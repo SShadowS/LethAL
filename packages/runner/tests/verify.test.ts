@@ -1,18 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { InstalledArtifactError } from "../src/artifact";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
+import { NamedMutantError } from "../src/named-mutants";
 import { type MutantVerdict, ResultsStore } from "../src/store";
+import { TestAppError } from "../src/test-app-publish";
 import {
+  INSTALLED_ARTIFACT_REFUSALS,
+  TEST_APP_REFUSALS,
+  VERIFY_REFUSALS,
   VerifyError,
   type VerifySource,
   assertSourceUnchanged,
+  killedByOf,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
+  verifyExitCode,
+  verifyRefusalOf,
 } from "../src/verify";
 
 const A1 = "a".repeat(32);
@@ -167,7 +176,8 @@ describe("resolveVerifySource", () => {
     );
     const src = resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0004"]));
     expect(src.runId).toBe(run1);
-    expect(src.projectPath).toBe("P");
+    // Carried item 1: the stored path is resolved, so a relative one names a real place.
+    expect(src.projectPath).toBe(resolve("P"));
     expect(src.artifactSha256).toBe("0".repeat(64));
     expect(src.sourceSha256).toBe("5".repeat(64));
     expect(src.targets).toEqual([
@@ -206,6 +216,23 @@ describe("resolveVerifySource", () => {
       expect(e.reason).toBe("source-predates-verify");
       store.close();
     }
+  });
+
+  test("source-predates-verify names all four reasons a run records no source hash", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runId, artifact(0, A1));
+    const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
+    expect(e.reason).toBe("source-predates-verify");
+    for (const cause of [
+      "before lethal verify existed",
+      "source changed during the run",
+      "the run stopped before the last batch",
+      "source tree was unreadable",
+    ]) {
+      expect(e.detail).toContain(cause);
+    }
+    store.close();
   });
 
   test("a killed or known-survivor row is not-a-survivor, and a no-coverage row is accepted", () => {
@@ -309,6 +336,49 @@ describe("assertSourceUnchanged", () => {
     );
     expect(e).toBeInstanceOf(VerifyError);
     expect((e as VerifyError).reason).toBe("source-changed");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a relative project path resolves, and a missing project or app.json is project-unreadable", async () => {
+    const store = new ResultsStore(":memory:");
+    oneBatchRun(store, A1, [mutantRow("M0001", "survived")], "some/rel/app");
+    const src = resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"]));
+    expect(src.projectPath).toBe(resolve("some/rel/app"));
+    store.close();
+    const missing = await assertSourceUnchanged(src, SYMBOLS).catch((e: unknown) => e);
+    expect(missing).toBeInstanceOf(VerifyError);
+    expect((missing as VerifyError).reason).toBe("project-unreadable");
+    expect((missing as VerifyError).detail).toContain(resolve("some/rel/app"));
+
+    const { dir, source } = await project();
+    rmSync(join(dir, "app.json"));
+    const noAppJson = await assertSourceUnchanged(source, SYMBOLS).catch((e: unknown) => e);
+    expect(noAppJson).toBeInstanceOf(VerifyError);
+    expect((noAppJson as VerifyError).reason).toBe("project-unreadable");
+    expect((noAppJson as VerifyError).detail).toContain("app.json");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a source change says so in plain words when the test project is nested in the target", async () => {
+    const { dir, source } = await project();
+    mkdirSync(join(dir, "test"));
+    const nestedSource = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
+    // Only a TEST file changes, inside the nested test project.
+    writeFileSync(join(dir, "test", "T.Codeunit.al"), "codeunit 50200 T { }");
+    const nested = await assertSourceUnchanged(nestedSource, SYMBOLS, join(dir, "test")).catch(
+      (e: unknown) => e,
+    );
+    expect((nested as VerifyError).reason).toBe("source-changed");
+    expect((nested as VerifyError).detail).toContain("lies inside the target project");
+    expect((nested as VerifyError).detail).toContain("editing or adding a test there refuses too");
+    // A sibling test project: the same refusal, without the nested-project sentence.
+    const sibling = await assertSourceUnchanged(
+      nestedSource,
+      SYMBOLS,
+      join(dir, "..", "sibling-tests"),
+    ).catch((e: unknown) => e);
+    expect((sibling as VerifyError).reason).toBe("source-changed");
+    expect((sibling as VerifyError).detail).not.toContain("lies inside the target project");
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -600,5 +670,114 @@ describe("planVerify", () => {
       (err: unknown) => err,
     );
     expect(e).toBeInstanceOf(EquivalenceMarksError);
+  });
+});
+
+describe("verifyRefusalOf (carried item 2)", () => {
+  test("every reason each caught error class can carry maps to a VERIFY_REFUSALS member, and a recycle-leaving publish quarantines", () => {
+    // The two maps are `Record`s over the error classes' own reason unions, so a reason added
+    // there fails the typecheck until it is mapped; this enumerates them at runtime.
+    const members = new Set<string>(VERIFY_REFUSALS);
+    const installed = Object.keys(INSTALLED_ARTIFACT_REFUSALS) as Array<
+      keyof typeof INSTALLED_ARTIFACT_REFUSALS
+    >;
+    expect(installed.length).toBe(7);
+    for (const reason of installed) {
+      const r = verifyRefusalOf(new InstalledArtifactError(reason, "d"));
+      expect(r?.kind).toBe("refused");
+      expect(members.has(r?.kind === "refused" ? r.reason : "")).toBe(true);
+    }
+    expect(verifyRefusalOf(new InstalledArtifactError("mismatch", "d"))).toMatchObject({
+      reason: "stale-artifact",
+    });
+    const testApp = Object.keys(TEST_APP_REFUSALS) as Array<keyof typeof TEST_APP_REFUSALS>;
+    expect(testApp.length).toBe(9);
+    for (const reason of testApp) {
+      const r = verifyRefusalOf(new TestAppError(reason, "d"));
+      if (reason === "publish-indeterminate" || reason === "publish-anomalous") {
+        expect(r?.kind).toBe("quarantined");
+      } else {
+        expect(r?.kind).toBe("refused");
+        expect(members.has(r?.kind === "refused" ? r.reason : "")).toBe(true);
+      }
+    }
+    // Verify refuses every user-reachable NamedMutantError cause upstream, so one that reaches
+    // here is verify's own bad call: rethrown (exit 1), never a refusal the user cannot fix.
+    expect(verifyRefusalOf(new NamedMutantError("x"))).toBeUndefined();
+    // A malformed lethal.equivalent.json is the user's own input to fix.
+    expect(verifyRefusalOf(new EquivalenceMarksError("bad marks"))).toEqual({
+      kind: "refused",
+      reason: "equivalence-marks-unreadable",
+      detail: "bad marks",
+    });
+    expect(verifyRefusalOf(new VerifyError("carried", "d"))).toEqual({
+      kind: "refused",
+      reason: "carried",
+      detail: "d",
+    });
+    // Anything else is not a refusal: the caller rethrows it (exit 1).
+    expect(verifyRefusalOf(new Error("bug"))).toBeUndefined();
+  });
+});
+
+describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
+  test("killedByOf reads assertion, runtime-error and other from the measured callstack shapes", () => {
+    // Verbatim from a measured report, read from the file so no literal can drift from it.
+    const demo = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "..", "examples", "credit-limit", "demo.report.json"),
+        "utf8",
+      ),
+    ) as { mutants: Array<{ killingTestFailure?: string }> };
+    const texts = demo.mutants.flatMap((m) =>
+      m.killingTestFailure === undefined ? [] : [m.killingTestFailure],
+    );
+    const find = (prefix: string): string => {
+      const t = texts.find((x) => x.startsWith(prefix));
+      if (t === undefined) throw new Error(`demo.report.json has no kill text "${prefix}"`);
+      return t;
+    };
+    const TESTS = "Credit Limit Demo Tests";
+    // A bare Error(...) in the test, whose first frame is in the test app itself.
+    const bare = find("Expected an order of 400, got 0.");
+    expect(bare.split("\n")[1]).toStartWith("Credit Limit Tests(CodeUnit 90250)");
+    expect(killedByOf(bare, TESTS)).toBe("other");
+    // The test's own asserterror expectation failed.
+    expect(
+      killedByOf(find("Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException"), TESTS),
+    ).toBe("assertion");
+    // An error raised in the TARGET app (Credit Limit Demo), measured in the same report. The
+    // brief allowed this shape to be constructed; the demo has a measured one, so it is used.
+    const target = find("An order of 400 would take customer C-10000 over their credit limit.");
+    expect(target.split("\n")[1]).toStartWith(
+      "Credit Limit Mgt(CodeUnit 90204).CheckCreditLimit line",
+    );
+    expect(killedByOf(target, TESTS)).toBe("runtime-error");
+    // Library Assert's prefix is an assertion wherever it was raised.
+    expect(killedByOf("Assert.AreEqual failed. Expected:<1> Actual:<0>.", TESTS)).toBe("assertion");
+    // No second line: nothing to read a frame from.
+    expect(killedByOf("Expected an order of 400, got 0.", TESTS)).toBe("other");
+    expect(killedByOf(undefined, TESTS)).toBe("other");
+  });
+
+  test("the exit code precedence is 3, 6, 4, 5, 0", () => {
+    const killed = { verdict: "killed" as const };
+    const survived = { verdict: "survived" as const };
+    const error = { verdict: "error" as const };
+    const skipped = { verdict: "skipped" as const };
+    const stable = { state: "stable" as const };
+    const flaky = { state: "flaky" as const };
+    const refused = { reason: "carried", detail: "d" };
+    expect(verifyExitCode({ quarantined: "q", refused, results: [error], newTests: [flaky] })).toBe(
+      3,
+    );
+    expect(verifyExitCode({ refused, results: [error], newTests: [flaky] })).toBe(6);
+    expect(verifyExitCode({ results: [error, error, skipped], newTests: [flaky] })).toBe(4);
+    expect(verifyExitCode({ results: [error, killed], newTests: [stable] })).toBe(5);
+    expect(verifyExitCode({ results: [survived, killed], newTests: [stable] })).toBe(5);
+    expect(verifyExitCode({ results: [killed, skipped], newTests: [flaky] })).toBe(5);
+    expect(verifyExitCode({ results: [killed, skipped], newTests: [stable] })).toBe(0);
+    // Every survivor skipped: nothing measured, and nothing wrong either.
+    expect(verifyExitCode({ results: [skipped], newTests: [] })).toBe(0);
   });
 });

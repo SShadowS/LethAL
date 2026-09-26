@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**47 of 255 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**50 of 259 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -99,7 +99,7 @@ that ordering is the priority.
 - **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · open
 - **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · open
 - **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · open
-- **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · open
+- **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · open
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · open
@@ -172,6 +172,10 @@ that ordering is the priority.
 - **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · open
 - **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · open
+- **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · open
+- **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · open
+- **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · open
+- **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · open
 
 ## Backends and tooling
 

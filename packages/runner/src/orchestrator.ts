@@ -1303,6 +1303,8 @@ async function prepareArtifactDir(args: {
   readonly projectManifest: Readonly<Record<string, unknown>>;
   readonly appVersion: string;
   readonly artifactId: string;
+  /** C02-06: the generation snapshot to copy the uninstrumented files from; see `prepareBatchProject`. */
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -1315,7 +1317,13 @@ async function prepareArtifactDir(args: {
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
   });
-  await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
+  await prepareBatchProject(
+    args.projectDir,
+    args.targetDir,
+    args.projectManifest,
+    args.appVersion,
+    args.source,
+  );
 }
 
 /**
@@ -1359,6 +1367,7 @@ async function bisectAndNote(args: {
   // publishing a narrowed candidate to a live server violates spec §8 regardless.
   readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -1372,6 +1381,7 @@ async function bisectAndNote(args: {
           projectManifest: args.projectManifest,
           appVersion: args.appVersion,
           artifactId: args.artifactId,
+          source: args.source,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -3242,6 +3252,83 @@ async function runLeaseHook(a: {
 }
 
 /**
+ * One unmutated run of `ref` (no mutant active), recorded as a baseline row, with the lease and
+ * in-flight rules a baseline run needs. `stop: true` means the session can do nothing more: the
+ * lease answer was handled or the run was quarantined in flight, and `verdict` is not a result.
+ * Shared by `scoreBatch`'s baseline and C02-06's second unmutated run (decision 11).
+ */
+async function dispatchUnmutated(
+  scope: BatchScope,
+  ref: TestMethodRef,
+): Promise<{ readonly verdict: TestVerdict; readonly stop: boolean }> {
+  const {
+    backend,
+    caps,
+    safety,
+    leaseSession,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    store,
+    runId,
+  } = scope;
+  const v = await runOnce(
+    backend,
+    safety,
+    ref,
+    {
+      coverage: caps.coverage,
+      timeoutMs: scope.baselineTimeoutMs,
+    },
+    scope.resyncOpSeq,
+  );
+  // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
+  // session id rides along as data (the store's liveness check counts baseline rows too).
+  store.recordTestResult(
+    runId,
+    null,
+    null,
+    ref,
+    v.outcome,
+    v.durationMs,
+    v.failureMessage,
+    undefined,
+    v.sessionId,
+  );
+  // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
+  // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
+  // quarantine for a lease loss that leaves the container perfectly healthy, and would
+  // treat a same-attempt duplicate claim as a loss.
+  const baselineLease = classifyLeaseVerdict(v);
+  if (baselineLease !== "none") {
+    await handleBaselineLeaseOutcome({
+      kind: baselineLease,
+      safety,
+      leaseSession,
+      ref,
+      verdict: v,
+    });
+    return { verdict: v, stop: true };
+  }
+  if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+    // The server may still be executing this baseline test. Latch unsafe, record a
+    // durable tier quarantine, and stop collecting baseline results: no further
+    // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
+    // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
+    // stop (the caller checks `safety.isUnsafe`, same as the post-batch guard).
+    await quarantineInFlight({
+      safety,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      detail: `baseline test in-flight-unknown running ${ref.method}`,
+    });
+    return { verdict: v, stop: true };
+  }
+  return { verdict: v, stop: false };
+}
+
+/**
  * C02-04: one batch's baseline, its stale-test-app refusal, the covering loop and the design
  * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
  * run against which tests is the caller's `select`; this function does not choose.
@@ -3334,59 +3421,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     }
   }
   for (const ref of reused !== undefined ? [] : tests) {
-    const v = await runOnce(
-      backend,
-      safety,
-      ref,
-      {
-        coverage: caps.coverage,
-        timeoutMs: scope.baselineTimeoutMs,
-      },
-      scope.resyncOpSeq,
-    );
-    // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
-    // session id rides along as data (the store's liveness check counts baseline rows too).
-    store.recordTestResult(
-      runId,
-      null,
-      null,
-      ref,
-      v.outcome,
-      v.durationMs,
-      v.failureMessage,
-      undefined,
-      v.sessionId,
-    );
-    // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
-    // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
-    // quarantine for a lease loss that leaves the container perfectly healthy — and would
-    // treat a same-attempt duplicate claim as a loss.
-    const baselineLease = classifyLeaseVerdict(v);
-    if (baselineLease !== "none") {
-      await handleBaselineLeaseOutcome({
-        kind: baselineLease,
-        safety,
-        leaseSession,
-        ref,
-        verdict: v,
-      });
-      break;
-    }
-    if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-      // The server may still be executing this baseline test. Latch unsafe, record a
-      // durable tier quarantine, and stop collecting baseline results — no further
-      // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
-      // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
-      // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
-      await quarantineInFlight({
-        safety,
-        quarantineStore,
-        resourceKey,
-        nowIso,
-        detail: `baseline test in-flight-unknown running ${ref.method}`,
-      });
-      break;
-    }
+    const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+    if (stop) break;
     baseline.push({ ref, verdict: v });
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
@@ -3907,6 +3943,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // copies of the uninstrumented files; recorded only when the two agree.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
+  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
+  // recorded anyway, so the disk is read as before.
+  const sourceSnapshot =
+    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -3923,7 +3964,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
-    ...("snapshot" in sourceHashAtGeneration ? { source: sourceHashAtGeneration.snapshot } : {}),
+    ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
@@ -4200,7 +4241,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // ceiling); build/revision are clock-derived (see app-version.ts). The reservation is
       // wrapped so an out-of-range or malformed app.json version aborts the session with an
       // error naming the actual input, before anything is written or compiled.
-      const projectManifest = await readProjectManifest(cfg.projectDir, batchIdx);
+      const projectManifest = await readProjectManifest(cfg.projectDir, batchIdx, sourceSnapshot);
       const sourceVersion = projectManifest.version;
       if (typeof sourceVersion !== "string") {
         throw new Error(
@@ -4239,6 +4280,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         projectManifest,
         appVersion,
         artifactId,
+        source: sourceSnapshot,
       });
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -4466,6 +4508,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           artifactId: newArtifactId(),
           compileCheck: (dir) => cfg.backend.compileCheck(dir),
           originalErr: deployErr,
+          source: sourceSnapshot,
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -4928,6 +4971,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 // exactly what bisection candidates are — compileCheck doesn't change that.
                 compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
+                source: sourceSnapshot,
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -5218,6 +5262,34 @@ export interface NamedMutantsConfig {
   readonly groupRuns?: SessionConfig["groupRuns"];
   readonly nowIso?: () => string;
   readonly emit?: SessionConfig["emit"];
+  /**
+   * C02-06 decision 11: each of these methods runs once more with no mutant active, after the
+   * covering loop, through the baseline's own dispatch. Answered in `NamedMutantsResult.rerun`.
+   */
+  readonly rerunOnUnmutated?: readonly TestMethodRef[];
+  /**
+   * C02-06 decision 13: a mutant is recorded `error`, never activated, unless EVERY one of its
+   * methods had a valid green baseline run (a `pass` in a fresh session). Off: C02-04b's rule,
+   * which drops a red method and scores the mutant on the rest.
+   */
+  readonly requireEveryMethodGreen?: boolean;
+}
+
+/** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
+export interface UnmutatedRun {
+  readonly ref: TestMethodRef;
+  /**
+   * `not-run`: no result for this method. For a rerun: the session latched, or the dispatch
+   * stopped, before it ran. For a baseline method: it never reached `select`. A baseline that
+   * stops AND latches the session never reaches `select` at all, so the methods that DID run
+   * before that stop are reported `not-run` too.
+   */
+  readonly outcome: TestVerdict["outcome"] | "not-run";
+  readonly failureMessage?: string;
+  readonly testRunsBefore?: number;
+  readonly sessionId?: number;
+  /** `testRunsBefore` 0 with a session id; for a rerun also a session no earlier call used. */
+  readonly fresh: boolean;
 }
 
 export interface NamedMutantsResult {
@@ -5225,6 +5297,39 @@ export interface NamedMutantsResult {
   readonly outcomes: readonly SessionOutcome[];
   /** Set when the session latched unsafe: the text `SessionReport.quarantined.reason` would get. */
   readonly quarantined?: string;
+  /** One per baseline method, in baseline order. */
+  readonly baseline: readonly UnmutatedRun[];
+  /** One per `rerunOnUnmutated` method, in its order; empty without it. */
+  readonly rerun: readonly UnmutatedRun[];
+}
+
+/** R206 section 2.1: the server reported that tests had already run in this call's session. */
+function sessionWasReused(v: { readonly testRunsBefore?: number }): boolean {
+  return v.testRunsBefore !== undefined && v.testRunsBefore > 0;
+}
+
+/** C02-06 decision 11: a `ran` answer from a session nothing had run in. No keys is not fresh. */
+function ranInFreshSession(v: {
+  readonly testRunsBefore?: number;
+  readonly sessionId?: number;
+}): boolean {
+  return v.testRunsBefore !== undefined && !sessionWasReused(v) && v.sessionId !== undefined;
+}
+
+function unmutatedRun(
+  ref: TestMethodRef,
+  v: TestVerdict | undefined,
+  fresh: boolean,
+): UnmutatedRun {
+  if (v === undefined) return { ref, outcome: "not-run", fresh: false };
+  return {
+    ref,
+    outcome: v.outcome,
+    ...(v.failureMessage !== undefined ? { failureMessage: v.failureMessage } : {}),
+    ...(v.testRunsBefore !== undefined ? { testRunsBefore: v.testRunsBefore } : {}),
+    ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+    fresh,
+  };
 }
 
 /**
@@ -5261,6 +5366,14 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
   const named = resolveNamedMutants(manifest, cfg.requests);
+  // `rerun` is answered by `testKeyOf`, so a repeated ref would report its second run twice.
+  const rerunKeys = (cfg.rerunOnUnmutated ?? []).map(testKeyOf);
+  const repeatedRerun = [...new Set(rerunKeys.filter((k, i) => rerunKeys.indexOf(k) !== i))];
+  if (repeatedRerun.length > 0) {
+    throw new NamedMutantError(
+      `${who}: rerunOnUnmutated names a test method more than once: ${repeatedRerun.join(", ")}`,
+    );
+  }
   if (cfg.inLease !== undefined && cfg.lease === undefined) {
     throw new NamedMutantError(
       "inLease requires a lease: a publish outside the fence would not hold the lease's operation marker, and the backend's op sequence would be stale for the first RunMutant after it",
@@ -5322,6 +5435,11 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     emit,
   });
   const outcomes: SessionOutcome[] = [];
+  const strict = cfg.requireEveryMethodGreen === true;
+  const baselineTests = baselineTestsOf(named);
+  const rerunRefs = cfg.rerunOnUnmutated ?? [];
+  const baselineRan = new Map<string, TestVerdict>();
+  const rerunRan = new Map<string, UnmutatedRun>();
   try {
     // Before the first op: a lease lost from here on invalidates THIS batch's verdicts.
     if (leaseSession !== undefined) leaseSession.currentBatchIndex = installed.batchIndex;
@@ -5366,9 +5484,32 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     await scoreBatch(scope, {
       batchIndex: installed.batchIndex,
       artifactId: artifact.artifactId,
-      tests: baselineTestsOf(named),
-      select: (baseline) => selectNamed(baseline, named, scope, installed.batchIndex),
+      tests: baselineTests,
+      select: (baseline) => {
+        for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
+        return selectNamed(baseline, named, scope, installed.batchIndex, strict);
+      },
     });
+    // Decision 11: after the covering loop on purpose, so a test that passes clean but fails
+    // once mutant runs have touched the server is caught. Freshness for a rerun also needs a
+    // session no earlier call of this run used: the ids recorded so far, grown as the loop goes.
+    if (rerunRefs.length > 0 && !safety.isUnsafe) {
+      const seen = store.sessionIdsOf(runId);
+      await activateOnce(backend, safety, null);
+      for (const ref of rerunRefs) {
+        const { verdict, stop } = await dispatchUnmutated(scope, ref);
+        // A verdict the dispatch stopped on (a lease loss, a strand) is not a result, so it is
+        // never fresh: its method can only be `flaky-unknown`, never `flaky`.
+        const fresh =
+          !stop &&
+          ranInFreshSession(verdict) &&
+          verdict.sessionId !== undefined &&
+          !seen.has(verdict.sessionId);
+        if (verdict.sessionId !== undefined) seen.add(verdict.sessionId);
+        rerunRan.set(testKeyOf(ref), unmutatedRun(ref, verdict, fresh));
+        if (stop) break;
+      }
+    }
   } catch (err) {
     if (!(err instanceof SessionUnsafeError)) throw err;
   } finally {
@@ -5396,6 +5537,13 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   return {
     outcomes: answered,
     ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
+    baseline: baselineTests.map((ref) => {
+      const v = baselineRan.get(testKeyOf(ref));
+      return unmutatedRun(ref, v, v !== undefined && ranInFreshSession(v));
+    }),
+    rerun: rerunRefs.map(
+      (ref) => rerunRan.get(testKeyOf(ref)) ?? unmutatedRun(ref, undefined, false),
+    ),
   };
 }
 
@@ -5409,6 +5557,8 @@ function selectNamed(
   named: readonly ResolvedNamedMutant[],
   scope: BatchScope,
   batchIndex: number,
+  /** C02-06 decision 13: `requireEveryMethodGreen`. */
+  strict: boolean,
 ): CoveringPlan | undefined {
   const rowByKey = new Map(baseline.map((b) => [testKeyOf(b.ref), b]));
   const green = new Set(
@@ -5417,6 +5567,33 @@ function selectNamed(
   const mutants: MutantManifestEntry[] = [];
   const perMutantTests = new Map<string, readonly TestMethodRef[]>();
   for (const { mutant, methods } of named) {
+    if (strict) {
+      const invalid = methods.flatMap((m) => {
+        const why = invalidBaselineReason(rowByKey.get(testKeyOf(m))?.verdict);
+        return why === undefined ? [] : [{ ref: m, text: `${qualifiedTestName(m)} (${why})` }];
+      });
+      if (invalid.length > 0) {
+        record(
+          scope.store,
+          scope.runId,
+          mutant,
+          "error",
+          scope.outcomes,
+          batchIndex,
+          scope.emit,
+          undefined,
+          `invalid baseline: every requested test method needs a green unmutated run in a fresh session, and ${invalid.length} did not have one: ${invalid.map((i) => i.text).join("; ")}`,
+        );
+        // The same methods as structured data, on the outcome `record` just pushed.
+        const at = scope.outcomes.length - 1;
+        const pushed = scope.outcomes[at];
+        if (pushed?.mutant !== mutant) {
+          throw new Error(`selectNamed: record() did not push ${mutant.mutantId}'s outcome last`);
+        }
+        scope.outcomes[at] = { ...pushed, invalidBaseline: invalid.map((i) => i.ref) };
+        continue;
+      }
+    }
     const greenMethods = methods.filter((m) => green.has(testKeyOf(m)));
     if (greenMethods.length === 0) {
       const own = methods.flatMap((m) => {
@@ -5451,6 +5628,19 @@ function selectNamed(
     ),
     memberCountsByTest: new Map(),
   };
+}
+
+/** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is. */
+function invalidBaselineReason(v: TestVerdict | undefined): string | undefined {
+  if (v === undefined) return "no baseline run";
+  if (v.outcome !== "pass") {
+    return v.failureMessage !== undefined ? `${v.outcome}: ${v.failureMessage}` : v.outcome;
+  }
+  if (sessionWasReused(v)) {
+    return `not fresh: session ${v.sessionId ?? "?"} had run ${v.testRunsBefore} test(s) before`;
+  }
+  if (!ranInFreshSession(v)) return "not fresh: the server reported no session keys";
+  return undefined;
 }
 /**
  * R26: runs the configured permission canary and guarantees it cannot end the session.
@@ -5556,7 +5746,7 @@ export function unsupportedCoverageNote(
 }
 
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
-function qualifiedTestName(ref: TestMethodRef): string {
+export function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
 }
 
@@ -5864,7 +6054,7 @@ async function confirmWarm(p: {
       args.attestation.clean = true;
     }
   }
-  const reusedIn = verdicts.find((rv) => rv.testRunsBefore !== undefined && rv.testRunsBefore > 0);
+  const reusedIn = verdicts.find(sessionWasReused);
   if (reusedIn !== undefined) {
     return error(
       "session-reused",
@@ -6207,6 +6397,9 @@ async function runMutantsOnBackend(args: {
     await activateOnce(args.backend, args.safety, m.mutantId);
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
+    // C02-06 decision 14: the killer's FULL ref, set beside `killingTest` at every site that
+    // decides a kill. Internal (`SessionOutcome` only): see its doc comment for why.
+    let killingTestRef: TestMethodRef | undefined;
     /**
      * R86: the failure text of the run that KILLED this mutant — see `MutantOutcome`'s field of the
      * same name for what it is for.
@@ -6365,7 +6558,7 @@ async function runMutantsOnBackend(args: {
       // mutant's. A failure or a timeout measured there is not attributable: an error, never a
       // kill. A pass stands (a reused session can hide a kill, never manufacture one). A 408
       // carries no keys, so a `timeout` is not asserted here; a warm one is, through its replay.
-      const reused = v.testRunsBefore !== undefined && v.testRunsBefore > 0;
+      const reused = sessionWasReused(v);
       if (reused && !args.sessionReuse.warned) {
         args.sessionReuse.warned = true;
         args.emit({
@@ -6393,6 +6586,7 @@ async function runMutantsOnBackend(args: {
           if (warm.kind === "confirmed") {
             verdict = "timeout-killed";
             killingTest = ref.method;
+            killingTestRef = ref;
             killingTestFailure = v.failureMessage;
             killPosition = warm.killPosition;
             recordKill(args.killLedger, m, ref);
@@ -6408,6 +6602,7 @@ async function runMutantsOnBackend(args: {
         }
         verdict = "timeout-killed";
         killingTest = ref.method;
+        killingTestRef = ref;
         killingTestFailure = v.failureMessage;
         killPosition = 1;
         recordKill(args.killLedger, m, ref);
@@ -6427,6 +6622,7 @@ async function runMutantsOnBackend(args: {
         if (warm.kind === "confirmed") {
           verdict = "killed";
           killingTest = ref.method;
+          killingTestRef = ref;
           // R86: the MUTATED run's text, never the replay's (which passed).
           killingTestFailure = v.failureMessage;
           killPosition = warm.killPosition;
@@ -6559,7 +6755,7 @@ async function runMutantsOnBackend(args: {
             // about whether a strand has a cause.
             cause = "stranded";
           }
-        } else if (confirm.testRunsBefore !== undefined && confirm.testRunsBefore > 0) {
+        } else if (sessionWasReused(confirm)) {
           // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
           // did not measure the killer cold. Not a kill.
           verdict = "error";
@@ -6568,6 +6764,7 @@ async function runMutantsOnBackend(args: {
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+          killingTestRef = ref;
           killPosition = 1;
           recordKill(args.killLedger, m, ref);
           // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
@@ -6665,6 +6862,7 @@ async function runMutantsOnBackend(args: {
       undefined, // unplaceable
       killPosition,
       reach,
+      killingTestRef,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -6704,6 +6902,13 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** A snapshot entry, or a loud bug: a snapshot always holds every file it is asked for. */
+function snapshotBytes(source: ReadonlyMap<string, Buffer>, rel: string): Buffer {
+  const bytes = source.get(rel);
+  if (bytes === undefined) throw new Error(`${rel} is not in the source snapshot`);
+  return bytes;
+}
+
 /**
  * Reads and parses the target project's `app.json`. Throws (aborting the
  * whole session, uncaught by the per-batch deploy try/catch) if it is
@@ -6713,11 +6918,15 @@ async function pathExists(p: string): Promise<boolean> {
 async function readProjectManifest(
   projectDir: string,
   batchIdx: number,
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<Record<string, unknown>> {
   const appJsonPath = join(projectDir, "app.json");
   let raw: string;
   try {
-    raw = await readFile(appJsonPath, "utf8");
+    raw =
+      source !== undefined
+        ? snapshotBytes(source, "app.json").toString("utf8")
+        : await readFile(appJsonPath, "utf8");
   } catch (err) {
     throw new Error(
       `cannot deploy batch ${batchIdx}: target project has no app.json at ${appJsonPath} ` +
@@ -6791,6 +7000,7 @@ export async function prepareBatchProject(
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
   appVersion: string,
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<void> {
   await writeStampedAppJson(batchDir, projectManifest, appVersion);
 
@@ -6808,9 +7018,13 @@ export async function prepareBatchProject(
   // So collisions are detected here on the SOURCE paths, independently of what is already on
   // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
   // files, so the flattening survives there — by luck, not by design.)
-  // C02-06: the `.al` set comes from `targetAlFiles`, which `hashTargetSource` hashes too, so the
-  // recorded source hash covers exactly the AL this copies.
-  const alFiles = await targetAlFiles(projectDir);
+  // C02-06: the `.al` set and bytes come from `source`, the snapshot generation hashed and parsed,
+  // so every batch compiles exactly the recorded bytes whatever happens on disk meanwhile. Without
+  // one, `targetAlFiles`, which `hashTargetSource` enumerates too.
+  const alFiles =
+    source !== undefined
+      ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
+      : await targetAlFiles(projectDir);
   const alBySeenBasename = new Map<string, string>();
   for (const rel of alFiles) {
     const base = basename(rel);
@@ -6823,7 +7037,8 @@ export async function prepareBatchProject(
     alBySeenBasename.set(base.toLowerCase(), rel);
     const dest = join(batchDir, base);
     if (await pathExists(dest)) continue;
-    await copyFile(join(projectDir, rel), dest);
+    if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
+    else await copyFile(join(projectDir, rel), dest);
   }
 
   // Every directory that holds at least one `.al` file. A resource named relative to an AL file is
@@ -7317,6 +7532,11 @@ export function record(
   // Passed only by the covering loop, and only for a `"statement"`-grain mutant it measured. The
   // grain itself rides on `m`. Rides on `mutant-scored` only; the store gets none of it.
   reach?: { readonly guardReached: boolean; readonly reachedBy: readonly string[] },
+  // C02-06 decision 14: the killer's full ref, beside `killingTest`. Passed only by the covering
+  // loop's three kill-deciding branches (confirmation, timeout, warm-confirmation), never by
+  // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
+  // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
+  killingTestRef?: TestMethodRef,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -7358,6 +7578,9 @@ export function record(
       : {}),
     ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
+    // C02-06 decision 14: `SessionOutcome` only, never store, never an event (see the parameter's
+    // own doc comment).
+    ...(killingTestRef !== undefined ? { killingTestRef } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),

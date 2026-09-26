@@ -10,7 +10,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
-import type { BackendCapabilities } from "./backend";
+import type { BackendCapabilities, TestMethodRef } from "./backend";
 import {
   type EquivalenceMarkReport,
   SURVIVING_VERDICTS,
@@ -42,6 +42,21 @@ export interface SessionOutcome {
   readonly verdict: MutantVerdict;
   readonly batchIndex: number;
   readonly killingTest?: string;
+  /**
+   * C02-06 decision 14: the killer's FULL identity (codeunit id and name, not just the bare
+   * method name `killingTest` carries), set beside `killingTest` at every site that decides a
+   * kill. Internal only: never copied onto `MutantOutcome` or any `RunEvent`, so `SessionReport`
+   * and both generated schemas do not move. A `--resume` carried verdict has no ref and leaves
+   * this absent, same as every other verdict that never confirmed a kill here.
+   */
+  readonly killingTestRef?: TestMethodRef;
+  /**
+   * C02-06 decision 13: under `requireEveryMethodGreen`, the requested methods that had no valid
+   * green unmutated run, which is why this outcome is `error`. Structured data for `lethal verify`,
+   * so it never parses `failureNote`. Internal only, like `killingTestRef`: set only by
+   * `runNamedMutants`, which builds no report.
+   */
+  readonly invalidBaseline?: readonly TestMethodRef[];
   readonly failureNote?: string;
   /** R86 — see `MutantOutcome.killingTestFailure`. */
   readonly killingTestFailure?: string;

@@ -330,7 +330,10 @@ test("publishTestApp: a BC downgrade refusal inside the fence is publish-failed 
   const err = await publishTestApp(
     loggingFence(log),
     COMPILED,
-    deps(log, [null, OLD], DOWNGRADE),
+    // R248 decision 12: the pre-fence read must answer with a readable resident package (at the
+    // local app.json's own version, so the version check passes it through) to reach BC's own
+    // in-fence downgrade refusal; a pre-fence `null` is now resident-unreadable, tested above.
+    deps(log, [OLD, OLD], DOWNGRADE),
   ).catch((e) => e);
   expect(err).toMatchObject({
     reason: "publish-failed",
@@ -405,6 +408,15 @@ test("publishTestApp: a failed exit whose bytes landed anyway is publish-anomalo
     deps([], [OLD, NEW], DOWNGRADE),
   ).catch((e) => e);
   expect(err).toMatchObject({ reason: "publish-anomalous", confirmedTerminal: false });
+});
+
+test("publishTestApp refuses an unreadable resident package before the fence, claiming no marker (R248)", async () => {
+  const log: string[] = [];
+  const err = await publishTestApp(loggingFence(log), COMPILED, deps(log, [null])).catch((e) => e);
+  expect(err).toMatchObject({ reason: "resident-unreadable", confirmedTerminal: true });
+  expect(log).toEqual(["read"]);
+  expect((err as Error).message).toContain("BC_DEV_USER");
+  expect((err as Error).message).not.toContain("undefined");
 });
 
 test("publishTestApp refuses a configuration that cannot read the package back, before the fence", async () => {

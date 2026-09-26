@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,13 @@ import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import { loadDryRunConfig, restoreNotice } from "../src/cli";
+import {
+  RUN_FLAGS,
+  VERIFY_FLAGS,
+  VERIFY_NOT_ALL_KILLED_EXIT_CODE,
+  VERIFY_REFUSED_EXIT_CODE,
+  verifyFromCli,
+} from "../src/cli";
 import {
   announceAlRunnerCanary,
   clearQuarantine,
@@ -46,6 +54,7 @@ import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
+import { VERIFY_EXIT } from "../src/verify";
 
 /**
  * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
@@ -1986,5 +1995,179 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(row.source_sha256).toBe(await hashTargetSource(projectDir, ["X"]));
     // And it is not the hash without the symbol, so the symbol is what is being compared.
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
+  });
+});
+
+describe("C02-06: lethal verify (Task 7)", () => {
+  const A = "a".repeat(32);
+  const VERIFY_ARGS = [
+    "verify",
+    "--db",
+    "r.sqlite",
+    "--artifact",
+    A,
+    "--tests",
+    "t",
+    "--survivors",
+    "0/M0001",
+  ];
+
+  test("verify parses --db, --artifact, --tests and repeatable --survivors", () => {
+    expect(
+      parseCliConfig([
+        "verify",
+        "--db",
+        "r.sqlite",
+        "--artifact",
+        A,
+        "--tests",
+        "t",
+        "--survivors",
+        "0/M0001,0/M0002",
+        "--survivors",
+        "0/M0003",
+      ]),
+    ).toEqual({
+      mode: "verify",
+      dbPath: "r.sqlite",
+      artifact: A,
+      testDir: "t",
+      survivors: ["0/M0001,0/M0002", "0/M0003"],
+    });
+    expect(parseCliConfig([...VERIFY_ARGS, "--config", "c.json"])).toMatchObject({
+      configPath: "c.json",
+    });
+  });
+
+  test("verify refuses every shared flag outside its allowlist, --out and --report included", () => {
+    const others = Object.entries(RUN_FLAGS).filter(([flag]) => !VERIFY_FLAGS.has(flag));
+    expect(others.map(([f]) => f)).toContain("out");
+    expect(others.map(([f]) => f)).toContain("report");
+    for (const [flag, spec] of others) {
+      const extra = spec.type === "boolean" ? [`--${flag}`] : [`--${flag}`, "x"];
+      expect(() => parseCliConfig([...VERIFY_ARGS, ...extra]), flag).toThrow(`--${flag}`);
+    }
+  });
+
+  test("run refuses --artifact and --survivors", () => {
+    const run = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
+    expect(() => parseCliConfig([...run, "--artifact", A])).toThrow(/--artifact.*lethal verify/);
+    expect(() => parseCliConfig([...run, "--survivors", "0/M0001"])).toThrow(
+      /--survivors.*lethal verify/,
+    );
+  });
+
+  test("verify requires --db and --artifact", () => {
+    const without = (flag: string) => {
+      const i = VERIFY_ARGS.indexOf(flag);
+      return [...VERIFY_ARGS.slice(0, i), ...VERIFY_ARGS.slice(i + 2)];
+    };
+    for (const flag of ["--db", "--artifact", "--tests", "--survivors"]) {
+      expect(() => parseCliConfig(without(flag)), flag).toThrow(`missing required ${flag}`);
+    }
+  });
+
+  test("verify refuses a config with an envTool section", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const project = join(root, "proj");
+    await mkdir(project);
+    await writeFile(
+      join(project, "lethal.config.json"),
+      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),
+    );
+    await writeFile(join(project, "app.json"), "{}");
+    const dbPath = join(root, "r.sqlite");
+    const store = new ResultsStore(dbPath);
+    const runId = store.createRun({
+      projectPath: project,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.0.0",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: A,
+      sha256: "1".repeat(64),
+    });
+    store.close();
+    let printed = "";
+    let built = 0;
+    const code = await verifyFromCli(
+      { mode: "verify", dbPath, artifact: A, testDir: join(root, "t"), survivors: ["0/M0001"] },
+      {
+        write: (s) => {
+          printed += s;
+        },
+        buildBackend: async () => {
+          built++;
+          throw new Error("must not build a backend for an envTool config");
+        },
+      },
+    );
+    expect(code).toBe(VERIFY_REFUSED_EXIT_CODE);
+    const out = JSON.parse(printed);
+    expect(out.refused.reason).toBe("unsupported-config");
+    expect(out.refused.detail).toContain("envTool");
+    expect(out.exitCode).toBe(6);
+    expect(out.results).toEqual([]);
+    expect(built).toBe(0);
+  });
+
+  test("verify refuses a project without app.json before building the backend, and closes the store", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const project = join(root, "proj");
+    await mkdir(project);
+    // A valid config, so only the missing app.json can stop it.
+    await writeFile(
+      join(project, "lethal.config.json"),
+      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
+    );
+    const dbPath = join(root, "r.sqlite");
+    const store = new ResultsStore(dbPath);
+    const runId = store.createRun({
+      projectPath: project,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.0.0",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: A,
+      sha256: "1".repeat(64),
+    });
+    store.close();
+    let printed = "";
+    let built = 0;
+    const code = await verifyFromCli(
+      { mode: "verify", dbPath, artifact: A, testDir: join(root, "t"), survivors: ["0/M0001"] },
+      {
+        write: (s) => {
+          printed += s;
+        },
+        buildBackend: async () => {
+          built++;
+          throw new Error("validateSelectorIdsForProject: cannot read app.json");
+        },
+      },
+    );
+    expect(code).toBe(VERIFY_REFUSED_EXIT_CODE);
+    const out = JSON.parse(printed);
+    expect(out.refused.reason).toBe("project-unreadable");
+    expect(out.refused.detail).toContain("app.json");
+    expect(out.results).toEqual([]);
+    expect(built).toBe(0);
+    // Windows refuses to delete a file an open handle holds: this passes only if the store closed.
+    rmSync(dbPath);
+  });
+
+  test("VERIFY_NOT_ALL_KILLED_EXIT_CODE and VERIFY_REFUSED_EXIT_CODE are 5 and 6, and 3 and 4 are reused", () => {
+    expect(VERIFY_NOT_ALL_KILLED_EXIT_CODE).toBe(5);
+    expect(VERIFY_REFUSED_EXIT_CODE).toBe(6);
+    expect(VERIFY_EXIT.notAllKilled).toBe(VERIFY_NOT_ALL_KILLED_EXIT_CODE);
+    expect(VERIFY_EXIT.refused).toBe(VERIFY_REFUSED_EXIT_CODE);
+    expect(VERIFY_EXIT.quarantined).toBe(QUARANTINED_EXIT_CODE);
+    expect(VERIFY_EXIT.nothingMeasured).toBe(NOTHING_SCORED_EXIT_CODE);
   });
 });
