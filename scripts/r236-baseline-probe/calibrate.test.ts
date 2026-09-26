@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { type RoundData, aggregate, judgeRound, parseCalibration } from "./calibrate";
+import {
+  type RoundData,
+  aggregate,
+  calibrationScript,
+  clientTypeMap,
+  judgeRound,
+  parseCalibration,
+  readerIds,
+} from "./calibrate";
 
 const T0 = Date.parse("2026-09-26T10:00:00.000Z");
 const opts = { recentMs: 10 * 60_000, tolMs: 5_000 };
@@ -39,7 +47,9 @@ describe("judgeRound: pooling (a), from the cmdlet list", () => {
 });
 
 describe("judgeRound: the Active Session soundness criteria (b)", () => {
-  const live = { id: 77, user: "DOMAIN\\admin", login: T0 + 55_000 };
+  const live = { id: 77, user: "DOMAIN\\admin", login: T0 + 55_000, clientType: "10" };
+  // the cmdlet's own view of the same session: its ClientType NAME is what says "OData"
+  const liveNst = [{ id: 77, user: "admin", login: null, clientType: "ODataV4" }];
 
   test("finished disappears: sound when the finished op's session is absent from a NON-empty scoped table", () => {
     expect(judgeRound(base({ active: [live] }), opts).finishedDisappears).toBe("sound");
@@ -53,12 +63,30 @@ describe("judgeRound: the Active Session soundness criteria (b)", () => {
     expect(judgeRound(base({ active: null }), opts).finishedDisappears).toBe("not determinable");
   });
 
-  test("live stays: sound only when a row of OUR user logged in during the burst is present", () => {
-    expect(judgeRound(base({ active: [live] }), opts).liveStays).toBe("sound");
+  test("live stays: sound only for an OData row (named so by the cmdlet) of OUR user logged in during the burst", () => {
+    expect(judgeRound(base({ active: [live], nst: liveNst }), opts).liveStays).toBe("sound");
     const otherUser = { ...live, user: "someone" };
-    expect(judgeRound(base({ active: [otherUser] }), opts).liveStays).toBe("not determinable");
+    expect(judgeRound(base({ active: [otherUser], nst: liveNst }), opts).liveStays).toBe(
+      "not determinable",
+    );
     const beforeBurst = { ...live, login: T0 };
-    expect(judgeRound(base({ active: [beforeBurst] }), opts).liveStays).toBe("not determinable");
+    expect(judgeRound(base({ active: [beforeBurst], nst: liveNst }), opts).liveStays).toBe(
+      "not determinable",
+    );
+  });
+
+  test("calibration 2: the reader's own management session is never a live-stays proof", () => {
+    // measured: sid -5024, Active Session Client Type 2, the cmdlet says "Windows", login in the burst
+    const reader = { id: -5024, user: "admin", login: T0 + 51_000, clientType: "2" };
+    const readerNst = [{ id: -5024, user: "admin", login: null, clientType: "Windows" }];
+    const r = base({ active: [reader], nst: readerNst });
+    expect(judgeRound(r, opts).liveStays).toBe("not determinable");
+    expect(readerIds(r, opts.tolMs)).toEqual([-5024]);
+    // an Active Session row the cmdlet does not list cannot be confirmed OData: not a proof either
+    expect(judgeRound(base({ active: [live], nst: [] }), opts).liveStays).toBe("not determinable");
+    expect(clientTypeMap(r)).toEqual([
+      { sessionId: -5024, tableClientType: "2", cmdletClientType: "Windows" },
+    ]);
   });
 
   test("ids match: the latest Logon event for the finished op's session id, before the op, is our user", () => {
@@ -99,8 +127,8 @@ describe("parseCalibration", () => {
   test("reads the tagged lines; server times without a zone are UTC; a failed read is null", () => {
     const out = [
       "noise",
-      'R236-NST:[{"SessionID":41,"UserID":"admin","Login":"2026-09-26T09:59:59.0000000Z"}]',
-      'R236-ACTIVE:{"sid":77,"user":"admin","login":"2026-09-26T10:00:55.000"}',
+      'R236-NST:[{"SessionID":41,"UserID":"admin","ClientType":"Windows","Login":"2026-09-26T09:59:59.0000000Z"}]',
+      'R236-ACTIVE:{"sid":77,"user":"admin","ct":2,"login":"2026-09-26T10:00:55.000"}',
       'R236-FIN:[{"sid":41,"aid":"a1","seq":3,"started":"2026-09-26T10:00:00.000"}]',
       "R236-EVT-ERR:Invalid object name",
     ].join("\n");
@@ -114,9 +142,19 @@ describe("parseCalibration", () => {
       if (tz === undefined) Reflect.deleteProperty(process.env, "TZ");
       else process.env.TZ = tz;
     }
-    expect(p.nst).toEqual([{ id: 41, user: "admin", login: T0 - 1_000 }]);
-    expect(p.active).toEqual([{ id: 77, user: "admin", login: T0 + 55_000 }]);
+    expect(p.nst).toEqual([{ id: 41, user: "admin", login: T0 - 1_000, clientType: "Windows" }]);
+    expect(p.active).toEqual([{ id: 77, user: "admin", login: T0 + 55_000, clientType: "2" }]);
     expect(p.finished).toEqual([{ sessionId: 41, attemptId: "a1", opSeq: 3, startedAt: T0 }]);
     expect(p.events).toBeNull();
+  });
+});
+
+describe("calibration 2: Session Event is scoped by server instance ID", () => {
+  test("the Session Event read never names a Server Instance Name column and prints its scope", () => {
+    const text = calibrationScript("default");
+    const evt = text.slice(text.indexOf("'R236-COLS:Session Event:'"));
+    expect(evt).not.toContain("[Server Instance Name]");
+    expect(evt).toContain("[Server Instance ID] = $instId");
+    expect(evt).toContain("'R236-EVT-SCOPE:'");
   });
 });

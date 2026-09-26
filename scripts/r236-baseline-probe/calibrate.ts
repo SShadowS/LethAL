@@ -9,8 +9,11 @@
  *       - finishedDisappears: a known finished op's session is ABSENT from a NON-EMPTY scoped table
  *         (present as the same session = not sound; an empty table proves nothing).
  *       - liveStays: while a burst of read-only `HarnessInfo` calls runs, the scoped table holds a
- *         row of OUR user that logged in during the burst. Only "sound" or "not determinable": a
- *         per-request session can end between two reads, so absence is never proof of unsoundness.
+ *         row of OUR user that logged in during the burst AND that the cmdlet also lists under a
+ *         web-service / OData ClientType name (calibration 2: the only in-burst row was the reader's
+ *         own management session, Client Type 2, which the cmdlet calls "Windows"; it is recorded in
+ *         `observed.readerIds` and never counts). Only "sound" or "not determinable": a per-request
+ *         session can end between two reads, so absence is never proof of unsoundness.
  *       - idsMatch: the latest `Session Event` Logon for a finished op's session id, at or before
  *         the op started, is OUR user (the control app's `SessionId()` and the server's session
  *         records share one id space). A different user = not sound.
@@ -21,6 +24,11 @@
  *
  * LETHAL_R236_PROBE=1 bun scripts/r236-baseline-probe/calibrate.ts --out <file.ndjson>
  *   [--rounds <n>=5] [--interval-ms <ms>=10000] [--recent-minutes <m>=10]
+ *
+ * --recent-minutes: pooling is judged only on ops that finished within this window. Before any probe
+ * session the newest finished op is usually far older (calibration 2: about 90 minutes), so pooling
+ * reads "not determinable" and the round says so; to judge it, run right after a probe or gate
+ * session. Raising the window weakens the test, since an idle pooled session may time out.
  *
  * One NDJSON line per round (raw rows plus that round's verdicts), then one `summary` line.
  * Exit: 0 done (whatever the verdicts); 2 harness fault. Table and column names are UNVERIFIED
@@ -45,6 +53,8 @@ export interface Listed {
   readonly user: string | null;
   /** ms since epoch, UTC; null when the server gave none. */
   readonly login: number | null;
+  /** The cmdlet's ClientType NAME, or the Active Session table's `Client Type` number as text. */
+  readonly clientType: string | null;
 }
 export interface FinishedOp {
   readonly sessionId: number;
@@ -75,6 +85,45 @@ export interface RoundVerdicts {
   readonly idsMatch: Verdict;
 }
 
+/** Cmdlet ClientType names that mean a web-service call. "WebClient" (the browser) does not match. */
+const ODATA_CLIENT_TYPE = /odata|soap|web ?service/i;
+
+/**
+ * NOT used for any verdict: the `Client Type` option order as commonly documented. Calibration 2
+ * measured table value 2 on a session the cmdlet calls "Windows", which contradicts it, so the
+ * verdicts rely only on the cmdlet's names (`clientTypeMap` records what each round observed).
+ */
+export const ASSUMED_CLIENT_TYPE_OPTIONS =
+  "0 Windows Client, 1 SOAP, 2 OData, 3 NAS, 4 Background, 5 Management Client, 6 Web Client (assumed, unverified, contradicted by calibration 2)";
+
+/** Sessions seen in both lists, with each list's client type: the OBSERVED mapping. */
+export function clientTypeMap(
+  d: Pick<RoundData, "nst" | "active">,
+): Array<{ sessionId: number; tableClientType: string | null; cmdletClientType: string | null }> {
+  const nst = new Map((d.nst ?? []).map((n) => [n.id, n] as const));
+  return (d.active ?? []).flatMap((a) => {
+    const n = nst.get(a.id);
+    return n === undefined
+      ? []
+      : [{ sessionId: a.id, tableClientType: a.clientType, cmdletClientType: n.clientType }];
+  });
+}
+
+/**
+ * Sessions that are most likely the READER itself: listed by the cmdlet under a non-web-service
+ * type and logged in (per the table) during this round's burst. Recorded, and never a proof.
+ */
+export function readerIds(d: RoundData, tolMs: number): number[] {
+  const active = new Map((d.active ?? []).map((a) => [a.id, a] as const));
+  return (d.nst ?? [])
+    .filter((n) => !ODATA_CLIENT_TYPE.test(n.clientType ?? ""))
+    .filter((n) => {
+      const login = active.get(n.id)?.login ?? null;
+      return login !== null && login >= d.burst.start - tolMs;
+    })
+    .map((n) => n.id);
+}
+
 const norm = (u: string | null) => (u ?? "").toLowerCase().replace(/^.*\\/, "");
 
 type Match = "same" | "absent" | "ambiguous";
@@ -101,14 +150,22 @@ export function judgeRound(d: RoundData, o: { recentMs: number; tolMs: number })
     else if (m.includes("absent")) finishedDisappears = "sound";
   }
 
+  // Calibration 2: the only in-burst row measured was the READER's own management session (Client
+  // Type 2, which the cmdlet names "Windows"). A proof must be a row the cmdlet ALSO lists, under a
+  // ClientType NAME that says web service / OData, so no numeric option mapping is assumed.
+  const nstById = new Map((d.nst ?? []).map((n) => [n.id, n] as const));
   const liveStays: Verdict =
-    d.active?.some(
-      (r) =>
+    d.active?.some((r) => {
+      const n = nstById.get(r.id);
+      return (
+        n !== undefined &&
+        ODATA_CLIENT_TYPE.test(n.clientType ?? "") &&
         norm(r.user) === norm(d.user) &&
         r.login !== null &&
         r.login >= d.burst.start - o.tolMs &&
-        r.login <= d.burst.end + o.tolMs,
-    ) === true
+        r.login <= d.burst.end + o.tolMs
+      );
+    }) === true
       ? "sound"
       : "not determinable";
 
@@ -185,11 +242,23 @@ export function parseCalibration(
   return {
     nst: read("R236-NST", (r) =>
       typeof r.SessionID === "number"
-        ? { id: r.SessionID, user: str(r.UserID), login: utc(r.Login) }
+        ? {
+            id: r.SessionID,
+            user: str(r.UserID),
+            login: utc(r.Login),
+            clientType: str(r.ClientType),
+          }
         : null,
     ),
     active: read("R236-ACTIVE", (r) =>
-      typeof r.sid === "number" ? { id: r.sid, user: str(r.user), login: utc(r.login) } : null,
+      typeof r.sid === "number"
+        ? {
+            id: r.sid,
+            user: str(r.user),
+            login: utc(r.login),
+            clientType: typeof r.ct === "number" ? String(r.ct) : null,
+          }
+        : null,
     ),
     finished: read("R236-FIN", (r) => {
       const startedAt = utc(r.started);
@@ -220,6 +289,7 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
     'R236-NST:' + (ConvertTo-Json -Compress -InputObject @(Get-NAVServerSession -ServerInstance BC -Tenant $tenant | ForEach-Object { @{ SessionID = [int]$_.SessionID; UserID = [string]$_.UserID; ClientType = [string]$_.ClientType; Login = (& $iso $_.LoginDatetime) } }))
   } catch { 'R236-NST-ERR:' + $_.Exception.Message }
   $sq = $null
+  $instId = $null
   try {
     ${TENANT_SQL_SETUP_PS}
   } catch { 'R236-DB-ERR:' + $_.Exception.Message }
@@ -234,6 +304,8 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
     'R236-ACTIVE-SCOPE:' + ($where -join ' AND ') + " (database $db)"
     $rows = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid, [User ID] AS usr, [Client Type] AS ct, CONVERT(varchar(23), [Login Datetime], 126) AS login FROM [dbo].[Active Session] WHERE $($where -join ' AND ')" | ForEach-Object { @{ sid = [int]$_.sid; user = [string]$_.usr; ct = [int]$_.ct; login = [string]$_.login } })
     'R236-ACTIVE:' + (ConvertTo-Json -Compress -InputObject $rows)
+    $iids = @(Invoke-Sqlcmd @sq -Query "SELECT DISTINCT [Server Instance ID] AS iid FROM [dbo].[Active Session] WHERE [Server Instance Name] = N'BC'" | ForEach-Object { [int]$_.iid })
+    if ($iids.Count -eq 1) { $instId = $iids[0] }
   } catch { 'R236-ACTIVE-ERR:' + $_.Exception.Message }
   $sids = @()
   try {
@@ -249,7 +321,11 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
     if (-not $sq) { throw 'tenant database not resolved' }
     'R236-COLS:Session Event:' + (ConvertTo-Json -Compress -InputObject (& $cols 'Session Event'))
     if ($sids.Count -eq 0) { throw 'no finished-op session ids to look up' }
-    $ev = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid, [Event Type] AS typ, CONVERT(varchar(23), [Event Datetime], 126) AS at, [User ID] AS usr FROM [dbo].[Session Event] WHERE [Server Instance Name] = N'BC' AND [Session ID] IN ($($sids -join ','))" | ForEach-Object { @{ sid = [int]$_.sid; type = [int]$_.typ; at = [string]$_.at; user = [string]$_.usr } })
+    # Session Event has no Server Instance Name column (calibration 2): scope by the BC instance's ID,
+    # resolved from Active Session; if that is not resolvable, read unscoped and say so.
+    $scope = if ($instId -ne $null) { "[Server Instance ID] = $instId" } else { '1 = 1' }
+    'R236-EVT-SCOPE:' + $(if ($instId -ne $null) { $scope } else { 'UNSCOPED: the BC instance ID was not resolvable' })
+    $ev = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid, [Event Type] AS typ, CONVERT(varchar(23), [Event Datetime], 126) AS at, [User ID] AS usr FROM [dbo].[Session Event] WHERE $scope AND [Session ID] IN ($($sids -join ','))" | ForEach-Object { @{ sid = [int]$_.sid; type = [int]$_.typ; at = [string]$_.at; user = [string]$_.usr } })
     'R236-EVT:' + (ConvertTo-Json -Compress -InputObject $ev)
   } catch { 'R236-EVT-ERR:' + $_.Exception.Message }
 }`;
@@ -327,10 +403,24 @@ async function main(): Promise<void> {
     };
     const verdicts = judgeRound(data, opts);
     judged.push(verdicts);
+    const observed = {
+      readerIds: readerIds(data, opts.tolMs),
+      clientTypeMap: clientTypeMap(data),
+      assumedClientTypeOptions: ASSUMED_CLIENT_TYPE_OPTIONS,
+      newestFinishedAgeMin:
+        data.finished === null || data.finished.length === 0
+          ? null
+          : Math.round((data.at - Math.max(...data.finished.map((f) => f.startedAt))) / 60_000),
+    };
     appendFileSync(
       out,
-      `${JSON.stringify({ kind: "round", round, ...data, verdicts, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
+      `${JSON.stringify({ kind: "round", round, ...data, verdicts, observed, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
     );
+    if (verdicts.pooling === "not determinable" && observed.newestFinishedAgeMin !== null) {
+      console.log(
+        `round ${round}: newest finished op is ${observed.newestFinishedAgeMin} min old, outside --recent-minutes; pooling cannot be judged (expected before any probe session)`,
+      );
+    }
     console.log(`round ${round}: ${JSON.stringify(verdicts)}`);
     if (round < rounds) await Bun.sleep(intervalMs);
   }
