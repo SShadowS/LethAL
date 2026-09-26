@@ -16,6 +16,7 @@ export {
   findEnclosingCodeBlock,
   isStatementPosition,
   isStatementSlot,
+  gapBlockOf,
   declarationMembers,
 } from "./ast/tree-walks";
 
