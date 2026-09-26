@@ -12,7 +12,6 @@ import {
 } from "./assertion-screen";
 import type { BackendCapabilities } from "./backend";
 import {
-  type EquivalenceMark,
   type EquivalenceMarkReport,
   SURVIVING_VERDICTS,
   applyEquivalenceMarks,
@@ -1986,9 +1985,6 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     deadlineExceeded: 0,
   };
   const mutants: MutantOutcome[] = [];
-  const marksByKey = new Map<string, EquivalenceMark>(
-    (statics.equivalenceMarks ?? []).map((mk) => [mk.key, mk]),
-  );
 
   for (const o of input.outcomes) {
     switch (o.verdict) {
@@ -2070,19 +2066,55 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         ? { procedureEndLine: o.mutant.procedureEndLine }
         : {}),
     };
-    // C02-01: decided per ROW, by this row's operator and identity, because mutant ids restart
-    // per batch and the run-level lists below are keyed by bare `mutantCode` (R231). Same rules as
-    // those lists: risk on `survived` only, a mark on a surviving verdict only.
+    // C02-01: decided per ROW, by this row's operator, because mutant ids restart per batch and
+    // the run-level lists below are keyed by bare `mutantCode` (R231). Same rule as that list:
+    // risk on `survived` only. The row's `readerMark` is added below, from the run-level result.
     const risk =
       row.verdict === "survived" ? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName) : undefined;
-    const mark = SURVIVING_VERDICTS.has(row.verdict)
-      ? marksByKey.get(markIdentityOf(row))
+    mutants.push({ ...row, ...(risk !== undefined ? { equivalenceRisk: risk } : {}) });
+  }
+
+  // R172 proposal 3. Matched here rather than in the fold because it needs the finished per-mutant
+  // verdicts: whether a mark is "matched" or "contradicted" is a question about the OUTCOME, not
+  // about the input the run was given.
+  const marks = statics.equivalenceMarks;
+  let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
+  if (marks !== undefined && marks.length > 0) {
+    const marked: EquivalenceMarkReport = applyEquivalenceMarks(
+      marks,
+      mutants.map((m) => ({
+        mutantCode: m.mutantCode,
+        identity: markIdentityOf(m),
+        verdict: m.verdict,
+      })),
+    );
+    readerMarkedEquivalent = {
+      matched: [...marked.matched]
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
+        .map((m) => ({ mutantCode: m.mutantCode, key: m.key, reason: m.reason })),
+      stale: marked.stale.map((m) => m.key).sort(),
+      contradicted: [...marked.contradicted]
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
+        .map((c) => ({
+          mutantCode: c.mutantCode,
+          key: c.key,
+          reason: c.reason,
+          verdict: c.verdict,
+        })),
+    };
+  }
+  // C02-01: ONE source of truth for a row's `readerMark`: the run-level classification above. A row
+  // carries the mark only when that mark is `matched`, and only on a surviving verdict. A per-row
+  // lookup disagreed with the list when two rows share one identity (the matcher keeps the last
+  // row, so a survivor could carry a mark the list calls `contradicted`).
+  const matchedMarks = new Map((readerMarkedEquivalent?.matched ?? []).map((m) => [m.key, m]));
+  for (const [i, m] of mutants.entries()) {
+    const mark = SURVIVING_VERDICTS.has(m.verdict)
+      ? matchedMarks.get(markIdentityOf(m))
       : undefined;
-    mutants.push({
-      ...row,
-      ...(risk !== undefined ? { equivalenceRisk: risk } : {}),
-      ...(mark !== undefined ? { readerMark: { key: mark.key, reason: mark.reason } } : {}),
-    });
+    if (mark !== undefined) {
+      mutants[i] = { ...m, readerMark: { key: mark.key, reason: mark.reason } };
+    }
   }
 
   const denom = counts.killed + counts.timeoutKilled + counts.survived;
@@ -2237,35 +2269,6 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
               meaning: EQUIVALENCE_RISK_EXPLANATIONS[risk] ?? risk,
             })),
         };
-  // R172 proposal 3. Matched here rather than in the fold because it needs the finished per-mutant
-  // verdicts: whether a mark is "matched" or "contradicted" is a question about the OUTCOME, not
-  // about the input the run was given.
-  const marks = statics.equivalenceMarks;
-  let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
-  if (marks !== undefined && marks.length > 0) {
-    const marked: EquivalenceMarkReport = applyEquivalenceMarks(
-      marks,
-      mutants.map((m) => ({
-        mutantCode: m.mutantCode,
-        identity: markIdentityOf(m),
-        verdict: m.verdict,
-      })),
-    );
-    readerMarkedEquivalent = {
-      matched: [...marked.matched]
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
-        .map((m) => ({ mutantCode: m.mutantCode, key: m.key, reason: m.reason })),
-      stale: marked.stale.map((m) => m.key).sort(),
-      contradicted: [...marked.contradicted]
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
-        .map((c) => ({
-          mutantCode: c.mutantCode,
-          key: c.key,
-          reason: c.reason,
-          verdict: c.verdict,
-        })),
-    };
-  }
   const platformArtifactKills =
     platformKillsByMechanism.size === 0
       ? undefined

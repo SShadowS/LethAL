@@ -611,6 +611,49 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       expect(matched.length).toBe(2);
       expect(rowMarked).toEqual(matched.map((m) => ({ ...m })));
     });
+
+    // Review finding 2 (C02-01 round 1): two rows share ONE R166 identity (the same site in two
+    // batches), one survived and one killed. The run-level matcher keeps the LAST row per identity,
+    // so the order decides `matched` or `contradicted`. A row's `readerMark` must follow that
+    // classification, never a second per-row lookup, or the row and the list disagree.
+    describe("two rows sharing one identity, one survived and one killed (C02-01)", () => {
+      const SITE = { astHash: "hash-shared" };
+      const KEY_SHARED = serializeKey(identityKeyOf(mutant("M0001", SITE)));
+      const marks = [{ key: KEY_SHARED, reason: "R-shared" }];
+      const run = (first: "survived" | "killed", second: "survived" | "killed") =>
+        buildReport(
+          { ...STATICS, equivalenceMarks: marks },
+          seq([
+            setGenerated(2),
+            { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+            scored(mutant("M0001", SITE), 0, first),
+            { type: "baseline-batch-finished", batchIndex: 1, verdicts: [] },
+            scored(mutant("M0001", SITE), 1, second),
+            { type: "session-finished", elapsedMs: 2_000 },
+          ]),
+        );
+      const survivorOf = (r: SessionReport) => {
+        const s = r.mutants.find((m) => m.verdict === "survived");
+        if (s === undefined) throw new Error("buildReport dropped the survivor");
+        return s;
+      };
+
+      test("killed last: the list says contradicted, so no row carries the mark", () => {
+        const report = run("survived", "killed");
+        expect(report.readerMarkedEquivalent?.contradicted.map((c) => c.key)).toEqual([KEY_SHARED]);
+        expect(report.readerMarkedEquivalent?.matched).toEqual([]);
+        expect("readerMark" in survivorOf(report)).toBe(false);
+        expect(report.mutants.filter((m) => m.readerMark !== undefined)).toEqual([]);
+      });
+
+      test("survived last: the list says matched, so the survivor carries the mark", () => {
+        const report = run("killed", "survived");
+        expect(report.readerMarkedEquivalent?.matched.map((c) => c.key)).toEqual([KEY_SHARED]);
+        expect(report.readerMarkedEquivalent?.contradicted).toEqual([]);
+        expect(survivorOf(report).readerMark).toEqual({ key: KEY_SHARED, reason: "R-shared" });
+        expect(report.mutants.filter((m) => m.readerMark !== undefined)).toHaveLength(1);
+      });
+    });
   });
 
   test("explains every hang-capable reason it can carry", () => {
