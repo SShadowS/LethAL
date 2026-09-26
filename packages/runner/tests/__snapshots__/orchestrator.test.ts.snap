@@ -8889,7 +8889,7 @@ exports[`C02-04 characterization 11: parallel workers 1`] = `
 exports[`C02-04 characterization 12: baseline in-flight 1`] = `
 {
   "mutantRows": [],
-  "quarantined": "baseline test in-flight-unknown running OverBudgetDetected",
+  "quarantined": "baseline test in-flight-unknown running OverBudgetDetected: no failure message",
   "testRows": [
     {
       "codeunit_id": 79100,
@@ -9047,7 +9047,7 @@ exports[`C02-04 characterization 12: baseline in-flight 1`] = `
     },
     {
       "event": {
-        "reason": "baseline test in-flight-unknown running OverBudgetDetected",
+        "reason": "baseline test in-flight-unknown running OverBudgetDetected: no failure message",
         "seq": 14,
         "type": "quarantined",
       },

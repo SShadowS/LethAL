@@ -5301,6 +5301,7 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
         outcome: "deadline-exceeded",
         durationMs: 1,
         operation: "in-flight-unknown",
+        failureMessage: "RunMutant timed out after headers: AbortError",
       }),
     });
     const report = await runSessionForTest(backend, {
@@ -5316,7 +5317,10 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
     // Task 12's mutant-loop branch, not a thrown SessionUnsafeError.
     expect(report).not.toBeInstanceOf(Error);
     const sessionReport = report as Awaited<ReturnType<typeof runSession>>;
-    expect(sessionReport.quarantined?.reason).toContain("in-flight-unknown");
+    // R236 Task 6: the quarantine detail names the exit that fired, not just "in-flight-unknown".
+    expect(sessionReport.quarantined?.reason).toBe(
+      "baseline test in-flight-unknown running OverBudgetDetected: RunMutant timed out after headers: AbortError",
+    );
     // No mutant scheduling: the baseline latch must stop the session before step 5/6 ever run,
     // so nothing at all lands in `report.mutants` (not even "no green baseline tests" errors).
     expect(sessionReport.mutants).toHaveLength(0);

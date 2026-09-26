@@ -3383,7 +3383,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         quarantineStore,
         resourceKey,
         nowIso,
-        detail: `baseline test in-flight-unknown running ${ref.method}`,
+        detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}`,
       });
       break;
     }
