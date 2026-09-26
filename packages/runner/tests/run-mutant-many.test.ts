@@ -51,7 +51,13 @@ function req(over: Partial<RunMutantManyRequest> = {}): RunMutantManyRequest {
 /** R206: the session every well-formed answer below ran in, and the id its entries carry. */
 const SESSION = 2037;
 
-function entry(i: number, method: string, result: number, lines = 1): Record<string, unknown> {
+function entry(
+  i: number,
+  method: string,
+  result: number,
+  lines = 1,
+  observedActive = true,
+): Record<string, unknown> {
   const testResults = Array.from({ length: lines }, () => ({ method, result }));
   return {
     index: i,
@@ -61,6 +67,7 @@ function entry(i: number, method: string, result: number, lines = 1): Record<str
     sessionId: SESSION,
     codeunitResults: JSON.stringify({ testResults }),
     durationMs: 40 + i,
+    observedActive,
   };
 }
 
@@ -725,5 +732,34 @@ describe("runMany — the session keys (R206 §2.1)", () => {
     ).runMany(req());
     if (r.kind !== "call") throw new Error("expected the two-line entry to abort the call");
     expect(r.methodIndex).toBe(2);
+  });
+});
+
+describe("runMany — GH-24: observedActive is per-test reach", () => {
+  test("GH-24: observedActive is per entry", async () => {
+    const inner = answer({
+      methods: [
+        entry(1, M[0]?.method ?? "Alpha", 2, 1, false),
+        entry(2, M[1]?.method ?? "Beta", 2, 1, true),
+        entry(3, M[2]?.method ?? "Gamma", 2, 1, false),
+      ],
+    });
+    const r = await transport(fakes({ many: odata(inner) }).fetchFn).runMany(req());
+    expect(r.kind).toBe("verdicts");
+    if (r.kind !== "verdicts") return;
+    expect(r.verdicts.map((v) => v.reachedActive)).toEqual([false, true, false]);
+  });
+
+  test("GH-24: an entry without observedActive is malformed", async () => {
+    const bad = entry(2, M[1]?.method ?? "Beta", 2);
+    bad.observedActive = undefined;
+    const inner = answer({
+      methods: [entry(1, M[0]?.method ?? "Alpha", 2), bad, entry(3, M[2]?.method ?? "Gamma", 2)],
+    });
+    const r = await transport(fakes({ many: odata(inner) }).fetchFn).runMany(req());
+    expect(r.kind).toBe("call");
+    if (r.kind !== "call") return;
+    expect(r.cause).toBe("group-answer-malformed");
+    expect(r.verdict.failureMessage).toMatch(/observedActive/);
   });
 });

@@ -2,8 +2,19 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALNodeKind, findAll, findFirst, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import {
+  ALNodeKind,
+  findAll,
+  findFirst,
+  initParser,
+  parseAL,
+  visit,
+  wrapRoot,
+} from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import { buildComponents } from "../src/components";
+import { REACH_MARKER, reachGrainOf } from "../src/dispatch";
+import { assignMutantIds } from "../src/ids";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
@@ -1378,5 +1389,65 @@ describe("assignIdentityOrdinals (R193)", () => {
     ]);
     expect(out.map((m) => m.identityOrdinal)).toEqual([0, 1, 0]);
     expect(identityTupleOf(out[0] as never)).toContain("|OnInsert|");
+  });
+});
+
+describe("GH-24: the manifest records each mutant's reach grain", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("a manifest entry carries the grain reachGrainOf returned", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-grain-"));
+    try {
+      const src = `codeunit 51907 "G" { procedure P(A: Boolean) var X: Integer; begin if A then Foo(); X := 1; end; local procedure Foo() begin end; }`;
+      const root = wrapRoot(parseAL(src));
+      const nodes: ALSyntaxNode[] = [];
+      visit(root, (n) => {
+        nodes.push(n);
+      });
+      const call = nodes.find((n) => n.kind === ALNodeKind.procedure_call);
+      const assign = nodes.find((n) => n.kind === ALNodeKind.assignment_statement);
+      if (call === undefined || assign === undefined) throw new Error("fixture shape");
+      const mk = (before: ALSyntaxNode, after: string, operatorName: string): MutationSpec => ({
+        operatorName,
+        operatorVersion: "1.0.0",
+        astNodeId: `${before.startIndex}`,
+        before,
+        after: { ...before, text: after } as never,
+        parentContext: "statement-position",
+      });
+      const specs = [mk(call, "", "op.void"), mk(assign, "X := 2", "op.flip")];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path: "G.Codeunit.al", source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+      const expected = new Map<string, string>();
+      const ided = assignMutantIds(new Map([["G.Codeunit.al", specs]])).get("G.Codeunit.al") ?? [];
+      for (const c of buildComponents(ided)) {
+        for (const m of c.members) expected.set(m.mutantId, reachGrainOf(m, c.root));
+      }
+      // Both grains occur, so a manifest that wrote one constant for every entry fails here.
+      expect([...expected.values()].sort()).toEqual(["enclosing", "statement"]);
+
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      const written = new Map<string, string>(
+        manifest.mutants.map((m: { mutantId: string; reachGrain: string }) => [
+          m.mutantId,
+          m.reachGrain,
+        ]),
+      );
+      expect(written).toEqual(expected);
+      const out = await readFile(join(dir, "G.Codeunit.al"), "utf8");
+      for (const [id, grain] of expected) {
+        expect(out.includes(REACH_MARKER(id))).toBe(grain === "statement");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

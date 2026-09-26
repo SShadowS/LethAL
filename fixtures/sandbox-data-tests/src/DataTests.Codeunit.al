@@ -1408,4 +1408,34 @@ codeunit 79310 "Data Tests"
         if Result <> 7 then
             Error('expected 7 from the pass-through, got %1', Result);
     end;
+
+    // ---------------------------------------------------------------------------------------------
+    // GH-24's reach control (`Data Reach Ops`). The two NAMES are load-bearing: R197's last
+    // tie-break is the qualified name, and "ReachTakesBranch" sorts before "ReachWithoutBranch", so
+    // the test that enters the branch runs FIRST in a grouped call and the one that does not runs
+    // SECOND. A per-test reset that does nothing then reads `true` twice instead of `true, false`.
+    // Neither test reads `Seen`, so a mutant inside the branch survives and both always run.
+    // ---------------------------------------------------------------------------------------------
+
+    [Test]
+    procedure ReachTakesBranch()
+    var
+        ReachOps: Codeunit "Data Reach Ops";
+        Result: Integer;
+    begin
+        Result := ReachOps.Classify(500);
+        if Result <> 500 then
+            Error('expected 500 from Classify(500), got %1', Result);
+    end;
+
+    [Test]
+    procedure ReachWithoutBranch()
+    var
+        ReachOps: Codeunit "Data Reach Ops";
+        Result: Integer;
+    begin
+        Result := ReachOps.Classify(10);
+        if Result <> 10 then
+            Error('expected 10 from Classify(10), got %1', Result);
+    end;
 }

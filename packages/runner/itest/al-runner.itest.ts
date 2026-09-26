@@ -43,6 +43,11 @@ import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  assertEveryMutantHasReachGrain,
+  assertNoReachAttestation,
+  printReachSummary,
+} from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
@@ -343,6 +348,13 @@ function assertVerdictTable(report: SessionReport): void {
     4,
     "DiscountedPrice is never called by any test — R220: its 4 mutants must be no-coverage, not survived and never killed",
   );
+
+  // GH-24 plan Decision 11: al-runner has no attestation mechanism at all — `Reached` is a no-op
+  // in its selectors, so no mutant may carry `guardReached`, whatever its grain. `reachGrain`
+  // itself is still a compile-time fact and must still be written.
+  printReachSummary(report);
+  assertEveryMutantHasReachGrain(report);
+  assertNoReachAttestation(report);
 }
 
 /**

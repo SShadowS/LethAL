@@ -230,6 +230,7 @@ codeunit 91012 "LC Run Many"
             RunLine.SetFilter("Line No.", '%1|%2', HeaderLineNo, FnLineNo);
             RunLine.FindFirst();
             TStart := CurrentDateTime;
+            State.ResetObservedActive();
             State.NoteTestMethodRun();
             Mgt.RunTests(RunLine, ALTestSuite);
             // PROGRESS_BETWEEN_FIRST (R198): the very next statement after the run returns.
@@ -249,6 +250,7 @@ codeunit 91012 "LC Run Many"
             One.Add('sessionId', SessionId());
             One.Add('codeunitResults', FunctionLineResults(Mgt, FnLine, CodeunitId, HeaderNames.Get(I)));
             One.Add('durationMs', DurationMs(CurrentDateTime - TStart));
+            One.Add('observedActive', State.AttestationObservedActive());
             Ran.Add(One);
 
             if StopAtFirstFailure and (Result <> 2) then begin

@@ -48,6 +48,8 @@ function echo(over: Record<string, unknown> = {}): Record<string, unknown> {
     // R206 §2.1: every answer that ran carries the session keys (control app 1.0.0.18).
     testRunsBefore: 0,
     sessionId: 2037,
+    // GH-24: every answer that ran carries this test's own reach attestation (control app 1.0.0.19).
+    observedActive: true,
     ...over,
   };
 }
@@ -480,6 +482,24 @@ describe("RunMutantTransport.run — per-run attestation (spec §G)", () => {
     const v = await transport(okFetch(inner)).run(REQ);
     expect(v.outcome).toBe("pass");
     expect(v.attestation).toEqual({ observedAny: false, identityMismatch: false });
+  });
+});
+
+describe("RunMutantTransport.run — GH-24: per-test reach attestation", () => {
+  test("a ran answer without observedActive is an error, not unreached", async () => {
+    const inner = echo({ observedAny: true, identityMismatch: false });
+    inner.observedActive = undefined;
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toMatch(/observedActive.*1\.0\.0\.19/);
+    expect(v.reachedActive).toBeUndefined();
+  });
+
+  test("observedActive reaches the verdict", async () => {
+    const inner = echo({ observedAny: true, identityMismatch: false, observedActive: false });
+    const v = await transport(okFetch(inner)).run(REQ);
+    expect(v.reachedActive).toBe(false);
+    expect(v.attestation).toEqual({ observedAny: true, identityMismatch: false });
   });
 });
 

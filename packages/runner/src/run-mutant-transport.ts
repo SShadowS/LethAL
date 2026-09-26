@@ -136,6 +136,8 @@ interface GroupEntry {
   /** R206: the function line the entry ran (distinct across a call) and the session it ran in. */
   readonly lineNo: unknown;
   readonly sessionId: unknown;
+  /** GH-24: per-entry reach attestation — see `TestVerdict.reachedActive`. */
+  readonly observedActive: unknown;
 }
 
 /** Parsed `LethALControl_RunMutant` result (the JSON string inside OData's scalar `value`). */
@@ -151,6 +153,8 @@ interface RunMutantResult {
   readonly codeunitResults?: unknown;
   readonly observedAny?: unknown;
   readonly identityMismatch?: unknown;
+  /** GH-24: per-test reach attestation — see `TestVerdict.reachedActive`. */
+  readonly observedActive?: unknown;
   /** R58: present only on the `RunMutantWithCoverage` action — see `FencedCoverageRow`. */
   readonly coverage?: unknown;
   /**
@@ -1024,12 +1028,23 @@ export class RunMutantTransport {
             ? JSON.stringify(raw.codeunitResults)
             : undefined;
       if (results === undefined) return malformed(`entry ${i + 1} has no codeunitResults`);
+      // GH-24: this entry's own reach attestation, checked here so the mapper never sees a
+      // call-level stand-in — each entry's value comes from THAT entry.
+      if (typeof raw.observedActive !== "boolean")
+        return malformed(
+          `entry ${i + 1} has no boolean observedActive (control app 1.0.0.19, GH-24)`,
+        );
       // The three per-entry faults that abort the session today keep doing so: the line count,
       // BC's own inner method name, and the result enum are checked by the SAME code `run` uses.
       const v = this.mapRanResult(
         want.ref,
         raw.durationMs,
-        { codeunitResults: results, observedAny: attestation.observedAny, identityMismatch: false },
+        {
+          codeunitResults: results,
+          observedAny: attestation.observedAny,
+          identityMismatch: false,
+          observedActive: raw.observedActive,
+        },
         fencedOp,
       );
       if (v.outcome === "error") return call(v);
@@ -1376,7 +1391,10 @@ export class RunMutantTransport {
   private mapRanResult(
     ref: TestMethodRef,
     durationMs: number,
-    result: Pick<RunMutantResult, "codeunitResults" | "observedAny" | "identityMismatch">,
+    result: Pick<
+      RunMutantResult,
+      "codeunitResults" | "observedAny" | "identityMismatch" | "observedActive"
+    >,
     fencedOp: { readonly attemptId: string; readonly opSeq: number },
   ): TestVerdict {
     if (typeof result.codeunitResults !== "string") {
@@ -1455,12 +1473,24 @@ export class RunMutantTransport {
           "RunMutant attestation identity mismatch: a selector with a non-matching (targetAppId, artifactId) ran — wrong/stale binary",
       };
     }
+    // GH-24: a `ran` answer must carry a boolean `observedActive` for THIS test method. Never
+    // defaulted to `false` — a missing value is refused rather than read as "not reached".
+    if (typeof result.observedActive !== "boolean") {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage:
+          "RunMutant answer ran but carries no boolean observedActive; control app 1.0.0.19 stamps it on every answer (GH-24). Refusing to read a missing value as unreached.",
+      };
+    }
     const failureMessage = this.failureTextOf(line);
     return {
       ref,
       outcome,
       durationMs,
       attestation,
+      reachedActive: result.observedActive,
       ...(outcome === "fail" && failureMessage !== undefined ? { failureMessage } : {}),
     };
   }

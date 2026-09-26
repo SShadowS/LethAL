@@ -771,6 +771,14 @@
             "astHash": {
               "type": "string"
             },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
+            },
             "objectType": {
               "type": "string"
             },
@@ -880,6 +888,15 @@
         "guardObserved": {
           "type": "boolean"
         },
+        "guardReached": {
+          "type": "boolean"
+        },
+        "reachedBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "runner": {
           "type": "string",
           "enum": [
@@ -961,6 +978,14 @@
             },
             "astHash": {
               "type": "string"
+            },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
             },
             "objectType": {
               "type": "string"
@@ -1122,6 +1147,14 @@
             },
             "astHash": {
               "type": "string"
+            },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
             },
             "objectType": {
               "type": "string"

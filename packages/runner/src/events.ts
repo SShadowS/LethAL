@@ -346,6 +346,10 @@ export type RunEventInput =
       readonly coveringTests: readonly string[];
       readonly coverageAttribution?: CoverageAttribution;
       readonly guardObserved?: boolean;
+      /** GH-24: see `MutantOutcome.guardReached` (report.ts). The grain rides on `mutant`. */
+      readonly guardReached?: boolean;
+      /** GH-24: see `MutantOutcome.reachedBy` (report.ts). Present exactly when `guardReached` is. */
+      readonly reachedBy?: readonly string[];
       readonly runner?: RunnerKind;
       /**
        * The constant diagnosis note — `describeRunnerDisagreement(coverageMode)`

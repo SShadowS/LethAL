@@ -6173,6 +6173,10 @@ async function runMutantsOnBackend(args: {
     // Whether any instrumented guard fired during this mutant's runs — see
     // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
     let guardObserved: boolean | undefined;
+    // GH-24: per-test reach, folded into `guardReached`/`reachedBy` after the loop.
+    const reachedBy: string[] = [];
+    let reachAnswered = false;
+    let reachUnanswered = false;
     // mutant_row_id isn't known until recordMutant() runs below (the
     // verdict — and thus the recordMutant call — only lands AFTER this
     // loop finishes), so buffer this mutant's test-result rows here and
@@ -6247,6 +6251,14 @@ async function runMutantsOnBackend(args: {
       // that cannot attest — see `MutantOutcome.guardObserved`.
       if (v.attestation !== undefined) {
         guardObserved = (guardObserved ?? false) || v.attestation.observedAny;
+      }
+      // GH-24: per-test reach. Unmeasured, never false: a run without an answer (timeout, a
+      // stopped 408, transport error, in-flight, al-runner) leaves the mutant unmeasured unless
+      // another run reached. Only statement-grain mutants are ever decided (after the loop).
+      if (v.reachedActive === undefined) reachUnanswered = true;
+      else {
+        reachAnswered = true;
+        if (v.reachedActive) reachedBy.push(qualifiedTestName(ref));
       }
       // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
       // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
@@ -6535,6 +6547,15 @@ async function runMutantsOnBackend(args: {
         failureNote = `group-coverage-incomplete: every call answered and every returned method passed, but ${missing.length} of ${wanted.size} covering test(s) were never attempted (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}) — not a survivor (R198)`;
       }
     }
+    // GH-24: a manifest with no grain (written before GH-24) is never decided either.
+    const reach =
+      m.reachGrain !== "statement"
+        ? undefined
+        : reachedBy.length > 0
+          ? { guardReached: true, reachedBy }
+          : reachAnswered && !reachUnanswered
+            ? { guardReached: false, reachedBy: [] }
+            : undefined;
     const mutantRowId = record(
       args.store,
       args.runId,
@@ -6562,6 +6583,7 @@ async function runMutantsOnBackend(args: {
       killingTestFailure,
       undefined, // unplaceable
       killPosition,
+      reach,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -7215,6 +7237,10 @@ export function record(
   // `MutantOutcome.killPosition`. Passed by the two call sites that decide a kill and by the two
   // resume replays; absent on every other verdict.
   killPosition?: number,
+  // GH-24: a decided reach, `guardReached` with its `reachedBy` (see `MutantOutcome.guardReached`).
+  // Passed only by the covering loop, and only for a `"statement"`-grain mutant it measured. The
+  // grain itself rides on `m`. Rides on `mutant-scored` only; the store gets none of it.
+  reach?: { readonly guardReached: boolean; readonly reachedBy: readonly string[] },
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -7249,6 +7275,9 @@ export function record(
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(guardObserved !== undefined ? { guardObserved } : {}),
+    ...(reach !== undefined
+      ? { guardReached: reach.guardReached, reachedBy: reach.reachedBy }
+      : {}),
     ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
@@ -7300,6 +7329,9 @@ export function record(
       coveringTests,
       ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
       ...(guardObserved !== undefined ? { guardObserved } : {}),
+      ...(reach !== undefined
+        ? { guardReached: reach.guardReached, reachedBy: reach.reachedBy }
+        : {}),
       ...(runner !== undefined ? { runner } : {}),
       ...(runnerDisagreement !== undefined ? { runnerDisagreement } : {}),
       ...(runnerDisagreementTest !== undefined ? { runnerDisagreementTest } : {}),

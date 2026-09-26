@@ -9,7 +9,9 @@ import {
   maskAlNonCode,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
+import { buildComponents } from "./components";
 import { type TierResolver, dedupeSpecs } from "./dedup";
+import { type ReachGrain, reachGrainOf } from "./dispatch";
 import type { DeclaredObject } from "./id-ranges";
 import { assignMutantIds } from "./ids";
 import {
@@ -101,6 +103,14 @@ export interface MutantManifestEntry {
   readonly operatorName: string;
   readonly operatorVersion: string;
   readonly astHash: string;
+  /**
+   * GH-24: where reach can be measured for this mutant, decided when the dispatch chain is emitted
+   * (`reachGrainOf`). Only `statement` mutants carry a `MutationSelector.Reached` marker.
+   * `writeInstrumentedProject` always writes it. Optional only for the same reason as
+   * `identityOrdinal`: this type is embedded in the event stream, and a stream or manifest written
+   * before GH-24 has no grain and must still validate. Absent means "not recorded", never a grain.
+   */
+  readonly reachGrain?: ReachGrain;
   /**
    * The AL object KEYWORD this mutant's object was declared with, lowercased: `table`,
    * `codeunit`, `page`, `report`, `query`, `xmlport`, `enum`.
@@ -479,6 +489,12 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     const headers = objectHeadersOf(f.source, f.path);
     assertNoUnsupportedObjectMix(headers, f.path);
     const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
+    // The same components `compileSchemataForFile` builds from the same `ided`, so the grain
+    // recorded here is the one the emitted chain placed (or omitted) its marker by.
+    const grainOf = new Map<string, ReachGrain>();
+    for (const c of buildComponents(ided)) {
+      for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
+    }
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
@@ -488,6 +504,10 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       const header = attributeHeader(headers, spec, f.path);
       const procedureScope = procedureScopeOf(spec);
       const member = enclosingMemberOf(spec);
+      const reachGrain = grainOf.get(mutantId);
+      if (reachGrain === undefined) {
+        throw new Error(`writeInstrumentedProject: no reach grain for ${mutantId} in ${f.path}`);
+      }
       unnumbered.push({
         mutantId,
         file: f.path,
@@ -497,6 +517,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
         astHash: astSubtreeHash(spec.before),
+        reachGrain,
         objectType: header.type,
         codeunitId: header.id,
         codeunitName: header.name,
