@@ -337,19 +337,14 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
 }
 
 /**
- * Decision 8. Recomputes the target's source hash with the SAME function and preprocessor symbols
- * the source run recorded it with. Reads the project's files; never a server.
+ * Carried item 1: a missing project directory or app.json is a `project-unreadable` refusal, not
+ * an ENOENT from the hash or a plain error from the backend build. `lethal verify` runs it before
+ * it builds anything; `assertSourceUnchanged` runs it again before hashing.
  */
-export async function assertSourceUnchanged(
-  source: VerifySource,
-  preprocessorSymbols: readonly string[],
-  /** The test project, only to say so when it lies inside the target (carried item 3). */
-  testDir?: string,
-): Promise<void> {
-  // Carried item 1: a missing project or app.json is a refusal, not an ENOENT from the hash.
+export async function assertProjectReadable(projectPath: string): Promise<void> {
   for (const [path, want] of [
-    [source.projectPath, "directory"],
-    [join(source.projectPath, "app.json"), "file"],
+    [projectPath, "directory"],
+    [join(projectPath, "app.json"), "file"],
   ] as const) {
     const st = await stat(path).catch(() => undefined);
     if (st === undefined || (want === "directory" ? !st.isDirectory() : !st.isFile())) {
@@ -359,6 +354,19 @@ export async function assertSourceUnchanged(
       );
     }
   }
+}
+
+/**
+ * Decision 8. Recomputes the target's source hash with the SAME function and preprocessor symbols
+ * the source run recorded it with. Reads the project's files; never a server.
+ */
+export async function assertSourceUnchanged(
+  source: VerifySource,
+  preprocessorSymbols: readonly string[],
+  /** The test project, only to say so when it lies inside the target (carried item 3). */
+  testDir?: string,
+): Promise<void> {
+  await assertProjectReadable(source.projectPath);
   const now = await hashTargetSource(source.projectPath, preprocessorSymbols);
   if (now !== source.sourceSha256) {
     // Carried item 3: one whole-source hash cannot say WHICH file changed, so this says the one

@@ -105,6 +105,7 @@ import {
   VerifyError,
   type VerifyOutput,
   artifactRecordOf,
+  assertProjectReadable,
   parseVerifyRequest,
   refusalOutput,
   runVerify,
@@ -1212,7 +1213,7 @@ const FLAG_OWNERS: ReadonlyArray<{
 ];
 
 /** Plan decision 1: the only flags `lethal verify` reads. Every other one is refused, not ignored. */
-const VERIFY_FLAGS: ReadonlySet<string> = new Set([
+export const VERIFY_FLAGS: ReadonlySet<string> = new Set([
   "db",
   "artifact",
   "tests",
@@ -4648,12 +4649,8 @@ export async function verifyFromCli(
     }
     store = new ResultsStore(parsed.dbPath);
     const projectDir = resolve(artifactRecordOf(store, parsed.artifact).projectPath);
-    if (!existsSync(projectDir)) {
-      throw new VerifyError(
-        "project-unreadable",
-        `the source run's project directory ${projectDir} does not exist`,
-      );
-    }
+    // Before the config and the backend: buildBackend reads app.json and would throw a plain error.
+    await assertProjectReadable(projectDir);
     const configFile = await loadLethalConfigFile(
       parsed.configPath ?? join(projectDir, "lethal.config.json"),
     );
