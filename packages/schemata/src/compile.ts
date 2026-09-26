@@ -83,21 +83,33 @@ function injectReachLatches(
       owner.kind !== ALNodeKind.trigger
     )
       owner = owner.parent;
-    const body = owner?.children.findIndex((n) => n.kind === ALNodeKind.block) ?? -1;
-    const before = owner?.children[body - 1];
-    if (owner === null || before === undefined) {
+    const body = owner?.children.find((n) => n.kind === ALNodeKind.block);
+    const begin = body?.children[0];
+    if (owner === null || begin === undefined) {
       throw new Error(
         `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared.`,
       );
     }
     if (done.has(owner.startIndex)) continue;
     done.add(owner.startIndex);
-    const text =
-      before.kind === ALNodeKind.var_section
-        ? ` ${REACH_LATCH}: Boolean;`
-        : ` var ${REACH_LATCH}: Boolean;`;
-    rewrites.set(insertionNodeAt(before, before.endIndex), text);
+    // Fix round 1: a comment is a node of its own, so neither anchor may be "the node before
+    // begin". After a `//` comment the declaration would be commented out (AL0118), and a comment
+    // between the var section and begin used to hide the section and emit a second one.
+    const vars = owner.children.find((n) => n.kind === ALNodeKind.var_section);
+    const decls = vars?.children.find((n) => n.kind === "var_body") ?? vars;
+    const lastDecl = decls?.children.filter((n) => !isComment(n)).at(-1);
+    if (vars !== undefined && lastDecl !== undefined) {
+      // After the last DECLARATION, before any trailing comment on its line.
+      rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${REACH_LATCH}: Boolean;`);
+    } else {
+      // Directly before `begin`, after any comment: the header's own line comment ends at a newline.
+      rewrites.set(insertionNodeAt(begin, begin.startIndex), `var ${REACH_LATCH}: Boolean; `);
+    }
   }
+}
+
+function isComment(n: ALSyntaxNode): boolean {
+  return n.rawKind === "comment" || n.rawKind === "multiline_comment";
 }
 
 /** Raw grammar kinds of a `codeunit_declaration`'s three header tokens. */

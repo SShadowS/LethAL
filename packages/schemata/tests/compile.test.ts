@@ -1277,6 +1277,59 @@ describe("GH-24: reach grain and marker placement", () => {
     expect(compile(caseArms()).split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
   });
 
+  // R246 fix round 1: a comment is a node of its own, so "the node before begin" can be a comment,
+  // and text inserted after a `//` comment is commented out (AL0118 at alc, every mutant error).
+  const latchOut = (src: string): string => {
+    const root = parse(src);
+    const target = nth(root, ALNodeKind.assignment_statement, 0, "X := 2");
+    return compile({
+      src,
+      root,
+      specs: [spec(target, "", "lethal.remove-assignment")],
+      wrapped: [],
+    });
+  };
+
+  it("R246 fix 1: a trailing // on the last variable does not swallow the latch", () => {
+    // A trailing `//` on the last variable: the declaration goes after the variable, before it.
+    expect(
+      latchOut(
+        `codeunit 51908 "R" { procedure P() var X: Integer; // note\n begin X := 1; X := 2; end; }`,
+      ),
+    ).toContain(`var X: Integer; ${REACH_LATCH}: Boolean; // note\n begin`);
+  });
+
+  it("R246 fix 1: a // after the header, with no var section, does not swallow the latch", () => {
+    // A `//` after the header and no var section: a new section right before `begin`.
+    expect(
+      latchOut(`codeunit 51909 "R" { procedure P(X: Integer) // hdr\n    begin X := 2; end; }`),
+    ).toContain(`procedure P(X: Integer) // hdr\n    var ${REACH_LATCH}: Boolean; begin`);
+  });
+
+  it("R246 fix 1: with no var section, the declaration lands before a body-rooted chain", () => {
+    // The insertion and the chain start at the same index; the insertion must print first.
+    const src = `codeunit 51911 "R" { procedure P(X: Integer) begin X := 2; end; }`;
+    const root = parse(src);
+    const out = compile({
+      src,
+      root,
+      specs: [spec(bodyOf(root, "P"), "begin end", "lethal.empty-block")],
+      wrapped: [],
+    });
+    expect(out).toContain(`procedure P(X: Integer) var ${REACH_LATCH}: Boolean; begin\n`);
+  });
+
+  it("R246 fix 1: a // line and a /* */ block before begin keep one var section", () => {
+    // A `//` line and a `/* */` block between the var section and `begin`: still one var section.
+    const between = latchOut(
+      `codeunit 51910 "R" { procedure P() var X: Integer;\n /* blk */\n // line\n begin X := 1; X := 2; end; }`,
+    );
+    expect(between).toContain(
+      `var X: Integer; ${REACH_LATCH}: Boolean;\n /* blk */\n // line\n begin`,
+    );
+    expect(between.split(/\bvar\b/).length - 1).toBe(2); // the object's MutationSelector var, and P's
+  });
+
   it("R246: a trigger with a marker declares the latch too", () => {
     const src = `codeunit 51907 "R" { trigger OnRun() var X: Integer; begin X := 1; X := 2; end; }`;
     const root = parse(src);
