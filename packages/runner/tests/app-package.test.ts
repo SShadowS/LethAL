@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AppMethodIndex, objectTypeName } from "../src/app-package";
@@ -243,6 +243,27 @@ describe("fromSymbolReference with namespaces (issue #9)", () => {
       ],
     });
     expect([...index.declaredObjects()].sort()).toEqual(["codeunit:50100", "codeunit:50101"]);
+  });
+
+  /**
+   * The tests above use a hand-written shape. This one uses what `alc` 18.0.41 actually wrote for
+   * `fixtures/sandbox-app` 1.0.0.1 (GH-09): `Sandbox Logic` in `namespace LethAL.Sandbox.Logic`,
+   * `Sandbox Pricing` at the root. Extracted from the compiled `.app`, byte order mark stripped,
+   * whitespace formatted; it holds names and ids only, no source.
+   */
+  it("GH-09: a real alc SymbolReference of a mixed namespaced app declares both objects", async () => {
+    const json = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "data", "gh09-mixed-namespace.symbolreference.json"),
+        "utf8",
+      ),
+    ) as unknown;
+    const index = AppMethodIndex.fromSymbolReference(json);
+    const declared = index.declaredObjects();
+    expect(declared.has("codeunit:79000")).toBe(true);
+    expect(declared.has("codeunit:79001")).toBe(true);
+    // `IsOverBudget`'s method id as alc assigned it in this build.
+    expect(index.lookup(5, 79000, -352596841)).toBe("IsOverBudget");
   });
 });
 
