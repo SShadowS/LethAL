@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 253 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**47 of 254 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -103,6 +103,7 @@ that ordering is the priority.
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · open
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · open
+- **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 
 ## Product gaps a real project hits
