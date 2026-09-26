@@ -221,6 +221,15 @@
               "key": { "type": "string" },
               "reason": { "type": "string" }
             }
+          },
+          "artifactId": {
+            "type": "string",
+            "description": "Verbatim from the report's artifacts[] entry whose batchIndex equals this row's: the artifact THIS run recorded for the row's batch. Not proof the verdict came from that binary. Absent exactly when artifactIdAbsent is present."
+          },
+          "artifactIdAbsent": {
+            "type": "string",
+            "enum": ["carried", "not-recorded", "not-published"],
+            "description": "Why artifactId is absent. carried: the verdict was carried by --resume and measured against a prior run's artifact, which this report does not name. not-recorded: the report has no artifacts field (written before it existed). not-published: the report has artifacts but no entry for this batch."
           }
         }
       }

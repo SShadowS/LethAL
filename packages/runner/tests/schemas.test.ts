@@ -12,7 +12,12 @@ import {
   doctorJson,
 } from "../src/cli";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
-import { EXPLAIN_SCHEMA_VERSION, SURVIVOR_RANKINGS, TOOL_CONDITIONS } from "../src/explain";
+import {
+  ARTIFACT_ID_ABSENCES,
+  EXPLAIN_SCHEMA_VERSION,
+  SURVIVOR_RANKINGS,
+  TOOL_CONDITIONS,
+} from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
 import {
   CAVEAT_INTERPRETATIONS,
@@ -223,6 +228,7 @@ describe("published JSON Schemas (R152)", () => {
         "SurvivorRanking",
         "MutantErrorCause",
         "ToolCondition",
+        "ArtifactIdAbsence",
         'ReportValidity["reliability"]',
       ],
     });
@@ -259,6 +265,9 @@ describe("published JSON Schemas (R152)", () => {
     );
     expect(enumAt(explainSchema, "$.toolConditions[].condition")).toEqual([...TOOL_CONDITIONS]);
     expect(enumAt(explainSchema, "$.survivorSelection.rankedBy")).toEqual([...SURVIVOR_RANKINGS]);
+    expect(enumAt(explainSchema, "$.survivors[].artifactIdAbsent")).toEqual([
+      ...ARTIFACT_ID_ABSENCES,
+    ]);
     expect(enumAt(doctorSchema, "$.notChecked")).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(enumAt(doctorSchema, "$.caveat.kind")).toEqual([...DOCTOR_CAVEAT_KINDS]);
   });

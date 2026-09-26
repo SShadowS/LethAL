@@ -7,6 +7,7 @@ import { tier1Operators } from "@lethal/builtin-tier1";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
+  ARTIFACT_ID_ABSENCES,
   EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
@@ -308,6 +309,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   // SurvivorRanking — R150. Describes how this projection ordered its own output, so it can come
   // from nowhere but here.
   ...SURVIVOR_RANKINGS,
+  // ArtifactIdAbsence — C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
+  // artifactId, which the report states only by the absence of a field.
+  ...ARTIFACT_ID_ABSENCES,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -365,8 +369,8 @@ describe("explain — the plan's own four tests", () => {
  *   unstable/deadlineExceeded  1 each, matching M0005 and M0004's `cause`
  *   caveats      `resumed` included because `resumedFrom` is set, which `buildReport` pushes
  *                UNCONDITIONALLY — the final review caught this one missing
- *   resumedFrom  `carriedMutants: 0` because no outcome here is `carried` (the fold counts it 1:1),
- *                which is a documented, meaningful state: the resume found nothing to carry.
+ *   resumedFrom  `carriedMutants: 1` because exactly one outcome here (M0003) is `carried`; the
+ *                fold counts it 1:1.
  *                `skippedStranded: 2` is backed by the two `strandedSkipMutant` rows above.
  */
 function fullCoverageReport(): SessionReport {
@@ -398,10 +402,13 @@ function fullCoverageReport(): SessionReport {
   };
   // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name —
   // reaches the `triggerName` leaf the "no dead entries" test needs.
+  // It is also CARRIED, so the `artifactIdAbsent` leaf is reached (as "carried"), while M0001 in
+  // batch 1 reaches `artifactId` through `artifacts` below.
   const triggerSurvivor: MutantOutcome = {
     ...survivorMutant("M0003", "all-green", undefined, 6),
     procedureName: "",
     triggerName: "OnValidate",
+    carried: true,
   };
   return {
     ...base,
@@ -443,7 +450,17 @@ function fullCoverageReport(): SessionReport {
     ],
     testsOnly: ["test/Posting/**"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
-    resumedFrom: { runId: 7, carriedMutants: 0, skippedStranded: 2 },
+    resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
+    // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
+    // carried, so this run names no artifact for it whatever `artifacts` holds.
+    artifacts: [
+      {
+        batchIndex: 1,
+        artifactId: "0123456789abcdef0123456789abcdef",
+        sha256: "c".repeat(64),
+        appVersion: "1.0.9.9",
+      },
+    ],
   };
 }
 
@@ -502,6 +519,7 @@ function derivedExplainLeafPaths(): readonly string[] {
       "SurvivorRanking",
       "MutantErrorCause",
       "ToolCondition",
+      "ArtifactIdAbsence",
       'ReportValidity["reliability"]',
     ],
   });
@@ -558,6 +576,8 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].equivalenceRisk", // [verbatim]
   "$.survivors[].readerMark.key", // [verbatim]
   "$.survivors[].readerMark.reason", // [verbatim]
+  "$.survivors[].artifactId", // [joined] artifacts[].artifactId whose batchIndex equals the row's
+  "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
   "$.notMeasured[].line", // [verbatim]
@@ -1022,6 +1042,8 @@ describe("explain — survivors", () => {
     expect(s?.reachInterpretation).toBe(REACH_INTERPRETATIONS["covered-but-unreached"]);
     expect(Object.keys(s ?? {}).sort()).toEqual(
       [
+        // C02-01 Task 4: `reportFixture()` has no `artifacts`, so the row says `not-recorded`.
+        "artifactIdAbsent",
         "attribution",
         "batchIndex",
         "codeunitName",
@@ -1380,6 +1402,121 @@ describe("explain — the split contract", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————————————————————
+// C02-01 Task 4: each survivor names the artifact its batch recorded, or says why not. Fixture ids
+// are literals, so the oracle is the fixture, never the lookup.
+// ————————————————————————————————————————————————————————————————————————————————————————
+
+describe("explain — artifactId (C02-01)", () => {
+  const A1 = "0123456789abcdef0123456789abcdef";
+  const A4 = "fedcba9876543210fedcba9876543210";
+  const artifacts = [
+    { batchIndex: 1, artifactId: A1, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+    { batchIndex: 4, artifactId: A4, sha256: "b".repeat(64), appVersion: "1.0.1.2" },
+  ];
+
+  test("each survivor names the artifact its batch recorded", () => {
+    // M0001 in batch 1 and M0001 AGAIN in batch 4 (ids restart per batch). Indexes 1 and 4, not 0
+    // and 1, so a lookup by array position fails here.
+    const out = explain(
+      reportFixture({
+        artifacts,
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0001", "exact", true, 4),
+        ],
+      }),
+    );
+    const [b1, b4] = out.survivors;
+    expect(b1?.batchIndex).toBe(1);
+    expect(b1?.artifactId).toBe(A1);
+    expect(b4?.batchIndex).toBe(4);
+    expect(b4?.artifactId).toBe(A4);
+    expect("artifactIdAbsent" in (b1 ?? {})).toBe(false);
+    expect("artifactIdAbsent" in (b4 ?? {})).toBe(false);
+  });
+
+  test("a carried survivor never borrows its batch's artifactId", () => {
+    const out = explain(
+      reportFixture({
+        artifacts,
+        mutants: [{ ...survivorMutant("M0001", "exact", true, 4), carried: true }],
+      }),
+    );
+    const [s] = out.survivors;
+    expect(s?.artifactIdAbsent).toBe("carried");
+    expect("artifactId" in (s ?? {})).toBe(false);
+  });
+
+  test("a batch with no artifact says not-published beside a published one", () => {
+    const [first] = artifacts;
+    if (first === undefined) throw new Error("fixture has no batch-1 artifact");
+    const out = explain(
+      reportFixture({
+        artifacts: [first],
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0001", "exact", true, 4),
+        ],
+      }),
+    );
+    const [b1, b4] = out.survivors;
+    expect(b1?.artifactId).toBe(A1);
+    expect(b4?.artifactIdAbsent).toBe("not-published");
+    expect("artifactId" in (b4 ?? {})).toBe(false);
+
+    const none = explain(
+      reportFixture({
+        artifacts: [],
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0002", "exact", true, 4),
+        ],
+      }),
+    );
+    expect(none.survivors.map((s) => s.artifactIdAbsent)).toEqual([
+      "not-published",
+      "not-published",
+    ]);
+  });
+
+  test("a report without artifacts says not-recorded", () => {
+    const out = explain(reportFixture());
+    expect(out.survivors.length).toBeGreaterThan(0);
+    for (const s of out.survivors) {
+      expect(s.artifactIdAbsent).toBe("not-recorded");
+      expect("artifactId" in s).toBe(false);
+    }
+  });
+
+  test("a malformed artifacts[] is refused", () => {
+    const entry = { batchIndex: 1, artifactId: A1, sha256: "a".repeat(64), appVersion: "1.0.1.1" };
+    for (const value of [
+      "not an array",
+      [entry, { ...entry, artifactId: A4 }], // batchIndex 1 twice
+      [{ ...entry, batchIndex: "1" }],
+      [{ ...entry, batchIndex: -1 }],
+      [{ ...entry, batchIndex: 1.5 }],
+      [{ ...entry, artifactId: 7 }],
+      [null],
+    ]) {
+      const bad = reportFixture({ artifacts: value } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/artifacts/);
+    }
+  });
+
+  test("a non-boolean carried is refused", () => {
+    for (const value of ["true", 1, null]) {
+      const bad = reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact", true), carried: value }],
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/carried/);
+    }
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————————————————————
 // R113: `explain` is the first consumer to meet the blind `JSON.parse(...) as SessionReport` cast.
 // ————————————————————————————————————————————————————————————————————————————————————————
 
@@ -1575,6 +1712,28 @@ describe("explain — the real campaign reports", () => {
           .filter((s) => !allowed.has(s))
           .map((s) => `${name}: ${s}`),
       ).toEqual([]);
+      // C02-01: every survivor has exactly one of `artifactId` / `artifactIdAbsent`.
+      for (const s of out.survivors) {
+        expect(`${name}: ${"artifactId" in s} ${"artifactIdAbsent" in s}`).toMatch(
+          /: (true false|false true)$/,
+        );
+      }
+    }
+  });
+
+  test("rung1.resumed-run: carried survivors say carried, the rest say not-recorded (C02-01)", () => {
+    const raw = load("rung1.resumed-run.report.json");
+    const out = explain(raw);
+    // Keyed by (batchIndex, mutantCode): mutant ids restart per batch.
+    const id = (m: { batchIndex?: number; mutantCode: string }) =>
+      `${m.batchIndex}/${m.mutantCode}`;
+    const carried = new Set(
+      raw.mutants.filter((m) => m.verdict === "survived" && m.carried === true).map(id),
+    );
+    expect(carried.size).toBe(54); // measured 2026-09-25: 108 survivors, 54 carried
+    for (const s of out.survivors) {
+      expect("artifactId" in s).toBe(false);
+      expect(s.artifactIdAbsent).toBe(carried.has(id(s)) ? "carried" : "not-recorded");
     }
   });
 
