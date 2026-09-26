@@ -6,8 +6,8 @@ import {
   isStatementPosition,
   printWithRewrites,
 } from "@lethal/engine";
-import { buildComponents } from "./components";
-import { emitDispatch } from "./dispatch";
+import { type Component, buildComponents } from "./components";
+import { REACH_LATCH, emitDispatch, reachGrainOf } from "./dispatch";
 import { type IdedSpec, assignMutantIds } from "./ids";
 
 export function compileSchemataForFile(
@@ -34,6 +34,9 @@ export function compileSchemataForFile(
   // reliably, and is unsafe around ternaries and `var` parameters.
   const components = buildComponents(resolvedIded);
   const rewrites = new Map<ALSyntaxNode, string>();
+  // R246. Before the chains: a latch insertion can end exactly where a body-rooted chain starts,
+  // and the printer keeps map order on a tie, so the zero-width insertion must come first.
+  injectReachLatches(components, rewrites, filePath ?? "<file>");
   for (const component of components) {
     rewrites.set(
       component.root,
@@ -56,6 +59,45 @@ export function compileSchemataForFile(
   if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
 
   return printWithRewrites(source, root, rewrites);
+}
+
+/**
+ * R246. Declares `REACH_LATCH` as a local of every procedure or trigger that holds a
+ * statement-grain reach marker, once each. Appended to an existing `var` section, or added as one
+ * right after the header. The inserted text has no newline, so no line moves. A LOCAL, not a
+ * selector or object global: it is fresh on every call, so a hit can never outlive the test that
+ * made it, which the per-test reach reading depends on.
+ */
+function injectReachLatches(
+  components: readonly Component[],
+  rewrites: Map<ALSyntaxNode, string>,
+  filePath: string,
+): void {
+  const done = new Set<number>();
+  for (const c of components) {
+    if (!c.members.some((m) => reachGrainOf(m, c.root) === "statement")) continue;
+    let owner: ALSyntaxNode | null = c.root;
+    while (
+      owner !== null &&
+      owner.kind !== ALNodeKind.procedure &&
+      owner.kind !== ALNodeKind.trigger
+    )
+      owner = owner.parent;
+    const body = owner?.children.findIndex((n) => n.kind === ALNodeKind.block) ?? -1;
+    const before = owner?.children[body - 1];
+    if (owner === null || before === undefined) {
+      throw new Error(
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared.`,
+      );
+    }
+    if (done.has(owner.startIndex)) continue;
+    done.add(owner.startIndex);
+    const text =
+      before.kind === ALNodeKind.var_section
+        ? ` ${REACH_LATCH}: Boolean;`
+        : ` var ${REACH_LATCH}: Boolean;`;
+    rewrites.set(insertionNodeAt(before, before.endIndex), text);
+  }
 }
 
 /** Raw grammar kinds of a `codeunit_declaration`'s three header tokens. */

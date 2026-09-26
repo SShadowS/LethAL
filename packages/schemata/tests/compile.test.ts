@@ -13,7 +13,7 @@ import {
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { canCarryMutationSelectorVar, compileSchemataForFile } from "../src/compile";
 import { buildComponents } from "../src/components";
-import { REACH_MARKER, reachGrainOf } from "../src/dispatch";
+import { REACH_LATCH, REACH_MARKER, reachGrainOf } from "../src/dispatch";
 import { assignMutantIds } from "../src/ids";
 
 /** Builds a MutationSpec matching the shape the existing tests construct by hand. */
@@ -1251,6 +1251,53 @@ describe("GH-24: reach grain and marker placement", () => {
     expect(out).toContain(`1: begin ${REACH_MARKER("M0002")} ; end;`);
   });
 
+  // R246: a marker inside a loop ran two calls per iteration and turned a 4.4 s overflow kill into
+  // a timeout. After its first hit the marker must cost one test of a local Boolean, and that
+  // Boolean must be the enclosing procedure's own local, so it starts false on every call and can
+  // never carry a hit from one test into the next.
+  it("R246: the marker is latched by a procedure-local Boolean, tested first and set after the call", () => {
+    expect(REACH_MARKER("M0002")).toBe(
+      `if not ${REACH_LATCH} then begin MutationSelector.Reached('M0002'); ${REACH_LATCH} := true; end;`,
+    );
+  });
+
+  it("R246: a procedure with a marker declares the latch once, on an existing line", () => {
+    // Existing var section: appended after its last declaration.
+    const list = compile(listPrefix());
+    expect(list).toContain(`var X: Integer; Y: Integer; ${REACH_LATCH}: Boolean; begin`);
+    expect(list.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1); // two markers, one procedure
+    // No var section: one is added after the header, before `begin`.
+    const exit = compile(thenExit());
+    expect(exit).toContain(
+      `procedure P(Amount: Integer): Integer var ${REACH_LATCH}: Boolean; begin`,
+    );
+    // No statement-grain marker in the file: no latch at all.
+    expect(compile(thenCall())).not.toContain(REACH_LATCH);
+    // `Touch` carries no marker, so only `P` declares it.
+    expect(compile(caseArms()).split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+  });
+
+  it("R246: a trigger with a marker declares the latch too", () => {
+    const src = `codeunit 51907 "R" { trigger OnRun() var X: Integer; begin X := 1; X := 2; end; }`;
+    const root = parse(src);
+    const first = nth(root, ALNodeKind.assignment_statement, 0, "X := 1");
+    const second = nth(root, ALNodeKind.assignment_statement, 0, "X := 2");
+    const out = compile({
+      src,
+      root,
+      // Two separate components in one trigger: still one declaration.
+      specs: [
+        spec(first, "", "lethal.remove-assignment"),
+        spec(second, "", "lethal.remove-assignment"),
+      ],
+      wrapped: [],
+    });
+    expect(out).toContain(`var X: Integer; ${REACH_LATCH}: Boolean; begin`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+    expect(out).toContain(REACH_MARKER("M0001"));
+    expect(out).toContain(REACH_MARKER("M0002"));
+  });
+
   it("GH-24: the marker adds no line and appears only in its own branch", () => {
     for (const make of [thenCall, thenExit, listPrefix, ifBody, repeatBody, caseArms]) {
       const s = make();
@@ -1275,15 +1322,21 @@ describe("GH-24: reach grain and marker placement", () => {
         const open = `begin ${REACH_MARKER(id)} `;
         const at = stripped.indexOf(open);
         if (at < 0) continue; // absence is the count check's job, above
-        const close = stripped.indexOf(" end", at);
+        const close = stripped.indexOf(" end", at + open.length);
         stripped =
           stripped.slice(0, at) +
           stripped.slice(at + open.length, close) +
           stripped.slice(close + " end".length);
       }
+      // R246: the marker is latched, and the latch is declared in the procedure's var section.
+      for (const id of grains(s).keys()) {
+        stripped = stripped
+          .replaceAll(` ${REACH_MARKER(id)} `, " ")
+          .replaceAll(`${REACH_MARKER(id)} `, "");
+      }
       stripped = stripped
-        .replace(/ MutationSelector\.Reached\('M\d+'\);(?= )/g, "")
-        .replace(/MutationSelector\.Reached\('M\d+'\); /g, "");
+        .replaceAll(` var ${REACH_LATCH}: Boolean;`, "")
+        .replaceAll(` ${REACH_LATCH}: Boolean;`, "");
       expect(stripped).not.toContain("Reached(");
       expect(out.split("\n").length).toBe(stripped.split("\n").length);
       // The pre-GH-24 output, recorded before the marker existed.

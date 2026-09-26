@@ -44,11 +44,23 @@ export function emitDispatch(component: Component): string {
 }
 
 /**
+ * R246. The procedure-local Boolean that latches the marker after its first hit. A marker inside a
+ * loop otherwise costs two calls (selector, then `LC Control State.NoteReached`) per iteration,
+ * which turned `itest:hang`'s 4.4 s Int32-overflow kill into a timeout. With the latch the hot path
+ * is one test of a local. It is a LOCAL of the enclosing procedure or trigger (declared by
+ * `compileSchemataForFile`), so it starts false on every call: it cannot outlive a test method, and
+ * so cannot survive any of the control app's `ObservedActive` resets, which all run between tests.
+ * The first hit still reaches `NoteReached`, so a mismatched tuple still latches
+ * `ObservedIdentityMismatch` there.
+ */
+export const REACH_LATCH = "LethALReachLatch";
+
+/**
  * GH-24. The call a statement-grain mutant's branch makes at its OWN statement, so the control app
  * can say that statement began executing. No newline, anywhere: line numbers must not move.
  */
 export const REACH_MARKER = (mutantId: string): string =>
-  `MutationSelector.Reached('${mutantId}');`;
+  `if not ${REACH_LATCH} then begin MutationSelector.Reached('${mutantId}'); ${REACH_LATCH} := true; end;`;
 
 /**
  * Where reach can be measured for one mutant, decided at compile time.
