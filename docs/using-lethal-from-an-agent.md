@@ -1,7 +1,7 @@
 # Driving LethAL from an agent
 
 Everything a program needs to run LethAL and read the result: the argv, the exit codes, which file
-answers which question, and the five rules that stop a caller reaching a confident wrong
+answers which question, and the six rules that stop a caller reaching a confident wrong
 conclusion. Written for an autonomous consumer (an agent, a CI job, a script). A human should read
 [`../README.md`](../README.md) instead.
 
@@ -105,7 +105,8 @@ warns (`group-runs-inert`) when that happens.
 
 ### Which subcommand reads which flag (checked)
 
-Every subcommand refuses a flag it does not read; none accepts one and ignores it. The table lists
+Every subcommand refuses a flag it does not read; none but the one exception below accepts one
+and ignores it. The table lists
 the flags an agent is most likely to reach for. Any flag on a subcommand not listed for it is
 refused, with a message naming the subcommands that do read it. `campaign` also refuses some of
 its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
@@ -140,6 +141,7 @@ Commands that look right and are refused. Each one below is run by a test and mu
 |---|---|
 | `lethal run --project app --tests tests --backend bcdev --report r.json` | `run` writes its report with `--out`. |
 | `lethal explain report.json --out e.json` | `explain` prints on stdout; redirect it: `lethal explain report.json > e.json`. |
+| `lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --out v.json` | `verify` prints on stdout; redirect it. |
 
 ### Exit codes (checked)
 
@@ -252,7 +254,143 @@ acting on a fact the run itself no longer stands behind.
 
 Unknown event types are ignored by design, so a future event type does not break a consumer.
 
-## The five rules (checked)
+## The hardening loop (checked)
+
+The loop that turns a survivor into a killed mutant: `lethal run`, `lethal explain`, write a test
+that should kill a survivor, `lethal verify`, and repeat until verify exits `0`. Then a fresh
+`lethal run` makes the record. LethAL never writes the test; you do.
+
+### From an explain row to a verify command (checked)
+
+Each `explain` survivor row carries the three values verify needs: `artifactId`, `batchIndex` and
+`mutantCode`. The command, with `<project>` the run's `--project` and `<tests-dir>` the test
+project you edited:
+
+```bash
+lethal verify --db <project>/lethal.sqlite --artifact <artifactId> --survivors <batchIndex>/<mutantCode> --tests <tests-dir>
+```
+
+A filled-in example:
+
+```bash
+lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests
+```
+
+`--db` is the database the run wrote: the run's own `--db`, or its default. Only the LAST batch a
+run published stays installed on the server, so a survivor from an earlier batch is refused as
+`batch-not-installed`.
+
+A row with no `artifactId` carries `artifactIdAbsent` instead:
+
+| artifactIdAbsent | what it means for verify |
+|---|---|
+| `carried` | The verdict was carried from an earlier run, so nothing of it is installed. Run a fresh `lethal run`. |
+| `not-recorded` | The report predates artifact ids. Run again. |
+| `not-published` | The backend published nothing for that batch. Verify cannot help. |
+
+### Running verify (checked)
+
+Verify works on `bcdev` only. It prints one JSON object on stdout and its progress on stderr. The
+ids are checked when verify runs, not when the argv is parsed, so a wrong id is exit `6` with
+`malformed-request` rather than a usage error. Each call publishes the test app once. **The test
+project IS published, and it stays installed afterwards**: verify does not put back the one that
+was there before.
+
+### Reading a verify result (checked)
+
+`verifySchemaVersion: 1`. Schema: [../schemas/verify-v1.schema.json](../schemas/verify-v1.schema.json).
+
+| field | values |
+|---|---|
+| `results[].verdict` | `killed`, `survived`, `error`, `skipped` |
+| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
+| `results[].killedBy` | `assertion`, `runtime-error`, `other` |
+
+`killedBy` never changes the exit code: a kill by a runtime error is still a kill, and says only
+that no assertion caught it. `killedByNewTest` says whether the killing test is one your edit
+added. `invalidBaseline` lists requested tests without a valid green unmutated run, so their
+passing proves nothing.
+
+### Verify exit codes (checked)
+
+| code | meaning |
+|---|---|
+| `0` | Every named survivor was killed and every new test is `stable`. Also returned when every survivor skipped, which measured nothing. |
+| `1` | An uncaught failure. There is no result. |
+| `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`, which leave the container needing a recycle. |
+| `4` | Every non-skipped survivor is `error`: verify measured nothing. |
+| `5` | Not every named survivor was killed, or a new test is not `stable`. |
+| `6` | Refused before measuring; `refused.reason` says why. |
+
+When several apply, the first in this order wins. Precedence: `3`, `6`, `4`, `5`, `0`.
+
+### Verify refusals (checked)
+
+The set of reasons is checked; the advice is guidance.
+
+| reason | what to do |
+|---|---|
+| `malformed-request` | Fix the argv: a 32-character hex `--artifact` and `<batchIndex>/<mutantCode>` ids. |
+| `unknown-artifact` | Pass the run's `--db` and the `artifactId` from explain. |
+| `batch-not-installed` | Only the last batch is installed. Run the slice in one batch. |
+| `wrong-batch` | Take the artifact and the id from the same explain row. |
+| `unknown-mutant` | Re-copy the mutant code from explain. |
+| `not-a-survivor` | That mutant was not a survivor. Drop the id. |
+| `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
+| `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. |
+| `source-changed` | The target changed since it was instrumented. Run again. A test project nested inside the target makes every test edit trigger this (R260). |
+| `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
+| `no-tests-to-run` | Write a test first. |
+| `unsupported-config` | Verify runs on `bcdev` only, with no `envTool`. |
+| `project-unreadable` | The run's project path is gone. |
+| `equivalence-marks-unreadable` | Fix `lethal.equivalent.json`. |
+| `stale-artifact` | Another run published since. Run again and use the new artifact id. |
+| `artifact-files-unusable` | The run's local build files are gone or changed. Run again. |
+| `artifact-identity-unavailable` | The server could not say what is installed. Run `lethal doctor`. |
+| `test-app-manifest-unreadable` | Fix the test project's `app.json`. |
+| `test-app-symbols-unreadable` | Fix the test project's `.alpackages`. |
+| `test-app-compile-failed` | Fix the test AL; the detail has the compiler errors. |
+| `test-app-version-below-resident` | Raise the test app's version above the installed one. |
+| `test-app-publish-failed` | Read the detail. |
+| `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. |
+
+### Marking an equivalent survivor (checked)
+
+Some survivors cannot be killed by any test, because the change does not change behaviour. Mark
+one in `<project>/lethal.equivalent.json`:
+
+```json
+{ "marks": [ { "key": "...", "reason": "..." } ] }
+```
+
+`reason` is required. Build `key` from the survivor's row in `report.json`:
+
+```text
+key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
+```
+
+Use `triggerName` when `procedureName` is empty. **A row with `identityOrdinal` (a twin after the
+first) cannot be marked today, because the marks file accepts only five-field keys (R230).**
+
+A marked survivor is `skipped`: verify never runs it, and it is not a measured kill or survival.
+`equivalenceRisk` alone never skips a survivor. A mark never changes the score.
+
+### Writing the killing test (guidance)
+
+Start from the row's `coveringTests` and the mutated span. Prefer a row with
+`executionProven: true`; a `false` one may be no finding at all. `reach: "covered-but-unreached"`
+means a test enters the procedure and never reaches the statement, so it needs a new case rather
+than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
+`flaky` or `red`. Verify runs the covering tests the run recorded plus the tests your edit added,
+so an edit to an existing test that did NOT cover the mutant is never run against it: that is a
+blind spot, not a survival.
+
+### After verify (guidance)
+
+A verify `killed` proves the test kills that mutant in the installed build. Make it the record
+with a fresh `lethal run`, never with `--resume`, which would carry the old verdicts (R247).
+
+## The six rules (checked)
 
 1. **Read `validity` before quoting `mutationScore`.** The number without its caveats is not a
    result.
@@ -262,6 +400,9 @@ Unknown event types are ignored by design, so a future event type does not break
 4. **Exit `3` means the run does not vouch for its own verdicts.** Do not report them.
 5. **Exit `4` means the run measured nothing.** There is no score and no survivor; read the
    failure notes.
+6. **A verify `killed` is proof for the installed build; the record is a fresh `lethal run`,
+   never with `--resume`.** `skipped` is not a measured kill or survival: it is a reader's mark,
+   listed in `results[].verdict` so the output accounts for every named id.
 
 ## What LethAL cannot measure (guidance)
 

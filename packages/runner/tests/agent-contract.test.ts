@@ -1,19 +1,39 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { MutantManifestEntry } from "@lethal/schemata";
 import {
   DOCTOR_SCHEMA_VERSION,
   FLAG_OWNERS,
   NOTHING_SCORED_EXIT_CODE,
   QUARANTINED_EXIT_CODE,
   RUN_FLAGS,
+  VERIFY_NOT_ALL_KILLED_EXIT_CODE,
+  VERIFY_REFUSED_EXIT_CODE,
   exitCodeForReport,
   parseCliConfig,
 } from "../src/cli";
+import {
+  EQUIVALENCE_MARKS_FILENAME,
+  applyEquivalenceMarks,
+  parseEquivalenceMarks,
+} from "../src/equivalence-marks";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
-import { EXPLAIN_SCHEMA_VERSION } from "../src/explain";
+import { ARTIFACT_ID_ABSENCES, EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
 import { LARGE_RUN_MUTANT_THRESHOLD } from "../src/orchestrator";
 import { REPORT_SCHEMA_VERSION } from "../src/report";
+import { identityKeyOf, serializeKey } from "../src/selection";
+import {
+  KILLED_BY,
+  NEW_TEST_STATES,
+  TEST_APP_REFUSALS,
+  VERIFY_EXIT,
+  VERIFY_REFUSALS,
+  VERIFY_SCHEMA_VERSION,
+  VERIFY_VERDICTS,
+  parseVerifyRequest,
+  verifyExitCode,
+} from "../src/verify";
 
 /**
  * R153. Two documents tell an OUTSIDE consumer how to call LethAL and how to read what it returns:
@@ -128,7 +148,7 @@ describe("the agent-facing documents (R153)", () => {
     }
   });
 
-  test("both documents carry the five rules that stop a wrong conclusion", () => {
+  test("both documents carry the six rules that stop a wrong conclusion", () => {
     // Each of these is a fact a consumer cannot derive from the output and will get wrong by
     // default. They are the reason these documents exist at all, so their absence is a failure
     // rather than a style note.
@@ -291,7 +311,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
   test("the documented default database is the one run uses", () => {
     const parsed = parseCliConfig(["run", "--project", "P", "--tests", "T", "--backend", "bcdev"]);
     expect(parsed.mode === "run" ? parsed.dbPath : "").toBe(join("P", "lethal.sqlite"));
-    expect(read(REFERENCE)).toContain("`<project>/lethal.sqlite`");
+    expect(section(read(REFERENCE), "Running (checked)")).toContain("`<project>/lethal.sqlite`");
   });
 
   test("every linked schema exists and each current one is linked", () => {
@@ -334,5 +354,279 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
 
   test("no em dashes", () => {
     for (const [name, text] of docs) expect(text.includes("—"), name).toBe(false);
+  });
+});
+
+const ART = "0123456789abcdef0123456789abcdef";
+
+type ReportRow = {
+  readonly mutantCode: string;
+  readonly verdict: string;
+  readonly astHash: string;
+  readonly codeunitName: string;
+  readonly procedureName: string;
+  readonly triggerName?: string;
+  readonly operatorName: string;
+  readonly operatorMajor: number;
+  readonly identityOrdinal?: number;
+};
+
+/** The single line of a kind, or a thrown error: two recipes would let a wrong one hide. */
+function onlyLine(text: string, pick: (argvOrLine: string) => boolean): string {
+  const lines = [...text.matchAll(/```[a-z]*\r?\n([\s\S]*?)```/g)]
+    .flatMap((b) =>
+      (b[1] ?? "")
+        .replace(/\\\r?\n\s*/g, " ")
+        .split("\n")
+        .map((l) => l.trim()),
+    )
+    .filter(pick);
+  if (lines.length !== 1) throw new Error(`expected exactly one such line, found ${lines.length}`);
+  return lines[0] ?? "";
+}
+
+/** Runs a verify argv the way `verifyFromCli` starts: argv parse, then the request parse. Returns
+ *  both, so a caller can pin the database and test project as well as the ids. */
+function verifyRequestOf(argv: readonly string[]) {
+  const parsed = parseCliConfig([...argv]);
+  if (parsed.mode !== "verify") throw new Error(`not a verify command: ${argv.join(" ")}`);
+  return { parsed, req: parseVerifyRequest(parsed.artifact, parsed.survivors) };
+}
+
+describe("C02-07: the hardening loop, run from the documents", () => {
+  const docs: ReadonlyArray<[string, string]> = [
+    ["reference", read(REFERENCE)],
+    ["skill", read(SKILL)],
+  ];
+
+  test("every verify example is a request verify accepts", () => {
+    for (const [name, text] of docs) {
+      const examples = documentedCommands(text).filter(
+        (c) => c[0] === "verify" && !c.join(" ").includes("<"),
+      );
+      expect(examples.length, `${name} shows no literal \`lethal verify\``).toBeGreaterThan(0);
+      for (const argv of examples) {
+        expect(() => verifyRequestOf(argv), `${name}: lethal ${argv.join(" ")}`).not.toThrow();
+      }
+    }
+  });
+
+  test("the documented recipe turns an explain row into a request for that row", () => {
+    const report = {
+      ...JSON.parse(read(GIFT_CARD)),
+      artifacts: [
+        { batchIndex: 0, artifactId: ART, sha256: "0".repeat(64), appVersion: "1.0.0.0" },
+      ],
+    };
+    const rows = explain(report).survivors;
+    expect(rows.length).toBeGreaterThan(0);
+    const recipe = onlyLine(
+      read(REFERENCE),
+      (l) => l.startsWith("lethal verify ") && l.includes("<"),
+    );
+    for (const row of rows) {
+      const fields = row as unknown as Record<string, unknown>;
+      const filled = recipe.replace(/<([A-Za-z-]+)>/g, (_, name: string) => {
+        if (name === "project") return "P";
+        if (name === "tests-dir") return "T";
+        const v = fields[name];
+        if (v === undefined)
+          throw new Error(`recipe placeholder <${name}> is not an explain survivor field`);
+        return String(v);
+      });
+      const { parsed, req } = verifyRequestOf(shellWords(filled).slice(1));
+      expect(req.artifactId).toBe(ART);
+      const { batchIndex, mutantCode } = row;
+      if (batchIndex === undefined) throw new Error(`survivor ${mutantCode} has no batchIndex`);
+      expect(req.ids).toEqual([{ batchIndex, mutantCode }]);
+      // The rest of the loop: the run's own database (the run default for project P) and the
+      // test project the agent edited. A valid request against the wrong store or tests is the
+      // "valid request, wrong hardening loop" case.
+      expect(parsed.dbPath).toBe("P/lethal.sqlite");
+      expect(parsed.testDir).toBe("T");
+    }
+    const body = section(read(REFERENCE), "From an explain row to a verify command (checked)");
+    const absences = tableRows(body).map(([c = ""]) => ticks(c)[0] ?? "");
+    expect(new Set(absences)).toEqual(new Set(ARTIFACT_ID_ABSENCES));
+  });
+
+  test("a mark built by the documented recipe loads and matches", () => {
+    const rows = (JSON.parse(read(GIFT_CARD)) as { readonly mutants: readonly ReportRow[] })
+      .mutants;
+    const survivors = rows.filter((m) => m.verdict === "survived" && !m.identityOrdinal);
+    expect(survivors.length).toBeGreaterThan(0);
+    expect(survivors.some((m) => m.procedureName === "")).toBe(true); // the trigger rule is exercised
+    const recipe = onlyLine(read(REFERENCE), (l) => l.startsWith("key = ")).slice("key = ".length);
+    const keyOf = (m: ReportRow) =>
+      recipe.replace(/<([A-Za-z]+)>/g, (_, name: string) => {
+        const v =
+          name === "procedureName"
+            ? m.procedureName || m.triggerName || ""
+            : (m as Record<string, unknown>)[name];
+        if (v === undefined)
+          throw new Error(`recipe placeholder <${name}> is not a report row field`);
+        return String(v);
+      });
+    const file = JSON.stringify({
+      marks: survivors.map((m) => ({ key: keyOf(m), reason: "equivalent" })),
+    });
+    const marks = parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME);
+    const identity = (m: ReportRow) =>
+      serializeKey(
+        identityKeyOf({
+          ...m,
+          operatorVersion: `${m.operatorMajor}.0.0`,
+        } as unknown as MutantManifestEntry),
+      );
+    const result = applyEquivalenceMarks(
+      marks,
+      rows.map((m) => ({ mutantCode: m.mutantCode, identity: identity(m), verdict: m.verdict })),
+    );
+    expect(result.stale).toEqual([]);
+    expect(result.contradicted).toEqual([]);
+    expect(result.matched.map((x) => x.mutantCode).sort()).toEqual(
+      survivors.map((m) => m.mutantCode).sort(),
+    );
+    expect(section(read(REFERENCE), "Marking an equivalent survivor (checked)")).toContain(
+      EQUIVALENCE_MARKS_FILENAME,
+    );
+  });
+
+  test("the R230 limit the doc states is the code's", () => {
+    // A twin after the first serializes with a sixth field, which the marks parser refuses today.
+    // When R230 is fixed this test goes red: then delete the limit from the doc and this test.
+    const twin = serializeKey({
+      astHash: "h",
+      codeunitName: "C",
+      procedureName: "P",
+      operatorName: "o",
+      operatorMajor: 1,
+      ordinal: 2,
+    });
+    expect(() =>
+      parseEquivalenceMarks(JSON.stringify({ marks: [{ key: twin, reason: "r" }] }), "t"),
+    ).toThrow(/expected 5/);
+    const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
+    expect(body).toContain("`identityOrdinal`");
+    expect(body).toContain("R230");
+  });
+
+  test("verifySchemaVersion is this build's", () => {
+    expect(statesVersion(read(REFERENCE), "verifySchemaVersion", VERIFY_SCHEMA_VERSION)).toBe(true);
+    expect(read(REFERENCE)).toContain(`../schemas/verify-v${VERIFY_SCHEMA_VERSION}.schema.json`);
+  });
+
+  test("verify's value sets are exact, per field", () => {
+    // | `results[].verdict` | `killed`, `survived`, ... |
+    const rows = tableRows(section(read(REFERENCE), "Reading a verify result (checked)"));
+    const valuesOf = (field: string) => {
+      const matching = rows.filter(([f = ""]) => ticks(f)[0] === field);
+      // Exactly once: a second row for the same field could carry different values and hide.
+      expect(matching.length, `rows for ${field}`).toBe(1);
+      return new Set(ticks(matching[0]?.[1] ?? ""));
+    };
+    expect(valuesOf("results[].verdict")).toEqual(new Set(VERIFY_VERDICTS));
+    expect(valuesOf("newTests[].state")).toEqual(new Set(NEW_TEST_STATES));
+    expect(valuesOf("results[].killedBy")).toEqual(new Set(KILLED_BY));
+  });
+
+  test("the refusal table is VERIFY_REFUSALS", () => {
+    const listed = tableRows(section(read(REFERENCE), "Verify refusals (checked)")).map(
+      ([c = ""]) => ticks(c)[0] ?? "",
+    );
+    expect(listed.length).toBe(new Set(listed).size);
+    expect(new Set(listed)).toEqual(new Set(VERIFY_REFUSALS));
+  });
+
+  test("verify exit codes and their precedence", () => {
+    expect(VERIFY_NOT_ALL_KILLED_EXIT_CODE).toBe(VERIFY_EXIT.notAllKilled);
+    expect(VERIFY_REFUSED_EXIT_CODE).toBe(VERIFY_EXIT.refused);
+    const rows = tableRows(section(read(REFERENCE), "Verify exit codes (checked)"));
+    const codes = rows.map(([c = ""]) => ticks(c)[0] ?? "");
+    expect(new Set(codes)).toEqual(new Set(["1", ...Object.values(VERIFY_EXIT).map(String)]));
+    // Exit 3's row names exactly the test-app reasons that quarantine, and the refusal table none.
+    const quarantining = Object.entries(TEST_APP_REFUSALS)
+      .filter(([, to]) => to === "quarantined")
+      .map(([r]) => r);
+    const row3 =
+      rows.find(([c = ""]) => ticks(c)[0] === String(VERIFY_EXIT.quarantined))?.[1] ?? "";
+    expect(new Set(ticks(row3).filter((t) => t.startsWith("publish-")))).toEqual(
+      new Set(quarantining),
+    );
+    // One competing-condition case per precedence boundary, run through the real function.
+    const R = (verdict: (typeof VERIFY_VERDICTS)[number]) => ({ verdict });
+    const cases: ReadonlyArray<[string, Parameters<typeof verifyExitCode>[0], number]> = [
+      [
+        "3 over 6",
+        { quarantined: "x", refused: {}, results: [], newTests: [] },
+        VERIFY_EXIT.quarantined,
+      ],
+      ["6 over 4", { refused: {}, results: [R("error")], newTests: [] }, VERIFY_EXIT.refused],
+      [
+        "4 over 5: all error AND a flaky new test",
+        { results: [R("error")], newTests: [{ state: "flaky" }] },
+        VERIFY_EXIT.nothingMeasured,
+      ],
+      [
+        "4 ignores skipped rows",
+        { results: [R("error"), R("skipped")], newTests: [] },
+        VERIFY_EXIT.nothingMeasured,
+      ],
+      [
+        "5: one survivor",
+        { results: [R("killed"), R("survived")], newTests: [] },
+        VERIFY_EXIT.notAllKilled,
+      ],
+      [
+        "5 over 0: all killed but a flaky new test",
+        { results: [R("killed")], newTests: [{ state: "flaky" }] },
+        VERIFY_EXIT.notAllKilled,
+      ],
+      [
+        "0: all killed, every new test stable",
+        { results: [R("killed")], newTests: [{ state: "stable" }] },
+        VERIFY_EXIT.ok,
+      ],
+      ["0: every survivor skipped", { results: [R("skipped")], newTests: [] }, VERIFY_EXIT.ok],
+    ];
+    for (const [why, input, code] of cases) expect(verifyExitCode(input), why).toBe(code);
+    const order = [
+      VERIFY_EXIT.quarantined,
+      VERIFY_EXIT.refused,
+      VERIFY_EXIT.nothingMeasured,
+      VERIFY_EXIT.notAllKilled,
+      VERIFY_EXIT.ok,
+    ]
+      .map((c) => `\`${c}\``)
+      .join(", ");
+    expect(flowed(read(REFERENCE))).toContain(`Precedence: ${order}.`);
+    for (const [name, text] of docs) {
+      const t = flowed(text).toLowerCase();
+      expect(t, `${name}: meaning of 5`).toContain("not every named survivor was killed");
+      expect(t, `${name}: meaning of 6`).toContain("refused before measuring");
+      expect(t, `${name}: all skipped`).toContain("every survivor skipped");
+    }
+  });
+
+  test("verify --out is a documented, refused trap", () => {
+    const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
+    const verifyRow = rows.find(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1] === "verify");
+    const argv = shellWords(ticks(verifyRow?.[0] ?? "")[0] ?? "").slice(1);
+    expect(argv).toContain("--out");
+    expect(() => parseCliConfig(argv)).toThrow(/--out/);
+  });
+
+  test("both documents carry the six rules", () => {
+    const rules: ReadonlyArray<[string, string]> = [
+      ["reference", section(read(REFERENCE), "The six rules (checked)")],
+      ["skill", section(read(SKILL), "Rules that stop a wrong conclusion")],
+    ];
+    for (const [name, body] of rules) {
+      const items = body.split("\n").filter((l) => /^\d+\. /.test(l));
+      expect(items.length, `${name} rule count`).toBe(6);
+      const lower = flowed(body).toLowerCase();
+      expect(lower, `${name}: rule 6`).toContain("never with `--resume`");
+      expect(lower, `${name}: rule 6`).toContain("`skipped` is not a measured kill or survival");
+    }
   });
 });
