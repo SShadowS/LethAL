@@ -629,6 +629,16 @@ export function decideExit(s: {
 }
 
 /**
+ * Whether the C4 preflight must run before this session. `afterUnprovenHit` only ever reflects
+ * what happened earlier in THIS process: a new invocation (a new segment, a new arm, the smoke
+ * scripts) starts that variable false regardless of how the previous invocation ended, so it must
+ * always gate its own first session (index 1) rather than trust a state it never had (review r1).
+ */
+export function shouldPreflight(index: number, afterUnprovenHit: boolean): boolean {
+  return index === 1 || afterUnprovenHit;
+}
+
+/**
  * The gate before a session that follows an unproven hit: doctor must exit 0 and the harness check
  * must pass. Nothing here force-resets anything; a failure means "run the recovery procedure".
  * The lease acquire itself happens inside `runSession`, whose failure throws and exits 4.
@@ -841,9 +851,11 @@ async function main(): Promise<void> {
   let afterHit = false;
   let afterUnprovenHit = false;
   for (let index = 1; index <= sessions; index++) {
-    if (afterUnprovenHit) {
+    if (shouldPreflight(index, afterUnprovenHit)) {
       // Ruling q-160433: after an unproven action end, the next session starts only if doctor is
       // clean and the harness check passes, with no force-reset. Otherwise: recovery (exit 3).
+      // Also every invocation's own first session (review r1): a fresh process cannot know
+      // whether the PREVIOUS invocation ended on an unproven hit.
       const gate = await preflight({
         doctor: async () => {
           const repo = resolve(import.meta.dir, "..", "..");

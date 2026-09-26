@@ -20,6 +20,7 @@ import {
   parseContainerEvidence,
   preflight,
   sessionControl,
+  shouldPreflight,
   writeCaptures,
   writeRecord,
 } from "./probe.ts";
@@ -286,6 +287,19 @@ describe("preflight (the gate before a session that follows an unproven hit)", (
       harness: async () => {},
     });
     expect(spawnFails.ok).toBe(false);
+  });
+});
+
+describe("shouldPreflight (every invocation preflights at its first session, not only after a hit in the same process; review r1)", () => {
+  test("a fresh invocation's first session always gates, whatever afterUnprovenHit says", () => {
+    expect(shouldPreflight(1, false)).toBe(true);
+    expect(shouldPreflight(1, true)).toBe(true);
+  });
+
+  test("a later session in the same run gates only when the one before it was an unproven hit", () => {
+    expect(shouldPreflight(2, true)).toBe(true);
+    expect(shouldPreflight(2, false)).toBe(false);
+    expect(shouldPreflight(9, false)).toBe(false);
   });
 });
 
