@@ -295,6 +295,12 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
     expect(message).toMatch(/rebuild extensions\/lethal-control and republish/);
   });
 
+  test("GH-24: refuses 1.0.0.18", async () => {
+    const message = await messageFrom(info({ semver: "1.0.0.18" }));
+    expect(message).toContain("1.0.0.18");
+    expect(message).toContain("1.0.0.19");
+  });
+
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {
     const message = await messageFrom(info({ semver: undefined }));
     expect(message).toMatch(/did not report a LethAL Control version/);
@@ -530,7 +536,7 @@ describe("parseLeaseSnapshot (R110)", () => {
     // The failure that matters: this is what an un-republished container answers, and defaulting
     // here would report it as "no lease held".
     expect(() => parseLeaseSnapshot({})).toThrow(HarnessVerificationError);
-    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.18/);
+    expect(() => parseLeaseSnapshot({})).toThrow(/1\.0\.0\.19/);
     expect(() => parseLeaseSnapshot({})).toThrow(/republish/);
   });
 

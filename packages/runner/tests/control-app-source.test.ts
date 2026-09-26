@@ -215,3 +215,55 @@ describe("suite-unresolved (R206 §4 item 1)", () => {
     expect(unresolvedAt).toBeGreaterThan(finishAt);
   });
 });
+
+const at = (body: string, needle: string): number => {
+  const i = body.indexOf(needle);
+  expect(i, `missing: ${needle}`).toBeGreaterThanOrEqual(0);
+  return i;
+};
+
+describe("GH-24: ObservedActive, reset per method and read after ProgressBetween", () => {
+  test("LC Run Many resets ObservedActive right before each method runs", () => {
+    const body = procedureBody(read("RunMany.Codeunit.al"), "RunAll");
+    const loop = at(body, "foreach Entry in Methods do begin");
+    const reset = at(body, "State.ResetObservedActive();");
+    const note = at(body, "State.NoteTestMethodRun();");
+    const run = at(body, "Mgt.RunTests(RunLine, ALTestSuite);");
+    expect(loop).toBeLessThan(reset);
+    expect(reset).toBeLessThan(note);
+    expect(note).toBeLessThan(run);
+    expect(body.slice(reset, note).split(";").length).toBe(2); // nothing between reset and note
+  });
+  test("ResetObservedActive clears the flag", () => {
+    at(
+      procedureBody(read("ControlState.Codeunit.al"), "ResetObservedActive"),
+      "ObservedActive := false;",
+    );
+  });
+  test("the entry reads ObservedActive only after ProgressBetween", () => {
+    const body = procedureBody(read("RunMany.Codeunit.al"), "RunAll");
+    const between = at(body, "State.ProgressBetween(FenceAttemptId, FenceOpSeq, Index);");
+    const readAt = at(body, "One.Add('observedActive', State.AttestationObservedActive());");
+    expect(readAt).toBeGreaterThan(between);
+  });
+  test("IsActive does not set ObservedActive (the root-grain trap)", () => {
+    const body = procedureBody(read("ControlState.Codeunit.al"), "IsActive");
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).not.toContain("ObservedActive");
+  });
+  test("both resets clear ObservedActive", () => {
+    for (const p of ["WriteActive", "ResetAttestationState"]) {
+      at(procedureBody(read("ControlState.Codeunit.al"), p), "ObservedActive := false;");
+    }
+  });
+  test("RunMutant reads ObservedActive before phase 3 and answers it", () => {
+    const body = procedureBody(read("ControlApi.Codeunit.al"), "RunMutant");
+    const readAt = at(body, "State.AttestationObservedActive()");
+    const phase3 = at(body, "State.TryFinishRun(");
+    expect(readAt).toBeLessThan(phase3);
+    at(
+      procedureBody(read("ControlApi.Codeunit.al"), "BuildStatus"),
+      "Obj.Add('observedActive', ObservedActive);",
+    );
+  });
+});
