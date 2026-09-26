@@ -127,4 +127,22 @@ recorded, so H7 can only be a candidate here. R225's cold-start claim stays open
 
 Nothing above the OUTCOME line changes after the first live session.
 
+## Addendum 2026-09-26, before any live session (probe review r1)
+
+Written after the probe's adversarial review and before any live probe session ran.
+
+- **(i) `actionEnded` needs a demonstrated id-space match.** A call's BC session id missing from
+  `Get-NAVServerSession` counts as "ended" only when that list is non-empty AND a known session id appears
+  in it: the latest finished op of the same session (its `LC Op Progress` row), the `sessionId` a
+  successful `ran` answer carried, or an id also present in the tenant's `Active Session` table. Without
+  that match (for example a wrong tenant answering an empty list), `actionEnded` is false and the probe
+  stops with exit 3. The probe records this control for every session as `sessionControl`.
+- **(ii) Pooled sessions.** If the smoke shows a finished op's session still listed
+  (`sessionControl.finishedOpListed: true`), sessions outlive their op and the session check cannot
+  separate the two H2 classes. §4 then files every hit whose marker completed but whose session is still
+  listed as **"H2 undetermined (pooled session)"**, never H2-fence.
+- **(iii) Exit 2 after a session started.** An exit 2 after any session started (a harness fault in the
+  middle of an arm) is handled like exit 3 or 4: run the recovery procedure before anything else uses
+  Cronus28, then resume as a new segment.
+
 ## OUTCOME
