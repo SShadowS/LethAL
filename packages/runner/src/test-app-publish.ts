@@ -25,6 +25,7 @@ export type TestAppRefusal =
   | "symbols-unreadable" // an .alpackages entry with no readable identity
   | "compile-failed" // alc said no
   | "unsupported" // the backend cannot read the package back
+  | "resident-unreadable" // R248: a pre-fence read answered null, before the fence
   | "version-below-resident" // decision 3, before the fence
   | "publish-failed" // decision 2's table
   | "publish-indeterminate"
@@ -34,6 +35,7 @@ export type TestAppRefusal =
 const TERMINAL_REASONS: ReadonlySet<TestAppRefusal> = new Set<TestAppRefusal>([
   "publish-failed",
   "unsupported",
+  "resident-unreadable",
   "version-below-resident",
   "manifest-unreadable",
   "compile-failed",
@@ -262,17 +264,26 @@ export async function publishTestApp(
       "this configuration cannot read a published package back (no dev server or no credentials), so a publish could not be verified",
     );
   }
-  if (before instanceof Uint8Array) {
-    const resident = versionOf(before);
-    if (compareVersionsOrRefuse(app.version, resident) < 0) {
-      throw new TestAppError(
-        "version-below-resident",
-        `the container holds ${app.name} ${resident}, above this project's app.json ${app.version}. LethAL publishes a test app at its own version and never mints one. Clear the resident record (Sync-NAVApp -Mode Clean, see .claude/skills/control-app) or raise app.json above ${resident}.`,
-        resident,
-      );
-    }
+  // R248: a caller of publishTestApp always has a resident test app already (verify's baseline
+  // just ran it; itest:testapp publishes over one too), so a pre-fence `null` almost always means
+  // the dev-endpoint read credentials are wrong, not "never published". Refuse before the fence
+  // (no marker claimed) rather than let the publish go ahead and land on publish-indeterminate,
+  // which would strand the container needing a recycle over a config mistake.
+  if (before === null) {
+    throw new TestAppError(
+      "resident-unreadable",
+      `the resident ${app.name} package could not be read before publishing: check the dev-endpoint read credentials (BC_DEV_USER / BC_DEV_PASSWORD), or that the app has ever been published`,
+    );
   }
-  // null: never published, or unreadable. BC's own downgrade refusal inside the fence is the backstop.
+  const resident = versionOf(before);
+  if (compareVersionsOrRefuse(app.version, resident) < 0) {
+    throw new TestAppError(
+      "version-below-resident",
+      `the container holds ${app.name} ${resident}, above this project's app.json ${app.version}. LethAL publishes a test app at its own version and never mints one. Clear the resident record (Sync-NAVApp -Mode Clean, see .claude/skills/control-app) or raise app.json above ${resident}.`,
+      resident,
+    );
+  }
+  // BC's own downgrade refusal inside the fence is still the backstop for an in-fence read.
   return fence.publish(async () => {
     let publishError: string | undefined;
     try {

@@ -42,10 +42,12 @@ root. Below, `coord` means that full command.
 owner's pause live in the same folder CentralGauge uses. A LethAL lease is seen by
 CentralGauge's lanes and the other way round.
 
-- **LethAL may use ONE container: `Cronus28`** (owner allocation 2026-09-25, enforced by coord
-  through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and Cronus283 belong to
-  CentralGauge; never lease or publish to them. Every fixture (`sandbox-app`, `sandbox-data`,
-  `sandbox-hang`) runs against Cronus28, so live gates run one at a time.
+- **LethAL may use `Cronus28` and `Cronus284`** (owner allocation 2026-09-25, Cronus284 added
+  2026-09-26, enforced by coord through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and
+  Cronus283 belong to CentralGauge; never lease or publish to them. Cronus28 serves every gate
+  (`sandbox-app`, `sandbox-data`, `sandbox-hang`), one at a time. **Cronus284 is dedicated to
+  R-236's measurement** (control 1.0.0.19, `sandbox-data` 1.0.0.10 + tests 1.0.0.18, set up
+  2026-09-26); no gate or other task uses it until the orchestrator says so.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`), then
   `coord lease Cronus28 <lane>`, heartbeat every 5 minutes, release right after. Held by

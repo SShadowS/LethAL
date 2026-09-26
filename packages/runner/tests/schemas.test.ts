@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { Glob } from "bun";
+import { hashTargetSource } from "../src/baseline-snapshot";
 import {
   DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
@@ -27,7 +30,18 @@ import {
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
 } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
+import { ATTRIBUTION_INTERPRETATIONS, identityKeyOf, serializeKey } from "../src/selection";
+import { ResultsStore } from "../src/store";
+import {
+  KILLED_BY,
+  NEW_TEST_STATES,
+  VERIFY_REFUSALS,
+  VERIFY_SCHEMA_VERSION,
+  VERIFY_VERDICTS,
+  type VerifyDeps,
+  type VerifyOutput,
+  runVerify,
+} from "../src/verify";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
 /**
@@ -350,6 +364,296 @@ describe("published JSON Schemas (R152)", () => {
 });
 
 /**
+ * C02-06 Task 6. `verify-v1.schema.json` is hand-written, like `doctor` and `explain` above it, and
+ * pinned the same way: leaves against the declaration, enums against the runtime domain, version
+ * against the constant. The fourth check needs a REAL `runVerify` output rather than a hand-typed
+ * one, and orchestrator.test.ts's own runVerify fixtures (search "C02-06 Task 5.4: runVerify")
+ * drive a full schemata compile through a fake execution backend and a real lease dance to get one
+ * -- machinery this file has no reason to duplicate just to validate a schema. The ALL-SKIPPED path
+ * below is a genuine `runVerify` call too, just one that never reaches the backend or the lease
+ * (planVerify returns before either is touched once every survivor is reader-marked equivalent),
+ * so the backend and lease it passes only need to satisfy the types, not do anything.
+ */
+function neverCalledBackend(): VerifyDeps["backend"] {
+  const boom = (): never => {
+    throw new Error("schemas.test.ts verify fixture: the backend is not used on this path");
+  };
+  return {
+    capabilities: boom,
+    status: async () => boom(),
+    deploy: async () => boom(),
+    compileCheck: async () => boom(),
+    activate: async () => boom(),
+    run: async () => boom(),
+    compileTestApp: async () => boom(),
+    publishTestApp: async () => boom(),
+  };
+}
+
+function neverCalledLease(): VerifyDeps["lease"] {
+  const boom = (): never => {
+    throw new Error("schemas.test.ts verify fixture: the lease is not used on this path");
+  };
+  return {
+    client: {
+      acquire: async () => boom(),
+      renew: async () => boom(),
+      release: async () => boom(),
+      beginPublish: async () => boom(),
+      endPublish: async () => boom(),
+      getOperationStatus: async () => boom(),
+      recoverOp: async () => boom(),
+    },
+    serverGeneration: async () => boom(),
+  };
+}
+
+/** One minimal, fully-valid manifest entry -- the same shape verify.test.ts's own `entry()` builds. */
+function verifySchemaFixtureEntry(): MutantManifestEntry {
+  return {
+    mutantId: "M0001",
+    file: "Logic.Codeunit.al",
+    startIndex: 10,
+    endIndex: 20,
+    startLine: 3,
+    operatorName: "lethal.negate-conditional",
+    operatorVersion: "1.0.0",
+    astHash: "hash-M0001",
+    objectType: "codeunit",
+    codeunitId: 50000,
+    codeunitName: "Logic",
+    procedureName: "Post",
+    originalText: "a",
+    mutatedText: "b",
+  };
+}
+
+/**
+ * A real source project, a real hashed manifest and `.app` on disk, and a real reader mark: enough
+ * for `resolveVerifySource`, `assertSourceUnchanged` and `loadInstalledArtifact` to all run for
+ * real, then `planVerify` skips the one survivor, so `runVerify` returns without ever reaching
+ * `compileTestApp`/`publishTestApp`/`runNamedMutants`/the lease. A genuine `ok: true` VerifyOutput.
+ */
+async function buildVerifyHappyPathOutput() {
+  const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-proj-"));
+  const instrumentedDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-instr-"));
+  try {
+    writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
+    mkdirSync(join(projectDir, "src"));
+    writeFileSync(join(projectDir, "src", "Logic.Codeunit.al"), 'codeunit 50000 "Logic" { }');
+
+    const entry = verifySchemaFixtureEntry();
+    const manifest: MutantManifest = {
+      selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+      artifactId: "a".repeat(32),
+      mutants: [entry],
+    };
+    const manifestText = JSON.stringify(manifest);
+    writeFileSync(join(instrumentedDir, "mutant-manifest.json"), manifestText);
+    writeFileSync(join(instrumentedDir, "app.json"), "{}");
+    const appBytes = new TextEncoder().encode("fake-test-app-bytes");
+    const appPath = join(instrumentedDir, "fake.app");
+    writeFileSync(appPath, appBytes);
+
+    writeFileSync(
+      join(projectDir, "lethal.equivalent.json"),
+      JSON.stringify({
+        marks: [{ key: serializeKey(identityKeyOf(entry)), reason: "same either way" }],
+      }),
+    );
+
+    const store = new ResultsStore(":memory:");
+    const preprocessorSymbols: string[] = [];
+    const runId = store.createRun({
+      projectPath: projectDir,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.0.1",
+      appId: "11111111-1111-1111-1111-111111111111",
+      artifactId: manifest.artifactId,
+      sha256: Bun.SHA256.hash(appBytes, "hex"),
+      manifestSha256: Bun.SHA256.hash(manifestText, "hex"),
+      appPath,
+      instrumentedDir,
+    });
+    store.recordSourceHash(runId, await hashTargetSource(projectDir, preprocessorSymbols));
+    store.recordMutant(runId, {
+      mutantCode: entry.mutantId,
+      astHash: entry.astHash,
+      codeunitName: entry.codeunitName,
+      procedureName: entry.procedureName,
+      operatorName: entry.operatorName,
+      operatorMajor: 1,
+      file: entry.file,
+      line: entry.startLine,
+      verdict: "survived",
+      durationMs: 40,
+      batchIndex: 0,
+      carried: false,
+      coveringTests: [],
+    });
+
+    const out = await runVerify(
+      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: join(projectDir, "tests") },
+      {
+        store,
+        backend: neverCalledBackend(),
+        lease: neverCalledLease(),
+        resourceServer: "http://schema-fixture",
+        resourceServerInstance: "BC",
+        preprocessorSymbols,
+      },
+    );
+    store.close();
+    return out;
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(instrumentedDir, { recursive: true, force: true });
+  }
+}
+
+/** No store row, no project, no manifest: `parseVerifyRequest` refuses before any of those is read. */
+async function buildVerifyRefusedOutput() {
+  const store = new ResultsStore(":memory:");
+  const out = await runVerify(
+    { artifact: "not-32-hex", survivors: ["0/M0001"], testDir: "unused" },
+    {
+      store,
+      backend: neverCalledBackend(),
+      lease: neverCalledLease(),
+      resourceServer: "http://schema-fixture",
+      resourceServerInstance: "BC",
+      preprocessorSymbols: [],
+    },
+  );
+  store.close();
+  return out;
+}
+
+describe("published JSON Schema - verify (C02-06 Task 6)", () => {
+  const verifySchema = loadSchema("verify-v1.schema.json");
+
+  test("the verify schema describes exactly the leaves VerifyOutput declares", () => {
+    const fromType = typeLeafPaths({
+      files: [join(SRC, "verify.ts")],
+      root: "VerifyOutput",
+      expectedLeafTypeNames: ["VerifyVerdict", "KilledBy", "NewTestState", "VerifyRefusal"],
+    });
+    expect([...schemaLeafPaths(verifySchema)].sort()).toEqual([...fromType].sort());
+  });
+
+  test("every verify enum equals the runtime domain it copies", () => {
+    expect(enumAt(verifySchema, "$.results[].verdict")).toEqual([...VERIFY_VERDICTS]);
+    expect(enumAt(verifySchema, "$.refused.reason")).toEqual([...VERIFY_REFUSALS]);
+    expect(enumAt(verifySchema, "$.results[].killedBy")).toEqual([...KILLED_BY]);
+    expect(enumAt(verifySchema, "$.newTests[].state")).toEqual([...NEW_TEST_STATES]);
+    // UnmutatedRun.outcome is an inline literal union in verify.ts, not a named runtime array, so
+    // it is pinned against that literal list directly rather than against an imported constant.
+    expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([
+      "pass",
+      "fail",
+      "not-run",
+    ]);
+  });
+
+  test("the verify schema's version const and $id match VERIFY_SCHEMA_VERSION", () => {
+    const verifyVersion = (verifySchema.properties as Record<string, Schema>).verifySchemaVersion;
+    expect(verifyVersion?.const).toBe(VERIFY_SCHEMA_VERSION);
+    expect(verifySchema.$id).toContain(`verify-v${VERIFY_SCHEMA_VERSION}`);
+  });
+
+  test("a runVerify output validates", async () => {
+    const happy = await buildVerifyHappyPathOutput();
+    expect(happy.ok).toBe(true);
+    expect(happy.results.map((r) => r.verdict)).toEqual(["skipped"]);
+    expect(conformsTo(verifySchema, happy)).toEqual([]);
+
+    const refused = await buildVerifyRefusedOutput();
+    expect(refused.refused?.reason).toBe("malformed-request");
+    expect(refused.source).toBeUndefined();
+    expect(conformsTo(verifySchema, refused)).toEqual([]);
+
+    // Neither fixture above reaches a killed or survived verdict, testApp, or a populated newTests
+    // entry: planVerify returns before any of those are touched once every survivor is skipped, and
+    // parseVerifyRequest refuses before source resolves at all. The leaf-path test further up only
+    // confirms those paths EXIST in both the type and the schema -- it never checks `required` or
+    // `additionalProperties` on them, which live only in the hand-written JSON. This literal is
+    // typed `: VerifyOutput` with no `as` anywhere, so tsc itself forces every field VerifyOutput
+    // requires to be present, and it fills every optional leaf `killingTest`/`killedBy`/`testApp`/
+    // `newTests[].runs` touch -- closing that gap without a runNamed fake or a committed report.
+    const measured: VerifyOutput = {
+      verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+      ok: false,
+      exitCode: 5,
+      source: {
+        runId: 1,
+        batchIndex: 0,
+        artifactId: "a".repeat(32),
+        artifactSha256: "b".repeat(64),
+        sourceSha256: "c".repeat(64),
+        projectPath: "C:/fixtures/sandbox-app",
+      },
+      verifyRunId: 2,
+      testApp: {
+        name: "Server Tests",
+        version: "7.7.7.7",
+        sha256: "d".repeat(64),
+        compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+      },
+      newTests: [
+        {
+          test: "New Tests.OverBudgetDetected",
+          codeunitId: 79102,
+          state: "stable",
+          runs: [
+            { outcome: "pass", fresh: true, sessionId: 11, testRunsBefore: 0 },
+            { outcome: "pass", fresh: true, sessionId: 12, testRunsBefore: 0 },
+          ],
+        },
+      ],
+      results: [
+        {
+          id: "0/M0001",
+          batchIndex: 0,
+          mutantCode: "M0001",
+          file: "Logic.Codeunit.al",
+          line: 3,
+          operatorName: "lethal.negate-conditional",
+          procedureName: "Post",
+          verdict: "killed",
+          testsRun: ["Sandbox Tests.OverBudgetDetected"],
+          killingTest: {
+            codeunitId: 79100,
+            codeunitName: "Sandbox Tests",
+            method: "OverBudgetDetected",
+          },
+          killedByNewTest: false,
+          killedBy: "assertion",
+          killingTestFailure: "Assert.AreEqual failed. Expected:<400> Actual:<0>.",
+        },
+        {
+          id: "0/M0002",
+          batchIndex: 0,
+          mutantCode: "M0002",
+          file: "Logic.Codeunit.al",
+          line: 9,
+          operatorName: "lethal.remove-assignment",
+          procedureName: "Post",
+          verdict: "survived",
+          testsRun: ["Sandbox Tests.OverBudgetDetected"],
+        },
+      ],
+      counts: { killed: 1, survived: 1, error: 0, skipped: 0 },
+      timings: { totalMs: 1234, compileMs: 200, publishMs: 50 },
+    };
+    expect(conformsTo(verifySchema, measured)).toEqual([]);
+  });
+});
+
+/**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
  * `SessionReport` has 130 leaves and the stream is a union of 20 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
@@ -488,6 +792,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       // The stream schema describes ONE EVENT, a union whose members carry their own required
       // fields, so an empty root set is correct here and not an omission.
       "stream-v1.schema.json": [],
+      "verify-v1.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
     });
   });
 
