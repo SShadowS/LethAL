@@ -86,7 +86,7 @@ killing test and its mutant is reported survived. The report flags a narrowed ru
 **Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
 CONDITIONAL. LethAL reads al-runner's own coverage output (R220), but one file declaring more than one
 object disables it for the whole run (upstream #3713), and then an unreached mutant comes back
-survived rather than no-coverage. Under-reporting only, never a false kill. Do not quote a score from it. (Its `asserterror` DID
+survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
 

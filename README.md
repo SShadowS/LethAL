@@ -684,8 +684,9 @@ a LethAL feature or a mode.
   `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
   discarded by the error. What remains is that coverage is CONDITIONAL: one file declaring more than
   one object disables it for the whole run (upstream #3713), and then a mutant no test reaches is
-  run against every test and comes back `survived` rather than `no-coverage`. Under-reporting
-  only, never a false kill. Use it for offline smoke-testing, not for a score.
+  run against every test and comes back `survived` rather than `no-coverage`. Conditional coverage is one measured route to a false survivor. No measurement has shown a false
+  kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
+  that exists but holds a mismatched build is untested (R235). Use it for offline smoke-testing, not for a score.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than

@@ -224,7 +224,7 @@ dated before the run.
 `bcdev`. `al-runner` is offline and NOT authoritative: its coverage is CONDITIONAL. LethAL reads
 al-runner's own `--coverage` (R220), but one file declaring more than one object disables it for
 the whole run (upstream #3713), and then an unreached mutant comes back survived rather than
-no-coverage. Under-reporting only, never a false kill, and a startup canary measures the actual binary each session. (The older claim
+no-coverage. That is one measured route to a false survivor; no measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). A startup canary measures the actual binary each session. (The older claim
 that its `asserterror` never fails a test was fixed upstream in v2; the canary confirms it.)
 
 **"You planted that bug."**
