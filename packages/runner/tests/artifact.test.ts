@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
+import type { MutantManifest } from "@lethal/schemata";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
-import type { CompiledArtifact } from "../src/artifact";
+import type { ArtifactIo, CompiledArtifact } from "../src/artifact";
 import { ContainerDeployer } from "../src/publisher";
 
 const CFG = {
@@ -326,5 +327,114 @@ describe("ContainerDeployer.publish", () => {
     const message = (err as Error).message;
     expect(message).toContain("newer version 1.0.106.0 was already installed");
     expect(message).toContain("Publish operation failed");
+  });
+});
+
+describe("C02-05: compile's argv parity", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const input = (projectDir: string) => ({
+    projectDir,
+    artifactId: ID,
+    appId: "app",
+    appVersion: "1.0.0.0",
+    mutantManifest: { artifactId: ID, mutants: [] } as unknown as MutantManifest,
+    appManifest: {},
+  });
+  function recordingIo(argvs: string[][]): ArtifactIo {
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async () => new TextEncoder().encode("x"),
+      writeArtifact: async () => {},
+    };
+  }
+  test("compile's argv is exactly the pre-refactor argv", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:\\cache", outputDir: "C:\\out" },
+      recordingIo(argvs),
+    ).compile(input("C:\\proj"));
+    expect(argvs).toEqual([
+      ["C:/alc.exe", "/project:C:/proj", "/packagecachepath:C:/cache", `/out:C:/out/${ID}.app`],
+    ]);
+  });
+  test("compile's argv with preprocessor symbols is exactly the pre-refactor argv", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      {
+        alcPath: "C:/alc.exe",
+        packageCachePath: "C:/cache",
+        outputDir: "C:/out",
+        preprocessorSymbols: ["A", "B"],
+      },
+      recordingIo(argvs),
+    ).compile(input("C:/proj"));
+    expect(argvs).toEqual([
+      [
+        "C:/alc.exe",
+        "/project:C:/proj",
+        "/packagecachepath:C:/cache",
+        "/define:A,B",
+        `/out:C:/out/${ID}.app`,
+      ],
+    ]);
+  });
+});
+
+describe("C02-05: compileProject", () => {
+  function io(argvs: string[][], exitCode = 0, stdout = ""): ArtifactIo {
+    const bytes = new TextEncoder().encode("test-app-bytes");
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode, stdout, stderr: "" };
+      },
+      readArtifact: async () => bytes,
+      writeArtifact: async () => {},
+    };
+  }
+
+  test("compileProject uses the caller's package cache and returns content-addressed bytes", async () => {
+    const argvs: string[][] = [];
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "C:/target-cache", outputDir: "C:/out" },
+      io(argvs),
+    );
+    const out = await c.compileProject({
+      projectDir: "C:/tests",
+      packageCachePath: "C:/scratch-cache",
+      name: "testapp-x",
+    });
+    expect(argvs[0]).toContain("/packagecachepath:C:/scratch-cache");
+    expect(argvs[0]).not.toContain("/packagecachepath:C:/target-cache");
+    expect(out.sha256).toBe(Bun.SHA256.hash(new TextEncoder().encode("test-app-bytes"), "hex"));
+    expect(out.appPath).toBe(`C:/out/${out.sha256.slice(0, 16)}-testapp-x.app`);
+  });
+
+  test("compileProject passes the configured preprocessor symbols like compile does", async () => {
+    const argvs: string[][] = [];
+    const c = new ArtifactCompiler(
+      {
+        alcPath: "alc",
+        packageCachePath: "p",
+        outputDir: "C:/out",
+        preprocessorSymbols: ["CLEAN24"],
+      },
+      io(argvs),
+    );
+    await c.compileProject({ projectDir: "C:/tests", packageCachePath: "C:/s", name: "t" });
+    expect(argvs[0]).toContain("/define:CLEAN24");
+  });
+
+  test("compileProject throws AlcCompileError with alc's own text", async () => {
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "p", outputDir: "C:/out" },
+      io([], 1, "error AL0132: nope"),
+    );
+    await expect(
+      c.compileProject({ projectDir: "C:/tests", packageCachePath: "C:/s", name: "t" }),
+    ).rejects.toThrow(/AL0132/);
   });
 });

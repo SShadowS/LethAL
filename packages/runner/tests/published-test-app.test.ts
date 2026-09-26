@@ -3,6 +3,7 @@ import {
   comparePublishedTestApp,
   parsePublishedApp,
   publishedTestAppWarning,
+  readAppIdentity,
 } from "../src/published-test-app";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -153,5 +154,21 @@ describe("publishedTestAppWarning", () => {
     const text = publishedTestAppWarning(c) ?? "";
     expect(text).toContain("1.0.0.9");
     expect(text).toContain("could not be compared");
+  });
+});
+
+describe("readAppIdentity", () => {
+  it("readAppIdentity reads Id, Name, Publisher and Version", () => {
+    expect(readAppIdentity(publishedPackage("1.0.0.11"))).toEqual({
+      id: "ae4589f8-4376-41a5-acf3-8df73772fefd",
+      name: "LethAL Sandbox Data Tests",
+      publisher: "LethAL",
+      version: "1.0.0.11",
+    });
+  });
+
+  it("readAppIdentity throws on a package with no manifest", () => {
+    const notAnApp = buildFakeAppWithEntries({ "readme.txt": "not a package" });
+    expect(() => readAppIdentity(notAnApp)).toThrow(/NavxManifest/);
   });
 });

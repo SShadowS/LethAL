@@ -1804,3 +1804,33 @@ timeout; it does not detect, flag, or specifically mitigate the false-tag case, 
 distinct safety net for it. It is recorded here so that a later reader does not mistake the absence
 of an observed instance for evidence of absence, and does not mistake section 6 for a check this
 design does not have.
+
+## Dev endpoint: test-app read-back and same-version replace (C02-05)
+
+Measured 2026-09-26 on Cronus28 (BC 28.4.53241.53758, DK), under a coord lease. Two questions,
+each a BC fact that C02-05's test-app publish rests on:
+
+1. Does the dev endpoint's `dev/packages` read return, byte for byte, the test app that was just
+   published? R139 measured this on Cronus283; this re-measures it on Cronus28.
+2. Does a dev-endpoint `altool publishapp` of the SAME app name and SAME version, with different
+   bytes, get accepted and replace the package? Nothing in this repo had recorded it.
+
+Method. `fixtures/sandbox-tests` (`LethAL Sandbox Tests`, version 1.0.0.2) was compiled twice with
+`alc` from unchanged source. The two packages already differed (alc output is not byte-stable), so
+the first compile is build A and the second is build B, and the script checked that their hashes
+differ before publishing anything. Each publish went through `ContainerDeployer` (altool
+`publishapp`, dev endpoint, `UserPassword`), and each read-back through
+`BcDevMcpBackend.fetchPublishedAppPackage`, hashed with `hashPackage`.
+
+| step | altool exit | read-back version | read-back sha256 | expected |
+|---|---|---|---|---|
+| resident, before anything | (none) | 1.0.0.2 | `6ecba09d1d80309097519d5071a533a2e5a4b351a0e2e2723197812ef27b42e1` | (whatever was there) |
+| publish A | 0 | 1.0.0.2 | `91089951c31da63bfce31ec69389eb697ccd83e84fa48bc10726f711d1f5faf5` | A, matches |
+| publish B, same version | 0 | 1.0.0.2 | `89347999563a8bd7208c3cff4b6dd4fa1791f7575563c52544fa31099723d433` | B, matches |
+| publish A again (restore) | 0 | 1.0.0.2 | `91089951c31da63bfce31ec69389eb697ccd83e84fa48bc10726f711d1f5faf5` | A, matches |
+
+Build A is `91089951...5faf5` and build B is `89347999...3d433`. All three read-backs equal the
+local hash of the package just published, so on Cronus28 the read-back is byte-for-byte the
+published test app, and a same-name, same-version republish with other bytes is accepted (exit 0)
+and replaces what the server holds. Decisions 2 and 3 of the C02-05 plan stand. The container was
+left holding build A, which is compiled from the committed source.
