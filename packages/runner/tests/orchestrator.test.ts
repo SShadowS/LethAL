@@ -10144,6 +10144,20 @@ const NAMED_TESTS_AL = `codeunit 79100 "Sandbox Tests"
 }
 `;
 
+// C02-06 Task 5.2 (decision 14): a second test codeunit whose method shares
+// `OverBudgetDetected`'s NAME with codeunit 79100 above. `killingTest` alone (the bare method
+// name) cannot tell these two apart; `killingTestRef` exists to.
+const MIRROR_TESTS_AL = `codeunit 79101 "Zulu Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`;
+
 /**
  * Attach-only fake. `attach` runs the REAL `DeploymentVerifier` against a scripted registry read,
  * so a mismatch is refused by the production comparison. Baseline: `RedAtBaseline` fails with
@@ -10160,6 +10174,9 @@ class NamedFake implements ExecutionBackend {
       readonly serverReports?: string;
       readonly strand?: string;
       readonly killer?: string;
+      /** C02-06 Task 5.2: restrict the kill to this exact ref (codeunit + method) rather than
+       *  every covering ref, so a multi-method covering set can kill at a chosen position. */
+      readonly killerRef?: TestMethodRef;
       readonly observedAny?: boolean;
     },
   ) {}
@@ -10202,7 +10219,12 @@ class NamedFake implements ExecutionBackend {
       return { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
     }
     const attestation = { observedAny: this.o.observedAny ?? true, identityMismatch: false };
-    return m === (this.o.killer ?? "M0001")
+    const killerRef = this.o.killerRef;
+    const isKillingRun =
+      m === (this.o.killer ?? "M0001") &&
+      (killerRef === undefined ||
+        (ref.codeunitId === killerRef.codeunitId && ref.method === killerRef.method));
+    return isKillingRun
       ? { ref, outcome: "fail", durationMs: 5, failureMessage: `killed by ${m}`, attestation }
       : { ref, outcome: "pass", durationMs: 5, attestation };
   }
@@ -10245,18 +10267,22 @@ class LeaseNamedFake extends NamedFake {
 
 const OVER = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
 const RED = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "RedAtBaseline" };
+// C02-06 Task 5.2: the mirror of OVER in MIRROR_TESTS_AL — same method name, different codeunit.
+const OVER2 = { codeunitId: 79101, codeunitName: "Zulu Tests", method: "OverBudgetDetected" };
 
 async function installedFixture(
   o: {
     readonly serverReports?: string;
     readonly strand?: string;
     readonly killer?: string;
+    readonly killerRef?: TestMethodRef;
     readonly observedAny?: boolean;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
 ) {
   const dirs = await makeProject(NAMED_TESTS_AL);
+  await Bun.write(join(dirs.testDir, "ZuluTests.Codeunit.al"), MIRROR_TESTS_AL);
   await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
   const store = new ResultsStore(":memory:");
   const phase = new PhaseBackend({ writeApp: true });
@@ -10635,6 +10661,85 @@ describe("C02-04b: runNamedMutants", () => {
     expect(res.quarantined).toContain("unattested artifact");
   });
 });
+
+describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
+  test("killingTestRef names the codeunit that killed, when two codeunits share the method name", async () => {
+    const fx1 = await installedFixture();
+    const res1 = await runNamedMutants({
+      ...fx1.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER2] }],
+    });
+    expect(res1.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(res1.outcomes[0]?.killingTest).toBe("OverBudgetDetected");
+    expect(res1.outcomes[0]?.killingTestRef).toEqual(OVER2);
+
+    // The mirror: the OTHER codeunit's same-named method kills instead.
+    const fx2 = await installedFixture();
+    const res2 = await runNamedMutants({
+      ...fx2.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res2.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(res2.outcomes[0]?.killingTest).toBe("OverBudgetDetected");
+    expect(res2.outcomes[0]?.killingTestRef).toEqual(OVER);
+  });
+
+  test("a warm-confirmed kill carries its ref", async () => {
+    // Covering set of two, from two different codeunits sharing a method name: OVER (position 1
+    // by name order, since kills/members tie) passes, OVER2 (position 2) is the one `killerRef`
+    // restricts the fail to — a group-call kill at position > 1 only ever confirms warm (R206).
+    const fx = await installedFixture({ killerRef: OVER2 });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(res.outcomes[0]?.killPosition).toBe(2);
+    expect(res.outcomes[0]?.killingTest).toBe("OverBudgetDetected");
+    expect(res.outcomes[0]?.killingTestRef).toEqual(OVER2);
+  });
+
+  test("killingTestRef never reaches the report", () => {
+    const mutant: MutantManifestEntry = {
+      mutantId: "M1",
+      file: "test.al",
+      startIndex: 0,
+      endIndex: 1,
+      startLine: 10,
+      operatorName: "Op1",
+      operatorVersion: "1.0.0",
+      astHash: "hash1",
+      objectType: "codeunit",
+      codeunitId: 50000,
+      codeunitName: "Test",
+      procedureName: "TestProc",
+      originalText: "Original();",
+      mutatedText: "",
+    };
+    const outcome: SessionOutcome = {
+      mutant,
+      verdict: "killed",
+      batchIndex: 0,
+      killingTest: "OverBudgetDetected",
+      killingTestRef: OVER,
+    };
+    const report = legacyBuildReport({
+      caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+      baselineGreen: true,
+      batches: 1,
+      unsupportedTests: [],
+      notInstrumented: { totalFiles: 0, files: [] },
+      timings: { totalMs: 0, generateMutationSetMs: 0, deployMs: 0, baselineMs: 0 },
+      baselineTests: [],
+      untargetedTriggerCount: 0,
+      outcomes: [outcome],
+    });
+    expect(JSON.stringify(report)).not.toContain("killingTestRef");
+    const row = report.mutants.find((m) => m.mutantCode === "M1");
+    expect(row?.killingTest).toBe("OverBudgetDetected");
+  });
+});
+
 // C02-05 Task 6. COMPILED, deps, NEW, OLD and DOWNGRADE are copied from test-app-publish.test.ts:
 // importing that file would register its tests a second time.
 const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests

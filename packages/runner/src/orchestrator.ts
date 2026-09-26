@@ -6225,6 +6225,9 @@ async function runMutantsOnBackend(args: {
     await activateOnce(args.backend, args.safety, m.mutantId);
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
+    // C02-06 decision 14: the killer's FULL ref, set beside `killingTest` at every site that
+    // decides a kill. Internal (`SessionOutcome` only) — see its doc comment for why.
+    let killingTestRef: TestMethodRef | undefined;
     /**
      * R86: the failure text of the run that KILLED this mutant — see `MutantOutcome`'s field of the
      * same name for what it is for.
@@ -6411,6 +6414,7 @@ async function runMutantsOnBackend(args: {
           if (warm.kind === "confirmed") {
             verdict = "timeout-killed";
             killingTest = ref.method;
+            killingTestRef = ref;
             killingTestFailure = v.failureMessage;
             killPosition = warm.killPosition;
             recordKill(args.killLedger, m, ref);
@@ -6426,6 +6430,7 @@ async function runMutantsOnBackend(args: {
         }
         verdict = "timeout-killed";
         killingTest = ref.method;
+        killingTestRef = ref;
         killingTestFailure = v.failureMessage;
         killPosition = 1;
         recordKill(args.killLedger, m, ref);
@@ -6445,6 +6450,7 @@ async function runMutantsOnBackend(args: {
         if (warm.kind === "confirmed") {
           verdict = "killed";
           killingTest = ref.method;
+          killingTestRef = ref;
           // R86: the MUTATED run's text, never the replay's (which passed).
           killingTestFailure = v.failureMessage;
           killPosition = warm.killPosition;
@@ -6586,6 +6592,7 @@ async function runMutantsOnBackend(args: {
         } else if (confirm.outcome === "pass") {
           verdict = "killed";
           killingTest = ref.method;
+          killingTestRef = ref;
           killPosition = 1;
           recordKill(args.killLedger, m, ref);
           // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
@@ -6683,6 +6690,7 @@ async function runMutantsOnBackend(args: {
       undefined, // unplaceable
       killPosition,
       reach,
+      killingTestRef,
     );
     for (const t of testResultBuffer) {
       args.store.recordTestResult(
@@ -7352,6 +7360,11 @@ export function record(
   // Passed only by the covering loop, and only for a `"statement"`-grain mutant it measured. The
   // grain itself rides on `m`. Rides on `mutant-scored` only; the store gets none of it.
   reach?: { readonly guardReached: boolean; readonly reachedBy: readonly string[] },
+  // C02-06 decision 14: the killer's full ref, beside `killingTest`. Passed only by the covering
+  // loop's three kill-deciding branches (confirmation, timeout, warm-confirmation) — never by
+  // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
+  // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
+  killingTestRef?: TestMethodRef,
 ): number {
   const key = identityKeyOf(m);
   const mutantRowId = store.recordMutant(runId, {
@@ -7393,6 +7406,9 @@ export function record(
       : {}),
     ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
+    // C02-06 decision 14: `SessionOutcome` only — never store, never an event (see the parameter's
+    // own doc comment).
+    ...(killingTestRef !== undefined ? { killingTestRef } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),
     ...(killingTestFailure !== undefined ? { killingTestFailure } : {}),
     ...(killPosition !== undefined ? { killPosition } : {}),
