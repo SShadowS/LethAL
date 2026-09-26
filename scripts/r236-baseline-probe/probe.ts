@@ -3,14 +3,17 @@
  * mutant) and records, per BC call, the HTTP timeline from `traceFetch`. When a RunMutant call
  * breaks it reads the control app's op marker at once (fast path); after the session it reads the
  * marker again and asks the BC server itself whether the BC session that ran the call has ended
- * (slow path). Only both together count as "the whole action ended"; anything less stops the probe
- * (exit 3) so the operator can run the recovery procedure.
+ * (slow path). Only both together count as "the whole action ended" (`actionEnd: "proven"`).
+ * Ruling q-160433: anything less is `actionEnd: "unproven"`, a COUNTED hit with no retry, and the arm
+ * continues; the next session starts only if doctor is clean and the harness check passes (no
+ * force-reset), and its record carries `afterUnprovenHit`.
  *
  * LETHAL_R236_PROBE=1 bun scripts/r236-baseline-probe/probe.ts --arm <label> --sessions <n>
  *   --out <file.ndjson> [--segment <n>] [--control-app <path.app>] [--no-trace]
  *
- * Exit codes: 0 all sessions ran; 2 harness fault; 3 stopped because a broken call's action could
- * not be confirmed ended; 4 stopped on a thrown session.
+ * Exit codes: 0 all sessions ran; 2 harness fault; 3 run the recovery procedure (the gate after an
+ * unproven hit failed, or a record could not be written to --out); 4 a session threw (for example
+ * the lease acquire refused), also recovery.
  *
  * Paths are absolute so the same file runs from a worktree of an older client (R236 Task 4 step 5).
  * The runner imports are kept to APIs that exist unchanged at 7b7fff3.
@@ -90,6 +93,12 @@ interface SessionRecord {
   readonly endedAt: string;
   readonly traced: boolean;
   readonly afterHit: boolean;
+  /** Ruling q-160433: the previous session's action end was unproven (reported apart and in the total). */
+  readonly afterUnprovenHit: boolean;
+  /** The first session of a resumed segment (`--segment` > 1), i.e. right after a recovery. */
+  readonly postRecovery: boolean;
+  /** "proven" / "unproven" for a session with a quarantine or a broken call; null otherwise. */
+  readonly actionEnd: "proven" | "unproven" | null;
   readonly controlVersion: string;
   readonly clientCommit: string;
   readonly appVersion: string | null;
@@ -415,33 +424,52 @@ export async function gatherEvidence(
 }
 
 /**
- * Requirements 8 and 9 plus review r1's minor: 0 only when nothing threw, every broken call is
- * proven ended, and a quarantine names a test that IS one of the broken calls.
+ * Ruling q-160433. A thrown session stops for recovery (4). Otherwise the session is recorded and
+ * the arm CONTINUES; the only question is whether its action end is proven. "proven" needs every
+ * broken RunMutant call to be proven ended AND, for a quarantine, the quarantined test to be one of
+ * those calls. Anything less is "unproven": a counted hit, no retry, and the NEXT session starts
+ * only through `preflight`.
  */
 export function decideExit(s: {
   thrown: string | null;
   quarantined: string | null;
   broken: ReadonlyArray<{ testMethod: string | null; actionEnded: boolean }>;
-}): { exitCode: 0 | 3 | 4; stopReason: string | null } {
+}): { exitCode: 0 | 4; actionEnd: "proven" | "unproven" | null; stopReason: string | null } {
   if (s.thrown !== null) {
-    return { exitCode: 4, stopReason: "session threw; a thrown session is never an observation" };
-  }
-  if (s.broken.some((b) => !b.actionEnded)) {
     return {
-      exitCode: 3,
-      stopReason: "a broken RunMutant call's whole action could not be confirmed ended",
+      exitCode: 4,
+      actionEnd: null,
+      stopReason: "session threw; a thrown session is never an observation",
     };
   }
-  if (s.quarantined !== null) {
-    const test = /in-flight-unknown running (\S+)/.exec(s.quarantined)?.[1];
-    if (test === undefined || !s.broken.some((b) => b.testMethod === test)) {
-      return {
-        exitCode: 3,
-        stopReason: "quarantined, and the quarantined test is not a broken call proven ended",
-      };
-    }
+  if (s.quarantined === null && s.broken.length === 0) {
+    return { exitCode: 0, actionEnd: null, stopReason: null };
   }
-  return { exitCode: 0, stopReason: null };
+  const test =
+    s.quarantined === null ? null : /in-flight-unknown running (\S+)/.exec(s.quarantined)?.[1];
+  const proven =
+    s.broken.every((b) => b.actionEnded) &&
+    (s.quarantined === null || (test !== undefined && s.broken.some((b) => b.testMethod === test)));
+  return { exitCode: 0, actionEnd: proven ? "proven" : "unproven", stopReason: null };
+}
+
+/**
+ * The gate before a session that follows an unproven hit: doctor must exit 0 and the harness check
+ * must pass. Nothing here force-resets anything; a failure means "run the recovery procedure".
+ * The lease acquire itself happens inside `runSession`, whose failure throws and exits 4.
+ */
+export async function preflight(deps: {
+  doctor: () => Promise<number>;
+  harness: () => Promise<unknown>;
+}): Promise<{ ok: boolean; reason: string | null }> {
+  try {
+    const code = await deps.doctor();
+    if (code !== 0) return { ok: false, reason: `doctor exited ${code}` };
+    await deps.harness();
+    return { ok: true, reason: null };
+  } catch (err) {
+    return { ok: false, reason: String(err) };
+  }
 }
 
 /** Always leaves the record somewhere: the file, else stdout. Returns false if the file failed. */
@@ -611,7 +639,37 @@ async function main(): Promise<void> {
   const harnessVerifier = new HarnessVerifier(odataCfg);
 
   let afterHit = false;
+  let afterUnprovenHit = false;
   for (let index = 1; index <= sessions; index++) {
+    if (afterUnprovenHit) {
+      // Ruling q-160433: after an unproven action end, the next session starts only if doctor is
+      // clean and the harness check passes, with no force-reset. Otherwise: recovery (exit 3).
+      const gate = await preflight({
+        doctor: async () => {
+          const repo = resolve(import.meta.dir, "..", "..");
+          const proc = Bun.spawn(
+            [
+              "bun",
+              join(repo, "packages/runner/src/cli.ts"),
+              "doctor",
+              "--config",
+              CONFIG_PATH,
+              "--project",
+              PROJECT_DIR,
+            ],
+            { cwd: repo, stdout: "inherit", stderr: "inherit" },
+          );
+          return await proc.exited;
+        },
+        harness: () => harnessVerifier.verify(),
+      });
+      if (!gate.ok) {
+        console.error(
+          `${arm} #${index}: preflight after an unproven hit failed (${gate.reason}); run the recovery procedure, then resume with --segment ${segment + 1}`,
+        );
+        process.exit(3);
+      }
+    }
     const controlVersion = await harnessVerifier.fetchControlVersion();
     const scratchDir = await mkdtemp(join(tmpdir(), `r236-${arm}-`));
     const outputDir = join(scratchDir, "publish");
@@ -744,7 +802,7 @@ async function main(): Promise<void> {
       ranAnswerSessionId: ran.sessionId,
     });
     if (thrown !== null) quarantined = `THREW: ${thrown}`;
-    const { exitCode, stopReason } = decideExit({ thrown, quarantined, broken });
+    const { exitCode, actionEnd, stopReason } = decideExit({ thrown, quarantined, broken });
 
     const record: SessionRecord = {
       arm,
@@ -754,6 +812,9 @@ async function main(): Promise<void> {
       endedAt: new Date().toISOString(),
       traced,
       afterHit,
+      afterUnprovenHit,
+      postRecovery: segment > 1 && index === 1,
+      actionEnd,
       controlVersion,
       clientCommit,
       appVersion,
@@ -779,6 +840,7 @@ async function main(): Promise<void> {
     if (exitCode !== 0) process.exit(exitCode);
     if (!written) process.exit(3); // the record reached stdout only: stop, never continue silently
     afterHit = broken.length > 0;
+    afterUnprovenHit = actionEnd === "unproven";
   }
   process.exit(0);
 }

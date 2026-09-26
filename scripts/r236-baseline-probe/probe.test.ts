@@ -8,6 +8,7 @@ import {
   decideExit,
   gatherEvidence,
   parseContainerEvidence,
+  preflight,
   sessionControl,
   writeRecord,
 } from "./probe.ts";
@@ -203,38 +204,63 @@ describe("gatherEvidence (review r1 IMPORTANT 3: evidence failures never lose th
   });
 });
 
-describe("decideExit", () => {
+describe("decideExit (ruling q-160433: an unproven action end is a counted hit, not a stop)", () => {
   const b = (testMethod: string, actionEnded: boolean) => ({ testMethod, actionEnded });
   const reason = "baseline test in-flight-unknown running PageActionComputesNonZero";
+  const d = (
+    quarantined: string | null,
+    broken: ReturnType<typeof b>[],
+    thrown: string | null = null,
+  ) => decideExit({ thrown, quarantined, broken });
 
-  test("0 only when every broken call ended and the quarantined test matches a broken call", () => {
-    expect(decideExit({ thrown: null, quarantined: null, broken: [] }).exitCode).toBe(0);
-    expect(
-      decideExit({
-        thrown: null,
-        quarantined: reason,
-        broken: [b("PageActionComputesNonZero", true)],
-      }).exitCode,
-    ).toBe(0);
+  test("no quarantine and no broken call: 0, no action-end class", () => {
+    expect(d(null, [])).toEqual({ exitCode: 0, actionEnd: null, stopReason: null });
   });
 
-  test("review r1 minor: a quarantine whose test is not a broken call's stops (exit 3)", () => {
-    expect(
-      decideExit({ thrown: null, quarantined: reason, broken: [b("OtherTest", true)] }).exitCode,
-    ).toBe(3);
-    expect(decideExit({ thrown: null, quarantined: reason, broken: [] }).exitCode).toBe(3);
-    expect(
-      decideExit({ thrown: null, quarantined: "something else", broken: [b("X", true)] }).exitCode,
-    ).toBe(3);
+  test("a hit whose broken call provably ended: 0, proven", () => {
+    expect(d(reason, [b("PageActionComputesNonZero", true)])).toMatchObject({
+      exitCode: 0,
+      actionEnd: "proven",
+    });
   });
 
-  test("a broken call not proven ended stops (3); a throw stops (4)", () => {
-    expect(decideExit({ thrown: null, quarantined: null, broken: [b("X", false)] }).exitCode).toBe(
-      3,
-    );
-    expect(
-      decideExit({ thrown: "boom", quarantined: null, broken: [b("X", false)] }).exitCode,
-    ).toBe(4);
+  test("an end that cannot be proven is 'unproven' and does NOT stop the arm (0)", () => {
+    expect(d(reason, [b("PageActionComputesNonZero", false)])).toMatchObject({
+      exitCode: 0,
+      actionEnd: "unproven",
+    });
+    expect(d(reason, [])).toMatchObject({ exitCode: 0, actionEnd: "unproven" }); // untraced
+    expect(d(reason, [b("OtherTest", true)])).toMatchObject({ exitCode: 0, actionEnd: "unproven" });
+    expect(d(null, [b("X", false)])).toMatchObject({ exitCode: 0, actionEnd: "unproven" });
+  });
+
+  test("a throw still stops for recovery (4)", () => {
+    expect(d(null, [b("X", false)], "boom").exitCode).toBe(4);
+  });
+});
+
+describe("preflight (the gate before a session that follows an unproven hit)", () => {
+  test("clean only when doctor exits 0 AND the harness check passes; never force-resets", async () => {
+    const ok = await preflight({ doctor: async () => 0, harness: async () => {} });
+    expect(ok).toEqual({ ok: true, reason: null });
+    const dirty = await preflight({ doctor: async () => 1, harness: async () => {} });
+    expect(dirty.ok).toBe(false);
+    expect(dirty.reason).toContain("doctor exited 1");
+    const harness = await preflight({
+      doctor: async () => 0,
+      harness: async () => {
+        throw new Error("lease held");
+      },
+    });
+    expect(harness.ok).toBe(false);
+    expect(harness.reason).toContain("lease held");
+    const spawnFails = await preflight({
+      doctor: async () => {
+        throw new Error("ENOENT bun");
+      },
+      harness: async () => {},
+    });
+    expect(spawnFails.ok).toBe(false);
   });
 });
 

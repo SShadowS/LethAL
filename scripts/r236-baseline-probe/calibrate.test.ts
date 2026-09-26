@@ -111,7 +111,7 @@ describe("parseCalibration", () => {
     try {
       p = parseCalibration(out);
     } finally {
-      if (tz === undefined) delete process.env.TZ;
+      if (tz === undefined) Reflect.deleteProperty(process.env, "TZ");
       else process.env.TZ = tz;
     }
     expect(p.nst).toEqual([{ id: 41, user: "admin", login: T0 - 1_000 }]);
