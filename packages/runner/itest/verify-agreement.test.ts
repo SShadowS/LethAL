@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import type { VerifyResult } from "../src/verify";
-import { AgreementJoinError, assertFreshFullRun, compareVerifyToFullRun } from "./verify-agreement";
+import {
+  AgreementJoinError,
+  SCRATCH_ANSWERS,
+  assertFreshFullRun,
+  compareVerifyToFullRun,
+  writeScratchSuite,
+} from "./verify-agreement";
 
 // Hand-built reports (C02-08 Task 1). Every mutant carries every field `keyOf` reads, so the join
 // runs on the real identity key and never on a mutant code.
@@ -386,6 +395,93 @@ describe("C02-08: compareVerifyToFullRun", () => {
     expect(diffs[0]).toContain("0/M0005");
     expect(agreeOf(rows)["0/M0005"]).toBe(false);
     expect(rows.filter((r) => !r.agree)).toHaveLength(1);
+  });
+});
+
+describe("C02-08: writeScratchSuite", () => {
+  const TESTS_DIR = resolve(import.meta.dir, "../../../fixtures/sandbox-harden-tests");
+  const ANSWERS_FILE = resolve(
+    import.meta.dir,
+    "../../../fixtures/sandbox-harden-answers/src/HardenAnswerKey.Codeunit.al",
+  );
+  const BASE_METHODS = [
+    "IsLargeSeparatesSmallFromLarge",
+    "CountInCategoryCountsRows",
+    "FirstAmountReadsARow",
+    "SetAmountStoresTheAmount",
+    "AmountValidateDoublesIt",
+    "BonusForPaysOnlyAboveTen",
+  ];
+  const ANSWER_METHODS = [
+    "IsLargeAtTheBoundary",
+    "CountInCategoryIgnoresOtherCategories",
+    "FirstAmountReadsTheFirstRow",
+    "SetAmountRunsValidation",
+    "BonusForTwiceOnOneInstance",
+  ];
+
+  test("C02-08: the scratch suite holds the six base tests and the five answer tests, all names unique", async () => {
+    const dest = await mkdtemp(join(tmpdir(), "lethal-scratch-suite-"));
+    try {
+      const refs = await writeScratchSuite(TESTS_DIR, ANSWERS_FILE, dest);
+      expect(refs).toHaveLength(11);
+      expect(new Set(refs.map((r) => r.method)).size).toBe(11);
+
+      const answerRefs = refs.filter((r) => r.codeunitId === SCRATCH_ANSWERS.codeunitId);
+      expect(answerRefs).toHaveLength(5);
+      expect(answerRefs.every((r) => r.codeunitName === SCRATCH_ANSWERS.codeunitName)).toBe(true);
+      expect(new Set(answerRefs.map((r) => r.method))).toEqual(new Set(ANSWER_METHODS));
+
+      const baseRefs = refs.filter((r) => r.codeunitId !== SCRATCH_ANSWERS.codeunitId);
+      expect(new Set(baseRefs.map((r) => r.method))).toEqual(new Set(BASE_METHODS));
+
+      const [destAppJson, srcAppJson] = await Promise.all([
+        readFile(join(dest, "app.json")),
+        readFile(join(TESTS_DIR, "app.json")),
+      ]);
+      expect(destAppJson.equals(srcAppJson)).toBe(true);
+    } finally {
+      await rm(dest, { recursive: true, force: true });
+    }
+  });
+
+  test("C02-08: a duplicate method name across codeunits throws", async () => {
+    const dest = await mkdtemp(join(tmpdir(), "lethal-scratch-suite-dup-"));
+    const scratchAnswers = await mkdtemp(join(tmpdir(), "lethal-scratch-answers-dup-"));
+    try {
+      const original = await readFile(ANSWERS_FILE, "utf8");
+      // The answers file ALSO declares a base-suite method name, as an agent adding a test could.
+      const tampered = original.replace(
+        "    local procedure InsertEntry",
+        "    [Test]\n    procedure IsLargeSeparatesSmallFromLarge()\n    begin\n    end;\n\n    local procedure InsertEntry",
+      );
+      expect(tampered).not.toBe(original);
+      const tamperedFile = join(scratchAnswers, "HardenAnswerKey.Codeunit.al");
+      await writeFile(tamperedFile, tampered, "utf8");
+      await expect(writeScratchSuite(TESTS_DIR, tamperedFile, dest)).rejects.toThrow();
+    } finally {
+      await rm(dest, { recursive: true, force: true });
+      await rm(scratchAnswers, { recursive: true, force: true });
+    }
+  });
+
+  test("C02-08: a missing header throws", async () => {
+    const dest = await mkdtemp(join(tmpdir(), "lethal-scratch-suite-noheader-"));
+    const scratchAnswers = await mkdtemp(join(tmpdir(), "lethal-scratch-answers-noheader-"));
+    try {
+      const original = await readFile(ANSWERS_FILE, "utf8");
+      const tampered = original.replace(
+        'codeunit 79575 "Harden Answer Key"',
+        'codeunit 79580 "Harden Answer Key"',
+      );
+      expect(tampered).not.toBe(original);
+      const tamperedFile = join(scratchAnswers, "HardenAnswerKey.Codeunit.al");
+      await writeFile(tamperedFile, tampered, "utf8");
+      await expect(writeScratchSuite(TESTS_DIR, tamperedFile, dest)).rejects.toThrow();
+    } finally {
+      await rm(dest, { recursive: true, force: true });
+      await rm(scratchAnswers, { recursive: true, force: true });
+    }
   });
 });
 
