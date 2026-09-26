@@ -15,6 +15,7 @@ import { STREAM_SCHEMA_VERSION } from "../src/events";
 import {
   ARTIFACT_ID_ABSENCES,
   EXPLAIN_SCHEMA_VERSION,
+  REACH_GRAINS,
   SURVIVOR_RANKINGS,
   TOOL_CONDITIONS,
 } from "../src/explain";
@@ -213,7 +214,7 @@ function enumAt(root: Schema, path: string): unknown[] {
 }
 
 describe("published JSON Schemas (R152)", () => {
-  const explainSchema = loadSchema("explain-v4.schema.json");
+  const explainSchema = loadSchema("explain-v5.schema.json");
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
@@ -225,6 +226,7 @@ describe("published JSON Schemas (R152)", () => {
         "CoverageAttribution",
         "GuardEvidence",
         "SurvivorReach",
+        "ReachGrain",
         "SurvivorRanking",
         "MutantErrorCause",
         "ToolCondition",
@@ -260,6 +262,7 @@ describe("published JSON Schemas (R152)", () => {
     expect(enumAt(explainSchema, "$.survivors[].reach")).toEqual(
       Object.keys(REACH_INTERPRETATIONS),
     );
+    expect(enumAt(explainSchema, "$.survivors[].reachGrain")).toEqual(Object.keys(REACH_GRAINS));
     expect(enumAt(explainSchema, "$.notMeasured[].cause")).toEqual(
       Object.keys(ERROR_CAUSE_INTERPRETATIONS),
     );
@@ -450,6 +453,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v5.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -477,10 +491,102 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     });
   });
 
+  /**
+   * R233, the value-domain half of R157's pin. `EXPLAIN_SCHEMA_VERSION`'s rule says a value domain
+   * that changes in either direction bumps the version, and five commits grew v4's `caveat` and
+   * `cause` sets without one. Every `enum` in the published explain schema is pinned here against a
+   * LITERAL list, not against the runtime constant it copies (the test above does that, and moves
+   * with the code). So adding a value reddens this test, and the fix is a version bump plus a new
+   * list, never an edited one.
+   */
+  test("every enum value set in the published explain schema is pinned (R233)", () => {
+    const enums: Record<string, readonly unknown[]> = {};
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((n, i) => walk(n, `${path}[${i}]`));
+        return;
+      }
+      if (typeof node !== "object" || node === null) return;
+      for (const [k, v] of Object.entries(node)) {
+        if (k === "enum") enums[path] = v as readonly unknown[];
+        else walk(v, `${path}/${k}`);
+      }
+    };
+    walk(loadSchema(`explain-v${EXPLAIN_SCHEMA_VERSION}.schema.json`), "#");
+    expect(
+      enums,
+      "An explain value domain changed. R233: EXPLAIN_SCHEMA_VERSION bumps for ANY value added or " +
+        "removed (explain.ts, its doc comment); bump it, publish a new schema file, then pin here.",
+    ).toEqual({
+      "#/properties/score/properties/reliability": [
+        "full",
+        "narrowed",
+        "degraded",
+        "narrowed-degraded",
+      ],
+      "#/properties/caveats/items/properties/caveat": [
+        "baseline-red",
+        "narrowed",
+        "operator-narrowed",
+        "line-narrowed",
+        "tests-narrowed",
+        "uninstrumentable-files",
+        "stale-test-app",
+        "tests-permission-refused",
+        "tests-testpage-unsupported",
+        "runner-disagreement",
+        "stop-hung-sessions",
+        "resumed",
+        "untargeted-triggers",
+        "attribution-unplaceable",
+        "platform-artifact-kills",
+        "kills-without-assertion",
+        "declarative-sites-dropped",
+        "all-errors",
+        "session-warm",
+      ],
+      "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
+      "#/properties/survivors/items/properties/attribution": ["exact", "object", "all-green"],
+      "#/properties/survivors/items/properties/guardEvidence": [
+        "observed",
+        "not-observed",
+        "not-measured",
+      ],
+      "#/properties/survivors/items/properties/reach": [
+        "reached-unnoticed",
+        "covered-but-unreached",
+        "unreached-and-uncovered",
+        "not-decided",
+      ],
+      "#/properties/survivors/items/properties/reachGrain": ["statement", "enclosing", "unplaced"],
+      "#/properties/survivors/items/properties/artifactIdAbsent": [
+        "carried",
+        "not-recorded",
+        "not-published",
+      ],
+      "#/properties/notMeasured/items/properties/cause": [
+        "deadline-exceeded",
+        "unstable",
+        "stranded",
+        "result-lost",
+        "group-run-error",
+        "group-answer-malformed",
+        "group-coverage-incomplete",
+        "op-stopped",
+        "stopped-after-completion",
+        "session-reused",
+        "warm-prefix-unstable",
+        "warm-timeout-unconfirmed",
+        "warm-confirmation-incomplete",
+      ],
+      "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
+    });
+  });
+
   test("the explain survivor row's required set is pinned (C02-01)", () => {
     // Nested required lists are not covered by the R157 root pin. A new survivor field added to
-    // this list would make the edited v4 schema reject an explain output stored before it.
-    const explainSchema = loadSchema("explain-v4.schema.json");
+    // this list would make the edited v5 schema reject an explain output stored before it.
+    const explainSchema = loadSchema("explain-v5.schema.json");
     const items = ((explainSchema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
       required?: string[];
     };

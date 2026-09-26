@@ -154,7 +154,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json` — what it MEANS
 
-`explainSchemaVersion: 4`. Reads that file and nothing else: no server, no database, no config.
+`explainSchemaVersion: 5`. Reads that file and nothing else: no server, no database, no config.
 Prints JSON on stdout.
 
 Its own `contract` block states the split: **structure is contractual, prose is not.** Field names,
@@ -166,7 +166,9 @@ exact, member-level coverage match, meaning a test is measured to have executed 
 procedure. `false` means some test touched the object and no test is measured to have run the
 mutated code, so the survivor may be no finding at all. `reach` adds what the coverage signal and
 the mutant run's own guard attestation say together: `covered-but-unreached` is a test that enters
-the procedure and never reaches the statement.
+the procedure and never reaches the statement. Where the report measured the mutant's own statement
+(`reachGrain: "statement"`), `reach` is decided by that instead: `reached-unnoticed` means the
+statement ran under the tests listed in `reachedBy` and every one still passed.
 
 A report from another schema version, or carrying a value this build cannot interpret, is REFUSED
 rather than explained with the unrecognised value dropped.
