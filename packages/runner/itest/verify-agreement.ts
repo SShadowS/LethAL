@@ -6,6 +6,10 @@
  * one full-run mutant by the R166 identity key (`keyOf`, the key `campaign compare` and every frozen
  * baseline use). The comparison is per mutant; an aggregate count is never the agreement.
  */
+import { cp, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { TestMethodRef } from "../src/backend";
+import { discoverTests } from "../src/discovery";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { keyOf } from "./mutant-equality";
@@ -125,4 +129,57 @@ export function assertFreshFullRun(full: SessionReport): void {
   if (carried.length > 0) {
     throw new AgreementJoinError(`the full run carried ${carried.join(", ")} by --resume (R247)`);
   }
+}
+
+/** The five answer-key tests renumbered into the tests app's range. */
+export const SCRATCH_ANSWERS = {
+  codeunitId: 79574,
+  codeunitName: "Harden Verify Answers",
+} as const;
+
+const ANSWERS_HEADER = 'codeunit 79575 "Harden Answer Key"';
+const SCRATCH_HEADER = `codeunit ${SCRATCH_ANSWERS.codeunitId} "${SCRATCH_ANSWERS.codeunitName}"`;
+
+/**
+ * Copies `testsDir` (including .alpackages) to `dest`, then writes the answer key's codeunit into
+ * `dest/src/HardenVerifyAnswers.Codeunit.al` with its header rewritten to SCRATCH_ANSWERS. Leaves
+ * app.json byte-identical (same app id, name, version: publishing it REPLACES the committed suite,
+ * which is why the gate restores). Throws when the header to rewrite is not found exactly once, or
+ * when any [Test] method name occurs in two codeunits of the result (killingTest is compared by
+ * method name). Returns the discovered test refs.
+ *
+ * `testsDir/.alpackages` is gitignored. When it is missing, `cp` copies nothing under that name (no
+ * error here: this function never compiles) and the loss surfaces loudly downstream, at the alc
+ * compile of `dest`, as unresolved-symbol errors, never as a silent zero-mutant "success".
+ */
+export async function writeScratchSuite(
+  testsDir: string,
+  answersFile: string,
+  dest: string,
+): Promise<TestMethodRef[]> {
+  await cp(testsDir, dest, { recursive: true });
+
+  const source = await readFile(answersFile, "utf8");
+  const occurrences = source.split(ANSWERS_HEADER).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      `writeScratchSuite: expected the header ${JSON.stringify(ANSWERS_HEADER)} exactly once in ${answersFile}, found ${occurrences}`,
+    );
+  }
+  const rewritten = source.replace(ANSWERS_HEADER, SCRATCH_HEADER);
+  await writeFile(join(dest, "src", "HardenVerifyAnswers.Codeunit.al"), rewritten, "utf8");
+
+  const refs = await discoverTests(dest);
+  const byMethod = new Map<string, number>();
+  for (const ref of refs) byMethod.set(ref.method, (byMethod.get(ref.method) ?? 0) + 1);
+  const dupes = Array.from(byMethod.entries())
+    .filter(([, count]) => count > 1)
+    .map(([name]) => name);
+  if (dupes.length > 0) {
+    throw new Error(
+      `writeScratchSuite: [Test] method name(s) ${dupes.join(", ")} occur in more than one codeunit of the scratch suite; killingTest is compared by method name, so this would be ambiguous`,
+    );
+  }
+
+  return refs;
 }
