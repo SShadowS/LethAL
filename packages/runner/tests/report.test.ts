@@ -380,6 +380,54 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     expect("hangCapable" in row).toBe(false);
   });
 
+  test("the enclosing member's line span rides the same site path, and is absent when the entry lacks it (C02-01)", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 2,
+        deployedCount: 2,
+        hangCapableCount: 0,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001", { procedureStartLine: 3, procedureEndLine: 8 }),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 500,
+        coveringTests: [],
+      },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0002"),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 500,
+        coveringTests: [],
+      },
+      { type: "session-finished", elapsedMs: 1_000 },
+    ]);
+    const report = buildReport(STATICS, events);
+    const byId = new Map(report.mutants.map((m) => [m.mutantCode, m]));
+    const spanned = byId.get("M0001");
+    const bare = byId.get("M0002");
+    if (spanned === undefined || bare === undefined)
+      throw new Error("buildReport dropped a mutant");
+    expect({ start: spanned.procedureStartLine, end: spanned.procedureEndLine }).toEqual({
+      start: 3,
+      end: 8,
+    });
+    expect("procedureStartLine" in bare).toBe(false);
+    expect("procedureEndLine" in bare).toBe(false);
+  });
+
   test("explains every hang-capable reason it can carry", () => {
     // Iterate the TABLE itself, not a hand-copied list of its keys: `Record<HangCapableReason,
     // string>` already forces a new union member to gain an entry at compile time, but a separate

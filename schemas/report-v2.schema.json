@@ -362,6 +362,12 @@
           "triggerName": {
             "type": "string"
           },
+          "procedureStartLine": {
+            "type": "number"
+          },
+          "procedureEndLine": {
+            "type": "number"
+          },
           "startIndex": {
             "type": "number"
           },

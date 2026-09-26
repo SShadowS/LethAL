@@ -1522,6 +1522,15 @@ export interface MutantOutcome {
    */
   readonly procedureName: string;
   readonly triggerName?: string;
+  /**
+   * C02-01: the 1-based first and last line of the member enclosing this mutant: its `procedure`,
+   * or its `trigger` when there is no procedure. A SITE property, carried verbatim from
+   * `MutantManifestEntry.procedureStartLine`/`procedureEndLine` like `hangCapable`, and computed
+   * there with the same line numbering as `line`. Absent when neither member encloses the site,
+   * and on reports written before this field existed. Line numbers only, never source text.
+   */
+  readonly procedureStartLine?: number;
+  readonly procedureEndLine?: number;
   readonly startIndex: number;
   readonly endIndex: number;
   readonly originalText: string;
@@ -1981,6 +1990,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       // R196: also a SITE property, off the manifest entry for the same reason as its neighbour
       // above.
       ...(o.mutant.hangCapable !== undefined ? { hangCapable: o.mutant.hangCapable } : {}),
+      // C02-01: the enclosing member's span, another SITE property off the manifest entry.
+      ...(o.mutant.procedureStartLine !== undefined
+        ? { procedureStartLine: o.mutant.procedureStartLine }
+        : {}),
+      ...(o.mutant.procedureEndLine !== undefined
+        ? { procedureEndLine: o.mutant.procedureEndLine }
+        : {}),
     });
   }
 

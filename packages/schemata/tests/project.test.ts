@@ -307,6 +307,82 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
+  // C02-01: write one assignment-mutant project and return its only manifest entry.
+  async function onlyManifestEntry(src: string, path: string): Promise<Record<string, unknown>> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-"));
+    try {
+      const root = wrapRoot(parseAL(src));
+      const assign = findFirst(root, ALNodeKind.assignment_statement);
+      if (assign === null) throw new Error("no assignment");
+      const specs: MutationSpec[] = [
+        {
+          operatorName: "op.flip",
+          operatorVersion: "1.0.0",
+          astNodeId: `${assign.startIndex}`,
+          before: assign,
+          after: { ...assign, text: "X := 10;" } as never,
+          parentContext: "statement-position",
+        },
+      ];
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: [{ path, source: src, root, specs }],
+        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: TARGET_APP_ID,
+        operatorTiers: NO_TIERS,
+      });
+      const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
+      const [entry] = manifest.mutants as Record<string, unknown>[];
+      if (entry === undefined || manifest.mutants.length !== 1) {
+        throw new Error("expected exactly one manifest entry");
+      }
+      return entry;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("manifest entries carry the enclosing member's line span (C02-01)", async () => {
+    // Line 2 is an attribute, line 3 the declaration, line 7 the mutated statement, line 8 `end;`.
+    const src = `codeunit 51044 "Span" {
+  [EventSubscriber(ObjectType::Table, Database::Customer, 'OnAfterInsertEvent', '', false, false)]
+  local procedure Tagged()
+  var
+    X: Integer;
+  begin
+    X := 1;
+  end;
+}`;
+    const entry = await onlyManifestEntry(src, "Span.Codeunit.al");
+    expect({
+      start: entry.procedureStartLine,
+      line: entry.startLine,
+      end: entry.procedureEndLine,
+    }).toEqual({ start: 3, line: 7, end: 8 });
+    // Oracle independent of lineOfIndex: the lines themselves, read off the literal.
+    const lines = src.split("\n");
+    expect(lines[Number(entry.procedureStartLine) - 1]).toMatch(/^\s*local procedure Tagged\(\)/);
+    expect(lines[Number(entry.procedureEndLine) - 1]).toMatch(/^\s*end;\s*$/);
+  });
+
+  it("a trigger mutant gets the trigger's span, not an absent one (C02-01)", async () => {
+    const src = `table 50100 "T" {
+  trigger OnInsert()
+  begin
+    Y := 2;
+  end;
+}`;
+    const entry = await onlyManifestEntry(src, "T.Table.al");
+    expect({
+      procedureName: entry.procedureName,
+      triggerName: entry.triggerName,
+      start: entry.procedureStartLine,
+      line: entry.startLine,
+      end: entry.procedureEndLine,
+    }).toEqual({ procedureName: "", triggerName: "OnInsert", start: 2, line: 4, end: 5 });
+  });
+
   it("manifest entries carry identity and coverage-lookup fields", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
     try {
