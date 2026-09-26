@@ -8,11 +8,12 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { AppMethodIndex, objectTypeName } from "./app-package";
-import { ArtifactPrepareError, DeploymentError } from "./artifact";
+import { ArtifactPrepareError, DeploymentError, InstalledArtifactError } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  BoundArtifact,
   CoverageEntry,
   CoverageMap,
   CoverageMode,
@@ -655,6 +656,45 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // published. The transport echoes and validates this identity tuple on every call (§I5).
     this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
     return artifact;
+  }
+
+  /**
+   * C02-04b: bind this backend to an artifact that is ALREADY installed, with no compile and no
+   * publish. The same readiness and identity checks `deploy()` runs, in the same order, then the
+   * same coverage index and transport binding. Nothing is bound unless the registry reports
+   * exactly this artifact: `mismatch` and `unavailable` both throw (unavailable fails closed).
+   */
+  async attach(artifact: BoundArtifact): Promise<void> {
+    const deployment = this.deployment;
+    if (deployment === undefined) {
+      throw new InstalledArtifactError(
+        "unsupported",
+        "BcDevMcpBackend: no BcDevDeployment configured, so there is no verifier to attach with",
+      );
+    }
+    await deployment.harnessVerifier.verify();
+    const verification = await deployment.verifier.verify({
+      appId: artifact.appId,
+      artifactId: artifact.artifactId,
+    });
+    if (verification.status === "mismatch") {
+      throw new InstalledArtifactError(
+        "mismatch",
+        `expected artifact ${artifact.artifactId}, server reports ${verification.reported}`,
+      );
+    }
+    if (verification.status === "unavailable") {
+      throw new InstalledArtifactError("unavailable", verification.detail);
+    }
+    try {
+      await this.indexArtifact(artifact.appPath, artifact.instrumentedDir);
+    } catch (err) {
+      throw new InstalledArtifactError(
+        "local-copy-unreadable",
+        `indexing ${artifact.appPath}: ${describeThrown(err)}`,
+      );
+    }
+    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
   }
 
   /**

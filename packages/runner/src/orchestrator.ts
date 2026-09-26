@@ -4357,6 +4357,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           appId: compiled.appId,
           artifactId: compiled.artifactId,
           sha256: compiled.sha256,
+          // C02-04b: the manifest the compiler was GIVEN, in the same insert as the .app hash.
+          // This is the only moment both are in hand; loadInstalledArtifact trusts nothing else.
+          manifestSha256: Bun.SHA256.hash(JSON.stringify(compiled.mutantManifest), "hex"),
         });
       }
       // 3e. R90: the OTHER half of the measurement. A ceiling recorded only from failures is a

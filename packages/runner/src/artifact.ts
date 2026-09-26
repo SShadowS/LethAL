@@ -42,6 +42,28 @@ export class DeploymentError extends Error {
   }
 }
 
+/**
+ * C02-04b: an ALREADY-installed artifact could not be bound to its recorded bytes and manifest,
+ * or the server does not report it. Extends `Error` directly: it is neither a compiler verdict
+ * (`AlcCompileError`, which bisection reads) nor a failed deployment (`DeploymentError`), since
+ * nothing was compiled or published.
+ */
+export class InstalledArtifactError extends Error {
+  constructor(
+    readonly reason:
+      | "no-record"
+      | "local-copy-unreadable"
+      | "local-copy-differs"
+      | "manifest-differs"
+      | "mismatch"
+      | "unavailable"
+      | "unsupported",
+    readonly detail: string,
+  ) {
+    super(`installed artifact refused (${reason}): ${detail}`);
+  }
+}
+
 export interface ArtifactCoverageMetadata {
   readonly methodIndexSource: string;
   readonly localProcedures: readonly string[];

@@ -3309,6 +3309,21 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // C02-04b Task 6: the trusted record's manifest hash is of the object the compiler was GIVEN,
+  // which PhaseBackend.returned holds independently of anything the orchestrator wrote.
+  test("step 3d records the hash of the manifest the compiler was given", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const expected = Bun.SHA256.hash(JSON.stringify(returned.mutantManifest), "hex");
+    expect(store.trustedArtifactRecord(run.id, 0)?.manifestSha256).toBe(expected);
+    store.close();
+  });
+
   test("every published batch's identity reaches both the event and the store (C02-02)", async () => {
     const dirs = await makeProject();
     // A second carrier file so maxGuardsPerBatch: 1 splits the run in two, exactly as the

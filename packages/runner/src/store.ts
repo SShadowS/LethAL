@@ -289,6 +289,9 @@ CREATE TABLE IF NOT EXISTS batch_artifacts (
   artifact_id TEXT NOT NULL,
   artifact_sha256 TEXT NOT NULL,
   app_version TEXT NOT NULL,
+  -- C02-04b: SHA-256 of JSON.stringify(the manifest the compiler was given). NULL on a row written
+  -- before the column existed, which trustedArtifactRecord's callers refuse rather than trust.
+  manifest_sha256 TEXT,
   PRIMARY KEY (run_id, batch_index)
 );
 `;
@@ -415,6 +418,14 @@ export class ResultsStore {
       if (!runCols.some((c) => c.name === col)) {
         this.db.exec(`ALTER TABLE runs ADD COLUMN ${col} TEXT`);
       }
+    }
+    // C02-04b: batch_artifacts gained manifest_sha256. A C02-02 database has the table without
+    // it; its old rows stay NULL, which reads as "no trusted record", never as a match.
+    const baCols = this.db.query("PRAGMA table_info(batch_artifacts)").all() as Array<{
+      name: string;
+    }>;
+    if (!baCols.some((c) => c.name === "manifest_sha256")) {
+      this.db.exec("ALTER TABLE batch_artifacts ADD COLUMN manifest_sha256 TEXT");
     }
     // R90's `publish_outcomes` needs NOTHING here, and that is a property of it being a whole new
     // TABLE rather than a new column: `SCHEMA` runs `CREATE TABLE IF NOT EXISTS` on every open, so
@@ -641,6 +652,8 @@ export class ResultsStore {
       appId: string;
       artifactId: string;
       sha256: string;
+      /** C02-04b: SHA-256 of JSON.stringify(compiled.mutantManifest). Absent writes NULL. */
+      manifestSha256?: string;
     },
   ): void {
     // One transaction: the run-row UPDATE (last batch wins, unchanged) and the batch_artifacts
@@ -655,12 +668,56 @@ export class ResultsStore {
         .run(info.appVersion, info.appId, info.artifactId, info.sha256, runId);
       this.db
         .query(
-          "INSERT INTO batch_artifacts (run_id, batch_index, artifact_id, artifact_sha256, app_version) " +
-            "VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO batch_artifacts " +
+            "(run_id, batch_index, artifact_id, artifact_sha256, app_version, manifest_sha256) " +
+            "VALUES (?, ?, ?, ?, ?, ?)",
         )
-        .run(runId, info.batchIndex, info.artifactId, info.sha256, info.appVersion);
+        .run(
+          runId,
+          info.batchIndex,
+          info.artifactId,
+          info.sha256,
+          info.appVersion,
+          info.manifestSha256 ?? null,
+        );
     });
     tx();
+  }
+
+  /**
+   * C02-04b: the record LethAL wrote when it held both the manifest and the .app bytes, for one
+   * batch. `null` when no such batch was recorded. `manifestSha256` is `null` on a row written
+   * before that column existed; the caller must refuse it, not trust it by default. `appId` is
+   * the run's, since every batch of a run publishes one app id.
+   */
+  trustedArtifactRecord(
+    runId: number,
+    batchIndex: number,
+  ): { artifactId: string; sha256: string; manifestSha256: string | null; appId: string } | null {
+    const row = this.db
+      .query(
+        "SELECT b.artifact_id, b.artifact_sha256, b.manifest_sha256, r.app_id " +
+          "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id " +
+          "WHERE b.run_id = ? AND b.batch_index = ?",
+      )
+      .get(runId, batchIndex) as {
+      artifact_id: string;
+      artifact_sha256: string;
+      manifest_sha256: string | null;
+      app_id: string | null;
+    } | null;
+    if (row === null) return null;
+    if (row.app_id === null) {
+      throw new Error(
+        `trustedArtifactRecord: run ${runId} has a batch_artifacts row but no runs.app_id`,
+      );
+    }
+    return {
+      artifactId: row.artifact_id,
+      sha256: row.artifact_sha256,
+      manifestSha256: row.manifest_sha256,
+      appId: row.app_id,
+    };
   }
 
   /** C02-02: every published batch's artifact provenance for this run, ordered by batch_index. */

@@ -197,6 +197,78 @@ describe("ResultsStore", () => {
     store.close();
   });
 
+  // C02-04b Task 6: the manifest hash is written in the same insert as the .app hash, and read
+  // back only through trustedArtifactRecord, never through artifactsForRun (BatchArtifact does not
+  // gain it).
+  test("recordArtifact stores the manifest hash and trustedArtifactRecord returns it", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const a = "0123456789abcdef0123456789abcdef";
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.1.1",
+      appId: APP,
+      artifactId: a,
+      sha256: "a".repeat(64),
+      manifestSha256: "c".repeat(64),
+    });
+    expect(store.trustedArtifactRecord(runId, 0)).toEqual({
+      artifactId: a,
+      sha256: "a".repeat(64),
+      manifestSha256: "c".repeat(64),
+      appId: APP,
+    });
+    expect(store.trustedArtifactRecord(runId, 1)).toBeNull();
+    expect(store.artifactsForRun(runId)).toEqual([
+      { batchIndex: 0, artifactId: a, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+    ]);
+    store.close();
+  });
+
+  test("a batch_artifacts row written before the column exists reads back manifestSha256 null", () => {
+    const path = join(tmpdir(), `lethal-store-manifest-sha-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT
+  );
+  CREATE TABLE batch_artifacts (
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    batch_index INTEGER NOT NULL,
+    artifact_id TEXT NOT NULL,
+    artifact_sha256 TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    PRIMARY KEY (run_id, batch_index)
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, app_id) VALUES ('P','bcdev','1.0.1.1','${APP}')`,
+    );
+    legacy.exec(
+      `INSERT INTO batch_artifacts (run_id, batch_index, artifact_id, artifact_sha256, app_version) VALUES (1, 0, '${"d".repeat(32)}', '${"e".repeat(64)}', '1.0.1.1')`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    expect(store.trustedArtifactRecord(1, 0)).toEqual({
+      artifactId: "d".repeat(32),
+      sha256: "e".repeat(64),
+      manifestSha256: null,
+      appId: APP,
+    });
+    store.close();
+    rmSync(path, { force: true });
+  });
+
   test("artifactsForRun is empty for a run that published nothing", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });

@@ -228,6 +228,19 @@ export type RunManyResult =
       readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
     };
 
+/**
+ * C02-04b: an installed artifact whose local .app and manifest matched the trusted store record
+ * (`loadInstalledArtifact`). Identity comes from that record, never from the caller.
+ */
+export interface BoundArtifact {
+  /** `runs.app_id` of the run that published it (every batch of a run publishes one app id). */
+  readonly appId: string;
+  readonly artifactId: string;
+  readonly sha256: string;
+  readonly appPath: string;
+  readonly instrumentedDir: string;
+}
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   status(): Promise<BackendStatus>;
@@ -273,6 +286,12 @@ export interface ExecutionBackend {
    * there is no published app to ask about. Implementations must never throw — a proactive check
    * must not be able to stop a run.
    */
+  /**
+   * C02-04b, OPTIONAL: bind to an ALREADY-installed artifact. Never compiles or publishes.
+   * Throws `InstalledArtifactError` when the server does not report that artifact; binds nothing
+   * in that case. Absent on a backend that cannot (al-runner, which has nothing installed).
+   */
+  attach?(artifact: BoundArtifact): Promise<void>;
   fetchPublishedAppPackage?(app: {
     readonly publisher: string;
     readonly name: string;
