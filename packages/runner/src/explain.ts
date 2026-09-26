@@ -703,6 +703,20 @@ export function assertExplainableReport(value: unknown): SessionReport {
       }
       seen.add(batchIndex);
     }
+    // A survivor's `batchIndex` is the lookup key. Missing, `"1"` or `1.5` would never match an
+    // entry and so read as `not-published`, a confident wrong answer. Only checked when the report
+    // names artifacts, so every archived report still projects.
+    for (const m of mutants) {
+      const mutant = m as Record<string, unknown>;
+      if (mutant.verdict !== "survived") continue;
+      const bi = mutant.batchIndex;
+      if (typeof bi !== "number" || !Number.isInteger(bi) || bi < 0) {
+        refuse(
+          `mutant ${JSON.stringify(mutant.mutantCode)} is \`survived\` with a batchIndex that is not a non-negative integer, so its artifact cannot be looked up`,
+          bi,
+        );
+      }
+    }
   }
   // The two session-level branches. `quarantined: null` would pass a bare `!== undefined` test and
   // then emit a tool condition whose `detail` read off a null — and `skippedStranded: "2"` compares

@@ -309,7 +309,7 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   // SurvivorRanking — R150. Describes how this projection ordered its own output, so it can come
   // from nowhere but here.
   ...SURVIVOR_RANKINGS,
-  // ArtifactIdAbsence — C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
+  // ArtifactIdAbsence, C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
   // artifactId, which the report states only by the absence of a field.
   ...ARTIFACT_ID_ABSENCES,
 ];
@@ -1502,6 +1502,15 @@ describe("explain — artifactId (C02-01)", () => {
       const bad = reportFixture({ artifacts: value } as unknown as Partial<SessionReport>);
       expect(() => explain(bad)).toThrow(MalformedReportError);
       expect(() => explain(bad)).toThrow(/artifacts/);
+    }
+  });
+
+  test("a malformed survivor batchIndex is refused when the report names artifacts", () => {
+    const { batchIndex: _dropped, ...noBatch } = survivorMutant("M0001", "exact", true, 4);
+    for (const row of [noBatch, { ...survivorMutant("M0001", "exact", true), batchIndex: "1" }]) {
+      const bad = reportFixture({ artifacts, mutants: [row] } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/batchIndex/);
     }
   });
 
