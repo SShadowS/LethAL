@@ -247,3 +247,126 @@ export function assertDirectTransportReach(probes: readonly DirectTransportProbe
     }
   }
 }
+
+/** One `test_results` row of a `Data Reach Ops` mutant, read from the store in insertion order,
+ *  which is run order. `tables.itest.ts` reads it before the store closes. */
+export interface ReachControlRun {
+  readonly mutantCode: string;
+  readonly batchIndex: number | null;
+  readonly method: string;
+  readonly outcome: string;
+  readonly opKind: string | null;
+  readonly sessionId: number | null;
+}
+
+const REACH_ARM = "Data Reach Ops";
+const REACH_TAKER = "ReachTakesBranch";
+const REACH_SKIPPER = "ReachWithoutBranch";
+const qualifiedReachTest = (method: string) => `Data Tests.${method}`;
+
+function oneArmMutant(
+  report: SessionReport,
+  what: string,
+  pick: (m: SessionReport["mutants"][number]) => boolean,
+): SessionReport["mutants"][number] {
+  const found = report.mutants.filter(
+    (m) => m.codeunitName === REACH_ARM && m.procedureName === "Classify" && pick(m),
+  );
+  const [only] = found;
+  assert.ok(
+    found.length === 1 && only !== undefined,
+    `GH-24 reach control: expected exactly one ${what} in ${REACH_ARM}.Classify, found ${found.length} (docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md)`,
+  );
+  return only;
+}
+
+/**
+ * GH-24 Task 6: the live negative control, pre-committed in
+ * `docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md`.
+ *
+ * For each inside-branch mutant (`remove-assignment` of `Seen := Amount` and the then-block's
+ * `empty-block`): survived, statement grain, and ONE grouped call ran `ReachTakesBranch` THEN
+ * `ReachWithoutBranch`, whose per-entry reach values in run order are `[true, false]`. The ORDER
+ * is the point: a `false` measured after a `true` in the same call is what proves the server
+ * clears the flag between tests. A set comparison would pass a server that never resets it.
+ *
+ * The enclosing mutant (`void-method-call` of `Touch()`) carries no reach at all, and both
+ * baseline direct runs (no mutant active) report `reachedActive: false`.
+ */
+export function assertReachControl(
+  report: SessionReport,
+  runs: readonly ReachControlRun[],
+  baseline: readonly DirectTransportProbe[],
+): void {
+  const insideBranch = [
+    oneArmMutant(report, "remove-assignment", (m) => m.operatorName === "lethal.remove-assignment"),
+    oneArmMutant(
+      report,
+      "then-block empty-block",
+      (m) =>
+        m.operatorName === "lethal.empty-block" &&
+        m.originalText.includes("Seen := Amount") &&
+        !m.originalText.includes("exit("),
+    ),
+  ];
+  for (const m of insideBranch) {
+    const id = `${m.mutantCode} (${m.operatorName})`;
+    assert.equal(m.verdict, "survived", `reach control ${id}: expected survived, got ${m.verdict}`);
+    assert.equal(m.reachGrain, "statement", `reach control ${id}: expected statement grain`);
+    const rows = runs.filter(
+      (r) =>
+        r.mutantCode === m.mutantCode &&
+        r.batchIndex === m.batchIndex &&
+        (r.outcome === "pass" || r.outcome === "fail"),
+    );
+    assert.deepEqual(
+      rows.map((r) => r.method),
+      [REACH_TAKER, REACH_SKIPPER],
+      `reach control ${id}: its runs must be ${REACH_TAKER} then ${REACH_SKIPPER}, in that order; got ${JSON.stringify(rows.map((r) => r.method))}`,
+    );
+    const sessions = new Set(rows.map((r) => r.sessionId));
+    assert.ok(
+      rows.every((r) => r.opKind === "many") && sessions.size === 1 && !sessions.has(null),
+      `reach control ${id}: both runs must come from one grouped call (op_kind many, one session id); got ${JSON.stringify(rows.map((r) => [r.opKind, r.sessionId]))}`,
+    );
+    const reachedBy = m.reachedBy ?? [];
+    const values = rows.map((r) => reachedBy.includes(qualifiedReachTest(r.method)));
+    assert.deepEqual(
+      values,
+      [true, false],
+      `reach control ${id}: per-entry reach in run order must be [true,false], got ${JSON.stringify(values)} (reachedBy ${JSON.stringify(m.reachedBy)})`,
+    );
+    assert.equal(m.guardReached, true, `reach control ${id}: expected guardReached true`);
+    assert.deepEqual(
+      m.reachedBy,
+      [qualifiedReachTest(REACH_TAKER)],
+      `reach control ${id}: reachedBy must be exactly [${qualifiedReachTest(REACH_TAKER)}], got ${JSON.stringify(m.reachedBy)}`,
+    );
+  }
+
+  const enclosing = oneArmMutant(
+    report,
+    "void-method-call",
+    (m) => m.operatorName === "lethal.void-method-call",
+  );
+  const eid = `${enclosing.mutantCode} (void-method-call)`;
+  assert.equal(enclosing.verdict, "survived", `reach control ${eid}: expected survived`);
+  assert.equal(enclosing.reachGrain, "enclosing", `reach control ${eid}: expected enclosing grain`);
+  assert.equal(
+    enclosing.guardReached,
+    undefined,
+    `reach control ${eid}: must carry no guardReached`,
+  );
+  assert.equal(enclosing.reachedBy, undefined, `reach control ${eid}: must carry no reachedBy`);
+
+  assert.deepEqual(
+    baseline.map((p) => p.label).sort(),
+    [REACH_TAKER, REACH_SKIPPER].sort(),
+    `reach control baseline: expected one direct run each of ${REACH_TAKER} and ${REACH_SKIPPER}, got ${JSON.stringify(baseline.map((p) => p.label))}`,
+  );
+  for (const p of baseline) {
+    assert.ok(p.baseline, `reach control baseline: ${p.label} must be a no-mutant run`);
+    assert.equal(p.verdict.outcome, "pass", `reach control baseline: ${p.label} must pass`);
+  }
+  assertDirectTransportReach(baseline);
+}

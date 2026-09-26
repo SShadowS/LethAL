@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import {
   type DirectTransportProbe,
+  type ReachControlRun,
   assertDirectTransportReach,
   assertEveryMutantHasReachGrain,
   assertKilledStatementGrainReached,
   assertNoReachAttestation,
   assertNonStatementGrainHasNoGuardReached,
+  assertReachControl,
   assertReachEvidence,
   assertReachIdenticalAcrossLegs,
   assertReachedByWithinCoveringTests,
@@ -440,5 +442,173 @@ describe("assertReachEvidence (the combined wiring bcdev/tables/chunked/envtool 
       mutant({ mutantCode: "M0083", verdict: "killed", reachGrain: "statement" }),
     ]);
     expect(() => assertReachEvidence(report)).toThrow(/M0083/);
+  });
+});
+
+describe("assertReachControl (GH-24 Task 6: the live negative control on itest:tables)", () => {
+  const TAKER = "Data Tests.ReachTakesBranch";
+  const SKIPPER = "Data Tests.ReachWithoutBranch";
+
+  // The arm as the pre-commitment predicts it: two inside-branch controls reached by the first test
+  // only, one enclosing mutant with no reach at all.
+  function control(over: Partial<MutantOutcome> & { mutantCode: string }): MutantOutcome {
+    return mutant({
+      codeunitName: "Data Reach Ops",
+      procedureName: "Classify",
+      verdict: "survived",
+      reachGrain: "statement",
+      coveringTests: [TAKER, SKIPPER],
+      guardReached: true,
+      reachedBy: [TAKER],
+      ...over,
+    });
+  }
+  function armReport(overrides: Record<string, Partial<MutantOutcome>> = {}): SessionReport {
+    return reportOf([
+      control({
+        mutantCode: "M0243",
+        operatorName: "lethal.remove-assignment",
+        originalText: "Seen := Amount",
+        ...overrides.M0243,
+      }),
+      control({
+        mutantCode: "M0242",
+        operatorName: "lethal.empty-block",
+        originalText: "begin\n            Seen := Amount;\n        end",
+        ...overrides.M0242,
+      }),
+      // The body-level empty-block also contains `Seen := Amount`, so the gate must tell it apart.
+      control({
+        mutantCode: "M0240",
+        operatorName: "lethal.empty-block",
+        verdict: "killed",
+        originalText:
+          "begin\n        if Amount > 100 then begin\n            Seen := Amount;\n        end;\n        exit(Amount);\n    end",
+      }),
+      // Built without `control`'s reach defaults: an enclosing mutant carries none.
+      mutant({
+        mutantCode: "M0245",
+        codeunitName: "Data Reach Ops",
+        procedureName: "Classify",
+        operatorName: "lethal.void-method-call",
+        originalText: "Touch()",
+        coveringTests: [TAKER, SKIPPER],
+        reachGrain: "enclosing",
+        ...overrides.M0245,
+      }),
+    ]);
+  }
+  function rowsFor(
+    mutantCode: string,
+    methods: readonly string[],
+    sessionId = 7,
+  ): ReachControlRun[] {
+    return methods.map((method) => ({
+      mutantCode,
+      batchIndex: 0,
+      method,
+      outcome: "pass",
+      opKind: "many",
+      sessionId,
+    }));
+  }
+  const goodRuns = (): ReachControlRun[] => [
+    ...rowsFor("M0243", ["ReachTakesBranch", "ReachWithoutBranch"], 7),
+    ...rowsFor("M0242", ["ReachTakesBranch", "ReachWithoutBranch"], 8),
+  ];
+  const goodBaseline = (): DirectTransportProbe[] => [
+    {
+      label: "ReachTakesBranch",
+      verdict: { outcome: "pass", reachedActive: false },
+      baseline: true,
+    },
+    {
+      label: "ReachWithoutBranch",
+      verdict: { outcome: "pass", reachedActive: false },
+      baseline: true,
+    },
+  ];
+
+  test("the predicted arm passes", () => {
+    expect(() => assertReachControl(armReport(), goodRuns(), goodBaseline())).not.toThrow();
+  });
+
+  test("the root-grain bug (the skipper reached too) THROWS naming the control", () => {
+    const report = armReport({ M0243: { reachedBy: [SKIPPER, TAKER] } });
+    expect(() => assertReachControl(report, goodRuns(), goodBaseline())).toThrow(/M0243/);
+  });
+
+  test("the no-reset bug (per-entry values [true, true]) THROWS naming the control", () => {
+    const report = armReport({ M0243: { reachedBy: [TAKER, SKIPPER] } });
+    expect(() => assertReachControl(report, goodRuns(), goodBaseline())).toThrow(
+      /M0243.*\[true,true\]/,
+    );
+  });
+
+  test("ReachWithoutBranch missing from the run THROWS: a reset needs a false AFTER a true", () => {
+    const runs = [
+      ...rowsFor("M0243", ["ReachTakesBranch"], 7),
+      ...rowsFor("M0242", ["ReachTakesBranch", "ReachWithoutBranch"], 8),
+    ];
+    expect(() => assertReachControl(armReport(), runs, goodBaseline())).toThrow(
+      /M0243.*ReachWithoutBranch/,
+    );
+  });
+
+  test("the two tests in reversed order THROWS: the set alone does not prove the reset", () => {
+    const runs = [
+      ...rowsFor("M0243", ["ReachWithoutBranch", "ReachTakesBranch"], 7),
+      ...rowsFor("M0242", ["ReachTakesBranch", "ReachWithoutBranch"], 8),
+    ];
+    expect(() => assertReachControl(armReport(), runs, goodBaseline())).toThrow(/M0243/);
+  });
+
+  test("the two tests in two calls (two session ids) THROWS: the reset is inside ONE call", () => {
+    // Each call on its own reads true/false correctly; only the session ids say they were two calls.
+    const runs = [
+      ...rowsFor("M0243", ["ReachTakesBranch"], 7),
+      ...rowsFor("M0243", ["ReachWithoutBranch"], 9),
+      ...rowsFor("M0242", ["ReachTakesBranch", "ReachWithoutBranch"], 8),
+    ];
+    expect(() => assertReachControl(armReport(), runs, goodBaseline())).toThrow(/M0243.*one/);
+  });
+
+  test("the then-block empty-block reached by both THROWS naming it", () => {
+    const report = armReport({ M0242: { reachedBy: [TAKER, SKIPPER] } });
+    expect(() => assertReachControl(report, goodRuns(), goodBaseline())).toThrow(/M0242/);
+  });
+
+  test("the enclosing mutant carrying guardReached THROWS naming it", () => {
+    const report = armReport({ M0245: { guardReached: true, reachedBy: [TAKER] } });
+    expect(() => assertReachControl(report, goodRuns(), goodBaseline())).toThrow(/M0245/);
+  });
+
+  test("the enclosing mutant at statement grain THROWS naming it", () => {
+    const report = armReport({ M0245: { reachGrain: "statement" } });
+    expect(() => assertReachControl(report, goodRuns(), goodBaseline())).toThrow(/M0245/);
+  });
+
+  test("a baseline run reporting reachedActive true THROWS naming the test", () => {
+    const baseline = goodBaseline();
+    baseline[1] = {
+      label: "ReachWithoutBranch",
+      verdict: { outcome: "pass", reachedActive: true },
+      baseline: true,
+    };
+    expect(() => assertReachControl(armReport(), goodRuns(), baseline)).toThrow(
+      /ReachWithoutBranch/,
+    );
+  });
+
+  test("a missing baseline run THROWS: both tests must be probed", () => {
+    expect(() => assertReachControl(armReport(), goodRuns(), goodBaseline().slice(0, 1))).toThrow(
+      /baseline/,
+    );
+  });
+
+  test("an arm missing from the report THROWS rather than passing on nothing", () => {
+    expect(() => assertReachControl(reportOf([]), goodRuns(), goodBaseline())).toThrow(
+      /Data Reach Ops/,
+    );
   });
 });

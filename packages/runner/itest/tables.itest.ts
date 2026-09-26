@@ -46,7 +46,13 @@ import { assertMatchesBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
-import { assertReachEvidence } from "./reach-evidence";
+import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
+import {
+  type DirectTransportProbe,
+  type ReachControlRun,
+  assertReachControl,
+  assertReachEvidence,
+} from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_TABLES) {
   console.log(
@@ -66,6 +72,11 @@ const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
 // Committed per-mutant baseline — see baseline-guard.ts. Absent on the first run: the guard
 // RECORDS it and says so. Never hand-write this file; it must come from a live run.
 const BASELINE_PATH = join(HERE, "tables.baseline.json");
+// GH-24's reach baseline probes drive `RunMutantTransport` directly, as bcdev's protocol probes do.
+// `fixtures/sandbox-data/app.json` "id", and `codeunit 79310 "Data Tests"`.
+const TARGET_APP_ID = "aa2f0691-47c3-470e-a351-5bfe955d4f13";
+const DATA_TESTS_ID = 79310;
+const PROBE_TIMEOUT_MS = 120_000;
 
 // Must live inside sandbox-data's declared idRanges (79300-79399, see its
 // app.json) — real alc.exe enforces app.json idRanges (AL0297) for the injected objects too.
@@ -248,6 +259,11 @@ const EXPECTED = {
   // fixture and example this repo owns, so without this arm it would ship exercised by no gate at
   // all. Four of the nineteen are its own; fifteen are collateral from operators that already ship.
   // Pre-committed in docs/superpowers/specs/2026-08-31-temporal-arm-precommitment.md.
+  // GH-24 Task 6 added `codeunit 79334 "Data Reach Ops"` (10 sites) and did NOT move these figures.
+  // Its predicted deltas are pre-committed in
+  // docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md (section 5): 407 sites,
+  // 301 / 68 / 18, groupedCalls 369 + 13. The owner updates them, and re-records
+  // tables.baseline.json, only after a live run matches that file per mutant.
   totalMutantSites: 397,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
@@ -681,6 +697,8 @@ interface RunOnceResult {
   readonly odataCfg: ActivationConfig;
   /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
   readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
+  /** GH-24: every `test_results` row of a `Data Reach Ops` mutant, in run order. */
+  readonly reachControlRuns: readonly ReachControlRun[];
 }
 
 async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
@@ -785,12 +803,68 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
     });
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
     const sessionLiveness = store.sessionIdLiveness(runId);
-    return { report, odataCfg, sessionLiveness };
+    // GH-24: the report keeps only the tests that REACHED, so the order both control tests ran in,
+    // and whether they shared one grouped call, is read from the store's rows (insertion order is
+    // run order) before it closes.
+    const reachControlRuns = store.db
+      .query(
+        "SELECT mu.mutant_code AS mutantCode, mu.batch_index AS batchIndex, tr.method AS method, " +
+          "tr.outcome AS outcome, tr.op_kind AS opKind, tr.session_id AS sessionId " +
+          "FROM test_results tr JOIN mutants mu ON mu.id = tr.mutant_row_id " +
+          "WHERE tr.run_id = ? AND mu.codeunit_name = 'Data Reach Ops' ORDER BY tr.id",
+      )
+      .all(runId) as ReachControlRun[];
+    return { report, odataCfg, sessionLiveness, reachControlRuns };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and this script never
     // exits, even on a fully successful run.
     await backend.close();
+  }
+}
+
+/**
+ * GH-24: the baseline half of the reach control. With no mutant active no `Reached` marker can
+ * fire, so a direct run of each control test must come back `pass` with `reachedActive: false`.
+ * Same probe lease and registered-artifact read as bcdev's protocol-invariant probes.
+ */
+async function runReachBaselineProbes(odataCfg: ActivationConfig): Promise<DirectTransportProbe[]> {
+  const artifactId = await odataReadRegisteredArtifact(odataCfg, TARGET_APP_ID);
+  if (!/^[0-9a-f]{32}$/.test(artifactId)) {
+    throw new Error(
+      `LethALControl_RegisteredArtifact(${TARGET_APP_ID}) returned ${JSON.stringify(artifactId)}, not a 32-hex artifact id: the deployed target did not self-register`,
+    );
+  }
+  const tx = new RunMutantTransport(odataCfg, TARGET_APP_ID, artifactId);
+  const probe = await acquireProbeLease(odataCfg);
+  try {
+    const probes: DirectTransportProbe[] = [];
+    for (const method of ["ReachTakesBranch", "ReachWithoutBranch"]) {
+      const verdict = await tx.run({
+        ref: { codeunitId: DATA_TESTS_ID, codeunitName: "Data Tests", method },
+        mutantId: "",
+        attemptId: `probe-reach-baseline-${method}`,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        lease: {
+          epoch: probe.lease.epoch,
+          token: probe.lease.token,
+          serverGeneration: probe.lease.serverGeneration,
+          opSeq: probe.nextOpSeq(),
+        },
+      });
+      probes.push({ label: method, verdict, baseline: true });
+    }
+    return probes;
+  } catch (err) {
+    const lost = probe.leaseLostDiagnosis();
+    if (lost !== undefined) {
+      throw new Error(
+        `reach baseline probes failed, and the probe lease heartbeat reported a lease loss: ${lost}. Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    throw err;
+  } finally {
+    await probe.stop();
   }
 }
 
@@ -1600,6 +1674,13 @@ async function main(): Promise<void> {
     );
     assertTrioTextEvidence(second.report);
     assertFilterLiteralEvidence(second.report);
+
+    // GH-24 Task 6: the live reach control, pre-committed in
+    // docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md. The baseline probes run
+    // after both sessions, against the artifact the second one left published.
+    const reachBaseline = await runReachBaselineProbes(second.odataCfg);
+    assertReachControl(first.report, first.reachControlRuns, reachBaseline);
+    assertReachControl(second.report, second.reachControlRuns, reachBaseline);
 
     const shape = (r: SessionReport) =>
       [...r.mutants]
