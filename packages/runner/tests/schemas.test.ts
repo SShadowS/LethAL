@@ -573,7 +573,20 @@ async function buildVerifyRefusedOutput() {
 }
 
 describe("published JSON Schema - verify (C02-06 Task 6)", () => {
-  const verifySchema = loadSchema("verify-v1.schema.json");
+  const verifySchema = loadSchema(`verify-v${VERIFY_SCHEMA_VERSION}.schema.json`);
+
+  // C02-09: v2 added two refusal reasons and `results[].gapId`. v1 stays as it was published, so a
+  // stored v1 document remains checkable, and is no longer pinned against the declaration (the
+  // explain-v4 precedent).
+  test("verify-v1.schema.json is kept as published", () => {
+    const v1 = loadSchema("verify-v1.schema.json");
+    expect((v1.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(1);
+    expect(enumAt(v1, "$.refused.reason")).not.toContain("unknown-gap");
+  });
+
+  test("results[].gapId is a declared leaf of the current verify schema", () => {
+    expect([...schemaLeafPaths(verifySchema)]).toContain("$.results[].gapId");
+  });
 
   test("the verify schema describes exactly the leaves VerifyOutput declares", () => {
     const fromType = typeLeafPaths({
@@ -662,6 +675,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
           line: 3,
           operatorName: "lethal.negate-conditional",
           procedureName: "Post",
+          gapId: "G0123456789ab",
           verdict: "killed",
           testsRun: ["Sandbox Tests.OverBudgetDetected"],
           killingTest: {
@@ -832,6 +846,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       // fields, so an empty root set is correct here and not an omission.
       "stream-v1.schema.json": [],
       "verify-v1.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      "verify-v2.schema.json": [
         "counts",
         "exitCode",
         "newTests",
