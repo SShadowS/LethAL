@@ -309,6 +309,10 @@ export interface SessionFingerprintInput {
   readonly operators?: readonly string[];
   readonly lines?: readonly LineRange[];
   readonly testsOnly?: readonly string[];
+  /** C02-06: the `alc` preprocessor symbols. `#if` branches compile differently under other
+   *  symbols, and R192's baseline key hashes AL bytes only, so a resume across a symbol change
+   *  would carry measurements made under the old ones. */
+  readonly preprocessorSymbols?: readonly string[];
   readonly skipKnownSurvivors: boolean;
   readonly selectorIds: {
     readonly selectorId: number;
@@ -340,6 +344,11 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
       ? { lines: [...input.lines].map((r) => `${r.file}:${r.start}-${r.end}`).sort() }
       : {}),
     testsOnly: input.testsOnly === undefined ? null : [...input.testsOnly].sort(),
+    // C02-06: conditional and only when non-empty, like `exclude`, so a run with no symbols keeps
+    // the digest every store recorded before this key existed. Sorted: order selects nothing.
+    ...(input.preprocessorSymbols !== undefined && input.preprocessorSymbols.length > 0
+      ? { preprocessorSymbols: [...input.preprocessorSymbols].sort() }
+      : {}),
     skipKnownSurvivors: input.skipKnownSurvivors,
     selectorIds: [
       input.selectorIds.selectorId,

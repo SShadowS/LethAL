@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
-import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
+import type { CompiledArtifact } from "../src/artifact";
+import type {
+  BackendCapabilities,
+  BackendStatus,
+  ExecutionBackend,
+  TestMethodRef,
+  TestVerdict,
+} from "../src/backend";
+import { hashTargetSource } from "../src/baseline-snapshot";
+import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
+import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import { loadDryRunConfig, restoreNotice } from "../src/cli";
 import {
@@ -35,6 +45,7 @@ import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
+import { ResultsStore } from "../src/store";
 
 /**
  * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
@@ -1884,5 +1895,96 @@ describe("issue #22: the restore notice names the version to beat", () => {
     expect(n).toContain("30.0.20721.13876");
     expect(n).toContain("30.0.20721.13877");
     expect(n).toContain("republish your test app");
+  });
+});
+// C02-06 fix round 1: the config's preprocessor symbols reach runSession from the CLI, so the
+// report names them and the recorded target source hash covers them. Driven through the REAL
+// runFromCli and runSession; only the backend is a fake (no deploy, every test passes).
+describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
+  class PassingBackend implements ExecutionBackend {
+    capabilities(): BackendCapabilities {
+      return { coverage: "none", deploy: "none", isolation: "session", authoritative: false };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "fake" };
+    }
+    async deploy(): Promise<CompiledArtifact | null> {
+      return null;
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(): Promise<void> {}
+    async run(ref: TestMethodRef): Promise<TestVerdict> {
+      return { ref, outcome: "pass", durationMs: 1 };
+    }
+  }
+
+  test("the config's preprocessorSymbols reach the report and the recorded source hash", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-cli-symbols-"));
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Symbols Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(
+      join(projectDir, "Logic.Codeunit.al"),
+      `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`,
+    );
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
+    const dbPath = join(root, "lethal.sqlite");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "al-runner",
+      dbPath,
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const report = await runFromCli(parsed, {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () => new PassingBackend(),
+    });
+    expect(report.preprocessorSymbols).toEqual(["X"]);
+    const store = new ResultsStore(dbPath);
+    const row = store.db.query("SELECT source_sha256 FROM runs").get() as {
+      source_sha256: string | null;
+    };
+    store.close();
+    expect(row.source_sha256).toBe(await hashTargetSource(projectDir, ["X"]));
+    // And it is not the hash without the symbol, so the symbol is what is being compared.
+    expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
   });
 });

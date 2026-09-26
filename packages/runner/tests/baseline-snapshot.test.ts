@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashAlTree, hashPackage, snapshotApplies, testAppHashFor } from "../src/baseline-snapshot";
+import {
+  hashAlTree,
+  hashPackage,
+  hashTargetSource,
+  snapshotApplies,
+  testAppHashFor,
+} from "../src/baseline-snapshot";
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
 
@@ -55,6 +62,73 @@ describe("hashAlTree (R192)", () => {
     const a = await hashAlTree(tree(BATCH));
     const b = await hashAlTree(tree({ ...BATCH, "app.json": '{"version":"1.0.20692.9"}' }));
     expect(b).toBe(a);
+  });
+});
+/**
+ * C02-06 decision 8 (controller ruling): the target's source hash covers exactly what the target
+ * build compiles, which is every `.al` `prepareBatchProject` copies, `app.json`, and the
+ * preprocessor symbols. `lethal verify` refuses a run whose source hashes differently now.
+ */
+describe("hashTargetSource (C02-06)", () => {
+  const PROJECT = {
+    "app.json": '{"id":"x","version":"1.0.0.0"}',
+    "src/Logic.Codeunit.al": "codeunit 1 Logic { }",
+    "src/Helper.Codeunit.al": "codeunit 2 Helper { }",
+    "test/Tests.Codeunit.al": "codeunit 3 Tests { }",
+  };
+
+  test("hashTargetSource changes when a helper .al file changes", async () => {
+    const a = await hashTargetSource(tree(PROJECT), []);
+    const b = await hashTargetSource(
+      tree({ ...PROJECT, "src/Helper.Codeunit.al": "codeunit 2 Helper { } " }),
+      [],
+    );
+    expect(b).not.toBe(a);
+  });
+
+  test("hashTargetSource includes app.json and a nested test project's .al, because the target build copies them", async () => {
+    const a = await hashTargetSource(tree(PROJECT), []);
+    const appJson = await hashTargetSource(
+      tree({ ...PROJECT, "app.json": '{"id":"x","version":"1.0.0.1"}' }),
+      [],
+    );
+    expect(appJson).not.toBe(a);
+    const nestedTest = await hashTargetSource(
+      tree({ ...PROJECT, "test/Tests.Codeunit.al": "codeunit 3 Tests { } " }),
+      [],
+    );
+    expect(nestedTest).not.toBe(a);
+    // The stated ceiling: a resource is not hashed.
+    const xlf = await hashTargetSource(tree({ ...PROJECT, "Translations/x.xlf": "<xliff/>" }), []);
+    expect(xlf).toBe(a);
+  });
+
+  test("hashTargetSource changes when preprocessorSymbols change, not when their order does", async () => {
+    const dir = tree(PROJECT);
+    const none = await hashTargetSource(dir, []);
+    const ab = await hashTargetSource(dir, ["A", "B"]);
+    expect(ab).not.toBe(none);
+    expect(await hashTargetSource(dir, ["B", "A"])).toBe(ab);
+    expect(await hashTargetSource(dir, ["A"])).not.toBe(ab);
+  });
+
+  test("hashTargetSource does not depend on directory listing order", async () => {
+    // Uppercase and a nested directory, so a directory listing's order differs from a sorted one.
+    const files: Record<string, string> = {
+      "app.json": "{}",
+      "zeta/Z.Codeunit.al": "z",
+      "B.Codeunit.al": "b",
+      "a.Codeunit.al": "a",
+    };
+    const forward = tree(files);
+    const backward = tree(Object.fromEntries(Object.entries(files).reverse()));
+    const got = await hashTargetSource(forward, ["S"]);
+    expect(await hashTargetSource(backward, ["S"])).toBe(got);
+    // The rule, computed here independently: sorted forward-slash paths, `<path> NUL <bytes> NUL`.
+    const h = createHash("sha256");
+    for (const rel of Object.keys(files).sort()) h.update(`${rel}\0${files[rel]}\0`);
+    h.update(`preprocessorSymbols\0${JSON.stringify(["S"])}\n`);
+    expect(got).toBe(h.digest("hex"));
   });
 });
 
