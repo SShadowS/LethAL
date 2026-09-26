@@ -66,9 +66,9 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 
 const TEST_CODEUNIT = { codeunitId: 79100, codeunitName: "Sandbox Tests" } as const;
 const TEST_CODEUNIT_FILE = join("src", "SandboxTests.Codeunit.al");
-const NEW_TEST = "ZzC0206ClampKeepsMidValue";
+const NEW_TEST = "ZzC0206ClampRejectsAboveHundred";
 const NEW_TEST_QUALIFIED = `${TEST_CODEUNIT.codeunitName}.${NEW_TEST}`;
-const NEW_TEST_ERROR = "ZzC0206: ClampPercent(50) must return 50";
+const NEW_TEST_ERROR = "ZzC0206: ClampPercent(150) must return 0";
 /** Microsoft's Base Application: its installed version is the BC build this gate ran against. */
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 /** The three frozen rows this gate drives, by identity key suffix in bcdev.baseline.json. */
@@ -263,6 +263,9 @@ async function main(): Promise<void> {
     );
 
     // ---- 2. A scratch copy of the test project with ONE added test. app.json unchanged.
+    // negate-conditional flips `or` to `and` on ClampPercent (measured offline, see the spec's
+    // correction), so the mutant differs from the original only OUTSIDE 0..100: at 150 the
+    // original returns 0 and the mutant 150. Live run 1 used 50, where the two agree.
     const newTestDir = join(scratch, "tests-with-new-test");
     await cp(TEST_DIR, newTestDir, { recursive: true });
     const codeunitPath = join(newTestDir, TEST_CODEUNIT_FILE);
@@ -271,7 +274,7 @@ async function main(): Promise<void> {
     assert.ok(end > 0, `step 2: ${codeunitPath} has no closing brace`);
     await writeFile(
       codeunitPath,
-      `${source.slice(0, end)}\n    [Test]\n    procedure ${NEW_TEST}()\n    begin\n        if SandboxLogic.ClampPercent(50) <> 50 then\n            Error('${NEW_TEST_ERROR}');\n    end;\n}\n`,
+      `${source.slice(0, end)}\n    [Test]\n    procedure ${NEW_TEST}()\n    begin\n        if SandboxLogic.ClampPercent(150) <> 0 then\n            Error('${NEW_TEST_ERROR}');\n    end;\n}\n`,
       "utf8",
     );
     console.log(`step 2 PASS: scratch test project at ${newTestDir} with ${NEW_TEST_QUALIFIED}`);
