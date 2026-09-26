@@ -688,7 +688,9 @@ export class ResultsStore {
    * C02-04b: the record LethAL wrote when it held both the manifest and the .app bytes, for one
    * batch. `null` when no such batch was recorded. `manifestSha256` is `null` on a row written
    * before that column existed; the caller must refuse it, not trust it by default. `appId` is
-   * the run's, since every batch of a run publishes one app id.
+   * the run's, since every batch of a run publishes one app id, but it can also be `null` (a NULL
+   * `runs.app_id`); the caller must refuse that too, not trust it by default. `loadInstalledArtifact`
+   * does both refusals, throwing `InstalledArtifactError("no-record", ...)`.
    */
   trustedArtifactRecord(
     runId: number,

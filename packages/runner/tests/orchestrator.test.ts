@@ -9918,6 +9918,12 @@ describe("C02-04b: runNamedMutants", () => {
       expect(Bun.SHA256.hash(a.appBytes, "hex")).toBe(record.sha256);
       expect(a.alSources.find((x) => x.path === "SandboxLogic.Codeunit.al")?.text).toBe(alBefore);
     }
+    // Prove the tamper itself ran, so a no-op fence.publish couldn't make this pass vacuously:
+    // the files on disk now differ from what the preflight read and from the trusted record.
+    const appAfterBytes = await readFile(fx.installed.appPath);
+    expect(Bun.SHA256.hash(appAfterBytes, "hex")).not.toBe(record.sha256);
+    const alAfter = await readFile(alPath, "utf8");
+    expect(alAfter).not.toBe(alBefore);
   });
 
   test("runNamedMutants refuses an unreadable AL source before any backend call", async () => {
