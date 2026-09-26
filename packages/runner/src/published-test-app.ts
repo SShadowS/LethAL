@@ -101,6 +101,35 @@ export function parsePublishedApp(pkg: Buffer): PublishedApp {
   return { version, tests };
 }
 
+/**
+ * C02-05: the `<App>` element's Id, Name, Publisher and Version, from the same manifest entry
+ * `parsePublishedApp` reads. Throws, like `parsePublishedApp`, on a package without them.
+ */
+export function readAppIdentity(pkg: Buffer): {
+  readonly id: string;
+  readonly name: string;
+  readonly publisher: string;
+  readonly version: string;
+} {
+  const manifest = readPackageEntry(pkg, MANIFEST_ENTRY);
+  if (manifest === null) {
+    throw new Error(`package carries no ${MANIFEST_ENTRY}, so it is not a BC app package`);
+  }
+  const app = /<App\b[^>]*>/.exec(manifest.toString("utf8"))?.[0];
+  if (app === undefined) throw new Error(`package's ${MANIFEST_ENTRY} carries no App element`);
+  const attr = (k: string): string => {
+    const v = new RegExp(`\\s${k}="([^"]*)"`).exec(app)?.[1];
+    if (v === undefined) throw new Error(`package's ${MANIFEST_ENTRY} App element has no ${k}`);
+    return v;
+  };
+  return {
+    id: attr("Id"),
+    name: attr("Name"),
+    publisher: attr("Publisher"),
+    version: attr("Version"),
+  };
+}
+
 export function comparePublishedTestApp(
   local: LocalTestApp,
   published: PublishedApp,
