@@ -33,6 +33,7 @@ import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
 import { type LineMap, buildLineMap, lineMapFromSources } from "./line-map";
+import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
 import type {
@@ -41,6 +42,11 @@ import type {
   RunMutantTransport,
 } from "./run-mutant-transport";
 import { NO_RESULT_FOR_METHOD } from "./stale-test-app";
+import {
+  compileTestApp as compileTestAppOf,
+  publishTestApp as publishTestAppOf,
+} from "./test-app-publish";
+import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -753,6 +759,36 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * C02-05: compile a test project against an installed guarded build. Local only: alc, no
+   * server call. A thin hand-off — the module does the staging/compile work; this only supplies
+   * the backend's own compiler and control symbol.
+   */
+  async compileTestApp(testDir: string, target: BoundArtifact): Promise<CompiledTestApp> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    return compileTestAppOf({
+      testDir,
+      target,
+      compiler: deployment.compiler,
+      controlSymbolPath: this.cfg.controlSymbolPath,
+    });
+  }
+
+  /**
+   * C02-05: publish it inside the lease fence and verify it by the server's own bytes. Another
+   * thin hand-off — the module decides the outcome; this only supplies the backend's own
+   * deployer and its existing `fetchPublishedAppPackage` read-back (R139 check 2).
+   */
+  async publishTestApp(fence: LeaseFence, app: CompiledTestApp): Promise<PublishedTestApp> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    return publishTestAppOf(fence, app, {
+      publisher: deployment.deployer,
+      readPublished: (k) => this.fetchPublishedAppPackage(k),
+    });
   }
 
   async activate(mutantId: string | null): Promise<void> {
