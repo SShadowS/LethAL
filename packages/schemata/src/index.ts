@@ -33,6 +33,7 @@ export {
   clipMutationText,
   identityTupleOf,
   assignIdentityOrdinals,
+  gapIdOf,
 } from "./project";
 export type {
   InstrumentedFile,
