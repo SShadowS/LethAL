@@ -232,7 +232,7 @@ Stated so a consumer does not read an absence as a finding.
 
 ### Which mutants can fail to terminate
 
-Three shapes have been found and two were fixed by giving the same question a form that cannot hang.
+Six shapes have been found and three were fixed by giving the same question a form that cannot hang.
 What remains is small and named, so a stranded run is diagnosable rather than mysterious.
 
 **Fixed, and listed so an older report reads correctly:**
@@ -243,6 +243,9 @@ What remains is small and named, so a stranded run is diagnosable rather than my
 - `empty-block` on a `while` loop's body. A `while` loop's body is what advances its condition, so
   emptying it freezes the loop forever. Ceded to `loop-skip` (`while false`), which runs the body
   zero times (R179).
+- `flip-boolean-literal` at a loop's whole-condition literal. `until true` and `while false` flipped
+  to loops whose condition never ends; both are refused (issue #7 and its follow-up). `until false`
+  and `while true` are ceded to `loop-truncate` and `loop-skip`, which emit the same text.
 
 **Remaining, accepted and documented rather than fixed:**
 
@@ -254,6 +257,9 @@ What remains is small and named, so a stranded run is diagnosable rather than my
 - `empty-block` on a `repeat` body whose condition its body advances. `repeat` always runs its body
   once, so there is no "run it zero times" rewrite to cede to. A handful of sites on the same app,
   and the count is an estimate rather than a measurement (R179).
+- `flip-boolean-literal` at a literal NESTED in a loop condition, under a unary `not`, or in the loop
+  body guarding its only exit. None of these three shapes is refused; zero sites measured for the
+  condition shapes, and the body-guard shape is not yet counted (R239).
 
 **What to do about it.** Nothing, on a first run: the shapes are rare and the report names a
 stranded tier rather than reporting a plausible score. If a run does strand, `--resume` continues it

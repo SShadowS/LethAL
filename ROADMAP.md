@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 237 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**34 of 238 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -159,6 +159,7 @@ that ordering is the priority.
 - **R221** · `--exclude <glob>`: the complement of `--only`, so a project can say which folders must never be mutated · [R221.md](docs/roadmap/R221.md) · done 2026-09-09, requested by the maintainer after pointing LethAL at a real project
 - **R222** · al-runner does NOT require a recompile per mutant: a source-backed resource file is a runtime host-to-AL channel, measured at 0.1 s per mutant against a full compile · [R222.md](docs/roadmap/R222.md) · done 2026-09-09, opt-in as `selectorMode: "resource"`, gate leg 4 asserts per-mutant equality with the…
 - **R227** · `--only` selects whole files, so a pull-request run spends most of its time re-measuring lines the PR never changed · [R227.md](docs/roadmap/R227.md) · done (this commit) — `--lines <file>:<start>-<end>` and `--changed-since <ref>`, GitHub issue #19
+- **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · open
 
 ## Backends and tooling
 
