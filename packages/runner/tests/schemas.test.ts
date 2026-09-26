@@ -315,6 +315,45 @@ describe("published JSON Schemas (R152)", () => {
     ).toEqual([]);
   });
 
+  test("a projection WITH gaps validates against the explain schema (C02-09)", () => {
+    // The committed report above predates C02-09 and carries no gap ids, so it never reaches
+    // `gaps` or `noCoverageBlocks`. Here every row gets one per (file, procedure, trigger, batch),
+    // and two batches get an artifact, so gaps with and without `artifactId`, with and without
+    // `triggerName`, and no-coverage blocks all appear.
+    const raw = JSON.parse(
+      readFileSync(join(REPO_ROOT, "docs/campaign/2026-08-03-do/rung2.report.json"), "utf8"),
+    ) as { mutants: Record<string, unknown>[]; artifacts?: unknown };
+    const ids = new Map<string, { gapId: string; line: number }>();
+    for (const m of raw.mutants) {
+      const key = [m.file, m.procedureName, m.triggerName, m.batchIndex].join("|");
+      let block = ids.get(key);
+      if (block === undefined) {
+        block = { gapId: `G${ids.size.toString(16).padStart(12, "0")}`, line: Number(m.line) };
+        ids.set(key, block);
+      }
+      m.gapId = block.gapId;
+      m.blockStartLine = block.line;
+      m.blockEndLine = block.line + 1;
+    }
+    raw.artifacts = [0, 1].map((batchIndex) => ({
+      batchIndex,
+      artifactId: `${batchIndex}`.repeat(32),
+      sha256: "c".repeat(64),
+      appVersion: "1.0.0.0",
+    }));
+    const projection = explain(assertExplainableReport(raw));
+    const gaps = projection.gaps ?? [];
+    expect(gaps.some((g) => g.artifactId !== undefined)).toBe(true);
+    expect(gaps.some((g) => g.artifactIdAbsent !== undefined)).toBe(true);
+    expect(gaps.some((g) => g.triggerName !== undefined)).toBe(true);
+    expect(gaps.some((g) => g.triggerName === undefined)).toBe(true);
+    expect(projection.noCoverageBlocks?.length).toBeGreaterThan(0);
+    expect(conformsTo(explainSchema, projection)).toEqual([]);
+    expect(
+      conformsTo(explainSchema, explain(assertExplainableReport(raw), { topSurvivors: 3 })),
+    ).toEqual([]);
+  });
+
   test("doctor output validates, with and without a caveat", () => {
     const report = {
       ok: false,
@@ -807,10 +846,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   /**
    * R233, the value-domain half of R157's pin. `EXPLAIN_SCHEMA_VERSION`'s rule says a value domain
    * that changes in either direction bumps the version, and five commits grew v4's `caveat` and
-   * `cause` sets without one. Every `enum` in the published explain schema is pinned here against a
-   * LITERAL list, not against the runtime constant it copies (the test above does that, and moves
-   * with the code). So adding a value reddens this test, and the fix is a version bump plus a new
-   * list, never an edited one.
+   * `cause` sets without one. Every `enum` in the published explain schema is pinned here by PATH
+   * against a LITERAL list, not against the runtime constant it copies (the test above does that,
+   * and moves with the code). What it guards: a changed list at an existing path is a bump, and the
+   * fix is a version bump plus a new list, never an edited one. ANY new enum path also reddens it,
+   * and needs explicit review and a literal pin here; whether that bumps follows
+   * `schemas/README.md` (adding an optional field does not), not the path's novelty alone. C02-09's
+   * `gaps[].artifactIdAbsent` is that case: a new optional field whose list is asserted IDENTICAL
+   * to `survivors[].artifactIdAbsent`'s below, so no new value domain appears.
    */
   test("every enum value set in the published explain schema is pinned (R233)", () => {
     const enums: Record<string, readonly unknown[]> = {};
@@ -877,6 +920,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "not-recorded",
         "not-published",
       ],
+      "#/properties/gaps/items/properties/artifactIdAbsent": [
+        "carried",
+        "not-recorded",
+        "not-published",
+      ],
       "#/properties/notMeasured/items/properties/cause": [
         "deadline-exceeded",
         "unstable",
@@ -894,6 +942,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
     });
+    // C02-09: the one new enum path reuses the survivor's domain exactly, which is why it did not
+    // bump the version.
+    expect(enums["#/properties/gaps/items/properties/artifactIdAbsent"]).toEqual(
+      enums["#/properties/survivors/items/properties/artifactIdAbsent"],
+    );
   });
 
   test("the explain survivor row's required set is pinned (C02-01)", () => {
