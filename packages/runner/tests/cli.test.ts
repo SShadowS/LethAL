@@ -20,7 +20,9 @@ import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import { loadDryRunConfig, restoreNotice } from "../src/cli";
 import {
+  FLAG_OWNERS,
   RUN_FLAGS,
+  VALID_SUBCOMMANDS,
   VERIFY_FLAGS,
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
@@ -30,6 +32,7 @@ import {
   announceAlRunnerCanary,
   clearQuarantine,
   forceResetLeaseFromCli,
+  helpText,
   leaseSessionFor,
   odataBaseUrl,
   odataCfgFor,
@@ -77,8 +80,9 @@ describe("parseCliConfig: a shared flag the subcommand does not own is REFUSED",
   // fine on `run` and then do nothing. R151 refused `--json` for exactly that reason and applied it
   // to that one flag; six others were still silently accepted, measured 2026-08-27.
   //
-  // Pinned as a TABLE rather than one case each, so a flag added to the shared option set without an
-  // owner shows up here as a gap rather than as a silent acceptance a year later.
+  // Pinned as a TABLE rather than one case each. This fixed list does NOT catch a flag added to the
+  // shared option set without an owner: it only names the flags it names. "flags are read or
+  // refused, never ignored" (C02-07, below) is the test that does, against the parsed config.
   const UNOWNED_ON_RUN: ReadonlyArray<readonly [string, readonly string[]]> = [
     ["json", ["--json"]],
     ["report", ["--report", "x.json"]],
@@ -2169,5 +2173,278 @@ describe("C02-06: lethal verify (Task 7)", () => {
     expect(VERIFY_EXIT.refused).toBe(VERIFY_REFUSED_EXIT_CODE);
     expect(VERIFY_EXIT.quarantined).toBe(QUARANTINED_EXIT_CODE);
     expect(VERIFY_EXIT.nothingMeasured).toBe(NOTHING_SCORED_EXIT_CODE);
+  });
+});
+
+/**
+ * C02-07. Every invocation shape an agent or operator uses: one per subcommand, plus the modes and
+ * verbs whose parse branches read different flags. Argv fixtures only.
+ */
+const INVOCATIONS: ReadonlyArray<{ readonly sub: string; readonly argv: readonly string[] }> = [
+  { sub: "run", argv: ["run", "--project", "P", "--tests", "T", "--backend", "bcdev"] },
+  { sub: "run", argv: ["run", "--project", "P", "--tests", "T", "--backend", "al-runner"] },
+  { sub: "run", argv: ["run", "--project", "P", "--dry-run"] },
+  { sub: "init", argv: ["init", "--project", "P"] },
+  { sub: "clear-quarantine", argv: ["clear-quarantine", "--server", "S", "--instance", "I"] },
+  { sub: "clear-ceiling", argv: ["clear-ceiling", "--project", "P", "--config", "C"] },
+  // `--server`/`--instance` are a pair on clear-ceiling (R112): one alone is refused-other, so the
+  // pair needs its own invocation for "every owner reads" to see them read.
+  {
+    sub: "clear-ceiling",
+    argv: ["clear-ceiling", "--project", "P", "--server", "S", "--instance", "I"],
+  },
+  {
+    sub: "force-reset-lease",
+    argv: ["force-reset-lease", "--server", "S", "--instance", "I", "--config", "C"],
+  },
+  { sub: "doctor", argv: ["doctor", "--config", "C"] },
+  { sub: "explain", argv: ["explain", "r.json"] },
+  {
+    sub: "export",
+    argv: [
+      "export",
+      "r.json",
+      "--format",
+      "mutation-elements",
+      "--project",
+      "P",
+      "--out",
+      "o.json",
+    ],
+  },
+  {
+    sub: "campaign",
+    argv: [
+      "campaign",
+      "freeze",
+      "--manifest",
+      "m",
+      "--stage",
+      "s",
+      "--report",
+      "r",
+      "--expect-mutants",
+      "5",
+    ],
+  },
+  {
+    sub: "campaign",
+    argv: ["campaign", "anchors", "--manifest", "m", "--stage", "s", "--report", "r"],
+  },
+  {
+    sub: "campaign",
+    argv: ["campaign", "compare", "--manifest", "m", "--stage", "s", "--report", "r"],
+  },
+  {
+    sub: "verify",
+    argv: [
+      "verify",
+      "--db",
+      "d",
+      "--artifact",
+      "0123456789abcdef0123456789abcdef",
+      "--survivors",
+      "0/M0001",
+      "--tests",
+      "T",
+    ],
+  },
+];
+
+/** Values that satisfy a flag's own validator, so "read" is not confused with "refused a bad value".
+ *  Every other string flag gets `zz-<flag>`, a value no default can equal. */
+const VALUE: Readonly<Record<string, string>> = {
+  lines: "src/A.al:1-2",
+  thresholds: "70,50",
+  top: "3",
+  "expect-mutants": "7",
+  workers: "2",
+  "compile-concurrency": "3",
+  "max-guards-per-batch": "5",
+  "mutant-timeout-ms": "200000",
+  "max-methods-per-call": "4",
+  "request-ceiling-ms": "250000",
+  "resume-run": "2",
+  "selector-id": "50100",
+  "control-id": "50101",
+  "table-id": "50102",
+  format: "mutation-elements",
+};
+
+/** MEASURED exemption: flags `run --dry-run` accepts and ignores. Filed (C02-07 Task 5); may only
+ *  shrink. Measured 2026-09-26 once FLAG_OWNERS was total (before it, `--server`, `--instance` and
+ *  `--file` were ignored here too; they are now refused as `clear-*` flags). */
+const DRY_RUN_IGNORES: ReadonlySet<string> = new Set([
+  "tests",
+  "backend",
+  "out",
+  "progress-out",
+  "workers",
+  "compile-concurrency",
+  "keep-env",
+  "allow-expiring-env",
+  "selector-id",
+  "control-id",
+  "table-id",
+  "skip-known-survivors",
+  "max-guards-per-batch",
+  "max-methods-per-call",
+  "request-ceiling-ms",
+  "no-group-runs",
+  "retry-stranded",
+  "stop-hung-sessions",
+  "allow-large-run",
+]);
+
+/**
+ * NAMED exception: a flag the parse STORES (so "reads" by the parsed-config oracle) whose value a
+ * precedence rule can override at runtime. A parsed-config change is not proof of runtime use, so
+ * each such case is listed here, with the rule that overrides it, rather than hidden inside "reads".
+ * Found by reading every `*FromCli` consumer of each parsed field for a conditional read
+ * (C02-07 Task 1).
+ */
+const PRECEDENCE_OVERRIDES: ReadonlyArray<{
+  readonly argv: readonly string[];
+  readonly flag: string;
+  readonly rule: string;
+}> = [
+  {
+    argv: ["clear-ceiling", "--project", "P", "--server", "S", "--instance", "I"],
+    flag: "config",
+    rule: "resolveCeilingIdentity: an explicit --server/--instance pair wins; the config is not opened",
+  },
+];
+
+type Outcome = "reads" | "ignores" | "refused-by-owner" | "refused-other";
+
+function outcome(argv: readonly string[], flag: string): Outcome {
+  const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
+  const extra =
+    spec.type === "boolean" ? [`--${flag}`] : [`--${flag}`, VALUE[flag] ?? `zz-${flag}`];
+  const before = JSON.stringify(parseCliConfig([...argv]));
+  let after: string;
+  try {
+    after = JSON.stringify(parseCliConfig([...argv, ...extra]));
+  } catch (e) {
+    return /is only accepted by|is not accepted by/.test((e as Error).message)
+      ? "refused-by-owner"
+      : "refused-other";
+  }
+  return after === before ? "ignores" : "reads";
+}
+
+describe("C02-07: flags are read or refused, never ignored", () => {
+  test("every invocation parses bare, so each case isolates one flag", () => {
+    for (const { argv } of INVOCATIONS)
+      expect(() => parseCliConfig([...argv]), argv.join(" ")).not.toThrow();
+  });
+
+  test("every shared flag has an owner", () => {
+    const owned = new Set(FLAG_OWNERS.map((r) => r.flag));
+    expect(Object.keys(RUN_FLAGS).filter((f) => !owned.has(f))).toEqual([]);
+    expect(FLAG_OWNERS.length).toBe(owned.size);
+  });
+
+  test("every row has an owner", () => {
+    // A row with `owners: []` would pass the test above, make "every owner reads" vacuous and make
+    // "every non-owner refuses" demand a refusal everywhere, including where the flag is read.
+    expect(FLAG_OWNERS.filter((r) => r.owners.length === 0).map((r) => r.flag)).toEqual([]);
+  });
+
+  test("the precedence overrides are exact", () => {
+    // Each entry must still be STORED by the parse; an entry the parse stopped storing is stale.
+    for (const { argv, flag } of PRECEDENCE_OVERRIDES) {
+      expect(outcome(argv, flag), `${argv.slice(0, 1).join(" ")} --${flag}`).toBe("reads");
+    }
+    expect(PRECEDENCE_OVERRIDES.map((o) => `${o.argv[0]} --${o.flag}`)).toEqual([
+      "clear-ceiling --config",
+    ]);
+  });
+
+  test("every flag's owners are where --help documents it", () => {
+    // The independent spec for ownership, in both directions: the subcommands a flag appears under
+    // in `--help` (its usage lines, plus the option lines of each per-subcommand section such as
+    // the `RUN` or `CLEAR-CEILING` heading) must equal its FLAG_OWNERS row. Measured on
+    // lethal/lane-code ca6eef2: equal for all 46 flags. A missing, extra or empty owner, or a flag
+    // documented nowhere, fails here even though the refusal fires before the branch reads it.
+    const lines = helpText("0.0.0").split("\n");
+    const homes = new Map<string, Set<string>>();
+    const add = (flag: string, sub: string) => {
+      if (!(flag in RUN_FLAGS)) return;
+      const s = homes.get(flag) ?? new Set<string>();
+      s.add(sub);
+      homes.set(flag, s);
+    };
+    let sectionSub = "";
+    for (const line of lines) {
+      const usage = line.match(/^\s+lethal ([a-z-]+)/);
+      if (usage) {
+        for (const m of line.matchAll(/--([a-z][a-z0-9-]+)/g)) add(m[1] ?? "", usage[1] ?? "");
+        continue;
+      }
+      const heading = line.match(/^([A-Z][A-Z-]+)\b/);
+      if (heading) {
+        const sub = (heading[1] ?? "").toLowerCase();
+        sectionSub = (VALID_SUBCOMMANDS as readonly string[]).includes(sub) ? sub : "";
+        continue;
+      }
+      const option = line.match(/^\s+(?:-[a-zA-Z], )?--([a-z][a-z0-9-]+)/);
+      if (option && sectionSub !== "") add(option[1] ?? "", sectionSub);
+    }
+    for (const { flag, owners } of FLAG_OWNERS) {
+      expect([...(homes.get(flag) ?? [])].sort(), `--${flag}`).toEqual([...owners].sort());
+    }
+  });
+
+  test("no invocation ignores a flag it accepts", () => {
+    // The oracle is the parsed config, not FLAG_OWNERS: a flag that parses and changes nothing is
+    // the `--report`-on-`run` bug (R176), whatever the table says.
+    const ignored: string[] = [];
+    for (const { argv } of INVOCATIONS) {
+      for (const flag of Object.keys(RUN_FLAGS)) {
+        if (argv.includes(`--${flag}`)) continue;
+        if (outcome(argv, flag) !== "ignores") continue;
+        const dry = argv.includes("--dry-run");
+        if (dry && DRY_RUN_IGNORES.has(flag)) continue;
+        ignored.push(`${argv.slice(0, 2).join(" ")}${dry ? " --dry-run" : ""} --${flag}`);
+      }
+    }
+    expect(ignored).toEqual([]);
+  });
+
+  test("the dry-run exemption is exact", () => {
+    const dry = INVOCATIONS.find((i) => i.argv.includes("--dry-run"));
+    if (dry === undefined) throw new Error("no dry-run invocation");
+    const measured = Object.keys(RUN_FLAGS).filter(
+      (f) => !dry.argv.includes(`--${f}`) && outcome(dry.argv, f) === "ignores",
+    );
+    expect(new Set(measured)).toEqual(new Set(DRY_RUN_IGNORES));
+  });
+
+  test("every owner reads its flag in at least one of its invocations", () => {
+    for (const { flag, owners } of FLAG_OWNERS) {
+      for (const sub of owners) {
+        const mine = INVOCATIONS.filter((i) => i.sub === sub);
+        const results = mine.map((i) =>
+          i.argv.includes(`--${flag}`) ? "reads" : outcome(i.argv, flag),
+        );
+        expect(results, `${sub} --${flag}`).toContain("reads");
+      }
+    }
+  });
+
+  test("every non-owner refuses by ownership", () => {
+    for (const { flag, owners } of FLAG_OWNERS) {
+      for (const { sub, argv } of INVOCATIONS) {
+        if ((owners as readonly string[]).includes(sub) || argv.includes(`--${flag}`)) continue;
+        expect(outcome(argv, flag), `${argv.slice(0, 2).join(" ")} --${flag}`).toBe(
+          "refused-by-owner",
+        );
+      }
+    }
+  });
+
+  test("explain --out is refused and says the JSON goes to stdout", () => {
+    expect(() => parseCliConfig(["explain", "r.json", "--out", "e.json"])).toThrow(/stdout/);
   });
 });
