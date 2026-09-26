@@ -1403,6 +1403,8 @@ function capturingRunMutantFactory(
       codeunitId: b.testCodeunitId,
       method: b.testMethod,
       codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+      // GH-24: every answer that ran carries this test's own reach attestation (1.0.0.19).
+      observedActive: true,
       ...attestation,
     };
     return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
@@ -1756,6 +1758,8 @@ describe('coverageMode "fenced" (R58)', () => {
         codeunitId: b.testCodeunitId,
         method: b.testMethod,
         codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        // GH-24: every answer that ran carries this test's own reach attestation (1.0.0.19).
+        observedActive: true,
         coverage: coverageRows,
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
@@ -1873,6 +1877,8 @@ describe('coverageMode "fenced" (R58)', () => {
           codeunitId: b.testCodeunitId,
           method: b.testMethod,
           codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+          // GH-24: every answer that ran carries this test's own reach attestation (1.0.0.19).
+          observedActive: true,
         };
         return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
       }) as typeof fetch;
@@ -2131,6 +2137,8 @@ describe("fenced coverage — the server-side object-id filter", () => {
         codeunitId: b.testCodeunitId,
         method: b.testMethod,
         codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        // GH-24: every answer that ran carries this test's own reach attestation (1.0.0.19).
+        observedActive: true,
         coverage: [],
       };
       return new Response(JSON.stringify({ value: JSON.stringify(inner) }), { status: 200 });
@@ -2286,6 +2294,8 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
         codeunitId: b.testCodeunitId,
         method: b.testMethod,
         codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        // GH-24: every answer that ran carries this test's own reach attestation (1.0.0.19).
+        observedActive: true,
         ...(inner as Record<string, unknown>),
       };
       return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });

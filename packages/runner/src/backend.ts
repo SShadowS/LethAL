@@ -104,6 +104,16 @@ export interface TestVerdict {
    */
   readonly attestation?: { readonly observedAny: boolean; readonly identityMismatch: boolean };
   /**
+   * GH-24: the server's `observedActive` for THIS test method — whether the marker at the active
+   * mutant's own statement fired during this run. A verdict field BESIDE `attestation`, not
+   * inside it, so an absent value stays structurally distinct from `false`. Set on every verdict
+   * `RunMutantTransport` maps from a `ran` answer (`RunMutant`'s top level and each
+   * `RunMutantMany` entry, read from THAT entry, never a call-level stand-in); absent on every
+   * other verdict and on al-runner, where no such attestation exists. Never defaulted to `false`:
+   * a `ran` answer without a boolean `observedActive` is refused instead (control app 1.0.0.19).
+   */
+  readonly reachedActive?: boolean;
+  /**
    * The raw server `reason` string on a Layer 5C-B1 `RunMutant` `lease-invalid` result — set ONLY
    * alongside `operation:"lease-lost"` (design §5/§8). `"op-in-flight"` means THIS caller's own
    * (attemptId, opSeq) is still active server-side — a duplicate claim on a still-running same
