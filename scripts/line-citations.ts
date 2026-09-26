@@ -102,6 +102,12 @@ export interface Citation {
  */
 export const ALLOWLIST: readonly { file: string; citation: string; reason: string }[] = [
   {
+    file: "packages/runner/tests/cli.test.ts",
+    citation: "A.al:1",
+    reason:
+      "a valid `--lines` value in C02-07's flag-ownership test (argument data), not a pointer",
+  },
+  {
     file: "packages/runner/tests/line-filter.test.ts",
     citation: "A.al:3",
     reason: "`--lines <file>:<start>-<end>` argument data under test (issue #19), not a pointer",

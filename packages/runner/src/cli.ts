@@ -697,7 +697,7 @@ export type CliConfig =
   | HelpCliConfig
   | VersionCliConfig;
 
-const VALID_SUBCOMMANDS = [
+export const VALID_SUBCOMMANDS = [
   "run",
   "init",
   "clear-quarantine",
@@ -1039,6 +1039,7 @@ OTHER
 
 EXIT CODES
   0 ok   1 error   ${QUARANTINED_EXIT_CODE} quarantined (the run refused to vouch for its own verdicts)
+  ${NOTHING_SCORED_EXIT_CODE} nothing scored (every mutant errored; the run measured nothing)
 
 A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
 \`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;
@@ -1145,6 +1146,37 @@ export const RUN_FLAGS = {
   survivors: { type: "string", multiple: true },
 } as const;
 
+/** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
+const RUN_ONLY_FLAGS = [
+  "backend",
+  "skip-known-survivors",
+  "dry-run",
+  "workers",
+  "compile-concurrency",
+  "keep-env",
+  "allow-expiring-env",
+  "selector-id",
+  "control-id",
+  "table-id",
+  "only",
+  "exclude",
+  "operator",
+  "lines",
+  "changed-since",
+  "tests-only",
+  "max-guards-per-batch",
+  "mutant-timeout-ms",
+  "max-methods-per-call",
+  "request-ceiling-ms",
+  "no-group-runs",
+  "resume",
+  "resume-run",
+  "retry-stranded",
+  "stop-hung-sessions",
+  "allow-large-run",
+  "progress-out",
+] as const;
+
 /**
  * Which subcommand OWNS each flag in the shared option table, and what to suggest instead.
  *
@@ -1159,13 +1191,38 @@ export const RUN_FLAGS = {
  * `--report` completes normally and writes nothing, which is indistinguishable from a run that
  * wrote a report somewhere else. Empty-vs-empty, this project's signature bug, in the argv layer.
  *
- * Flags NOT listed here are shared on purpose (`--project`, `--config`) and are owned by nobody.
+ * C02-07: EVERY flag in `RUN_FLAGS` has a row, shared ones (`--project`, `--config`, `--out`)
+ * included, so every subcommand refuses every flag it does not read. `cli.test.ts`'s "flags are read
+ * or refused, never ignored" enforces that against the parsed config, not against this table. Two
+ * named exceptions live there: `run --dry-run`'s exact, shrink-only list of execution flags it
+ * accepts and ignores, and one precedence override (`clear-ceiling --config` is stored but not
+ * opened when an explicit `--server`/`--instance` pair is given; see `resolveCeilingIdentity`).
+ * "Read" means the parse STORES the flag. A config can still leave a stored flag unused (for
+ * example `doctor --project`/`--tests` on an al-runner-only config, `force-reset-lease --project`
+ * on a config without an environment tool); those depend on the config, not on another flag.
+ * `instead` is optional: without it the message names the owners and the refused subcommand only.
  */
-const FLAG_OWNERS: ReadonlyArray<{
+export const FLAG_OWNERS: ReadonlyArray<{
   readonly flag: string;
-  readonly owners: readonly string[];
-  readonly instead: string;
+  readonly owners: readonly (typeof VALID_SUBCOMMANDS)[number][];
+  readonly instead?: string;
 }> = [
+  {
+    flag: "project",
+    owners: ["run", "init", "clear-ceiling", "force-reset-lease", "doctor", "export", "campaign"],
+  },
+  { flag: "tests", owners: ["run", "doctor", "verify"] },
+  { flag: "config", owners: ["run", "clear-ceiling", "force-reset-lease", "doctor", "verify"] },
+  { flag: "db", owners: ["run", "clear-ceiling", "verify"] },
+  {
+    flag: "out",
+    owners: ["run", "init", "export"],
+    instead:
+      "`lethal explain`, `lethal doctor --json` and `lethal verify` print JSON on stdout; redirect it to a file.",
+  },
+  { flag: "server", owners: ["clear-quarantine", "clear-ceiling", "force-reset-lease"] },
+  { flag: "instance", owners: ["clear-quarantine", "clear-ceiling", "force-reset-lease"] },
+  { flag: "file", owners: ["clear-ceiling"] },
   {
     flag: "json",
     owners: ["doctor"],
@@ -1210,6 +1267,11 @@ const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It names the survivors `lethal verify` proves killed.",
   },
+  ...RUN_ONLY_FLAGS.map((flag) => ({
+    flag,
+    owners: ["run"] as const,
+    instead: "It is a `lethal run` flag.",
+  })),
 ];
 
 /** Plan decision 1: the only flags `lethal verify` reads. Every other one is refused, not ignored. */
@@ -1235,10 +1297,10 @@ function refuseFlagsThisSubcommandDoesNotOwn(
   for (const { flag, owners, instead } of FLAG_OWNERS) {
     const given = values[flag];
     const present = typeof given === "boolean" ? given : given !== undefined;
-    if (!present || owners.includes(subcommand)) continue;
+    if (!present || (owners as readonly string[]).includes(subcommand)) continue;
     const list = owners.map((o) => `\`lethal ${o}\``).join(" or ");
     throw new Error(
-      `--${flag} is only accepted by ${list}, not \`lethal ${subcommand}\`. ${instead}`,
+      `--${flag} is only accepted by ${list}, not \`lethal ${subcommand}\`.${instead !== undefined ? ` ${instead}` : ""}`,
     );
   }
 }
