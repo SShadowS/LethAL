@@ -1039,6 +1039,7 @@ OTHER
 
 EXIT CODES
   0 ok   1 error   ${QUARANTINED_EXIT_CODE} quarantined (the run refused to vouch for its own verdicts)
+  ${NOTHING_SCORED_EXIT_CODE} nothing scored (every mutant errored; the run measured nothing)
 
 A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
 \`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;

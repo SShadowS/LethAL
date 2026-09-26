@@ -28,7 +28,7 @@ test runs that code at all. The share your tests killed is the **mutation score*
 the OS temp dir, changes the copy there, compiles that, and publishes it. There is nothing to
 revert. What *does* persist is on the server: the modified build stays published until you
 republish your own app (see [Restoring your app after a run](#restoring-your-app-after-a-run)),
-which is why LethAL is for a **sandbox or dev container, never a production tenant**. Your test project is never touched at all: LethAL does not even publish it.
+which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never touches or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed.
 
 ## Prerequisites
 
@@ -438,16 +438,21 @@ From a source checkout, replace `lethal` with `bun packages/runner/src/cli.ts`.
 ## Driving it from an agent, a script or CI
 
 LethAL is built to be called by a program: one binary, flags rather than prompts, distinct exit
-codes (`0` ok, `1` error, `3` quarantined), a read-only pre-flight in `lethal doctor --json`, a
-versioned JSON report, an NDJSON event stream flushed per event, and `lethal explain`, whose whole
-purpose is telling a consumer what the data means rather than making it guess.
+codes (`0` completed, `1` error, `3` quarantined, meaning the run refused to vouch for its own
+verdicts, `4` nothing scored, meaning every mutant errored and the run measured nothing), a
+read-only pre-flight in `lethal doctor --json`, a versioned JSON report, an NDJSON event stream
+flushed per event, and `lethal explain`, whose whole purpose is telling a consumer what the data
+means rather than making it guess. `lethal verify` then measures whether a test you wrote kills a
+named survivor on the build the run left installed; the reference's
+[hardening loop](docs/using-lethal-from-an-agent.md#the-hardening-loop-checked) walks the steps and
+its own exit codes.
 
 Two documents collect that contract so nobody has to derive it from the source:
 
-- [`docs/using-lethal-from-an-agent.md`](docs/using-lethal-from-an-agent.md) — the reference: argv,
-  exit codes, which of the three output surfaces answers which question, and the four rules that
-  stop a caller reaching a confident wrong conclusion.
-- [`skills/lethal-mutation-testing/SKILL.md`](skills/lethal-mutation-testing/SKILL.md) — the same
+- [`docs/using-lethal-from-an-agent.md`](docs/using-lethal-from-an-agent.md), the reference: argv,
+  exit codes, which output surface answers which question, and the six rules that stop a caller
+  reaching a confident wrong conclusion.
+- [`skills/lethal-mutation-testing/SKILL.md`](skills/lethal-mutation-testing/SKILL.md), the same
   contract as a copyable agent skill. Drop it into your own agent's skills directory.
 
 Both are checked against the code by `packages/runner/tests/agent-contract.test.ts`: a flag either

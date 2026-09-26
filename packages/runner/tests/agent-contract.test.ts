@@ -11,6 +11,7 @@ import {
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
   exitCodeForReport,
+  helpText,
   parseCliConfig,
 } from "../src/cli";
 import {
@@ -634,5 +635,46 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       expect(lower, `${name}: rule 6`).toContain("never with `--resume`");
       expect(lower, `${name}: rule 6`).toContain("`skipped` is not a measured kill or survival");
     }
+  });
+});
+
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
+
+describe("C02-07: README and --help state the contract's exit codes and rules", () => {
+  test("help lists every promised exit code, in the right block", () => {
+    const help = helpText("0.0.0");
+    const footer = help.split("EXIT CODES")[1] ?? "";
+    const runCodes = [...footer.matchAll(/(?:^|\s)(\d)\s/g)].map((m) => Number(m[1]));
+    expect(new Set(runCodes)).toEqual(
+      new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE]),
+    );
+    const lines = help.split("\n");
+    const verifyStart = lines.findIndex((l) => l.startsWith("VERIFY"));
+    const verifyLine = lines.findIndex(
+      (l, i) => i > verifyStart && l.trim().startsWith("Exit codes:"),
+    );
+    expect(verifyStart, "no VERIFY block").toBeGreaterThanOrEqual(0);
+    expect(verifyLine, "no verify Exit codes line").toBeGreaterThan(verifyStart);
+    const verifyText = lines.slice(verifyLine, verifyLine + 3).join(" ");
+    for (const c of Object.values(VERIFY_EXIT))
+      expect(verifyText, `verify help omits ${c}`).toMatch(new RegExp(`\\b${c}\\b`));
+  });
+
+  test("README agrees with the reference", () => {
+    const readme = read(join(REPO_ROOT, "README.md"));
+    const body = flowed(section(readme, "Driving it from an agent, a script or CI"));
+    expect(body).toContain(`\`${NOTHING_SCORED_EXIT_CODE}\``);
+    expect(body.toLowerCase()).toContain("measured nothing");
+    const count = section(read(REFERENCE), "The six rules (checked)")
+      .split("\n")
+      .filter((l) => /^\d+\. /.test(l)).length;
+    expect(body).toContain(`the ${NUMBER_WORDS[count]} rules`);
+    for (const w of NUMBER_WORDS.filter((_, i) => i !== count))
+      expect(body).not.toContain(`the ${w} rules`);
+  });
+
+  test("README does not deny that verify publishes the test app", () => {
+    // Regression guard only (a string): the claim was true before lethal verify existed.
+    expect(read(join(REPO_ROOT, "README.md"))).not.toContain("does not even publish it");
   });
 });
