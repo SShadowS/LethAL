@@ -377,7 +377,7 @@ function fullCoverageReport(): SessionReport {
   const base = reportFixture();
   const m0001 = survivorMutant("M0001", "exact", true, 1);
   // C02-01: the reader's mark, keyed to this row's REAL serialized identity (report.ts's
-  // `markIdentityOf`) rather than a placeholder like `K-M0001` — a wrong key would otherwise go
+  // `markIdentityOf`) rather than a placeholder like `K-M0001`. A wrong key would otherwise go
   // undetected.
   const survivorWithMark: MutantOutcome = {
     ...m0001,
@@ -394,13 +394,13 @@ function fullCoverageReport(): SessionReport {
     },
   };
   // C02-01: `lethal.remove-assignment` is the operator whose registry entry declares
-  // "value-rewrite" (remove-assignment.ts) — the only way `buildReport` can produce that risk.
+  // "value-rewrite" (remove-assignment.ts), the only way `buildReport` can produce that risk.
   const survivorWithRisk: MutantOutcome = {
     ...survivorMutant("M0002", "object", false, 4),
     operatorName: "lethal.remove-assignment",
     equivalenceRisk: "value-rewrite",
   };
-  // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name —
+  // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name. It
   // reaches the `triggerName` leaf the "no dead entries" test needs.
   // It is also CARRIED, so the `artifactIdAbsent` leaf is reached (as "carried"), while M0001 in
   // batch 1 reaches `artifactId` through `artifacts` below.
@@ -678,7 +678,11 @@ describe("explain — the admissibility rule, made executable", () => {
       if (m.equivalenceRisk !== undefined) {
         expect(m.verdict).toBe("survived");
         const risk = riskByOperator.get(m.operatorName);
-        if (risk === undefined) throw new Error(`no tier1 operator named ${m.operatorName}`);
+        if (risk === undefined) {
+          throw new Error(
+            `no tier1 operator named ${m.operatorName}, or it declares no equivalenceRisk`,
+          );
+        }
         expect(m.equivalenceRisk).toBe(risk);
       }
       if (m.readerMark !== undefined) {
@@ -872,7 +876,7 @@ describe("explain — the admissibility rule, made executable", () => {
   test("an archived report projects the new fields as absent, never defaulted (C02-01)", () => {
     // A pre-C02-01 row: no span, no row-level risk or mark. The RUN-level lists are present and
     // name this row's mutantCode, to prove explain never joins them.
-    // Destructured off rather than deleted, so the key is genuinely absent from the start —
+    // Destructured off rather than deleted, so the key is genuinely absent from the start,
     // never present with an `undefined` value.
     const { procedureStartLine, procedureEndLine, ...row } = survivorMutant("M0001", "exact", true);
     const report = reportFixture({
@@ -1511,6 +1515,16 @@ describe("explain — artifactId (C02-01)", () => {
       const bad = reportFixture({ artifacts, mutants: [row] } as unknown as Partial<SessionReport>);
       expect(() => explain(bad)).toThrow(MalformedReportError);
       expect(() => explain(bad)).toThrow(/batchIndex/);
+    }
+  });
+
+  test("a malformed readerMark is refused rather than projected as an empty mark", () => {
+    for (const value of [null, "x", { key: "K" }, { key: "K", reason: 7 }]) {
+      const bad = reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact", true), readerMark: value }],
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/readerMark/);
     }
   });
 

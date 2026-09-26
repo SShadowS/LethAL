@@ -546,6 +546,10 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
  *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup
  *   - `artifacts` (each `batchIndex` once, `artifactId` a string) : C02-01, the per-batch lookup
+ *   - a `survived` row's `batchIndex`, when `artifacts` is present : C02-01, the lookup key; a bad
+ *                                            one would silently read as `not-published`
+ *   - every mutant's `readerMark` (an object with string `key` and `reason`) : C02-01, read field
+ *                                            by field; a bad one would throw or project as `{}`
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
  *
  * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
@@ -649,6 +653,18 @@ export function assertExplainableReport(value: unknown): SessionReport {
         `${where} has a non-boolean carried, which would decide its artifactId by coercion`,
         mutant.carried,
       );
+    }
+    // C02-01: `survivorOf` reads `readerMark.key` and `.reason`. `null` would throw a TypeError
+    // there, and a string would project as `readerMark: {}`, breaking the schema's required keys.
+    const mark = mutant.readerMark;
+    if (
+      mark !== undefined &&
+      (typeof mark !== "object" ||
+        mark === null ||
+        typeof (mark as Record<string, unknown>).key !== "string" ||
+        typeof (mark as Record<string, unknown>).reason !== "string")
+    ) {
+      refuse(`${where} has a readerMark that is not { key: string, reason: string }`, mark);
     }
     const attribution = mutant.coverageAttribution;
     if (
