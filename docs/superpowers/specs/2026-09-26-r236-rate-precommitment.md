@@ -679,3 +679,32 @@ d6dd50f feat(control): ObservedActive, the active mutant's own statement reached
 - Stated plainly (§5): the fresh-tenant bootstrap was not reproduced, R225's cold-start claim stays open, and
   socket reuse cannot be established. The rate on Cronus284 (6 of 60 counted, 2 of 3 warm-up) differs sharply
   from the Cronus28 smokes (6 of 7, D3); this cycle cannot say why.
+
+## ERRATUM 2026-09-26 (review r1, written after the run; nothing above this line is edited)
+
+- **Execution facts (a)/(b) correction.** §2's "Execution facts" said the probe forces `Connection: close` on
+  traced calls. It does not: `traceFetch`'s `freshConnection` hook (`scripts/r236-baseline-probe/fetch-trace.ts`)
+  is what sets that header, and `probe.ts`'s `sessionHooks` never sets `freshConnection` on the hooks object it
+  builds, so it stays undefined and the check `hooks.freshConnection === true` is false on every call this probe
+  made. Every traced call in this run used the same connection handling as the untraced client. This changes no
+  result in the OUTCOME: O2's contrast, O4 through O8's descriptive counts and O11's licensing all stand
+  unchanged, since none of them relied on `Connection: close` being forced.
+- **`afterUnprovenHit` correction and fix.** `afterUnprovenHit` is a per-process variable (`probe.ts`, `main()`):
+  it starts `false` at the top of every invocation, so a new invocation (a new `--segment`, a new arm script, the
+  smoke scripts) cannot know whether the PREVIOUS invocation's last session ended on an unproven hit, and the C4
+  preflight (doctor + harness check) was skipped at such a boundary. Fixed in
+  `scripts/r236-baseline-probe/probe.ts` (commit `d222663`): a new `shouldPreflight(index, afterUnprovenHit)`
+  helper also gates a run's first session (`index === 1`) unconditionally, so every invocation now preflights
+  at its own start regardless of what the prior invocation's last session did.
+  - **Timeline check, verified against `C:/Users/SShadowS/AppData/Local/Temp/r236/log.txt` and the NDJSON files.**
+    In the counted arms, no invocation boundary followed an unproven hit: A1 ended on #15, no hit; B'1 segment 1
+    ended on the failed preflight and the recovery it triggered (session #10 hit, the in-process preflight ran
+    and failed, exit 3, then recovery 284-1 restarted the container and ran its own doctor/health checks before
+    segment 2 started); B'1 segment 2, B'2 and A2 each ended on a no-hit session (record 16, record 15 and record
+    15 respectively); `warmup-284` ended on its second (no-hit) session. The only boundary where an invocation's
+    LAST session was an unproven hit and the NEXT invocation started without a preflight is pre-arm, on Cronus28:
+    `smoke-traced` segment 2 ended on a hit (its #4, `smoke-traced.ndjson` record 5), and `smoke-untraced` started
+    next (a separate invocation, no recovery in between, `log.txt` 18:56:00 to 18:56:24) with `afterUnprovenHit`
+    reset to `false` and so no preflight before its first session. `smoke-untraced`'s first session was itself a
+    hit. No arm session in the OUTCOME (O1 to O11) was reached through a skipped preflight; the gap only ever
+    affected a pre-arm smoke boundary. No OUTCOME result changes.
