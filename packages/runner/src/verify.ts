@@ -334,14 +334,30 @@ export async function expandGapIds(
       line: entry.startLine,
     };
   });
-  // Two rows for one mutant is corruption. A manifest entry with NO row is not: a run that
-  // quarantined or threw partway through its last batch still records the artifact, so its
-  // unscored entries are "not measured" and stay out of every gap's members and counts.
+  // Two rows for one mutant is corruption. A manifest entry with NO row is "not measured" only
+  // when the run did not finish: a run that quarantined or threw partway through its last batch
+  // still records the artifact but never reaches `finishRun`, so `finished_at` stays NULL. On a
+  // FINISHED run every manifest entry was scored, so a missing row is a lost row (a corrupt store),
+  // and treating it as not measured would silently drop a survivor.
   const recorded = new Set(rows.map((r) => r.mutantCode));
   if (recorded.size !== rows.length) {
     throw new Error(
       `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${rows.length} row(s) for ${recorded.size} mutant(s): a mutant twice (a corrupt store)`,
     );
+  }
+  const run = store.getRun(rec.runId);
+  if (run === null) {
+    throw new Error(
+      `verify.ts: artifact ${req.artifactId} names run ${rec.runId}, which the store does not hold (a corrupt store)`,
+    );
+  }
+  if (run.finished) {
+    const missing = manifest.mutants.filter((m) => !recorded.has(m.mutantId));
+    if (missing.length > 0) {
+      throw new Error(
+        `verify.ts: run ${rec.runId} finished, but batch ${rec.batchIndex} records no row for ${missing.map((m) => m.mutantId).join(", ")} of artifact ${req.artifactId}'s manifest (a corrupt store)`,
+      );
+    }
   }
   const tallies = tallyGaps(gapRows);
   const known = new Set(manifest.mutants.map((m) => m.gapId));
