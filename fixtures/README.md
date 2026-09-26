@@ -8,7 +8,7 @@ manual smoke-testing, and the env-gated integration scripts in
 
 | Codeunit | Id | App | Purpose |
 |---|---|---|---|
-| `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. |
+| `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. Declared in `namespace LethAL.Sandbox.Logic` on purpose (GH-09, R212): with `Sandbox Pricing` left at the root the app is mixed, so `itest:bcdev` and `itest:alrunner` pin namespaced coverage attribution. |
 | `Sandbox Pricing` | 79001 | `sandbox-app` | Mutation target, deliberately **untested** by any test method. |
 | `Sandbox Tests` | 79100 | `sandbox-tests` | `Subtype = Test` codeunit exercising `Sandbox Logic`. Asserts via `Error()` — no Library Assert dependency. Must NOT carry a `TestIsolation` property — `TestIsolation` is a **TestRunner**-codeunit property in real BC; setting it on a `Subtype = Test` codeunit is rejected by the AL compiler (`AL0223`). Isolation is chosen by whichever TestRunner codeunit invokes the tests and Layer 4 does not verify it — see the note below. |
 

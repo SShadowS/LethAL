@@ -1,0 +1,112 @@
+{
+  "RuntimeVersion": "13.0",
+  "Namespaces": [
+    {
+      "Namespaces": [
+        {
+          "Namespaces": [
+            {
+              "Codeunits": [
+                {
+                  "Methods": [
+                    {
+                      "ReturnTypeDefinition": { "Name": "Boolean" },
+                      "Parameters": [
+                        { "Name": "Amount", "TypeDefinition": { "Name": "Decimal" } },
+                        { "Name": "Budget", "TypeDefinition": { "Name": "Decimal" } }
+                      ],
+                      "Id": -352596841,
+                      "Name": "IsOverBudget"
+                    },
+                    {
+                      "ReturnTypeDefinition": { "Name": "Integer" },
+                      "Parameters": [{ "Name": "Value", "TypeDefinition": { "Name": "Integer" } }],
+                      "Id": 1628299115,
+                      "Name": "ClampPercent"
+                    },
+                    {
+                      "Parameters": [{ "Name": "Amount", "TypeDefinition": { "Name": "Decimal" } }],
+                      "Id": 4345982,
+                      "Name": "ApplyAudit"
+                    }
+                  ],
+                  "ReferenceSourceFileName": "src/SandboxLogic.Codeunit.al",
+                  "Id": 79000,
+                  "Name": "Sandbox Logic"
+                }
+              ],
+              "Reports": [],
+              "XmlPorts": [],
+              "Queries": [],
+              "ControlAddIns": [],
+              "EnumTypes": [],
+              "DotNetPackages": [],
+              "Interfaces": [],
+              "PermissionSets": [],
+              "PermissionSetExtensions": [],
+              "ReportExtensions": [],
+              "Name": "Logic"
+            }
+          ],
+          "Codeunits": [],
+          "Reports": [],
+          "XmlPorts": [],
+          "Queries": [],
+          "ControlAddIns": [],
+          "EnumTypes": [],
+          "DotNetPackages": [],
+          "Interfaces": [],
+          "PermissionSets": [],
+          "PermissionSetExtensions": [],
+          "ReportExtensions": [],
+          "Name": "Sandbox"
+        }
+      ],
+      "Codeunits": [],
+      "Reports": [],
+      "XmlPorts": [],
+      "Queries": [],
+      "ControlAddIns": [],
+      "EnumTypes": [],
+      "DotNetPackages": [],
+      "Interfaces": [],
+      "PermissionSets": [],
+      "PermissionSetExtensions": [],
+      "ReportExtensions": [],
+      "Name": "LethAL"
+    }
+  ],
+  "Codeunits": [
+    {
+      "Methods": [
+        {
+          "ReturnTypeDefinition": { "Name": "Decimal" },
+          "Parameters": [
+            { "Name": "Price", "TypeDefinition": { "Name": "Decimal" } },
+            { "Name": "Pct", "TypeDefinition": { "Name": "Decimal" } }
+          ],
+          "Id": 897975083,
+          "Name": "DiscountedPrice"
+        }
+      ],
+      "ReferenceSourceFileName": "src/SandboxPricing.Codeunit.al",
+      "Id": 79001,
+      "Name": "Sandbox Pricing"
+    }
+  ],
+  "Reports": [],
+  "XmlPorts": [],
+  "Queries": [],
+  "ControlAddIns": [],
+  "EnumTypes": [],
+  "DotNetPackages": [],
+  "Interfaces": [],
+  "PermissionSets": [],
+  "PermissionSetExtensions": [],
+  "ReportExtensions": [],
+  "InternalsVisibleToModules": [],
+  "AppId": "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+  "Name": "LethAL Sandbox App",
+  "Publisher": "LethAL",
+  "Version": "1.0.0.1"
+}

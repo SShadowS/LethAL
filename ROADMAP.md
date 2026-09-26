@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**43 of 249 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 252 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -83,7 +83,7 @@ that ordering is the priority.
 - **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · open, filed 2026-09-06 while building [[R196]]'s `classifyHangCapable`, which needed to compare two resolved…
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · open, filed 2026-09-06, closure needs a live BC re-run
-- **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · open, filed 2026-09-08
+- **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
 - **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured; WIDENED 2026-09-09, the same construct also LOSES sites, and that half was…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
@@ -168,6 +168,9 @@ that ordering is the priority.
 - **R227** · `--only` selects whole files, so a pull-request run spends most of its time re-measuring lines the PR never changed · [R227.md](docs/roadmap/R227.md) · done (this commit) — `--lines <file>:<start>-<end>` and `--changed-since <ref>`, GitHub issue #19
 - **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · open
 - **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · open
+- **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · open
+- **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
+- **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · open
 
 ## Backends and tooling
 

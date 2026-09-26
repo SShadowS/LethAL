@@ -2,7 +2,7 @@
   "id": "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
   "name": "LethAL Sandbox App",
   "publisher": "LethAL",
-  "version": "1.0.0.0",
+  "version": "1.0.0.1",
   "brief": "LethAL Layer 4 fixture: mutation target app.",
   "description": "Minimal AL codeunits used as the mutation target for LethAL's Layer 4 execution-runtime fixture and integration tests. Not for production use — see fixtures/README.md.",
   "privacyStatement": "",
