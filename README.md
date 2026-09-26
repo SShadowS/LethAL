@@ -28,7 +28,7 @@ test runs that code at all. The share your tests killed is the **mutation score*
 the OS temp dir, changes the copy there, compiles that, and publishes it. There is nothing to
 revert. What *does* persist is on the server: the modified build stays published until you
 republish your own app (see [Restoring your app after a run](#restoring-your-app-after-a-run)),
-which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never touches or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed.
+which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never modifies or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed.
 
 ## Prerequisites
 
@@ -158,7 +158,8 @@ what a survivor, a `no-coverage` row and a killed mutant look like on code you c
 sitting.
 
 - [`examples/gift-card`](examples/gift-card/README.md) — one planted bug in a balance calculation,
-  and the shortest path to seeing the point. 45 mutants, 70.3%.
+  and the shortest path to seeing the point. 60 mutants, 34 killed, 15 survived, 11 no-coverage:
+  a score of 69.4%.
 - [`examples/credit-limit`](examples/credit-limit/README.md) — three gaps rather than one, and the
   only demo that can show `remove-calcfields`: it reads a FlowField through `CalcFields`, which the
   gift-card app deliberately does not. 32 mutants, 70.8%.

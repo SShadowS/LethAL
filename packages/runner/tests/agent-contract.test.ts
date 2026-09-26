@@ -31,7 +31,7 @@ import { STREAM_SCHEMA_VERSION } from "../src/events";
 import { ARTIFACT_ID_ABSENCES, EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
 import { LARGE_RUN_MUTANT_THRESHOLD } from "../src/orchestrator";
 import { createNdjsonSink } from "../src/progress-ndjson";
-import { CAVEAT_INTERPRETATIONS, REPORT_SCHEMA_VERSION } from "../src/report";
+import { CAVEAT_INTERPRETATIONS, REPORT_SCHEMA_VERSION, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import {
@@ -1053,6 +1053,24 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
     expect(body).toContain(`the ${NUMBER_WORDS[count]} rules`);
     for (const w of NUMBER_WORDS.filter((_, i) => i !== count))
       expect(body).not.toContain(`the ${w} rules`);
+  });
+
+  test("README's gift-card figures are the committed report's", () => {
+    const r = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    // The score as the report itself renders it.
+    const score = /score: (\S+%)/.exec(renderConsole(r))?.[1] ?? "";
+    expect(score).toMatch(/^\d+\.\d%$/);
+    const readme = flowed(read(join(REPO_ROOT, "README.md")));
+    expect(readme).toContain(
+      `${r.mutants.length} mutants, ${r.counts.killed} killed, ${r.counts.survived} survived, ${r.counts.noCoverage} no-coverage: a score of ${score}.`,
+    );
+  });
+
+  test("README says run never modifies or publishes the test project", () => {
+    // Run DOES read the test project (it discovers the tests there); it never changes or publishes it.
+    const readme = flowed(read(join(REPO_ROOT, "README.md")));
+    expect(readme).toContain("`lethal run` never modifies or publishes your test project.");
+    expect(readme).not.toContain("never touches or publishes");
   });
 
   test("README does not deny that verify publishes the test app", () => {
