@@ -1,5 +1,10 @@
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import type { TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
-import type { InstalledArtifactRef } from "./named-mutants";
+import { discoverTests } from "./discovery";
+import { type EquivalenceMark, loadEquivalenceMarks } from "./equivalence-marks";
+import type { InstalledArtifactRef, NamedMutantRequest } from "./named-mutants";
+import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
@@ -218,4 +223,138 @@ export async function assertSourceUnchanged(
       `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id`,
     );
   }
+}
+
+export interface VerifyPlan {
+  /** One request per survivor that runs. `[]` only when every target was skipped. */
+  readonly requests: readonly NamedMutantRequest[];
+  readonly newTests: readonly TestMethodRef[];
+  readonly skipped: ReadonlyArray<{
+    readonly entry: MutantManifestEntry;
+    readonly mark: EquivalenceMark;
+  }>;
+  /** Every target's trusted manifest entry, skipped or not, by mutant code. */
+  readonly entries: ReadonlyMap<string, MutantManifestEntry>;
+}
+
+/**
+ * Decisions 5 and 6. `manifest` is the one `loadInstalledArtifact` matched. Reads the project's
+ * CURRENT marks file and the test project's `.al` files; never a server.
+ *
+ * A survivor a reader marked equivalent is skipped. Every other one runs its source-run covering
+ * tests, each matched to the source baseline by `(codeunitId, method)` and required unchanged in
+ * the test project, then every new test (not in the source baseline by `testKeyOf`).
+ */
+export async function planVerify(a: {
+  readonly source: VerifySource;
+  readonly manifest: MutantManifest;
+  readonly sourceBaseline: ReturnType<ResultsStore["baselineTests"]>;
+  readonly testDir: string;
+}): Promise<VerifyPlan> {
+  const { source, manifest, sourceBaseline, testDir } = a;
+
+  const byId = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
+  const entries = new Map<string, MutantManifestEntry>();
+  for (const t of source.targets) {
+    const entry = byId.get(t.mutantCode);
+    if (entry === undefined) {
+      throw new Error(
+        `verify.ts: run ${source.runId} records ${t.mutantCode}, but artifact ${manifest.artifactId}'s manifest has no such mutant`,
+      );
+    }
+    entries.set(t.mutantCode, entry);
+  }
+
+  // Decision 6. A missing file is no marks; a malformed or unreadable one throws.
+  const marks = (await loadEquivalenceMarks(source.projectPath)) ?? [];
+  const markByKey = new Map(marks.map((m) => [m.key, m] as const));
+  const skipped: Array<VerifyPlan["skipped"][number]> = [];
+  const running: Array<VerifySource["targets"][number]> = [];
+  for (const t of source.targets) {
+    const entry = entries.get(t.mutantCode);
+    if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} lost its entry`);
+    const mark = markByKey.get(serializeKey(identityKeyOf(entry)));
+    if (mark !== undefined) skipped.push({ entry, mark });
+    else running.push(t);
+  }
+  if (running.length === 0) return { requests: [], newTests: [], skipped, entries };
+
+  if (sourceBaseline.length === 0) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded no baseline tests, so no test can be told apart as new; run lethal run again, then verify`,
+    );
+  }
+  const unnamed = sourceBaseline.filter((r) => r.codeunitName === null);
+  if (unnamed.length > 0) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded baseline tests without a codeunit name (before lethal verify existed): ${unnamed.map((r) => `${r.codeunitId}::${r.method}`).join(", ")}; run lethal run again, then verify`,
+    );
+  }
+
+  const discovered = await discoverTests(testDir);
+  const baselineKeys = new Set(
+    sourceBaseline.map((r) =>
+      testKeyOf({ codeunitId: r.codeunitId, codeunitName: "", method: r.method }),
+    ),
+  );
+  const newTests = discovered.filter((ref) => !baselineKeys.has(testKeyOf(ref)));
+
+  // Decision 5, ruling 10: a covering NAME picks exactly one source baseline row, and the test
+  // project must still hold that row's (codeunitId, method) under the same codeunit name.
+  const matchCovering = (name: string): TestMethodRef | string => {
+    const rows = sourceBaseline.filter((r) => `${r.codeunitName}.${r.method}` === name);
+    const [only] = rows;
+    if (only === undefined || rows.length > 1) {
+      return `${name} matches ${rows.length} source baseline test(s)${rows.length > 1 ? ` (${rows.map((r) => `codeunit ${r.codeunitId}`).join(", ")})` : ""}, not exactly one`;
+    }
+    const now = discovered.find(
+      (ref) => ref.codeunitId === only.codeunitId && ref.method === only.method,
+    );
+    if (now !== undefined && now.codeunitName === only.codeunitName) return now;
+    const sameName = discovered.filter((ref) => `${ref.codeunitName}.${ref.method}` === name);
+    const found =
+      now !== undefined
+        ? `codeunit ${now.codeunitId} is now named "${now.codeunitName}"`
+        : sameName.length > 0
+          ? `the test project has it only as ${sameName.map((r) => `codeunit ${r.codeunitId}`).join(", ")}`
+          : "the test project no longer has it";
+    return `${name} was codeunit ${only.codeunitId} method ${only.method} in the source run; ${found}`;
+  };
+
+  const unmatched: string[] = [];
+  const noTests: string[] = [];
+  const requests: NamedMutantRequest[] = [];
+  for (const t of running) {
+    const seen = new Set<string>();
+    const methods: TestMethodRef[] = [];
+    const add = (ref: TestMethodRef) => {
+      if (!seen.has(testKeyOf(ref))) {
+        seen.add(testKeyOf(ref));
+        methods.push(ref);
+      }
+    };
+    for (const name of t.coveringTests) {
+      const ref = matchCovering(name);
+      if (typeof ref === "string") unmatched.push(`${t.batchIndex}/${t.mutantCode}: ${ref}`);
+      else add(ref);
+    }
+    for (const ref of newTests) add(ref);
+    if (methods.length === 0) noTests.push(`${t.batchIndex}/${t.mutantCode}`);
+    requests.push({ mutantId: t.mutantCode, methods });
+  }
+  if (unmatched.length > 0) {
+    throw new VerifyError(
+      "covering-test-unmatched",
+      `a covering test cannot be matched to the same codeunit id and method, so it is not run in its place: ${unmatched.join("; ")}`,
+    );
+  }
+  if (noTests.length > 0) {
+    throw new VerifyError(
+      "no-tests-to-run",
+      `no covering test and no new test for: ${noTests.join(", ")}; add a test that reaches the mutated code`,
+    );
+  }
+  return { requests, newTests, skipped, entries };
 }

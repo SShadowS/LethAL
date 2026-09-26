@@ -2,13 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import {
   VerifyError,
   type VerifySource,
   assertSourceUnchanged,
   parseVerifyRequest,
+  planVerify,
   resolveVerifySource,
 } from "../src/verify";
 
@@ -303,5 +306,275 @@ describe("assertSourceUnchanged", () => {
     const { dir, source } = await project();
     await assertSourceUnchanged(source, SYMBOLS);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+describe("planVerify", () => {
+  type Codeunit = { id: number; name: string; methods: readonly string[]; body?: string };
+
+  /** A temp test project with one real `.al` test codeunit per entry. */
+  function testDir(codeunits: readonly Codeunit[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tests-"));
+    for (const c of codeunits) {
+      const methods = c.methods
+        .map((m) => `    [Test]\n    procedure ${m}()\n    begin\n${c.body ?? ""}    end;\n`)
+        .join("\n");
+      writeFileSync(
+        join(dir, `${c.id}.Codeunit.al`),
+        `codeunit ${c.id} "${c.name}"\n{\n    Subtype = Test;\n\n${methods}}\n`,
+      );
+    }
+    return dir;
+  }
+
+  function entry(mutantId: string, over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
+    return {
+      mutantId,
+      file: "Logic.Codeunit.al",
+      startIndex: 10,
+      endIndex: 20,
+      startLine: 3,
+      operatorName: "lethal.negate-conditional",
+      operatorVersion: "1.0.0",
+      astHash: `hash-${mutantId}`,
+      objectType: "codeunit",
+      codeunitId: 50000,
+      codeunitName: "Logic",
+      procedureName: "Post",
+      originalText: "a",
+      mutatedText: "b",
+      ...over,
+    };
+  }
+
+  function manifest(mutants: readonly MutantManifestEntry[]): MutantManifest {
+    return { selectorIds: { selectorId: 1, controlId: 2, tableId: 3 }, artifactId: A1, mutants };
+  }
+
+  /** A project dir holding the given marks file, or none when `marks` is undefined. */
+  function project(marks?: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-proj-"));
+    if (marks !== undefined) {
+      writeFileSync(
+        join(dir, "lethal.equivalent.json"),
+        typeof marks === "string" ? marks : JSON.stringify(marks),
+      );
+    }
+    return dir;
+  }
+
+  function source(
+    projectPath: string,
+    targets: ReadonlyArray<{ mutantCode: string; coveringTests: readonly string[] }>,
+  ): VerifySource {
+    return {
+      runId: 1,
+      projectPath,
+      artifactSha256: "0".repeat(64),
+      sourceSha256: "5".repeat(64),
+      installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+      targets: targets.map((t) => ({ batchIndex: 0, ...t })),
+    };
+  }
+
+  const row = (codeunitId: number, codeunitName: string | null, method: string) => ({
+    codeunitId,
+    codeunitName,
+    method,
+  });
+  const keys = (refs: ReadonlyArray<{ codeunitId: number; method: string }>) =>
+    refs.map((r) => `${r.codeunitId}::${r.method}`);
+
+  async function planRefusal(p: Promise<unknown>): Promise<VerifyError> {
+    const e = await p.then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    if (e instanceof VerifyError) return e;
+    throw new Error(`expected a VerifyError, got ${String(e)}`);
+  }
+
+  test("covering tests plus new tests, deduplicated, in that order", async () => {
+    const plan = await planVerify({
+      source: source(project(), [
+        { mutantCode: "M0001", coveringTests: ["Old.B", "Old.A", "Old.B"] },
+        { mutantCode: "M0002", coveringTests: [] },
+      ]),
+      manifest: manifest([entry("M0001"), entry("M0002")]),
+      sourceBaseline: [row(50100, "Old", "A"), row(50100, "Old", "B")],
+      testDir: testDir([
+        { id: 50100, name: "Old", methods: ["A", "B"] },
+        { id: 50101, name: "New", methods: ["N1", "N2"] },
+      ]),
+    });
+    expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001", "M0002"]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual([
+      "50100::B",
+      "50100::A",
+      "50101::N1",
+      "50101::N2",
+    ]);
+    expect(keys(plan.requests[1]?.methods ?? [])).toEqual(["50101::N1", "50101::N2"]);
+    expect(keys(plan.newTests)).toEqual(["50101::N1", "50101::N2"]);
+    expect(plan.skipped).toEqual([]);
+    expect([...plan.entries.keys()]).toEqual(["M0001", "M0002"]);
+  });
+
+  /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */
+  function coveringPlan(baseline: ReturnType<typeof row>[], codeunits: readonly Codeunit[]) {
+    return planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: baseline,
+      testDir: testDir(codeunits),
+    });
+  }
+
+  test("a renumbered covering codeunit with the same name and method is refused, never run as the old test", async () => {
+    const e = await planRefusal(
+      coveringPlan([row(50100, "T", "M")], [{ id: 50199, name: "T", methods: ["M"] }]),
+    );
+    expect(e.reason).toBe("covering-test-unmatched");
+    expect(e.detail).toContain("T.M");
+    expect(e.detail).toContain("50100");
+    expect(e.detail).toContain("50199");
+  });
+
+  test("a renamed covering codeunit with the same id is refused", async () => {
+    const e = await planRefusal(
+      coveringPlan([row(50100, "T", "M")], [{ id: 50100, name: "T2", methods: ["M"] }]),
+    );
+    expect(e.reason).toBe("covering-test-unmatched");
+    expect(e.detail).toContain("T2");
+  });
+
+  test("a removed covering method is refused", async () => {
+    const e = await planRefusal(
+      coveringPlan([row(50100, "T", "M")], [{ id: 50100, name: "T", methods: ["Other"] }]),
+    );
+    expect(e.reason).toBe("covering-test-unmatched");
+    expect(e.detail).toContain("T.M");
+  });
+
+  test("a covering name matching two source baseline rows is refused", async () => {
+    const e = await planRefusal(
+      coveringPlan(
+        [row(50100, "T", "M"), row(50101, "T", "M")],
+        [{ id: 50100, name: "T", methods: ["M"] }],
+      ),
+    );
+    expect(e.reason).toBe("covering-test-unmatched");
+    expect(e.detail).toContain("50100");
+    expect(e.detail).toContain("50101");
+  });
+
+  test("a source baseline row without a codeunit name is source-predates-verify", async () => {
+    const e = await planRefusal(
+      coveringPlan(
+        [row(50100, "T", "M"), row(50101, null, "X")],
+        [{ id: 50100, name: "T", methods: ["M"] }],
+      ),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+  });
+
+  test("a test in the source baseline is not new, even if it is edited", async () => {
+    // 50100 A.M is in the source baseline and was edited since; 50101 B.M shares its method name
+    // and is genuinely new. Only the second is new. The first does not cover the no-coverage
+    // survivor, so it does not run at all: the stated blind spot, pinned as behaviour.
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: [] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "A", "M")],
+      testDir: testDir([
+        { id: 50100, name: "A", methods: ["M"], body: "        Error('now asserts');\n" },
+        { id: 50101, name: "B", methods: ["M"] },
+      ]),
+    });
+    expect(keys(plan.newTests)).toEqual(["50101::M"]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50101::M"]);
+  });
+
+  test("an empty source baseline is refused, never read as every test new", async () => {
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: [] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [],
+        testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+  });
+
+  test("a no-coverage survivor with no new test is refused as no-tests-to-run", async () => {
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [
+          { mutantCode: "M0001", coveringTests: ["T.M"] },
+          { mutantCode: "M0002", coveringTests: [] },
+        ]),
+        manifest: manifest([entry("M0001"), entry("M0002")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+      }),
+    );
+    expect(e.reason).toBe("no-tests-to-run");
+    expect(e.detail).toContain("0/M0002");
+    expect(e.detail).not.toContain("0/M0001");
+  });
+
+  /** Survivors all covered by `T.M`, planned against the given marks file. */
+  function markedPlan(marks: unknown, entries: readonly MutantManifestEntry[]) {
+    return planVerify({
+      source: source(
+        project(marks),
+        entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
+      ),
+      manifest: manifest(entries),
+      sourceBaseline: [row(50100, "T", "M")],
+      testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+    });
+  }
+
+  test("a reader-marked survivor is skipped and never reaches runNamedMutants", async () => {
+    const marks = {
+      marks: [
+        { key: "hash-M0001|Logic|Post|lethal.negate-conditional|1", reason: "same either way" },
+      ],
+    };
+    const plan = await markedPlan(marks, [entry("M0001"), entry("M0002")]);
+    expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0002"]);
+    expect(plan.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+    expect(plan.skipped[0]?.mark.reason).toBe("same either way");
+
+    const all = await markedPlan(marks, [entry("M0001")]);
+    expect(all.requests).toEqual([]);
+    expect(all.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+  });
+
+  test("equivalenceRisk alone never skips", async () => {
+    // remove-assignment declares equivalenceRisk "value-rewrite"; with no mark it still runs.
+    const plan = await markedPlan(undefined, [
+      entry("M0001", { operatorName: "lethal.remove-assignment" }),
+    ]);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
+  });
+
+  test("a trigger mutant's mark matches by triggerName", async () => {
+    const plan = await markedPlan(
+      { marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }] },
+      [entry("M0001", { procedureName: "", triggerName: "OnInsert" })],
+    );
+    expect(plan.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+    expect(plan.requests).toEqual([]);
+  });
+
+  test("a malformed marks file is thrown, never read as no marks", async () => {
+    const e = await markedPlan("{not json", [entry("M0001")]).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(EquivalenceMarksError);
   });
 });
