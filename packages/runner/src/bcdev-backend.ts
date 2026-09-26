@@ -8,11 +8,12 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { AppMethodIndex, objectTypeName } from "./app-package";
-import { ArtifactPrepareError, DeploymentError } from "./artifact";
+import { ArtifactPrepareError, DeploymentError, InstalledArtifactError } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  BoundArtifact,
   CoverageEntry,
   CoverageMap,
   CoverageMode,
@@ -31,7 +32,8 @@ import { describeThrown } from "./describe-error";
 import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
-import { type LineMap, buildLineMap } from "./line-map";
+import { type LineMap, buildLineMap, lineMapFromSources } from "./line-map";
+import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
 import type {
@@ -40,6 +42,11 @@ import type {
   RunMutantTransport,
 } from "./run-mutant-transport";
 import { NO_RESULT_FOR_METHOD } from "./stale-test-app";
+import {
+  compileTestApp as compileTestAppOf,
+  publishTestApp as publishTestAppOf,
+} from "./test-app-publish";
+import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 
 export interface BcDevConfig {
   readonly mcpCommand: readonly string[]; // e.g. ["bun", "x", "bc-dev-mcp"] — argv to spawn
@@ -589,6 +596,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
   }
 
+  /** `indexArtifact` over the in-memory copy `loadInstalledArtifact` verified; reads no file. */
+  private async indexInstalled(artifact: BoundArtifact): Promise<void> {
+    this.methodIndex = AppMethodIndex.fromAppBytes(artifact.appBytes);
+    if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
+      this.lineMap = await lineMapFromSources(
+        artifact.alSources,
+        this.methodIndex.declaredObjects(),
+      );
+      this.coverageObjectIdFilter = coverageObjectIdFilterFromText(
+        artifact.appJsonText,
+        join(artifact.instrumentedDir, "app.json"),
+      );
+    } else {
+      this.lineMap = undefined;
+      this.coverageObjectIdFilter = undefined;
+    }
+  }
+
   async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
@@ -658,6 +683,47 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   /**
+   * C02-04b: bind this backend to an artifact that is ALREADY installed, with no compile and no
+   * publish. The same readiness and identity checks `deploy()` runs, in the same order, then the
+   * same coverage index and transport binding. Nothing is bound unless the registry reports
+   * exactly this artifact: `mismatch` and `unavailable` both throw (unavailable fails closed).
+   */
+  async attach(artifact: BoundArtifact): Promise<void> {
+    // Unbind first, so a refused attach leaves NO transport, not the previous artifact's.
+    this.runMutantTransport = undefined;
+    const deployment = this.deployment;
+    if (deployment === undefined) {
+      throw new InstalledArtifactError(
+        "unsupported",
+        "BcDevMcpBackend: no BcDevDeployment configured, so there is no verifier to attach with",
+      );
+    }
+    await deployment.harnessVerifier.verify();
+    const verification = await deployment.verifier.verify({
+      appId: artifact.appId,
+      artifactId: artifact.artifactId,
+    });
+    if (verification.status === "mismatch") {
+      throw new InstalledArtifactError(
+        "mismatch",
+        `expected artifact ${artifact.artifactId}, server reports ${verification.reported}`,
+      );
+    }
+    if (verification.status === "unavailable") {
+      throw new InstalledArtifactError("unavailable", verification.detail);
+    }
+    try {
+      await this.indexInstalled(artifact);
+    } catch (err) {
+      throw new InstalledArtifactError(
+        "local-copy-unreadable",
+        `indexing ${artifact.appPath}: ${describeThrown(err)}`,
+      );
+    }
+    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
+  }
+
+  /**
    * Bisection's compile-only seam (Task 7b, spec §8/§10): compile the candidate and throw on a
    * compiler rejection, exactly like `deploy()`'s prepare+compile phase — but stop there. No
    * publish, no verify, no `recordArtifact`, and critically no `this.methodIndex`
@@ -693,6 +759,36 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } finally {
       await rm(staged, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /**
+   * C02-05: compile a test project against an installed guarded build. Local only: alc, no
+   * server call. A thin hand-off: the module does the staging/compile work, this only supplies
+   * the backend's own compiler and control symbol.
+   */
+  async compileTestApp(testDir: string, target: BoundArtifact): Promise<CompiledTestApp> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    return compileTestAppOf({
+      testDir,
+      target,
+      compiler: deployment.compiler,
+      controlSymbolPath: this.cfg.controlSymbolPath,
+    });
+  }
+
+  /**
+   * C02-05: publish it inside the lease fence and verify it by the server's own bytes. Another
+   * thin hand-off: the module decides the outcome, this only supplies the backend's own
+   * deployer and its existing `fetchPublishedAppPackage` read-back (R139 check 2).
+   */
+  async publishTestApp(fence: LeaseFence, app: CompiledTestApp): Promise<PublishedTestApp> {
+    const deployment = this.deployment;
+    if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
+    return publishTestAppOf(fence, app, {
+      publisher: deployment.deployer,
+      readPublished: (k) => this.fetchPublishedAppPackage(k),
+    });
   }
 
   async activate(mutantId: string | null): Promise<void> {
@@ -1212,9 +1308,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
  */
 async function coverageObjectIdFilterOf(instrumentedDir: string): Promise<string> {
   const appJsonPath = join(instrumentedDir, "app.json");
+  let text: string;
+  try {
+    text = await readFile(appJsonPath, "utf8");
+  } catch (err) {
+    throw new ArtifactPrepareError(
+      `cannot read ${appJsonPath} for the fenced-coverage object filter: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return coverageObjectIdFilterFromText(text, appJsonPath);
+}
+
+/** `coverageObjectIdFilterOf` over `app.json` text already read; `appJsonPath` names it in errors. */
+function coverageObjectIdFilterFromText(text: string, appJsonPath: string): string {
   let manifest: Record<string, unknown>;
   try {
-    manifest = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    manifest = JSON.parse(text) as Record<string, unknown>;
   } catch (err) {
     throw new ArtifactPrepareError(
       `cannot read ${appJsonPath} for the fenced-coverage object filter: ${err instanceof Error ? err.message : String(err)}`,

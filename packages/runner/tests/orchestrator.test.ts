@@ -1,17 +1,23 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "../src/artifact";
+import {
+  AlcCompileError,
+  ArtifactPrepareError,
+  DeploymentError,
+  InstalledArtifactError,
+} from "../src/artifact";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  BoundArtifact,
   ExecutionBackend,
   RunManyOpts,
   RunManyResult,
@@ -19,6 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { hashPackage } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
@@ -39,6 +46,7 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { NamedMutantError } from "../src/named-mutants";
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
@@ -51,13 +59,16 @@ import {
   narrowFilesToSubset,
   noGreenBaselineNote,
   operatorTiers,
+  runNamedMutants,
   runOnce,
   runSession,
 } from "../src/orchestrator";
 import type {
+  LeaseFence,
   LeaseSessionConfig,
   LeaseTimers,
   MutationSetResult,
+  NamedMutantsConfig,
   SessionConfig,
 } from "../src/orchestrator";
 import { recordPublishOutcome } from "../src/publish-ceiling";
@@ -69,8 +80,10 @@ import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
+import { type CompiledTestApp, TestAppError, publishTestApp } from "../src/test-app-publish";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -3123,6 +3136,8 @@ class PhaseBackend implements ExecutionBackend {
       readonly onPublish?: (attempt: number) => void;
       /** What MutationControl_Identity reports; defaults to echoing the compiled artifact. */
       readonly reportedIdentity?: string;
+      /** C02-04b: write the bytes `sha256` is the hash of to `appPath`, so the file is real. */
+      readonly writeApp?: boolean;
     } = {},
   ) {}
   private publishAttempts = 0;
@@ -3144,6 +3159,9 @@ class PhaseBackend implements ExecutionBackend {
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
     this.lastCompiledVersion = appManifest.version;
+    if (this.opts.writeApp === true) {
+      await Bun.write(join(dir, "phase-fake.app"), mutantManifest.artifactId);
+    }
     return {
       artifactId: mutantManifest.artifactId,
       appId: appManifest.id,
@@ -3319,6 +3337,21 @@ describe("runSession — Layer 5A deployment identity", () => {
       /app\.json version/,
     );
     expect(backend.calls).not.toContain("compile");
+    store.close();
+  });
+
+  // C02-04b Task 6: the trusted record's manifest hash is of the object the compiler was GIVEN,
+  // which PhaseBackend.returned holds independently of anything the orchestrator wrote.
+  test("step 3d records the hash of the manifest the compiler was given", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const expected = Bun.SHA256.hash(JSON.stringify(returned.mutantManifest), "hex");
+    expect(store.trustedArtifactRecord(run.id, 0)?.manifestSha256).toBe(expected);
     store.close();
   });
 
@@ -9868,5 +9901,784 @@ describe("GH-24: per-mutant reach", () => {
       expect(row.reachGrain).toBeUndefined();
       expect(reachOf(row)).toEqual({});
     }
+  });
+});
+
+// ----------------------------------------------------------------------------
+// C02-04b Task 8: `runNamedMutants`, the lease-scoped no-deploy verdict primitive. The fixture
+// publishes a real batch through `runSession` (C02-02's `PhaseBackend`, writing a real `.app`),
+// then runs the named mutants against a fake that can only `attach`, never deploy.
+// ----------------------------------------------------------------------------
+
+const NAMED_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure RedAtBaseline()
+    begin
+    end;
+}
+`;
+
+/**
+ * Attach-only fake. `attach` runs the REAL `DeploymentVerifier` against a scripted registry read,
+ * so a mismatch is refused by the production comparison. Baseline: `RedAtBaseline` fails with
+ * "boom-red", everything else passes. Mutant runs: `killer` fails, `strand` comes back
+ * `deadline-exceeded` + `in-flight-unknown`, everything else passes; each attests `observedAny`.
+ */
+class NamedFake implements ExecutionBackend {
+  /** Every artifact `attach` was handed, in call order. */
+  readonly attached: BoundArtifact[] = [];
+  private active: string | null = null;
+  private manySeq = 0;
+  constructor(
+    private readonly o: {
+      readonly serverReports?: string;
+      readonly strand?: string;
+      readonly killer?: string;
+      readonly observedAny?: boolean;
+    },
+  ) {}
+  capabilities() {
+    return PHASE_CAPS;
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "named" };
+  }
+  async deploy(): Promise<CompiledArtifact | null> {
+    throw new Error("NamedFake: runNamedMutants must never deploy the target");
+  }
+  async compileCheck(): Promise<void> {
+    throw new Error("NamedFake: runNamedMutants must never compile the target");
+  }
+  async attach(a: BoundArtifact): Promise<void> {
+    this.attached.push(a);
+    const reported = this.o.serverReports ?? a.artifactId;
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ value: reported }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    const v = await new DeploymentVerifier(PHASE_VERIFIER_CFG, fetchFn).verify(a);
+    if (v.status === "mismatch") {
+      throw new InstalledArtifactError("mismatch", `server reports ${v.reported}`);
+    }
+    if (v.status === "unavailable") throw new InstalledArtifactError("unavailable", v.detail);
+  }
+  async activate(id: string | null): Promise<void> {
+    this.active = id;
+  }
+  async run(ref: TestMethodRef, _o: RunOpts): Promise<TestVerdict> {
+    const m = this.active;
+    if (m === null) {
+      return ref.method === "RedAtBaseline"
+        ? { ref, outcome: "fail", durationMs: 5, failureMessage: "boom-red" }
+        : { ref, outcome: "pass", durationMs: 5 };
+    }
+    if (m === this.o.strand) {
+      return { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
+    }
+    const attestation = { observedAny: this.o.observedAny ?? true, identityMismatch: false };
+    return m === (this.o.killer ?? "M0001")
+      ? { ref, outcome: "fail", durationMs: 5, failureMessage: `killed by ${m}`, attestation }
+      : { ref, outcome: "pass", durationMs: 5, attestation };
+  }
+  async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+    this.manySeq += 1;
+    const fencedOp = { attemptId: `n${this.manySeq}`, opSeq: 100 + this.manySeq };
+    const verdicts: TestVerdict[] = [];
+    for (const [i, m] of opts.methods.entries()) {
+      const v = await this.run(m.ref, { coverage: "none", timeoutMs: m.budgetMs });
+      if (v.operation === "in-flight-unknown") {
+        return { kind: "call", verdict: v, methodIndex: i + 1, fencedOp };
+      }
+      verdicts.push(v);
+      if (v.outcome !== "pass") {
+        return {
+          kind: "verdicts",
+          endedBy: "failure",
+          ranCount: verdicts.length,
+          verdicts,
+          durationMs: 5,
+          fencedOp,
+        };
+      }
+    }
+    return {
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: verdicts.length,
+      verdicts,
+      durationMs: 5,
+      fencedOp,
+    };
+  }
+}
+
+/** `NamedFake` plus the `setLease` an authoritative lease session binds. */
+class LeaseNamedFake extends NamedFake {
+  setLease(_l: Lease): void {}
+}
+
+const OVER = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+const RED = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "RedAtBaseline" };
+
+async function installedFixture(
+  o: {
+    readonly serverReports?: string;
+    readonly strand?: string;
+    readonly killer?: string;
+    readonly observedAny?: boolean;
+    /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
+    readonly lease?: boolean;
+  } = {},
+) {
+  const dirs = await makeProject(NAMED_TESTS_AL);
+  await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+  const store = new ResultsStore(":memory:");
+  const phase = new PhaseBackend({ writeApp: true });
+  await runSession({ backend: phase, store, ...dirs, selectorIds });
+  const [compiled] = phase.returned;
+  if (compiled === undefined) throw new Error("installedFixture: the setup run published nothing");
+  const fromRunId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+  const installed = {
+    fromRunId,
+    batchIndex: 0,
+    appPath: compiled.appPath,
+    instrumentedDir: join(dirs.instrumentedDir, `run-${fromRunId}-batch-0`),
+  };
+  const runId = store.createRun({
+    projectPath: dirs.projectDir,
+    backend: "named-mutants-test",
+    appVersion: "0.0.0.0",
+  });
+  const trace: Trace = [];
+  const withLease = o.lease !== false;
+  const client = new FakeLeaseClient(trace as string[]);
+  const inner = withLease ? new LeaseNamedFake(o) : new NamedFake(o);
+  const cfg: NamedMutantsConfig = {
+    backend: recording(inner, trace, "b"),
+    store,
+    runId,
+    installed,
+    requests: [{ mutantId: "M0001", methods: [OVER] }],
+    emit: [traceEvents(trace)],
+    ...(withLease ? { lease: leaseCfg(client).lease } : {}),
+  };
+  return { cfg, trace, store, client, installed, inner };
+}
+
+async function rewriteManifestKeepingId(
+  dir: string,
+  f: (m: { artifactId: string; mutants: unknown[] }) => unknown,
+): Promise<void> {
+  const path = join(dir, "mutant-manifest.json");
+  await Bun.write(path, JSON.stringify(f(JSON.parse(await readFile(path, "utf8")))));
+}
+
+const calls = (t: Trace) => t.filter((x) => typeof x === "object" && x !== null && "call" in x);
+const rowCount = (s: ResultsStore, table: string, runId: number) =>
+  (s.db.query(`SELECT COUNT(*) AS n FROM ${table} WHERE run_id = ?`).get(runId) as { n: number }).n;
+const allRows = (s: ResultsStore, table: string) =>
+  (s.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+describe("C02-04b: runNamedMutants", () => {
+  test("runNamedMutants: request mistakes are refused before any backend call", async () => {
+    const fx = await installedFixture();
+    for (const requests of [
+      [],
+      [{ mutantId: "M0001", methods: [] }],
+      [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0001", methods: [OVER] },
+      ],
+      [{ mutantId: "M0099", methods: [OVER] }],
+    ]) {
+      await expect(runNamedMutants({ ...fx.cfg, requests })).rejects.toBeInstanceOf(
+        NamedMutantError,
+      );
+    }
+    expect(calls(fx.trace)).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
+  });
+
+  // Review r1 fix 1: verdicts written under a finished run, or under the source run itself, land
+  // in history `priorSurvivorKeys` reads, so its survivors would join the skip list.
+  test("runNamedMutants refuses a runId with no run row before any backend call", async () => {
+    const fx = await installedFixture();
+    const err = await runNamedMutants({ ...fx.cfg, runId: 9999 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/run 9999 does not exist/);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants refuses a finished run before any backend call", async () => {
+    const fx = await installedFixture();
+    fx.store.finishRun(fx.cfg.runId, { batchCount: 0, baselineGreen: true });
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/is finished/);
+    expect(calls(fx.trace)).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
+  });
+
+  test("runNamedMutants refuses the source run as its runId, even unfinished, before any backend call", async () => {
+    const fx = await installedFixture();
+    // Unfinish the source run, so only the same-run check can refuse it.
+    fx.store.db
+      .query("UPDATE runs SET finished_at = NULL WHERE id = ?")
+      .run(fx.installed.fromRunId);
+    const err = await runNamedMutants({ ...fx.cfg, runId: fx.installed.fromRunId }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/the run that published/);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  // Review r1 fix 2: the local copy is read ONCE, in the preflight, and what was hashed there is
+  // what attach indexes. A file rewritten afterwards cannot reach the index.
+  test("runNamedMutants: a local file changed after the preflight cannot change what attach indexes", async () => {
+    const fx = await installedFixture();
+    const record = fx.store.trustedArtifactRecord(fx.installed.fromRunId, 0);
+    if (record === null) throw new Error("fixture recorded no artifact");
+    const alPath = join(fx.installed.instrumentedDir, "SandboxLogic.Codeunit.al");
+    const alBefore = await readFile(alPath, "utf8");
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: async (fence) => {
+        await fence.publish(async () => {
+          await Bun.write(fx.installed.appPath, "tampered after the preflight");
+          await Bun.write(alPath, "// tampered after the preflight");
+        });
+      },
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(fx.inner.attached).toHaveLength(2);
+    for (const a of fx.inner.attached) {
+      expect(Bun.SHA256.hash(a.appBytes, "hex")).toBe(record.sha256);
+      expect(a.alSources.find((x) => x.path === "SandboxLogic.Codeunit.al")?.text).toBe(alBefore);
+    }
+    // Prove the tamper itself ran, so a no-op fence.publish couldn't make this pass vacuously:
+    // the files on disk now differ from what the preflight read and from the trusted record.
+    const appAfterBytes = await readFile(fx.installed.appPath);
+    expect(Bun.SHA256.hash(appAfterBytes, "hex")).not.toBe(record.sha256);
+    const alAfter = await readFile(alPath, "utf8");
+    expect(alAfter).not.toBe(alBefore);
+  });
+
+  test("runNamedMutants refuses an unreadable AL source before any backend call", async () => {
+    const fx = await installedFixture();
+    // A directory named like a source: listed as an .al file, and reading it fails.
+    await mkdir(join(fx.installed.instrumentedDir, "Unreadable.Codeunit.al"));
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("local-copy-unreadable");
+    expect((err as InstalledArtifactError).detail).toContain(fx.installed.instrumentedDir);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  // Review r1 fix 3: a malformed trusted record is a typed refusal before any server call.
+  test("runNamedMutants refuses a record with no run app id before any backend call", async () => {
+    const fx = await installedFixture();
+    fx.store.db.query("UPDATE runs SET app_id = NULL WHERE id = ?").run(fx.installed.fromRunId);
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("no-record");
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants refuses a record whose artifactId is not 32 lowercase hex before any backend call", async () => {
+    const fx = await installedFixture();
+    // The manifest and the record agree on the bad id, so only the format check can refuse it.
+    let rewritten = "";
+    await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => {
+      const next = { ...m, artifactId: m.artifactId.toUpperCase() };
+      rewritten = JSON.stringify(next);
+      return next;
+    });
+    const upper = (JSON.parse(rewritten) as { artifactId: string }).artifactId;
+    fx.store.db
+      .query(
+        "UPDATE batch_artifacts SET artifact_id = ?, manifest_sha256 = ? WHERE run_id = ? AND batch_index = 0",
+      )
+      .run(upper, Bun.SHA256.hash(rewritten, "hex"), fx.installed.fromRunId);
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("no-record");
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants: a same-id wrong manifest is refused before any backend call", async () => {
+    const fx = await installedFixture();
+    await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => ({
+      ...m,
+      mutants: m.mutants.slice(1),
+    }));
+    await expect(
+      runNamedMutants({ ...fx.cfg, requests: [{ mutantId: "M0002", methods: [OVER] }] }),
+    ).rejects.toMatchObject({ reason: "manifest-differs" });
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants: a wrong installed artifact throws at the preflight attach and runs nothing", async () => {
+    const fx = await installedFixture({ serverReports: "b".repeat(32) });
+    let hookRan = false;
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: async () => {
+        hookRan = true;
+      },
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("mismatch");
+    // Refused at the PREFLIGHT attach, before the hook could change anything on the server.
+    expect(hookRan).toBe(false);
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string; id?: string | null };
+      return x.call === "run" || x.call === "runMany" || (x.call === "activate" && x.id !== null);
+    });
+    // Teardown's activate(null) is allowed; any mutant activation or run is not.
+    expect(work).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
+    expect(rowCount(fx.store, "test_results", fx.cfg.runId)).toBe(0);
+    expect(fx.client.releaseCalls).toBe(1);
+  });
+
+  test("runNamedMutants: a hang quarantines, and every request still gets exactly one outcome", async () => {
+    // M0001 killed by OVER; M0002's run: deadline-exceeded + in-flight-unknown; M0003 never reached.
+    const dir = freshTmpDir();
+    const fx = await installedFixture({ strand: "M0002" });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      quarantineDir: dir,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      requests: ["M0001", "M0002", "M0003"].map((mutantId) => ({ mutantId, methods: [OVER] })),
+    });
+    expect(res.outcomes.map((o) => [o.mutant.mutantId, o.verdict])).toEqual([
+      ["M0001", "killed"],
+      ["M0002", "error"],
+      ["M0003", "error"],
+    ]);
+    expect(res.outcomes[1]?.cause).toBeDefined();
+    expect(res.outcomes[2]?.failureNote).toMatch(/^not run: /);
+    expect(res.quarantined).toContain("in-flight-unknown");
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).not.toBeNull();
+  });
+
+  test("runNamedMutants: a red baseline method is never run against its mutant", async () => {
+    const fx = await installedFixture();
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [RED] },
+        { mutantId: "M0002", methods: [RED, OVER] },
+      ],
+    });
+    expect(res.outcomes[0]?.verdict).toBe("error");
+    expect(res.outcomes[0]?.failureNote).toContain("boom-red");
+    // qualifiedTestName's format (orchestrator.ts): `${codeunitName}.${method}`.
+    expect(res.outcomes[1]?.coveringTests).toEqual([`${OVER.codeunitName}.${OVER.method}`]);
+    // Everything after the FIRST mutant activation is the mutant phase.
+    const tr = calls(fx.trace) as Array<{
+      call: string;
+      id?: string | null;
+      method?: string;
+      methods?: Array<[string, number]>;
+    }>;
+    const firstMutant = tr.findIndex((c) => c.call === "activate" && typeof c.id === "string");
+    expect(firstMutant).toBeGreaterThan(0);
+    const mutantRuns = tr
+      .slice(firstMutant)
+      .filter((c) => c.call === "run" || c.call === "runMany");
+    expect(mutantRuns.length).toBeGreaterThan(0);
+    const named = mutantRuns.flatMap((c) =>
+      c.call === "run" ? [c.method] : (c.methods ?? []).map((m) => m[0]),
+    );
+    expect(named).not.toContain("RedAtBaseline");
+    // It DID run at baseline.
+    const ranAtBaseline = tr
+      .slice(0, firstMutant)
+      .some((c) => c.call === "run" && c.method === "RedAtBaseline");
+    expect(ranAtBaseline).toBe(true);
+    expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0001" });
+  });
+
+  test("runNamedMutants: inLease without a lease is refused, never run unfenced", async () => {
+    // A non-lease-bindable fake, so no lease is required and the session would otherwise proceed.
+    const fx = await installedFixture({ lease: false });
+    let hookRan = false;
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: async () => {
+          hookRan = true;
+        },
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toBeInstanceOf(NamedMutantError);
+    expect(hookRan).toBe(false);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants never deploys the target", async () => {
+    const fx = await installedFixture();
+    const artifactsBefore = allRows(fx.store, "batch_artifacts");
+    const publishesBefore = allRows(fx.store, "publish_outcomes");
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(allRows(fx.store, "batch_artifacts")).toBe(artifactsBefore);
+    expect(allRows(fx.store, "publish_outcomes")).toBe(publishesBefore);
+    const names = calls(fx.trace).map((c) => (c as { call: string }).call);
+    expect(names).not.toContain("deploy");
+    expect(names).not.toContain("compileCheck");
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; phase?: string } }).event]
+        : [],
+    );
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.some((e) => e.type === "batch-published")).toBe(false);
+    expect(events.some((e) => e.type === "phase-entered" && e.phase === "deploy")).toBe(false);
+  });
+
+  test("runNamedMutants: the order is lease, preflight attach, inLease, rebind, attach, baseline, covering, release", async () => {
+    const fx = await installedFixture();
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: async (fence) => {
+        await fence.publish(async () => {
+          fx.trace.push({ call: "test-app" });
+        });
+      },
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    const label = (x: unknown): string[] => {
+      if (typeof x === "string") return x === "status" || x === "renew" ? [] : [x];
+      if (typeof x !== "object" || x === null || !("call" in x)) return [];
+      const c = x as {
+        call: string;
+        id?: string | null;
+        method?: string;
+        lastCompletedOpSeq?: number;
+      };
+      if (c.call === "status") return [];
+      if (c.call === "activate") return [`activate ${String(c.id)}`];
+      if (c.call === "run") return [`run ${c.method ?? "?"}`];
+      if (c.call === "setLease") return [`setLease ${String(c.lastCompletedOpSeq)}`];
+      return [c.call];
+    };
+    // The acquire grant's lastCompletedOpSeq is 7 (aLease), so the fenced publish is op 8 and the
+    // rebind after it must re-seed the backend at 8.
+    expect(fx.trace.flatMap(label)).toEqual([
+      "acquire",
+      "setLease 7",
+      "attach",
+      "beginPublish",
+      "test-app",
+      "endPublish",
+      "setLease 8",
+      "attach",
+      "activate null",
+      "run OverBudgetDetected",
+      "activate M0001",
+      "runMany",
+      // The kill's confirmation: the killing test re-run unmutated (runMutantsOnBackend).
+      "activate null",
+      "run OverBudgetDetected",
+      // Teardown, then the op-gated release.
+      "activate null",
+      "release",
+    ]);
+  });
+
+  test("runNamedMutants: an unattested batch returns error outcomes, never the raw survivors", async () => {
+    const fx = await installedFixture({ observedAny: false, killer: "none" });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: ["M0001", "M0002", "M0003"].map((mutantId) => ({ mutantId, methods: [OVER] })),
+    });
+    expect(res.outcomes).toHaveLength(3);
+    for (const o of res.outcomes) {
+      expect(o.verdict).toBe("error");
+      expect(o.failureNote).toContain("unattested artifact");
+    }
+    expect(res.quarantined).toContain("unattested artifact");
+  });
+});
+// C02-05 Task 6. COMPILED, deps, NEW, OLD and DOWNGRADE are copied from test-app-publish.test.ts:
+// importing that file would register its tests a second time.
+const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests
+const testsPkg = (version: string, extra: Record<string, string> = {}) =>
+  buildFakeAppWithEntries({
+    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${TESTS_ID}" Name="LethAL Sandbox Tests" Publisher="LethAL" Version="${version}" /></Package>`,
+    ...extra,
+  });
+const NEW = testsPkg("1.0.0.2", { "src/T.al": "new" });
+const OLD = testsPkg("1.0.0.2", { "src/T.al": "old" });
+const COMPILED: CompiledTestApp = {
+  appPath: "C:/out/x-testapp.app",
+  sha256: hashPackage(NEW),
+  appId: TESTS_ID,
+  name: "LethAL Sandbox Tests",
+  publisher: "LethAL",
+  version: "1.0.0.2",
+  compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+};
+const DOWNGRADE =
+  "altool publishapp failed (exit 1):\nCannot install the extension LethAL Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.0.9 was already installed.";
+function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) {
+  const queue = [...reads];
+  return {
+    publisher: {
+      publish: async (a: { sha256: string }) => {
+        log.push(`publish ${a.sha256.slice(0, 8)}`);
+        if (publishFails !== undefined) throw new Error(publishFails);
+      },
+    },
+    readPublished: async () => {
+      log.push("read");
+      return queue.shift();
+    },
+  };
+}
+
+describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
+  // ONE log PER TEST: a shared log lets an earlier test's publish leak into a later assertion.
+  const inLease =
+    (tlog: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) =>
+    async (fence: LeaseFence) => {
+      await publishTestApp(fence, COMPILED, deps(tlog, reads, publishFails));
+    };
+  const attaches = (t: Trace) =>
+    calls(t).filter((c) => (c as { call: string }).call === "attach").length;
+  async function fixture(o: { serverReports?: string } = {}) {
+    const fx = await installedFixture(o);
+    const quarantineDir = freshTmpDir();
+    const cfg: NamedMutantsConfig = {
+      ...fx.cfg,
+      quarantineDir,
+      resourceServer: "http://cronus28",
+      resourceServerInstance: "BC",
+    };
+    const quarantine = () => new QuarantineStore(quarantineDir).read("http://cronus28|BC");
+    return { ...fx, cfg, quarantine };
+  }
+
+  test("C02-05: a server reporting another target is refused before any test-app publish", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture({ serverReports: "b".repeat(32) });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("mismatch");
+    expect(tlog).toEqual([]); // no read, no publish: the server was not modified
+    expect(fx.client.beginPublishArgs).toEqual([]); // no marker claimed
+    expect(fx.client.releaseCalls).toBe(1);
+  });
+
+  test("C02-05: a verified test-app publish is followed by rebind, attach and the baseline", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["succeeded"]);
+    const tr = calls(fx.trace) as Array<{ call: string; lastCompletedOpSeq?: number }>;
+    const preflight = tr.findIndex((c) => c.call === "attach");
+    const rebind = tr.findIndex(
+      (c) => c.call === "setLease" && c.lastCompletedOpSeq === fx.client.beginPublishArgs[0]?.opSeq,
+    );
+    const postPublish = tr.findIndex((c, i) => i > rebind && c.call === "attach");
+    const firstRun = tr.findIndex((c) => c.call === "run" || c.call === "runMany");
+    expect(preflight).toBeGreaterThan(-1);
+    expect(rebind).toBeGreaterThan(preflight);
+    expect(postPublish).toBeGreaterThan(rebind);
+    expect(firstRun).toBeGreaterThan(postPublish);
+    expect(attaches(fx.trace)).toBe(2);
+  });
+
+  test("C02-05: a confirmed test-app publish failure ends the marker as failed and records no recycle", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [null, OLD], DOWNGRADE),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toMatchObject({ reason: "publish-failed", installedVersion: "1.0.0.9" });
+    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+    expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
+    expect(attaches(fx.trace)).toBe(1); // the preflight only
+  });
+
+  test("C02-05: a plain altool failure with the old package read back keeps the marker", async () => {
+    // Review r1: no BC refusal text, so the old bytes read back once cannot show BC refused. altool
+    // may have lost its response while BC is still applying the publish. Decision 2's
+    // indeterminate row: marker kept (no EndPublish), container-needs-recycle recorded.
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(
+          tlog,
+          [OLD, OLD],
+          "altool publishapp failed (exit 1):\nThe app could not be published.",
+        ),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).toMatchObject({ opKind: "container-needs-recycle" });
+    expect(attaches(fx.trace)).toBe(1); // the preflight only
+  });
+
+  test("C02-05: a failed exit with an unreadable read-back keeps the marker", async () => {
+    // Ruling 1: null is a timeout or a refused connection; it cannot show the publish did not land.
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, null], DOWNGRADE),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-indeterminate" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+    expect(attaches(fx.trace)).toBe(1);
+  });
+
+  test("C02-05: an indeterminate test-app publish leaves the marker and records container-needs-recycle", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, OLD]),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-indeterminate" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+  });
+
+  test("C02-05: an anomalous publish carrying BC's downgrade text is not treated as terminal", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, NEW], DOWNGRADE),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-anomalous" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+  });
+
+  // A refused BeginPublish throws LeaseUnavailableError out of runNamedMutants: the stop is the
+  // throw, so no outcome is returned for any request.
+  test("C02-05: a refused BeginPublish stops the work: no altool, no post-publish attach, no baseline or mutant run", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.beginPublishOutcome = { begun: false, alreadyCompleted: false };
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, NEW]),
+        requests: [
+          { mutantId: "M0001", methods: [OVER] },
+          { mutantId: "M0002", methods: [OVER] },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    expect(tlog).toEqual(["read"]); // the pre-fence resident read only: no altool spawn
+    expect(attaches(fx.trace)).toBe(1); // the preflight ran; the post-publish attach did not
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string; id?: string | null };
+      return (
+        x.call === "run" ||
+        x.call === "runMany" ||
+        (x.call === "activate" && typeof x.id === "string")
+      );
+    });
+    expect(work).toEqual([]); // no baseline, no mutant
+    expect(fx.client.endPublishArgs).toEqual([]);
+    // KNOWN-WRONG, pre-existing LeaseSession behaviour, recorded here and NOT endorsed: every
+    // refused BeginPublish is read as lease loss, so a lease that may still be ours is never
+    // released and is held to its ttl. Tracked as R249 (docs/roadmap/R249.md). When R249 lands,
+    // this becomes 1.
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("C02-05: a lease lost across the test-app publish runs nothing after it", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.endPublishOutcome = { ended: false };
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+    });
+    expect(res.quarantined).toMatch(/lease-lost/);
+    expect(res.outcomes.map((o) => [o.verdict, o.failureNote?.startsWith("not run: ")])).toEqual([
+      ["error", true],
+      ["error", true],
+    ]);
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string; id?: string | null };
+      return (
+        x.call === "run" ||
+        x.call === "runMany" ||
+        (x.call === "activate" && typeof x.id === "string")
+      );
+    });
+    expect(work).toEqual([]);
+    expect(attaches(fx.trace)).toBe(1); // the preflight ran; the post-publish attach did not
+  });
+
+  test("C02-05: a version-below-resident refusal from inLease throws TestAppError, emits no after-lease-acquired-uncertain, does not latch, and releases the lease", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [testsPkg("1.0.0.5")]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect((err as TestAppError).reason).toBe("version-below-resident");
+    expect(tlog).toEqual(["read"]); // refused before the fence: no publish
+    expect(fx.client.beginPublishArgs).toEqual([]);
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; code?: string } }).event]
+        : [],
+    );
+    expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
+    expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
   });
 });

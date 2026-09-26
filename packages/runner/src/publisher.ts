@@ -38,7 +38,7 @@ export const defaultSpawn = bunSpawn;
  * the contract rather than one implementation.
  */
 export interface AppPublisher {
-  publish(artifact: CompiledArtifact): Promise<void>;
+  publish(artifact: Pick<CompiledArtifact, "appPath" | "sha256">): Promise<void>;
 }
 
 /**
@@ -84,7 +84,7 @@ export class ContainerDeployer implements AppPublisher {
     private readonly io: ContainerDeployerIo,
   ) {}
 
-  async publish(artifact: CompiledArtifact): Promise<void> {
+  async publish(artifact: Pick<CompiledArtifact, "appPath" | "sha256">): Promise<void> {
     // Everything below is serialized per physical container (see publish-serializer.ts): BC's
     // altool replace protocol races itself under genuine concurrent publishes to one container
     // (verified live, fixtures/README.md's "Deployment identity (Layer 5A)" section, Probe B,

@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { AlSource } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
 export interface TestMethodRef {
@@ -238,6 +239,29 @@ export type RunManyResult =
       readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
     };
 
+/**
+ * C02-04b: an installed artifact whose local .app and manifest matched the trusted store record
+ * (`loadInstalledArtifact`). Identity comes from that record, never from the caller.
+ *
+ * The local copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
+ * (the bytes whose hash matched) and the sources below, never the files again, so a file changed
+ * after the check cannot reach the index. `appPath` and `instrumentedDir` are for messages only.
+ */
+export interface BoundArtifact {
+  /** `runs.app_id` of the run that published it (every batch of a run publishes one app id). */
+  readonly appId: string;
+  readonly artifactId: string;
+  readonly sha256: string;
+  readonly appPath: string;
+  readonly instrumentedDir: string;
+  /** The .app bytes whose SHA-256 is `sha256`. */
+  readonly appBytes: Uint8Array;
+  /** `<instrumentedDir>/app.json`, verbatim. */
+  readonly appJsonText: string;
+  /** Every `.al` under `instrumentedDir` (`readAlSources`). */
+  readonly alSources: readonly AlSource[];
+}
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   status(): Promise<BackendStatus>;
@@ -265,6 +289,14 @@ export interface ExecutionBackend {
    * coverage per test and keeps the single-method call.
    */
   runMany?(opts: RunManyOpts): Promise<RunManyResult>;
+  /**
+   * C02-04b, OPTIONAL: bind to an ALREADY-installed artifact. Never compiles or publishes.
+   * Throws `InstalledArtifactError` when the server does not report that artifact (and may throw
+   * `HarnessVerificationError` from its readiness check); on any throw it binds nothing, not even
+   * a transport an earlier `attach` or `deploy` had bound. Absent on a backend that cannot
+   * (al-runner, which has nothing installed).
+   */
+  attach?(artifact: BoundArtifact): Promise<void>;
   /**
    * R139 check 2, OPTIONAL: the bytes of the package this backend's server currently holds for
    * `app`.

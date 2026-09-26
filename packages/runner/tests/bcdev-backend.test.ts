@@ -11,10 +11,12 @@ import {
   AlcCompileError,
   ArtifactCompiler,
   DeploymentError,
+  InstalledArtifactError,
   defaultArtifactIo,
 } from "../src/artifact";
-import type { ArtifactIo, CompileInput } from "../src/artifact";
-import type { TestMethodRef } from "../src/backend";
+import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact";
+import type { BoundArtifact, TestMethodRef } from "../src/backend";
+import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend, PublishFailedError } from "../src/bcdev-backend";
 import type { BcDevConfig, BcDevDeployment } from "../src/bcdev-backend";
 import { DeploymentVerifier } from "../src/deployment-verifier";
@@ -22,10 +24,11 @@ import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
+import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
-import { buildFakeApp } from "./helpers/fake-app";
+import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -354,7 +357,12 @@ async function makeBackendWithDeploy(
   symbolReference: unknown,
   instrumentedDir?: string,
   runMutantTransportFactory?: (targetAppId: string, artifactId: string) => RunMutantTransport,
-): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
+): Promise<{
+  backend: BcDevMcpBackend;
+  artifact: CompiledArtifact;
+  deployDir: string;
+  cleanup: () => Promise<void>;
+}> {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
     content: [{ type: "text", text: JSON.stringify(await runHandler(args)) }],
@@ -379,15 +387,195 @@ async function makeBackendWithDeploy(
     makeDeployment(outputDir, symbolReference),
     runMutantTransportFactory,
   );
-  await backend.deploy(deployDir);
+  const artifact = await backend.deploy(deployDir);
   return {
     backend,
+    artifact,
+    deployDir,
     cleanup: async () => {
       await rmStaged(deployDir);
       await rm(outputDir, { recursive: true, force: true });
     },
   };
 }
+
+// C02-04b Task 6: `attach` binds a FRESH backend to an artifact a first backend already
+// installed. It must never compile or publish, and it must bind nothing unless the server's
+// registry names the same artifact.
+describe("BcDevMcpBackend.attach", () => {
+  const SYMBOLS = {
+    Codeunits: [{ Id: 70000, Name: "Some Codeunit", Methods: [{ Id: 222, Name: "Post" }] }],
+  };
+  const hubRun = () => ({
+    results: [
+      {
+        codeunitId: 79100,
+        method: "PostingUpdatesTotal",
+        status: "passed",
+        durationMs: 1,
+        output: "",
+      },
+    ],
+    coverage: [
+      {
+        testObjectId: 79100,
+        testMethodId: 111,
+        coveredProcedures: [{ objectType: 5, objectId: 70000, methodId: 222 }],
+      },
+    ],
+  });
+
+  /** A second backend over the first one's output: records argv and every factory call. */
+  async function attachSetup(opts: { reportedIdentity?: string; fetch500?: boolean }) {
+    const first = await makeBackendWithDeploy(hubRun, SYMBOLS);
+    const argv: string[][] = [];
+    const factoryCalls: Array<[string, string]> = [];
+    const spawn: SpawnFn = async (a) => {
+      argv.push([...a]);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-attach-"));
+    const base = makeDeployment(outputDir, SYMBOLS, {
+      spawn,
+      reportedIdentity: opts.reportedIdentity ?? TEST_ARTIFACT_ID,
+    });
+    const deployment: BcDevDeployment = opts.fetch500
+      ? {
+          ...base,
+          verifier: new DeploymentVerifier(
+            { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+            (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch,
+          ),
+        }
+      : base;
+    const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+    server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
+      content: [{ type: "text", text: JSON.stringify(hubRun()) }],
+    }));
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    void server.connect(serverTransport);
+    const backend = new BcDevMcpBackend(
+      { ...baseConfig(), ...(await controlStaging(outputDir)) },
+      () => clientTransport,
+      deployment,
+      (appId, artifactId) => {
+        factoryCalls.push([appId, artifactId]);
+        return {} as RunMutantTransport;
+      },
+    );
+    const bound = {
+      appId: first.artifact.appId,
+      artifactId: first.artifact.artifactId,
+      sha256: first.artifact.sha256,
+      appPath: first.artifact.appPath,
+      instrumentedDir: first.deployDir,
+      // What `loadInstalledArtifact` hands over: the bytes it hashed. "procedure" coverage reads
+      // no source, so the source fields are empty here.
+      appBytes: new Uint8Array(await readFile(first.artifact.appPath)),
+      appJsonText: "{}",
+      alSources: [],
+    };
+    return {
+      backend,
+      bound,
+      argv,
+      factoryCalls,
+      cleanup: async () => {
+        await first.cleanup();
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("attach binds the transport to the installed artifact without compiling or publishing", async () => {
+    const s = await attachSetup({});
+    try {
+      await s.backend.attach(s.bound);
+      expect(s.factoryCalls).toEqual([[TEST_APP_ID, TEST_ARTIFACT_ID]]);
+      expect(s.argv.some((a) => a.some((x) => x.includes("alc")))).toBe(false);
+      expect(s.argv.some((a) => a.includes("publishapp"))).toBe(false);
+      const v = await s.backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries[0]?.procedure).toBe("Post");
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("attach refuses a server that reports another artifact, and binds no transport", async () => {
+    const s = await attachSetup({ reportedIdentity: "b".repeat(32) });
+    try {
+      const err = await s.backend.attach(s.bound).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InstalledArtifactError);
+      expect(err).toMatchObject({ reason: "mismatch" });
+      expect((err as InstalledArtifactError).detail).toContain("b".repeat(32));
+      expect(s.factoryCalls).toEqual([]);
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("attach fails closed when the server cannot say", async () => {
+    const s = await attachSetup({ fetch500: true });
+    try {
+      await expect(s.backend.attach(s.bound)).rejects.toMatchObject({ reason: "unavailable" });
+      expect(s.factoryCalls).toEqual([]);
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  // Review r1 fix 2: attach indexes the bytes the preflight verified and never re-reads appPath,
+  // so a file changed or removed after the preflight cannot reach the index.
+  test("attach indexes the verified in-memory bytes, never the file at appPath", async () => {
+    const s = await attachSetup({});
+    try {
+      await s.backend.attach({ ...s.bound, appPath: join(s.bound.instrumentedDir, "missing.app") });
+      expect(s.factoryCalls).toEqual([[TEST_APP_ID, TEST_ARTIFACT_ID]]);
+      const v = await s.backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries[0]?.procedure).toBe("Post");
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("attach refuses bytes it cannot index as local-copy-unreadable, after the registry agreed", async () => {
+    const s = await attachSetup({});
+    try {
+      const err = await s.backend
+        .attach({ ...s.bound, appBytes: new Uint8Array([1, 2, 3]) })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({ reason: "local-copy-unreadable" });
+      expect(s.factoryCalls).toEqual([]);
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("a refused attach unbinds the transport an earlier attach had bound", async () => {
+    const s = await attachSetup({});
+    const transportOf = () =>
+      (s.backend as unknown as { runMutantTransport?: unknown }).runMutantTransport;
+    try {
+      await s.backend.attach(s.bound);
+      expect(transportOf()).toBeDefined();
+      const err = await s.backend
+        .attach({ ...s.bound, appBytes: new Uint8Array([1, 2, 3]) })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({ reason: "local-copy-unreadable" });
+      expect(transportOf()).toBeUndefined();
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("InstalledArtifactError is not a DeploymentError or an AlcCompileError", () => {
+    const err = new InstalledArtifactError("mismatch", "x");
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(DeploymentError);
+    expect(err).not.toBeInstanceOf(AlcCompileError);
+    expect(Object.getPrototypeOf(InstalledArtifactError.prototype)).toBe(Error.prototype);
+  });
+});
 
 describe("BcDevMcpBackend.run", () => {
   test("maps a passing result and resolves procedure coverage from the compiled app", async () => {
@@ -1378,6 +1566,216 @@ describe("BcDevMcpBackend.compileCheck", () => {
       await rm(dirB, { recursive: true, force: true });
       await rm(outputDir, { recursive: true, force: true });
     }
+  });
+});
+
+// C02-05 Task 5: `compileTestApp`/`publishTestApp` are thin hand-offs to the module in
+// test-app-publish.ts (Tasks 3-4, tested exhaustively there). These tests only pin the WIRING:
+// the backend's own compiler/control symbol reach compileTestApp, and its own deployer/
+// fetchPublishedAppPackage reach publishTestApp, never the MCP client, never a server call for
+// compileTestApp.
+describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
+  const TESTS_APP_ID = "22222222-2222-2222-2222-222222222222";
+  const navxManifest = (id: string, name: string, version: string) =>
+    `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${id}" Name="${name}" Publisher="LethAL" Version="${version}" /></Package>`;
+
+  function fakeTarget(dir: string): BoundArtifact {
+    return {
+      appId: TEST_APP_ID,
+      artifactId: TEST_ARTIFACT_ID,
+      sha256: "b".repeat(64),
+      appPath: join(dir, "bound.app"),
+      instrumentedDir: dir,
+      appBytes: new TextEncoder().encode("fake-bound-app-bytes"),
+      appJsonText: "{}",
+      alSources: [],
+    };
+  }
+
+  test("compileTestApp uses the backend's own compiler and control symbol, and calls no server", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compiletestapp-"));
+    try {
+      await Bun.write(
+        join(dir, "app.json"),
+        JSON.stringify({
+          id: TESTS_APP_ID,
+          name: "LethAL Sandbox Tests",
+          publisher: "LethAL",
+          version: "1.0.0.2",
+        }),
+      );
+      // compileTestApp parses the control symbol's own manifest identity (readAppIdentity), so
+      // unlike controlStaging()'s plain-string fixture (deploy()/compileCheck() only `cp` it) this
+      // must be a real, parseable package.
+      const controlSymbolPath = join(dir, "lethal-control.app");
+      await Bun.write(
+        controlSymbolPath,
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": navxManifest(CONTROL_APP_ID, "LethAL Control", "1.0.0.18"),
+        }),
+      );
+
+      const calls: string[][] = [];
+      let cacheFiles: Buffer[] = [];
+      const recordingSpawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const cache = argv
+          .find((a) => a.startsWith("/packagecachepath:"))
+          ?.slice("/packagecachepath:".length);
+        if (cache !== undefined) {
+          cacheFiles = await Promise.all(
+            (await readdir(cache)).map((f) => readFile(join(cache, f))),
+          );
+        }
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+
+      // A real (fake) MCP server whose tool handler must never be reached.
+      const runHandler = mock((_args: unknown) => ({ results: [] }));
+      const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
+      server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
+        content: [{ type: "text", text: JSON.stringify(runHandler(args)) }],
+      }));
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      void server.connect(serverTransport);
+
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          controlSymbolPath,
+          packageCachePath: join(dir, ".alpackages-unused"),
+        },
+        () => clientTransport,
+        makeDeployment(dir, { Codeunits: [] }, { spawn: recordingSpawn }),
+      );
+      const fetchSpy = spyOn(backend, "fetchPublishedAppPackage");
+
+      const app = await backend.compileTestApp(dir, fakeTarget(dir));
+
+      expect(calls).toHaveLength(1); // alc only: no altool, no MCP call, no server read
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      const controlBytes = await readFile(controlSymbolPath);
+      expect(cacheFiles.some((b) => b.equals(controlBytes))).toBe(true);
+      expect(runHandler).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(app.appId).toBe(TESTS_APP_ID);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("publishTestApp publishes with the backend's deployer and reads back from dev/packages", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-publishtestapp-"));
+    try {
+      const OLD = buildFakeAppWithEntries({
+        "NavxManifest.xml": navxManifest(TESTS_APP_ID, "LethAL Sandbox Tests", "1.0.0.2"),
+      });
+      const NEW = buildFakeAppWithEntries({
+        "NavxManifest.xml": navxManifest(TESTS_APP_ID, "LethAL Sandbox Tests", "1.0.0.2"),
+        "src/T.al": "new",
+      });
+      const appPath = join(dir, "compiled-testapp.app");
+      await Bun.write(appPath, NEW);
+      const app = {
+        appPath,
+        sha256: hashPackage(NEW),
+        appId: TESTS_APP_ID,
+        name: "LethAL Sandbox Tests",
+        publisher: "LethAL",
+        version: "1.0.0.2",
+        compiledAgainst: { artifactId: TEST_ARTIFACT_ID, sha256: "b".repeat(64) },
+      };
+
+      const calls: string[][] = [];
+      const recordingSpawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          env: { BC_DEV_USER: "u", BC_DEV_PASSWORD: "p" },
+          ...UNUSED_STAGING_CFG,
+        },
+        undefined,
+        makeDeployment(dir, {}, { spawn: recordingSpawn }),
+      );
+
+      // publishTestApp's wrapper calls `this.fetchPublishedAppPackage(k)` with no fetchFn override
+      // (production always uses bcFetch), so to observe the URLs it actually builds, the spy
+      // forwards to the REAL implementation with a recording fetchFn substituted for bcFetch.
+      const seenUrls: string[] = [];
+      const queue: Array<Uint8Array | undefined> = [new Uint8Array(OLD), new Uint8Array(NEW)];
+      const original = backend.fetchPublishedAppPackage.bind(backend);
+      spyOn(backend, "fetchPublishedAppPackage").mockImplementation(
+        async (a: { readonly publisher: string; readonly name: string }) =>
+          original(a, async (url) => {
+            seenUrls.push(String(url));
+            const next = queue.shift();
+            return next === undefined
+              ? new Response("", { status: 404 })
+              : new Response(next, { status: 200 });
+          }),
+      );
+
+      const log: string[] = [];
+      const fence: LeaseFence = {
+        publish: async (run) => {
+          log.push("begin");
+          const r = await run();
+          log.push("end");
+          return r;
+        },
+      };
+
+      const published = await backend.publishTestApp(fence, app);
+
+      expect(published.sha256).toBe(hashPackage(NEW));
+      expect(calls).toHaveLength(1); // altool only: publishTestApp never compiles
+      expect(calls[0]?.[0]).toBe("C:/fake/altool.exe");
+      expect(calls[0]?.[2]).toBe(appPath);
+      expect(seenUrls).toHaveLength(2);
+      for (const url of seenUrls) expect(url).toContain("appName=LethAL%20Sandbox%20Tests");
+      expect(log).toEqual(["begin", "end"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a backend with no deployment refuses both", async () => {
+    const backend = new BcDevMcpBackend({
+      mcpCommand: ["unused"],
+      project: "/al",
+      server: "http://bc",
+      serverInstance: "BC",
+      ...UNUSED_STAGING_CFG,
+    });
+    await expect(backend.compileTestApp("C:/unused", fakeTarget("C:/unused"))).rejects.toThrow(
+      "BcDevMcpBackend: no compiler/deployer/verifier configured",
+    );
+    const fence: LeaseFence = { publish: async (run) => run() };
+    const app = {
+      appPath: "C:/unused/x.app",
+      sha256: "0".repeat(64),
+      appId: "x",
+      name: "x",
+      publisher: "x",
+      version: "1.0.0.0",
+      compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+    };
+    await expect(backend.publishTestApp(fence, app)).rejects.toThrow(
+      "BcDevMcpBackend: no compiler/deployer/verifier configured",
+    );
   });
 });
 

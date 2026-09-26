@@ -75,7 +75,10 @@ export class DeploymentVerifier {
     private readonly fetchFn: FetchFn = bcFetch,
   ) {}
 
-  async verify(expected: CompiledArtifact): Promise<DeploymentVerification> {
+  // Reads only these two fields, so `attach` can verify an installed artifact it never compiled.
+  async verify(
+    expected: Pick<CompiledArtifact, "artifactId" | "appId">,
+  ): Promise<DeploymentVerification> {
     // Reject a malformed expected id LOUDLY (throw) rather than silently running it through the
     // comparison below — a placeholder id happening to equal itself must never read as "verified".
     if (!isValidArtifactId(expected.artifactId)) {

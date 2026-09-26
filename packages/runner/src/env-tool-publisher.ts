@@ -27,7 +27,7 @@ export class EnvToolPublisher implements AppPublisher {
     private readonly io: EnvToolPublisherIo,
   ) {}
 
-  async publish(artifact: CompiledArtifact): Promise<void> {
+  async publish(artifact: Pick<CompiledArtifact, "appPath" | "sha256">): Promise<void> {
     await serializePublish(this.ctx.serializerKey, async () => {
       const bytes = await this.io.readArtifact(artifact.appPath);
       const actual = Bun.SHA256.hash(bytes, "hex");
