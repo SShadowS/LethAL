@@ -10738,7 +10738,10 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     const fx = await fixture();
     const err = await runNamedMutants({
       ...fx.cfg,
-      inLease: inLease(tlog, [null, OLD], DOWNGRADE),
+      // R248 decision 12: the pre-fence read must be a readable resident package (at the local
+      // app.json's own version) to reach BC's in-fence downgrade refusal; a pre-fence `null` is
+      // now resident-unreadable, tested below.
+      inLease: inLease(tlog, [OLD, OLD], DOWNGRADE),
       requests: [{ mutantId: "M0001", methods: [OVER] }],
     }).catch((e) => e);
     expect(err).toMatchObject({ reason: "publish-failed", installedVersion: "1.0.0.9" });
@@ -10896,6 +10899,22 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
         : [],
     );
     expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
+    expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
+  });
+
+  test("C02-06: an unreadable resident test app releases the lease with no recycle record", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [null]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect((err as TestAppError).reason).toBe("resident-unreadable");
+    expect(tlog).toEqual(["read"]); // refused before the fence: no publish
+    expect(fx.client.beginPublishArgs).toEqual([]);
     expect(await fx.quarantine()).toBeNull();
     expect(fx.client.releaseCalls).toBe(1);
   });
