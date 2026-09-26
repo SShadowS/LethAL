@@ -8,11 +8,15 @@ import type { CallTrace } from "./fetch-trace";
 // Imported WITH its extension: R186's importer check matches by basename, so a bare "./probe" is read as
 // importing the unguarded `scripts/r126-server-probe/probe.ts`. This probe.ts is guarded by import.meta.main.
 import {
+  CONFIG_PATH,
+  PROJECT_DIR,
+  TEST_DIR,
   containerFromServer,
   containerScript,
   decideActionEnded,
   decideExit,
   gatherEvidence,
+  guardThenConnect,
   parseContainerEvidence,
   preflight,
   sessionControl,
@@ -365,5 +369,76 @@ describe("writeCaptures (orchestrator ruling A: partial and full TestPage answer
     ]);
     expect(recs[0]?.error).toBeDefined();
     expect(recs[0]?.path).toBeNull();
+  });
+});
+
+describe("the project is this repo's fixture, not the main checkout's", () => {
+  const fwd = (p: string) => p.replaceAll("\\", "/");
+  test("PROJECT_DIR, TEST_DIR and CONFIG_PATH resolve under THIS tree, two levels above the script", () => {
+    const root = fwd(join(import.meta.dir, "..", ".."));
+    expect(fwd(PROJECT_DIR)).toBe(`${root}/fixtures/sandbox-data`);
+    expect(fwd(TEST_DIR)).toBe(`${root}/fixtures/sandbox-data-tests`);
+    expect(fwd(CONFIG_PATH)).toBe(`${root}/fixtures/sandbox-data/lethal.config.local.json`);
+    for (const p of [PROJECT_DIR, TEST_DIR, CONFIG_PATH]) {
+      expect(fwd(p)).not.toContain("U:/Git/LethAL/");
+    }
+  });
+});
+
+describe("the lease guard: no network call unless coord shows lane bugs holding the configured container", () => {
+  const coord =
+    (stdout: string, code = 0) =>
+    async (_container: string) => ({ code, stdout, stderr: "" });
+  const counting = () => {
+    let calls = 0;
+    const f = async () => {
+      calls++;
+      return "1.0.0.19";
+    };
+    return { f, calls: () => calls };
+  };
+  const bugs = JSON.stringify({ lane: "bugs", attempt: "0001", at: 1 });
+
+  test("holder bugs: proceeds, and only then makes the first network call", async () => {
+    const net = counting();
+    expect(await guardThenConnect("Cronus284", coord(bugs), net.f)).toBe("1.0.0.19");
+    expect(net.calls()).toBe(1);
+  });
+
+  const refusals: Array<[string, ReturnType<typeof coord>, string]> = [
+    ["a null holder", coord("null\n"), "not leased"],
+    [
+      "another lane",
+      coord(JSON.stringify({ lane: "orchestrator", attempt: "0002", at: 1 })),
+      "orchestrator",
+    ],
+    ["coord failing (even with a bugs-looking stdout)", coord(bugs, 1), "coord"],
+    ["garbage output", coord("Error: something"), "coord"],
+  ];
+  for (const [name, c, says] of refusals) {
+    test(`${name}: refuses, naming the container and what it saw, before any network call`, async () => {
+      const net = counting();
+      const err = await guardThenConnect("Cronus284", c, net.f).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(String(err)).toContain("Cronus284");
+      expect(String(err)).toContain(says);
+      expect(net.calls()).toBe(0);
+    });
+  }
+
+  test("coord that cannot even be spawned: refuses", async () => {
+    const net = counting();
+    const spawnFails = async () => {
+      throw new Error("ENOENT deno");
+    };
+    const err = await guardThenConnect("Cronus284", spawnFails, net.f).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(String(err)).toContain("Cronus284");
+    expect(net.calls()).toBe(0);
   });
 });

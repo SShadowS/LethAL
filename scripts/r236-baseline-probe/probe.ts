@@ -10,12 +10,17 @@
  *
  * LETHAL_R236_PROBE=1 bun scripts/r236-baseline-probe/probe.ts --arm <label> --sessions <n>
  *   --out <file.ndjson> [--segment <n>] [--control-app <path.app>] [--no-trace]
+ *   [--coord-script <coord.ts>] [--coord-root <dir>]
+ *
+ * Before any network call it REFUSES (exit 2) unless `coord holder <container>` shows lane "bugs"
+ * holding the container named by the config's `bcdev.server`.
  *
  * Exit codes: 0 all sessions ran; 2 harness fault; 3 run the recovery procedure (the gate after an
  * unproven hit failed, or a record could not be written to --out); 4 a session threw (for example
  * the lease acquire refused), also recovery.
  *
- * Paths are absolute so the same file runs from a worktree of an older client (R236 Task 4 step 5).
+ * Paths resolve from the script's own location, so a copy in a worktree of an older client (R236 Task 4
+ * step 5) uses THAT worktree's fixture and gitignored config.
  * The runner imports are kept to APIs that exist unchanged at 7b7fff3.
  */
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -44,10 +49,16 @@ import { RunMutantTransport } from "../../packages/runner/src/run-mutant-transpo
 import { ResultsStore } from "../../packages/runner/src/store";
 import { type CallTrace, type TraceHooks, traceFetch } from "./fetch-trace";
 
-const PROJECT_DIR = "U:/Git/LethAL/fixtures/sandbox-data";
-const TEST_DIR = "U:/Git/LethAL/fixtures/sandbox-data-tests";
-export const CONFIG_PATH = `${PROJECT_DIR}/lethal.config.local.json`;
-const LAUNCH_LOCAL_PATH = `${PROJECT_DIR}/.vscode/launch.local.json`;
+/**
+ * THIS tree's fixture, two levels above the script, never a hard-coded checkout: an absolute
+ * `U:/Git/LethAL/...` made a worktree's probe read the MAIN checkout's config (and container). A copy
+ * in the 7b7fff3 worktree resolves to that worktree's fixture, which needs its own gitignored config.
+ */
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+export const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
+export const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
+export const CONFIG_PATH = join(PROJECT_DIR, "lethal.config.local.json");
+const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 /** The fixture's one `return-value` mutant, covered only by the TestPage test: no mutant runs. */
 const ONLY = ["src/DataValueSource.Codeunit.al"];
@@ -66,6 +77,70 @@ export function containerFromServer(server: string | undefined): string {
   return host;
 }
 const HIT = "baseline test in-flight-unknown running PageActionComputesNonZero";
+/** Defaults for the coord lease check; both are CLI flags (`--coord-script`, `--coord-root`). */
+export const COORD_SCRIPT_DEFAULT = "U:/Git/agent-coord/coord.ts";
+export const COORD_ROOT_DEFAULT = "H:\\lethal-coord";
+/** The coord lane that must hold the configured container. */
+const OUR_LANE = "bugs";
+
+export type CoordRun = (
+  container: string,
+) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+export function coordHolderRunner(script: string, root: string): CoordRun {
+  return async (container) => {
+    const proc = Bun.spawn(["deno", "run", "--allow-all", script, "holder", container], {
+      env: { ...process.env, CG_COORD_ROOT: root },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  };
+}
+
+/**
+ * Orchestrator ruling: before ANY network call, `coord holder <container>` must show lane "bugs".
+ * A null holder, another lane, a coord that fails or cannot be spawned, or output that is not the
+ * expected JSON all REFUSE (never assume). Only after the check passes does `connect` run, so the
+ * first network call can never precede it. The configured container is the one checked: an earlier
+ * run read Cronus28 without its lease because the config came from the wrong checkout.
+ */
+export async function guardThenConnect<T>(
+  container: string,
+  coord: CoordRun,
+  connect: () => Promise<T>,
+): Promise<T> {
+  let seen: string;
+  try {
+    const r = await coord(container);
+    if (r.code !== 0) {
+      throw new Error(`coord holder exited ${r.code}: ${r.stderr.trim() || r.stdout.trim()}`);
+    }
+    const holder: unknown = JSON.parse(r.stdout.trim());
+    if (holder === null) {
+      throw new Error(`${container} is not leased (coord holder returned null)`);
+    }
+    const lane = (holder as { lane?: unknown }).lane;
+    if (typeof lane !== "string") throw new Error(`coord holder gave no lane: ${r.stdout.trim()}`);
+    seen = lane;
+  } catch (err) {
+    throw new Error(
+      `refusing to touch ${container}: cannot confirm lane "${OUR_LANE}" holds it (coord: ${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (seen !== OUR_LANE) {
+    throw new Error(
+      `refusing to touch ${container}: coord shows it held by lane "${seen}", not "${OUR_LANE}"`,
+    );
+  }
+  return await connect();
+}
+
 const OTHER_BASELINE_IN_FLIGHT =
   /baseline test in-flight-unknown running (?!PageActionComputesNonZero)/;
 /** A marker read must never hang the probe on a stuck server. */
@@ -136,6 +211,8 @@ interface SessionRecord {
   readonly scratchDir: string;
   /** The container the evidence reads targeted, from `bcdev.server`. */
   readonly container: string;
+  readonly projectDir: string;
+  readonly server: string;
   /** Ruling A: the TestPage call's answer bytes (partial on a hit, full on a clean session). */
   readonly answers: readonly AnswerFile[];
 }
@@ -700,6 +777,8 @@ async function main(): Promise<void> {
       segment: { type: "string", default: "1" },
       "control-app": { type: "string" },
       "no-trace": { type: "boolean", default: false },
+      "coord-script": { type: "string", default: COORD_SCRIPT_DEFAULT },
+      "coord-root": { type: "string", default: COORD_ROOT_DEFAULT },
     },
   });
   const arm = values.arm;
@@ -728,7 +807,23 @@ async function main(): Promise<void> {
   const configFile = JSON.parse(await readFile(CONFIG_PATH, "utf8")) as LethalConfigFile;
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const container = containerFromServer(bcdev.server);
-  console.log(`container: ${container} (from bcdev.server ${bcdev.server})`);
+  console.log(
+    `projectDir: ${PROJECT_DIR}; config: ${CONFIG_PATH}; server: ${bcdev.server}; container: ${container}`,
+  );
+  // Lease guard: nothing below may reach the network before this passes.
+  const guardedVersion = await guardThenConnect(
+    container,
+    coordHolderRunner(values["coord-script"], values["coord-root"]),
+    () =>
+      new HarnessVerifier({
+        baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
+        company: bcdev.company,
+        username: bcdev.username,
+        password: bcdev.password,
+        ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
+      }).fetchControlVersion(),
+  );
+  console.log(`lease guard passed: lane bugs holds ${container}; control ${guardedVersion}`);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths)
     throw new HarnessFault(
@@ -940,6 +1035,8 @@ async function main(): Promise<void> {
       stopReason,
       scratchDir,
       container,
+      projectDir: PROJECT_DIR,
+      server: bcdev.server,
       answers: writeCaptures(out, `${arm}-seg${segment}-${index}`, captures),
     };
     const written = writeRecord(out, record);

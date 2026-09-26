@@ -24,6 +24,10 @@
  *
  * LETHAL_R236_PROBE=1 bun scripts/r236-baseline-probe/calibrate.ts --out <file.ndjson>
  *   [--rounds <n>=5] [--interval-ms <ms>=10000] [--recent-minutes <m>=10]
+ *   [--coord-script <coord.ts>] [--coord-root <dir>]
+ *
+ * Like the probe, it refuses (exit 2) before any network call unless coord shows lane "bugs" holding
+ * the configured container.
  *
  * --recent-minutes: pooling is judged only on ops that finished within this window. Before any probe
  * session the newest finished op is usually far older (calibration 2: about 90 minutes), so pooling
@@ -43,7 +47,17 @@ import type { LethalConfigFile } from "../../packages/runner/src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
 // With the extension: R186's importer check matches by basename (see probe.test.ts).
-import { CONFIG_PATH, TENANT_SQL_SETUP_PS, containerFromServer, runPwsh } from "./probe.ts";
+import {
+  CONFIG_PATH,
+  COORD_ROOT_DEFAULT,
+  COORD_SCRIPT_DEFAULT,
+  PROJECT_DIR,
+  TENANT_SQL_SETUP_PS,
+  containerFromServer,
+  coordHolderRunner,
+  guardThenConnect,
+  runPwsh,
+} from "./probe.ts";
 
 export type Verdict = "sound" | "not sound" | "not determinable";
 export type Pooling = "pooled" | "not pooled" | "not determinable";
@@ -344,6 +358,8 @@ async function main(): Promise<void> {
       rounds: { type: "string", default: "5" },
       "interval-ms": { type: "string", default: "10000" },
       "recent-minutes": { type: "string", default: "10" },
+      "coord-script": { type: "string", default: COORD_SCRIPT_DEFAULT },
+      "coord-root": { type: "string", default: COORD_ROOT_DEFAULT },
     },
   });
   const rounds = Number(values.rounds);
@@ -371,7 +387,17 @@ async function main(): Promise<void> {
   const harness = new HarnessVerifier(odataCfg);
   const tenant = bcdev.tenant ?? "default";
   const container = containerFromServer(bcdev.server);
-  console.log(`container: ${container} (from bcdev.server ${bcdev.server})`);
+  console.log(
+    `projectDir: ${PROJECT_DIR}; config: ${CONFIG_PATH}; server: ${bcdev.server}; container: ${container}`,
+  );
+  const where = { container, projectDir: PROJECT_DIR, server: bcdev.server };
+  // Lease guard: the burst and the container read below both need it first.
+  const guardedVersion = await guardThenConnect(
+    container,
+    coordHolderRunner(values["coord-script"], values["coord-root"]),
+    () => harness.fetchControlVersion(),
+  );
+  console.log(`lease guard passed: lane bugs holds ${container}; control ${guardedVersion}`);
   const opts = { recentMs, tolMs: 5_000 };
   const judged: RoundVerdicts[] = [];
   for (let round = 1; round <= rounds; round++) {
@@ -416,7 +442,7 @@ async function main(): Promise<void> {
     };
     appendFileSync(
       out,
-      `${JSON.stringify({ kind: "round", container, round, ...data, verdicts, observed, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
+      `${JSON.stringify({ kind: "round", ...where, round, ...data, verdicts, observed, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
     );
     if (verdicts.pooling === "not determinable" && observed.newestFinishedAgeMin !== null) {
       console.log(
@@ -429,7 +455,7 @@ async function main(): Promise<void> {
   const summary = aggregate(judged);
   appendFileSync(
     out,
-    `${JSON.stringify({ kind: "summary", container, rounds, recentMs, ...summary })}\n`,
+    `${JSON.stringify({ kind: "summary", ...where, rounds, recentMs, ...summary })}\n`,
   );
   console.log(`summary: ${JSON.stringify(summary)}`);
   process.exit(0);
