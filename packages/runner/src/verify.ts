@@ -223,15 +223,17 @@ const PER_ID_ORDER: readonly VerifyRefusal[] = [
  * Decision 3. Resolves the request inside the NAMED artifact only, never by recency. Store only:
  * never touches a file or a server. A per-id refusal names every offending id, not only the first.
  */
-export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
-  // parseVerifyRequest refuses this too; a caller building the request directly must not get a
-  // source with no targets, which planVerify could only answer as "every target was skipped".
-  if (req.ids.length === 0) {
-    throw new VerifyError("malformed-request", "the request names no mutant");
-  }
+/**
+ * The store's record of one artifact id, or `unknown-artifact` when there is none or the store
+ * holds it twice. `lethal verify` reads the source run's project path from it before any config.
+ */
+export function artifactRecordOf(
+  store: ResultsStore,
+  artifactId: string,
+): NonNullable<ReturnType<ResultsStore["artifactRecordById"]>> {
   let rec: ReturnType<ResultsStore["artifactRecordById"]>;
   try {
-    rec = store.artifactRecordById(req.artifactId);
+    rec = store.artifactRecordById(artifactId);
   } catch (e) {
     if (e instanceof DuplicateArtifactRecordError) {
       throw new VerifyError(
@@ -244,9 +246,19 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
   if (rec === null) {
     throw new VerifyError(
       "unknown-artifact",
-      `the store records no artifact ${req.artifactId}; copy the id from the run's report (artifacts[].artifactId)`,
+      `the store records no artifact ${artifactId}; copy the id from the run's report (artifacts[].artifactId)`,
     );
   }
+  return rec;
+}
+
+export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
+  // parseVerifyRequest refuses this too; a caller building the request directly must not get a
+  // source with no targets, which planVerify could only answer as "every target was skipped".
+  if (req.ids.length === 0) {
+    throw new VerifyError("malformed-request", "the request names no mutant");
+  }
+  const rec = artifactRecordOf(store, req.artifactId);
   if (rec.batchIndex !== rec.highestBatchIndex) {
     throw new VerifyError(
       "batch-not-installed",
@@ -894,24 +906,36 @@ export async function runVerify(
       timings: timings(),
     };
   } catch (err) {
-    const r = verifyRefusalOf(err);
-    if (r === undefined) throw err;
-    const out =
-      r.kind === "quarantined"
-        ? { quarantined: r.detail }
-        : { refused: { reason: r.reason, detail: r.detail } };
-    const exitCode = verifyExitCode({ ...out, results: [], newTests: [] });
-    return {
-      ...header(),
-      ok: false,
-      exitCode,
-      newTests: [],
-      results: [],
-      counts: NO_COUNTS,
-      ...out,
-      timings: timings(),
-    };
+    const out = refusalOutput(err, timings());
+    if (out === undefined) throw err;
+    return { ...header(), ...out };
   }
+}
+
+/**
+ * The output for a typed refusal or quarantine caught before anything was measured: `results: []`
+ * always. `undefined` for any other error, which the caller rethrows (exit 1).
+ */
+export function refusalOutput(
+  err: unknown,
+  timings: VerifyOutput["timings"],
+): VerifyOutput | undefined {
+  const r = verifyRefusalOf(err);
+  if (r === undefined) return undefined;
+  const out =
+    r.kind === "quarantined"
+      ? { quarantined: r.detail }
+      : { refused: { reason: r.reason, detail: r.detail } };
+  return {
+    verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+    ok: false,
+    exitCode: verifyExitCode({ ...out, results: [], newTests: [] }),
+    newTests: [],
+    results: [],
+    counts: NO_COUNTS,
+    ...out,
+    timings,
+  };
 }
 
 type MeasuredPart = Omit<

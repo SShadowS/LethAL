@@ -2,7 +2,7 @@
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   type AppIdRange,
@@ -100,6 +100,15 @@ import { quarantineResourceKey } from "./resource-key";
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
+import {
+  VERIFY_EXIT,
+  VerifyError,
+  type VerifyOutput,
+  artifactRecordOf,
+  parseVerifyRequest,
+  refusalOutput,
+  runVerify,
+} from "./verify";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -603,6 +612,21 @@ export interface ExportCliConfig {
   readonly thresholds: { readonly high: number; readonly low: number };
 }
 
+/**
+ * C02-06 `lethal verify` (plan decision 1): prove, on the build a run left installed, that the
+ * named survivors are killed by the test project as it is now. `--survivors` values are kept raw;
+ * `parseVerifyRequest` splits and checks them, so a malformed id is a JSON refusal (exit 6).
+ */
+export interface VerifyCliConfig {
+  readonly mode: "verify";
+  readonly dbPath: string;
+  readonly artifact: string;
+  readonly testDir: string;
+  readonly survivors: readonly string[];
+  /** Absent means `<project>/lethal.config.json`, the project the store records for the artifact. */
+  readonly configPath?: string;
+}
+
 export interface ExplainCliConfig {
   readonly mode: "explain";
   readonly reportPath: string;
@@ -665,6 +689,7 @@ export type CliConfig =
   | ForceResetLeaseCliConfig
   | DoctorCliConfig
   | ExplainCliConfig
+  | VerifyCliConfig
   | ExportCliConfig
   | CampaignCliConfig
   | InitCliConfig
@@ -681,6 +706,7 @@ const VALID_SUBCOMMANDS = [
   "explain",
   "export",
   "campaign",
+  "verify",
 ] as const;
 
 /** The three `lethal campaign` verbs — see `CampaignCliConfig`. */
@@ -783,6 +809,8 @@ USAGE
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
   lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
   lethal campaign compare  --manifest <path> --stage <name> --report <path>
+  lethal verify            --db <path> --artifact <id> --tests <dir> --survivors <ids>
+                                         [--config <path>]
 
 EXPORT — R178. Projects a finished report into a format a CI system can DISPLAY.
   --format <name>            required, no default. Only 'mutation-elements' today: the Stryker
@@ -987,6 +1015,23 @@ CAMPAIGN — the measurement gates, with 'committed before the run' machine-chec
             missing baseline is refused rather than recorded — that is the whole difference from
             freeze
 
+VERIFY — prove named survivors are now killed, on the build the run left installed (bcdev only)
+  Compiles and publishes the test project once, then runs each named survivor's covering tests
+  plus every test the project gained since the run. Prints one JSON object on stdout
+  (verifySchemaVersion, results, newTests, counts, refused); progress goes to stderr.
+  --db <path>                results database of the run that published the artifact. Required
+  --artifact <id>            the 32-hex artifactId from that run's report. Required, no default:
+                             it names which build the survivor ids belong to
+  --tests <dir>              the test project as it is now. Required
+  --survivors <ids>          <batchIndex>/<mutantCode> ids, comma separated (repeatable). Required
+  --config <path>            default: lethal.config.json in the project the database records.
+                             A config with an envTool section is refused
+  Every other flag is refused, --out included: the JSON always goes to stdout.
+  Exit codes: 0 every survivor killed and every new test stable; 3 quarantined; 4 nothing
+  measured (every survivor error); 5 some survivor survived or errored, or a new test is not
+  stable; 6 refused before measuring (refused.reason says why); 1 error. A new test that already
+  fails with no mutant active makes every survivor an error, so it gives 4, not 5.
+
 OTHER
   -h, --help                 this text
   -V, --version              print the version
@@ -1093,6 +1138,10 @@ export const RUN_FLAGS = {
   json: { type: "boolean", default: false },
   // `lethal init --force`: overwrite an existing config. Shared table, same strict-mode reason.
   force: { type: "boolean", default: false },
+  // C02-06 `lethal verify`: the source artifact and the survivors to prove killed. Owned by
+  // `verify` alone in FLAG_OWNERS. `--survivors` repeats and each value is a comma list.
+  artifact: { type: "string" },
+  survivors: { type: "string", multiple: true },
 } as const;
 
 /**
@@ -1150,7 +1199,26 @@ const FLAG_OWNERS: ReadonlyArray<{
     owners: ["init"],
     instead: "It lets `lethal init` overwrite an existing config.",
   },
+  {
+    flag: "artifact",
+    owners: ["verify"],
+    instead: "It names the artifact whose survivors `lethal verify` proves killed.",
+  },
+  {
+    flag: "survivors",
+    owners: ["verify"],
+    instead: "It names the survivors `lethal verify` proves killed.",
+  },
 ];
+
+/** Plan decision 1: the only flags `lethal verify` reads. Every other one is refused, not ignored. */
+const VERIFY_FLAGS: ReadonlySet<string> = new Set([
+  "db",
+  "artifact",
+  "tests",
+  "survivors",
+  "config",
+]);
 
 /**
  * Refuse any shared flag the given subcommand does not own, rather than ignoring it.
@@ -1278,6 +1346,42 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const subcommand = requireKnownSubcommand(positionals);
 
   refuseFlagsThisSubcommandDoesNotOwn(subcommand, values);
+
+  if (subcommand === "verify") {
+    for (const [flag, given] of Object.entries(values)) {
+      const present = typeof given === "boolean" ? given : given !== undefined;
+      if (present && !VERIFY_FLAGS.has(flag)) {
+        throw new Error(
+          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors and --config. Its JSON goes to stdout.`,
+        );
+      }
+    }
+    const need = (flag: string, v: string | undefined, why: string): string => {
+      if (v === undefined || v === "") throw new Error(`missing required --${flag} (${why})`);
+      return v;
+    };
+    const dbPath = need(
+      "db",
+      values.db,
+      "the results database of the run that published the artifact",
+    );
+    const artifact = need("artifact", values.artifact, "the artifactId from the run's report");
+    const testDir = need("tests", values.tests, "the test project to compile and publish");
+    const survivors = values.survivors ?? [];
+    if (survivors.length === 0) {
+      throw new Error(
+        "missing required --survivors <ids> (<batchIndex>/<mutantCode>, comma separated)",
+      );
+    }
+    return {
+      mode: "verify",
+      dbPath,
+      artifact,
+      testDir,
+      survivors,
+      ...(values.config !== undefined && values.config !== "" ? { configPath: values.config } : {}),
+    };
+  }
 
   if (subcommand === "clear-quarantine") {
     const server = values.server;
@@ -2426,8 +2530,17 @@ export async function resolveEnvToolSession(
   };
 }
 
+/**
+ * C02-06: what `buildBackend`, `leaseSessionFor` and `resourceIdentityFor` read of the parsed
+ * command. `lethal verify` has no `RunCliConfig`; it passes these four instead of faking one.
+ */
+export type BackendInputs = Pick<
+  RunCliConfig,
+  "backendKind" | "projectDir" | "testDir" | "stopHungSessions"
+>;
+
 export async function buildBackend(
-  parsed: RunCliConfig,
+  parsed: BackendInputs,
   configFile: LethalConfigFile,
   scratchDir: string,
   envToolDeploy?: {
@@ -2619,7 +2732,7 @@ export function afterLeaseAcquiredFor(envSession: EnvToolSession | undefined): {
 }
 
 export function leaseSessionFor(
-  parsed: RunCliConfig,
+  parsed: BackendInputs,
   configFile: LethalConfigFile,
 ): Pick<SessionConfig, "lease"> {
   if (parsed.backendKind !== "bcdev") return {};
@@ -2657,7 +2770,7 @@ export function permissionCanaryFor(
 }
 
 export function resourceIdentityFor(
-  parsed: RunCliConfig,
+  parsed: BackendInputs,
   configFile: LethalConfigFile,
 ): Pick<SessionConfig, "resourceServer" | "resourceServerInstance"> {
   if (parsed.backendKind !== "bcdev") return {};
@@ -3410,6 +3523,13 @@ export async function runFromCli(
  * quietly stopped matching the binary is the drift worth a test.
  */
 export const QUARANTINED_EXIT_CODE = 3;
+
+/** C02-06 decision 7: `lethal verify` measured, and some survivor was not killed or some new test
+ *  was not stable. */
+export const VERIFY_NOT_ALL_KILLED_EXIT_CODE = VERIFY_EXIT.notAllKilled;
+
+/** C02-06 decision 7: `lethal verify` refused before measuring; `refused.reason` says why. */
+export const VERIFY_REFUSED_EXIT_CODE = VERIFY_EXIT.refused;
 
 /**
  * R190. Distinct exit code for a run that MEASURED NOTHING: every recorded mutant is an `error`
@@ -4499,6 +4619,122 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
 }
 
 /**
+ * C02-06 `lethal verify`. Prints one `VerifyOutput` as JSON on stdout (progress goes to stderr)
+ * and returns its exit code. The store names the source run's project, whose config is read
+ * unless `--config` names another. bcdev only: an `envTool` config is refused before any backend
+ * is built. A typed refusal before `runVerify` prints the same refusal shape `runVerify` does.
+ */
+export async function verifyFromCli(
+  parsed: VerifyCliConfig,
+  deps: {
+    readonly write?: (text: string) => void;
+    readonly buildBackend?: typeof buildBackend;
+  } = {},
+): Promise<number> {
+  const started = Date.now();
+  const write = deps.write ?? ((t: string) => process.stdout.write(t));
+  const print = (o: VerifyOutput): number => {
+    write(`${JSON.stringify(o, null, 2)}\n`);
+    return o.exitCode;
+  };
+  let store: ResultsStore | undefined;
+  let backend: ExecutionBackend | undefined;
+  try {
+    // Refused before the store is opened: a malformed id needs no database.
+    parseVerifyRequest(parsed.artifact, parsed.survivors);
+    // `new ResultsStore` would create a missing file, and then answer "no such artifact".
+    if (!existsSync(parsed.dbPath)) {
+      throw new VerifyError("unknown-artifact", `there is no results database at ${parsed.dbPath}`);
+    }
+    store = new ResultsStore(parsed.dbPath);
+    const projectDir = resolve(artifactRecordOf(store, parsed.artifact).projectPath);
+    if (!existsSync(projectDir)) {
+      throw new VerifyError(
+        "project-unreadable",
+        `the source run's project directory ${projectDir} does not exist`,
+      );
+    }
+    const configFile = await loadLethalConfigFile(
+      parsed.configPath ?? join(projectDir, "lethal.config.json"),
+    );
+    if (configFile.envTool !== undefined) {
+      throw new VerifyError(
+        "unsupported-config",
+        "the config has an envTool section; lethal verify runs only against a directly configured bcdev container",
+      );
+    }
+    const inputs: BackendInputs = { backendKind: "bcdev", projectDir, testDir: parsed.testDir };
+    // ponytail: the config's selector ids, never the source run's CLI overrides (the store keeps
+    // none). buildBackend only validates them against app.json; the installed build has its own.
+    const selectorIds = resolveSelectorIds({}, validateSelectorIdsConfig(configFile.selectorIds));
+    const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-verify-"));
+    const built = await (deps.buildBackend ?? buildBackend)(
+      inputs,
+      configFile,
+      scratchRoot,
+      undefined,
+      {},
+      selectorIds,
+    );
+    backend = built;
+    if (!(built instanceof BcDevMcpBackend)) {
+      throw new Error(
+        "verifyFromCli: buildBackend returned a non-bcdev backend for a bcdev config",
+      );
+    }
+    const { lease } = leaseSessionFor(inputs, configFile);
+    const { resourceServer, resourceServerInstance } = resourceIdentityFor(inputs, configFile);
+    if (
+      lease === undefined ||
+      resourceServer === undefined ||
+      resourceServerInstance === undefined
+    ) {
+      throw new Error("verifyFromCli: a bcdev config produced no lease or resource identity");
+    }
+    const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
+      heartbeatMs: PROGRESS_HEARTBEAT_MS,
+    });
+    return print(
+      await runVerify(
+        { artifact: parsed.artifact, survivors: parsed.survivors, testDir: parsed.testDir },
+        {
+          store,
+          backend: built,
+          lease,
+          resourceServer,
+          resourceServerInstance,
+          preprocessorSymbols: validatePreprocessorSymbols(configFile.preprocessorSymbols),
+          emit: [progress],
+        },
+      ),
+    );
+  } catch (err) {
+    const out = refusalOutput(err, { totalMs: Date.now() - started });
+    if (out === undefined) throw err;
+    return print(out);
+  } finally {
+    if (store !== undefined) {
+      try {
+        store.close();
+      } catch (err) {
+        console.warn(
+          `[lethal] store.close() failed during cleanup (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (backend instanceof BcDevMcpBackend) {
+      try {
+        await backend.close();
+      } catch (err) {
+        console.warn(
+          `[lethal] backend.close() failed during cleanup (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * `lethal campaign freeze | anchors | compare` — dispatches to the three gates in
  * `campaign-subcommands.ts`, which own every decision. Like `doctorFromCli`, this calls the REAL
  * implementations with no swappable resolver in between: the injectable seams
@@ -4755,6 +4991,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "explain") {
     return await explainFromCli(parsed);
+  }
+  if (parsed.mode === "verify") {
+    return await verifyFromCli(parsed);
   }
   if (parsed.mode === "export") {
     return await exportFromCli(parsed);

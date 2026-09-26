@@ -35,7 +35,7 @@ Two caveats worth reading before you validate against these:
 worse than no schema at all — it calls a correct document invalid, at every consumer that validates.
 
 1. **Shape.** Each schema's leaf paths are asserted equal to the leaves walked out of the TypeScript
-   declaration (`ExplainOutput`, `DoctorJsonOutput`), in both directions. A field added to the type
+   declaration (`ExplainOutput`, `DoctorJsonOutput`, `VerifyOutput`), in both directions. A field added to the type
    with no schema entry fails; a schema property with no field fails.
 2. **Value domains.** Every `enum` is asserted equal to the runtime constant it copies, so a value
    added to `Caveat` or `MutantErrorCause` cannot leave the schema behind. Every `enum` in the
