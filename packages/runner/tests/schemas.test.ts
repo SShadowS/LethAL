@@ -12,7 +12,12 @@ import {
   doctorJson,
 } from "../src/cli";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
-import { EXPLAIN_SCHEMA_VERSION, SURVIVOR_RANKINGS, TOOL_CONDITIONS } from "../src/explain";
+import {
+  ARTIFACT_ID_ABSENCES,
+  EXPLAIN_SCHEMA_VERSION,
+  SURVIVOR_RANKINGS,
+  TOOL_CONDITIONS,
+} from "../src/explain";
 import { assertExplainableReport, explain } from "../src/explain";
 import {
   CAVEAT_INTERPRETATIONS,
@@ -223,6 +228,7 @@ describe("published JSON Schemas (R152)", () => {
         "SurvivorRanking",
         "MutantErrorCause",
         "ToolCondition",
+        "ArtifactIdAbsence",
         'ReportValidity["reliability"]',
       ],
     });
@@ -259,6 +265,9 @@ describe("published JSON Schemas (R152)", () => {
     );
     expect(enumAt(explainSchema, "$.toolConditions[].condition")).toEqual([...TOOL_CONDITIONS]);
     expect(enumAt(explainSchema, "$.survivorSelection.rankedBy")).toEqual([...SURVIVOR_RANKINGS]);
+    expect(enumAt(explainSchema, "$.survivors[].artifactIdAbsent")).toEqual([
+      ...ARTIFACT_ID_ABSENCES,
+    ]);
     expect(enumAt(doctorSchema, "$.notChecked")).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     expect(enumAt(doctorSchema, "$.caveat.kind")).toEqual([...DOCTOR_CAVEAT_KINDS]);
   });
@@ -466,6 +475,33 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       // fields, so an empty root set is correct here and not an omission.
       "stream-v1.schema.json": [],
     });
+  });
+
+  test("the explain survivor row's required set is pinned (C02-01)", () => {
+    // Nested required lists are not covered by the R157 root pin. A new survivor field added to
+    // this list would make the edited v4 schema reject an explain output stored before it.
+    const explainSchema = loadSchema("explain-v4.schema.json");
+    const items = ((explainSchema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
+      required?: string[];
+    };
+    expect([...(items.required ?? [])].sort()).toEqual([
+      "attribution",
+      "codeunitName",
+      "coveringTests",
+      "executionProven",
+      "file",
+      "guardEvidence",
+      "guardInterpretation",
+      "interpretation",
+      "line",
+      "mutantCode",
+      "mutatedText",
+      "operatorName",
+      "originalText",
+      "procedureName",
+      "reach",
+      "reachInterpretation",
+    ]);
   });
 
   test("every line of the committed event stream validates, header and one pinned R196 exception excepted", () => {

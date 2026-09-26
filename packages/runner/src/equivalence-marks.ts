@@ -82,7 +82,7 @@ export interface EquivalenceMarkReport {
 
 /** Verdicts that are consistent with a mutant nothing can kill. `known-survivor` counts: it is a
  *  survival carried from a prior run, not a fresh contradiction of the mark. */
-const SURVIVING_VERDICTS: ReadonlySet<string> = new Set(["survived", "known-survivor"]);
+export const SURVIVING_VERDICTS: ReadonlySet<string> = new Set(["survived", "known-survivor"]);
 
 export class EquivalenceMarksError extends Error {}
 

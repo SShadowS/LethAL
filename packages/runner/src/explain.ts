@@ -280,7 +280,46 @@ export interface ExplainSurvivor {
   readonly guardInterpretation: Interpretation;
   /** `REACH_INTERPRETATIONS[reach]`, by reference. */
   readonly reachInterpretation: Interpretation;
+  /**
+   * C02-01: the batch of THIS run the row was recorded in; for a carried row it is this run's
+   * batch, not the prior run's. Mutant ids restart per batch, so `(batchIndex, mutantCode)` names
+   * a row and `mutantCode` alone does not. Always written by this build; optional in the schema
+   * so an older explain output still validates.
+   */
+  readonly batchIndex?: number;
+  /** C02-01: present on a trigger mutant, whose `procedureName` is `""`. */
+  readonly triggerName?: string;
+  /** C02-01: verbatim from the report row; see `MutantOutcome.procedureStartLine`. */
+  readonly procedureStartLine?: number;
+  /** C02-01: verbatim from the report row; see `MutantOutcome.procedureEndLine`. */
+  readonly procedureEndLine?: number;
+  /** C02-01: the report's `equivalenceRisk`, an open string as the report types it (ruling c).
+   *  Absent: not recorded, never "not equivalent". */
+  readonly equivalenceRisk?: string;
+  /** C02-01: the report's `readerMark`, copied field by field, never spread. */
+  readonly readerMark?: { readonly key: string; readonly reason: string };
+  /**
+   * C02-01: verbatim from the `SessionReport.artifacts[]` entry whose `batchIndex` equals this
+   * row's. It is the artifact THIS run recorded for the row's batch, and nothing more: it is NOT
+   * proof that the verdict came from that binary (a pool worker ran its own copy, and a later
+   * batch replaces an earlier one on the server). Absent exactly when `artifactIdAbsent` is present;
+   * this build writes one of the two on every row. Optional so an older explain output validates.
+   */
+  readonly artifactId?: string;
+  /** C02-01: why `artifactId` is absent. See `ARTIFACT_ID_ABSENCES`. */
+  readonly artifactIdAbsent?: ArtifactIdAbsence;
 }
+
+/** Why a survivor has no `artifactId`. Tokens; consumers branch on the exact value.
+ *  - `carried`: the verdict was carried by `--resume` from a prior run and measured against
+ *    THAT run's artifact, which this report does not name. Wins even when this run recorded an
+ *    artifact for the same batch index.
+ *  - `not-recorded`: the report has no `artifacts` field at all: written before C02-02.
+ *  - `not-published`: the report has `artifacts`, but no entry for this batch: the backend
+ *    returned no artifact for it (al-runner, or a `deploy()` that returned `null`). Other
+ *    batches of the same run may still have one. */
+export const ARTIFACT_ID_ABSENCES = ["carried", "not-recorded", "not-published"] as const;
+export type ArtifactIdAbsence = (typeof ARTIFACT_ID_ABSENCES)[number];
 
 /**
  * One `error`-verdict mutant: recorded, score-excluded, and NOT a verdict about the mutant.
@@ -429,7 +468,8 @@ export const EXPLAIN_CONTRACT: ExplainContract = {
     "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
     "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
     "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
-    "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+    "`entailedNegative`, `note`, `scoreDescribes`, `detail`, `readerMark.reason` or " +
+    "`failureNote`; they may be reworded " +
     "at any time without a version bump. That is safe rather than merely asked-for, because every " +
     "machine-usable atom already appears as a structured field beside the prose that explains it " +
     "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
@@ -504,6 +544,13 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *   - every mutant's `guardObserved`       — a tri-state, one of whose states (`not-observed`) moves
  *                                            a mutant out of the survivor reading entirely
  *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
+ *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup
+ *   - `artifacts` (each `batchIndex` once, `artifactId` a string) : C02-01, the per-batch lookup
+ *   - a `survived` row's `batchIndex`      : C02-01, a required row field copied to the survivor
+ *                                            and the artifact lookup key; a bad one would silently
+ *                                            read as `not-published`
+ *   - every mutant's `readerMark` (an object with string `key` and `reason`) : C02-01, read field
+ *                                            by field; a bad one would throw or project as `{}`
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
  *
  * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
@@ -600,6 +647,26 @@ export function assertExplainableReport(value: unknown): SessionReport {
         mutant.guardObserved,
       );
     }
+    // C02-01: `carried` decides `artifactIdAbsent`, and wins over the batch lookup, so a coerced
+    // `"true"` or `null` would hand a carried verdict this run's artifact or the reverse.
+    if (mutant.carried !== undefined && typeof mutant.carried !== "boolean") {
+      refuse(
+        `${where} has a non-boolean carried, which would decide its artifactId by coercion`,
+        mutant.carried,
+      );
+    }
+    // C02-01: `survivorOf` reads `readerMark.key` and `.reason`. `null` would throw a TypeError
+    // there, and a string would project as `readerMark: {}`, breaking the schema's required keys.
+    const mark = mutant.readerMark;
+    if (
+      mark !== undefined &&
+      (typeof mark !== "object" ||
+        mark === null ||
+        typeof (mark as Record<string, unknown>).key !== "string" ||
+        typeof (mark as Record<string, unknown>).reason !== "string")
+    ) {
+      refuse(`${where} has a readerMark that is not { key: string, reason: string }`, mark);
+    }
     const attribution = mutant.coverageAttribution;
     if (
       attribution !== undefined &&
@@ -621,6 +688,52 @@ export function assertExplainableReport(value: unknown): SessionReport {
     const cause = mutant.cause;
     if (cause !== undefined && (typeof cause !== "string" || !KNOWN_ERROR_CAUSES.has(cause))) {
       refuse(`${where} has an error cause this build cannot interpret`, cause, KNOWN_ERROR_CAUSES);
+    }
+  }
+  // C02-01: each survivor's `artifactId` is looked up here by `batchIndex`. Two entries for one
+  // batch would make that lookup a guess. The id's 32-hex shape is a copied open value and is not
+  // checked.
+  const { artifacts } = record;
+  if (artifacts !== undefined) {
+    if (!Array.isArray(artifacts)) refuse("`artifacts` is present but is not an array", artifacts);
+    const seen = new Set<number>();
+    for (const a of artifacts) {
+      if (typeof a !== "object" || a === null) {
+        refuse("`artifacts` contains a non-object entry", a);
+      }
+      const entry = a as Record<string, unknown>;
+      const { batchIndex } = entry;
+      if (typeof batchIndex !== "number" || !Number.isInteger(batchIndex) || batchIndex < 0) {
+        refuse(
+          "`artifacts` has an entry whose batchIndex is not a non-negative integer",
+          batchIndex,
+        );
+      }
+      if (typeof entry.artifactId !== "string") {
+        refuse("`artifacts` has an entry whose artifactId is not a string", entry.artifactId);
+      }
+      if (seen.has(batchIndex)) {
+        refuse(
+          "`artifacts` names the same batchIndex twice, so its artifact is ambiguous",
+          batchIndex,
+        );
+      }
+      seen.add(batchIndex);
+    }
+  }
+  // A survivor's `batchIndex` is a REQUIRED report-row field: `survivorOf` copies it, and it is the
+  // artifact lookup key. Missing, `"1"` or `1.5` is a malformed report whether or not `artifacts`
+  // exists; with artifacts it would also never match an entry and read as `not-published`, a
+  // confident wrong answer. Every committed report carries it, so every one still projects.
+  for (const m of mutants) {
+    const mutant = m as Record<string, unknown>;
+    if (mutant.verdict !== "survived") continue;
+    const bi = mutant.batchIndex;
+    if (typeof bi !== "number" || !Number.isInteger(bi) || bi < 0) {
+      refuse(
+        `mutant ${JSON.stringify(mutant.mutantCode)} is \`survived\` with a batchIndex that is not a non-negative integer`,
+        bi,
+      );
     }
   }
   // The two session-level branches. `quarantined: null` would pass a bare `!== undefined` test and
@@ -660,7 +773,25 @@ function keyed<K extends string>(
   return found;
 }
 
-function survivorOf(m: MutantOutcome): ExplainSurvivor {
+/**
+ * C02-01: the artifact THIS run recorded for the row's batch, or why there is none. The order is
+ * the rule: `carried` first, because a carried verdict was measured against a prior run's artifact
+ * even when this run published the same batch index. Looked up by the entry's `batchIndex` FIELD,
+ * never by array position. Never throws; `assertExplainableReport` has checked the inputs.
+ */
+function artifactOf(
+  m: MutantOutcome,
+  artifacts: SessionReport["artifacts"],
+): { readonly artifactId: string } | { readonly artifactIdAbsent: ArtifactIdAbsence } {
+  if (m.carried === true) return { artifactIdAbsent: "carried" };
+  if (artifacts === undefined) return { artifactIdAbsent: "not-recorded" };
+  const entry = artifacts.find((a) => a.batchIndex === m.batchIndex);
+  return entry !== undefined
+    ? { artifactId: entry.artifactId }
+    : { artifactIdAbsent: "not-published" };
+}
+
+function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): ExplainSurvivor {
   const attribution = m.coverageAttribution;
   if (attribution === undefined) {
     // Unreachable via `explain` (validated above); kept because this function is where the claim
@@ -688,6 +819,17 @@ function survivorOf(m: MutantOutcome): ExplainSurvivor {
     interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
     guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
     reachInterpretation: keyed(REACH_INTERPRETATIONS, reach, "reach"),
+    // C02-01: copied field by field, never an object spread, so an unexpected extra property on
+    // the report row cannot ride through into the output.
+    batchIndex: m.batchIndex,
+    ...(m.triggerName !== undefined ? { triggerName: m.triggerName } : {}),
+    ...(m.procedureStartLine !== undefined ? { procedureStartLine: m.procedureStartLine } : {}),
+    ...(m.procedureEndLine !== undefined ? { procedureEndLine: m.procedureEndLine } : {}),
+    ...(m.equivalenceRisk !== undefined ? { equivalenceRisk: m.equivalenceRisk } : {}),
+    ...(m.readerMark !== undefined
+      ? { readerMark: { key: m.readerMark.key, reason: m.readerMark.reason } }
+      : {}),
+    ...artifactOf(m, artifacts),
   };
 }
 
@@ -798,7 +940,9 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
       `explain: topSurvivors must be a positive integer, got ${JSON.stringify(topSurvivors)}`,
     );
   }
-  const allSurvivors = validated.mutants.filter((m) => m.verdict === "survived").map(survivorOf);
+  const allSurvivors = validated.mutants
+    .filter((m) => m.verdict === "survived")
+    .map((m) => survivorOf(m, validated.artifacts));
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   return {
