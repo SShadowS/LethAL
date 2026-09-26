@@ -1554,6 +1554,20 @@ export interface MutantOutcome {
    */
   readonly procedureStartLine?: number;
   readonly procedureEndLine?: number;
+  /**
+   * C02-09: a SITE property, carried verbatim from `MutantManifestEntry.gapId` like
+   * `procedureStartLine` — the id of the innermost branch body (`if`/`else`, a loop body, a `case`
+   * arm, or else the enclosing member) that contains this mutant. Absent when the manifest entry
+   * has no gap id (a report written before this field existed).
+   */
+  readonly gapId?: string;
+  /**
+   * C02-09: the gap block's 1-based first and last line, carried verbatim from
+   * `MutantManifestEntry.blockStartLine`/`blockEndLine` like `procedureStartLine`. Absent for the
+   * same reason as `gapId`. Line numbers only, never source text.
+   */
+  readonly blockStartLine?: number;
+  readonly blockEndLine?: number;
   /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
    *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
    *  mutant ids restart per batch and that list's bare `mutantCode`s cannot say which batch
@@ -2119,6 +2133,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.mutant.procedureEndLine !== undefined
         ? { procedureEndLine: o.mutant.procedureEndLine }
         : {}),
+      // C02-09: the gap id and its block's span, another SITE property off the manifest entry.
+      ...(o.mutant.gapId !== undefined ? { gapId: o.mutant.gapId } : {}),
+      ...(o.mutant.blockStartLine !== undefined ? { blockStartLine: o.mutant.blockStartLine } : {}),
+      ...(o.mutant.blockEndLine !== undefined ? { blockEndLine: o.mutant.blockEndLine } : {}),
     };
     // C02-01: decided per ROW, by this row's operator, because mutant ids restart per batch and
     // the run-level lists below are keyed by bare `mutantCode` (R231). Same rule as that list:
