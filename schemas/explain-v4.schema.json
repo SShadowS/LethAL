@@ -191,7 +191,37 @@
           },
           "interpretation": { "$ref": "#/$defs/interpretation" },
           "guardInterpretation": { "$ref": "#/$defs/interpretation" },
-          "reachInterpretation": { "$ref": "#/$defs/interpretation" }
+          "reachInterpretation": { "$ref": "#/$defs/interpretation" },
+          "batchIndex": {
+            "type": "integer",
+            "description": "The batch of THIS run the row was recorded in. Mutant ids restart per batch, so (batchIndex, mutantCode) names a row and mutantCode alone does not. Always written by this build; optional here so an older explain output still validates."
+          },
+          "triggerName": {
+            "type": "string",
+            "description": "Present on a trigger mutant, whose procedureName is \"\"."
+          },
+          "procedureStartLine": {
+            "type": "integer",
+            "description": "Verbatim from the report row: the 1-based first line of the enclosing procedure or trigger. Absent when neither encloses the site, or on a report predating this field."
+          },
+          "procedureEndLine": {
+            "type": "integer",
+            "description": "Verbatim from the report row: the 1-based last line of the enclosing procedure or trigger."
+          },
+          "equivalenceRisk": {
+            "type": "string",
+            "description": "The equivalence risk this row's operator declared, on a survived row only. An open string. Absent means not recorded, never \"not equivalent\"."
+          },
+          "readerMark": {
+            "type": "object",
+            "description": "The reader's mark whose key equals this row's identity, on a survived or known-survivor row. Absent means no mark matched, never that nobody looked.",
+            "additionalProperties": false,
+            "required": ["key", "reason"],
+            "properties": {
+              "key": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
         }
       }
     },

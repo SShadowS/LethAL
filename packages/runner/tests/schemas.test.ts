@@ -468,6 +468,33 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     });
   });
 
+  test("the explain survivor row's required set is pinned (C02-01)", () => {
+    // Nested required lists are not covered by the R157 root pin. A new survivor field added to
+    // this list would make the edited v4 schema reject an explain output stored before it.
+    const explainSchema = loadSchema("explain-v4.schema.json");
+    const items = ((explainSchema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
+      required?: string[];
+    };
+    expect([...(items.required ?? [])].sort()).toEqual([
+      "attribution",
+      "codeunitName",
+      "coveringTests",
+      "executionProven",
+      "file",
+      "guardEvidence",
+      "guardInterpretation",
+      "interpretation",
+      "line",
+      "mutantCode",
+      "mutatedText",
+      "operatorName",
+      "originalText",
+      "procedureName",
+      "reach",
+      "reachInterpretation",
+    ]);
+  });
+
   test("every line of the committed event stream validates, header and one pinned R196 exception excepted", () => {
     // The header is NOT a RunEvent — the sink writes it itself, and it carries `ndjsonHeader: true`
     // with no `seq` precisely so a consumer can tell the two apart. A schema that accepted it would

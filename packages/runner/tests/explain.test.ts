@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tier1Operators } from "@lethal/builtin-tier1";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
@@ -27,7 +28,7 @@ import {
   STRANDED_SKIP_INTERPRETATION,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
+import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
 import { TypeLeafPathError, typeLeafPaths } from "./helpers/type-leaf-paths";
@@ -43,6 +44,7 @@ function survivorMutant(
   code: string,
   attribution: CoverageAttribution,
   guardObserved?: boolean,
+  batchIndex = 0,
 ): MutantOutcome {
   return {
     mutantCode: code,
@@ -50,9 +52,13 @@ function survivorMutant(
     line: 42,
     operatorName: "lethal.negate-conditional",
     verdict: "survived",
-    batchIndex: 0,
+    batchIndex,
     durationMs: 120,
     procedureName: "ComputeTotal",
+    // C02-01: the enclosing procedure's span, distinct from `line` and `startIndex` so a swap
+    // between them is detectable in the verbatim test.
+    procedureStartLine: 38,
+    procedureEndLine: 51,
     startIndex: 100,
     endIndex: 110,
     originalText: "Qty > 0",
@@ -258,7 +264,8 @@ const PINNED_CONTRACT_NOTE =
   "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
   "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
   "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
-  "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+  "`entailedNegative`, `note`, `scoreDescribes`, `detail`, `readerMark.reason` or " +
+  "`failureNote`; they may be reworded " +
   "at any time without a version bump. That is safe rather than merely asked-for, because every " +
   "machine-usable atom already appears as a structured field beside the prose that explains it " +
   "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
@@ -364,6 +371,38 @@ describe("explain — the plan's own four tests", () => {
  */
 function fullCoverageReport(): SessionReport {
   const base = reportFixture();
+  const m0001 = survivorMutant("M0001", "exact", true, 1);
+  // C02-01: the reader's mark, keyed to this row's REAL serialized identity (report.ts's
+  // `markIdentityOf`) rather than a placeholder like `K-M0001` — a wrong key would otherwise go
+  // undetected.
+  const survivorWithMark: MutantOutcome = {
+    ...m0001,
+    readerMark: {
+      key: serializeKey({
+        astHash: m0001.astHash,
+        codeunitName: m0001.codeunitName,
+        procedureName: m0001.procedureName,
+        operatorName: m0001.operatorName,
+        operatorMajor: m0001.operatorMajor,
+        ordinal: 0,
+      }),
+      reason: "reader confirmed this rewrite is never read downstream",
+    },
+  };
+  // C02-01: `lethal.remove-assignment` is the operator whose registry entry declares
+  // "value-rewrite" (remove-assignment.ts) — the only way `buildReport` can produce that risk.
+  const survivorWithRisk: MutantOutcome = {
+    ...survivorMutant("M0002", "object", false, 4),
+    operatorName: "lethal.remove-assignment",
+    equivalenceRisk: "value-rewrite",
+  };
+  // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name —
+  // reaches the `triggerName` leaf the "no dead entries" test needs.
+  const triggerSurvivor: MutantOutcome = {
+    ...survivorMutant("M0003", "all-green", undefined, 6),
+    procedureName: "",
+    triggerName: "OnValidate",
+  };
   return {
     ...base,
     validity: {
@@ -385,9 +424,9 @@ function fullCoverageReport(): SessionReport {
     },
     mutationScore: 0.4,
     mutants: [
-      survivorMutant("M0001", "exact", true),
-      survivorMutant("M0002", "object", false),
-      survivorMutant("M0003", "all-green"),
+      survivorWithMark,
+      survivorWithRisk,
+      triggerSurvivor,
       errorMutant("M0004", "deadline-exceeded"),
       errorMutant("M0005", "unstable"),
       strandedSkipMutant("M0006"),
@@ -512,6 +551,13 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].reachInterpretation.meaning", // [registry]
   "$.survivors[].reachInterpretation.entailedNegative", // [registry]
   "$.survivors[].reachInterpretation.basis", // [registry]
+  "$.survivors[].batchIndex", // [verbatim]
+  "$.survivors[].triggerName", // [verbatim]
+  "$.survivors[].procedureStartLine", // [verbatim]
+  "$.survivors[].procedureEndLine", // [verbatim]
+  "$.survivors[].equivalenceRisk", // [verbatim]
+  "$.survivors[].readerMark.key", // [verbatim]
+  "$.survivors[].readerMark.reason", // [verbatim]
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
   "$.notMeasured[].line", // [verbatim]
@@ -604,6 +650,31 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(r.resumedFrom?.skippedStranded).toBe(
       r.mutants.filter((m) => m.failureNote?.startsWith("not re-run on resume:") === true).length,
     );
+    // C02-01: `equivalenceRisk` only on a `survived` row, `readerMark` only on `survived` or
+    // `known-survivor`, and both keyed to what `buildReport` would actually derive rather than to
+    // a value the fixture merely asserts.
+    const riskByOperator = new Map(tier1Operators.map((o) => [o.name, o.equivalenceRisk] as const));
+    for (const m of r.mutants) {
+      if (m.equivalenceRisk !== undefined) {
+        expect(m.verdict).toBe("survived");
+        const risk = riskByOperator.get(m.operatorName);
+        if (risk === undefined) throw new Error(`no tier1 operator named ${m.operatorName}`);
+        expect(m.equivalenceRisk).toBe(risk);
+      }
+      if (m.readerMark !== undefined) {
+        expect(["survived", "known-survivor"]).toContain(m.verdict);
+        expect(m.readerMark.key).toBe(
+          serializeKey({
+            astHash: m.astHash,
+            codeunitName: m.codeunitName,
+            procedureName: m.procedureName,
+            operatorName: m.operatorName,
+            operatorMajor: m.operatorMajor,
+            ordinal: m.identityOrdinal ?? 0,
+          }),
+        );
+      }
+    }
   });
 
   test("the pin is exactly what `ExplainOutput`'s TYPE can produce — R115 gap (1)", () => {
@@ -698,14 +769,25 @@ describe("explain — the admissibility rule, made executable", () => {
       firstSurvivor?.mutatedText,
       String(firstSurvivor?.line),
       String(firstSurvivor?.startIndex),
+      // C02-01: the new span, and the batch this row was recorded in, distinct from every value
+      // above and from each other.
+      String(firstSurvivor?.procedureStartLine),
+      String(firstSurvivor?.procedureEndLine),
+      String(firstSurvivor?.batchIndex),
     ];
     expect(new Set(rowValues).size).toBe(rowValues.length);
-    // ALL NINE per-row [verbatim] fields, projected against source as whole rows rather than
-    // field by field. The final review measured what the field-by-field form missed: six survivor
-    // fields and three notMeasured fields had no value assertion anywhere, so swapping `file` with
+    // EVERY per-row [verbatim] field, projected against source as whole rows rather than field by
+    // field. The final review measured what the field-by-field form missed: six survivor fields
+    // and three notMeasured fields had no value assertion anywhere, so swapping `file` with
     // `codeunitName` in `survivorOf` was 1444 pass / 0 fail, and reading `notMeasured[].line` off
     // `startIndex` (77 -> 200) was 48 pass / 0 fail. A whole-row `toEqual` cannot be partially
     // written: adding a field to `ExplainSurvivor` without adding it here fails the row compare.
+    //
+    // C02-01's three optional fields (`triggerName`, `equivalenceRisk`, `readerMark`) are compared
+    // as present-or-absent KEYS rather than by value: reading `m.triggerName` through a plain
+    // property access gives `undefined` whether the key is genuinely missing or present with an
+    // `undefined` value, so a value comparison alone cannot catch `survivorOf` writing the key
+    // where the source omitted it (`...(v !== undefined ? { k: v } : {})` broken into `k: v`).
     const survivorSources = report.mutants.filter((m) => m.verdict === "survived");
     const survivorVerbatim = (m: {
       mutantCode: string;
@@ -717,6 +799,12 @@ describe("explain — the admissibility rule, made executable", () => {
       originalText: string;
       mutatedText: string;
       coveringTests: readonly string[];
+      batchIndex?: number;
+      procedureStartLine?: number;
+      procedureEndLine?: number;
+      triggerName?: string;
+      equivalenceRisk?: string;
+      readerMark?: { readonly key: string; readonly reason: string };
     }) => ({
       mutantCode: m.mutantCode,
       file: m.file,
@@ -727,6 +815,15 @@ describe("explain — the admissibility rule, made executable", () => {
       originalText: m.originalText,
       mutatedText: m.mutatedText,
       coveringTests: m.coveringTests,
+      batchIndex: m.batchIndex,
+      procedureStartLine: m.procedureStartLine,
+      procedureEndLine: m.procedureEndLine,
+      hasTriggerName: "triggerName" in m,
+      triggerName: m.triggerName,
+      hasEquivalenceRisk: "equivalenceRisk" in m,
+      equivalenceRisk: m.equivalenceRisk,
+      hasReaderMark: "readerMark" in m,
+      readerMark: m.readerMark,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
@@ -750,6 +847,52 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(out.toolConditions.find((c) => c.condition === "stranded-skips")?.count).toBe(
       report.resumedFrom?.skippedStranded,
     );
+  });
+
+  test("an archived report projects the new fields as absent, never defaulted (C02-01)", () => {
+    // A pre-C02-01 row: no span, no row-level risk or mark. The RUN-level lists are present and
+    // name this row's mutantCode, to prove explain never joins them.
+    // Destructured off rather than deleted, so the key is genuinely absent from the start —
+    // never present with an `undefined` value.
+    const { procedureStartLine, procedureEndLine, ...row } = survivorMutant("M0001", "exact", true);
+    const report = reportFixture({
+      mutants: [row],
+      likelyEquivalentSurvivors: {
+        count: 1,
+        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+      },
+      readerMarkedEquivalent: {
+        matched: [{ mutantCode: "M0001", key: "K", reason: "R" }],
+        stale: [],
+        contradicted: [],
+      },
+    });
+    const [s] = explain(report).survivors;
+    expect(s?.batchIndex).toBe(row.batchIndex);
+    for (const k of [
+      "procedureStartLine",
+      "procedureEndLine",
+      "equivalenceRisk",
+      "readerMark",
+      "triggerName",
+    ]) {
+      expect(k in (s ?? {})).toBe(false);
+    }
+  });
+
+  test("a trigger survivor carries triggerName and its span (C02-01)", () => {
+    const row: MutantOutcome = {
+      ...survivorMutant("M0001", "exact", true),
+      procedureName: "",
+      triggerName: "OnInsert",
+      procedureStartLine: 11,
+      procedureEndLine: 14,
+    };
+    const [s] = explain(reportFixture({ mutants: [row] })).survivors;
+    expect(s?.procedureName).toBe("");
+    expect(s?.triggerName).toBe("OnInsert");
+    expect(s?.procedureStartLine).toBe(11);
+    expect(s?.procedureEndLine).toBe(14);
   });
 
   test("the contract is EXACTLY the pinned object, field for field, and is the shared constant", () => {
@@ -880,6 +1023,7 @@ describe("explain — survivors", () => {
     expect(Object.keys(s ?? {}).sort()).toEqual(
       [
         "attribution",
+        "batchIndex",
         "codeunitName",
         "coveringTests",
         "executionProven",
@@ -892,7 +1036,9 @@ describe("explain — survivors", () => {
         "mutatedText",
         "operatorName",
         "originalText",
+        "procedureEndLine",
         "procedureName",
+        "procedureStartLine",
         "reach",
         "reachInterpretation",
       ].sort(),

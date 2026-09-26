@@ -280,6 +280,24 @@ export interface ExplainSurvivor {
   readonly guardInterpretation: Interpretation;
   /** `REACH_INTERPRETATIONS[reach]`, by reference. */
   readonly reachInterpretation: Interpretation;
+  /**
+   * C02-01: the batch of THIS run the row was recorded in; for a carried row it is this run's
+   * batch, not the prior run's. Mutant ids restart per batch, so `(batchIndex, mutantCode)` names
+   * a row and `mutantCode` alone does not. Always written by this build; optional in the schema
+   * so an older explain output still validates.
+   */
+  readonly batchIndex?: number;
+  /** C02-01: present on a trigger mutant, whose `procedureName` is `""`. */
+  readonly triggerName?: string;
+  /** C02-01: verbatim from the report row; see `MutantOutcome.procedureStartLine`. */
+  readonly procedureStartLine?: number;
+  /** C02-01: verbatim from the report row; see `MutantOutcome.procedureEndLine`. */
+  readonly procedureEndLine?: number;
+  /** C02-01: the report's `equivalenceRisk`, an open string as the report types it (ruling c).
+   *  Absent: not recorded, never "not equivalent". */
+  readonly equivalenceRisk?: string;
+  /** C02-01: the report's `readerMark`, copied field by field, never spread. */
+  readonly readerMark?: { readonly key: string; readonly reason: string };
 }
 
 /**
@@ -429,7 +447,8 @@ export const EXPLAIN_CONTRACT: ExplainContract = {
     "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
     "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
     "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
-    "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+    "`entailedNegative`, `note`, `scoreDescribes`, `detail`, `readerMark.reason` or " +
+    "`failureNote`; they may be reworded " +
     "at any time without a version bump. That is safe rather than merely asked-for, because every " +
     "machine-usable atom already appears as a structured field beside the prose that explains it " +
     "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
@@ -688,6 +707,16 @@ function survivorOf(m: MutantOutcome): ExplainSurvivor {
     interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
     guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
     reachInterpretation: keyed(REACH_INTERPRETATIONS, reach, "reach"),
+    // C02-01: copied field by field, never an object spread, so an unexpected extra property on
+    // the report row cannot ride through into the output.
+    batchIndex: m.batchIndex,
+    ...(m.triggerName !== undefined ? { triggerName: m.triggerName } : {}),
+    ...(m.procedureStartLine !== undefined ? { procedureStartLine: m.procedureStartLine } : {}),
+    ...(m.procedureEndLine !== undefined ? { procedureEndLine: m.procedureEndLine } : {}),
+    ...(m.equivalenceRisk !== undefined ? { equivalenceRisk: m.equivalenceRisk } : {}),
+    ...(m.readerMark !== undefined
+      ? { readerMark: { key: m.readerMark.key, reason: m.readerMark.reason } }
+      : {}),
   };
 }
 
