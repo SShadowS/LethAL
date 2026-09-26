@@ -1,0 +1,28 @@
+{
+  "id": "9bc2014f-e12f-4571-9a00-4e7641d19702",
+  "name": "LethAL Sandbox Harden",
+  "brief": "LethAL C02-03 fixture: a target with five planted survivors.",
+  "description": "Five small procedures, one planted survivor each: four a reasonable test kills and one true equivalent, recorded in lethal.equivalent.json. Its own app and id range so no frozen baseline moves. Not for production use, see fixtures/README.md.",
+  "dependencies": [],
+  "idRanges": [
+    {
+      "from": 79500,
+      "to": 79549
+    }
+  ],
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "screenshots": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
