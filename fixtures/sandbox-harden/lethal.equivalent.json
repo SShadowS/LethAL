@@ -1,0 +1,10 @@
+{
+  "marks": [
+    {
+      "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Harden Logic|BonusFor|lethal.remove-assignment|1",
+      "reason": "Equivalent: Bonus is a local, AL sets every local to its default (0) on each call, and nothing reads Bonus before `Bonus := 0`, so deleting the statement changes no observable value. Planted by C02-03; see fixtures/README.md, sandbox-harden.",
+      "markedBy": "C02-03",
+      "markedOn": "2026-09-25"
+    }
+  ]
+}

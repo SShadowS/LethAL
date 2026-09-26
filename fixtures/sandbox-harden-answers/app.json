@@ -1,0 +1,35 @@
+{
+  "id": "5c09afdc-456d-432c-ae1f-afca0eb6e12e",
+  "name": "LethAL Sandbox Harden Answers",
+  "brief": "LethAL C02-03 fixture: the answer key for sandbox-harden.",
+  "description": "Four tests that kill sandbox-harden's four actionable survivors, and one that tries and fails to kill the planted equivalent. Asserts via Error(). Not for production use.",
+  "dependencies": [
+    {
+      "id": "9bc2014f-e12f-4571-9a00-4e7641d19702",
+      "name": "LethAL Sandbox Harden",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [
+    {
+      "from": 79575,
+      "to": 79599
+    }
+  ],
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "screenshots": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

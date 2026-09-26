@@ -6,11 +6,15 @@ manual smoke-testing, and the env-gated integration scripts in
 
 ## Object ids
 
-| Codeunit | Id | App | Purpose |
+| Object | Id | App | Purpose |
 |---|---|---|---|
 | `Sandbox Logic` | 79000 | `sandbox-app` | Mutation target — every Tier 1 operator finds ≥1 site here. Declared in `namespace LethAL.Sandbox.Logic` on purpose (GH-09, R212): with `Sandbox Pricing` left at the root the app is mixed, so `itest:bcdev` and `itest:alrunner` pin namespaced coverage attribution. |
 | `Sandbox Pricing` | 79001 | `sandbox-app` | Mutation target, deliberately **untested** by any test method. |
 | `Sandbox Tests` | 79100 | `sandbox-tests` | `Subtype = Test` codeunit exercising `Sandbox Logic`. Asserts via `Error()` — no Library Assert dependency. Must NOT carry a `TestIsolation` property — `TestIsolation` is a **TestRunner**-codeunit property in real BC; setting it on a `Subtype = Test` codeunit is rejected by the AL compiler (`AL0223`). Isolation is chosen by whichever TestRunner codeunit invokes the tests and Layer 4 does not verify it — see the note below. |
+| `Harden Logic` | 79500 | `sandbox-harden` | Mutation target for C02's survivor loop: five procedures, one planted survivor each, plus one true equivalent. See "sandbox-harden (C02-03)" below. |
+| `Harden Entry` (table) | 79501 | `sandbox-harden` | The target's one table. Its `Amount` field's `OnValidate` gives `lethal.validate-to-assign` something to skip (S4). |
+| `Harden Tests` | 79550 | `sandbox-harden-tests` | `Subtype = Test` codeunit, `TestPermissions = Disabled;`. Asserts via `Error()`, no Library Assert. Kills every mutant except the five planted survivors. |
+| `Harden Answer Key` | 79575 | `sandbox-harden-answers` | Separate answer-key app: four tests that kill S1 to S4, plus one that tries and is expected to fail against the equivalent S5. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -23,8 +27,8 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 `pickSelectorIds` (`packages/schemata/src/id-ranges.ts`) implements it and `lethal init` writes it;
 `validateSelectorIds` refuses an id outside every declared range, a duplicate among the three, or one
 the project already declares. Every fixture here follows it against its own ranges — `sandbox-app`
-79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `gift-card` 90197-90199 — and
-two fixtures must never share the three ids, which is R169.
+79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
+`gift-card` 90197-90199 — and two fixtures must never share the three ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
 verified against a real BC server 2026-07-18. al-runner's compiler simply doesn't enforce
@@ -227,6 +231,99 @@ Isolation is therefore chosen by whichever TestRunner codeunit invokes the tests
 verified by scanning test-codeunit sources. Layer 4 does not check it — it's an out-of-band concern,
 verified manually against the real backend instead (see `--test-isolation method` in
 `al-runner-backend.ts`'s `run()`, verified against the real al-runner CLI).
+
+## sandbox-harden (C02-03)
+
+`fixtures/sandbox-harden` (plus `sandbox-harden-tests` and `sandbox-harden-answers`) is the fixture
+for C02's survivor loop (GitHub issue #13, epic #10). A full `lethal run` against it gives EXACTLY
+five survivors and no `no-coverage` mutant: four ordinary gaps a reasonable test would kill, and one
+true equivalent. `lethal harden` (C02-01) and `lethal verify` (C02-04 to C02-06) measure against
+this fixture instead of `sandbox-data`'s 60-odd survivors, because "exactly five, one of them
+equivalent" needs a small, purpose-built target.
+
+One codeunit, `codeunit 79500 "Harden Logic"`, holds five small procedures, one planted survivor
+each. One table, `table 79501 "Harden Entry"`, gives `lethal.validate-to-assign` something to skip
+through its `Amount` field's `OnValidate`. Ids: target 79500-79549, tests
+(`codeunit 79550 "Harden Tests"`) 79550-79574, answers (`codeunit 79575 "Harden Answer Key"`)
+79575-79599. Gate: `LETHAL_ITEST_HARDEN=1 bun run itest:harden`, baseline
+`packages/runner/itest/harden.baseline.json`.
+
+### The five planted survivors
+
+| Id | Procedure | Operator | `equivalenceRisk` | Why the base suite misses it | Answer-key killer |
+|---|---|---|---|---|---|
+| S1 | `IsLarge` | `lethal.conditional-boundary` (`>` to `>=`) | none | base tests use 500 and 50, never exactly 100 | `IsLargeAtTheBoundary`: `IsLarge(100)` must be false |
+| S2 | `CountInCategory` | `lethal.remove-setrange` | none | every row in the base test is already in the wanted category | `CountInCategoryIgnoresOtherCategories`: two `A` rows and one `B` row, count of `A` must be 2 |
+| S3 | `FirstAmount` | `lethal.swap-find-direction` (`FindFirst` to `FindLast`) | none | the base test inserts one row, so first and last are the same row | `FirstAmountReadsTheFirstRow`: row 1 (Amount 7) then row 2 (Amount 9), result must be 7 |
+| S4 | `SetAmount` | `lethal.validate-to-assign` | none | the base test reads `Amount`, never `Doubled`, which `OnValidate` sets | `SetAmountRunsValidation`: after `SetAmount(Entry, 5)`, `Doubled` must be 10 |
+| S5 | `BonusFor` | `lethal.remove-assignment` on `Bonus := 0` | `value-rewrite` | equivalent, see below | none. `BonusForTwiceOnOneInstance` tries and is expected to fail (pass on the mutant) |
+
+Four different operators plant S1 to S4, three of them AL-specific (Tier 2). The fifth,
+`remove-assignment`, is the one operator here that declares an `equivalenceRisk`, and it plants the
+equivalent. The equivalent is recorded in the target's own committed `lethal.equivalent.json`, a
+reader mark whose key is the row's serialized identity (`identityKeyOf` / `serializeKey`,
+`packages/runner/src/selection.ts`), matched live against `readerMarkedEquivalent`.
+
+### Why S5 is equivalent, not just untested
+
+`Bonus` is a variable local to `BonusFor`. AL gives every local its type's default value (0 for
+`Integer`) on each call, before the first statement runs. `Bonus := 0` is that first statement, and
+nothing reads `Bonus` before it. So with or without the statement, `Bonus` holds 0 at the same point
+on every input, table state and call order: the procedure only conditionally overwrites it with
+`Amount` afterwards and returns it. No test can observe a difference.
+
+Two things would break this claim, and the fixture avoids both on purpose:
+
+1. If `Bonus` were a codeunit global instead of a local, a second call on the same instance would
+   start from whatever the previous call left in it, and the mutant would become killable. This is
+   the same reason `sandbox-hang`'s `Counter := 0` is equivalent only per fresh instance (the
+   `CountUpTo` rows in `hang.itest.ts`).
+2. If any statement read `Bonus` before `Bonus := 0` ran, the local's default value would be
+   observable and the deletion would change behaviour.
+
+Neither holds here: `Bonus` is local, and its first read is `if Amount > 10 then Bonus := Amount`,
+which reads `Amount`, not `Bonus`. The base test, `BonusForPaysOnlyAboveTen`, deliberately calls
+`BonusFor` three times on ONE codeunit instance for exactly this reason: if AL carried a local
+across calls, the second call would inherit the first call's value and the base suite itself would
+kill the mutant, whether or not `Bonus := 0` survives. The answer key's `BonusForTwiceOnOneInstance`
+repeats that shape and is expected to pass on the mutant, which is a live measurement of the claim
+above, not only an appeal to the AL spec.
+
+### The answer-key app, and why it is separate
+
+`fixtures/sandbox-harden-answers` (`codeunit 79575 "Harden Answer Key"`) is a third app, not more
+test methods in `sandbox-harden-tests`. Two reasons: the base suite's frozen baseline must
+never contain the killers, or "the base suite misses it" stops being true, and C02-08 needs a fixed
+control it can measure against without touching the committed base suite. Its gate leg only asserts
+the five planted verdicts, S1 to S4 killed by name, S5 survived. Every other row is printed, not
+frozen: the answer key's tests were never designed to kill the other sixteen mutants, and in
+practice some of them do anyway just by exercising the same procedures.
+
+Measured 2026-09-26 on Cronus28, twice, identical results: the base suite
+(`sandbox-harden-tests`) gives 16 killed, 5 survived, 0 no-coverage over 21 deployed mutants in one
+batch. The answers suite (`sandbox-harden-answers`) gives 18 killed, 3 survived: S5, plus two
+non-planted mutants the answer key does not target and so does not kill (`IsLarge`'s
+`empty-block`, `BonusFor`'s `conditional-boundary`).
+
+### Hand-off rule for C02-08
+
+- The agent's new tests must NOT be committed into `fixtures/sandbox-harden-tests`: that app's
+  baseline freezes five survivors. Work on a copy. If the copy keeps the tests app's id and name,
+  publishing it REPLACES the published suite, and `itest:harden` then refuses with
+  `StaleTestAppError` until the committed suite is republished. Give the copy its own id, or
+  republish afterwards.
+- `lethal verify --tests fixtures/sandbox-harden-answers` is NOT a usable control on its own.
+  `planVerify`'s `matchCovering` (`packages/runner/src/verify.ts`) resolves each survivor's
+  covering-test name against that SAME codeunit name in `--tests`. S1 to S4's covering tests are
+  `Harden Tests.*` (codeunit 79550), and `sandbox-harden-answers` holds only `Harden Answer Key`
+  (codeunit 79575), so `planVerify` throws `covering-test-unmatched` before anything runs.
+  C02-08's working control is a temporary copy of `sandbox-harden-tests` whose `app.json` stays
+  byte-identical (same id, name, version), so publishing it REPLACES the committed suite, plus one
+  new codeunit, `79574 "Harden Verify Answers"` (inside the tests app's own 79550-79574 `idRanges`,
+  so `alc` accepts it and it cannot collide with the published `sandbox-harden-answers` app at
+  79575), holding the five answer-key methods. C02-08 publishes that copy, runs `lethal verify`,
+  restores the committed suite in a `finally`, and runs `itest:harden` around the whole sequence to
+  confirm nothing drifted.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
