@@ -193,8 +193,14 @@ export type AlRunnerPlatformAppsParse =
        * `[bc] selected BC <build> (<artifact dir>)` line, the layout both earlier sentences named
        * verbatim. Same non-empty check as `already-complete`; the derivation is named in the
        * refusal if the directory is not there.
+       *
+       * `"package-cache"` (R235): no provisioning sentence, but the runner's verbose output listed
+       * a `[pkg-cache] <dir>` line ending in `platform-apps` (2.11.0 on a warm cache). That line is
+       * one entry of the directories the runner SEARCHES for `.app` dependencies: a search-set
+       * fact, not a statement of which `.app` won resolution. Same non-empty check as
+       * `already-complete`.
        */
-      readonly basis: "downloaded" | "already-complete" | "selected-artifact";
+      readonly basis: "downloaded" | "already-complete" | "selected-artifact" | "package-cache";
     }
   | { readonly kind: "no-completion-line" }
   | { readonly kind: "conflicting"; readonly dirs: readonly string[] };
@@ -283,6 +289,28 @@ const PLATFORM_APPS_COMPLETION =
 const PLATFORM_APPS_ALREADY_COMPLETE =
   /^\[provision\] platform apps already complete at ((?:[A-Za-z]:[\\/]|[\\/]|~[\\/])[^\n]*platform-apps[\\/]?)\.?[ \t\r]*$/gm;
 
+/**
+ * R235: the VERBOSE search-set line al-runner 2.11.0 prints for each package cache it searches.
+ *
+ * Measured 2026-09-26 on al-runner v2.11.0, warm cache, with `AL_RUNNER_VERBOSE=1`, verbatim:
+ *
+ *       package caches (final search set): 2 dir(s)
+ *         [pkg-cache] C:\...\.local/share/al-runner/artifacts\28.1.49838.54487\test-apps
+ *         [pkg-cache] C:\...\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps
+ *
+ * Non-verbose, the same warm run prints no provisioning sentence at all, and the platform apps are
+ * NOT under the `[bc] selected` build (54487) but under the engine variant's (54368), so R200's
+ * derivation names a directory that does not exist. This line is the runner's own path.
+ *
+ * - **Indentation is allowed, but the tag must open the line.** A test's failure text that merely
+ *   contains `[pkg-cache]` mid-line does not match. One that prints its own indented line would,
+ *   and that is accepted: the provisioning call selects no test (`AL_RUNNER_PROVISION_SENTINEL`).
+ * - **The directory must end in `platform-apps`.** The `test-apps` line beside it is the test
+ *   toolkit and is never a platform-app pin.
+ */
+const PLATFORM_APPS_PKG_CACHE =
+  /^[ \t]*\[pkg-cache\] ((?:[A-Za-z]:[\\/]|[\\/]|~[\\/])[^\n]*platform-apps[\\/]?)[ \t\r]*$/gm;
+
 /** Separator and trailing-separator insensitive, and case-insensitive on win32 — the three ways one
  *  directory gets two spellings. Used ONLY to compare; the reported path stays verbatim. */
 function normalisePlatformAppsPath(p: string): string {
@@ -291,7 +319,8 @@ function normalisePlatformAppsPath(p: string): string {
 }
 
 /**
- * Read the platform-app directory al-runner said it finished writing. R147.
+ * Read the platform-app directory al-runner said it finished writing, or, since R235, that it
+ * named in a verbose `[pkg-cache]` search-set line. R147.
  *
  * WHY THE COMPLETION SENTENCE AND NOT THE INTENT ONE. The same run also prints
  * `[provision] fetching Microsoft platform R2R apps for BC <v> <SEP> <dir>` BEFORE the download
@@ -314,6 +343,7 @@ function normalisePlatformAppsPath(p: string): string {
 export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAppsParse {
   PLATFORM_APPS_COMPLETION.lastIndex = 0;
   PLATFORM_APPS_ALREADY_COMPLETE.lastIndex = 0;
+  PLATFORM_APPS_PKG_CACHE.lastIndex = 0;
   const seen = new Map<string, string>();
   let appCount = 0;
   let downloaded = false;
@@ -329,17 +359,29 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
   // finds what the first wrote, so a cold run says "Downloaded ..." then "already complete at ...".
   // They must agree on the directory or this is `conflicting`, exactly as two `Downloaded` lines
   // naming different places would be.
+  let alreadyComplete = false;
   for (const m of output.matchAll(PLATFORM_APPS_ALREADY_COMPLETE)) {
+    const [, dir] = m;
+    if (dir === undefined) continue;
+    seen.set(normalisePlatformAppsPath(dir), dir);
+    alreadyComplete = true;
+  }
+  // R235: the verbose search-set line joins the same map, so a provisioning sentence naming a
+  // DIFFERENT directory is `conflicting`, never a silent pick.
+  for (const m of output.matchAll(PLATFORM_APPS_PKG_CACHE)) {
     const [, dir] = m;
     if (dir === undefined) continue;
     seen.set(normalisePlatformAppsPath(dir), dir);
   }
   if (seen.size === 0) {
     // R200: al-runner 2.10.0.0 says nothing about provisioning on a warm cache. The `[bc] selected`
-    // line still names the artifact directory, and both provisioning sentences ever measured put
-    // the platform apps at `<that>/platform-apps` (2.1.2.0: `...\28.0.46665.53671\platform-apps`;
-    // 2.7.0.0: `...\28.0.46665.53952\platform-apps`), so the location is measured layout. The
-    // caller still refuses unless the directory exists and holds an `.app`.
+    // line still names the artifact directory, and the provisioning sentences measured up to 2.7
+    // put the platform apps at `<that>/platform-apps` (2.1.2.0: `...\28.0.46665.53671\platform-apps`;
+    // 2.7.0.0: `...\28.0.46665.53952\platform-apps`). That is NOT true of a mixed cache on 2.11.0,
+    // which searches the engine variant's build rather than the selected one (R235): the verbose
+    // `[pkg-cache]` line read above covers that case, and this derivation runs only when none of
+    // the three lines matched. The caller still refuses unless the directory exists and holds an
+    // `.app`.
     const selected = /^\[bc\] selected BC [0-9]+(?:\.[0-9]+)+ \(([^)\n]+)\)[ \t\r]*$/m.exec(output);
     const artifactDir = selected?.[1]?.trim();
     if (artifactDir === undefined || artifactDir === "") return { kind: "no-completion-line" };
@@ -363,7 +405,8 @@ export function parseAlRunnerPlatformAppsDir(output: string): AlRunnerPlatformAp
     kind: "found",
     dir,
     appCount,
-    basis: downloaded ? "downloaded" : "already-complete",
+    // A provisioning sentence outranks a bare search-set entry (R235).
+    basis: downloaded ? "downloaded" : alreadyComplete ? "already-complete" : "package-cache",
   };
 }
 
