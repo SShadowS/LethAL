@@ -214,6 +214,32 @@ describe("resolveVerifySource", () => {
     store.close();
   });
 
+  test("an artifact id the store records twice is refused as unknown-artifact, a corrupt store", () => {
+    const store = new ResultsStore(":memory:");
+    oneBatchRun(store, A1, [mutantRow("M0001", "survived")]);
+    oneBatchRun(store, A1, [mutantRow("M0001", "survived")]);
+    const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
+    expect(e.reason).toBe("unknown-artifact");
+    expect(e.detail).toContain("twice");
+    store.close();
+  });
+
+  test("a request mixing a wrong-batch id and a carried id refuses as wrong-batch and names both", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runId, artifact(0, A2));
+    store.recordArtifact(runId, artifact(1, A1));
+    store.recordSourceHash(runId, "5".repeat(64));
+    store.recordMutant(runId, mutantRow("M0001", "survived", { batchIndex: 1, carried: true }));
+    const e = refusal(() =>
+      resolveVerifySource(store, parseVerifyRequest(A1, ["1/M0001,0/M0002"])),
+    );
+    expect(e.reason).toBe("wrong-batch");
+    expect(e.detail).toContain("1/M0001");
+    expect(e.detail).toContain("0/M0002");
+    store.close();
+  });
+
   test("every offending id is named, not only the first", () => {
     const store = new ResultsStore(":memory:");
     oneBatchRun(store, A1, [

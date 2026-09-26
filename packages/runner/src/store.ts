@@ -5,6 +5,15 @@ import type { PublishOutcome } from "./deployment-verifier";
 import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
 
+/** C02-06: `artifactRecordById` found one artifact id on more than one batch row, a corrupt store.
+ *  Typed so `lethal verify` can refuse it without matching message text. */
+export class DuplicateArtifactRecordError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DuplicateArtifactRecordError";
+  }
+}
+
 export type MutantVerdict =
   | "killed"
   | "survived"
@@ -816,7 +825,7 @@ export class ResultsStore {
       instrumented_dir: string | null;
     }>;
     if (rows.length > 1) {
-      throw new Error(
+      throw new DuplicateArtifactRecordError(
         `store.ts: the store records artifact ${artifactId} twice (runs ${rows.map((r) => r.run_id).join(", ")}). A random artifact id cannot repeat, so the store is corrupt.`,
       );
     }

@@ -1,6 +1,6 @@
 import { hashTargetSource } from "./baseline-snapshot";
 import type { InstalledArtifactRef } from "./named-mutants";
-import type { ResultsStore } from "./store";
+import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -109,7 +109,18 @@ const PER_ID_ORDER: readonly VerifyRefusal[] = [
  * never touches a file or a server. A per-id refusal names every offending id, not only the first.
  */
 export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
-  const rec = store.artifactRecordById(req.artifactId);
+  let rec: ReturnType<ResultsStore["artifactRecordById"]>;
+  try {
+    rec = store.artifactRecordById(req.artifactId);
+  } catch (e) {
+    if (e instanceof DuplicateArtifactRecordError) {
+      throw new VerifyError(
+        "unknown-artifact",
+        `the store records this id twice, so it cannot name one source (a corrupt store): ${e.message}`,
+      );
+    }
+    throw e;
+  }
   if (rec === null) {
     throw new VerifyError(
       "unknown-artifact",
