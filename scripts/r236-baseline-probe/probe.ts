@@ -18,7 +18,7 @@
  * Paths are absolute so the same file runs from a worktree of an older client (R236 Task 4 step 5).
  * The runner imports are kept to APIs that exist unchanged at 7b7fff3.
  */
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -136,6 +136,68 @@ interface SessionRecord {
   readonly scratchDir: string;
   /** The container the evidence reads targeted, from `bcdev.server`. */
   readonly container: string;
+  /** Ruling A: the TestPage call's answer bytes (partial on a hit, full on a clean session). */
+  readonly answers: readonly AnswerFile[];
+}
+
+/** The TestPage call whose answer bytes the truncation check needs. */
+const TESTPAGE_CALL = (t: CallTrace) =>
+  t.action === "LethALControl_RunMutantWithCoverage" &&
+  t.testMethod === "PageActionComputesNonZero";
+
+export interface Capture {
+  readonly trace: CallTrace;
+  readonly bytes: Uint8Array;
+  readonly complete: boolean;
+}
+
+export interface AnswerFile {
+  readonly kind: "partial" | "full";
+  readonly attemptId: string | null;
+  readonly opSeq: number | null;
+  /** Where the body stopped: the number of bytes kept (for "full", the answer size). */
+  readonly offset: number;
+  readonly bytesReceived: number | null;
+  readonly contentLength: string | null;
+  readonly path: string | null;
+  readonly sha256: string;
+  readonly error?: string;
+}
+
+/**
+ * Ruling A: writes each captured answer to `<out>.partial/<prefix>-<kind>-<attemptId>-<opSeq>.bin`.
+ * Never throws: a failed write is recorded with `path: null` and the error, so the session record
+ * is still written.
+ */
+export function writeCaptures(
+  out: string,
+  prefix: string,
+  captures: readonly Capture[],
+): AnswerFile[] {
+  const dir = `${out}.partial`;
+  return captures.map((c) => {
+    const kind = c.complete ? "full" : "partial";
+    const base = {
+      kind,
+      attemptId: c.trace.attemptId ?? null,
+      opSeq: c.trace.opSeq ?? null,
+      offset: c.bytes.byteLength,
+      bytesReceived: c.trace.bytesReceived ?? null,
+      contentLength: c.trace.contentLength ?? null,
+      sha256: new Bun.CryptoHasher("sha256").update(c.bytes).digest("hex"),
+    } as const;
+    const path = join(
+      dir,
+      `${prefix}-${kind}-${base.attemptId ?? "none"}-${base.opSeq ?? "none"}.bin`,
+    );
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path, c.bytes);
+      return { ...base, path };
+    } catch (err) {
+      return { ...base, path: null, error: String(err) };
+    }
+  });
 }
 
 /**
@@ -533,8 +595,13 @@ function sessionHooks(
   pending: PendingBroken[],
   postFence: PostFence[],
   ran: { sessionId: number | null },
+  captures: Capture[],
 ): TraceHooks {
   return {
+    captureBytes: TESTPAGE_CALL,
+    onBytes: (trace, bytes, complete) => {
+      captures.push({ trace, bytes, complete });
+    },
     onBrokenCall: async (trace, body) => {
       if (!trace.action.startsWith("LethALControl_RunMutant")) return;
       const { attemptId, opSeq, leaseEpoch, leaseToken, serverGeneration } = body;
@@ -717,8 +784,9 @@ async function main(): Promise<void> {
     const postFence: PostFence[] = [];
     const ran: { sessionId: number | null } = { sessionId: null };
     const events: RunEvent[] = [];
+    const captures: Capture[] = [];
     const fetchFn = traced
-      ? traceFetch(bcFetch, calls, sessionHooks(odataCfg, pending, postFence, ran))
+      ? traceFetch(bcFetch, calls, sessionHooks(odataCfg, pending, postFence, ran, captures))
       : bcFetch;
     const backend = new BcDevMcpBackend(
       {
@@ -872,6 +940,7 @@ async function main(): Promise<void> {
       stopReason,
       scratchDir,
       container,
+      answers: writeCaptures(out, `${arm}-seg${segment}-${index}`, captures),
     };
     const written = writeRecord(out, record);
     console.log(

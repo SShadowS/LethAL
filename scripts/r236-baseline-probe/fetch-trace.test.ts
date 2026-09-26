@@ -172,3 +172,76 @@ describe("traceFetch", () => {
     }
   });
 });
+
+describe("byte capture (orchestrator ruling A: the truncation check)", () => {
+  const PREFIX = '{"value":"{\\"status\\":\\"ran\\"';
+  const capture = (t: CallTrace) => t.testMethod === "PageActionComputesNonZero";
+
+  test("a stalled REAL body: the exact bytes that arrived, offset = bytesReceived, marked partial", async () => {
+    let tick: ReturnType<typeof setInterval> | undefined;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode(PREFIX));
+              tick = setInterval(() => {}, 1000);
+            },
+          }),
+        ),
+    });
+    try {
+      const sink: CallTrace[] = [];
+      const got: Array<{ bytes: Uint8Array; complete: boolean }> = [];
+      const ac = new AbortController();
+      const body = JSON.stringify({
+        attemptId: "a7",
+        opSeq: 12,
+        testMethod: "PageActionComputesNonZero",
+      });
+      const f = traceFetch(fetch, sink, {
+        captureBytes: capture,
+        onBytes: (_t, bytes, complete) => got.push({ bytes, complete }),
+      });
+      const res = await f(
+        `http://localhost:${server.port}/BC/ODataV4/LethALControl_RunMutantWithCoverage`,
+        {
+          method: "POST",
+          body,
+          signal: ac.signal,
+        },
+      );
+      setTimeout(() => ac.abort(), 100);
+      await res.text().catch(() => null);
+      expect(got).toHaveLength(1);
+      expect(got[0]?.complete).toBe(false);
+      expect(new TextDecoder().decode(got[0]?.bytes)).toBe(PREFIX);
+      expect(got[0]?.bytes.byteLength).toBe(sink[0]?.bytesReceived);
+    } finally {
+      if (tick !== undefined) clearInterval(tick);
+      server.stop(true);
+    }
+  });
+
+  test("a clean REAL body: the full answer bytes, marked complete; other calls are not captured", async () => {
+    const full = `${PREFIX}, "sessionId": 5}"}`;
+    const server = Bun.serve({ port: 0, fetch: () => new Response(full) });
+    try {
+      const got: Array<{ bytes: Uint8Array; complete: boolean }> = [];
+      const f = traceFetch(fetch, [], {
+        captureBytes: capture,
+        onBytes: (_t, bytes, complete) => got.push({ bytes, complete }),
+      });
+      const url = `http://localhost:${server.port}/BC/ODataV4/LethALControl_RunMutantWithCoverage`;
+      const mk = (m: string) => ({ method: "POST", body: JSON.stringify({ testMethod: m }) });
+      expect(await (await f(url, mk("PageActionComputesNonZero"))).text()).toBe(full);
+      await (await f(url, mk("SomeOtherTest"))).text();
+      expect(got).toHaveLength(1);
+      expect(got[0]?.complete).toBe(true);
+      expect(new TextDecoder().decode(got[0]?.bytes)).toBe(full);
+    } finally {
+      server.stop(true);
+    }
+  });
+});

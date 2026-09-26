@@ -31,6 +31,14 @@ export interface CallTrace {
 export interface TraceHooks {
   readonly onBrokenCall?: (trace: CallTrace, requestBody: Record<string, unknown>) => Promise<void>;
   readonly onBody?: (trace: CallTrace, text: string) => void;
+  /**
+   * Orchestrator ruling A (the truncation check): for calls this returns true, the raw body bytes are
+   * kept as they stream and handed to `onBytes` once: `complete: false` with exactly the bytes that
+   * arrived before the body broke (called BEFORE the broken-call hook), or `complete: true` with the
+   * whole answer. Neither hook can change what the caller sees.
+   */
+  readonly captureBytes?: (trace: CallTrace) => boolean;
+  readonly onBytes?: (trace: CallTrace, bytes: Uint8Array, complete: boolean) => void;
   readonly freshConnection?: boolean;
 }
 
@@ -93,9 +101,19 @@ export function traceFetch(inner: FetchFn, sink: CallTrace[], hooks: TraceHooks 
     trace.connection = res.headers.get("connection");
     trace.bytesReceived = 0;
     if (res.body === null) return res;
+    const kept: Uint8Array[] | null = hooks.captureBytes?.(trace) === true ? [] : null;
+    const handBytes = (complete: boolean) => {
+      if (kept === null) return;
+      try {
+        hooks.onBytes?.(trace, Buffer.concat(kept), complete);
+      } catch {
+        // diagnostics only
+      }
+    };
     const counter = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, c) {
         trace.bytesReceived = (trace.bytesReceived ?? 0) + chunk.byteLength;
+        kept?.push(chunk.slice());
         c.enqueue(chunk);
       },
       flush() {
@@ -119,9 +137,11 @@ export function traceFetch(inner: FetchFn, sink: CallTrace[], hooks: TraceHooks 
           trace.error = String(err);
           trace.errorName = err instanceof Error ? err.name : typeof err;
           trace.preHookError = `${trace.errorName}: ${String(err)}`;
+          handBytes(false);
           await runHook(hooks, trace, body);
           throw err;
         }
+        handBytes(true);
         try {
           hooks.onBody?.(trace, t);
         } catch {

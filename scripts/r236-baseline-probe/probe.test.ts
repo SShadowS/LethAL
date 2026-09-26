@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OperationStatus } from "../../packages/runner/src/lease";
 import { calibrationScript } from "./calibrate";
 import type { CallTrace } from "./fetch-trace";
@@ -13,6 +16,7 @@ import {
   parseContainerEvidence,
   preflight,
   sessionControl,
+  writeCaptures,
   writeRecord,
 } from "./probe.ts";
 
@@ -319,5 +323,47 @@ describe("the container comes from the config's server URL", () => {
     const probe = containerScript("Cronus284", "default", [], "2026-09-26T10:00:00.000", null);
     expect(probe).toContain("-containerName Cronus284 ");
     expect(calibrationScript("Cronus284", "default")).toContain("-containerName Cronus284 ");
+  });
+});
+
+describe("writeCaptures (orchestrator ruling A: partial and full TestPage answer bytes)", () => {
+  const trace = (bytesReceived: number): CallTrace => ({
+    action: "LethALControl_RunMutantWithCoverage",
+    dispatchedAt: 0,
+    attemptId: "a7",
+    opSeq: 12,
+    testMethod: "PageActionComputesNonZero",
+    bytesReceived,
+  });
+
+  test("each capture lands in <out>.partial/ with its offset, bytesReceived, path and sha256", () => {
+    const dir = mkdtempSync(join(tmpdir(), "r236-cap-"));
+    const out = join(dir, "A1.ndjson");
+    const partial = new Uint8Array([123, 34, 118]);
+    const full = new TextEncoder().encode('{"value":"x"}');
+    const recs = writeCaptures(out, "A1-seg1-3", [
+      { trace: trace(3), bytes: partial, complete: false },
+      { trace: trace(full.byteLength), bytes: full, complete: true },
+    ]);
+    expect(recs[0]).toMatchObject({
+      kind: "partial",
+      attemptId: "a7",
+      opSeq: 12,
+      offset: 3,
+      bytesReceived: 3,
+    });
+    expect(recs[0]?.path).toBe(join(`${out}.partial`, "A1-seg1-3-partial-a7-12.bin"));
+    expect(recs[0]?.sha256).toBe(new Bun.CryptoHasher("sha256").update(partial).digest("hex"));
+    expect(new Uint8Array(readFileSync(recs[0]?.path ?? ""))).toEqual(partial);
+    expect(recs[1]).toMatchObject({ kind: "full", offset: full.byteLength });
+    expect(new Uint8Array(readFileSync(recs[1]?.path ?? ""))).toEqual(full);
+  });
+
+  test("a write failure is recorded, never thrown", () => {
+    const recs = writeCaptures("Q:/r236-no-such-drive/A1.ndjson", "x", [
+      { trace: trace(3), bytes: new Uint8Array([1, 2, 3]), complete: false },
+    ]);
+    expect(recs[0]?.error).toBeDefined();
+    expect(recs[0]?.path).toBeNull();
   });
 });
