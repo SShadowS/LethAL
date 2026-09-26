@@ -132,6 +132,28 @@ test("compileTestApp compiles against the bound artifact, never the stale target
   });
 });
 
+test("compileTestApp stages target.appBytes into the scratch cache, never a re-read of appPath", async () => {
+  const fx = await fixture({});
+  // fixture() writes the same bytes to both; here appPath's file and appBytes are made to differ,
+  // so a cache built from a re-read of appPath would show the WRONG marker.
+  const verifiedBytes = pkg(TARGET_ID, "LethAL Sandbox App", "1.0.20357.100", {
+    "marker.txt": "VERIFIED_IN_MEMORY",
+  });
+  const onDiskBytes = await readFile(fx.target.appPath);
+  expect(readPackageEntry(onDiskBytes, "marker.txt")?.toString("utf8")).toBe("INSTRUMENTED");
+  const target: BoundArtifact = { ...fx.target, appBytes: new Uint8Array(verifiedBytes) };
+  const seen: Array<{ id: string; marker: string | null }> = [];
+  await compileTestApp({
+    testDir: fx.dir,
+    target,
+    compiler: watchingCompiler(fx.out, seen),
+    controlSymbolPath: fx.controlPath,
+  });
+  expect(seen.filter((s) => s.id === TARGET_ID).map((s) => s.marker)).toEqual([
+    "VERIFIED_IN_MEMORY",
+  ]);
+});
+
 test("compileTestApp: an alc rejection is TestAppError compile-failed, never AlcCompileError", async () => {
   const fx = await fixture({});
   const err = await compileTestApp({

@@ -30,11 +30,7 @@ export type TestAppRefusal =
   | "publish-indeterminate"
   | "publish-anomalous";
 
-/**
- * Every refusal on the test-app path. Extends `Error` DIRECTLY: in particular it is never an
- * `AlcCompileError`, so a test app alc rejects can never be read as bisection's "this subset does
- * not compile".
- */
+/** Reasons `confirmedTerminal` treats as terminal below. */
 const TERMINAL_REASONS: ReadonlySet<TestAppRefusal> = new Set<TestAppRefusal>([
   "publish-failed",
   "unsupported",
@@ -44,6 +40,11 @@ const TERMINAL_REASONS: ReadonlySet<TestAppRefusal> = new Set<TestAppRefusal>([
   "symbols-unreadable",
 ]);
 
+/**
+ * Every refusal on the test-app path. Extends `Error` DIRECTLY: in particular it is never an
+ * `AlcCompileError`, so a test app alc rejects can never be read as bisection's "this subset does
+ * not compile".
+ */
 export class TestAppError extends Error {
   constructor(
     readonly reason: TestAppRefusal,

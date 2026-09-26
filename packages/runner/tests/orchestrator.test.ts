@@ -10306,6 +10306,7 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     ).rejects.toMatchObject({ reason: "publish-failed" });
     expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
     expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
   });
 
   test("C02-05: a failed exit with an unreadable read-back keeps the marker", async () => {
