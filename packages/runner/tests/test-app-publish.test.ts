@@ -376,3 +376,64 @@ test("the published identity's sha256 is the R192 key of the same bytes", async 
   const out = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, NEW]));
   expect(await testAppHashFor(async () => NEW, "unused")).toBe(`package:${out.sha256}`);
 });
+
+test("TestAppError.confirmedTerminal: pre-server refusals and publish-failed only", () => {
+  const expected: Record<string, boolean> = {
+    "manifest-unreadable": true,
+    "symbols-unreadable": true,
+    "compile-failed": true,
+    unsupported: true,
+    "version-below-resident": true,
+    "publish-failed": true,
+    "publish-indeterminate": false,
+    "publish-anomalous": false,
+  };
+  const actual = Object.fromEntries(
+    Object.keys(expected).map((r) => [
+      r,
+      new TestAppError(r as ConstructorParameters<typeof TestAppError>[0], "x").confirmedTerminal,
+    ]),
+  );
+  expect(actual).toEqual(expected);
+});
+
+test("publishTestApp: our bytes landed but their manifest cannot be read is publish-indeterminate", async () => {
+  const NOMANIFEST = buildFakeAppWithEntries({ "src/T.al": "new" });
+  const C: CompiledTestApp = { ...COMPILED, sha256: hashPackage(NOMANIFEST) };
+  const log: string[] = [];
+  const err = await publishTestApp(loggingFence(log), C, deps(log, [OLD, NOMANIFEST])).catch(
+    (e) => e,
+  );
+  expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+  expect(log).not.toContain("end");
+});
+
+test("publishTestApp: an unreadable resident manifest is manifest-unreadable before the fence", async () => {
+  const log: string[] = [];
+  const err = await publishTestApp(
+    loggingFence(log),
+    COMPILED,
+    deps(log, [buildFakeAppWithEntries({ "src/T.al": "x" })]),
+  ).catch((e) => e);
+  expect(err).toMatchObject({ reason: "manifest-unreadable", confirmedTerminal: true });
+  expect(log).toEqual(["read"]);
+});
+
+test("publishTestApp: an unparseable resident version is manifest-unreadable before the fence", async () => {
+  const log: string[] = [];
+  const err = await publishTestApp(
+    loggingFence(log),
+    COMPILED,
+    deps(log, [pkg(TESTS_ID, "LethAL Sandbox Tests", "not.a.version")]),
+  ).catch((e) => e);
+  expect(err).toMatchObject({ reason: "manifest-unreadable", confirmedTerminal: true });
+  expect((err as Error).message).toContain("not.a.version");
+  expect(log).toEqual(["read"]);
+});
+
+test("publishTestApp: a resident at the SAME version passes to the fence (same-version replace)", async () => {
+  const log: string[] = [];
+  const out = await publishTestApp(loggingFence(log), COMPILED, deps(log, [OLD, NEW]));
+  expect(out.version).toBe("1.0.0.2");
+  expect(log).toEqual(["read", "begin", `publish ${COMPILED.sha256.slice(0, 8)}`, "read", "end"]);
+});

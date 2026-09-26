@@ -35,6 +35,15 @@ export type TestAppRefusal =
  * `AlcCompileError`, so a test app alc rejects can never be read as bisection's "this subset does
  * not compile".
  */
+const TERMINAL_REASONS: ReadonlySet<TestAppRefusal> = new Set<TestAppRefusal>([
+  "publish-failed",
+  "unsupported",
+  "version-below-resident",
+  "manifest-unreadable",
+  "compile-failed",
+  "symbols-unreadable",
+]);
+
 export class TestAppError extends Error {
   constructor(
     readonly reason: TestAppRefusal,
@@ -45,9 +54,14 @@ export class TestAppError extends Error {
     super(`test app refused (${reason}): ${detail}`);
     this.name = "TestAppError";
   }
-  /** Only a publish the server demonstrably did not take may tombstone the fence's marker. */
+  /**
+   * Whether the fence may tombstone its marker (and the lease hook release, not latch). True for a
+   * publish the server demonstrably did not take, and for every refusal thrown before
+   * `fence.publish`: those claim no marker and touch no server, like `ArtifactPrepareError`. An
+   * allow-list, so a reason added later is NOT terminal until someone says it is.
+   */
   get confirmedTerminal(): boolean {
-    return this.reason === "publish-failed";
+    return TERMINAL_REASONS.has(this.reason);
   }
 }
 
@@ -197,7 +211,7 @@ function versionOf(bytes: Uint8Array): string {
   try {
     return readAppIdentity(Buffer.from(bytes)).version;
   } catch (err) {
-    throw new TestAppError("manifest-unreadable", `the server's package: ${describeThrown(err)}`);
+    throw new TestAppError("manifest-unreadable", `the resident package: ${describeThrown(err)}`);
   }
 }
 
@@ -279,16 +293,28 @@ export async function publishTestApp(
     const outcome = decideTestAppOutcome(publishError === undefined, verification);
     if (outcome !== "accepted" || afterBytes === undefined) {
       throw new TestAppError(
+        // "accepted" here only narrows the type: accepted implies afterBytes is defined.
         `publish-${outcome === "accepted" ? "indeterminate" : outcome}`,
         describeOutcome(publishError, verification, app),
         parseVersionConflict(publishError ?? "") ?? undefined,
+      );
+    }
+    // Inside the fence the bytes landed, so a parse failure leaves the result unstated: it must be
+    // non-terminal (marker kept, recycle), never the pre-fence `manifest-unreadable`.
+    let version: string;
+    try {
+      version = readAppIdentity(Buffer.from(afterBytes)).version;
+    } catch (err) {
+      throw new TestAppError(
+        "publish-indeterminate",
+        `${app.name}: the server holds the compiled package (${app.sha256}) but its manifest cannot be read: ${describeThrown(err)}`,
       );
     }
     return {
       appId: app.appId,
       name: app.name,
       publisher: app.publisher,
-      version: versionOf(afterBytes),
+      version,
       sha256: app.sha256,
       compiledAgainst: app.compiledAgainst,
     };
