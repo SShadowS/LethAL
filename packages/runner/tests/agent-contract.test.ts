@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, RUN_FLAGS } from "../src/cli";
-import { DOCTOR_SCHEMA_VERSION } from "../src/cli";
+import {
+  DOCTOR_SCHEMA_VERSION,
+  FLAG_OWNERS,
+  NOTHING_SCORED_EXIT_CODE,
+  QUARANTINED_EXIT_CODE,
+  RUN_FLAGS,
+  exitCodeForReport,
+  parseCliConfig,
+} from "../src/cli";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION } from "../src/explain";
 import { LARGE_RUN_MUTANT_THRESHOLD } from "../src/orchestrator";
@@ -154,5 +161,178 @@ describe("the agent-facing documents (R153)", () => {
     expect(text.startsWith("---\n")).toBe(true);
     expect(text).toMatch(/^name: lethal-mutation-testing$/m);
     expect(text).toMatch(/^description: .{40,}$/m);
+  });
+});
+const GIFT_CARD = join(
+  REPO_ROOT,
+  "docs",
+  "campaign",
+  "2026-08-16-gift-card",
+  "rehearsal.report.json",
+);
+
+/** Shell words, honouring "..." and '...'. The documents' examples use no variables or
+ *  substitutions on purpose: an example must work exactly as a reader copies it. */
+function shellWords(line: string): string[] {
+  return [...line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
+}
+
+/** Every `lethal ...` command inside a fenced code block, backslash continuations joined. */
+function documentedCommands(text: string): string[][] {
+  const out: string[][] = [];
+  for (const block of text.matchAll(/```[a-z]*\r?\n([\s\S]*?)```/g)) {
+    for (const line of (block[1] ?? "").replace(/\\\r?\n\s*/g, " ").split("\n")) {
+      const t = line.trim();
+      if (t.startsWith("lethal ")) out.push(shellWords(t).slice(1));
+    }
+  }
+  return out;
+}
+
+/** The body under one heading, up to the next heading of the same or higher level. */
+function section(text: string, heading: string): string {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => /^#+ /.test(l) && l.replace(/^#+ /, "") === heading);
+  if (start < 0) throw new Error(`no heading "${heading}"`);
+  const level = (lines[start]?.match(/^#+/)?.[0] ?? "").length;
+  const end = lines.findIndex(
+    (l, i) => i > start && /^#+ /.test(l) && (l.match(/^#+/)?.[0] ?? "").length <= level,
+  );
+  return lines.slice(start + 1, end < 0 ? undefined : end).join("\n");
+}
+
+/** A Markdown table's body rows as cells, header and separator dropped. */
+function tableRows(body: string): string[][] {
+  const rows = body.split("\n").filter((l) => l.startsWith("|"));
+  return rows.slice(2).map((r) =>
+    r
+      .split("|")
+      .slice(1, -1)
+      .map((c) => c.trim()),
+  );
+}
+
+/** Every `backticked` token in a cell. */
+const ticks = (cell: string): string[] => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? "");
+
+describe("C02-07: the documents' commands and tables are the code's", () => {
+  const docs: ReadonlyArray<[string, string]> = [
+    ["reference", read(REFERENCE)],
+    ["skill", read(SKILL)],
+  ];
+
+  test("every lethal command the documents show parses", () => {
+    for (const [name, text] of docs) {
+      const cmds = documentedCommands(text);
+      for (const sub of ["doctor", "run", "explain"]) {
+        expect(
+          cmds.some((c) => c[0] === sub),
+          `${name} shows no \`lethal ${sub}\``,
+        ).toBe(true);
+      }
+      for (const argv of cmds) {
+        expect(() => parseCliConfig(argv), `${name}: lethal ${argv.join(" ")}`).not.toThrow();
+      }
+    }
+  });
+
+  test("the reference's ownership table is FLAG_OWNERS", () => {
+    const rows = tableRows(section(read(REFERENCE), "Which subcommand reads which flag (checked)"));
+    expect(rows.length).toBeGreaterThan(5);
+    for (const [flagCell = "", ownersCell = ""] of rows) {
+      const flag = ticks(flagCell)[0]?.replace(/^--/, "") ?? "";
+      const row = FLAG_OWNERS.find((r) => r.flag === flag);
+      expect(row, `--${flag} has no FLAG_OWNERS row`).toBeDefined();
+      expect(ticks(ownersCell).sort(), `--${flag}`).toEqual([...(row?.owners ?? [])].sort());
+    }
+  });
+
+  test("the traps the reference warns about are refused", () => {
+    const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
+    // Each row: | `lethal <sub> ... --flag x` | what to do instead |. The command is run.
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const [cmdCell = ""] of rows) {
+      const argv = shellWords(ticks(cmdCell)[0] ?? "").slice(1);
+      expect(() => parseCliConfig(argv), argv.join(" ")).toThrow(
+        /is only accepted by|is not accepted by/,
+      );
+    }
+    const subs = rows.map(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1]);
+    expect(subs).toContain("run");
+    expect(subs).toContain("explain");
+  });
+
+  test("the run exit-code table is exitCodeForReport's", () => {
+    const rows = tableRows(section(read(REFERENCE), "Exit codes (checked)"));
+    expect(rows.map(([c = ""]) => ticks(c)[0]).sort()).toEqual(
+      ["0", "1", String(QUARANTINED_EXIT_CODE), String(NOTHING_SCORED_EXIT_CODE)].sort(),
+    );
+    const meaning = (code: number) =>
+      flowed(rows.find(([c = ""]) => ticks(c)[0] === String(code))?.[1] ?? "").toLowerCase();
+    expect(meaning(0)).toContain("says nothing about whether mutants survived");
+    expect(exitCodeForReport({ validity: { caveats: ["narrowed"] } })).toBe(0);
+    expect(meaning(1)).toContain("error");
+    expect(meaning(QUARANTINED_EXIT_CODE)).toContain("vouch for its own verdicts");
+    expect(meaning(NOTHING_SCORED_EXIT_CODE)).toContain("measured nothing");
+    expect(exitCodeForReport({ validity: { caveats: ["all-errors"] } })).toBe(
+      NOTHING_SCORED_EXIT_CODE,
+    );
+    expect(
+      exitCodeForReport({
+        quarantined: { reason: "x" } as never,
+        validity: { caveats: ["all-errors"] },
+      }),
+    ).toBe(QUARANTINED_EXIT_CODE);
+    expect(flowed(read(REFERENCE))).toContain(
+      `both quarantined and scored nothing, \`${QUARANTINED_EXIT_CODE}\` wins`,
+    );
+  });
+
+  test("the documented default database is the one run uses", () => {
+    const parsed = parseCliConfig(["run", "--project", "P", "--tests", "T", "--backend", "bcdev"]);
+    expect(parsed.mode === "run" ? parsed.dbPath : "").toBe(join("P", "lethal.sqlite"));
+    expect(read(REFERENCE)).toContain("`<project>/lethal.sqlite`");
+  });
+
+  test("every linked schema exists and each current one is linked", () => {
+    const text = read(REFERENCE);
+    const linked = [...text.matchAll(/\.\.\/schemas\/([a-z]+-v\d+\.schema\.json)/g)].map(
+      (m) => m[1] ?? "",
+    );
+    for (const f of linked) expect(existsSync(join(REPO_ROOT, "schemas", f)), f).toBe(true);
+    for (const f of [
+      `report-v${REPORT_SCHEMA_VERSION}`,
+      `explain-v${EXPLAIN_SCHEMA_VERSION}`,
+      `stream-v${STREAM_SCHEMA_VERSION}`,
+      `doctor-v${DOCTOR_SCHEMA_VERSION}`,
+    ]) {
+      expect(linked, `the reference must link ${f}.schema.json`).toContain(`${f}.schema.json`);
+    }
+  });
+
+  test("the demo report's counts are the ones quoted", () => {
+    const r = JSON.parse(read(GIFT_CARD)) as {
+      readonly counts: {
+        readonly killed: number;
+        readonly survived: number;
+        readonly noCoverage: number;
+      };
+      readonly mutants: readonly unknown[];
+    };
+    expect(flowed(read(REFERENCE))).toContain(
+      `${r.mutants.length} mutants, ${r.counts.killed} killed, ${r.counts.survived} survived, ${r.counts.noCoverage} no-coverage`,
+    );
+  });
+
+  test("every section says whether a test checks it", () => {
+    const headings = read(REFERENCE)
+      .split("\n")
+      .filter((l) => /^#{2,6} /.test(l));
+    expect(headings.length).toBeGreaterThan(10);
+    expect(headings.filter((h) => !/ \((checked|guidance)\)$/.test(h))).toEqual([]);
+  });
+
+  test("no em dashes", () => {
+    for (const [name, text] of docs) expect(text.includes("—"), name).toBe(false);
   });
 });

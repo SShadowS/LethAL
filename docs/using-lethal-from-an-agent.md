@@ -9,7 +9,7 @@ There is a copyable skill next to this document at
 [`../skills/lethal-mutation-testing/SKILL.md`](../skills/lethal-mutation-testing/SKILL.md). It is
 the short operational form of this page; this page is the reference.
 
-## What LethAL answers
+## What LethAL answers (guidance)
 
 It breaks your AL code on purpose, one small change at a time, and runs your tests against each
 break. A change your tests catch is **killed**. One they miss is a **survivor**. One no test even
@@ -19,7 +19,7 @@ The question it answers is not "did this line run" but "would anyone notice if t
 wrong". That is why its output needs the interpretation rules below: a survivor is a lead, not a
 proven test-suite gap.
 
-## Before anything else: `doctor`
+## Before anything else: `doctor` (checked)
 
 ```bash
 lethal doctor --config lethal.config.json --json
@@ -49,7 +49,7 @@ The `--json` payload:
 
 `--json` is accepted by `doctor` only. On any other subcommand it is refused rather than ignored.
 
-## Running
+## Running (checked)
 
 ```bash
 lethal run --project <app-dir> \
@@ -67,6 +67,9 @@ it, so `--only "src/**" --exclude "src/Upgrade/**"` reads the way it sounds. Bot
 both select mutants rather than sources (every file is still parsed, compiled and published), and
 both refuse a pattern that matches no file. The report records either narrowing and flags the run
 `narrowed`, so a scoped score can never be mistaken for a project score.
+
+**The database.** A run keeps its state in `<project>/lethal.sqlite` unless `--db` names another
+file. `lethal verify` reads that same file, so give it the run's database, not a new one.
 
 Durable exclusions belong in the config rather than the command line: a top-level
 `"exclude": ["src/Upgrade/**"]` in `lethal.config.json` is UNIONED with any `--exclude` flag, never
@@ -100,7 +103,45 @@ timeout; the default is 300 s), and `--no-group-runs` goes back to one call per 
 `--mutant-timeout-ms` above the ceiling minus 30 s makes every test run alone again, and the run
 warns (`group-runs-inert`) when that happens.
 
-### Exit codes
+### Which subcommand reads which flag (checked)
+
+Every subcommand refuses a flag it does not read; none accepts one and ignores it. The table lists
+the flags an agent is most likely to reach for. Any flag on a subcommand not listed for it is
+refused, with a message naming the subcommands that do read it. `campaign` also refuses some of
+its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
+
+| flag | read by |
+|---|---|
+| `--project` | `run`, `init`, `clear-ceiling`, `force-reset-lease`, `doctor`, `export`, `campaign` |
+| `--tests` | `run`, `doctor`, `verify` |
+| `--config` | `run`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
+| `--db` | `run`, `clear-ceiling`, `verify` |
+| `--out` | `run`, `init`, `export` |
+| `--progress-out` | `run` |
+| `--json` | `doctor` |
+| `--top` | `explain` |
+| `--report` | `campaign` |
+| `--only` | `run` |
+| `--exclude` | `run` |
+| `--tests-only` | `run` |
+| `--operator` | `run` |
+| `--artifact` | `verify` |
+| `--survivors` | `verify` |
+
+One exception remains: `lethal run --dry-run` still accepts its execution flags (such as
+`--backend` and `--workers`) and ignores them, because it executes nothing. That is filed on the
+roadmap.
+
+### Traps (checked)
+
+Commands that look right and are refused. Each one below is run by a test and must be refused.
+
+| command | instead |
+|---|---|
+| `lethal run --project app --tests tests --backend bcdev --report r.json` | `run` writes its report with `--out`. |
+| `lethal explain report.json --out e.json` | `explain` prints on stdout; redirect it: `lethal explain report.json > e.json`. |
+
+### Exit codes (checked)
 
 | Code | Meaning |
 |---|---|
@@ -121,12 +162,19 @@ is nothing to `--resume`. When a run is both quarantined and scored nothing, `3`
 A non-zero exit is never "the test suite is bad". Mutation results live in the report, not the exit
 code.
 
-## Reading the result
+## Reading the result (checked)
 
 Three surfaces, three purposes, each versioned separately.
 
-All four have a published JSON Schema in [`../schemas/`](../schemas/). Validate against those rather
-than trusting a shape you inferred from one example. Two caveats that file spells out: the stream
+All four have a published JSON Schema in [`../schemas/`](../schemas/):
+
+- the report: [../schemas/report-v2.schema.json](../schemas/report-v2.schema.json)
+- `lethal explain`: [../schemas/explain-v5.schema.json](../schemas/explain-v5.schema.json)
+- the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
+- `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
+
+Validate against those rather than trusting a shape you inferred from one example. Two caveats
+that [`../schemas/README.md`](../schemas/README.md) spells out: the stream
 schema describes an EVENT line, not the header the sink writes first, and the report schema
 describes the shape the current build writes, so an archived report of the same version can lack a
 now-required property.
@@ -137,11 +185,11 @@ now-required property.
 lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
 ```
 
-It is the gift card demo's rehearsal run — 43 mutants, 25 killed, 11 survived, 7 no-coverage — and it
+It is the gift card demo's rehearsal run: 60 mutants, 34 killed, 15 survived, 11 no-coverage. It
 is kept unredacted because that app is ours. Every other committed report has its source stripped;
 see `scripts/redact-first-party-reports.json` for the rule and how it is enforced.
 
-### `--out report.json` — the record
+### `--out report.json`: the record (checked)
 
 `schemaVersion: 2`. The full result: `counts`, `mutationScore`, `validity`, and every mutant with
 its verdict, location, operator, covering tests and coverage attribution. This is the artifact to
@@ -152,7 +200,7 @@ archive.
 narrowed run describes the slice, not the project. A run whose baseline was red could not score
 some mutants at all, and they read `no-coverage` rather than `survived`.
 
-### `lethal explain report.json` — what it MEANS
+### `lethal explain report.json`: what it MEANS (checked)
 
 `explainSchemaVersion: 5`. Reads that file and nothing else: no server, no database, no config.
 Prints JSON on stdout.
@@ -187,24 +235,24 @@ The output always carries `survivorSelection`, whether or not anything was cappe
 ```
 
 Read `total` before treating `survivors` as the whole set. `rankedBy` is `report-order` when no cap
-was applied and `actionability` when one was — ranked so that the rows carrying the most evidence
+was applied and `actionability` when one was, ranked so that the rows carrying the most evidence
 survive the cut, ordered totally, so the same report and the same cap give the same rows every
 time. The cap bounds survivors only; `notMeasured` is never shortened. `--top 0` is refused.
 
-### `--progress-out events.ndjson` — following a live run
+### `--progress-out events.ndjson`: following a live run (checked)
 
 `streamSchemaVersion: 1`. One JSON object per line, flushed as each event arrives, so a killed
 process still leaves a readable file. Line 1 is a header this sink writes itself and carries
 `ndjsonHeader: true`; every later line is an event with `seq`, `type` and `runId`.
 
 **Every verdict line is PROVISIONAL until `session-finished` appears.** A `batch-invalidated` event
-can supersede a verdict already written to the file — a lease loss, or a deploy that turns out
+can supersede a verdict already written to the file: a lease loss, or a deploy that turns out
 unsound, sends its batch round again. Acting on a `survived` line that a later event retracts means
 acting on a fact the run itself no longer stands behind.
 
 Unknown event types are ignored by design, so a future event type does not break a consumer.
 
-## The five rules
+## The five rules (checked)
 
 1. **Read `validity` before quoting `mutationScore`.** The number without its caveats is not a
    result.
@@ -215,7 +263,7 @@ Unknown event types are ignored by design, so a future event type does not break
 5. **Exit `4` means the run measured nothing.** There is no score and no survivor; read the
    failure notes.
 
-## What LethAL cannot measure
+## What LethAL cannot measure (guidance)
 
 Stated so a consumer does not read an absence as a finding.
 
@@ -232,7 +280,7 @@ Stated so a consumer does not read an absence as a finding.
 - Coverage is procedure-level, and object-level for extension objects.
 
 
-### Which mutants can fail to terminate
+### Which mutants can fail to terminate (guidance)
 
 Six shapes have been found and three were fixed by giving the same question a form that cannot hang.
 What remains is small and named, so a stranded run is diagnosable rather than mysterious.
@@ -271,14 +319,14 @@ not turn it on unless you have been asked to.
 
 Full evidence for each is in [`../README.md`](../README.md) under Limits.
 
-## Config
+## Config (guidance)
 
 `lethal.config.json` sits next to the app by default; `--config` points elsewhere. Every required
 field is checked at startup and a missing one is named rather than defaulted. The shape is in the
 README's Configuration section. Credentials live in it, so treat it as a secret: do not read it
 into a transcript and do not copy it into an issue.
 
-## Safety
+## Safety (checked)
 
 - Point LethAL at a **sandbox or dev container only, never a production tenant.** The changed build
   stays published until you republish your own app, and a plain republish is refused as a

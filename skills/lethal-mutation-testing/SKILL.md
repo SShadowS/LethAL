@@ -33,7 +33,7 @@ lethal doctor --config lethal.config.json --json
 ```
 
 Read-only, seconds, reports every pre-flight problem at once. Exit `0` = all checks passed, `1` =
-at least one failed; branch on `checks[].name`. When it passes, read `notChecked` — the publish
+at least one failed; branch on `checks[].name`. When it passes, read `notChecked`: the publish
 ceiling and baseline test health are NOT covered by a green report.
 
 Fix what it names before running. It is much cheaper than discovering the same problem mid-run.
@@ -61,10 +61,10 @@ lethal run --project <app-dir> \
            --progress-out events.ndjson
 ```
 
-- `--backend bcdev` is authoritative. `al-runner` is offline and under-reports kills; never quote a
-  score from it.
+- `--backend bcdev` is authoritative. `al-runner` is offline and NOT authoritative: its coverage is
+  conditional, so an unreached mutant can come back survived; never quote a score from it.
 - `--only` and `--operator` choose which mutants run and cannot change a verdict. `--tests-only`
-  chooses which tests run and CAN — excluding a killing test reports its mutant as survived.
+  chooses which tests run and CAN: excluding a killing test reports its mutant as survived.
 - Runs take minutes to hours. Do not poll `events.ndjson` in a tight loop; read it when the run
   ends, or tail it if the user wants progress. A mutant's covering tests run in ONE server call
   (LethAL Control 1.0.0.17 or newer; older is refused up front), so survivors are no longer the
@@ -74,7 +74,7 @@ lethal run --project <app-dir> \
 **Exit codes: `0` completed, `1` error, `3` quarantined, `4` nothing scored.** `4` means every
 mutant errored and the run measured nothing: no score, no survivors, read the failure notes and
 fix the cause (there is nothing to resume). `3` means the run refused to vouch for
-its own verdicts — not that the tests failed. Do not report verdicts from a quarantined run;
+its own verdicts, not that the tests failed. Do not report verdicts from a quarantined run;
 `--resume` continues it once the cause is fixed.
 
 ## 4. Read the result
@@ -85,7 +85,7 @@ lethal explain report.json --top 15
 
 Prints JSON. Reads only that file: no server, no database, no config.
 
-- **`survivorSelection` first.** `{ total, shown, omitted, rankedBy }` — always present. If
+- **`survivorSelection` first.** `{ total, shown, omitted, rankedBy }`, always present. If
   `omitted` is above zero, the survivor list is a ranked prefix, not the whole set.
 - **`score`** carries `mutationScore` with `reliability` and `scoreDescribes`. Quote the number only
   with those. Also read `caveats`: a narrowed run's score describes the slice, not the project, and
@@ -95,7 +95,7 @@ Prints JSON. Reads only that file: no server, no database, no config.
   proves the mutated code ran, so it may be no finding at all. `reach: "covered-but-unreached"`
   means a test enters the procedure and never reaches the statement, which calls for a new case
   rather than a stronger assertion.
-- Structure is contractual; the prose in `meaning` is not. Never regex it — every machine-usable
+- Structure is contractual; the prose in `meaning` is not. Never regex it; every machine-usable
   fact is already a field.
 
 For the full record rather than the interpretation, read `report.json` itself
@@ -106,7 +106,7 @@ For the full record rather than the interpretation, read `report.json` itself
 1. Read `validity` before quoting `mutationScore`.
 2. A survivor is a lead, not a proven test-suite gap. Some survivors cannot be killed by any test.
    Check `executionProven` first.
-3. In `events.ndjson`, every verdict line is PROVISIONAL until a `session-finished` event appears —
+3. In `events.ndjson`, every verdict line is PROVISIONAL until a `session-finished` event appears:
    a later `batch-invalidated` can retract one.
 4. Exit `3` means the verdicts are not vouched for. Do not report them.
 5. Exit `4` means the run measured nothing. There is no result to report, only a cause to fix.
