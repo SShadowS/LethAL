@@ -18,6 +18,9 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 3. `coord doctor`, read `H:\lethal-coord\handoff\<session>.md` if it exists.
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
+5. Tell the orchestrator you are alive, always, also after a `/clear` or a resume: send
+   `lethal-orchestrator` the message `online: <session> (fresh session), state: <doing <id>
+   run <runId> | idle>`. Without it the orchestrator keeps waiting on your old session.
 
 ## Doing a task
 

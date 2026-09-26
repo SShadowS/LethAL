@@ -17,7 +17,9 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 0. `coord pause-state`: paused -> tell the lane `pause: stop at your next safe point` once,
    sweep again in 30 minutes, do nothing else. Not paused but a run shows `wait: paused` ->
    send `resume: continue from your handoff`.
-1. Doorbell messages first: submitted tasks go to review.
+1. Doorbell messages first: submitted tasks go to review. An `online: <session>` message
+   means that lane is a fresh session (after a `/clear` or a restart): send it the protocol
+   line, check its `coord status --lane`, and dispatch it again if it is idle.
 2. For each lane that is idle with `coord next <lane>` non-empty, pick by priority and send
    `next: <id>`. Lane `code` (`lethal-code`): c02 children in dependency order. Lane `bugs`
    (`lethal-bugs`): GH-25, GH-24, GH-09, GH-07, then GH-06, GH-04. A bug whose plan would touch
