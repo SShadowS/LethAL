@@ -5278,7 +5278,12 @@ export interface NamedMutantsConfig {
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
 export interface UnmutatedRun {
   readonly ref: TestMethodRef;
-  /** `not-run`: the session latched, or the dispatch stopped, before this method ran. */
+  /**
+   * `not-run`: no result for this method. For a rerun: the session latched, or the dispatch
+   * stopped, before it ran. For a baseline method: it never reached `select`. A baseline that
+   * stops AND latches the session never reaches `select` at all, so the methods that DID run
+   * before that stop are reported `not-run` too.
+   */
   readonly outcome: TestVerdict["outcome"] | "not-run";
   readonly failureMessage?: string;
   readonly testRunsBefore?: number;
@@ -5361,6 +5366,14 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
   const named = resolveNamedMutants(manifest, cfg.requests);
+  // `rerun` is answered by `testKeyOf`, so a repeated ref would report its second run twice.
+  const rerunKeys = (cfg.rerunOnUnmutated ?? []).map(testKeyOf);
+  const repeatedRerun = [...new Set(rerunKeys.filter((k, i) => rerunKeys.indexOf(k) !== i))];
+  if (repeatedRerun.length > 0) {
+    throw new NamedMutantError(
+      `${who}: rerunOnUnmutated names a test method more than once: ${repeatedRerun.join(", ")}`,
+    );
+  }
   if (cfg.inLease !== undefined && cfg.lease === undefined) {
     throw new NamedMutantError(
       "inLease requires a lease: a publish outside the fence would not hold the lease's operation marker, and the backend's op sequence would be stale for the first RunMutant after it",
@@ -5485,7 +5498,10 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       await activateOnce(backend, safety, null);
       for (const ref of rerunRefs) {
         const { verdict, stop } = await dispatchUnmutated(scope, ref);
+        // A verdict the dispatch stopped on (a lease loss, a strand) is not a result, so it is
+        // never fresh: its method can only be `flaky-unknown`, never `flaky`.
         const fresh =
+          !stop &&
           ranInFreshSession(verdict) &&
           verdict.sessionId !== undefined &&
           !seen.has(verdict.sessionId);

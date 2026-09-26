@@ -10187,9 +10187,16 @@ class NamedFake implements ExecutionBackend {
         readonly n: number;
         readonly ref: TestMethodRef;
       }) => { readonly sessionId: number; readonly testRunsBefore: number } | undefined;
+      /** C02-06 Task 5.4: replaces an unmutated run's verdict. `nth` counts this ref's unmutated
+       *  runs from 1 (1 is its baseline run, 2 its rerun). `undefined`: the default verdict. */
+      readonly unmutated?: (c: {
+        readonly ref: TestMethodRef;
+        readonly nth: number;
+      }) => TestVerdict | undefined;
     },
   ) {}
   private readonly kindSeq = new Map<string, number>();
+  private readonly unmutatedSeq = new Map<string, number>();
   private keys(kind: "unmutated" | "mutant" | "many" | "replay", ref: TestMethodRef) {
     const n = (this.kindSeq.get(kind) ?? 0) + 1;
     this.kindSeq.set(kind, n);
@@ -10224,7 +10231,13 @@ class NamedFake implements ExecutionBackend {
     this.active = id;
   }
   async run(ref: TestMethodRef, _o: RunOpts): Promise<TestVerdict> {
-    const v = this.verdictOf(ref);
+    let v = this.verdictOf(ref);
+    if (this.active === null) {
+      const k = `${ref.codeunitId}::${ref.method}`;
+      const nth = (this.unmutatedSeq.get(k) ?? 0) + 1;
+      this.unmutatedSeq.set(k, nth);
+      v = this.o.unmutated?.({ ref, nth }) ?? v;
+    }
     return { ...v, ...this.keys(this.active === null ? "unmutated" : "mutant", ref) };
   }
   private verdictOf(ref: TestMethodRef): TestVerdict {
@@ -10311,6 +10324,7 @@ async function installedFixture(
     readonly killerRef?: TestMethodRef;
     readonly observedAny?: boolean;
     readonly session?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["session"]>;
+    readonly unmutated?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["unmutated"]>;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
@@ -10940,6 +10954,44 @@ describe("C02-04b: runNamedMutants", () => {
     expect(tr.slice(stranded + 1).some((c) => c.call === "run" || c.call === "runMany")).toBe(
       false,
     );
+  });
+});
+
+describe("C02-06 Task 5.4: the rerun's own contract (5.3 review)", () => {
+  test("a rerun the dispatch stopped on is never fresh, so a lease loss or strand cannot read as flaky", async () => {
+    // The stranded rerun answers `fail` from a fresh-looking session. Its verdict is not a result
+    // (the dispatch stopped on it), so decision 11 must never call it fresh.
+    const fx = await installedFixture({
+      killer: "none",
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        nth === 2
+          ? { ref, outcome: "fail", durationMs: 1, operation: "in-flight-unknown" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      quarantineDir: freshTmpDir(),
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+    });
+    expect(res.quarantined).toContain("in-flight-unknown");
+    expect(res.rerun.map((r) => [r.outcome, r.testRunsBefore, r.fresh])).toEqual([
+      ["fail", 0, false],
+    ]);
+  });
+
+  test("rerunOnUnmutated naming one ref twice is refused before any backend call", async () => {
+    const fx = await installedFixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      rerunOnUnmutated: [OVER2, OVER, { ...OVER2 }],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toContain("79101::OverBudgetDetected");
+    expect(calls(fx.trace)).toEqual([]);
   });
 });
 
