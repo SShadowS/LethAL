@@ -402,4 +402,42 @@ the full bytes of the same call's answer. Warm-up sessions are included and mark
 - **Descriptive only, not a prediction:** whether the offsets fall on a buffer or chunk boundary, or at a
   payload position such as inside the CLR callstack text.
 
+## Addendum 2026-09-26, incident: the calibration read the wrong container (before any Cronus284 session)
+
+### E1. What happened
+
+- At about 17:17 UTC on 2026-09-26, the read-only calibration meant for Cronus284 ran against **Cronus28**,
+  without the Cronus28 lease. The cause: `probe.ts` hard-coded
+  `PROJECT_DIR = "U:/Git/LethAL/fixtures/sandbox-data"`, the MAIN checkout, so both scripts read the main
+  checkout's gitignored config, whose `bcdev.server` still named Cronus28, instead of this worktree's config
+  (`http://Cronus284`). The container-from-config change (D1) then correctly derived Cronus28 from the wrong
+  config.
+- The calibration makes no writes: `HarnessInfo` calls, `Get-NAVServerSession`, and SELECT statements in the
+  tenant database. The orchestrator checked Cronus28 afterwards and found it clean.
+- That run's output is discarded. It is not a Cronus284 calibration and governs nothing.
+- The Cronus28 smokes of D3 were run under the Cronus28 lease, from the main checkout, and so used the main
+  checkout's fixture copy at master 7b51d1f. D3's facts stand as pre-arm observations of that tree.
+
+### E2. The fix (commit 9661386)
+
+- `PROJECT_DIR`, `TEST_DIR`, `CONFIG_PATH` and the launch config now resolve from the script's own location
+  (two levels up is the repo root). A copy of the scripts in the 7b7fff3 worktree (Task 4 step 5) therefore
+  resolves to THAT worktree's fixture, and that worktree needs its own copy of the gitignored
+  `fixtures/sandbox-data/lethal.config.local.json` naming Cronus284 before it runs.
+- Every probe record and calibration line carries `projectDir`, `server` and `container`, and both scripts
+  print them at start.
+- No other absolute path remains in the probe folder: scratch directories, the scratch store and the scratch
+  quarantine directory are under the OS temp directory; the control app comes from the config or
+  `--control-app`; the only absolute defaults left are the coord script and root below, both flags.
+
+### E3. The lease guard (commit 9661386)
+
+- Before ANY network call, `probe.ts` and `calibrate.ts` derive the container from the config's server host
+  and run `coord holder <container>` (`deno run --allow-all <coord-script> holder <container>` with
+  `CG_COORD_ROOT=<coord-root>`; defaults `U:/Git/agent-coord/coord.ts` and `H:\lethal-coord`, flags
+  `--coord-script` and `--coord-root`).
+- They proceed only if the holder is lane **"bugs"**. A null holder, another lane, a coord that exits non-zero
+  or cannot be spawned, or output that is not the expected JSON all REFUSE with exit 2 and a message naming the
+  container and what coord showed. The first network call happens only after the guard passes.
+
 ## OUTCOME
