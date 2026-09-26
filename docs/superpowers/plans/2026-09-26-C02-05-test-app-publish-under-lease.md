@@ -60,13 +60,12 @@ const res = await runNamedMutants({ ...cfg, inLease: async (fence) => {
 | altool | read-back | outcome | `TestAppError.reason` | fence does |
 |---|---|---|---|---|
 | exit 0 | our bytes | `accepted` | (returns the identity) | EndPublish `succeeded`, op seq stored |
-| exit != 0, BC's downgrade refusal text (`parseVersionConflict`) | READABLE, not our bytes | `failed` | `publish-failed` | EndPublish `failed`, no recycle |
-| exit != 0, any other text | READABLE, not our bytes | `indeterminate` | `publish-indeterminate` | marker left, `container-needs-recycle` (review r1) |
+| exit != 0 | READABLE, not our bytes | `failed` | `publish-failed` | EndPublish `failed`, no recycle |
 | exit != 0 | unreadable (`null`) | `indeterminate` | `publish-indeterminate` | marker left, `container-needs-recycle` |
 | exit 0 | not our bytes, or unreadable | `indeterminate` | `publish-indeterminate` | marker left, `container-needs-recycle` |
 | exit != 0 | our bytes | `anomalous` | `publish-anomalous` | marker left, `container-needs-recycle` |
 
-So `publish-failed` requires positive evidence twice over: BC's own refusal text, and a server that answered with something that is not ours. Review r1: without the refusal text, one immediate read of the old bytes cannot show BC refused, because altool may have lost its response after dispatch while BC is still applying the publish.
+So `publish-failed` requires positive evidence: the server answered, and what it holds is not ours.
 
 `isConfirmedTerminalPublishFailure` (orchestrator.ts) gains one line, placed FIRST: `if (err instanceof TestAppError) return err.confirmedTerminal;`, true only for `publish-failed`. First matters: an anomalous publish's message carries altool's text, which may contain BC's "newer version ... was already installed", and the existing `parseVersionConflict` fallback would otherwise call it terminal and tombstone a marker over a publish that landed.
 
