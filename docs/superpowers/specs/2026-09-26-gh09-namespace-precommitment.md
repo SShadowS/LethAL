@@ -148,6 +148,121 @@ covering set.
   79250 fails `alc`: `error AL0297: The application object identifier '79250' is not valid. It
   must be within the allowed ranges '[79000..79199]'.` Not filed.
 
+## Addendum 2026-09-26 (before any live run): H2 decision rule, pre-fix dry run, al-runner note
+
+Written after review and before any live run. Sections 1 to 4 above are unchanged; where this
+addendum and an earlier section disagree, this addendum wins.
+
+### A.1 The H2 decision rule (supersedes §3.5's D / D-2 rule and the plan's step 8 wording)
+
+Decide H2 by the LOWEST positive-hit `ClampPercentRuns` row for `Codeunit 79000` with `lineNo > 0`
+in **24..30**:
+
+- **27**, with 25 and 26 absent: base 1, H2 **refuted**;
+- **26**: shift 1, H2 **confirmed**;
+- **25**: shift 2, H2 **confirmed**;
+- anything else (no row in 24..30, or a lowest row of 24, 28, 29 or 30): **stop and report**.
+
+"Shift k" means a statement on instrumented file line L arrives as row L - k. Rows for any OTHER
+object, including the selector codeunits 79197 to 79199, are outside the rule because it filters
+`Codeunit 79000`.
+
+### A.2 Proof that only ClampPercent can put a row in 24..30
+
+Source: the instrumented project regenerated exactly as a run builds it, `generateMutationSet`
+over `fixtures/sandbox-app` then `writeInstrumentedProject` (selector ids 79197 to 79199), on the
+lane head 4ab1604, so WITH GH-24's reach markers and `LethALReachLatch` declarations. 19 mutants.
+The regenerated `SandboxLogic.Codeunit.al` is byte-identical to the one §3.5 was read from.
+
+Instrumented lines 20 to 32, verbatim:
+
+```al
+end else begin
+  begin
+        exit(Amount > Budget);                          // ConditionalBoundary + ReturnValue
+    end
+end
+end;
+
+    procedure ClampPercent(Value: Integer): Integer
+    var LethALReachLatch: Boolean; begin
+if MutationSelector.Active('M0004') then begin
+  if not LethALReachLatch then begin MutationSelector.Reached('M0004'); LethALReachLatch := true; end; begin end
+end else if MutationSelector.Active('M0005') then begin
+  begin
+```
+
+Every procedure and trigger of `Codeunit 79000`, with its instrumented span (procedure line
+through `end;`, which is how BC's rows cover a procedure, measured, and how `spansOf` reads it):
+
+| Member | Span (file lines) | Executed by `ClampPercentRuns`? |
+|---|---|---|
+| `IsOverBudget` | 8..25 | **no**: only `OverBudgetDetected` calls it |
+| `ClampPercent` | 27..62 | **yes**: called directly |
+| `ApplyAudit` | 64..77 | **yes**: called directly |
+| `LogAudit` (local) | 79..112 | **yes**: called by `ApplyAudit`'s original arm (line 74) |
+
+The codeunit has no triggers. Lines 1 to 7 are the namespace, the header and the global `var`
+holding `MutationSelector`; line 113 is the closing `}`. `ClampPercent` itself calls nothing in
+79000: its only calls are `MutationSelector.Active` and `MutationSelector.Reached`, which run in
+`Codeunit 79199` and are excluded by the rule's object filter. `ClampPercentRuns` is the test
+body `SandboxLogic.ClampPercent(50); SandboxLogic.ApplyAudit(10);` and nothing else.
+
+Rows the executed members can occupy under each frame:
+
+| Frame | ClampPercent | ApplyAudit | LogAudit | In 24..30 |
+|---|---|---|---|---|
+| base 1 | 27..62 | 64..77 | 79..112 | ClampPercent only (27..30) |
+| shift 1 | 26..61 | 63..76 | 78..111 | ClampPercent only (26..30) |
+| shift 2 | 25..60 | 62..75 | 77..110 | ClampPercent only (25..30) |
+
+The nearest executed neighbour, `ApplyAudit`, starts at row 62 at the lowest, so no other executed
+procedure reaches 24..30 under any of the three frames. **The proof holds**: the lowest row in
+24..30 can only be ClampPercent's, and its value names the frame. For completeness, the one member
+that COULD reach the window, `IsOverBudget` (row 24 under shift 1, its `end;`), is not executed by
+this test, and the rule counts positive-hit rows only.
+
+### A.3 Pre-fix dry run (plan step 6b): a stop condition
+
+Step 6b must also show, on the pre-fix client `3db4a00~1`, **19 deployed mutants**, including the
+three `IsOverBudget` operators by name (`lethal.conditional-boundary`, `lethal.empty-block`,
+`lethal.return-value`). That client's tree-sitter-al predates `7b1e344`, so it may parse the
+namespaced file differently. If the three are missing, "kills not lost" in §3.3 could mean the
+mutants never existed rather than that attribution worked. **Fewer than 19, or any of the three
+absent: stop and report**; the §3.3 comparison is not run on it.
+
+### A.4 al-runner note, and the four legs of §3.2 named
+
+The `--server` leg (and the resource leg, which also runs through the server) takes each coverage
+statement's procedure name from al-runner's own `scope` field. What `scope` holds for a codeunit
+inside a namespace is **UNMEASURED**. A mismatch fails safe: the covering set comes back empty,
+the three kills fall to `no-coverage`, the per-mutant comparison against the one-shot leg fails,
+and the gate blocks. It cannot turn into a false kill.
+
+§3.2 says "all four legs" but names three. The four, as `packages/runner/itest/al-runner.itest.ts`
+runs them:
+
+1. **one-shot**: compared per mutant to `al-runner.baseline.json`, and the R147 platform-apps pin
+   asserted;
+2. **one-shot rerun**: the pin asserted again, and its per-mutant table must equal leg 1's
+   (determinism);
+3. **`--server`**: per-mutant equal to leg 1;
+4. **`--server` + `selectorMode: "resource"`**: per-mutant equal to leg 1.
+
+The pin is asserted on legs 1 and 2 only; the server legs never receive it (R235).
+
+### A.5 The issue #9 comment
+
+Record whether the pre-fix run prints the `declaredRows === 0` warning. Write "same failure as
+issue #9" ONLY if it does. §3.3 predicts it does not, because the root-level selector rows stay
+declared; in that case the comment says what the fixture reproduces instead: the three
+`IsOverBudget` kills lost to `no-coverage`, with nothing warning about it.
+
+### A.6 Task 2's red-check
+
+Task 2's red-check will force shift 1 and shift 2, so both confirming outcomes of A.1 are exercised
+offline, not only the one the live run happens to show.
+
 ## Measured
 
 (Filled in after the live runs, plan Task 1 step 10.)
