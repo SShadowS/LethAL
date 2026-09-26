@@ -212,7 +212,7 @@ export function equivalenceMarkWarnings(report: EquivalenceMarkReport): string[]
 }
 
 /**
- * R172 proposal 3 — load the reader's equivalence rulings for this project, if any.
+ * R172 proposal 3: load the reader's equivalence rulings for this project, if any.
  *
  * Discovery is a fixed filename beside the project rather than a CLI flag: a mark is a durable
  * property of the CODEBASE (this mutant, in this procedure, cannot be killed, and here is why), not
@@ -220,7 +220,7 @@ export function equivalenceMarkWarnings(report: EquivalenceMarkReport): string[]
  * one silently not, and two runs of the same project would then disagree about which survivors a
  * human had already examined.
  *
- * Absent file means absent feature, silently — that is the overwhelmingly common case and warning
+ * Absent file means absent feature, silently: that is the overwhelmingly common case and warning
  * about it every run would train people to ignore the line. A file that EXISTS and is malformed
  * throws, because a partially-loaded set of rulings is indistinguishable from survivors nobody has
  * looked at yet.
