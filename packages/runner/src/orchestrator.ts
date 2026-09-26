@@ -3321,7 +3321,7 @@ async function dispatchUnmutated(
       quarantineStore,
       resourceKey,
       nowIso,
-      detail: `baseline test in-flight-unknown running ${ref.method}`,
+      detail: `baseline test in-flight-unknown running ${ref.method}: ${v.failureMessage ?? "no failure message"}`,
     });
     return { verdict: v, stop: true };
   }
