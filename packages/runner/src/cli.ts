@@ -3339,6 +3339,9 @@ export async function runFromCli(
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
         ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+        // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
+        // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
+        preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
         ...afterLeaseAcquiredFor(envSession),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined

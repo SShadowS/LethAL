@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -25,7 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage } from "../src/baseline-snapshot";
+import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
@@ -3423,6 +3423,81 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(last.artifact_id).toBe(secondArtifact.artifactId);
     // C02-02 Task 3: the report's own `artifacts[]` names the same batches the store recorded.
     expect(report.artifacts).toEqual(store.artifactsForRun(run.id));
+    store.close();
+  });
+
+  // C02-06: lethal verify finds the installed files through the store alone, so step 3d must
+  // record the ones the compiler actually produced. PhaseBackend.returned is the oracle.
+  test("step 3d records the app path and batch dir it compiled", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const record = store.artifactRecordById(returned.artifactId);
+    expect(record?.appPath).toBe(returned.appPath);
+    // PhaseBackend writes its package inside the directory it compiled.
+    expect(record?.instrumentedDir).toBe(dirname(returned.appPath));
+    store.close();
+  });
+
+  test("runSession records the target source hash when generation and the last batch agree", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = new PhaseBackend();
+    await runSession({ backend, store, ...dirs, selectorIds, preprocessorSymbols: ["CLEAN24"] });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const expected = await hashTargetSource(dirs.projectDir, ["CLEAN24"]);
+    expect(store.artifactRecordById(returned.artifactId)?.sourceSha256).toBe(expected);
+    store.close();
+  });
+
+  test("an edit between generation and the last batch's preparation records NULL and warns", async () => {
+    const dirs = await makeProject();
+    // A second carrier file so maxGuardsPerBatch: 1 gives two batches; the edit lands while the
+    // first batch publishes, after generation read the source and before the last batch's
+    // preparation.
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    const backend = new PhaseBackend({
+      onPublish: (attempt) => {
+        if (attempt === 1) {
+          writeFileSync(join(dirs.projectDir, "Helper.Codeunit.al"), "codeunit 79003 Helper { }");
+        }
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    const run = store.db.query("SELECT id, source_sha256 FROM runs LIMIT 1").get() as {
+      id: number;
+      source_sha256: string | null;
+    };
+    expect(run.source_sha256).toBeNull();
+    const warned = events.filter(
+      (e) => e.type === "warning" && e.code === "source-changed-during-run",
+    );
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.type === "warning" ? warned[0].message : "").toContain(`run ${run.id}`);
     store.close();
   });
 });

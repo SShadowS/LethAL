@@ -48,7 +48,13 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { hashAlTree, snapshotApplies, testAppHashFor } from "./baseline-snapshot";
+import {
+  hashAlTree,
+  hashTargetSource,
+  snapshotApplies,
+  targetAlFiles,
+  testAppHashFor,
+} from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
@@ -1249,6 +1255,19 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
     );
   }
   return id;
+}
+
+/** C02-06: `hashTargetSource`, or `undefined` when the tree cannot be read (no `app.json`, say).
+ *  `undefined` never matches, so an unreadable tree records no hash rather than a wrong one. */
+async function hashTargetSourceOrUndefined(
+  projectDir: string,
+  symbols: readonly string[],
+): Promise<string | undefined> {
+  try {
+    return await hashTargetSource(projectDir, symbols);
+  } catch {
+    return undefined;
+  }
 }
 
 async function prepareArtifactDir(args: {
@@ -3853,6 +3872,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
+  // C02-06 decision 8: hashed BEFORE generation reads the source and again after the last batch
+  // is prepared (below); recorded only when the two agree, so the hash names the source actually
+  // instrumented. Hashing after generation instead would miss an edit landing between the two.
+  const sourceSymbols = cfg.preprocessorSymbols ?? [];
+  const sourceHashAtGeneration = await hashTargetSourceOrUndefined(cfg.projectDir, sourceSymbols);
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -4185,6 +4209,18 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         appVersion,
         artifactId,
       });
+      if (batchIdx === artifacts.length - 1) {
+        const atLastBatch = await hashTargetSourceOrUndefined(cfg.projectDir, sourceSymbols);
+        if (atLastBatch !== undefined && atLastBatch === sourceHashAtGeneration) {
+          cfg.store.recordSourceHash(runId, atLastBatch);
+        } else {
+          emit({
+            type: "warning",
+            code: "source-changed-during-run",
+            message: `[lethal] the target's source changed (or could not be read) while run ${runId} was preparing its batches, so no source hash is recorded and \`lethal verify\` will refuse this run. Re-run \`lethal run\` on a tree nothing edits mid-run to verify against it.`,
+          });
+        }
+      }
       const manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
@@ -4409,6 +4445,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           // C02-04b: the manifest the compiler was GIVEN, in the same insert as the .app hash.
           // This is the only moment both are in hand; loadInstalledArtifact trusts nothing else.
           manifestSha256: Bun.SHA256.hash(JSON.stringify(compiled.mutantManifest), "hex"),
+          // C02-06: where lethal verify finds the installed build's files. Not identity: verify
+          // re-hashes them against this row.
+          appPath: compiled.appPath,
+          instrumentedDir: batchDir,
         });
       }
       // 3e. R90: the OTHER half of the measurement. A ceiling recorded only from failures is a
@@ -6727,11 +6767,11 @@ export async function prepareBatchProject(
   // So collisions are detected here on the SOURCE paths, independently of what is already on
   // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
   // files, so the flattening survives there — by luck, not by design.)
+  // C02-06: the `.al` set comes from `targetAlFiles`, which `hashTargetSource` hashes too, so the
+  // recorded source hash covers exactly the AL this copies.
+  const alFiles = await targetAlFiles(projectDir);
   const alBySeenBasename = new Map<string, string>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
-    if (!rel.toLowerCase().endsWith(".al")) continue;
+  for (const rel of alFiles) {
     const base = basename(rel);
     const previous = alBySeenBasename.get(base.toLowerCase());
     if (previous !== undefined) {
@@ -6749,12 +6789,7 @@ export async function prepareBatchProject(
   // named relative to ITS directory, and the `.al` files above were just flattened onto the batch
   // root, so the resource has to appear at the batch root under the same relative tail. See the
   // second copy below.
-  const alDirs = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
-    if (rel.toLowerCase().endsWith(".al")) alDirs.add(dirname(rel));
-  }
+  const alDirs = new Set(alFiles.map((rel) => dirname(rel)));
 
   // Resources: same set minus the `.al` files above, minus the stamped `app.json` and any
   // already-built `.app` package, copied with their directory structure intact.
@@ -7266,6 +7301,8 @@ export function record(
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(unplaceable !== undefined ? { unplaceable } : {}),
+    // C02-06: always written, so a NULL can only mean a row from before the column existed.
+    carried: carried === true,
   });
   outcomes.push({
     mutant: m,

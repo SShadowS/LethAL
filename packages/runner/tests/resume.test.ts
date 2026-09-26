@@ -1073,6 +1073,37 @@ describe("runSession --resume (R47)", () => {
     expect(report.validity.baselineTests).toEqual(control.validity.baselineTests);
   });
 
+  // C02-06: lethal verify refuses a carried row, because a carried verdict was measured against
+  // an earlier build. Same run as the test above: batch 0 carries whole, batch 1 runs.
+  test("a carried verdict is stored carried, a measured one not", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new CountingBackend("pass", undefined, 2),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+    });
+    const run = store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number };
+    const batch0 = store.batchMutantRows(run.id, 0);
+    const batch1 = store.batchMutantRows(run.id, 1);
+    // Batch 0 carried whole (three mutants); batch 1 measured its own, including the stranded one
+    // it skips as error, which is recorded, not carried.
+    expect(batch0.map((r) => r.carried)).toEqual([true, true, true]);
+    expect(batch1.map((r) => r.carried)).toEqual([false, false, false]);
+    // The report, built from events rather than the store, agrees on how many carried.
+    expect(report.mutants.filter((m) => m.carried === true)).toHaveLength(3);
+  });
+
   test("R192 (second half): a changed test app means the baseline IS re-run", async () => {
     const dirs = await makeProject({ secondFile: true });
     const store = new ResultsStore(":memory:");

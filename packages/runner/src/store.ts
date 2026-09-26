@@ -126,6 +126,12 @@ export interface MutantRow {
   readonly coveringTests?: readonly string[];
   readonly coverageAttribution?: CoverageAttribution;
   readonly unplaceable?: boolean;
+  /**
+   * C02-06: true when `--resume` carried this verdict from a prior run instead of measuring it.
+   * `record()` always passes it; absent writes NULL, which `lethal verify` reads as "unknown" and
+   * refuses, never as "not carried".
+   */
+  readonly carried?: boolean;
 }
 
 /**
@@ -215,7 +221,8 @@ CREATE TABLE IF NOT EXISTS runs (
   app_id TEXT,
   artifact_id TEXT,
   artifact_sha256 TEXT,
-  config_fingerprint TEXT
+  config_fingerprint TEXT,
+  source_sha256 TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,7 +246,8 @@ CREATE TABLE IF NOT EXISTS mutants (
   covering_tests TEXT,
   coverage_attribution TEXT,
   unplaceable INTEGER,
-  identity_ordinal INTEGER
+  identity_ordinal INTEGER,
+  carried INTEGER
 );
 -- idx_mutants_identity is created by migrate(), NOT here. It covers procedure_name, which R166
 -- added by ALTER, and SCHEMA runs BEFORE migrate() -- so naming that column here throws
@@ -257,7 +265,8 @@ CREATE TABLE IF NOT EXISTS test_results (
   duration_ms INTEGER NOT NULL,
   failure_message TEXT,
   op_kind TEXT,
-  session_id INTEGER
+  session_id INTEGER,
+  codeunit_name TEXT
 );
 CREATE TABLE IF NOT EXISTS publish_outcomes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -292,6 +301,10 @@ CREATE TABLE IF NOT EXISTS batch_artifacts (
   -- C02-04b: SHA-256 of JSON.stringify(the manifest the compiler was given). NULL on a row written
   -- before the column existed, which trustedArtifactRecord's callers refuse rather than trust.
   manifest_sha256 TEXT,
+  -- C02-06: where step 3d's compiled package and batch dir are, for lethal verify. Not identity:
+  -- verify re-hashes the files against the row. NULL on an older row, which verify refuses.
+  app_path TEXT,
+  instrumented_dir TEXT,
   PRIMARY KEY (run_id, batch_index)
 );
 `;
@@ -426,6 +439,20 @@ export class ResultsStore {
     }>;
     if (!baCols.some((c) => c.name === "manifest_sha256")) {
       this.db.exec("ALTER TABLE batch_artifacts ADD COLUMN manifest_sha256 TEXT");
+    }
+    // C02-06: the five columns lethal verify reads. Every one stays NULL on an older row, and
+    // verify refuses a NULL as "recorded before verify existed", never reads it as a value.
+    for (const [table, col, known] of [
+      ["batch_artifacts", "app_path TEXT", baCols],
+      ["batch_artifacts", "instrumented_dir TEXT", baCols],
+      ["mutants", "carried INTEGER", cols],
+      ["runs", "source_sha256 TEXT", runCols],
+      ["test_results", "codeunit_name TEXT", trCols],
+    ] as const) {
+      const name = col.split(" ")[0] ?? "";
+      if (!known.some((c) => c.name === name)) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
+      }
     }
     // R90's `publish_outcomes` needs NOTHING here, and that is a property of it being a whole new
     // TABLE rather than a new column: `SCHEMA` runs `CREATE TABLE IF NOT EXISTS` on every open, so
@@ -654,6 +681,9 @@ export class ResultsStore {
       sha256: string;
       /** C02-04b: SHA-256 of JSON.stringify(compiled.mutantManifest). Absent writes NULL. */
       manifestSha256?: string;
+      /** C02-06: the compiled package and the batch dir it was built from. Absent writes NULL. */
+      appPath?: string;
+      instrumentedDir?: string;
     },
   ): void {
     // One transaction: the run-row UPDATE (last batch wins, unchanged) and the batch_artifacts
@@ -669,8 +699,8 @@ export class ResultsStore {
       this.db
         .query(
           "INSERT INTO batch_artifacts " +
-            "(run_id, batch_index, artifact_id, artifact_sha256, app_version, manifest_sha256) " +
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(run_id, batch_index, artifact_id, artifact_sha256, app_version, manifest_sha256, " +
+            "app_path, instrumented_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           runId,
@@ -679,6 +709,8 @@ export class ResultsStore {
           info.sha256,
           info.appVersion,
           info.manifestSha256 ?? null,
+          info.appPath ?? null,
+          info.instrumentedDir ?? null,
         );
     });
     tx();
@@ -743,6 +775,131 @@ export class ResultsStore {
       sha256: r.artifact_sha256,
       appVersion: r.app_version,
     }));
+  }
+
+  /** C02-06 decision 8: the target source hash, recorded only when generation and the last batch
+   *  read the same source (see `runSession`). */
+  recordSourceHash(runId: number, sha256: string): void {
+    this.db.query("UPDATE runs SET source_sha256 = ? WHERE id = ?").run(sha256, runId);
+  }
+
+  /**
+   * C02-06: the batch that recorded this artifact id, with its run. `null` when none. Two rows is
+   * a corrupt store (a random 32-hex id cannot repeat), so it throws rather than picking one.
+   * `highestBatchIndex` is the run's highest recorded batch, the only one still installed.
+   */
+  artifactRecordById(artifactId: string): {
+    runId: number;
+    projectPath: string;
+    batchIndex: number;
+    highestBatchIndex: number;
+    artifactSha256: string;
+    sourceSha256: string | null;
+    appPath: string | null;
+    instrumentedDir: string | null;
+  } | null {
+    const rows = this.db
+      .query(
+        "SELECT b.run_id, r.project_path, b.batch_index, " +
+          "(SELECT MAX(h.batch_index) FROM batch_artifacts h WHERE h.run_id = b.run_id) AS highest, " +
+          "b.artifact_sha256, r.source_sha256, b.app_path, b.instrumented_dir " +
+          "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id WHERE b.artifact_id = ?",
+      )
+      .all(artifactId) as Array<{
+      run_id: number;
+      project_path: string;
+      batch_index: number;
+      highest: number;
+      artifact_sha256: string;
+      source_sha256: string | null;
+      app_path: string | null;
+      instrumented_dir: string | null;
+    }>;
+    if (rows.length > 1) {
+      throw new Error(
+        `store.ts: the store records artifact ${artifactId} twice (runs ${rows.map((r) => r.run_id).join(", ")}). A random artifact id cannot repeat, so the store is corrupt.`,
+      );
+    }
+    const [row] = rows;
+    if (row === undefined) return null;
+    return {
+      runId: row.run_id,
+      projectPath: row.project_path,
+      batchIndex: row.batch_index,
+      highestBatchIndex: row.highest,
+      artifactSha256: row.artifact_sha256,
+      sourceSha256: row.source_sha256,
+      appPath: row.app_path,
+      instrumentedDir: row.instrumented_dir,
+    };
+  }
+
+  /** C02-06: one batch's mutant rows, in insert order. `carried` is null on a pre-column row. A
+   *  NULL or malformed `covering_tests` throws: every writer since R192 records the list. */
+  batchMutantRows(
+    runId: number,
+    batchIndex: number,
+  ): Array<{
+    mutantCode: string;
+    verdict: MutantVerdict;
+    coveringTests: readonly string[];
+    carried: boolean | null;
+  }> {
+    const rows = this.db
+      .query(
+        "SELECT mutant_code, verdict, covering_tests, carried, ast_hash, codeunit_name, " +
+          "operator_name FROM mutants WHERE run_id = ? AND batch_index = ? ORDER BY id",
+      )
+      .all(runId, batchIndex) as Array<{
+      mutant_code: string;
+      verdict: string;
+      covering_tests: string | null;
+      carried: number | null;
+      ast_hash: string;
+      codeunit_name: string;
+      operator_name: string;
+    }>;
+    return rows.map((r) => {
+      if (r.covering_tests === null) {
+        throw new Error(
+          `store.ts: mutant ${r.mutant_code} of run ${runId} batch ${batchIndex} has no "covering_tests" (a row from before R192)`,
+        );
+      }
+      return {
+        mutantCode: r.mutant_code,
+        verdict: r.verdict as MutantVerdict,
+        coveringTests: this.parseCoveringTests(r.covering_tests, r),
+        carried: r.carried === null ? null : r.carried !== 0,
+      };
+    });
+  }
+
+  /** C02-06: every BASELINE row of a run (`mutant_row_id IS NULL`), deduplicated, ordered by
+   *  codeunit id then method. `codeunitName` is null on a pre-column row. */
+  baselineTests(
+    runId: number,
+  ): Array<{ codeunitId: number; codeunitName: string | null; method: string }> {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT codeunit_id, codeunit_name, method FROM test_results " +
+          "WHERE run_id = ? AND mutant_row_id IS NULL ORDER BY codeunit_id, method, codeunit_name",
+      )
+      .all(runId) as Array<{ codeunit_id: number; codeunit_name: string | null; method: string }>;
+    return rows.map((r) => ({
+      codeunitId: r.codeunit_id,
+      codeunitName: r.codeunit_name,
+      method: r.method,
+    }));
+  }
+
+  /** C02-06 decision 11: every session id recorded under a run. */
+  sessionIdsOf(runId: number): Set<number> {
+    const rows = this.db
+      .query(
+        "SELECT DISTINCT session_id FROM test_results WHERE run_id = ? AND session_id IS NOT NULL",
+      )
+      .all(runId) as Array<{ session_id: number }>;
+    return new Set(rows.map((r) => r.session_id));
   }
 
   /**
@@ -815,8 +972,8 @@ export class ResultsStore {
         `INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name,
          operator_name, operator_major, file, line, verdict, killing_test, failure_note,
          killing_test_failure, kill_position, duration_ms, batch_index, runner,
-         covering_tests, coverage_attribution, unplaceable, identity_ordinal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         covering_tests, coverage_attribution, unplaceable, identity_ordinal, carried)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         runId,
@@ -840,6 +997,7 @@ export class ResultsStore {
         row.coverageAttribution ?? null,
         row.unplaceable === undefined ? null : row.unplaceable ? 1 : 0,
         row.identityOrdinal ?? 0,
+        row.carried === undefined ? null : row.carried ? 1 : 0,
       ) as { id: number };
     return r.id;
   }
@@ -894,14 +1052,15 @@ export class ResultsStore {
   ): void {
     this.db
       .query(
-        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, method, outcome, duration_ms, failure_message, op_kind, session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, codeunit_name, method, outcome, duration_ms, failure_message, op_kind, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
         mutantRowId,
         mutantCode,
         ref.codeunitId,
+        ref.codeunitName,
         ref.method,
         outcome,
         durationMs,
