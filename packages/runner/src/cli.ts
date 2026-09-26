@@ -1024,7 +1024,9 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
   --artifact <id>            the 32-hex artifactId from that run's report. Required, no default:
                              it names which build the survivor ids belong to
   --tests <dir>              the test project as it is now. Required
-  --survivors <ids>          <batchIndex>/<mutantCode> ids, comma separated (repeatable). Required
+  --survivors <ids>          <batchIndex>/<mutantCode> ids or gap ids (G + 12 hex, from lethal
+                             explain's gaps; one stands for its block's survivors), comma
+                             separated (repeatable). Required
   --config <path>            default: lethal.config.json in the project the database records.
                              A config with an envTool section is refused
   Every other flag is refused, --out included: the JSON always goes to stdout.
@@ -1433,7 +1435,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     const survivors = values.survivors ?? [];
     if (survivors.length === 0) {
       throw new Error(
-        "missing required --survivors <ids> (<batchIndex>/<mutantCode>, comma separated)",
+        "missing required --survivors <ids> (<batchIndex>/<mutantCode> ids or gap ids, comma separated)",
       );
     }
     return {
