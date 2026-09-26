@@ -177,6 +177,41 @@ async function runOnce(
   }
 }
 
+/**
+ * R147 pin check, called ONLY on the one-shot legs (R235). Only the one-shot CLI path sends the pin
+ * (`--package-cache <pin>` in place of `--auto-provision`); `--server` starts the daemon with
+ * `packagesDir` alone and never receives it, so asserting it on the server and resource legs would
+ * check a value that was recorded but not used.
+ */
+function assertPlatformAppsPinned(report: SessionReport): void {
+  // R147: this run must have PINNED the Microsoft platform-app directory its own provisioning run
+  // reported, and must say which. Without this assertion the optimisation could stop working with no
+  // observable difference anywhere — same verdicts, same counts, no line — and the wording it parses
+  // has already moved once inside a week (2.1.1.0's `fetching` line carried no path at all).
+  //
+  // Asserted as a SHAPE, not a fixed directory, for the same reason `bcBuild` is: al-runner resolves
+  // the project's BC version prefix forward to the latest Microsoft build, so the exact directory
+  // changes every time upstream publishes. What must not regress is that a directory was pinned at
+  // all. This is a MECHANISM assertion and deliberately not a timing one — the wall-clock gain
+  // (17.1 s to 6.8 s per invocation, measured 2026-08-15 on 2.1.2.0) depends on the network and on
+  // whether the AL output cache is warm, so no gate can hold it.
+  const pinned = report.validity.executionContexts.find((c) => c.platformAppsDir !== undefined);
+  assert.ok(
+    pinned !== undefined,
+    "no execution context carries a `platformAppsDir` — this session did not pin al-runner's " +
+      "platform-app directory, so every invocation paid --auto-provision again (R147). The run " +
+      "emits an `al-runner-platform-apps-unpinned` warning naming the reason; read it rather than " +
+      "guessing.",
+  );
+  assert.match(
+    pinned.platformAppsDir ?? "",
+    /platform-apps[\\/]?$/,
+    "the pinned directory must be a platform-apps directory — anything else means the parse " +
+      "matched a line it should not have",
+  );
+  console.log(`  platform apps pinned at: ${pinned.platformAppsDir}`);
+}
+
 function assertVerdictTable(report: SessionReport): void {
   // Always dump the per-mutant table BEFORE asserting — a bare count mismatch says nothing about
   // WHICH mutant moved, and this gate takes minutes to re-run. Mirrors bcdev.itest.ts.
@@ -272,33 +307,6 @@ function assertVerdictTable(report: SessionReport): void {
   );
   console.log(`  BC runtime under test: ${announced.bcBuild}`);
 
-  // R147: this run must have PINNED the Microsoft platform-app directory its own provisioning run
-  // reported, and must say which. Without this assertion the optimisation could stop working with no
-  // observable difference anywhere — same verdicts, same counts, no line — and the wording it parses
-  // has already moved once inside a week (2.1.1.0's `fetching` line carried no path at all).
-  //
-  // Asserted as a SHAPE, not a fixed directory, for the same reason `bcBuild` is: al-runner resolves
-  // the project's BC version prefix forward to the latest Microsoft build, so the exact directory
-  // changes every time upstream publishes. What must not regress is that a directory was pinned at
-  // all. This is a MECHANISM assertion and deliberately not a timing one — the wall-clock gain
-  // (17.1 s to 6.8 s per invocation, measured 2026-08-15 on 2.1.2.0) depends on the network and on
-  // whether the AL output cache is warm, so no gate can hold it.
-  const pinned = report.validity.executionContexts.find((c) => c.platformAppsDir !== undefined);
-  assert.ok(
-    pinned !== undefined,
-    "no execution context carries a `platformAppsDir` — this session did not pin al-runner's " +
-      "platform-app directory, so every invocation paid --auto-provision again (R147). The run " +
-      "emits an `al-runner-platform-apps-unpinned` warning naming the reason; read it rather than " +
-      "guessing.",
-  );
-  assert.match(
-    pinned.platformAppsDir ?? "",
-    /platform-apps[\\/]?$/,
-    "the pinned directory must be a platform-apps directory — anything else means the parse " +
-      "matched a line it should not have",
-  );
-  console.log(`  platform apps pinned at: ${pinned.platformAppsDir}`);
-
   const killed = report.mutants.filter((m) => m.verdict === "killed");
   assert.equal(killed.length, EXPECTED.killed);
   for (const m of killed) {
@@ -381,6 +389,7 @@ async function main(): Promise<void> {
   try {
     const first = await runOnce(scratchA);
     assertVerdictTable(first);
+    assertPlatformAppsPinned(first);
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
     // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
     // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
@@ -388,6 +397,7 @@ async function main(): Promise<void> {
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second);
+    assertPlatformAppsPinned(second);
 
     const shape = (r: SessionReport) =>
       [...r.mutants]

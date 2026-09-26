@@ -444,7 +444,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     const res = await Promise.race([
       this.spawn(argv, {
         signal: controller.signal,
-        env: alRunnerEnv(PROVISION_TEST_TIMEOUT_SECONDS),
+        // R235: al-runner 2.11 names the platform-app directory it searches only in verbose output
+        // (`[pkg-cache] <dir>`). The environment variable rather than `--verbose`, because an older
+        // runner ignores an unknown variable where an unknown flag could refuse the whole call.
+        // Only this call: `alRunnerEnv` and the mutant argv stay exactly as they were.
+        env: { ...alRunnerEnv(PROVISION_TEST_TIMEOUT_SECONDS), AL_RUNNER_VERBOSE: "1" },
       }).catch((e) => ({ exitCode: -1, stdout: "", stderr: String(e) })),
       new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
         timer = setTimeout(() => {
@@ -508,8 +512,9 @@ export class AlRunnerBackend implements ExecutionBackend {
         platformAppsRefusal:
           "the provisioning invocation printed no completion sentence naming a platform-app " +
           "directory (`[provision] Downloaded <N> app(s) ... to <dir>`, `platform apps already " +
-          "complete at <dir>`) and no `[bc] selected BC <build> (<artifact dir>)` line to derive one " +
-          "from, so there is nothing to pin (R147, R200). Either the wording moved or the runner " +
+          "complete at <dir>`), no verbose `[pkg-cache] <dir>` line ending in `platform-apps`, and no " +
+          "`[bc] selected BC <build> (<artifact dir>)` line to derive one from, so there is nothing " +
+          "to pin (R147, R200, R235). Either the wording moved or the runner " +
           "selected no build. Every invocation keeps --auto-provision, as before.",
       };
     }
@@ -527,7 +532,9 @@ export class AlRunnerBackend implements ExecutionBackend {
       const said =
         parsed.basis === "selected-artifact"
           ? `al-runner printed no provisioning sentence, and the platform-app directory derived from its \`[bc] selected\` line, ${parsed.dir}, cannot be read (R200)`
-          : `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory cannot be read`;
+          : parsed.basis === "package-cache"
+            ? `al-runner listed ${parsed.dir} as a \`[pkg-cache]\` search directory, but it cannot be read (R235)`
+            : `al-runner said it wrote ${parsed.appCount} platform app(s) to ${parsed.dir}, but that directory cannot be read`;
       return {
         platformAppsRefusal: `${said} (${err instanceof Error ? err.message : String(err)}), so it is not pinned (R147). Every invocation keeps --auto-provision, as before.`,
       };
@@ -552,6 +559,12 @@ export class AlRunnerBackend implements ExecutionBackend {
     if (parsed.basis === "selected-artifact" && apps === 0) {
       return {
         platformAppsRefusal: `al-runner printed no provisioning sentence; the platform-app directory derived from its \`[bc] selected\` line, ${parsed.dir}, exists but holds no *.app files, so it is not pinned (R147, R200). Every invocation keeps --auto-provision, as before.`,
+      };
+    }
+    // R235: a search-set entry states no count either, so the same non-empty rule applies.
+    if (parsed.basis === "package-cache" && apps === 0) {
+      return {
+        platformAppsRefusal: `al-runner listed ${parsed.dir} as a \`[pkg-cache]\` search directory, but it holds no *.app files, so it is not pinned (R147, R235). Every invocation keeps --auto-provision, as before.`,
       };
     }
     return { platformAppsDir: parsed.dir };
