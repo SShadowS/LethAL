@@ -344,7 +344,7 @@
           "other": { "type": "integer", "description": "error and known-survivor rows." },
           "unobservedBlock": {
             "type": "boolean",
-            "description": "Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, which can drop mutants inside a block."
+            "description": "Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, which can drop mutants inside a block, and on a quarantined run, which stops scheduling mutants mid-run."
           },
           "artifactId": {
             "type": "string",

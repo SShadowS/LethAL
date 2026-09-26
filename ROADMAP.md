@@ -186,7 +186,7 @@ that ordering is the priority.
 - **R274** · an explain gap does not carry its source span with the surviving mutants marked inline · [R274.md](docs/roadmap/R274.md) · open
 - **R275** · an explain gap does not print its verify command; the gap id and artifact id are the inputs, the command still has to be assembled · [R275.md](docs/roadmap/R275.md) · open
 - **R276** · gap ids change when a block is moved, and differ between a CRLF and an LF checkout of the same commit · [R276.md](docs/roadmap/R276.md) · open
-- **R277** · `unobservedBlock` is withheld on operator- and line-narrowed runs, so a `--changed-since` PR run never gets the mark · [R277.md](docs/roadmap/R277.md) · open
+- **R277** · `unobservedBlock` is withheld on operator- and line-narrowed runs and on quarantined runs, so a `--changed-since` PR run never gets the mark · [R277.md](docs/roadmap/R277.md) · open
 
 ## Backends and tooling
 
