@@ -9858,6 +9858,40 @@ describe("C02-04b: runNamedMutants", () => {
     expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
   });
 
+  // Review r1 fix 1: verdicts written under a finished run, or under the source run itself, land
+  // in history `priorSurvivorKeys` reads, so its survivors would join the skip list.
+  test("runNamedMutants refuses a runId with no run row before any backend call", async () => {
+    const fx = await installedFixture();
+    const err = await runNamedMutants({ ...fx.cfg, runId: 9999 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/run 9999 does not exist/);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants refuses a finished run before any backend call", async () => {
+    const fx = await installedFixture();
+    fx.store.finishRun(fx.cfg.runId, { batchCount: 0, baselineGreen: true });
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/is finished/);
+    expect(calls(fx.trace)).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
+  });
+
+  test("runNamedMutants refuses the source run as its runId, even unfinished, before any backend call", async () => {
+    const fx = await installedFixture();
+    // Unfinish the source run, so only the same-run check can refuse it.
+    fx.store.db
+      .query("UPDATE runs SET finished_at = NULL WHERE id = ?")
+      .run(fx.installed.fromRunId);
+    const err = await runNamedMutants({ ...fx.cfg, runId: fx.installed.fromRunId }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/the run that published/);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
   test("runNamedMutants: a same-id wrong manifest is refused before any backend call", async () => {
     const fx = await installedFixture();
     await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => ({

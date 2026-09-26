@@ -5105,7 +5105,8 @@ export interface LeaseFence {
 export interface NamedMutantsConfig {
   readonly backend: ExecutionBackend;
   readonly store: ResultsStore;
-  /** A run row the caller created for THIS call. Verdict and test rows are written under it. */
+  /** A run row the caller created for THIS call. Verdict and test rows are written under it.
+   *  Refused unless it exists, is unfinished, and is not `installed.fromRunId`. */
   readonly runId: number;
   readonly installed: InstalledArtifactRef;
   readonly requests: readonly NamedMutantRequest[];
@@ -5155,6 +5156,24 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const who = "runNamedMutants";
   const { backend, store, runId, installed } = cfg;
   // Everything up to `status()` reads only the store, local files and the request.
+  // Review r1 fix 1: rows written under a finished run, or under the source run, would be read
+  // back by `priorSurvivorKeys` as history, and those survivors would be skipped next session.
+  const run = store.getRun(runId);
+  if (run === null) {
+    throw new NamedMutantError(
+      `${who}: run ${runId} does not exist; create a run row for this call`,
+    );
+  }
+  if (runId === installed.fromRunId) {
+    throw new NamedMutantError(
+      `${who}: run ${runId} is the run that published the installed artifact; create a new run row for this call`,
+    );
+  }
+  if (run.finished) {
+    throw new NamedMutantError(
+      `${who}: run ${runId} is finished; its rows are history that priorSurvivorKeys reads, so create a new run row for this call`,
+    );
+  }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
   const named = resolveNamedMutants(manifest, cfg.requests);
   if (cfg.inLease !== undefined && cfg.lease === undefined) {
