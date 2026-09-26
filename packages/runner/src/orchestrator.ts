@@ -1257,16 +1257,17 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
   return id;
 }
 
-/** C02-06: `hashTargetSource`, or `undefined` when the tree cannot be read (no `app.json`, say).
- *  `undefined` never matches, so an unreadable tree records no hash rather than a wrong one. */
-async function hashTargetSourceOrUndefined(
+/** C02-06: `hashTargetSource`, or the reason the tree could not be read (no `app.json`, say). An
+ *  unread tree never matches, so it records no hash rather than a wrong one, and the warning can
+ *  say which of "edited" and "unreadable" happened. */
+async function readTargetSourceHash(
   projectDir: string,
   symbols: readonly string[],
-): Promise<string | undefined> {
+): Promise<{ readonly hash: string } | { readonly unreadable: string }> {
   try {
-    return await hashTargetSource(projectDir, symbols);
-  } catch {
-    return undefined;
+    return { hash: await hashTargetSource(projectDir, symbols) };
+  } catch (err) {
+    return { unreadable: messageOf(err) };
   }
 }
 
@@ -3876,7 +3877,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // is prepared (below); recorded only when the two agree, so the hash names the source actually
   // instrumented. Hashing after generation instead would miss an edit landing between the two.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
-  const sourceHashAtGeneration = await hashTargetSourceOrUndefined(cfg.projectDir, sourceSymbols);
+  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -4210,14 +4211,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         artifactId,
       });
       if (batchIdx === artifacts.length - 1) {
-        const atLastBatch = await hashTargetSourceOrUndefined(cfg.projectDir, sourceSymbols);
-        if (atLastBatch !== undefined && atLastBatch === sourceHashAtGeneration) {
-          cfg.store.recordSourceHash(runId, atLastBatch);
+        const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+        if (
+          "hash" in atLastBatch &&
+          "hash" in sourceHashAtGeneration &&
+          atLastBatch.hash === sourceHashAtGeneration.hash
+        ) {
+          cfg.store.recordSourceHash(runId, atLastBatch.hash);
         } else {
+          const why =
+            "unreadable" in sourceHashAtGeneration
+              ? `could not be read before generation (${sourceHashAtGeneration.unreadable})`
+              : "unreadable" in atLastBatch
+                ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
+                : "changed between generation and the last batch's preparation";
           emit({
             type: "warning",
             code: "source-changed-during-run",
-            message: `[lethal] the target's source changed (or could not be read) while run ${runId} was preparing its batches, so no source hash is recorded and \`lethal verify\` will refuse this run. Re-run \`lethal run\` on a tree nothing edits mid-run to verify against it.`,
+            message: `[lethal] run ${runId}: the target's source ${why}, so no source hash is recorded and \`lethal verify\` will refuse this run. Re-run \`lethal run\` on a readable tree that nothing edits mid-run to verify against it.`,
           });
         }
       }

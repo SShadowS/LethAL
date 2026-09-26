@@ -3,7 +3,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -3437,8 +3437,9 @@ describe("runSession — Layer 5A deployment identity", () => {
     if (returned === undefined) throw new Error("expected one published batch");
     const record = store.artifactRecordById(returned.artifactId);
     expect(record?.appPath).toBe(returned.appPath);
-    // PhaseBackend writes its package inside the directory it compiled.
-    expect(record?.instrumentedDir).toBe(dirname(returned.appPath));
+    // The batch dir runSession names, independent of where PhaseBackend writes its package.
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    expect(record?.instrumentedDir).toBe(join(dirs.instrumentedDir, `run-${run.id}-batch-0`));
     store.close();
   });
 
@@ -3497,7 +3498,9 @@ describe("runSession — Layer 5A deployment identity", () => {
       (e) => e.type === "warning" && e.code === "source-changed-during-run",
     );
     expect(warned).toHaveLength(1);
-    expect(warned[0]?.type === "warning" ? warned[0].message : "").toContain(`run ${run.id}`);
+    const message = warned[0]?.type === "warning" ? warned[0].message : "";
+    expect(message).toContain(`run ${run.id}`);
+    expect(message).toContain("changed between generation and the last batch's preparation");
     store.close();
   });
 });
