@@ -46,6 +46,7 @@ import { assertMatchesBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
+import { assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_TABLES) {
   console.log(
@@ -1112,6 +1113,10 @@ function assertVerdictTable(report: SessionReport): void {
   // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
   // extended by hand.
+
+  // GH-24: the per-mutant reach evidence — nothing here is frozen yet (ruling 3), but a killed
+  // statement-grain mutant with guardReached !== true is a BLOCK (ruling 2).
+  assertReachEvidence(report);
 }
 
 /**

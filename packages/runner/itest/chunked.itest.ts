@@ -74,6 +74,7 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_CHUNKED) {
   console.log("chunked itest: skipped (set LETHAL_ITEST_CHUNKED=1 to run against a live server)");
@@ -404,6 +405,9 @@ async function main(): Promise<void> {
       "control: killPosition histogram (the ORDERED positions chunking will move)",
     );
     assertNoNewCauses(control.report, "control");
+    // GH-24: nothing here is frozen yet (ruling 3), but a killed statement-grain mutant with
+    // guardReached !== true is a BLOCK (ruling 2).
+    assertReachEvidence(control.report);
 
     // 2. THE DIFFERENTIAL. Chunking is a cost knob and must not move a verdict or a killer.
     //    This is the assertion R198 §7 promised and never had.
@@ -421,6 +425,10 @@ async function main(): Promise<void> {
       );
     }
     assertNoNewCauses(chunked.report, "chunked");
+    assertReachEvidence(chunked.report);
+    // GH-24: chunking is a cost knob (R208) and must not move reach either — identical
+    // guardReached and reachedBy (as a SET) per mutant across the two legs.
+    assertReachIdenticalAcrossLegs(control.report, chunked.report);
 
     // 3. The chunked leg's own counts, pre-committed.
     assert.equal(chunked.report.warmKills, CHUNKED.warmKills, "chunked: warmKills");

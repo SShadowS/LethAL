@@ -42,6 +42,7 @@ import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
@@ -512,6 +513,18 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
       );
     }
 
+    // GH-24: the direct-transport half of the reach attestation — `order`/`fail`/`cleared` are
+    // BASELINE runs (mutantId "", no mutant active, so no marker can ever fire) and `mutated` is
+    // the one real covered run above with a mutant active. Every one of the four is a `ran`
+    // verdict (outcome pass/fail), so every one must carry a boolean `reachedActive`; the three
+    // baseline runs must additionally report it `false`.
+    assertDirectTransportReach([
+      { label: "order", verdict: order, baseline: true },
+      { label: "fail", verdict: fail, baseline: true },
+      { label: "mutated", verdict: mutated, baseline: false },
+      { label: "cleared", verdict: cleared, baseline: true },
+    ]);
+
     // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
     // registered one runs nothing and is a typed error, never a verdict.
     //
@@ -714,6 +727,10 @@ function assertVerdictTable(report: SessionReport): void {
       `expected every no-coverage mutant in SandboxPricing.Codeunit.al (DiscountedPrice, never called), got ${m.file}`,
     );
   }
+
+  // GH-24: the per-mutant reach evidence — nothing here is frozen yet (ruling 3), but a killed
+  // statement-grain mutant with guardReached !== true is a BLOCK (ruling 2).
+  assertReachEvidence(report);
 }
 
 async function main(): Promise<void> {
