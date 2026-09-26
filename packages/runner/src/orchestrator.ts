@@ -3252,6 +3252,83 @@ async function runLeaseHook(a: {
 }
 
 /**
+ * One unmutated run of `ref` (no mutant active), recorded as a baseline row, with the lease and
+ * in-flight rules a baseline run needs. `stop: true` means the session can do nothing more: the
+ * lease answer was handled or the run was quarantined in flight, and `verdict` is not a result.
+ * Shared by `scoreBatch`'s baseline and C02-06's second unmutated run (decision 11).
+ */
+async function dispatchUnmutated(
+  scope: BatchScope,
+  ref: TestMethodRef,
+): Promise<{ readonly verdict: TestVerdict; readonly stop: boolean }> {
+  const {
+    backend,
+    caps,
+    safety,
+    leaseSession,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    store,
+    runId,
+  } = scope;
+  const v = await runOnce(
+    backend,
+    safety,
+    ref,
+    {
+      coverage: caps.coverage,
+      timeoutMs: scope.baselineTimeoutMs,
+    },
+    scope.resyncOpSeq,
+  );
+  // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
+  // session id rides along as data (the store's liveness check counts baseline rows too).
+  store.recordTestResult(
+    runId,
+    null,
+    null,
+    ref,
+    v.outcome,
+    v.durationMs,
+    v.failureMessage,
+    undefined,
+    v.sessionId,
+  );
+  // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
+  // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
+  // quarantine for a lease loss that leaves the container perfectly healthy, and would
+  // treat a same-attempt duplicate claim as a loss.
+  const baselineLease = classifyLeaseVerdict(v);
+  if (baselineLease !== "none") {
+    await handleBaselineLeaseOutcome({
+      kind: baselineLease,
+      safety,
+      leaseSession,
+      ref,
+      verdict: v,
+    });
+    return { verdict: v, stop: true };
+  }
+  if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
+    // The server may still be executing this baseline test. Latch unsafe, record a
+    // durable tier quarantine, and stop collecting baseline results: no further
+    // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
+    // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
+    // stop (the caller checks `safety.isUnsafe`, same as the post-batch guard).
+    await quarantineInFlight({
+      safety,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      detail: `baseline test in-flight-unknown running ${ref.method}`,
+    });
+    return { verdict: v, stop: true };
+  }
+  return { verdict: v, stop: false };
+}
+
+/**
  * C02-04: one batch's baseline, its stale-test-app refusal, the covering loop and the design
  * section G attestation gate, in exactly the order `runSession` ran them inline. Which mutants
  * run against which tests is the caller's `select`; this function does not choose.
@@ -3344,59 +3421,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     }
   }
   for (const ref of reused !== undefined ? [] : tests) {
-    const v = await runOnce(
-      backend,
-      safety,
-      ref,
-      {
-        coverage: caps.coverage,
-        timeoutMs: scope.baselineTimeoutMs,
-      },
-      scope.resyncOpSeq,
-    );
-    // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
-    // session id rides along as data (the store's liveness check counts baseline rows too).
-    store.recordTestResult(
-      runId,
-      null,
-      null,
-      ref,
-      v.outcome,
-      v.durationMs,
-      v.failureMessage,
-      undefined,
-      v.sessionId,
-    );
-    // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
-    // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
-    // quarantine for a lease loss that leaves the container perfectly healthy — and would
-    // treat a same-attempt duplicate claim as a loss.
-    const baselineLease = classifyLeaseVerdict(v);
-    if (baselineLease !== "none") {
-      await handleBaselineLeaseOutcome({
-        kind: baselineLease,
-        safety,
-        leaseSession,
-        ref,
-        verdict: v,
-      });
-      break;
-    }
-    if (v.operation !== undefined && requiresUnsafeLatch(v.operation)) {
-      // The server may still be executing this baseline test. Latch unsafe, record a
-      // durable tier quarantine, and stop collecting baseline results — no further
-      // work-plane call (spec §8, §12). A stranded baseline test leaves nothing safe to
-      // do with `greenTests`/mutant scheduling either way, so there's nothing left but to
-      // stop (checked via `safety.isUnsafe` right below, same as the post-batch guard).
-      await quarantineInFlight({
-        safety,
-        quarantineStore,
-        resourceKey,
-        nowIso,
-        detail: `baseline test in-flight-unknown running ${ref.method}`,
-      });
-      break;
-    }
+    const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+    if (stop) break;
     baseline.push({ ref, verdict: v });
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
@@ -5236,6 +5262,29 @@ export interface NamedMutantsConfig {
   readonly groupRuns?: SessionConfig["groupRuns"];
   readonly nowIso?: () => string;
   readonly emit?: SessionConfig["emit"];
+  /**
+   * C02-06 decision 11: each of these methods runs once more with no mutant active, after the
+   * covering loop, through the baseline's own dispatch. Answered in `NamedMutantsResult.rerun`.
+   */
+  readonly rerunOnUnmutated?: readonly TestMethodRef[];
+  /**
+   * C02-06 decision 13: a mutant is recorded `error`, never activated, unless EVERY one of its
+   * methods had a valid green baseline run (a `pass` in a fresh session). Off: C02-04b's rule,
+   * which drops a red method and scores the mutant on the rest.
+   */
+  readonly requireEveryMethodGreen?: boolean;
+}
+
+/** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
+export interface UnmutatedRun {
+  readonly ref: TestMethodRef;
+  /** `not-run`: the session latched, or the dispatch stopped, before this method ran. */
+  readonly outcome: TestVerdict["outcome"] | "not-run";
+  readonly failureMessage?: string;
+  readonly testRunsBefore?: number;
+  readonly sessionId?: number;
+  /** `testRunsBefore` 0 with a session id; for a rerun also a session no earlier call used. */
+  readonly fresh: boolean;
 }
 
 export interface NamedMutantsResult {
@@ -5243,6 +5292,39 @@ export interface NamedMutantsResult {
   readonly outcomes: readonly SessionOutcome[];
   /** Set when the session latched unsafe: the text `SessionReport.quarantined.reason` would get. */
   readonly quarantined?: string;
+  /** One per baseline method, in baseline order. */
+  readonly baseline: readonly UnmutatedRun[];
+  /** One per `rerunOnUnmutated` method, in its order; empty without it. */
+  readonly rerun: readonly UnmutatedRun[];
+}
+
+/** R206 section 2.1: the server reported that tests had already run in this call's session. */
+function sessionWasReused(v: { readonly testRunsBefore?: number }): boolean {
+  return v.testRunsBefore !== undefined && v.testRunsBefore > 0;
+}
+
+/** C02-06 decision 11: a `ran` answer from a session nothing had run in. No keys is not fresh. */
+function ranInFreshSession(v: {
+  readonly testRunsBefore?: number;
+  readonly sessionId?: number;
+}): boolean {
+  return v.testRunsBefore !== undefined && !sessionWasReused(v) && v.sessionId !== undefined;
+}
+
+function unmutatedRun(
+  ref: TestMethodRef,
+  v: TestVerdict | undefined,
+  fresh: boolean,
+): UnmutatedRun {
+  if (v === undefined) return { ref, outcome: "not-run", fresh: false };
+  return {
+    ref,
+    outcome: v.outcome,
+    ...(v.failureMessage !== undefined ? { failureMessage: v.failureMessage } : {}),
+    ...(v.testRunsBefore !== undefined ? { testRunsBefore: v.testRunsBefore } : {}),
+    ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+    fresh,
+  };
 }
 
 /**
@@ -5340,6 +5422,11 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     emit,
   });
   const outcomes: SessionOutcome[] = [];
+  const strict = cfg.requireEveryMethodGreen === true;
+  const baselineTests = baselineTestsOf(named);
+  const rerunRefs = cfg.rerunOnUnmutated ?? [];
+  const baselineRan = new Map<string, TestVerdict>();
+  const rerunRan = new Map<string, UnmutatedRun>();
   try {
     // Before the first op: a lease lost from here on invalidates THIS batch's verdicts.
     if (leaseSession !== undefined) leaseSession.currentBatchIndex = installed.batchIndex;
@@ -5384,9 +5471,29 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     await scoreBatch(scope, {
       batchIndex: installed.batchIndex,
       artifactId: artifact.artifactId,
-      tests: baselineTestsOf(named),
-      select: (baseline) => selectNamed(baseline, named, scope, installed.batchIndex),
+      tests: baselineTests,
+      select: (baseline) => {
+        for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
+        return selectNamed(baseline, named, scope, installed.batchIndex, strict);
+      },
     });
+    // Decision 11: after the covering loop on purpose, so a test that passes clean but fails
+    // once mutant runs have touched the server is caught. Freshness for a rerun also needs a
+    // session no earlier call of this run used: the ids recorded so far, grown as the loop goes.
+    if (rerunRefs.length > 0 && !safety.isUnsafe) {
+      const seen = store.sessionIdsOf(runId);
+      await activateOnce(backend, safety, null);
+      for (const ref of rerunRefs) {
+        const { verdict, stop } = await dispatchUnmutated(scope, ref);
+        const fresh =
+          ranInFreshSession(verdict) &&
+          verdict.sessionId !== undefined &&
+          !seen.has(verdict.sessionId);
+        if (verdict.sessionId !== undefined) seen.add(verdict.sessionId);
+        rerunRan.set(testKeyOf(ref), unmutatedRun(ref, verdict, fresh));
+        if (stop) break;
+      }
+    }
   } catch (err) {
     if (!(err instanceof SessionUnsafeError)) throw err;
   } finally {
@@ -5414,6 +5521,13 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   return {
     outcomes: answered,
     ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
+    baseline: baselineTests.map((ref) => {
+      const v = baselineRan.get(testKeyOf(ref));
+      return unmutatedRun(ref, v, v !== undefined && ranInFreshSession(v));
+    }),
+    rerun: rerunRefs.map(
+      (ref) => rerunRan.get(testKeyOf(ref)) ?? unmutatedRun(ref, undefined, false),
+    ),
   };
 }
 
@@ -5427,6 +5541,8 @@ function selectNamed(
   named: readonly ResolvedNamedMutant[],
   scope: BatchScope,
   batchIndex: number,
+  /** C02-06 decision 13: `requireEveryMethodGreen`. */
+  strict: boolean,
 ): CoveringPlan | undefined {
   const rowByKey = new Map(baseline.map((b) => [testKeyOf(b.ref), b]));
   const green = new Set(
@@ -5435,6 +5551,26 @@ function selectNamed(
   const mutants: MutantManifestEntry[] = [];
   const perMutantTests = new Map<string, readonly TestMethodRef[]>();
   for (const { mutant, methods } of named) {
+    if (strict) {
+      const invalid = methods.flatMap((m) => {
+        const why = invalidBaselineReason(rowByKey.get(testKeyOf(m))?.verdict);
+        return why === undefined ? [] : [`${qualifiedTestName(m)} (${why})`];
+      });
+      if (invalid.length > 0) {
+        record(
+          scope.store,
+          scope.runId,
+          mutant,
+          "error",
+          scope.outcomes,
+          batchIndex,
+          scope.emit,
+          undefined,
+          `invalid baseline: every requested test method needs a green unmutated run in a fresh session, and ${invalid.length} did not have one: ${invalid.join("; ")}`,
+        );
+        continue;
+      }
+    }
     const greenMethods = methods.filter((m) => green.has(testKeyOf(m)));
     if (greenMethods.length === 0) {
       const own = methods.flatMap((m) => {
@@ -5469,6 +5605,19 @@ function selectNamed(
     ),
     memberCountsByTest: new Map(),
   };
+}
+
+/** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is. */
+function invalidBaselineReason(v: TestVerdict | undefined): string | undefined {
+  if (v === undefined) return "no baseline run";
+  if (v.outcome !== "pass") {
+    return v.failureMessage !== undefined ? `${v.outcome}: ${v.failureMessage}` : v.outcome;
+  }
+  if (sessionWasReused(v)) {
+    return `not fresh: session ${v.sessionId ?? "?"} had run ${v.testRunsBefore} test(s) before`;
+  }
+  if (!ranInFreshSession(v)) return "not fresh: the server reported no session keys";
+  return undefined;
 }
 /**
  * R26: runs the configured permission canary and guarantees it cannot end the session.
@@ -5882,7 +6031,7 @@ async function confirmWarm(p: {
       args.attestation.clean = true;
     }
   }
-  const reusedIn = verdicts.find((rv) => rv.testRunsBefore !== undefined && rv.testRunsBefore > 0);
+  const reusedIn = verdicts.find(sessionWasReused);
   if (reusedIn !== undefined) {
     return error(
       "session-reused",
@@ -6386,7 +6535,7 @@ async function runMutantsOnBackend(args: {
       // mutant's. A failure or a timeout measured there is not attributable: an error, never a
       // kill. A pass stands (a reused session can hide a kill, never manufacture one). A 408
       // carries no keys, so a `timeout` is not asserted here; a warm one is, through its replay.
-      const reused = v.testRunsBefore !== undefined && v.testRunsBefore > 0;
+      const reused = sessionWasReused(v);
       if (reused && !args.sessionReuse.warned) {
         args.sessionReuse.warned = true;
         args.emit({
@@ -6583,7 +6732,7 @@ async function runMutantsOnBackend(args: {
             // about whether a strand has a cause.
             cause = "stranded";
           }
-        } else if (confirm.testRunsBefore !== undefined && confirm.testRunsBefore > 0) {
+        } else if (sessionWasReused(confirm)) {
           // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
           // did not measure the killer cold. Not a kill.
           verdict = "error";

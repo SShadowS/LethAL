@@ -10178,8 +10178,23 @@ class NamedFake implements ExecutionBackend {
        *  every covering ref, so a multi-method covering set can kill at a chosen position. */
       readonly killerRef?: TestMethodRef;
       readonly observedAny?: boolean;
+      /** C02-06 Task 5.3: the R206 session keys each call answers with. `kind` is "unmutated"
+       *  (a single run, no mutant active), "mutant" (a single run under a mutant), "many" (a
+       *  covering group call) or "replay" (a confirmation group call); `n` counts calls of that
+       *  kind from 1. Absent: no keys, as before. */
+      readonly session?: (c: {
+        readonly kind: "unmutated" | "mutant" | "many" | "replay";
+        readonly n: number;
+        readonly ref: TestMethodRef;
+      }) => { readonly sessionId: number; readonly testRunsBefore: number } | undefined;
     },
   ) {}
+  private readonly kindSeq = new Map<string, number>();
+  private keys(kind: "unmutated" | "mutant" | "many" | "replay", ref: TestMethodRef) {
+    const n = (this.kindSeq.get(kind) ?? 0) + 1;
+    this.kindSeq.set(kind, n);
+    return this.o.session?.({ kind, n, ref }) ?? {};
+  }
   capabilities() {
     return PHASE_CAPS;
   }
@@ -10209,6 +10224,10 @@ class NamedFake implements ExecutionBackend {
     this.active = id;
   }
   async run(ref: TestMethodRef, _o: RunOpts): Promise<TestVerdict> {
+    const v = this.verdictOf(ref);
+    return { ...v, ...this.keys(this.active === null ? "unmutated" : "mutant", ref) };
+  }
+  private verdictOf(ref: TestMethodRef): TestVerdict {
     const m = this.active;
     if (m === null) {
       return ref.method === "RedAtBaseline"
@@ -10232,8 +10251,13 @@ class NamedFake implements ExecutionBackend {
     this.manySeq += 1;
     const fencedOp = { attemptId: `n${this.manySeq}`, opSeq: 100 + this.manySeq };
     const verdicts: TestVerdict[] = [];
+    const [first] = opts.methods;
+    const keys =
+      first === undefined
+        ? {}
+        : this.keys(opts.confirmation === true ? "replay" : "many", first.ref);
     for (const [i, m] of opts.methods.entries()) {
-      const v = await this.run(m.ref, { coverage: "none", timeoutMs: m.budgetMs });
+      const v = { ...this.verdictOf(m.ref), ...keys };
       if (v.operation === "in-flight-unknown") {
         return { kind: "call", verdict: v, methodIndex: i + 1, fencedOp };
       }
@@ -10270,6 +10294,15 @@ const RED = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "RedAtBa
 // C02-06 Task 5.2: the mirror of OVER in MIRROR_TESTS_AL, same method name, different codeunit.
 const OVER2 = { codeunitId: 79101, codeunitName: "Zulu Tests", method: "OverBudgetDetected" };
 
+/** C02-06 Task 5.3: every call answers from a session of its own that nothing had run in. */
+const freshSessions = () => {
+  let id = 0;
+  return () => {
+    id += 1;
+    return { sessionId: id, testRunsBefore: 0 };
+  };
+};
+
 async function installedFixture(
   o: {
     readonly serverReports?: string;
@@ -10277,6 +10310,7 @@ async function installedFixture(
     readonly killer?: string;
     readonly killerRef?: TestMethodRef;
     readonly observedAny?: boolean;
+    readonly session?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["session"]>;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
@@ -10659,6 +10693,253 @@ describe("C02-04b: runNamedMutants", () => {
       expect(o.failureNote).toContain("unattested artifact");
     }
     expect(res.quarantined).toContain("unattested artifact");
+  });
+  // C02-06 Task 5.3 (decisions 11 and 13): the strict baseline and the fresh second run.
+  test("requireEveryMethodGreen: a mutant with one red method is error naming it, although another method is green", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requireEveryMethodGreen: true,
+      requests: [{ mutantId: "M0002", methods: [RED, OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["error"]);
+    expect(res.outcomes[0]?.failureNote).toContain("RedAtBaseline");
+    expect(res.outcomes[0]?.failureNote).toContain("boom-red");
+    expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0002" });
+  });
+
+  test("requireEveryMethodGreen: a green baseline run in a reused session is not valid", async () => {
+    const fx = await installedFixture({
+      session: ({ kind }) =>
+        kind === "unmutated" ? { sessionId: 40, testRunsBefore: 2 } : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requireEveryMethodGreen: true,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["error"]);
+    expect(res.outcomes[0]?.failureNote).toContain("OverBudgetDetected");
+    expect(res.outcomes[0]?.failureNote).toContain("not fresh");
+    expect(res.outcomes[0]?.failureNote).toContain("session 40 had run 2 test(s) before");
+    expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0001" });
+  });
+
+  test("without requireEveryMethodGreen, C02-04b's red-baseline behaviour is unchanged", async () => {
+    // A reused session too: neither half of the strict rule applies when it is off.
+    const fx = await installedFixture({
+      killer: "none",
+      session: ({ kind }) =>
+        kind === "unmutated" ? { sessionId: 40, testRunsBefore: 2 } : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requireEveryMethodGreen: false,
+      requests: [
+        { mutantId: "M0001", methods: [RED] },
+        { mutantId: "M0002", methods: [RED, OVER] },
+      ],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["error", "survived"]);
+    expect(res.outcomes[0]?.failureNote).toContain("boom-red");
+    expect(res.outcomes[1]?.coveringTests).toEqual([`${OVER.codeunitName}.${OVER.method}`]);
+    expect(res.rerun).toEqual([]);
+  });
+
+  test("runNamedMutants: rerunOnUnmutated runs each method once more with no mutant active, after the covering loop", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [RED, OVER] }],
+      rerunOnUnmutated: [OVER, RED],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    const label = (x: unknown): string[] => {
+      if (x === "release") return [x];
+      if (typeof x !== "object" || x === null || !("call" in x)) return [];
+      const c = x as { call: string; id?: string | null; method?: string };
+      if (c.call === "activate") return [`activate ${String(c.id)}`];
+      if (c.call === "run") return [`run ${c.method ?? "?"}`];
+      if (c.call === "runMany") return [c.call];
+      return [];
+    };
+    expect(fx.trace.flatMap(label)).toEqual([
+      "activate null",
+      "run RedAtBaseline",
+      "run OverBudgetDetected",
+      "activate M0001",
+      "runMany",
+      "activate null",
+      "run OverBudgetDetected",
+      // The second unmutated run: after the covering loop and its confirmation, before release.
+      "activate null",
+      "run OverBudgetDetected",
+      "run RedAtBaseline",
+      "activate null",
+      "release",
+    ]);
+    expect(res.rerun.map((r) => [r.ref.method, r.outcome])).toEqual([
+      ["OverBudgetDetected", "pass"],
+      ["RedAtBaseline", "fail"],
+    ]);
+  });
+
+  test("runNamedMutants: baseline and rerun carry each run's own outcome and session", async () => {
+    const fx = await installedFixture({
+      killer: "none",
+      session: ({ kind, n }) =>
+        kind === "unmutated"
+          ? { sessionId: 100 + n, testRunsBefore: 0 }
+          : { sessionId: 900, testRunsBefore: 0 },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [RED, OVER] }],
+      rerunOnUnmutated: [RED, OVER],
+    });
+    expect(res.baseline).toEqual([
+      {
+        ref: RED,
+        outcome: "fail",
+        failureMessage: "boom-red",
+        testRunsBefore: 0,
+        sessionId: 101,
+        fresh: true,
+      },
+      { ref: OVER, outcome: "pass", testRunsBefore: 0, sessionId: 102, fresh: true },
+    ]);
+    expect(res.rerun).toEqual([
+      {
+        ref: RED,
+        outcome: "fail",
+        failureMessage: "boom-red",
+        testRunsBefore: 0,
+        sessionId: 103,
+        fresh: true,
+      },
+      { ref: OVER, outcome: "pass", testRunsBefore: 0, sessionId: 104, fresh: true },
+    ]);
+    // The rerun rows are written under the run like baseline rows: no mutant, their session kept.
+    const rows = fx.store.db
+      .query(
+        "SELECT method, outcome, session_id FROM test_results WHERE run_id = ? AND mutant_row_id IS NULL ORDER BY id",
+      )
+      .all(fx.cfg.runId);
+    expect(rows).toEqual([
+      { method: "RedAtBaseline", outcome: "fail", session_id: 101 },
+      { method: "OverBudgetDetected", outcome: "pass", session_id: 102 },
+      { method: "RedAtBaseline", outcome: "fail", session_id: 103 },
+      { method: "OverBudgetDetected", outcome: "pass", session_id: 104 },
+    ]);
+  });
+
+  test("a rerun in a session a warm replay already used is not fresh", async () => {
+    // OVER2 kills at group position 2, so the kill is confirmed by a warm replay (R206), which
+    // reports session 7. The rerun then reports session 7 again, with testRunsBefore 0: the
+    // count alone would call it fresh; only the recorded session ids say it is not.
+    let id = 0;
+    const fx = await installedFixture({
+      killerRef: OVER2,
+      session: ({ kind, n }) => {
+        if (kind === "replay" || (kind === "unmutated" && n > 2)) {
+          return { sessionId: 7, testRunsBefore: 0 };
+        }
+        id += 1;
+        return { sessionId: 1000 + id, testRunsBefore: 0 };
+      },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      rerunOnUnmutated: [OVER2],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(res.outcomes[0]?.killPosition).toBe(2);
+    expect(res.rerun).toEqual([
+      { ref: OVER2, outcome: "pass", testRunsBefore: 0, sessionId: 7, fresh: false },
+    ]);
+  });
+
+  test("a rerun in a session the baseline used is not fresh", async () => {
+    const fx = await installedFixture({
+      killer: "none",
+      session: ({ kind }) =>
+        kind === "unmutated"
+          ? { sessionId: 5, testRunsBefore: 0 }
+          : { sessionId: 50, testRunsBefore: 0 },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+    });
+    expect(res.baseline.map((b) => b.fresh)).toEqual([true]);
+    expect(res.rerun).toEqual([
+      { ref: OVER, outcome: "pass", testRunsBefore: 0, sessionId: 5, fresh: false },
+    ]);
+  });
+
+  test("a rerun in a new session with testRunsBefore 0 is fresh", async () => {
+    const fx = await installedFixture({
+      killer: "none",
+      session: ({ kind, n }) =>
+        kind === "unmutated"
+          ? { sessionId: 5 + n, testRunsBefore: 0 }
+          : { sessionId: 50, testRunsBefore: 0 },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+    });
+    expect(res.rerun).toEqual([
+      { ref: OVER, outcome: "pass", testRunsBefore: 0, sessionId: 7, fresh: true },
+    ]);
+  });
+
+  test("two reruns reporting the same session are not both fresh", async () => {
+    // Decision 11 (review r2, finding 3): the seen set grows as the rerun loop goes.
+    const fx = await installedFixture({
+      killer: "none",
+      session: ({ kind, n }) =>
+        kind === "unmutated"
+          ? { sessionId: n <= 2 ? n : 9, testRunsBefore: 0 }
+          : { sessionId: 50, testRunsBefore: 0 },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, RED] }],
+      rerunOnUnmutated: [OVER, RED],
+    });
+    expect(res.rerun.map((r) => [r.sessionId, r.fresh])).toEqual([
+      [9, true],
+      [9, false],
+    ]);
+  });
+
+  test("runNamedMutants: a latched session answers every rerun not-run", async () => {
+    const dir = freshTmpDir();
+    const fx = await installedFixture({ strand: "M0001", session: freshSessions() });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      quarantineDir: dir,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER, RED],
+    });
+    expect(res.quarantined).toContain("in-flight-unknown");
+    expect(res.rerun).toEqual([
+      { ref: OVER, outcome: "not-run", fresh: false },
+      { ref: RED, outcome: "not-run", fresh: false },
+    ]);
+    // Nothing ran after the covering call that stranded.
+    const tr = calls(fx.trace) as Array<{ call: string }>;
+    const stranded = tr.findIndex((c) => c.call === "runMany");
+    expect(stranded).toBeGreaterThan(0);
+    expect(tr.slice(stranded + 1).some((c) => c.call === "run" || c.call === "runMany")).toBe(
+      false,
+    );
   });
 });
 
