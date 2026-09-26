@@ -21,6 +21,7 @@
     "itest:stale-publish": "bun packages/runner/itest/stale-publish.itest.ts",
     "itest:tables": "bun packages/runner/itest/tables.itest.ts",
     "itest:hang": "bun packages/runner/itest/hang.itest.ts",
+    "itest:harden": "bun packages/runner/itest/harden.itest.ts",
     "itest:chunked": "bun packages/runner/itest/chunked.itest.ts",
     "itest:testapp": "bun packages/runner/itest/test-app-publish.itest.ts",
     "itest:verify": "bun packages/runner/itest/verify.itest.ts",

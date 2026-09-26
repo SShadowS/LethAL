@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
@@ -17,8 +17,11 @@ import {
   assertHardenAnswers,
   assertHardenMarks,
   assertHardenVerdicts,
+  recordAfterBothLegs,
   siteOf,
 } from "./harden-expected";
+import { diffMutants, normalizeForComparison } from "./mutant-equality";
+import type { NormalizedMutant } from "./mutant-equality";
 
 const PROJECT_DIR = resolve(import.meta.dir, "../../../fixtures/sandbox-harden");
 
@@ -66,7 +69,7 @@ function reportFrom(rows: readonly ExpectedMutant[]): SessionReport {
         ...(r.killingTest !== undefined ? { killingTest: r.killingTest } : {}),
       }) as unknown as MutantOutcome,
   );
-  return withCounts({ mutants } as unknown as SessionReport, planted("S5"));
+  return withCounts({ mutants, batches: 1 } as unknown as SessionReport, planted("S5"));
 }
 
 function withCounts(report: SessionReport, s5: ExpectedMutant): SessionReport {
@@ -170,7 +173,10 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
     assertHardenMarks(good);
 
     // Empty-versus-empty must not pass.
-    const empty = withCounts({ mutants: [] } as unknown as SessionReport, planted("S5"));
+    const empty = withCounts(
+      { mutants: [], batches: 1 } as unknown as SessionReport,
+      planted("S5"),
+    );
     expect(() => assertHardenVerdicts(empty)).toThrow(HardenGateError);
     expect(() => assertHardenMarks(empty)).toThrow(HardenGateError);
     expect(() => assertHardenAnswers(empty)).toThrow(HardenGateError);
@@ -232,5 +238,87 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
       }),
     );
     expect(() => assertHardenAnswers(s3Survives)).toThrow("S3");
+  });
+
+  test("C02-03: every check refuses a report of more than one batch", () => {
+    // Codes restart per batch: split the table at S5 so batch 1 starts again at M0001, and S5's
+    // code, and the mark's, now also names batch 0's first mutant.
+    const good = reportFrom(EXPECTED);
+    const s5Code = good.readerMarkedEquivalent?.matched[0]?.mutantCode;
+    const cut = good.mutants.findIndex((m) => m.mutantCode === s5Code);
+    const twoBatches = {
+      ...good,
+      batches: 2,
+      mutants: good.mutants.map((m, i) =>
+        i < cut
+          ? m
+          : {
+              ...m,
+              batchIndex: 1,
+              mutantCode: `M${String(i - cut + 1).padStart(4, "0")}`,
+            },
+      ),
+      // What a live report would then say: S5 is M0001, the same code batch 0's first mutant has.
+      likelyEquivalentSurvivors: {
+        count: 1,
+        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+      },
+      readerMarkedEquivalent: {
+        matched: [{ mutantCode: "M0001", key: "k", reason: "r" }],
+        stale: [],
+        contradicted: [],
+      },
+    } as SessionReport;
+    for (const check of [assertHardenVerdicts, assertHardenMarks, assertHardenAnswers]) {
+      expect(() => check(twoBatches)).toThrow("exactly one batch");
+    }
+    // `batches` alone is also read: one batch claimed with a stray batchIndex is refused.
+    const stray = {
+      ...good,
+      mutants: good.mutants.map((m, i) => (i === 0 ? { ...m, batchIndex: 1 } : m)),
+    } as SessionReport;
+    expect(() => assertHardenMarks(stray)).toThrow("exactly one batch");
+  });
+});
+
+describe("C02-03: the baseline is written only after leg B passes", () => {
+  const exists = (p: string) =>
+    access(p).then(
+      () => true,
+      () => false,
+    );
+
+  test("C02-03: the baseline is written only after leg B passes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-harden-baseline-"));
+    try {
+      const reportA = reportFrom(EXPECTED);
+      const failPath = join(dir, "fail.baseline.json");
+      await expect(
+        recordAfterBothLegs(
+          reportA,
+          async () => {
+            throw new Error("leg B failed");
+          },
+          failPath,
+        ),
+      ).rejects.toThrow("leg B failed");
+      expect(await exists(failPath)).toBe(false);
+
+      const okPath = join(dir, "ok.baseline.json");
+      let legBRan = false;
+      await recordAfterBothLegs(
+        reportA,
+        async () => {
+          legBRan = true;
+        },
+        okPath,
+      );
+      expect(legBRan).toBe(true);
+      const written = JSON.parse(await readFile(okPath, "utf8")) as NormalizedMutant[];
+      expect(written.length).toBe(EXPECTED.length);
+      expect(diffMutants(written, normalizeForComparison(reportA))).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,4 +1,5 @@
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { assertMatchesBaseline } from "./baseline-guard";
 
 /**
  * C02-03: the pre-committed per-mutant table for `fixtures/sandbox-harden`, and the three checks
@@ -217,6 +218,21 @@ export function describeRow(row: ExpectedMutant): string {
 }
 
 /**
+ * The report must be ONE batch, batch 0. The S5 lookup and the marks match by `mutantCode`, which
+ * restarts per batch, so on a two-batch report the same code could name two mutants and a check
+ * could pass on the wrong one. Every table check runs this first.
+ */
+export function assertSingleBatch(report: SessionReport): void {
+  const other = report.mutants.filter((m) => m.batchIndex !== 0);
+  if (report.batches !== 1 || other.length !== 0) {
+    const sample = other.slice(0, 5).map((m) => `${m.mutantCode}@${m.batchIndex}`);
+    throw new HardenGateError(
+      `the report must be exactly one batch (batch 0), got batches=${String(report.batches)} and ${other.length} mutant(s) outside batch 0 [${sample.join(", ")}]: mutant codes restart per batch, so the mark and S5 checks would be ambiguous`,
+    );
+  }
+}
+
+/**
  * Pair every row with exactly one report mutant. Throws on a missing row or a site held twice, so
  * an empty report fails here rather than passing every later check vacuously.
  */
@@ -225,6 +241,7 @@ function pairRows(
   expected: readonly ExpectedMutant[],
 ): Map<ExpectedMutant, MutantOutcome> {
   if (expected.length === 0) throw new HardenGateError("the expected table is empty");
+  assertSingleBatch(report);
   const bySite = new Map<string, MutantOutcome[]>();
   for (const m of report.mutants) {
     const k = siteOf(m.file, m.line, m.operatorName);
@@ -365,4 +382,18 @@ export function assertHardenAnswers(report: SessionReport, expected = EXPECTED):
   if (s5.verdict !== "survived") {
     throw new HardenGateError(`S5 ${describeRow(s5row)}: ${s5.verdict}, expected survived`);
   }
+}
+
+/**
+ * Writes the baseline (via assertMatchesBaseline) only after legB() resolved. A leg-B throw
+ * propagates and leaves no file behind. When the file already exists, leg A compared against it,
+ * and this compares the same report again, which cannot differ.
+ */
+export async function recordAfterBothLegs(
+  reportA: SessionReport,
+  legB: () => Promise<void>,
+  baselinePath: string,
+): Promise<void> {
+  await legB();
+  await assertMatchesBaseline(reportA, baselinePath, "harden itest");
 }
