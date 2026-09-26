@@ -104,13 +104,35 @@ export async function hashTargetSource(
   projectDir: string,
   preprocessorSymbols: readonly string[],
 ): Promise<string> {
-  const files = [...(await targetAlFiles(projectDir)), "app.json"]
-    .map((f) => f.replaceAll("\\", "/"))
-    .sort();
+  return hashSourceSnapshot(await readTargetSource(projectDir), preprocessorSymbols);
+}
+
+/**
+ * The target build's inputs read ONCE: every `targetAlFiles` path plus `app.json`, keyed by the
+ * path as `targetAlFiles` spells it. `runSession` hashes this snapshot AND hands it to
+ * `generateMutationSet` to parse, so the recorded hash is of the bytes generation consumed, not of
+ * a separate read that an edit could land between.
+ */
+export async function readTargetSource(projectDir: string): Promise<ReadonlyMap<string, Buffer>> {
+  const snapshot = new Map<string, Buffer>();
+  for (const rel of [...(await targetAlFiles(projectDir)), "app.json"]) {
+    snapshot.set(rel, await readFile(join(projectDir, rel)));
+  }
+  return snapshot;
+}
+
+/** `hashTargetSource` over a snapshot `readTargetSource` took. */
+export function hashSourceSnapshot(
+  snapshot: ReadonlyMap<string, Buffer>,
+  preprocessorSymbols: readonly string[],
+): string {
+  const files = [...snapshot.entries()]
+    .map(([rel, bytes]) => [rel.replaceAll("\\", "/"), bytes] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const h = createHash("sha256");
-  for (const rel of files) {
+  for (const [rel, bytes] of files) {
     h.update(`${rel}\0`);
-    h.update(await readFile(join(projectDir, rel)));
+    h.update(bytes);
     h.update("\0");
   }
   h.update(`preprocessorSymbols\0${JSON.stringify([...preprocessorSymbols].sort())}\n`);

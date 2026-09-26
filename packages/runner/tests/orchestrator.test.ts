@@ -3504,6 +3504,49 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // C02-06 review r1 item 1: an edit that lands after the source hash is read and is undone before
+  // the last batch's read was invisible to the two-read check, while generation had consumed the
+  // edited bytes. Generation now parses the SAME in-memory snapshot the first hash is taken over,
+  // so the build carries exactly the hashed bytes whatever happens on disk in between. The edit
+  // lands when generation starts and is undone when it ends: before the fix the published file
+  // carried the edit under a hash of the original.
+  test("an edit undone during generation cannot reach the build: generation parses the hashed snapshot", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const expected = await hashTargetSource(dirs.projectDir, []);
+    const edited = TARGET_AL.replace(
+      "    begin\n",
+      "    begin\n        // EDITED-DURING-GENERATION\n",
+    );
+    expect(edited).not.toBe(TARGET_AL);
+    const store = new ResultsStore(":memory:");
+    const backend = new PhaseBackend();
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [
+        (e) => {
+          if (e.type === "phase-entered" && e.phase === "generate") writeFileSync(file, edited);
+          if (e.type === "phase-left" && e.phase === "generate") writeFileSync(file, TARGET_AL);
+        },
+      ],
+    });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const record = store.artifactRecordById(returned.artifactId);
+    expect(record?.sourceSha256).toBe(expected);
+    const instrumentedDir = record?.instrumentedDir;
+    if (instrumentedDir === undefined || instrumentedDir === null) {
+      throw new Error("expected an artifact record with its batch dir");
+    }
+    const built = readFileSync(join(instrumentedDir, "SandboxLogic.Codeunit.al"), "utf8");
+    expect(built).toContain("exit(");
+    expect(built).not.toContain("EDITED-DURING-GENERATION");
+    store.close();
+  });
+
   // C02-06 review r1 item 2: a resume across a preprocessor-symbol change must start fresh, since
   // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
   test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {

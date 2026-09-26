@@ -50,7 +50,8 @@ import type {
 } from "./backend";
 import {
   hashAlTree,
-  hashTargetSource,
+  hashSourceSnapshot,
+  readTargetSource,
   snapshotApplies,
   targetAlFiles,
   testAppHashFor,
@@ -410,6 +411,12 @@ export interface MutationSetOptions {
    * just to preserve their existing console output.
    */
   readonly emit?: RunEmitter;
+  /**
+   * C02-06: a `readTargetSource` snapshot to parse instead of reading the disk. `runSession`
+   * passes the snapshot it hashed, so the recorded source hash is of exactly the bytes generation
+   * consumed. The `.al` set is the snapshot's keys; absent, the disk is enumerated and read.
+   */
+  readonly source?: ReadonlyMap<string, Buffer>;
 }
 
 /**
@@ -549,7 +556,10 @@ export async function generateMutationSet(
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
-  const entries = (await readdir(projectDir, { recursive: true })).filter(isEnumeratedAl);
+  const snapshot = options.source;
+  const entries = (
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+  ).filter(isEnumeratedAl);
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
@@ -597,7 +607,15 @@ export async function generateMutationSet(
   // spec-generation set would make `--only` change verdicts rather than just how many run.
   const parsed = await Promise.all(
     entries.sort().map(async (rel) => {
-      const source = await readFile(join(projectDir, rel), "utf8");
+      const bytes = snapshot?.get(rel);
+      if (snapshot !== undefined && bytes === undefined) {
+        throw new Error(`generateMutationSet: ${rel} is not in the source snapshot`);
+      }
+      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
+      const source =
+        bytes !== undefined
+          ? bytes.toString("utf8")
+          : await readFile(join(projectDir, rel), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
@@ -1257,15 +1275,20 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
   return id;
 }
 
-/** C02-06: `hashTargetSource`, or the reason the tree could not be read (no `app.json`, say). An
+/** C02-06: `hashTargetSource` plus the snapshot it hashed (generation parses that snapshot), or
+ *  the reason the tree could not be read (no `app.json`, say). An
  *  unread tree never matches, so it records no hash rather than a wrong one, and the warning can
  *  say which of "edited" and "unreadable" happened. */
 async function readTargetSourceHash(
   projectDir: string,
   symbols: readonly string[],
-): Promise<{ readonly hash: string } | { readonly unreadable: string }> {
+): Promise<
+  | { readonly hash: string; readonly snapshot: ReadonlyMap<string, Buffer> }
+  | { readonly unreadable: string }
+> {
   try {
-    return { hash: await hashTargetSource(projectDir, symbols) };
+    const snapshot = await readTargetSource(projectDir);
+    return { hash: hashSourceSnapshot(snapshot, symbols), snapshot };
   } catch (err) {
     return { unreadable: messageOf(err) };
   }
@@ -3877,9 +3900,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
-  // C02-06 decision 8: hashed BEFORE generation reads the source and again after the last batch
-  // is prepared (below); recorded only when the two agree, so the hash names the source actually
-  // instrumented. Hashing after generation instead would miss an edit landing between the two.
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
   emit({ type: "phase-entered", phase: "generate" });
@@ -3898,6 +3923,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
+    ...("snapshot" in sourceHashAtGeneration ? { source: sourceHashAtGeneration.snapshot } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
