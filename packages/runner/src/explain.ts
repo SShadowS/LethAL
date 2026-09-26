@@ -1,3 +1,4 @@
+import type { ReachGrain } from "@lethal/schemata";
 import type { Interpretation } from "./interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
@@ -167,8 +168,16 @@ import type { MutantVerdict } from "./store";
  * moving. Two bumps in one day is what a domain that is still being discovered looks like; the
  * alternative was leaving two more `error` shapes with no machine value at all, which is what R114
  * was filed about in the first place.
+ *
+ * 5: GH-24 added `reached-unnoticed` to `$.survivors[].reach`, and `covered-but-unreached` and
+ * `unreached-and-uncovered` changed meaning: the mutant's own `guardReached` now decides them,
+ * and a row carrying `reachGrain` without it reads `not-decided` instead of falling back to the
+ * batch-wide guard signal. The new `reachGrain` and `reachedBy` leaves are additive. R233 records
+ * that v4 drifted: five commits grew its `caveat` and `cause` domains without this bump, v4 is
+ * left as it was published, and `schemas.test.ts` now pins every value domain so the next one
+ * cannot ship silently.
  */
-export const EXPLAIN_SCHEMA_VERSION = 4;
+export const EXPLAIN_SCHEMA_VERSION = 5;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -272,8 +281,16 @@ export interface ExplainSurvivor {
    * was reached — the one claim neither can carry alone, and the reason this field exists rather
    * than a note. `covered-but-unreached` is the actionable case the two signals were previously
    * read as contradicting: a test enters the procedure and never reaches this statement.
+   *
+   * GH-24: the report's per-mutant `guardReached` decides first where present; see
+   * `survivorReachOf` for the whole order.
    */
   readonly reach: SurvivorReach;
+  /** GH-24: verbatim from the report row. Absent for a report written before GH-24. */
+  readonly reachGrain?: ReachGrain;
+  /** GH-24: verbatim from the report row, the tests whose run reached this mutant's own
+   *  statement. Present exactly when the row has `guardReached`, so `[]` means none reached. */
+  readonly reachedBy?: readonly string[];
   /** `ATTRIBUTION_INTERPRETATIONS[attribution]`, by reference. */
   readonly interpretation: Interpretation;
   /** `GUARD_EVIDENCE_INTERPRETATIONS[guardEvidence]`, by reference. */
@@ -490,6 +507,9 @@ export const EXPLAIN_CONTRACT: ExplainContract = {
 const KNOWN_CAVEATS: ReadonlySet<string> = new Set(Object.keys(CAVEAT_INTERPRETATIONS));
 const KNOWN_ATTRIBUTIONS: ReadonlySet<string> = new Set(Object.keys(ATTRIBUTION_INTERPRETATIONS));
 const KNOWN_ERROR_CAUSES: ReadonlySet<string> = new Set(Object.keys(ERROR_CAUSE_INTERPRETATIONS));
+/** GH-24. A `Record` so adding a `ReachGrain` variant fails to compile until it is listed here. */
+const REACH_GRAINS: Record<ReachGrain, true> = { statement: true, enclosing: true, unplaced: true };
+const KNOWN_REACH_GRAINS: ReadonlySet<string> = new Set(Object.keys(REACH_GRAINS));
 const KNOWN_VERDICTS: ReadonlySet<string> = new Set(
   Object.keys({
     killed: 0,
@@ -543,6 +563,8 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *                                            defaulting it either way claims what the data does not
  *   - every mutant's `guardObserved`       — a tri-state, one of whose states (`not-observed`) moves
  *                                            a mutant out of the survivor reading entirely
+ *   - every mutant's `guardReached`, `reachGrain` and `reachedBy` : GH-24, decide `reach`; also
+ *                                            refused in a combination the producer cannot write
  *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
  *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup
  *   - `artifacts` (each `batchIndex` once, `artifactId` a string) : C02-01, the per-batch lookup
@@ -645,6 +667,49 @@ export function assertExplainableReport(value: unknown): SessionReport {
       refuse(
         `${where} has a non-boolean guardObserved, which would decide its guard evidence by coercion`,
         mutant.guardObserved,
+      );
+    }
+    // GH-24: `guardReached` and `reachGrain` decide `reach`; `reachedBy` is copied. A coerced value
+    // or a combination the producer cannot write would decide reach from a corrupt row.
+    const { guardReached, reachedBy, reachGrain } = mutant;
+    if (guardReached !== undefined && typeof guardReached !== "boolean") {
+      refuse(
+        `${where} has a non-boolean guardReached, which would decide reach by coercion`,
+        guardReached,
+      );
+    }
+    if (
+      reachedBy !== undefined &&
+      (!Array.isArray(reachedBy) || reachedBy.some((t) => typeof t !== "string"))
+    ) {
+      refuse(`${where} has a reachedBy that is not an array of test names`, reachedBy);
+    }
+    if (
+      reachGrain !== undefined &&
+      (typeof reachGrain !== "string" || !KNOWN_REACH_GRAINS.has(reachGrain))
+    ) {
+      refuse(
+        `${where} has a reachGrain this build cannot interpret`,
+        reachGrain,
+        KNOWN_REACH_GRAINS,
+      );
+    }
+    if ((guardReached === undefined) !== (reachedBy === undefined)) {
+      refuse(
+        `${where} has one of guardReached and reachedBy without the other; the report writes both or neither`,
+        { guardReached, reachedBy },
+      );
+    }
+    if (guardReached !== undefined && reachGrain !== "statement") {
+      refuse(
+        `${where} has guardReached on a mutant whose reachGrain is not "statement"; only a statement-grain mutant carries a marker`,
+        reachGrain,
+      );
+    }
+    if (guardReached === true && mutant.guardObserved === false) {
+      refuse(
+        `${where} has guardReached true beside guardObserved false; a marker runs only inside a branch whose guard ran`,
+        { guardReached, guardObserved: mutant.guardObserved },
       );
     }
     // C02-01: `carried` decides `artifactIdAbsent`, and wins over the batch lookup, so a coerced
@@ -799,7 +864,7 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
     refuse(`survivor ${JSON.stringify(m.mutantCode)} has no coverageAttribution`, undefined);
   }
   const guardEvidence = guardEvidenceOf(m.guardObserved);
-  const reach = survivorReachOf(attribution, guardEvidence);
+  const reach = survivorReachOf(attribution, guardEvidence, m.guardReached, m.reachGrain);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
@@ -819,6 +884,8 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
     interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
     guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
     reachInterpretation: keyed(REACH_INTERPRETATIONS, reach, "reach"),
+    ...(m.reachGrain !== undefined ? { reachGrain: m.reachGrain } : {}),
+    ...(m.reachedBy !== undefined ? { reachedBy: [...m.reachedBy] } : {}),
     // C02-01: copied field by field, never an object spread, so an unexpected extra property on
     // the report row cannot ride through into the output.
     batchIndex: m.batchIndex,
@@ -879,24 +946,27 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
  * settled. It is deliberately not a judgement about the target's code, which rule (1) of this
  * file's admissibility rule forbids, and it tells no one what test to write.
  *
- * - 0 — `executionProven` and `reach: "not-decided"`. A test is measured to have executed this
- *   PROCEDURE, and nothing says the statement went unreached. The most evidence any survivor here
- *   carries.
- * - 1 — `executionProven` and `reach: "covered-but-unreached"`. A test enters the procedure and no
- *   guarded statement fired: the R116 pair. Strong evidence too, about a different situation, and
- *   ranked below 0 only because 0's rows are the ones whose covering test ran what was mutated.
- * - 2 — not `executionProven`, `reach: "not-decided"`. Some test touched the OBJECT. Whether the
+ * - 0: `reach: "reached-unnoticed"` (GH-24). The mutant's own statement is measured to have run
+ *   under a covering test, and every one passed. The most evidence any survivor here carries.
+ * - 1: `executionProven` and `reach: "not-decided"`. A test is measured to have executed this
+ *   PROCEDURE, and nothing says the statement went unreached.
+ * - 2: `executionProven` and `reach: "covered-but-unreached"`. A test enters the procedure and the
+ *   statement did not run: the R116 pair. Strong evidence too, about a different situation, and
+ *   ranked below 1 only because 1's rows may be ones whose covering test ran what was mutated.
+ * - 3: not `executionProven`, `reach: "not-decided"`. Some test touched the OBJECT. Whether the
  *   mutated member ran is unknown, which is FALLBACK 1's whole warning.
- * - 3 — not `executionProven`, `reach: "unreached-and-uncovered"`. Neither signal places a test at
- *   this code. The least any survivor carries, so the first to drop off a capped list.
+ * - 4: `reach: "unreached-and-uncovered"`. Neither signal places a test at this code. The least
+ *   any survivor carries, so the first to drop off a capped list.
  *
  * Ties break on `file`, then `line`, then `mutantCode`, which makes the order TOTAL: two rows can
  * never compare equal, so `--top 20` on one machine is `--top 20` on every other. A rank that left
  * ties would make the cap's contents depend on the sort implementation.
  */
 export function survivorActionabilityRank(s: ExplainSurvivor): number {
-  if (s.executionProven) return s.reach === "covered-but-unreached" ? 1 : 0;
-  return s.reach === "unreached-and-uncovered" ? 3 : 2;
+  if (s.reach === "reached-unnoticed") return 0;
+  if (s.reach === "unreached-and-uncovered") return 4;
+  if (s.executionProven) return s.reach === "covered-but-unreached" ? 2 : 1;
+  return 3;
 }
 
 /** The total order `rankedBy: "actionability"` names. Exported so a consumer, or a test, can

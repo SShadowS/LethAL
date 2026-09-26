@@ -944,8 +944,9 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
   explained with the unrecognised value dropped.
   --top <n>                  keep at most n survivors. Without it you get every survivor in report
                              order; with it the list is RANKED by how much evidence each row
-                             carries (execution-proven first, then the covered-but-unreached pair,
-                             then object-level attribution) and cut to n. The output always states
+                             carries (reached-unnoticed first, then execution-proven, then the
+                             covered-but-unreached pair, then object-level attribution) and cut
+                             to n. The output always states
                              what it did in 'survivorSelection': total, shown, omitted and
                              'rankedBy', present even when nothing was dropped, so a capped list
                              can never read as a complete one. The cap bounds SURVIVORS only,
