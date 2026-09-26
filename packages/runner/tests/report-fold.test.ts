@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { RunEvent, RunEventInput } from "../src/events";
+import { buildReport } from "../src/report";
 import { foldEvents } from "../src/report-fold";
 import type { FoldStatics } from "../src/report-fold";
 
@@ -839,5 +840,50 @@ describe("foldEvents: C02-02, artifacts[] names every published batch's identity
       { type: "session-finished", elapsedMs: 10 },
     ]);
     expect(() => foldEvents(STATICS, events)).toThrow(/no appVersion/);
+  });
+});
+
+describe("foldEvents: GH-24, per-mutant reach round-trips", () => {
+  function scored(over: Partial<Extract<RunEventInput, { type: "mutant-scored" }>>) {
+    return seq([
+      ...baseEvents(),
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001"),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 10,
+        coveringTests: ["Sales Helper Tests.T1"],
+        ...over,
+      },
+      { type: "session-finished", elapsedMs: 100 },
+    ]);
+  }
+
+  test("a decided mutant keeps all three keys, false and empty included", () => {
+    const events = scored({
+      mutant: mutant("M0001", { reachGrain: "statement" }),
+      guardReached: false,
+      reachedBy: [],
+    });
+    const [o] = foldEvents(STATICS, events).outcomes;
+    expect(o?.mutant.reachGrain).toBe("statement");
+    expect(o?.guardReached).toBe(false);
+    expect(o?.reachedBy).toEqual([]);
+    const [row] = buildReport(STATICS, events).mutants;
+    expect(row?.reachGrain).toBe("statement");
+    expect(row?.guardReached).toBe(false);
+    expect(row?.reachedBy).toEqual([]);
+  });
+
+  test("an enclosing-grain mutant round-trips with its grain alone", () => {
+    const events = scored({ mutant: mutant("M0001", { reachGrain: "enclosing" }) });
+    const [o] = foldEvents(STATICS, events).outcomes;
+    expect(o !== undefined && "guardReached" in o).toBe(false);
+    expect(o !== undefined && "reachedBy" in o).toBe(false);
+    const [row] = buildReport(STATICS, events).mutants;
+    expect(row?.reachGrain).toBe("enclosing");
+    expect(row !== undefined && "guardReached" in row).toBe(false);
+    expect(row !== undefined && "reachedBy" in row).toBe(false);
   });
 });

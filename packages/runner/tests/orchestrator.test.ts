@@ -238,6 +238,12 @@ class StubBackend implements ExecutionBackend {
   coverageEntriesFor?: (
     ref: TestMethodRef,
   ) => Array<{ objectType: string; objectId: number; procedure?: string }> | undefined;
+  /**
+   * GH-24: the per-test `reachedActive` an attesting run reports. Defaults to `mutant !== null`
+   * (the mutant's own statement began whenever a mutant was active). `undefined` leaves the field
+   * off, which is how a run without an answer looks.
+   */
+  reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -327,8 +333,15 @@ class StubBackend implements ExecutionBackend {
           }
         : {}),
       ...(hasAttestation ? { attestation: { observedAny: true, identityMismatch: false } } : {}),
+      ...(hasAttestation
+        ? reachedOf(this.reachedFor ? this.reachedFor(active, ref) : active !== null)
+        : {}),
     };
   }
+}
+
+function reachedOf(reachedActive: boolean | undefined): { reachedActive?: boolean } {
+  return reachedActive !== undefined ? { reachedActive } : {};
 }
 
 async function makeProject(testAl: string = TEST_AL) {
@@ -9627,5 +9640,233 @@ describe("C02-04 characterization", () => {
       }),
     );
     expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+});
+// GH-24: the per-mutant fold of each covering test's `reachedActive` into `guardReached` and
+// `reachedBy`, and the manifest's `reachGrain` on every mutant. Decision 7: unmeasured is never
+// false, and only statement-grain mutants are ever decided.
+const REACH_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure ATest()
+    begin
+    end;
+
+    [Test]
+    procedure BTest()
+    begin
+    end;
+}
+`;
+const REACH_A = "Sandbox Tests.ATest";
+const REACH_B = "Sandbox Tests.BTest";
+
+// An unbraced then-call: `void-method-call` on `DoNotify()` resolves to the enclosing `if`, so it
+// is enclosing grain, while the condition's mutants stay statement grain (the control).
+const REACH_ENCLOSING_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure Notify(Amount: Decimal)
+    begin
+        if Amount > 0 then
+            DoNotify();
+    end;
+
+    procedure DoNotify()
+    begin
+        Message('x');
+    end;
+}
+`;
+
+type Scored = Extract<RunEvent, { type: "mutant-scored" }>;
+
+async function runReach(
+  backend: ExecutionBackend,
+  targetAl: string = TARGET_AL,
+): Promise<{ scored: Scored[]; report: Awaited<ReturnType<typeof runSession>> }> {
+  const dirs = await makeProject(REACH_TESTS_AL);
+  await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), targetAl);
+  const events: RunEvent[] = [];
+  const report = await runSession({
+    backend,
+    store: new ResultsStore(":memory:"),
+    ...dirs,
+    selectorIds,
+    emit: [(e) => events.push(e)],
+  });
+  const scored = events.filter((e): e is Scored => e.type === "mutant-scored");
+  expect(scored.length).toBeGreaterThan(0);
+  return { scored, report };
+}
+
+function reachOf(o: {
+  readonly guardReached?: boolean;
+  readonly reachedBy?: readonly string[];
+}): { guardReached?: boolean; reachedBy?: readonly string[] } {
+  return {
+    ...(o.guardReached !== undefined ? { guardReached: o.guardReached } : {}),
+    ...(o.reachedBy !== undefined ? { reachedBy: o.reachedBy } : {}),
+  };
+}
+
+function reportRow(report: Awaited<ReturnType<typeof runSession>>, id: string) {
+  const row = report.mutants.find((m) => m.mutantCode === id);
+  if (row === undefined) throw new Error(`no report row for ${id}`);
+  return row;
+}
+
+describe("GH-24: per-mutant reach", () => {
+  test("GH-24: reachedBy names only the tests that reached", async () => {
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.reachedFor = (mutant, ref) => mutant !== null && ref.method === "ATest";
+    const { scored, report } = await runReach(backend);
+    for (const e of scored) {
+      expect(e.verdict).toBe("survived");
+      expect(e.mutant.reachGrain).toBe("statement");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      // A lost-ack retry yields only the final verdict: no test is named twice.
+      expect(new Set(e.reachedBy).size).toBe(e.reachedBy?.length ?? -1);
+      const row = reportRow(report, e.mutant.mutantId);
+      expect(row.reachGrain).toBe("statement");
+      expect(reachOf(row)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+    }
+  });
+
+  test("GH-24: a survivor nobody reached says false with an empty list", async () => {
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.reachedFor = () => false;
+    const { scored, report } = await runReach(backend);
+    for (const e of scored) {
+      expect(e.verdict).toBe("survived");
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      expect(reachOf(reportRow(report, e.mutant.mutantId))).toEqual({
+        guardReached: false,
+        reachedBy: [],
+      });
+    }
+  });
+
+  test("GH-24: a kill whose runs never reached keeps its verdict and says false", async () => {
+    const script = (mutant: string | null, ref: TestMethodRef) =>
+      mutant !== null && ref.method === "ATest" ? "fail" : "pass";
+    const never = new StubBackend(CAPS_NST, script, ["IsOverBudget"]);
+    never.reachedFor = () => false;
+    const { scored } = await runReach(never);
+    for (const e of scored) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+    }
+    // The mirror: every test reaches, but a kill stops at the killer, so the list is partial.
+    const always = new StubBackend(CAPS_NST, script, ["IsOverBudget"]);
+    always.reachedFor = (mutant) => mutant !== null;
+    const mirror = await runReach(always);
+    for (const e of mirror.scored) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+    }
+  });
+
+  test("GH-24: a run without an answer leaves reach not measured", async () => {
+    // ATest answers first, then BTest times out with no answer. Only M0001 times out: later
+    // mutants would run BTest first through the kill ledger, so only M0001 is asserted.
+    const script = (mutant: string | null, ref: TestMethodRef) =>
+      mutant === "M0001" && ref.method === "BTest" ? "timeout" : "pass";
+    const answerOf = (reachedA: boolean) => (mutant: string | null, ref: TestMethodRef) =>
+      ref.method === "BTest" ? undefined : mutant !== null && reachedA;
+    const unanswered = new StubBackend(CAPS_NST, script, ["IsOverBudget"]);
+    unanswered.reachedFor = answerOf(false);
+    const first = await runReach(unanswered);
+    const m1 = first.scored.find((e) => e.mutant.mutantId === "M0001");
+    expect(m1?.verdict).toBe("timeout-killed");
+    expect(m1?.mutant.reachGrain).toBe("statement");
+    expect(m1 !== undefined ? reachOf(m1) : undefined).toEqual({});
+    expect(reachOf(reportRow(first.report, "M0001"))).toEqual({});
+    // The other run reached: that is a measurement whatever the unanswered run would have said.
+    const reached = new StubBackend(CAPS_NST, script, ["IsOverBudget"]);
+    reached.reachedFor = answerOf(true);
+    const second = await runReach(reached);
+    const r1 = second.scored.find((e) => e.mutant.mutantId === "M0001");
+    expect(r1?.verdict).toBe("timeout-killed");
+    expect(r1 !== undefined ? reachOf(r1) : undefined).toEqual({
+      guardReached: true,
+      reachedBy: [REACH_A],
+    });
+  });
+
+  test("GH-24: an enclosing-grain mutant is never decided", async () => {
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["Notify"]);
+    backend.reachedFor = (mutant) => mutant !== null;
+    const { scored, report } = await runReach(backend, REACH_ENCLOSING_AL);
+    const enclosing = scored.filter((e) => e.mutant.reachGrain === "enclosing");
+    // Covered ones only: `DoNotify`'s own body is not in the coverage, so it is `no-coverage`.
+    const statement = scored.filter(
+      (e) => e.mutant.reachGrain === "statement" && e.verdict === "survived",
+    );
+    expect(enclosing.length).toBeGreaterThan(0);
+    expect(statement.length).toBeGreaterThan(0);
+    for (const e of enclosing) {
+      expect(e.verdict).toBe("survived");
+      expect(reachOf(e)).toEqual({});
+      const row = reportRow(report, e.mutant.mutantId);
+      expect(row.reachGrain).toBe("enclosing");
+      expect(reachOf(row)).toEqual({});
+    }
+    // The control: the same runs decide every statement-grain mutant.
+    for (const e of statement) {
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A, REACH_B] });
+    }
+  });
+
+  test("GH-24: a backend that never attests records no reach", async () => {
+    // Non-authoritative, as al-runner: no attestation, so no `reachedActive` on any verdict.
+    const backend = new StubBackend(CAPS_NST_WORKERS, () => "pass", ["IsOverBudget"]);
+    const { scored, report } = await runReach(backend);
+    for (const e of scored) {
+      expect(e.mutant.reachGrain).toBe("statement");
+      expect(reachOf(e)).toEqual({});
+      const row = reportRow(report, e.mutant.mutantId);
+      expect(row.reachGrain).toBe("statement");
+      expect(reachOf(row)).toEqual({});
+    }
+  });
+
+  test("GH-24: a manifest from before GH-24 has no grain and is never decided", async () => {
+    // An artifact instrumented before GH-24 wrote no `reachGrain`. Strip it from the manifest
+    // the batch is read from, at the one seam between writing and reading it.
+    const real = orchestratorModule.prepareBatchProject;
+    let stripped = 0;
+    const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
+      async (projectDir, targetDir, projectManifest, appVersion) => {
+        await real(projectDir, targetDir, projectManifest, appVersion);
+        const path = join(targetDir, "mutant-manifest.json");
+        const manifest = JSON.parse(await readFile(path, "utf8")) as {
+          mutants: Array<Record<string, unknown>>;
+        };
+        manifest.mutants = manifest.mutants.map(({ reachGrain, ...rest }) => {
+          expect(reachGrain).toBe("statement");
+          stripped += 1;
+          return rest;
+        });
+        await Bun.write(path, JSON.stringify(manifest));
+      },
+    );
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.reachedFor = (mutant) => mutant !== null;
+    let result: Awaited<ReturnType<typeof runReach>>;
+    try {
+      result = await runReach(backend);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(stripped).toBeGreaterThan(0);
+    for (const e of result.scored) {
+      expect(e.mutant.reachGrain).toBeUndefined();
+      expect(reachOf(e)).toEqual({});
+      const row = reportRow(result.report, e.mutant.mutantId);
+      expect(row.reachGrain).toBeUndefined();
+      expect(reachOf(row)).toEqual({});
+    }
   });
 });

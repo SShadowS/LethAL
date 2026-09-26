@@ -882,6 +882,15 @@
         "guardObserved": {
           "type": "boolean"
         },
+        "guardReached": {
+          "type": "boolean"
+        },
+        "reachedBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "runner": {
           "type": "string",
           "enum": [

@@ -408,6 +408,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             ? { coverageAttribution: e.coverageAttribution }
             : {}),
           ...(e.guardObserved !== undefined ? { guardObserved: e.guardObserved } : {}),
+          ...(e.guardReached !== undefined ? { guardReached: e.guardReached } : {}),
+          ...(e.reachedBy !== undefined ? { reachedBy: e.reachedBy } : {}),
           ...(e.killingTest !== undefined ? { killingTest: e.killingTest } : {}),
           ...(e.failureNote !== undefined ? { failureNote: e.failureNote } : {}),
           ...(e.killingTestFailure !== undefined

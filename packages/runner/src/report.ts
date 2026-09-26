@@ -1,6 +1,6 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
-import type { MutantManifestEntry } from "@lethal/schemata";
+import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
   ASSERTION_SCREEN_DIAGNOSIS,
@@ -80,6 +80,10 @@ export interface SessionOutcome {
    *  `MutantOutcome.guardObserved`. Absent when nothing ran it, or on a backend that cannot
    *  attest (al-runner). */
   readonly guardObserved?: boolean;
+  /** GH-24: see `MutantOutcome.guardReached`. The grain is read off `mutant.reachGrain`. */
+  readonly guardReached?: boolean;
+  /** GH-24: see `MutantOutcome.reachedBy`. Present exactly when `guardReached` is. */
+  readonly reachedBy?: readonly string[];
   /** R54: this verdict was CARRIED from a prior run by `--resume`, not measured here — see
    *  `MutantOutcome.carried`. */
   readonly carried?: boolean;
@@ -1567,6 +1571,35 @@ export interface MutantOutcome {
    */
   readonly guardObserved?: boolean;
   /**
+   * GH-24: the compile-time grain of this mutant's reach marker, carried verbatim from
+   * `MutantManifestEntry.reachGrain` (a SITE property, like `hangCapable`). Only `"statement"`
+   * mutants carry a `MutationSelector.Reached` marker, so only they can ever have `guardReached`.
+   * Absent for a manifest written before GH-24, which is "not recorded", never a grain.
+   */
+  readonly reachGrain?: ReachGrain;
+  /**
+   * GH-24: whether this mutant's OWN statement began executing during its runs, for a
+   * `"statement"`-grain mutant only. `true` if ANY run reported the marker reached; `false` only if
+   * at least one run happened and EVERY run answered and none reached. A run that ended without an
+   * answer (a timeout, a stopped or 408 run, a transport error, an operation in flight, al-runner)
+   * is UNMEASURED, never `false`, so a mixture of "not reached" and "no answer" leaves this absent.
+   *
+   * What `true` proves: the running binary executed a `Reached` marker carrying exactly this
+   * session's target app, the artifact the selector bakes and this mutant, while that mutant was
+   * active. For an expression or argument mutant that is the enclosing STATEMENT starting, not
+   * proof the mutated sub-expression was evaluated. `false` is NOT proof of absence.
+   *
+   * Absent for `"enclosing"` and `"unplaced"` grain whatever the server said, for a manifest with
+   * no grain, when nothing ran the mutant, and on a backend that cannot attest.
+   */
+  readonly guardReached?: boolean;
+  /**
+   * GH-24: qualified names of the tests whose run reached this mutant's marker, in run order.
+   * Present exactly when `guardReached` is (so `[]` with `false`). PARTIAL on a kill, which stops
+   * at the first failing test; complete on a survivor, which every covering test ran against.
+   */
+  readonly reachedBy?: readonly string[];
+  /**
    * R54: this verdict was CARRIED from a prior run by `--resume` rather than measured here.
    *
    * Provenance a consumer needs and cannot derive: the mutant is real and its verdict is real, but
@@ -1966,6 +1999,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         ? { coverageAttribution: o.coverageAttribution }
         : {}),
       ...(o.guardObserved !== undefined ? { guardObserved: o.guardObserved } : {}),
+      // GH-24: the grain is a SITE property, off the manifest entry like `hangCapable` below.
+      ...(o.mutant.reachGrain !== undefined ? { reachGrain: o.mutant.reachGrain } : {}),
+      ...(o.guardReached !== undefined ? { guardReached: o.guardReached } : {}),
+      ...(o.reachedBy !== undefined ? { reachedBy: o.reachedBy } : {}),
       ...(o.carried === true ? { carried: true } : {}),
       ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
