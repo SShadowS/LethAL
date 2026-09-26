@@ -621,7 +621,7 @@ export function decideExit(s: {
     return { exitCode: 0, actionEnd: null, stopReason: null };
   }
   const test =
-    s.quarantined === null ? null : /in-flight-unknown running (\S+)/.exec(s.quarantined)?.[1];
+    s.quarantined === null ? null : /in-flight-unknown running ([^\s:]+)/.exec(s.quarantined)?.[1];
   const proven =
     s.broken.every((b) => b.actionEnded) &&
     (s.quarantined === null || (test !== undefined && s.broken.some((b) => b.testMethod === test)));

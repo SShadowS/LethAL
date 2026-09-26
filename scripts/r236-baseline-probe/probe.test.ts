@@ -236,6 +236,19 @@ describe("decideExit (ruling q-160433: an unproven action end is a counted hit, 
     });
   });
 
+  test('a Task 6 suffixed reason (method name followed by ": <message>") still proves the action ended, the same as the old unsuffixed reason', () => {
+    const suffixed =
+      "baseline test in-flight-unknown running PageActionComputesNonZero: RunMutant timed out after headers: AbortError";
+    expect(d(suffixed, [b("PageActionComputesNonZero", true)])).toMatchObject({
+      exitCode: 0,
+      actionEnd: "proven",
+    });
+    expect(d(reason, [b("PageActionComputesNonZero", true)])).toMatchObject({
+      exitCode: 0,
+      actionEnd: "proven",
+    });
+  });
+
   test("an end that cannot be proven is 'unproven' and does NOT stop the arm (0)", () => {
     expect(d(reason, [b("PageActionComputesNonZero", false)])).toMatchObject({
       exitCode: 0,
