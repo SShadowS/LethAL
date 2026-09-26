@@ -174,7 +174,7 @@ Precedence: 3, 6, 4, 5, 0.
 
 Owner requirement 1, literally: if the target's source changed since it was instrumented, refuse with "re-instrument first".
 
-- **What is hashed:** `hashTargetSource(projectDir, testDir)` = SHA-256 over every `*.al` file under `projectDir` plus `projectDir/app.json`, as `<forward-slash relative path> NUL <bytes> NUL` in sorted path order, EXCLUDING any file under `testDir` when the test project is nested inside the target (fixtures are siblings, real repos sometimes nest), and excluding nothing else. A new helper beside `hashAlTree` in `baseline-snapshot.ts`; `hashAlTree` itself is not changed (R192 reads it).
+- **SUPERSEDED by the r2 fix below (erratum 2026-09-26, lane ruling confirmed): the r1 rule was** `hashTargetSource(projectDir, testDir)` = SHA-256 over every `*.al` file under `projectDir` plus `projectDir/app.json`, as `<forward-slash relative path> NUL <bytes> NUL` in sorted path order, EXCLUDING any file under `testDir` when the test project is nested inside the target (fixtures are siblings, real repos sometimes nest), and excluding nothing else. A new helper beside `hashAlTree` in `baseline-snapshot.ts`; `hashAlTree` itself is not changed (R192 reads it).
 - **`app.json` is IN.** It is a compile input of the instrumented build: `dependencies`, `runtime`, `features`, `preprocessorSymbols` and the id ranges all change what `alc` builds. Choosing a subset of its fields would be a second model of what matters, which is how a check goes stale. Cost, stated in the refusal text: a version-only bump also refuses, and costs one `lethal run`.
 - **What is hashed (orchestrator fix after review r2, finding 1):** exactly the inputs the TARGET build uses: every `*.al` file `prepareBatchProject` copies from `projectDir` (it copies ALL of them, including a nested test directory's, so nothing under `projectDir` is excluded unless the build excludes it too), plus `app.json`, plus the sorted `preprocessorSymbols` the config passes to the target compiler (`buildBackend` in `cli.ts`), serialized as one line. Share one enumeration with `prepareBatchProject` (extract it if needed) so the two cannot drift.
 - **When it is recorded (finding 2):** bound to the source actually compiled. Compute the hash once from the file contents generation reads, and again after the LAST batch's preparation; record `runs.source_sha256` only when the two agree. When they differ (the tree was edited during the run), record NULL and emit a warning naming the run as not verifiable; verify then refuses it as `source-predates-verify`. A test edits a file between the two reads and asserts NULL. **Checked** by verify before any server call: recompute now, compare; a difference is `source-changed` ("the installed build was made from other source; run `lethal run` again, then verify"). NULL is `source-predates-verify`.
@@ -286,7 +286,7 @@ sessionIdsOf(runId: number): Set<number>;
 
 // baseline-snapshot.ts
 /** Decision 8. Every *.al under projectDir plus projectDir/app.json, minus anything under testDir. */
-export async function hashTargetSource(projectDir: string, testDir: string): Promise<string>;
+export async function hashTargetSource(projectDir: string, preprocessorSymbols: readonly string[]): Promise<string>; // erratum: r2 rule, shares prepareBatchProject's enumeration
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -295,10 +295,11 @@ export async function hashTargetSource(projectDir: string, testDir: string): Pro
   - `baseline-snapshot` tests: `"hashTargetSource changes when a helper .al file changes"`, `"hashTargetSource includes app.json and excludes a nested test project"` (edit `app.json`: changes; edit a `.al` under a nested `testDir`: unchanged; add a `.xlf`: unchanged, the stated ceiling), `"hashTargetSource does not depend on directory listing order"` (same files written in two orders).
   - `orchestrator.test.ts`: `"step 3d records the app path and batch dir it compiled"` (against `PhaseBackend.returned[0].appPath`, C02-02's independent oracle); `"runSession records the target source hash before generation"` (equals `hashTargetSource(projectDir, testDir)` computed by the test itself).
   - `resume.test.ts`, on the R192 run with exactly one carried mutant: `"a carried verdict is stored carried, a measured one not"`.
+  - **Erratum 2026-09-26 (r2 rule, lane ruling confirmed):** the nested-test test reads "a nested test project's .al IS hashed, because the target build copies it" (plus app.json in, .xlf out, order-independent); the recording test reads "records the hash only when generation and the last batch's preparation agree; an edit between them records NULL and warns". Where the two bullets above say otherwise, this line wins.
 - [ ] **Step 2: Run and see them fail.** **Step 3: Implement.** **Step 4: Run** the loop. The C02-04 Part A characterization snapshots select explicit columns and must not change; if one does, stop and report.
 - [ ] **Step 5: Red-checks** (red line, then restored green):
   - write `carried` only when true: "carried as true, false, or null" goes red;
-  - drop the `testDir` exclusion: "excludes a nested test project" goes red;
+  - (erratum 2026-09-26, replaces the r1 "drop the `testDir` exclusion" check) record the source hash unconditionally instead of only when generation and last-batch preparation agree: "an edit between the reads records NULL and warns" goes red;
   - leave `app.json` out: the same test goes red on the `app.json` edit;
   - hash in `readdir` order without sorting: "does not depend on directory listing order" goes red;
   - drop `codeunit_name` from the INSERT: "with their codeunit names" goes red;
@@ -331,7 +332,7 @@ export interface VerifySource {
 /** Decision 3. Store only. Never touches a file or a server. */
 export function resolveVerifySource(store: ResultsStore, req: ReturnType<typeof parseVerifyRequest>): VerifySource;
 /** Decision 8. Reads the project's files; never a server. */
-export async function assertSourceUnchanged(source: VerifySource, testDir: string): Promise<void>;
+export async function assertSourceUnchanged(source: VerifySource, preprocessorSymbols: readonly string[]): Promise<void>; // erratum: r2 rule
 ```
 
 `resolveVerifySource`, in order: `artifactRecordById` or `unknown-artifact`; `batchIndex !== highestBatchIndex` -> `batch-not-installed`; null paths or null `sourceSha256` -> `source-predates-verify`; then per id: batch not the artifact's -> `wrong-batch`; no row -> `unknown-mutant`; `carried === null` -> `source-predates-verify`; `carried` -> `carried`; verdict not `survived`/`no-coverage` -> `not-a-survivor` (`known-survivor` says "re-run without --skip-known-survivors"). Every per-id refusal names ALL offending ids.
