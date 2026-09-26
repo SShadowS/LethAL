@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
+import type { MutantManifest } from "@lethal/schemata";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
-import type { CompiledArtifact } from "../src/artifact";
+import type { ArtifactIo, CompiledArtifact } from "../src/artifact";
 import { ContainerDeployer } from "../src/publisher";
 
 const CFG = {
@@ -326,5 +327,58 @@ describe("ContainerDeployer.publish", () => {
     const message = (err as Error).message;
     expect(message).toContain("newer version 1.0.106.0 was already installed");
     expect(message).toContain("Publish operation failed");
+  });
+});
+
+describe("C02-05: compile's argv parity", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const input = (projectDir: string) => ({
+    projectDir,
+    artifactId: ID,
+    appId: "app",
+    appVersion: "1.0.0.0",
+    mutantManifest: { artifactId: ID, mutants: [] } as unknown as MutantManifest,
+    appManifest: {},
+  });
+  function recordingIo(argvs: string[][]): ArtifactIo {
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      readArtifact: async () => new TextEncoder().encode("x"),
+      writeArtifact: async () => {},
+    };
+  }
+  test("compile's argv is exactly the pre-refactor argv", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      { alcPath: "C:/alc.exe", packageCachePath: "C:\\cache", outputDir: "C:\\out" },
+      recordingIo(argvs),
+    ).compile(input("C:\\proj"));
+    expect(argvs).toEqual([
+      ["C:/alc.exe", "/project:C:/proj", "/packagecachepath:C:/cache", `/out:C:/out/${ID}.app`],
+    ]);
+  });
+  test("compile's argv with preprocessor symbols is exactly the pre-refactor argv", async () => {
+    const argvs: string[][] = [];
+    await new ArtifactCompiler(
+      {
+        alcPath: "C:/alc.exe",
+        packageCachePath: "C:/cache",
+        outputDir: "C:/out",
+        preprocessorSymbols: ["A", "B"],
+      },
+      recordingIo(argvs),
+    ).compile(input("C:/proj"));
+    expect(argvs).toEqual([
+      [
+        "C:/alc.exe",
+        "/project:C:/proj",
+        "/packagecachepath:C:/cache",
+        "/define:A,B",
+        `/out:C:/out/${ID}.app`,
+      ],
+    ]);
   });
 });
