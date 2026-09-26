@@ -19,9 +19,8 @@
  * See fixtures/README.md for the expected shape of both files.
  */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ActivationConfig } from "../src/activation";
@@ -32,8 +31,7 @@ import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { HarnessVerifier } from "../src/harness";
-import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
-import type { Lease } from "../src/lease";
+import { LeaseClient } from "../src/lease";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import type { SessionReport } from "../src/report";
@@ -42,6 +40,8 @@ import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
+import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_BCDEV) {
   console.log(
@@ -136,87 +136,6 @@ const SANDBOX_TESTS_ID = 79100;
 const ORDER_MATTERS_PROBE_ID = 79210;
 const FAIL_PROBE_ID = 79211;
 const PROBE_TIMEOUT_MS = 120_000;
-/**
- * Layer 5C-B1 (Task 8): the protocol-invariant probes below drive `RunMutantTransport` DIRECTLY,
- * not through `runSession`, so they must take the machine-global lease themselves — the two-phase
- * fence (design §5) refuses any RunMutant whose (epoch, token, serverGeneration) tuple does not
- * match the row, or whose `opSeq` is not exactly `lastCompletedOpSeq + 1`. `runSession` has
- * already released its own lease by the time the probes run, so this acquire is uncontended.
- *
- * Also live-exercises the renew heartbeat: the probes take minutes and the ttl is 15s, so without
- * renewing, the lease would lapse mid-probe (phase 1 honors a matching-but-lapsed tuple, but a
- * competing acquire could then steal it — exactly the design §9 "slow-run-under-renew" case).
- */
-interface ProbeLease {
-  readonly client: LeaseClient;
-  readonly lease: Lease;
-  /** The next exactly-next `opSeq` for a fenced RunMutant. */
-  readonly nextOpSeq: () => number;
-  /**
-   * Task 9 diagnosability fix: the heartbeat used to be `client.renew(...).catch(() => {})` with
-   * `renewed` never inspected — a genuinely lost probe lease then surfaced only as a downstream
-   * protocol-invariant assertion failure with no hint it was actually a lease problem. Returns
-   * `lost:true` once the heartbeat has seen `renewed:false` TWICE in a row (retry-once on a lost
-   * ack before concluding loss, design §6) or a renew call itself throw twice in a row — a single
-   * bad renew is not conclusive, but two are.
-   */
-  readonly leaseLostDiagnosis: () => string | undefined;
-  readonly stop: () => Promise<void>;
-}
-
-async function acquireProbeLease(cfg: ActivationConfig): Promise<ProbeLease> {
-  const harness = await new HarnessVerifier(cfg).verify();
-  const client = new LeaseClient(cfg);
-  const outcome = await client.acquire(
-    `${hostname()}:${process.pid}:probes`,
-    MAX_TTL_SECONDS,
-    randomUUID(),
-    harness.serverGeneration,
-  );
-  if (!outcome.granted) {
-    throw new Error(
-      `probe lease was not granted (${JSON.stringify(outcome)}) — the container is held or has a stranded operation; recover per design §8 before re-running the gate`,
-    );
-  }
-  const lease = outcome.lease;
-  let opSeq = lease.lastCompletedOpSeq;
-  let consecutiveRenewFailures = 0;
-  let lostDiagnosis: string | undefined;
-  const heartbeat = setInterval(
-    () => {
-      void client
-        .renew(lease, MAX_TTL_SECONDS)
-        .then((r) => {
-          if (r.renewed) {
-            consecutiveRenewFailures = 0;
-            return;
-          }
-          consecutiveRenewFailures++;
-          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
-            lostDiagnosis = `probe lease heartbeat: RenewLease returned renewed:false twice in a row (epoch=${lease.epoch}) — the lease is genuinely lost, not a single dropped ack`;
-          }
-        })
-        .catch((err: unknown) => {
-          consecutiveRenewFailures++;
-          if (consecutiveRenewFailures >= 2 && lostDiagnosis === undefined) {
-            lostDiagnosis = `probe lease heartbeat: RenewLease threw twice in a row: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        });
-    },
-    Math.floor((MAX_TTL_SECONDS * 1000) / 3),
-  );
-  return {
-    client,
-    lease,
-    nextOpSeq: () => ++opSeq,
-    leaseLostDiagnosis: () => lostDiagnosis,
-    stop: async () => {
-      clearInterval(heartbeat);
-      await client.release(lease).catch(() => {});
-    },
-  };
-}
-
 interface LaunchLocalConfig {
   readonly configurations: ReadonlyArray<{
     readonly server?: string;
@@ -361,33 +280,6 @@ async function runOnce(scratchRoot: string): Promise<RunOnceResult> {
 }
 
 /**
- * Read the artifact id the deployed target self-registered, via the control extension's read-only
- * `LethALControl_RegisteredArtifact` OData action (Task 6/7). Single-parse OData scalar `value`
- * (a bare string, not the double-JSON RunMutant shape).
- */
-async function odataReadRegisteredArtifact(
-  cfg: ActivationConfig,
-  targetAppId: string,
-): Promise<string> {
-  const params = new URLSearchParams({ company: cfg.company });
-  if (cfg.tenant !== undefined) params.set("tenant", cfg.tenant);
-  const url = `${cfg.baseUrl}/ODataV4/LethALControl_RegisteredArtifact?${params.toString()}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${btoa(`${cfg.username}:${cfg.password}`)}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ targetAppId }),
-  });
-  if (!res.ok) {
-    throw new Error(`RegisteredArtifact read failed: HTTP ${res.status} ${await res.text()}`);
-  }
-  const value = ((await res.json()) as { value?: unknown }).value;
-  return typeof value === "string" ? value : "";
-}
-
-/**
  * The gate is the per-mutant frozen table PLUS these protocol invariants (spec §11): the table
  * alone cannot catch a runner that runs the wrong method set or leaves a mutant active. Each probe
  * drives RunMutant directly against a fixture whose OUTCOME witnesses the invariant — so a lying
@@ -511,6 +403,18 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
           `(observedAny && !identityMismatch). got ${JSON.stringify(v.attestation)}`,
       );
     }
+
+    // GH-24: the direct-transport half of the reach attestation — `order`/`fail`/`cleared` are
+    // BASELINE runs (mutantId "", no mutant active, so no marker can ever fire) and `mutated` is
+    // the one real covered run above with a mutant active. Every one of the four is a `ran`
+    // verdict (outcome pass/fail), so every one must carry a boolean `reachedActive`; the three
+    // baseline runs must additionally report it `false`.
+    assertDirectTransportReach([
+      { label: "order", verdict: order, baseline: true },
+      { label: "fail", verdict: fail, baseline: true },
+      { label: "mutated", verdict: mutated, baseline: false },
+      { label: "cleared", verdict: cleared, baseline: true },
+    ]);
 
     // Invariant 3 — artifact-mismatch (spec §C1). A RunMutant whose artifactId differs from the
     // registered one runs nothing and is a typed error, never a verdict.
@@ -714,6 +618,10 @@ function assertVerdictTable(report: SessionReport): void {
       `expected every no-coverage mutant in SandboxPricing.Codeunit.al (DiscountedPrice, never called), got ${m.file}`,
     );
   }
+
+  // GH-24: the per-mutant reach evidence — nothing here is frozen yet (ruling 3), but a killed
+  // statement-grain mutant with guardReached !== true is a BLOCK (ruling 2).
+  assertReachEvidence(report);
 }
 
 async function main(): Promise<void> {

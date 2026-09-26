@@ -391,6 +391,23 @@
           "guardObserved": {
             "type": "boolean"
           },
+          "reachGrain": {
+            "type": "string",
+            "enum": [
+              "statement",
+              "enclosing",
+              "unplaced"
+            ]
+          },
+          "guardReached": {
+            "type": "boolean"
+          },
+          "reachedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "carried": {
             "type": "boolean"
           },

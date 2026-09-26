@@ -40,6 +40,8 @@ export type {
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
+export { REACH_MARKER, reachGrainOf } from "./dispatch";
+export type { ReachGrain } from "./dispatch";
 export { resolveSite, isMutableSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";
 export { parseIdRanges, pickSelectorIds, validateSelectorIds } from "./id-ranges";

@@ -123,6 +123,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { assertMatchesBaseline } from "./baseline-guard";
+import { assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_ENVTOOL) {
   console.log(
@@ -322,6 +323,10 @@ function assertVerdictTable(report: SessionReport): void {
       `expected every no-coverage mutant in SandboxPricing.Codeunit.al (DiscountedPrice, never called), got ${m.file}`,
     );
   }
+
+  // GH-24: the per-mutant reach evidence — nothing here is frozen yet (ruling 3), but a killed
+  // statement-grain mutant with guardReached !== true is a BLOCK (ruling 2).
+  assertReachEvidence(report);
 }
 
 /**

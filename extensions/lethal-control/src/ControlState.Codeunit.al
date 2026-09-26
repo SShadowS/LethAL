@@ -33,6 +33,9 @@ codeunit 91002 "LC Control State"
         ExpectedArtifactId: Text;
         ObservedAny: Boolean;
         ObservedIdentityMismatch: Boolean;
+        // GH-24: the active mutant's own statement began, set only by NoteReached. Per test: LC Run
+        // Many resets it before each method.
+        ObservedActive: Boolean;
 
     /// <summary>Control-owned monotonic suite name within Code[10] (spec §5.4). SingleInstance, so
     /// consecutive runs never collide on one shared suite name. Wraps to stay in 10 chars.</summary>
@@ -87,6 +90,7 @@ codeunit 91002 "LC Control State"
         ExpectedArtifactId := ArtifactId;
         ObservedAny := false;
         ObservedIdentityMismatch := false;
+        ObservedActive := false;
         if not Active.Get('') then begin
             Active.Init();
             Active."Primary Key" := '';
@@ -181,6 +185,7 @@ codeunit 91002 "LC Control State"
         Loaded := true;
         ObservedAny := false;
         ObservedIdentityMismatch := false;
+        ObservedActive := false;
         ExpectedTargetAppId := '';
         ExpectedArtifactId := '';
     end;
@@ -234,6 +239,32 @@ codeunit 91002 "LC Control State"
     procedure AttestationMismatch(): Boolean
     begin
         exit(ObservedIdentityMismatch);
+    end;
+
+    /// <summary>GH-24: the marker the instrumented target emits INSIDE a mutant's own branch, at that
+    /// mutant's own statement. Not IsActive: IsActive is evaluated at the component ROOT, which can be
+    /// the whole procedure body. The early exit keeps a marker inside a loop cheap, and is safe:
+    /// ObservedActive true means the tuple already matched in this method. A mismatch before the
+    /// first match still latches.</summary>
+    procedure NoteReached(TargetAppId: Text; ArtifactId: Text; MutantId: Text)
+    begin
+        if ObservedActive then
+            exit;
+        EnsureLoaded();
+        if (CachedMutantId <> '') and (CachedTargetAppId = TargetAppId) and (CachedArtifactId = ArtifactId) and (CachedMutantId = MutantId) then
+            ObservedActive := true
+        else
+            ObservedIdentityMismatch := true;
+    end;
+
+    procedure ResetObservedActive()
+    begin
+        ObservedActive := false;
+    end;
+
+    procedure AttestationObservedActive(): Boolean
+    begin
+        exit(ObservedActive);
     end;
 
     /// <summary>Seeds the single "LC Lease" row on first install/upgrade with a fresh Server

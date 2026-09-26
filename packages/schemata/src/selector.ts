@@ -26,7 +26,7 @@ export interface SelectorConfig {
  *
  * al-runner never compiles this: `AlRunnerBackend.activate()` overwrites the whole selector file
  * with `emitStaticSelector` (self-contained, no control dependency) before its lazy `alc` run.
- * The procedure set here (`Active`, `ArtifactId`, `TargetAppId`) MUST stay identical to
+ * The procedure set here (`Active`, `Reached`, `ArtifactId`, `TargetAppId`) MUST stay identical to
  * `emitStaticSelector`'s (parity rule — see that emitter's doc comment for why).
  *
  * `TargetAppId()` (Layer 5C-A Task 8) makes this codeunit the SINGLE source of the baked
@@ -44,6 +44,14 @@ export function emitMutationSelector(
         ControlState: Codeunit "LC Control State";
     begin
         exit(ControlState.IsActive('${cfg.targetAppId}', '${cfg.artifactId}', MutantId));
+    end;
+
+    // GH-24: called from a statement-grain mutant's own branch, at its own statement.
+    procedure Reached(MutantId: Text)
+    var
+        ControlState: Codeunit "LC Control State";
+    begin
+        ControlState.NoteReached('${cfg.targetAppId}', '${cfg.artifactId}', MutantId);
     end;
 
     procedure ArtifactId(): Text
@@ -171,6 +179,11 @@ export function emitResourceSelector(cfg: {
         exit(MutantId = ActiveId);
     end;
 
+    procedure Reached(MutantId: Text)
+    begin
+        // ponytail: al-runner has no channel back to LethAL, so reach is not measured there (GH-24).
+    end;
+
     procedure ArtifactId(): Text
     begin
         exit('${cfg.artifactId}');
@@ -201,6 +214,11 @@ export function emitStaticSelector(cfg: {
     procedure Active(MutantId: Text): Boolean
     begin
 ${body}
+    end;
+
+    procedure Reached(MutantId: Text)
+    begin
+        // ponytail: al-runner has no channel back to LethAL, so reach is not measured there (GH-24).
     end;
 
     procedure ArtifactId(): Text

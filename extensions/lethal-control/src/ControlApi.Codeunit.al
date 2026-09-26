@@ -555,6 +555,7 @@ codeunit 91003 "LC Control API"
         CodeunitResults: Text;
         ObservedAny: Boolean;
         IdentityMismatch: Boolean;
+        ObservedActive: Boolean;
         TestRunsBefore: Integer;
     begin
         // R206 §2.1: the session-freshness predicate, read ONCE at the very top, before anything
@@ -574,7 +575,7 @@ codeunit 91003 "LC Control API"
                 ClaimStatus := 'lease-invalid'
             else
                 ClaimStatus := ClaimReason;
-            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, ClaimReason, -1));
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, ClaimReason, -1));
         end;
 
         // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
@@ -591,15 +592,16 @@ codeunit 91003 "LC Control API"
             CodeunitResults := BuildRunError(GetLastErrorText());
         ObservedAny := State.AttestationObservedAny();
         IdentityMismatch := State.AttestationMismatch();
+        ObservedActive := State.AttestationObservedActive();
 
         // PHASE 3 — verify-and-clear under lock, one transaction, one Commit. `FinishReason` is
         // blank except for the one refusal a client must not read as a lease loss (`op-stopped`,
         // R203): our own stop tombstoned this op while the session was still finishing.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, FinishReason, -1));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1));
 
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, '', TestRunsBefore));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore));
     end;
 
     /// <summary>
@@ -1097,7 +1099,7 @@ codeunit 91003 "LC Control API"
     /// on phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
     /// 'op-in-flight' for a still-active same-attempt duplicate claim), and since R198/R203 on ONE
     /// phase-3 refusal: 'op-stopped', the op our own stop tombstoned while the session finished.</summary>
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text; TestRunsBefore: Integer): Text
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; ObservedActive: Boolean; Reason: Text; TestRunsBefore: Integer): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -1114,6 +1116,7 @@ codeunit 91003 "LC Control API"
         if CodeunitResults <> '' then
             Obj.Add('codeunitResults', CodeunitResults);
         Obj.Add('observedAny', ObservedAny);
+        Obj.Add('observedActive', ObservedActive);
         Obj.Add('identityMismatch', IdentityMismatch);
         AddSessionKeys(Obj, Status, TestRunsBefore);
         Obj.WriteTo(Out);
@@ -1135,7 +1138,8 @@ codeunit 91003 "LC Control API"
     /// <summary>Builds the RunMutantMany JSON result: the call-level echo RunMutant's has (status,
     /// reason?, targetAppId, artifactId, attemptId, mutantId, observedAny, identityMismatch) and,
     /// on 'ran', EITHER the loop's {endedBy, ranCount, methods} merged in OR `runError`. Never both,
-    /// never neither.</summary>
+    /// never neither. GH-24: `observedActive` is per method, on each `methods` entry, never
+    /// call-level.</summary>
     local procedure BuildManyStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; GroupResults: Text; RunError: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; Reason: Text; TestRunsBefore: Integer): Text
     var
         Obj: JsonObject;
