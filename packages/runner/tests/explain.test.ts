@@ -1305,6 +1305,9 @@ describe("GH-24: reach decided per mutant", () => {
       ["guardReached", bad({ reachGrain: "statement", guardReached: "true", reachedBy: [] })],
       ["reachedBy", bad({ reachGrain: "statement", guardReached: true, reachedBy: [7] })],
       ["reachGrain", bad({ reachGrain: "expression" })],
+      // GH-24b: a marker that fired names at least one covering test; guardReached true with
+      // nothing in reachedBy is corrupt the same way as the pairs above.
+      ["reachedBy", bad({ reachGrain: "statement", guardReached: true, reachedBy: [] })],
     ];
     for (const [field, report] of cases) {
       expect(() => explain(report)).toThrow(MalformedReportError);
@@ -1348,15 +1351,16 @@ describe("GH-24: reach decided per mutant", () => {
 // ————————————————————————————————————————————————————————————————————————————————————————
 
 describe("explain — survivorSelection and the cap", () => {
-  /** One survivor per rank tier, deliberately in the WORST order, so any test asserting a ranked
-   *  result would also pass on an unsorted one only by accident. Rank comes from the pair
-   *  (attribution, guardObserved): see `survivorActionabilityRank`. */
+  /** One survivor per used rank tier (4 through 1; tier 0, reached-unnoticed, is not in this
+   *  fixture), deliberately in the WORST order, so any test asserting a ranked result would also
+   *  pass on an unsorted one only by accident. Rank comes from the pair (attribution,
+   *  guardObserved): see `survivorActionabilityRank`. */
   function oneOfEachRank(): MutantOutcome[] {
     return [
-      survivorMutant("M0004", "object", false), // rank 3 — unreached-and-uncovered
-      survivorMutant("M0003", "object", true), // rank 2 — not-decided, not execution-proven
-      survivorMutant("M0002", "exact", false), // rank 1 — covered-but-unreached
-      survivorMutant("M0001", "exact", true), // rank 0 — the most evidence
+      survivorMutant("M0004", "object", false), // rank 4: unreached-and-uncovered
+      survivorMutant("M0003", "object", true), // rank 3: not-decided, not execution-proven
+      survivorMutant("M0002", "exact", false), // rank 2: covered-but-unreached
+      survivorMutant("M0001", "exact", true), // rank 1: the most evidence in this fixture
     ];
   }
 
@@ -1420,7 +1424,7 @@ describe("explain — survivorSelection and the cap", () => {
   test("the order is TOTAL — ties break on file, then line, then mutantCode", () => {
     // Without a total order the contents of `--top n` depend on the sort implementation, so the
     // same report and the same cap could disagree between two machines. Every mutant here is rank
-    // 0, so ONLY the tie-breaks decide, and they are fed in reverse of the expected result.
+    // 1, so ONLY the tie-breaks decide, and they are fed in reverse of the expected result.
     const same = (code: string, file: string, line: number): MutantOutcome => ({
       ...survivorMutant(code, "exact", true),
       file,

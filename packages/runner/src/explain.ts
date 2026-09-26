@@ -507,8 +507,14 @@ export const EXPLAIN_CONTRACT: ExplainContract = {
 const KNOWN_CAVEATS: ReadonlySet<string> = new Set(Object.keys(CAVEAT_INTERPRETATIONS));
 const KNOWN_ATTRIBUTIONS: ReadonlySet<string> = new Set(Object.keys(ATTRIBUTION_INTERPRETATIONS));
 const KNOWN_ERROR_CAUSES: ReadonlySet<string> = new Set(Object.keys(ERROR_CAUSE_INTERPRETATIONS));
-/** GH-24. A `Record` so adding a `ReachGrain` variant fails to compile until it is listed here. */
-const REACH_GRAINS: Record<ReachGrain, true> = { statement: true, enclosing: true, unplaced: true };
+/** GH-24. A `Record` so adding a `ReachGrain` variant fails to compile until it is listed here.
+ *  Exported so `schemas.test.ts` can pin the published schema's `reachGrain` enum to this, the
+ *  same runtime domain every other published enum is checked against. */
+export const REACH_GRAINS: Record<ReachGrain, true> = {
+  statement: true,
+  enclosing: true,
+  unplaced: true,
+};
 const KNOWN_REACH_GRAINS: ReadonlySet<string> = new Set(Object.keys(REACH_GRAINS));
 const KNOWN_VERDICTS: ReadonlySet<string> = new Set(
   Object.keys({
@@ -710,6 +716,15 @@ export function assertExplainableReport(value: unknown): SessionReport {
       refuse(
         `${where} has guardReached true beside guardObserved false; a marker runs only inside a branch whose guard ran`,
         { guardReached, guardObserved: mutant.guardObserved },
+      );
+    }
+    // GH-24b: a marker that fired names at least one covering test. guardReached true with an
+    // empty reachedBy is the same corruption as the pairs above, just inside one field instead of
+    // across two.
+    if (guardReached === true && Array.isArray(reachedBy) && reachedBy.length === 0) {
+      refuse(
+        `${where} has guardReached true with an empty reachedBy; a marker that fired names at least one covering test`,
+        reachedBy,
       );
     }
     // C02-01: `carried` decides `artifactIdAbsent`, and wins over the batch lookup, so a coerced

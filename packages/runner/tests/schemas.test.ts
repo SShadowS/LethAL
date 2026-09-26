@@ -15,6 +15,7 @@ import { STREAM_SCHEMA_VERSION } from "../src/events";
 import {
   ARTIFACT_ID_ABSENCES,
   EXPLAIN_SCHEMA_VERSION,
+  REACH_GRAINS,
   SURVIVOR_RANKINGS,
   TOOL_CONDITIONS,
 } from "../src/explain";
@@ -261,6 +262,7 @@ describe("published JSON Schemas (R152)", () => {
     expect(enumAt(explainSchema, "$.survivors[].reach")).toEqual(
       Object.keys(REACH_INTERPRETATIONS),
     );
+    expect(enumAt(explainSchema, "$.survivors[].reachGrain")).toEqual(Object.keys(REACH_GRAINS));
     expect(enumAt(explainSchema, "$.notMeasured[].cause")).toEqual(
       Object.keys(ERROR_CAUSE_INTERPRETATIONS),
     );
