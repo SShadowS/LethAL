@@ -334,27 +334,39 @@ export async function expandGapIds(
       line: entry.startLine,
     };
   });
-  // Every row's code is in the manifest (checked above), so this fails on a repeated row or on a
-  // manifest entry with no row.
+  // Two rows for one mutant is corruption. A manifest entry with NO row is not: a run that
+  // quarantined or threw partway through its last batch still records the artifact, so its
+  // unscored entries are "not measured" and stay out of every gap's members and counts.
   const recorded = new Set(rows.map((r) => r.mutantCode));
-  if (recorded.size !== rows.length || recorded.size !== entries.size) {
+  if (recorded.size !== rows.length) {
     throw new Error(
-      `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${rows.length} row(s) for ${recorded.size} mutant(s), but artifact ${req.artifactId}'s manifest holds ${entries.size} (a corrupt store)`,
+      `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${rows.length} row(s) for ${recorded.size} mutant(s): a mutant twice (a corrupt store)`,
     );
   }
   const tallies = tallyGaps(gapRows);
+  const known = new Set(manifest.mutants.map((m) => m.gapId));
 
-  const unknown = req.gapIds.filter((g) => !tallies.has(g));
-  if (unknown.length > 0 || req.gapIds.some((g) => tallies.get(g)?.members.length === 0)) {
+  const unknown = req.gapIds.filter((g) => !known.has(g));
+  if (unknown.length > 0 || req.gapIds.some((g) => (tallies.get(g)?.members.length ?? 0) === 0)) {
     const empty = req.gapIds.flatMap((g) => {
-      const t = tallies.get(g);
-      if (t === undefined || t.members.length > 0) return [];
+      if (!known.has(g)) return [];
+      const t = tallies.get(g) ?? {
+        members: [],
+        noCoverageMembers: [],
+        killed: 0,
+        noCoverage: 0,
+        other: 0,
+      };
+      if (t.members.length > 0) return [];
+      const unmeasured = manifest.mutants.filter(
+        (m) => m.gapId === g && !recorded.has(m.mutantId),
+      ).length;
       const noCov =
         t.noCoverage > 0
           ? `; its no-coverage mutants (${t.noCoverageMembers.map((c) => `${rec.batchIndex}/${c}`).join(", ")}) are in lethal explain's noCoverageBlocks and can be named one by one`
           : "";
       return [
-        `${g} (gap-has-no-survivor: survived 0, killed ${t.killed}, no-coverage ${t.noCoverage}, other ${t.other}${noCov})`,
+        `${g} (gap-has-no-survivor: survived 0, killed ${t.killed}, no-coverage ${t.noCoverage}, other ${t.other}${unmeasured > 0 ? `, not measured ${unmeasured}` : ""}${noCov})`,
       ];
     });
     const parts = [

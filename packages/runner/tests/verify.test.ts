@@ -798,15 +798,20 @@ type Seed = {
   readonly entry: MutantManifestEntry;
   readonly verdict: MutantVerdict;
   readonly carried?: boolean;
+  /** No store row: the source run stopped before scoring it. */
+  readonly unrecorded?: boolean;
 };
 
 function seed(
   mutantId: string,
   gapId: string | undefined,
   verdict: MutantVerdict,
-  over: Partial<MutantManifestEntry> & { readonly carried?: boolean } = {},
+  over: Partial<MutantManifestEntry> & {
+    readonly carried?: boolean;
+    readonly unrecorded?: boolean;
+  } = {},
 ): Seed {
-  const { carried, ...rest } = over;
+  const { carried, unrecorded, ...rest } = over;
   return {
     entry: entry(mutantId, {
       startLine: Number(mutantId.slice(1)),
@@ -815,6 +820,7 @@ function seed(
     }),
     verdict,
     ...(carried !== undefined ? { carried } : {}),
+    ...(unrecorded !== undefined ? { unrecorded } : {}),
   };
 }
 
@@ -849,6 +855,7 @@ function installedRun(
   );
   store.recordSourceHash(runId, sourceSha256);
   for (const s of seeds) {
+    if (s.unrecorded === true) continue;
     store.recordMutant(
       runId,
       mutantRow(s.entry.mutantId, s.verdict, {
@@ -980,6 +987,46 @@ describe("C02-09: gap ids", () => {
     expect(n.detail).toContain("noCoverageBlocks");
     expect(n.detail).toContain("0/M0001, 0/M0002");
     noCov.close();
+  });
+
+  // Review fix round 1: a run that quarantined or threw partway through its last batch records its
+  // artifact, but its unscored manifest entries have no row. Those are not measured, not corruption.
+  test("a gap with one recorded survivor and one unrecorded entry expands to the survivor", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+    ]);
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+    store.close();
+  });
+
+  test("a gap whose recorded rows hold no survivor refuses gap-has-no-survivor, unrecorded entries or not", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "killed"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+      seed("M0003", GB, "survived", { unrecorded: true }),
+    ]);
+    const a = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GA])));
+    expect(a.reason).toBe("gap-has-no-survivor");
+    expect(a.detail).toContain("survived 0, killed 1, no-coverage 0, other 0, not measured 1");
+    // No recorded row at all: the manifest still carries the id, so it is not unknown.
+    const b = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GB])));
+    expect(b.reason).toBe("gap-has-no-survivor");
+    expect(b.detail).toContain("not measured 1");
+    store.close();
+  });
+
+  test("two rows for one mutant still throw as a corrupt store, never a refusal", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [seed("M0001", GA, "survived")]);
+    store.recordMutant(runId, mutantRow("M0001", "survived", { line: 1 }));
+    const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect(e).not.toBeInstanceOf(VerifyError);
+    expect((e as Error).message).toContain("a mutant twice (a corrupt store)");
+    store.close();
   });
 
   test("every offending gap id is named", async () => {
