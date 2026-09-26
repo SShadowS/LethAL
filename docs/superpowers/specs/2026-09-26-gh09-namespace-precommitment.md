@@ -265,4 +265,148 @@ offline, not only the one the live run happens to show.
 
 ## Measured
 
-(Filled in after the live runs, plan Task 1 step 10.)
+Filled in 2026-09-26 after the live runs (plan Task 1 step 10). Nothing above this heading was
+edited. The evidence is the run's own output: the two `probe-r58-compare.ts` reports, the fenced
+logs, the `LETHAL_FENCED_COVERAGE_DUMP` rows and the two itest logs.
+
+### M.1 Publish (step 6a)
+
+`sandbox-app` 1.0.0.1 and `sandbox-tests` 1.0.0.3 published on Cronus28 through the dev endpoint.
+It needed the tests app unpublished first, then the target, then `Sync-NAVApp -Mode Clean` for the
+resident instrumented record, before the republish (target, then tests) was accepted.
+
+### M.2 Pre-fix client (step 6b, A.3): MET
+
+A separate worktree at `a407344` (which is `3db4a00~1`), carrying the same fixture edit, with its
+config paths pointed at its own `.alpackages`. `compile:fixtures` there names the alc from
+`ms-dynamics-smb.al-18.0.2732683` and compiles both fixtures; the tests app is 1.0.0.3. Its dry run:
+
+```
+dry run: 2 file(s), 19 mutant site(s), 19 deployed mutant(s), 1 batch(es)
+  src\SandboxLogic.Codeunit.al:6  lethal.empty-block
+  src\SandboxLogic.Codeunit.al:7  lethal.return-value
+  src\SandboxLogic.Codeunit.al:7  lethal.conditional-boundary
+```
+
+19 deployed, and the three `IsOverBudget` operators are present by name (lines 6 and 7 of the
+namespaced source). A.3's stop condition did not fire, so §3.3 was run.
+
+### M.3 Pre-fix fenced vs none (step 6c, §3.3, A.5): MET
+
+```
+## ATTRIBUTION LOST 3 MUTANT(S) (R175)
+  M0001 src\SandboxLogic.Codeunit.al:6 lethal.empty-block: A said no-coverage, B scored it killed
+  M0002 src\SandboxLogic.Codeunit.al:7 lethal.return-value: A said no-coverage, B scored it killed
+  M0003 src\SandboxLogic.Codeunit.al:7 lethal.conditional-boundary: A said no-coverage, B scored it killed
+  A fenced: {"killed":0,"survived":0,"noCoverage":19,...} baselineGreen=true
+```
+
+Exactly the three predicted mutants, by id and operator. The fenced side reported all 19 as
+`no-coverage`: both tests' fenced coverage sets hold only `Codeunit:79199::Active`, the root-level
+selector, so the declared set was not empty and nothing warned. The pre-fix fenced log has no
+`fenced coverage for` line and no `declaredRows` warning, as §3.3 and A.5 predicted. The issue #9
+comment therefore does NOT say "same failure": this fixture reproduces three lost kills with no
+warning, not the reporter's warning.
+
+One reading note: the compare report's last line is the tool's own PASS verdict, printed under
+the ATTRIBUTION LOST block. The block is the result; the PASS line is recorded as printed.
+
+### M.4 `itest:alrunner` (step 7, §3.2, A.4): MET
+
+`al-runner build under test: al-runner v2.11.0`. All four legs print `killed=3 survived=12
+noCoverage=4 baselineGreen=true` with the same per-mutant table; `platform apps pinned at:
+...\28.1.49838.54368\platform-apps` on legs 1 and 2; `--server leg: 3 killed, verdicts identical`;
+`resource-selector leg: 3 killed, verdicts identical`; `al-runner itest: PASS`. A.4's unmeasured
+`scope` question did not bite: the server legs kept the three kills.
+
+### M.5 Coverage differential on the lane head (step 8, §3.4): MET
+
+No `ATTRIBUTION LOST` block. The fenced side carries member-level entries for `Sandbox Logic`
+(`only A: Codeunit:79000::ApplyAudit`, `Codeunit:79000::ClampPercent`, `Codeunit:79000::LogAudit`
+under `ClampPercentRuns`). The only verdict moves:
+
+```
+  verdict moves:
+    4 x no-coverage -> survived
+```
+
+and those four are `M0016` to `M0019`, `Sandbox Pricing`. Fenced counts 3/12/4, none 3/16/0.
+`ClampPercentRuns` is in no `IsOverBudget` mutant's covering set: M0001 to M0003 each read
+`covering set changed (1 -> 2) | only B: Sandbox Tests.ClampPercentRuns`.
+
+### M.6 H2 (step 8, §3.5, A.1): the pre-committed rule hit its STOP
+
+The dump, `Codeunit 79000`, positive hits, `lineNo > 0`, read against the instrumented
+`SandboxLogic.Codeunit.al` regenerated at HEAD `4916119` (byte-identical to the file A.2 quotes,
+sha256 `07afac62dc7a9cdd4958bd31b2688e4e021d6c98cb72cab958620cbc877a2e00`):
+
+- `OverBudgetDetected`: **10, 12, 16, 22**
+- `ClampPercentRuns`: **29, 31, 37, 43, 49, 57, 59, 66, 68, 74, 81, 83, 87, 93, 99, 107, 108**
+
+The lowest `ClampPercentRuns` row is **29**. A.1 names 29 as "stop and report". The rule was
+wrong, not the data. BC emits a row only for a statement that EXECUTED; it never emits one for a
+`procedure` declaration line, so neither §3.5's `D` (27) nor A.1's 26 or 25 could appear under any
+frame. Both rules assumed a declaration row that does not exist. They decide nothing and are
+recorded as failed rules, not as evidence either way.
+
+### M.7 H2, POST-HOC criterion (chosen after seeing the dump)
+
+**This criterion was chosen after the rows were seen.** It is not a pre-commitment and must not be
+quoted as one. Orchestrator ruling q-20260926T141319 approved it with this label.
+
+Criterion: under the right frame every positive row lands on a statement the test executed; a
+wrong frame puts rows on lines that cannot execute in that test. "Shift k" means row R is file
+line R + k. In the live run no mutant was active, so a line holding `MutationSelector.Reached`
+(an inactive mutant's arm), a bare `begin` or `end`, or an `exit(0)` whose condition is false
+never executes.
+
+`OverBudgetDetected` (calls `IsOverBudget` three times):
+
+| Row | Base 1 (file line = row) | Shift 1 (row + 1) | Shift 2 (row + 2) |
+|---|---|---|---|
+| 10 | `if MutationSelector.Active('M0001') then begin`: runs | 11, M0001's arm (`Reached`): never runs | 12, `end else if ...Active('M0002')`: runs |
+| 12 | `end else if ...Active('M0002')`: runs | 13, `begin` | 14, M0002's arm (`Reached`): never runs |
+| 16 | `end else if ...Active('M0003')`: runs | 17, `begin` | 18, M0003's arm (`Reached`): never runs |
+| 22 | `exit(Amount > Budget);`: runs | 23, `end` | 24, `end` |
+
+`ClampPercentRuns`, first rows (`ClampPercent(50)`):
+
+| Row | Base 1 | Shift 1 | Shift 2 |
+|---|---|---|---|
+| 29 | `if ...Active('M0004') then begin`: runs | 30, M0004's arm (`Reached`): never runs | 31, `end else if ...Active('M0005')`: runs |
+| 31 | `end else if ...Active('M0005')`: runs | 32, `begin` | 33, M0005's arm (`Reached`): never runs |
+| 37 | `end else if ...Active('M0007')`: runs | 38, `begin` | 39, M0007's arm (`Reached`): never runs |
+| 57 | `if (Value < 0) or (Value > 100) then`: runs | 58, `exit(0);`: not taken for 50 | 59, `exit(Value);`: runs |
+| 59 | `exit(Value);`: runs | 60, `end` | 61, `end` |
+
+Over all 21 rows: base 1 puts **21 of 21** on an executed statement. Shift 1 puts **1 of 21** there
+(row 107 lands on 108, `Amount := Amount;`) and every other row on a `begin` or `end`, a `Reached`
+arm or the untaken `exit(0)`. Shift 2 puts **5 of 21** there (rows 10, 29, 57, 66 and 81 land on
+the next `else if` or `exit`) and the rest on lines that cannot run. So the ruling's wording, "a
+non-executed line under both shifts", holds for most rows, not for every row: a shift moves a few
+rows onto a neighbouring executed statement by coincidence. What holds without exception is the
+other half: only base 1 puts EVERY row on an executed statement.
+
+Member-level attribution cannot see any of this. Every measured row is at least two lines inside
+its procedure's span, so all three frames name the same procedure for all 21 rows. That is why the
+corroboration in M.8 is weaker than it looks, and why Task 2's test pins the statement-level fact
+as well as the member names.
+
+### M.8 H2, the corroboration that WAS pre-committed
+
+- §3.4: head ATTRIBUTION LOST 0, with member-level entries for `Sandbox Logic` (M.5).
+- §3.1: `itest:bcdev` per-mutant equal to the baseline (M.9).
+
+A shifted frame misnames members on adjacent procedures (R29); neither check shows that. Both
+agree with base 1. Per M.7's last paragraph, both would also pass under shift 1 or 2 on this
+fixture, so they corroborate rather than decide.
+
+**Verdict: H2 REFUTED (base 1), on M.7 plus M.8. Task 3 does not run.**
+
+### M.9 `itest:bcdev` on the lane head (step 9, §3.1): MET
+
+Both passes print `verdicts: killed=3 survived=12 noCoverage=4 baselineGreen=true` with the same
+per-mutant table (M0001 to M0003 killed, M0004 to M0015 survived, M0016 to M0019 no-coverage), then
+`bcdev itest: protocol-invariant probes PASS` and `bcdev itest: PASS`. The gate compares every row
+to `bcdev.baseline.json`; it passed, and the baseline was not re-recorded (the tree was clean after
+the run).
