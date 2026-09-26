@@ -1769,6 +1769,8 @@ describe("explain — the real campaign reports", () => {
       raw.mutants.filter((m) => m.verdict === "survived" && m.carried === true).map(id),
     );
     expect(carried.size).toBe(54); // measured 2026-09-25: 108 survivors, 54 carried
+    // The OUTPUT count, so the loop below cannot pass on zero projected survivors.
+    expect(out.survivors.length).toBe(108);
     for (const s of out.survivors) {
       expect("artifactId" in s).toBe(false);
       expect(s.artifactIdAbsent).toBe(carried.has(id(s)) ? "carried" : "not-recorded");
