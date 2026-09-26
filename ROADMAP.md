@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**37 of 242 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 243 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -161,6 +161,7 @@ that ordering is the priority.
 - **R222** · al-runner does NOT require a recompile per mutant: a source-backed resource file is a runtime host-to-AL channel, measured at 0.1 s per mutant against a full compile · [R222.md](docs/roadmap/R222.md) · done 2026-09-09, opt-in as `selectorMode: "resource"`, gate leg 4 asserts per-mutant equality with the…
 - **R227** · `--only` selects whole files, so a pull-request run spends most of its time re-measuring lines the PR never changed · [R227.md](docs/roadmap/R227.md) · done (this commit) — `--lines <file>:<start>-<end>` and `--changed-since <ref>`, GitHub issue #19
 - **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · open
+- **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · open
 
 ## Backends and tooling
 
