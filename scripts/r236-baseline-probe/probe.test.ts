@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { OperationStatus } from "../../packages/runner/src/lease";
+import { calibrationScript } from "./calibrate";
 import type { CallTrace } from "./fetch-trace";
 // Imported WITH its extension: R186's importer check matches by basename, so a bare "./probe" is read as
 // importing the unguarded `scripts/r126-server-probe/probe.ts`. This probe.ts is guarded by import.meta.main.
 import {
+  containerScript,
   decideActionEnded,
   decideExit,
   gatherEvidence,
@@ -274,4 +276,27 @@ describe("writeRecord (review r1 IMPORTANT 3)", () => {
     cyclic.self = cyclic;
     expect(writeRecord("C:/r236-no-such-dir-xyz/out.ndjson", cyclic)).toBe(false);
   });
+});
+
+describe("calibration 1: the SQL reads target the TENANT database", () => {
+  // Measured on Cronus28 (multitenant): the server config's DatabaseName is the APP database
+  // (CRONUS), which holds neither `Active Session` nor `LC Op Progress$...`. The tenant's own
+  // database (here `default`) does, and only Get-NAVTenant names it.
+  const scripts = {
+    probe: containerScript(
+      "default",
+      [{ attemptId: "a7", opSeq: 12 }],
+      "2026-09-26T10:00:00.000",
+      null,
+    ),
+    calibrate: calibrationScript("default"),
+  };
+  for (const [name, text] of Object.entries(scripts)) {
+    test(`${name}: resolves the DB with Get-NAVTenant, prints it, never uses the server's DatabaseName`, () => {
+      expect(text).toContain("(Get-NAVTenant -ServerInstance BC -Tenant $tenant).DatabaseName");
+      expect(text).toContain("'R236-DB:'");
+      expect(text).toContain("Database = $db");
+      expect(text).not.toContain("& $get 'DatabaseName'");
+    });
+  }
 });

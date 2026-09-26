@@ -35,7 +35,7 @@ import type { LethalConfigFile } from "../../packages/runner/src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
 // With the extension: R186's importer check matches by basename (see probe.test.ts).
-import { CONFIG_PATH, CONTAINER, runPwsh } from "./probe.ts";
+import { CONFIG_PATH, CONTAINER, TENANT_SQL_SETUP_PS, runPwsh } from "./probe.ts";
 
 export type Verdict = "sound" | "not sound" | "not determinable";
 export type Pooling = "pooled" | "not pooled" | "not determinable";
@@ -209,7 +209,7 @@ export function parseCalibration(
   };
 }
 
-function calibrationScript(tenant: string): string {
+export function calibrationScript(tenant: string): string {
   if (!/^[0-9A-Za-z_-]{1,64}$/.test(tenant))
     throw new Error(`refusing tenant ${JSON.stringify(tenant)}`);
   return `
@@ -219,14 +219,13 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
   try {
     'R236-NST:' + (ConvertTo-Json -Compress -InputObject @(Get-NAVServerSession -ServerInstance BC -Tenant $tenant | ForEach-Object { @{ SessionID = [int]$_.SessionID; UserID = [string]$_.UserID; ClientType = [string]$_.ClientType; Login = (& $iso $_.LoginDatetime) } }))
   } catch { 'R236-NST-ERR:' + $_.Exception.Message }
-  $cfg = Get-NAVServerConfiguration -ServerInstance BC -AsXml
-  $get = { param($k) ($cfg.configuration.appSettings.add | Where-Object { $_.key -eq $k }).value }
-  $srv = & $get 'DatabaseServer'; $inst = & $get 'DatabaseInstance'; $db = & $get 'DatabaseName'
-  if ($inst) { $srv = "$srv\\$inst" }
-  $sq = @{ ServerInstance = $srv; Database = $db }
-  if ((Get-Command Invoke-Sqlcmd).Parameters.ContainsKey('TrustServerCertificate')) { $sq.TrustServerCertificate = $true }
+  $sq = $null
+  try {
+    ${TENANT_SQL_SETUP_PS}
+  } catch { 'R236-DB-ERR:' + $_.Exception.Message }
   $cols = { param($t) @(Invoke-Sqlcmd @sq -Query "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[$t]')" | ForEach-Object { [string]$_.name }) }
   try {
+    if (-not $sq) { throw 'tenant database not resolved' }
     $ac = & $cols 'Active Session'
     'R236-COLS:Active Session:' + (ConvertTo-Json -Compress -InputObject $ac)
     $where = @("[Server Instance Name] = N'BC'")
@@ -238,6 +237,7 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
   } catch { 'R236-ACTIVE-ERR:' + $_.Exception.Message }
   $sids = @()
   try {
+    if (-not $sq) { throw 'tenant database not resolved' }
     $t = @(Invoke-Sqlcmd @sq -Query "SELECT name FROM sys.tables WHERE name LIKE '%LC Op Progress%'" | ForEach-Object { $_.name })
     if ($t.Count -ne 1) { throw "expected one LC Op Progress table, found $($t.Count)" }
     'R236-COLS:' + $t[0] + ':' + (ConvertTo-Json -Compress -InputObject (& $cols $t[0]))
@@ -246,6 +246,7 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
     'R236-FIN:' + (ConvertTo-Json -Compress -InputObject $fin)
   } catch { 'R236-FIN-ERR:' + $_.Exception.Message }
   try {
+    if (-not $sq) { throw 'tenant database not resolved' }
     'R236-COLS:Session Event:' + (ConvertTo-Json -Compress -InputObject (& $cols 'Session Event'))
     if ($sids.Count -eq 0) { throw 'no finished-op session ids to look up' }
     $ev = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid, [Event Type] AS typ, CONVERT(varchar(23), [Event Datetime], 126) AS at, [User ID] AS usr FROM [dbo].[Session Event] WHERE [Server Instance Name] = N'BC' AND [Session ID] IN ($($sids -join ','))" | ForEach-Object { @{ sid = [int]$_.sid; type = [int]$_.typ; at = [string]$_.at; user = [string]$_.usr } })

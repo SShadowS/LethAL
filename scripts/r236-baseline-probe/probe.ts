@@ -269,7 +269,24 @@ interface EvidenceOp {
   readonly opSeq: number;
 }
 
-function containerScript(
+/**
+ * Calibration 1, measured on Cronus28 (multitenant): the server config's DatabaseName is the APP
+ * database (CRONUS), which holds neither `Active Session` nor `LC Op Progress$...`; those live in
+ * the TENANT database (there `default`), which only Get-NAVTenant names. Shared by the probe and
+ * calibrate scripts. Expects `$tenant`; defines `$db` and the Invoke-Sqlcmd splat `$sq`, and prints
+ * the resolved database as `R236-DB:`. A failure throws, so the caller's `-ERR` path applies.
+ */
+export const TENANT_SQL_SETUP_PS = `$cfg = Get-NAVServerConfiguration -ServerInstance BC -AsXml
+    $get = { param($k) ($cfg.configuration.appSettings.add | Where-Object { $_.key -eq $k }).value }
+    $srv = & $get 'DatabaseServer'; $inst = & $get 'DatabaseInstance'
+    if ($inst) { $srv = "$srv\\$inst" }
+    $db = (Get-NAVTenant -ServerInstance BC -Tenant $tenant).DatabaseName
+    if (-not $db) { throw "Get-NAVTenant named no database for tenant $tenant" }
+    'R236-DB:' + "$srv/$db (tenant $tenant)"
+    $sq = @{ ServerInstance = $srv; Database = $db }
+    if ((Get-Command Invoke-Sqlcmd).Parameters.ContainsKey('TrustServerCertificate')) { $sq.TrustServerCertificate = $true }`;
+
+export function containerScript(
   tenant: string,
   ops: readonly EvidenceOp[],
   sessionSinceSql: string,
@@ -288,13 +305,9 @@ function containerScript(
   return `
 Import-Module BcContainerHelper -DisableNameChecking
 Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant}', '${opsJson}', '${sessionSinceSql}', '${eventsSinceIso ?? ""}') -scriptblock { param($tenant, $opsJson, $sessionSince, $since)
+  $sq = $null
   try {
-    $cfg = Get-NAVServerConfiguration -ServerInstance BC -AsXml
-    $get = { param($k) ($cfg.configuration.appSettings.add | Where-Object { $_.key -eq $k }).value }
-    $srv = & $get 'DatabaseServer'; $inst = & $get 'DatabaseInstance'; $db = & $get 'DatabaseName'
-    if ($inst) { $srv = "$srv\\$inst" }
-    $sq = @{ ServerInstance = $srv; Database = $db }
-    if ((Get-Command Invoke-Sqlcmd).Parameters.ContainsKey('TrustServerCertificate')) { $sq.TrustServerCertificate = $true }
+    ${TENANT_SQL_SETUP_PS}
     $tables = @(Invoke-Sqlcmd @sq -Query "SELECT name FROM sys.tables WHERE name LIKE '%LC Op Progress%'" | ForEach-Object { $_.name })
     if ($tables.Count -ne 1) { throw "expected one LC Op Progress table, found $($tables.Count): $($tables -join ', ')" }
     $t = $tables[0]
@@ -308,6 +321,7 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant
     'R236-SQL-FIN:' + (ConvertTo-Json -Compress -InputObject $fin)
   } catch { 'R236-SQL-ERR:' + $_.Exception.Message }
   try {
+    if (-not $sq) { throw 'tenant database not resolved' }
     $act = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid FROM [dbo].[Active Session]" | ForEach-Object { [int]$_.sid })
     'R236-ACTIVE:' + (ConvertTo-Json -Compress -InputObject $act)
   } catch { 'R236-ACTIVE-ERR:' + $_.Exception.Message }
