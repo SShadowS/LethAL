@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**54 of 264 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**56 of 266 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -179,6 +179,7 @@ that ordering is the priority.
 - **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · open
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · open
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · open
+- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · open
 
 ## Backends and tooling
 
@@ -309,6 +310,7 @@ that ordering is the priority.
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · open
+- **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
 
 ---
 
