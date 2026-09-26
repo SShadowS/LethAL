@@ -1,0 +1,89 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 1`] = `
+"codeunit 51901 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P(Amount: Integer) begin if MutationSelector.Active('M0001') then begin
+  if Amount > 100 then ;
+end else begin
+  if Amount > 100 then Touch()
+end; end; local procedure Touch() begin end; }"
+`;
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 2`] = `
+"codeunit 51902 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P(Amount: Integer): Integer begin if MutationSelector.Active('M0001') then begin
+  if Amount >= 0 then exit(0)
+end else if MutationSelector.Active('M0002') then begin
+  if Amount < 0 then exit(1)
+end else begin
+  if Amount < 0 then exit(0)
+end; if MutationSelector.Active('M0003') then begin
+  if Amount < 1 then Error('')
+end else begin
+  if Amount < 1 then Error('neg')
+end; exit(1); end; }"
+`;
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 3`] = `
+"codeunit 51903 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P() var X: Integer; Y: Integer; begin
+if MutationSelector.Active('M0001') then begin
+  begin end
+end else if MutationSelector.Active('M0002') then begin
+  begin X := 1; ; end
+end else begin
+  begin X := 1; Y := 2; end
+end
+end; }"
+`;
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 4`] = `
+"codeunit 51904 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P(Amount: Integer) var Seen: Integer; begin
+if MutationSelector.Active('M0001') then begin
+  begin end
+end else if MutationSelector.Active('M0002') then begin
+  begin if Amount > 100 then begin end; Seen := 0; end
+end else begin
+  begin if Amount > 100 then begin Seen := Amount; end; Seen := 0; end
+end
+end; }"
+`;
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 5`] = `
+"codeunit 51905 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P() var I: Integer; begin
+if MutationSelector.Active('M0001') then begin
+  begin end
+end else if MutationSelector.Active('M0002') then begin
+  begin repeat begin end until I >= 3; end
+end else begin
+  begin repeat begin I += 1; end until I >= 3; end
+end
+end; }"
+`;
+
+exports[`GH-24: reach grain and marker placement GH-24: the marker adds no line and appears only in its own branch 6`] = `
+"codeunit 51906 "R" {     var
+        MutationSelector: Codeunit "Mutation Selector";
+
+procedure P(W: Integer) var X: Integer; begin if MutationSelector.Active('M0001') then begin
+  case W of 1: begin end; 2: Touch(); end
+end else if MutationSelector.Active('M0003') then begin
+  case W of 1: begin X := 1; end; 2: ; end
+end else if MutationSelector.Active('M0002') then begin
+  case W of 1: begin ; end; 2: Touch(); end
+end else begin
+  case W of 1: begin X := 1; end; 2: Touch(); end
+end; end; local procedure Touch() begin end; }"
+`;

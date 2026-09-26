@@ -771,6 +771,14 @@
             "astHash": {
               "type": "string"
             },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
+            },
             "objectType": {
               "type": "string"
             },
@@ -956,6 +964,14 @@
             "astHash": {
               "type": "string"
             },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
+            },
             "objectType": {
               "type": "string"
             },
@@ -1110,6 +1126,14 @@
             },
             "astHash": {
               "type": "string"
+            },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
             },
             "objectType": {
               "type": "string"

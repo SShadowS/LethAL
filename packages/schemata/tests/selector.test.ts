@@ -142,7 +142,12 @@ describe("selector single-sourced identity", () => {
       artifactId: ART,
       targetAppId: APP,
     });
-    for (const proc of ["procedure Active(", "procedure ArtifactId(", "procedure TargetAppId("]) {
+    for (const proc of [
+      "procedure Active(",
+      "procedure ArtifactId(",
+      "procedure TargetAppId(",
+      "procedure Reached(",
+    ]) {
       expect(dyn).toContain(proc);
       expect(stat).toContain(proc);
     }
@@ -158,7 +163,12 @@ describe("selector single-sourced identity", () => {
       artifactId: ART,
       targetAppId: APP,
     });
-    for (const proc of ["procedure Active(", "procedure ArtifactId(", "procedure TargetAppId("]) {
+    for (const proc of [
+      "procedure Active(",
+      "procedure ArtifactId(",
+      "procedure TargetAppId(",
+      "procedure Reached(",
+    ]) {
       expect(dyn).toContain(proc);
       expect(res).toContain(proc);
     }
@@ -196,5 +206,29 @@ describe("selector single-sourced identity", () => {
     expect(al).toContain("Subtype = Upgrade");
     expect(al).toContain("trigger OnUpgradePerCompany()");
     expect(al).toContain("State.RegisterArtifact(Selector.TargetAppId(), Selector.ArtifactId())");
+  });
+});
+
+describe("GH-24: the Reached marker procedure", () => {
+  const IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
+  const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+  const ART = "0123456789abcdef0123456789abcdef";
+
+  test("the delegating selector forwards Reached to LC Control State.NoteReached", () => {
+    const al = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
+    expect(al).toContain("procedure Reached(MutantId: Text)");
+    expect(al).toContain(`ControlState.NoteReached('${APP}', '${ART}', MutantId);`);
+  });
+
+  test("the static and resource selectors declare Reached with an empty body", () => {
+    // al-runner has no channel back to LethAL, so there is nothing to forward to. The procedure
+    // must still exist: every instrumented statement-grain branch calls it.
+    for (const al of [
+      emitStaticSelector({ objectId: 79199, activeId: "M0001", artifactId: ART, targetAppId: APP }),
+      emitResourceSelector({ objectId: 79199, artifactId: ART, targetAppId: APP }),
+    ]) {
+      expect(al).toContain("procedure Reached(MutantId: Text)");
+      expect(al).not.toContain("NoteReached(");
+    }
   });
 });

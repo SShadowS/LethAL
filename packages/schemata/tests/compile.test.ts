@@ -3,6 +3,7 @@ import {
   ALNodeKind,
   declarationMembers,
   findAll,
+  findEnclosingStatement,
   findFirst,
   initParser,
   parseAL,
@@ -11,6 +12,9 @@ import {
 } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { canCarryMutationSelectorVar, compileSchemataForFile } from "../src/compile";
+import { buildComponents } from "../src/components";
+import { REACH_MARKER, reachGrainOf } from "../src/dispatch";
+import { assignMutantIds } from "../src/ids";
 
 /** Builds a MutationSpec matching the shape the existing tests construct by hand. */
 function spec(before: ALSyntaxNode, afterText: string, operatorName: string): MutationSpec {
@@ -435,8 +439,10 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     // span (`begin ... end;`, ';' included per the grammar) ended in ';' and
     // `begin end` does not, so the splice has to reproduce it. Without it the
     // branch reads `... begin end\n        A := 2;` — invalid AL.
-    expect(out).toContain("if A <> 0 then begin end;\n        A := 2;");
-    expect(out).not.toMatch(/begin end\s*\n\s*A := 2;/);
+    // GH-24: the inner block is a nested statement-grain member, so its branch carries its marker
+    // after the `begin` (P1); the terminator rule is unchanged.
+    expect(out).toContain(`if A <> 0 then begin ${REACH_MARKER("M0002")} end;\n        A := 2;`);
+    expect(out).not.toMatch(/Reached\('M0002'\); end\s*\n\s*A := 2;/);
   });
 
   it("emits a fully re-parseable file when the component root is a statement (0 ERROR nodes)", async () => {
@@ -475,8 +481,10 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
       spec(inner, "begin end", "lethal.empty-block"),
     ]);
 
-    expect(out).toContain("if A <> 0 then begin end;\n            A := 2;");
-    expect(out).not.toMatch(/begin end\s*\n\s*A := 2;/);
+    expect(out).toContain(
+      `if A <> 0 then begin ${REACH_MARKER("M0002")} end;\n            A := 2;`,
+    );
+    expect(out).not.toMatch(/Reached\('M0002'\); end\s*\n\s*A := 2;/);
     expect(countErrorNodes(src)).toBe(0);
     expect(countErrorNodes(out)).toBe(0);
   });
@@ -522,8 +530,10 @@ describe("compileSchemataForFile — member splice reproduces a consumed termina
     // trailing `;` (the terminator re-parented outside every statement node),
     // so the branch text ends at `Y := 2` and the source's own `;` survives
     // after the spliced chain. A `;` before `end` is optional in AL.
-    expect(out).toContain("if X > 0 then begin end\n        else\n            Y := 2\n");
-    expect(out).not.toMatch(/begin end;\s*else/);
+    expect(out).toContain(
+      `if X > 0 then begin ${REACH_MARKER("M0002")} end\n        else\n            Y := 2\n`,
+    );
+    expect(out).not.toMatch(/Reached\('M0002'\); end;\s*else/);
     expect(out).not.toContain(";;");
     expect(countErrorNodes(out)).toBe(0);
   });
@@ -983,5 +993,301 @@ describe("compileSchemataForFile — selector var injection into extension objec
       );
       expect(countErrorNodes(out)).toBe(0);
     });
+  });
+});
+/**
+ * GH-24. Each scenario is parsed for real, because the grain rule reads `parent` and `fieldName`,
+ * which the fake nodes in `dispatch.test.ts` do not have. Every AST shape a test relies on is read
+ * off the parse and asserted, rather than assumed from what the grammar ought to produce.
+ */
+describe("GH-24: reach grain and marker placement", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  interface Scenario {
+    readonly src: string;
+    readonly root: ALSyntaxNode;
+    readonly specs: readonly MutationSpec[];
+    /** Mutant ids whose marker is a P3 wrap, so the strip below also removes `begin `/` end`. */
+    readonly wrapped: readonly string[];
+  }
+
+  const parse = (src: string): ALSyntaxNode => wrapRoot(parseAL(src));
+
+  // Every node of a scenario comes from ONE traversal. The wrapper objects a traversal hands out
+  // carry their own parent chain, and `injectMutationSelectorVar` keys the enclosing object by
+  // identity, so specs found by two separate `findAll` walks inject the selector var twice. The
+  // real pipeline walks each file once.
+  const walked = new WeakMap<ALSyntaxNode, ALSyntaxNode[]>();
+  const all = (root: ALSyntaxNode, kind: string): ALSyntaxNode[] => {
+    let nodes = walked.get(root);
+    if (nodes === undefined) {
+      const collected: ALSyntaxNode[] = [];
+      visit(root, (n) => {
+        collected.push(n);
+      });
+      nodes = collected;
+      walked.set(root, nodes);
+    }
+    return nodes.filter((n) => n.kind === kind);
+  };
+
+  const nth = (root: ALSyntaxNode, kind: string, i: number, startsWith = ""): ALSyntaxNode => {
+    const hit = all(root, kind).filter((n) => n.text.startsWith(startsWith))[i];
+    if (hit === undefined)
+      throw new Error(`no ${kind} #${i} starting ${JSON.stringify(startsWith)}`);
+    return hit;
+  };
+
+  const bodyOf = (root: ALSyntaxNode, procName: string): ALSyntaxNode => {
+    const body = all(root, ALNodeKind.block).find(
+      (b) =>
+        b.parent?.kind === ALNodeKind.procedure &&
+        b.parent.childForFieldName("name")?.text === procName,
+    );
+    if (body === undefined) throw new Error(`no body for ${procName}`);
+    return body;
+  };
+
+  /** Grain of every mutant, keyed by id, computed from the same components the compiler builds. */
+  const grains = (s: Scenario): Map<string, string> => {
+    const ided = assignMutantIds(new Map([["<file>", s.specs]])).get("<file>") ?? [];
+    const out = new Map<string, string>();
+    for (const c of buildComponents(ided)) {
+      for (const m of c.members) out.set(m.mutantId, reachGrainOf(m, c.root));
+    }
+    return out;
+  };
+
+  const compile = (s: Scenario): string => compileSchemataForFile(s.src, s.root, s.specs);
+
+  const words = (text: string, word: string): number =>
+    (text.match(new RegExp(`\\b${word}\\b`, "gi")) ?? []).length;
+
+  // The scenarios, one per test below, and all of them again in the no-line test.
+
+  const thenCall = (): Scenario => {
+    const src = `codeunit 51901 "R" { procedure P(Amount: Integer) begin if Amount > 100 then Touch(); end; local procedure Touch() begin end; }`;
+    const root = parse(src);
+    const call = nth(root, ALNodeKind.procedure_call, 0, "Touch");
+    return { src, root, specs: [spec(call, "", "lethal.void-method-call")], wrapped: [] };
+  };
+
+  const thenExit = (): Scenario => {
+    const src = `codeunit 51902 "R" { procedure P(Amount: Integer): Integer begin if Amount < 0 then exit(0); if Amount < 1 then Error('neg'); exit(1); end; }`;
+    const root = parse(src);
+    // The comparison makes the whole if the component root, so the exit is a NESTED member. Alone,
+    // the exit would be its own root, already braced by `wrapIfSingleStatementSlot`, and P0.
+    const guard = nth(root, ALNodeKind.comparison_expression, 0, "Amount < 0");
+    const exit0 = nth(root, ALNodeKind.exit_statement, 0);
+    const neg = nth(root, ALNodeKind.text_literal, 0, "'neg'");
+    return {
+      src,
+      root,
+      specs: [
+        spec(guard, "Amount >= 0", "lethal.negate-conditional"),
+        spec(exit0, "exit(1)", "lethal.return-value"),
+        spec(neg, "''", "lethal.toggle-blank-string"),
+      ],
+      wrapped: ["M0002"],
+    };
+  };
+
+  const listPrefix = (): Scenario => {
+    const src = `codeunit 51903 "R" { procedure P() var X: Integer; Y: Integer; begin X := 1; Y := 2; end; }`;
+    const root = parse(src);
+    const second = nth(root, ALNodeKind.assignment_statement, 0, "Y := 2");
+    return {
+      src,
+      root,
+      specs: [
+        spec(bodyOf(root, "P"), "begin end", "lethal.empty-block"),
+        spec(second, "", "lethal.remove-assignment"),
+      ],
+      wrapped: [],
+    };
+  };
+
+  const ifBody = (): Scenario => {
+    const src = `codeunit 51904 "R" { procedure P(Amount: Integer) var Seen: Integer; begin if Amount > 100 then begin Seen := Amount; end; Seen := 0; end; }`;
+    const root = parse(src);
+    const thenBlock = nth(root, ALNodeKind.if_statement, 0).childForFieldName("then_branch");
+    if (thenBlock === null) throw new Error("no then_branch");
+    return {
+      src,
+      root,
+      specs: [
+        spec(bodyOf(root, "P"), "begin end", "lethal.empty-block"),
+        spec(thenBlock, "begin end", "lethal.empty-block"),
+      ],
+      wrapped: [],
+    };
+  };
+
+  const repeatBody = (): Scenario => {
+    const src = `codeunit 51905 "R" { procedure P() var I: Integer; begin repeat begin I += 1; end until I >= 3; end; }`;
+    const root = parse(src);
+    const inner = all(root, ALNodeKind.block).find((b) => b.text.startsWith("begin I += 1"));
+    if (inner === undefined) throw new Error("no repeat body block");
+    return {
+      src,
+      root,
+      specs: [
+        spec(bodyOf(root, "P"), "begin end", "lethal.empty-block"),
+        spec(inner, "begin end", "lethal.empty-block"),
+      ],
+      wrapped: [],
+    };
+  };
+
+  const caseArms = (): Scenario => {
+    const src = `codeunit 51906 "R" { procedure P(W: Integer) var X: Integer; begin case W of 1: begin X := 1; end; 2: Touch(); end; end; local procedure Touch() begin end; }`;
+    const root = parse(src);
+    const armBlock = all(root, ALNodeKind.block).find((b) => b.text.startsWith("begin X := 1"));
+    if (armBlock === undefined) throw new Error("no arm block");
+    const call = nth(root, ALNodeKind.procedure_call, 0, "Touch");
+    const assign = nth(root, ALNodeKind.assignment_statement, 0, "X := 1");
+    return {
+      src,
+      root,
+      specs: [
+        spec(armBlock, "begin end", "lethal.empty-block"),
+        spec(assign, "", "lethal.remove-assignment"),
+        spec(call, "", "lethal.void-method-call"),
+      ],
+      wrapped: [],
+    };
+  };
+
+  it("GH-24: an unbraced then-call is enclosing grain and gets no marker", () => {
+    const s = thenCall();
+    const [callSpec] = s.specs;
+    if (callSpec === undefined) throw new Error("no spec");
+    // Measured shape: the call sits in the if's then_branch slot, not a statement list, so the
+    // resolved statement is the whole if.
+    expect(callSpec.before.parent?.kind).toBe(ALNodeKind.if_statement);
+    expect(callSpec.before.fieldName).toBe("then_branch");
+    expect(findEnclosingStatement(callSpec.before)?.kind).toBe(ALNodeKind.if_statement);
+    expect(grains(s).get("M0001")).toBe("enclosing");
+    expect(compile(s)).not.toContain(REACH_MARKER("M0001"));
+  });
+
+  it("GH-24: an own statement in a then-slot is wrapped (P3)", () => {
+    const s = thenExit();
+    const [, exitSpec, negSpec] = s.specs;
+    if (exitSpec === undefined || negSpec === undefined) throw new Error("no spec");
+    expect(exitSpec.before.parent?.kind).toBe(ALNodeKind.if_statement);
+    expect(exitSpec.before.fieldName).toBe("then_branch");
+    const g = grains(s);
+    expect(g.get("M0001")).toBe("statement"); // the comparison: its statement is the root (P0)
+    expect(g.get("M0002")).toBe("statement");
+    const out = compile(s);
+    // The marker sits AFTER `if Amount < 0 then`, so a skipped branch never reaches it.
+    expect(out).toContain(`if Amount < 0 then begin ${REACH_MARKER("M0002")} exit(1) end`);
+    expect(words(out, "begin")).toBe(words(out, "end"));
+    // Measured: `Error('neg')` in the same slot parses as a CALL (`call_expression`), not an
+    // `error_statement`, so a literal inside it resolves to the whole if and is enclosing grain.
+    const errorCall = negSpec.before.parent?.parent;
+    expect(errorCall?.kind).toBe(ALNodeKind.procedure_call);
+    expect(errorCall?.fieldName).toBe("then_branch");
+    expect(findEnclosingStatement(negSpec.before)?.kind).toBe(ALNodeKind.if_statement);
+    expect(g.get("M0003")).toBe("enclosing");
+    expect(out).not.toContain(REACH_MARKER("M0003"));
+  });
+
+  it("GH-24: a nested statement in a list gets a plain prefix (P2)", () => {
+    const s = listPrefix();
+    const g = grains(s);
+    expect(g.get("M0001")).toBe("statement"); // the body block, the component root (P0)
+    expect(g.get("M0002")).toBe("statement");
+    const out = compile(s);
+    expect(out).toContain(`then begin\n  ${REACH_MARKER("M0001")} begin end`);
+    expect(out).toContain(`X := 1; ${REACH_MARKER("M0002")} ;`);
+  });
+
+  it("GH-24: an if-body block gets the marker after its begin (P1)", () => {
+    const s = ifBody();
+    const [, blockSpec] = s.specs;
+    expect(blockSpec?.before.parent?.kind).toBe(ALNodeKind.if_statement);
+    expect(grains(s).get("M0002")).toBe("statement");
+    const out = compile(s);
+    expect(out).toContain(`then begin ${REACH_MARKER("M0002")} end;`);
+    expect(words(out, "begin")).toBe(words(out, "end"));
+  });
+
+  it("GH-24: a repeat body block is enclosing, because the grammar puts it in the repeat's statement list", () => {
+    // The plan expected this block's parent to be the repeat_statement (P1's repeat case). MEASURED
+    // on the vendored grammar it is not: a repeat's body is a `statement_block`, and a
+    // `begin ... end` inside it is one statement of that list, so the resolved statement is the
+    // whole repeat. `lethal.empty-block` targets only a block whose parent IS a repeat_statement,
+    // so no operator emits this spec (R244); it is built by hand to prove the shape is decided,
+    // not thrown.
+    const s = repeatBody();
+    const [, inner] = s.specs;
+    if (inner === undefined) throw new Error("no spec");
+    expect(inner.before.parent?.kind).toBe(ALNodeKind.statement_block);
+    expect(inner.before.parent?.parent?.kind).toBe(ALNodeKind.repeat_statement);
+    expect(findEnclosingStatement(inner.before)?.kind).toBe(ALNodeKind.repeat_statement);
+    expect(grains(s).get("M0002")).toBe("enclosing");
+    const out = compile(s);
+    expect(out).not.toContain(REACH_MARKER("M0002"));
+    expect(words(out, "begin")).toBe(words(out, "end"));
+  });
+
+  it("GH-24: a case-arm block and a case-arm call are enclosing", () => {
+    const s = caseArms();
+    const [armSpec, , callSpec] = s.specs;
+    expect(armSpec?.before.parent?.rawKind).toBe("case_branch");
+    expect(callSpec?.before.parent?.rawKind).toBe("case_branch");
+    const g = grains(s);
+    // Ids follow start position: the arm block, the assignment inside it, then the call.
+    expect(g.get("M0001")).toBe("enclosing");
+    expect(g.get("M0002")).toBe("statement");
+    expect(g.get("M0003")).toBe("enclosing");
+    const out = compile(s);
+    expect(out).not.toContain(REACH_MARKER("M0001"));
+    expect(out).not.toContain(REACH_MARKER("M0003"));
+    expect(out).toContain(`1: begin ${REACH_MARKER("M0002")} ; end;`);
+  });
+
+  it("GH-24: the marker adds no line and appears only in its own branch", () => {
+    for (const make of [thenCall, thenExit, listPrefix, ifBody, repeatBody, caseArms]) {
+      const s = make();
+      const out = compile(s);
+      for (const [id, grain] of grains(s)) {
+        const count = out.split(REACH_MARKER(id)).length - 1;
+        expect(`${id}:${count}`).toBe(`${id}:${grain === "statement" ? 1 : 0}`);
+      }
+      // Each segment runs from one guard to the next. A marker may only name its own guard's id,
+      // and only BEFORE that branch ends, never in the original branch.
+      for (const seg of out.split(/(?=MutationSelector\.Active\(')/).slice(1)) {
+        const id = /^MutationSelector\.Active\('(M\d+)'\)/.exec(seg)?.[1];
+        const branchEnd = seg.indexOf("end else");
+        expect(branchEnd).toBeGreaterThan(0);
+        for (const m of seg.matchAll(/MutationSelector\.Reached\('(M\d+)'\)/g)) {
+          expect(m[1]).toBe(id);
+          expect(m.index).toBeLessThan(branchEnd);
+        }
+      }
+      let stripped = out;
+      for (const id of s.wrapped) {
+        const open = `begin ${REACH_MARKER(id)} `;
+        const at = stripped.indexOf(open);
+        if (at < 0) continue; // absence is the count check's job, above
+        const close = stripped.indexOf(" end", at);
+        stripped =
+          stripped.slice(0, at) +
+          stripped.slice(at + open.length, close) +
+          stripped.slice(close + " end".length);
+      }
+      stripped = stripped
+        .replace(/ MutationSelector\.Reached\('M\d+'\);(?= )/g, "")
+        .replace(/MutationSelector\.Reached\('M\d+'\); /g, "");
+      expect(stripped).not.toContain("Reached(");
+      expect(out.split("\n").length).toBe(stripped.split("\n").length);
+      // The pre-GH-24 output, recorded before the marker existed.
+      expect(stripped).toMatchSnapshot();
+    }
   });
 });

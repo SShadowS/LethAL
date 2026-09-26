@@ -46,6 +46,7 @@ const FILES = [
 const CROSS_PACKAGE = [
   join(import.meta.dir, "..", "packages", "schemata", "src", "project.ts"),
   join(import.meta.dir, "..", "packages", "schemata", "src", "id-ranges.ts"),
+  join(import.meta.dir, "..", "packages", "schemata", "src", "dispatch.ts"),
   join(import.meta.dir, "..", "packages", "engine", "src", "operator", "interface.ts"),
 ];
 
