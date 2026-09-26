@@ -6226,7 +6226,7 @@ async function runMutantsOnBackend(args: {
     let verdict: SessionVerdict = "survived";
     let killingTest: string | undefined;
     // C02-06 decision 14: the killer's FULL ref, set beside `killingTest` at every site that
-    // decides a kill. Internal (`SessionOutcome` only) — see its doc comment for why.
+    // decides a kill. Internal (`SessionOutcome` only): see its doc comment for why.
     let killingTestRef: TestMethodRef | undefined;
     /**
      * R86: the failure text of the run that KILLED this mutant — see `MutantOutcome`'s field of the
@@ -7361,7 +7361,7 @@ export function record(
   // grain itself rides on `m`. Rides on `mutant-scored` only; the store gets none of it.
   reach?: { readonly guardReached: boolean; readonly reachedBy: readonly string[] },
   // C02-06 decision 14: the killer's full ref, beside `killingTest`. Passed only by the covering
-  // loop's three kill-deciding branches (confirmation, timeout, warm-confirmation) — never by
+  // loop's three kill-deciding branches (confirmation, timeout, warm-confirmation), never by
   // `--resume`'s replays, which carry no ref. `SessionOutcome`-only: NOT written to the store and
   // NOT put on `mutant-scored`/`mutant-carried`, so no event or report field moves.
   killingTestRef?: TestMethodRef,
@@ -7406,7 +7406,7 @@ export function record(
       : {}),
     ...(carried === true ? { carried: true } : {}),
     ...(killingTest !== undefined ? { killingTest } : {}),
-    // C02-06 decision 14: `SessionOutcome` only — never store, never an event (see the parameter's
+    // C02-06 decision 14: `SessionOutcome` only, never store, never an event (see the parameter's
     // own doc comment).
     ...(killingTestRef !== undefined ? { killingTestRef } : {}),
     ...(failureNote !== undefined ? { failureNote } : {}),

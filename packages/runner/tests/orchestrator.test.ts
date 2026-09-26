@@ -10267,7 +10267,7 @@ class LeaseNamedFake extends NamedFake {
 
 const OVER = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
 const RED = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "RedAtBaseline" };
-// C02-06 Task 5.2: the mirror of OVER in MIRROR_TESTS_AL — same method name, different codeunit.
+// C02-06 Task 5.2: the mirror of OVER in MIRROR_TESTS_AL, same method name, different codeunit.
 const OVER2 = { codeunitId: 79101, codeunitName: "Zulu Tests", method: "OverBudgetDetected" };
 
 async function installedFixture(
@@ -10687,7 +10687,7 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
   test("a warm-confirmed kill carries its ref", async () => {
     // Covering set of two, from two different codeunits sharing a method name: OVER (position 1
     // by name order, since kills/members tie) passes, OVER2 (position 2) is the one `killerRef`
-    // restricts the fail to — a group-call kill at position > 1 only ever confirms warm (R206).
+    // restricts the fail to: a group-call kill at position > 1 only ever confirms warm (R206).
     const fx = await installedFixture({ killerRef: OVER2 });
     const res = await runNamedMutants({
       ...fx.cfg,

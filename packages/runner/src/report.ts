@@ -44,7 +44,7 @@ export interface SessionOutcome {
   readonly killingTest?: string;
   /**
    * C02-06 decision 14: the killer's FULL identity (codeunit id and name, not just the bare
-   * method name `killingTest` carries) — set beside `killingTest` at every site that decides a
+   * method name `killingTest` carries), set beside `killingTest` at every site that decides a
    * kill. Internal only: never copied onto `MutantOutcome` or any `RunEvent`, so `SessionReport`
    * and both generated schemas do not move. A `--resume` carried verdict has no ref and leaves
    * this absent, same as every other verdict that never confirmed a kill here.
