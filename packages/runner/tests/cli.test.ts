@@ -2317,20 +2317,57 @@ const PRECEDENCE_OVERRIDES: ReadonlyArray<{
 
 type Outcome = "reads" | "ignores" | "refused-by-owner" | "refused-other";
 
+/** More values a flag's validator accepts, for flags an invocation already SUPPLIES. Such a flag is
+ *  measured by changing its value, and `VALUE[flag]` or `zz-<flag>` can equal the supplied value or
+ *  be refused (`--backend zz-backend`). Candidates are tried in order, skipping the supplied one. */
+const OTHER_VALUES: Readonly<Record<string, readonly string[]>> = {
+  backend: ["bcdev", "al-runner"],
+  artifact: ["fedcba9876543210fedcba9876543210"],
+  survivors: ["1/M0002"],
+};
+
+/**
+ * What the parse does with `--<flag>` on `argv`, measured by the parsed config: an absent flag is
+ * appended; a supplied one has its value changed (a boolean is removed). "reads" means the parsed
+ * config changed, "ignores" that it did not. One more case reads: a supplied flag whose every other
+ * value is refused by a message that starts with the flag's own name (`--format`, whose only value
+ * today is `mutation-elements`): the value alone decided the outcome, so the parse read it.
+ */
 function outcome(argv: readonly string[], flag: string): Outcome {
   const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
-  const extra =
-    spec.type === "boolean" ? [`--${flag}`] : [`--${flag}`, VALUE[flag] ?? `zz-${flag}`];
+  const at = argv.indexOf(`--${flag}`);
+  const supplied = argv[at + 1];
+  const variants: string[][] =
+    at < 0
+      ? [
+          [
+            ...argv,
+            ...(spec.type === "boolean"
+              ? [`--${flag}`]
+              : [`--${flag}`, VALUE[flag] ?? `zz-${flag}`]),
+          ],
+        ]
+      : spec.type === "boolean"
+        ? [argv.filter((_, i) => i !== at)]
+        : [...(OTHER_VALUES[flag] ?? []), VALUE[flag], `zz-${flag}`]
+            .filter((v): v is string => v !== undefined && v !== supplied)
+            .map((v) => argv.map((a, i) => (i === at + 1 ? v : a)));
   const before = JSON.stringify(parseCliConfig([...argv]));
-  let after: string;
-  try {
-    after = JSON.stringify(parseCliConfig([...argv, ...extra]));
-  } catch (e) {
-    return /is only accepted by|is not accepted by/.test((e as Error).message)
-      ? "refused-by-owner"
-      : "refused-other";
+  let refusal = "";
+  for (const changed of variants) {
+    let after: string;
+    try {
+      after = JSON.stringify(parseCliConfig(changed));
+    } catch (e) {
+      refusal = (e as Error).message;
+      continue;
+    }
+    return after === before ? "ignores" : "reads";
   }
-  return after === before ? "ignores" : "reads";
+  if (at >= 0 && spec.type !== "boolean" && refusal.startsWith(`--${flag} `)) return "reads";
+  return /is only accepted by|is not accepted by/.test(refusal)
+    ? "refused-by-owner"
+    : "refused-other";
 }
 
 describe("C02-07: flags are read or refused, never ignored", () => {
@@ -2402,7 +2439,6 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     const ignored: string[] = [];
     for (const { argv } of INVOCATIONS) {
       for (const flag of Object.keys(RUN_FLAGS)) {
-        if (argv.includes(`--${flag}`)) continue;
         if (outcome(argv, flag) !== "ignores") continue;
         const dry = argv.includes("--dry-run");
         if (dry && DRY_RUN_IGNORES.has(flag)) continue;
@@ -2415,9 +2451,7 @@ describe("C02-07: flags are read or refused, never ignored", () => {
   test("the dry-run exemption is exact", () => {
     const dry = INVOCATIONS.find((i) => i.argv.includes("--dry-run"));
     if (dry === undefined) throw new Error("no dry-run invocation");
-    const measured = Object.keys(RUN_FLAGS).filter(
-      (f) => !dry.argv.includes(`--${f}`) && outcome(dry.argv, f) === "ignores",
-    );
+    const measured = Object.keys(RUN_FLAGS).filter((f) => outcome(dry.argv, f) === "ignores");
     expect(new Set(measured)).toEqual(new Set(DRY_RUN_IGNORES));
   });
 
@@ -2425,9 +2459,8 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     for (const { flag, owners } of FLAG_OWNERS) {
       for (const sub of owners) {
         const mine = INVOCATIONS.filter((i) => i.sub === sub);
-        const results = mine.map((i) =>
-          i.argv.includes(`--${flag}`) ? "reads" : outcome(i.argv, flag),
-        );
+        // A flag the invocation already supplies is measured too, by changing its value.
+        const results = mine.map((i) => outcome(i.argv, flag));
         expect(results, `${sub} --${flag}`).toContain("reads");
       }
     }
@@ -2436,11 +2469,29 @@ describe("C02-07: flags are read or refused, never ignored", () => {
   test("every non-owner refuses by ownership", () => {
     for (const { flag, owners } of FLAG_OWNERS) {
       for (const { sub, argv } of INVOCATIONS) {
-        if ((owners as readonly string[]).includes(sub) || argv.includes(`--${flag}`)) continue;
+        if ((owners as readonly string[]).includes(sub)) continue;
         expect(outcome(argv, flag), `${argv.slice(0, 2).join(" ")} --${flag}`).toBe(
           "refused-by-owner",
         );
       }
+    }
+  });
+
+  test("an ownership refusal names every subcommand that reads the flag", () => {
+    // The agent reference promises this, so a refusal is a pointer to the right subcommand.
+    for (const { flag, owners } of FLAG_OWNERS) {
+      const other = INVOCATIONS.find((i) => !(owners as readonly string[]).includes(i.sub));
+      if (other === undefined) continue;
+      const extra = VALUE[flag] ?? `zz-${flag}`;
+      const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
+      let message = "";
+      try {
+        parseCliConfig([...other.argv, `--${flag}`, ...(spec.type === "boolean" ? [] : [extra])]);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      for (const o of owners)
+        expect(message, `--${flag} on ${other.sub}`).toContain(`\`lethal ${o}\``);
     }
   });
 
