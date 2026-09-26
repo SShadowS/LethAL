@@ -441,3 +441,241 @@ the full bytes of the same call's answer. Warm-up sessions are included and mark
   container and what coord showed. The first network call happens only after the guard passes.
 
 ## OUTCOME
+
+Filled 2026-09-26 in Task 5, offline, from the NDJSON under `C:/Users/SShadowS/AppData/Local/Temp/r236/`
+(scratch, not committed) and its `log.txt`. Tabulated by a one-off `bun` script that is not committed. Times
+are local (UTC+2) unless marked Z. Every arm ran on **Cronus284** (D1), control app **1.0.0.19** in every
+session, fixture tree HEAD's, test app `LethAL Sandbox Data Tests` 1.0.0.18.
+
+### O1. Counts (§1, §2, D2)
+
+Warm-up sessions (D2) are excluded from every rate and test below and listed separately.
+
+| block | segment | time | counted n | counted hits | hits at | warm-up sessions |
+| --- | --- | --- | --: | --: | --- | --- |
+| A1 | 1 | 19:34:51 to 19:47:27 | 15 | 2 | #1, #8 | none |
+| B'1 | 1 | 19:48:30 to 19:57:52 | 10 | 2 | #9, #10 | none |
+| B'1 | 2 | 20:04:20 to 20:10:16 | 5 | 1 | #4 | #1 (post-recovery), a hit |
+| B'2 | 1 | 20:10:23 to 20:19:01 | 15 | 0 | | none |
+| A2 | 1 | 20:19:13 to 20:29:37 | 15 | 1 | #4 | none |
+
+- **A = 3 of 30** (A1 2 of 15, A2 1 of 15). **B' = 3 of 30** (B'1 3 of 15, B'2 0 of 15).
+- Excluding `afterUnprovenHit` sessions (C4): A1 2 of 13, A2 1 of 14, B'1 2 of 12, B'2 0 of 15; A 3 of 27,
+  B' 2 of 27. Excluding `postRecovery` sessions: unchanged from the §3 figure (A 3 of 30, B' 3 of 30), because
+  the one post-recovery session is a warm-up and is already out. Neither alternative is tested (C5).
+- Warm-up sessions, reported separately: `warmup-284` #1 **hit**, #2 clean (the first two probe sessions on
+  Cronus284, 19:31:42 to 19:34:44); B'1 segment 2 #1 **hit** (first session after restart 284-1). 2 of 3 warm-up
+  sessions hit. The first warm-up attempt (`warmup-284-publishfail`, 19:28:24) threw before any test ran and is
+  not an observation.
+- Every counted session returned a report; no session threw during an arm. The client commits recorded are
+  `69a3a85` (A1, A2) and `7b7fff3` (B'1, B'2).
+- Hits by position in their block: a hit was followed by another hit once (B'1 #9 then #10); the other 6
+  sessions that followed a hit were clean.
+
+### O2. Main contrast (§3, C5)
+
+- **A vs B'**: Fisher exact, one-sided "A (newer client) has MORE hits", p = P(X >= 3) with X hypergeometric
+  (60 sessions, 6 hits, 30 drawn for A) = **0.6646**. Not below 0.05: **this measurement does not show an
+  increase.** Neither split arm is flagged for drift and neither is short, so this contrast is neither
+  "confounded by drift" nor "underpowered". C5's power note applies: at B' = 3 of 30, A needed at least 10 of 30
+  to read "raised".
+- **B' vs B** and **A vs B**: NOT measured this cycle. B did not run (D1 = no, D2 = no, D3 = no). The combined
+  contrast and the app-only contrast remain unmeasured.
+
+### O3. Drift and short arms (§3)
+
+- **A1 vs A2**: 2 of 15 vs 1 of 15, two-sided p = min(1, 2 x P(X >= 2)) = min(1, 2 x 0.5000) = **1.0000**. Not
+  flagged.
+- **B'1 vs B'2**: 3 of 15 vs 0 of 15, two-sided p = min(1, 2 x P(X >= 3)) = min(1, 2 x 0.1121) = **0.2241**. Not
+  flagged.
+- **Short arms: none.** Every arm reached 15 non-warm-up sessions. B'1 stopped once (1 of the 3 allowed) and
+  resumed as segment 2 with the remaining 5 plus one warm-up session (D2).
+- **Non-reproduction (§3):** the arms together have 6 counted hits, more than 2, so A3 did not run.
+
+### O4. Mechanism (§4 as amended by C3 and D1)
+
+- Cronus284's calibration (`calibrate-284.ndjson`, 5 rounds, 19:26:56) read pooling `not determinable`, b1
+  `sound`, b2 `not determinable`, b3 `not determinable`: **control `not determinable`**. The control was not
+  adopted, so C3 stands: every hit is `action-end unproven` (all 8 records say `actionEnd: "unproven"`,
+  `actionEnded: false`, `idSpaceMatched: false`), and **the mechanism verdict is inconclusive**. H2-action,
+  H2-fence and "H2 undetermined" are not declared.
+- Descriptive marker-state counts (C3), over all 8 hits (6 counted, 2 warm-up):
+  - **marker completed: 7** (6 counted, 1 warm-up). Both reads: `opKind: "none"`, `completed: true`,
+    `lastCompletedOpSeq` equal to the broken call's own `opSeq`, our `opAttemptId`, and our progress row in
+    state `done`. The fence ended on the server.
+  - **failed read: 1** (B'1 #10, counted). Both reads (at 0 ms and 45 032 ms) ended `TimeoutError: The
+    operation timed out.` Unclassified.
+  - H3: 0. H7-candidate: 0. `fetch`-phase wire failure: 0. Every broken call got status 200 headers and failed in
+    phase `body`.
+- **Broken calls by `testMethod`**, all Cronus284 sessions: `PageActionComputesNonZero` **8**, any other test
+  **0** (no other call errored). This meets §4's specificity numbers (at least 5 broken calls, at least 80%);
+  under C3 it is a descriptive count and licenses nothing by itself.
+- **NST event log**, one excerpt per class seen (the probe reads the Application log for
+  `MicrosoftDynamicsNav*` since the session started):
+  - marker completed (all 7): the read returned **no** BC event at all; the section after `----` is empty.
+  - failed read (B'1 #10): five warnings, Id 705, from 17:56:16Z to 17:57:14Z, each reading "Request was
+    throttled. It either timed-out or was cancelled.The OData operation was canceled by the user.", with
+    `CustomParameters` `"Max Active Request Count": "100","Requests running": "5","Requests waiting": "8"`
+    (the first) falling to `"6"` (the last). The TestPage call had been dispatched at 17:55:43.8Z and its
+    socket closed at +30 829 ms.
+
+### O5. The TestPage call, per hit
+
+| session | warm-up | headers after | bytes received | ended | at | marker |
+| --- | --- | --: | --: | --- | --: | --- |
+| warmup-284 #1 | yes | 1484 ms | 6528 | AbortError (client timer) | 120 004 ms | completed |
+| A1 #1 | | 614 ms | 6536 | AbortError (client timer) | 120 010 ms | completed |
+| A1 #8 | | 717 ms | 6530 | AbortError (client timer) | 120 005 ms | completed |
+| B'1 #9 | | 606 ms | 6544 | AbortError (client timer) | 120 014 ms | completed |
+| B'1 #10 | | 644 ms | 6616 | socket closed unexpectedly | 30 829 ms | failed read |
+| B'1 seg 2 #1 | yes | 1689 ms | 6642 | socket closed unexpectedly | 27 840 ms | completed |
+| B'1 seg 2 #4 | | 683 ms | 6533 | AbortError (client timer) | 120 008 ms | completed |
+| A2 #4 | | 618 ms | 6533 | AbortError (client timer) | 120 016 ms | completed |
+
+- Every hit is a **"truncated reply"** (D5): `Transfer-Encoding: chunked`, no `Content-Length` (so §4's H8
+  `bytesReceived < Content-Length` test cannot be evaluated, as D5 says), headers arrived, part of the body
+  arrived, then an abort or a socket close with no complete body. 8 of 8.
+- The same call in the 57 clean sessions (arms, warm-up #2, `smoke-Bp`, `restore-check`): `headersAt -
+  dispatchedAt` min 271, median 320, p90 360, max 543 ms; the body completed 0 to 1 ms after the headers;
+  6616 to 6618 bytes; chunked, no `Content-Length` in any of them. **Every hit's headers came later (606 ms or
+  more) than every clean answer's (543 ms at most).**
+
+### O6. Truncation decision (D6)
+
+Captures: 8 of 8 hits have a partial capture (none left out), 57 clean sessions have a full capture. Warm-up
+sessions are included and marked above.
+
+- **Consistent offset: FAILS.** Offsets: 6528, 6536, 6530, 6544, 6616, 6642, 6533, 6533. Min 6528, max 6642,
+  **spread 114** (at most 256: holds). Smallest captured full clean answer: **6616** (full sizes seen 6616, 6617,
+  6618). Not every offset is smaller than 6616: B'1 #10 at **6616** (equal) and the warm-up B'1 segment 2 #1 at
+  **6642** (larger). The second condition fails.
+- **Otherwise identical: FAILS**, on the ground D6 names first: the 57 clean answers differ from one another
+  after the D6 masking (57 distinct masked texts). The fields that differ are outside the mask: `artifactId`
+  (32 hex digits, random per artifact, not a GUID), and the string values of `startTime` and `finishTime` (D6
+  masks only number values of time-like keys). Every hit/clean pair (8 x 57) fails, and for every pair the first
+  differing position is `artifactId`, at character 145 or 146 of the masked text; for example A1 #1's partial
+  has `a8e82fbcbf523657f52ec61a8af38418` where the first clean answer has `f82ef7fd2289f187e14e20abaab82e39`. The
+  mask is not widened.
+- **Reading:** both conditions fail, so D6 does not license "the loss is on the server's send or serialize
+  side, not the client's".
+- **Descriptive only, not part of the decision** (a comparison that also masks `artifactId`, `startTime`,
+  `finishTime` and every digit, chosen after looking):
+  - The 57 clean answers are then identical. 6 of the 8 partials are then exact prefixes of every clean
+    answer. The two that are not are the two warm-up hits: their CLR callstack has a
+    `System.RuntimeMethodHandle.InvokeMethod(...)` frame where every clean answer has
+    ``InvokeStub_ITestClientSession.CreatePage(Object, Span`1)``. That longer callstack is why the warm-up hit
+    B'1 segment 2 #1 received 6642 bytes, **more than any clean answer**.
+  - **Where the offsets sit:** none inside the callstack text (it ends near character 5357 to 5384). All are in
+    the last part of the payload, in or after the `coverage` array. The six timer-ended hits are about 73 to
+    116 bytes short of a complete answer (estimated against one clean answer's digit widths): the warm-up
+    `warmup-284` #1 stops inside the `coverage` array, and the other five stop between the end of that array and
+    `coverageSerializeMs`; four of those five carry the TestPage call's own `coverageRunMs` (254, 265, 267,
+    315 ms), and A1 #8's cut falls just after that key. The two socket-closed hits lack only the **final `}`**
+    of the OData envelope, **1 byte**, and carry `coverageRunMs` (287 ms; 1326 ms on the warm-up) and
+    `coverageSerializeMs` (2 and 3 ms).
+    The offsets fall on no 4096 or 8192 boundary. Nothing here says whether the missing bytes were the last
+    chunk the server wrote or something the connection dropped.
+
+### O7. Post-fence cost (§4)
+
+`coverageRunMs` / `coverageSerializeMs` over all 65 Cronus284 sessions:
+
+| call | n | coverageRunMs min / median / p90 / max | coverageSerializeMs min / median / p90 / max |
+| --- | --: | --- | --- |
+| TestPage call (clean sessions only) | 57 | 245 / 289 / 331 / 494 | 1 / 2 / 3 / 15 |
+| the other 21 tests of the first 22 | 1365 | 144 / 286 / 341 / 809 | 1 / 3 / 5 / 47 |
+| all 67 other tests | 3987 | 144 / 286 / 336 / 809 | 1 / 3 / 4 / 47 |
+
+Hits record no `postFence` row for the TestPage call; the values in their partial answers are in O6. On a
+clean session the TestPage call's post-fence cost is not larger than the other tests'.
+
+### O8. Wedges (D5)
+
+| arm | hits followed by a preflight | preflight failed (wedge) | ratio |
+| --- | --: | --: | --- |
+| warm-up (`warmup-284`) | 1 (warm-up) | 0 | 0 of 1 |
+| A1 | 2 | 0 | 0 of 2 |
+| B'1 | 3 counted + 1 warm-up | 1 (after #10, counted) | 1 of 4 |
+| B'2 | 0 | 0 | |
+| A2 | 1 | 0 | 0 of 1 |
+| **overall** | **8** (6 counted, 2 warm-up) | **1** | **1 of 8** (counted: 1 of 6) |
+
+Every hit was followed by a preflight (none was the last session of its run). The one wedge: after B'1 #10 the
+preflight's `lethal doctor` exited 1, the probe exited 3, and recovery 284-1 ran (restart 19:58:09, healthy
+20:03:59, force-reset and clear-quarantine done 20:04:20).
+
+### O9. Timeline (Cronus284, local time)
+
+- 19:17:16 Cronus284 lease 003. 19:19:15 incident E1 (the calibration read Cronus28; discarded).
+- 19:26:56 calibration on Cronus284 (O4).
+- 19:28:24 to 19:28:38 first warm-up attempt threw: publish refused, `AL0132 ... 'NoteReached'`, because a
+  tenant-scoped LethAL Control 1.0.0.16 was resident. 19:31:09 to 19:31:29 cleanup (orchestrator option a):
+  unpublished old residents `LethAL Sandbox Tests` 1.0.0.2, `Sandbox Probes` 1.0.12.0, `Sandbox Hang Tests`
+  1.0.0.2, `Sandbox App` 1.0.20714.30801, `Sandbox Hang` 1.0.20714.28315, `LethAL Control` 1.0.0.16 and 1.0.0.18
+  (both uninstalled). Left: Sandbox Data Tests 1.0.0.18, Control 1.0.0.19 (Global), Sandbox Data.
+- 19:31:42 to 19:34:44 warm-up (2 sessions). 19:34:51 to 19:47:27 A1.
+- 19:47:43 the lane config's `packageCachePath`/`packagesDir` moved to the lane's own `.alpackages` (A1 had used
+  the main checkout's). 19:47:43 to 19:48:18 `smoke-Bp` (1 session, clean, `clientCommit` 7b7fff3).
+- 19:48:30 to 19:57:52 B'1 segment 1 (10 sessions, exit 3). 19:58:09 to 20:04:20 recovery 284-1.
+- 20:04:20 to 20:10:16 B'1 segment 2 (1 warm-up + 5). 20:10:23 to 20:19:01 B'2. 20:19:13 to 20:29:37 A2.
+- 20:30:02 restore check: Sandbox Data Tests 1.0.0.18, Sandbox Data 1.0.20722.33272, Control 1.0.0.19, all
+  installed. 20:30:09 to 20:30:44 `restore-check` session clean. 20:30:52 lease released.
+- No app swap (B did not run). Pre-arm Cronus28 smokes and their two recoveries are in D3.
+
+### O10. Confound list (§2)
+
+Outside `packages/`: arm order A1, B'1, B'2, A2 on one container; A1 read the main checkout's `.alpackages`
+(O9); the B' probe is a copy of this tree's probe run against the old client API (no `b-tree.diff` was saved,
+so it compiled unchanged). `git log --oneline 7b7fff3..HEAD -- packages/`, 37 commits:
+
+```
+1d14262 fix(explain): carried rows never decide reach; refuse contradictory reach on carried and false-with-reachers (GH-24b r1)
+73b0844 Merge master into lethal/lane-bugs
+30e4d68 fix(explain): refuse reached with no reachedBy; pin the reachGrain enum to runtime (GH-24b review)
+83c5839 feat(explain): reach decided per mutant, EXPLAIN_SCHEMA_VERSION 5 (GH-24b)
+7f84ff2 Merge C02-06 (part a): lethal verify's store columns, source hash and offline resolution
+0a4a106 fix(runner): generation parses the snapshot the source hash is taken over (C02-06)
+b74af12 fix(runner): a resume across a preprocessor-symbol change starts fresh (C02-06)
+57f066f fix(runner): verify refuses an empty request instead of planning it as all skipped (C02-06)
+4321e5d style(runner): no em dashes in the moved loadEquivalenceMarks doc (C02-06)
+79ee766 test(runner): measured namespaced coverage rows resolve under base 1 (GH-09)
+d79c2b6 feat(runner): verify matches covering tests by codeunit id and skips reader-marked survivors (C02-06)
+4916119 Merge master into lethal/lane-bugs
+d89cd07 fix(runner): a duplicate artifact record is refused as unknown-artifact (C02-06)
+e8adfe0 feat(runner): verify resolves its source by artifact id and refuses changed source (C02-06)
+3f8a926 test(runner): pin the CLI's preprocessor symbols reaching the source hash (C02-06)
+9c6f09f feat(store): record the installed files, source hash, carried verdicts and test codeunit names that lethal verify reads (C02-06)
+2fc92fe test(explain): the resumed-report test asserts its projected survivor count (C02-01)
+024d510 fix(explain): validate a survivor's batchIndex whether or not artifacts exists (C02-01)
+ccab705 fix(report): a row's readerMark follows the run-level matched list (C02-01)
+cb4dbdb test(runner): a real namespaced SymbolReference declares both objects (GH-09)
+f0492fd Merge master (GH-24 reach) into lethal/lane-code
+87e24f7 fix(explain): refuse a malformed readerMark; tidy C02-01 comments (C02-01)
+2fd4da8 fix(explain): refuse a malformed survivor batchIndex when the report names artifacts (C02-01)
+af6f3ae feat(explain): survivors name the artifact they were scored against, or why not (C02-01)
+20d2c4e feat(explain): survivors carry batch, trigger, span, equivalence risk and reader mark (C02-01)
+32e91c8 fix(schemata): the reach latch takes a name free in its scope (GH-24)
+56282f7 Merge master into lethal/lane-bugs (orchestrator.test.ts: keep both appended blocks, GH-24 reach and C02-04b/C02-05)
+0a3a38a feat(report): each row carries its own equivalence risk and reader mark (C02-01)
+fd72825 feat(report): each mutant row names its enclosing member's line span (C02-01)
+0a9cc84 fix(schemata): the reach latch declaration skips comments before begin (R246)
+2304074 fix(schemata,control): the reach marker latches after its first hit, reset with ObservedActive (R246)
+75c59de test(itest): assertReachControl on itest:tables (GH-24)
+9c86b79 test(itest): pre-commit reach evidence on the gates (GH-24)
+d2a8cc5 feat(runner): guardReached, reachedBy and reachGrain per mutant (GH-24)
+eb27ee1 feat(runner): the transport carries per-test reach and refuses an answer without it (GH-24)
+f154643 feat(schemata): reach grain per mutant, and a marker at its own statement (GH-24)
+d6dd50f feat(control): ObservedActive, the active mutant's own statement reached, per test (GH-24, 1.0.0.19)
+```
+
+### O11. What this licenses (§6)
+
+- Mechanism **inconclusive** (C3): **nothing**; report to the owner. H2-action (Task 8a, Task 8) and H2-fence
+  (Task 9) cannot fire on this probe. H3, H7-candidate and wire failure were not seen (0 each), so neither Task 9
+  via H3 nor the socket-identity roadmap item is licensed.
+- Main contrast A vs B' **not raised** (p = 0.6646): Task 11 is not licensed. **This measurement does not show
+  an increase** from the client commits between `7b7fff3` and HEAD on control app 1.0.0.19.
+- Truncation (D6): neither condition holds; no reading about the send side is licensed.
+- Stated plainly (§5): the fresh-tenant bootstrap was not reproduced, R225's cold-start claim stays open, and
+  socket reuse cannot be established. The rate on Cronus284 (6 of 60 counted, 2 of 3 warm-up) differs sharply
+  from the Cronus28 smokes (6 of 7, D3); this cycle cannot say why.
