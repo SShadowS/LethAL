@@ -157,14 +157,49 @@ export class ArtifactCompiler {
         `manifest artifactId ${input.mutantManifest.artifactId} does not match ${input.artifactId}`,
       );
     }
-    const scratch = toForwardSlashes(join(this.cfg.outputDir, `${input.artifactId}.app`));
+    const { appPath, sha256 } = await this.alcToContentAddressed(
+      input.projectDir,
+      this.cfg.packageCachePath,
+      input.artifactId,
+    );
+    return {
+      artifactId: input.artifactId,
+      appId: input.appId,
+      appVersion: input.appVersion,
+      appPath,
+      sha256,
+      mutantManifest: input.mutantManifest,
+      appManifest: input.appManifest,
+    };
+  }
+
+  /**
+   * Compiles a project that is not a mutation artifact (C02-05's test app): the same alc argv as
+   * `compile`, R101(c)'s /define included, but against the caller's package cache and with no
+   * manifest. Output is content-addressed in this compiler's outputDir: `<sha256[0:16]>-<name>.app`.
+   */
+  async compileProject(input: {
+    readonly projectDir: string;
+    readonly packageCachePath: string;
+    readonly name: string;
+  }): Promise<{ readonly appPath: string; readonly sha256: string }> {
+    return this.alcToContentAddressed(input.projectDir, input.packageCachePath, input.name);
+  }
+
+  /** The alc spawn, read, hash and rename shared by `compile` and `compileProject`. */
+  private async alcToContentAddressed(
+    projectDir: string,
+    packageCachePath: string,
+    name: string,
+  ): Promise<{ readonly appPath: string; readonly sha256: string }> {
+    const scratch = toForwardSlashes(join(this.cfg.outputDir, `${name}.app`));
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
       res = await this.io.spawn([
         this.cfg.alcPath,
-        `/project:${toForwardSlashes(input.projectDir)}`,
-        `/packagecachepath:${toForwardSlashes(this.cfg.packageCachePath)}`,
+        `/project:${toForwardSlashes(projectDir)}`,
+        `/packagecachepath:${toForwardSlashes(packageCachePath)}`,
         // R101(c). Omitted entirely when nothing is configured, rather than sent empty: `/define:`
         // with no value is a different thing to say to a compiler than not saying it.
         ...(symbols.length > 0 ? [`/define:${symbols.join(",")}`] : []),
@@ -192,7 +227,7 @@ export class ArtifactCompiler {
     }
     const sha256 = Bun.SHA256.hash(bytes, "hex");
     const appPath = toForwardSlashes(
-      join(this.cfg.outputDir, `${sha256.slice(0, 16)}-${input.artifactId}.app`),
+      join(this.cfg.outputDir, `${sha256.slice(0, 16)}-${name}.app`),
     );
     try {
       await this.io.writeArtifact(scratch, appPath);
@@ -201,14 +236,6 @@ export class ArtifactCompiler {
         `could not place artifact at ${appPath}: ${describeThrown(err)}`,
       );
     }
-    return {
-      artifactId: input.artifactId,
-      appId: input.appId,
-      appVersion: input.appVersion,
-      appPath,
-      sha256,
-      mutantManifest: input.mutantManifest,
-      appManifest: input.appManifest,
-    };
+    return { appPath, sha256 };
   }
 }

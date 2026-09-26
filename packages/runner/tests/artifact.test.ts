@@ -382,3 +382,59 @@ describe("C02-05: compile's argv parity", () => {
     ]);
   });
 });
+
+describe("C02-05: compileProject", () => {
+  function io(argvs: string[][], exitCode = 0, stdout = ""): ArtifactIo {
+    const bytes = new TextEncoder().encode("test-app-bytes");
+    return {
+      spawn: async (argv) => {
+        argvs.push([...argv]);
+        return { exitCode, stdout, stderr: "" };
+      },
+      readArtifact: async () => bytes,
+      writeArtifact: async () => {},
+    };
+  }
+
+  test("compileProject uses the caller's package cache and returns content-addressed bytes", async () => {
+    const argvs: string[][] = [];
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "C:/target-cache", outputDir: "C:/out" },
+      io(argvs),
+    );
+    const out = await c.compileProject({
+      projectDir: "C:/tests",
+      packageCachePath: "C:/scratch-cache",
+      name: "testapp-x",
+    });
+    expect(argvs[0]).toContain("/packagecachepath:C:/scratch-cache");
+    expect(argvs[0]).not.toContain("/packagecachepath:C:/target-cache");
+    expect(out.sha256).toBe(Bun.SHA256.hash(new TextEncoder().encode("test-app-bytes"), "hex"));
+    expect(out.appPath).toBe(`C:/out/${out.sha256.slice(0, 16)}-testapp-x.app`);
+  });
+
+  test("compileProject passes the configured preprocessor symbols like compile does", async () => {
+    const argvs: string[][] = [];
+    const c = new ArtifactCompiler(
+      {
+        alcPath: "alc",
+        packageCachePath: "p",
+        outputDir: "C:/out",
+        preprocessorSymbols: ["CLEAN24"],
+      },
+      io(argvs),
+    );
+    await c.compileProject({ projectDir: "C:/tests", packageCachePath: "C:/s", name: "t" });
+    expect(argvs[0]).toContain("/define:CLEAN24");
+  });
+
+  test("compileProject throws AlcCompileError with alc's own text", async () => {
+    const c = new ArtifactCompiler(
+      { alcPath: "alc", packageCachePath: "p", outputDir: "C:/out" },
+      io([], 1, "error AL0132: nope"),
+    );
+    await expect(
+      c.compileProject({ projectDir: "C:/tests", packageCachePath: "C:/s", name: "t" }),
+    ).rejects.toThrow(/AL0132/);
+  });
+});
