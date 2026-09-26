@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**50 of 259 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**51 of 260 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -176,6 +176,7 @@ that ordering is the priority.
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · open
 - **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · open
 - **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · open
+- **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · open
 
 ## Backends and tooling
 
