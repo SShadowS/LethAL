@@ -72,6 +72,8 @@
     "probe-r30-pageext.ts",
     "probe-r58-compare.ts",
     "probe-r58-differential.ts",
+    "r236-baseline-probe/calibrate.ts",
+    "r236-baseline-probe/calibrate.test.ts",
     "r236-baseline-probe/fetch-trace.ts",
     "r236-baseline-probe/fetch-trace.test.ts",
     "r236-baseline-probe/probe.ts",

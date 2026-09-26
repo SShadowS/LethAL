@@ -43,12 +43,12 @@ import { type CallTrace, type TraceHooks, traceFetch } from "./fetch-trace";
 
 const PROJECT_DIR = "U:/Git/LethAL/fixtures/sandbox-data";
 const TEST_DIR = "U:/Git/LethAL/fixtures/sandbox-data-tests";
-const CONFIG_PATH = `${PROJECT_DIR}/lethal.config.local.json`;
+export const CONFIG_PATH = `${PROJECT_DIR}/lethal.config.local.json`;
 const LAUNCH_LOCAL_PATH = `${PROJECT_DIR}/.vscode/launch.local.json`;
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 /** The fixture's one `return-value` mutant, covered only by the TestPage test: no mutant runs. */
 const ONLY = ["src/DataValueSource.Codeunit.al"];
-const CONTAINER = "Cronus28";
+export const CONTAINER = "Cronus28";
 const HIT = "baseline test in-flight-unknown running PageActionComputesNonZero";
 const OTHER_BASELINE_IN_FLIGHT =
   /baseline test in-flight-unknown running (?!PageActionComputesNonZero)/;
@@ -319,7 +319,7 @@ export type RunScript = (
   script: string,
 ) => Promise<{ stdout: string; stderr: string; code: number }>;
 
-async function runPwsh(script: string) {
+export async function runPwsh(script: string) {
   const proc = Bun.spawn(["pwsh", "-NoProfile", "-Command", script], {
     env: { ...process.env, DOCKER_CONTEXT: "desktop-windows" },
     stdout: "pipe",
