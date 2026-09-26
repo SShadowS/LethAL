@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { listPackageEntries, readPackageEntry } from "./app-package";
 import { compareAppVersions, parseVersionConflict } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
 import type { BoundArtifact } from "./backend";
@@ -104,9 +105,59 @@ async function readTestManifest(testDir: string) {
   return { id, name, publisher, version };
 }
 
+const READY_TO_RUN_MANIFEST = "readytorunappmanifest.json";
+
+/**
+ * R268: the app id of a symbol package. A plain package carries `NavxManifest.xml` at its root. A
+ * Ready-to-Run wrapper, which Microsoft ships for some builds and alc accepts, does not: it holds a
+ * `readytorunappmanifest.json` naming `EmbeddedAppId` and the real app as ONE embedded `.app`. Only
+ * that exact shape is unwrapped, and the embedded app's own manifest must agree with
+ * `EmbeddedAppId`. Anything else throws, never a guess: an unidentified package could be the target.
+ */
+export function symbolPackageId(bytes: Buffer): string {
+  const r2r = readPackageEntry(bytes, READY_TO_RUN_MANIFEST);
+  if (r2r === null || readPackageEntry(bytes, "NavxManifest.xml") !== null) {
+    return readAppIdentity(bytes).id;
+  }
+  let embeddedId: unknown;
+  try {
+    const parsed = JSON.parse(r2r.toString("utf8").replace(/^\uFEFF/, "")) as {
+      EmbeddedAppId?: unknown;
+    } | null;
+    embeddedId = parsed?.EmbeddedAppId;
+  } catch (err) {
+    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} is not JSON: ${describeThrown(err)}`);
+  }
+  if (typeof embeddedId !== "string") {
+    throw new Error(`Ready-to-Run ${READY_TO_RUN_MANIFEST} carries no string EmbeddedAppId`);
+  }
+  const inner = listPackageEntries(bytes).filter((e) => e.toLowerCase().endsWith(".app"));
+  const [only] = inner;
+  if (inner.length !== 1 || only === undefined) {
+    throw new Error(
+      `Ready-to-Run package must hold exactly one embedded .app, found ${inner.length}`,
+    );
+  }
+  const innerBytes = readPackageEntry(bytes, only);
+  if (innerBytes === null) throw new Error(`Ready-to-Run package lost its entry ${only}`);
+  let id: string;
+  try {
+    id = readAppIdentity(innerBytes).id;
+  } catch (err) {
+    // Named by entry, so a refusal from the inner app is distinguishable from the outer one's.
+    throw new Error(`Ready-to-Run embedded ${only}: ${describeThrown(err)}`);
+  }
+  if (id.toLowerCase() !== embeddedId.toLowerCase()) {
+    throw new Error(
+      `Ready-to-Run embedded app ${only} has Id ${id}, which does not match EmbeddedAppId ${embeddedId}`,
+    );
+  }
+  return id;
+}
+
 function identityOf(bytes: Buffer, what: string): string {
   try {
-    return readAppIdentity(bytes).id;
+    return symbolPackageId(bytes);
   } catch (err) {
     throw new TestAppError("symbols-unreadable", `${what}: ${describeThrown(err)}`);
   }

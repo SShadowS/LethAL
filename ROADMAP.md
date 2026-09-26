@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**56 of 265 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 269 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -105,6 +105,7 @@ that ordering is the priority.
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · open
 - **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
+- **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
 
 ## Product gaps a real project hits
 
@@ -179,6 +180,7 @@ that ordering is the priority.
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · open
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · open
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · open
+- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · open
 
 ## Backends and tooling
 
@@ -310,6 +312,8 @@ that ordering is the priority.
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
 - **R264** · Unit tests read the machine's REAL al-runner secondary cache, so `doctor-cli.test.ts`, `doctor-al-runner.test.ts` and `al-runner-cache.test.ts` time out once it grows (30 fail at 5 s on a 5.4 GB cache) · [R264.md](docs/roadmap/R264.md) · open
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · open
+- **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
+- **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
 
 ---
 

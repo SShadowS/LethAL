@@ -8,13 +8,13 @@ import type { BoundArtifact } from "../src/backend";
 import { hashPackage, testAppHashFor } from "../src/baseline-snapshot";
 import { decidePublishOutcome } from "../src/deployment-verifier";
 import type { LeaseFence } from "../src/orchestrator";
-import { readAppIdentity } from "../src/published-test-app";
 import {
   type CompiledTestApp,
   TestAppError,
   compileTestApp,
   decideTestAppOutcome,
   publishTestApp,
+  symbolPackageId,
 } from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -93,7 +93,7 @@ function watchingCompiler(
         for (const f of await readdir(cache)) {
           const b = await readFile(join(cache, f));
           seen.push({
-            id: readAppIdentity(b).id,
+            id: symbolPackageId(b),
             marker: readPackageEntry(b, "marker.txt")?.toString("utf8") ?? null,
           });
         }
@@ -187,6 +187,143 @@ test("compileTestApp refuses an .alpackages entry it cannot identify, naming the
     message: expect.stringContaining("mystery.app"),
   });
 });
+
+/**
+ * R268: a Ready-to-Run wrapper as Microsoft ships it. No root NavxManifest.xml; a
+ * readytorunappmanifest.json naming EmbeddedAppId; the real app embedded as one `.app` entry
+ * (itself a package carrying the manifest); plus precompiled artifacts that are not apps.
+ */
+const R2R_JSON = "readytorunappmanifest.json";
+const r2rJson = (embeddedAppId: string) =>
+  JSON.stringify({
+    EmbeddedAppId: embeddedAppId,
+    EmbeddedAppName: "Test Runner",
+    EmbeddedAppPublisher: "Microsoft",
+    EmbeddedAppVersion: "28.0.46665.50383",
+    EmbeddedAppFileName: "inner_28014.app",
+  });
+const r2r = (entries: Record<string, string | Buffer>) =>
+  buildFakeAppWithEntries({
+    ...entries,
+    "publishedartifacts/file:///S:/x/Test%20Runner/ABC.dll": "dll",
+    "[Content_Types].xml": "<Types/>",
+    "marker.txt": "WRAPPER",
+  });
+const goodR2r = (innerId: string) =>
+  r2r({
+    [R2R_JSON]: r2rJson(innerId),
+    "inner_28014.app": pkg(innerId, "Test Runner", "28.0.46665.50383"),
+  });
+const TEST_RUNNER_ID = "23de40a6-dfe8-4f80-80db-d70f83ce8caf";
+
+test("R268: a Ready-to-Run wrapper whose embedded app is the target is excluded like the target", async () => {
+  const fx = await fixture({
+    "Microsoft_System_28.0.0.0.app": pkg(SYSTEM_ID, "System", "28.0.0.0"),
+    "LethAL_LethAL Sandbox App_R2R.app": goodR2r(TARGET_ID),
+  });
+  const seen: Array<{ id: string; marker: string | null }> = [];
+  await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    compiler: watchingCompiler(fx.out, seen),
+    controlSymbolPath: fx.controlPath,
+  });
+  expect(seen.filter((s) => s.id === TARGET_ID).map((s) => s.marker)).toEqual(["INSTRUMENTED"]);
+  expect(seen.some((s) => s.marker === "WRAPPER")).toBe(false);
+});
+
+test("R268: a Ready-to-Run wrapper of an unrelated app is staged, byte for byte", async () => {
+  const fx = await fixture({
+    "Microsoft_Test Runner_28.0.46665.50383.app": goodR2r(TEST_RUNNER_ID),
+  });
+  const seen: Array<{ id: string; marker: string | null }> = [];
+  await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    compiler: watchingCompiler(fx.out, seen),
+    controlSymbolPath: fx.controlPath,
+  });
+  expect(seen.filter((s) => s.id === TEST_RUNNER_ID).map((s) => s.marker)).toEqual(["WRAPPER"]);
+});
+
+test("R268: symbolPackageId reads a wrapper's embedded id, and a plain package's own", () => {
+  expect(symbolPackageId(goodR2r(TEST_RUNNER_ID))).toBe(TEST_RUNNER_ID);
+  expect(symbolPackageId(pkg(SYSTEM_ID, "System", "28.0.0.0"))).toBe(SYSTEM_ID);
+  // Microsoft may write the JSON with a UTF-8 byte order mark; it is stripped before parsing.
+  expect(
+    symbolPackageId(
+      r2r({
+        [R2R_JSON]: `\uFEFF${r2rJson(TEST_RUNNER_ID)}`,
+        "inner_28014.app": pkg(TEST_RUNNER_ID, "Test Runner", "28.0.46665.50383"),
+      }),
+    ),
+  ).toBe(TEST_RUNNER_ID);
+  // A root manifest makes it a plain package: the Ready-to-Run file beside it is not consulted.
+  expect(
+    symbolPackageId(pkg(SYSTEM_ID, "System", "28.0.0.0", { [R2R_JSON]: r2rJson(TEST_RUNNER_ID) })),
+  ).toBe(SYSTEM_ID);
+});
+
+for (const [label, bytes, why] of [
+  [
+    "embeds no .app",
+    r2r({ [R2R_JSON]: r2rJson(TEST_RUNNER_ID) }),
+    /exactly one embedded \.app, found 0/,
+  ],
+  [
+    "embeds two .apps",
+    r2r({
+      [R2R_JSON]: r2rJson(TEST_RUNNER_ID),
+      "a.app": pkg(TEST_RUNNER_ID, "Test Runner", "1.0.0.0"),
+      "b.app": pkg(TEST_RUNNER_ID, "Test Runner", "1.0.0.0"),
+    }),
+    /exactly one embedded \.app, found 2/,
+  ],
+  [
+    "embeds an app whose id differs from EmbeddedAppId",
+    r2r({ [R2R_JSON]: r2rJson(TEST_RUNNER_ID), "inner.app": pkg(TARGET_ID, "X", "1.0.0.0") }),
+    /does not match EmbeddedAppId/,
+  ],
+  [
+    "embeds an app with no manifest",
+    r2r({
+      [R2R_JSON]: r2rJson(TEST_RUNNER_ID),
+      "inner.app": buildFakeAppWithEntries({ "x.txt": "x" }),
+    }),
+    /Ready-to-Run embedded inner\.app: .*NavxManifest/,
+  ],
+  [
+    "embeds an .app that is not a package",
+    r2r({ [R2R_JSON]: r2rJson(TEST_RUNNER_ID), "inner.app": "not a zip" }),
+    /Ready-to-Run embedded inner\.app: not a zip archive/,
+  ],
+  [
+    "has a readytorunappmanifest.json that is not JSON",
+    r2r({ [R2R_JSON]: "{not json", "inner.app": pkg(TEST_RUNNER_ID, "Test Runner", "1.0.0.0") }),
+    /is not JSON/,
+  ],
+  [
+    "has a readytorunappmanifest.json with no EmbeddedAppId",
+    r2r({ [R2R_JSON]: "{}", "inner.app": pkg(TEST_RUNNER_ID, "Test Runner", "1.0.0.0") }),
+    /no string EmbeddedAppId/,
+  ],
+] as const) {
+  test(`R268: compileTestApp refuses a Ready-to-Run wrapper that ${label}`, async () => {
+    const fx = await fixture({ "odd-r2r.app": bytes });
+    await expect(
+      compileTestApp({
+        testDir: fx.dir,
+        target: fx.target,
+        compiler: watchingCompiler(fx.out, []),
+        controlSymbolPath: fx.controlPath,
+      }),
+    ).rejects.toMatchObject({
+      reason: "symbols-unreadable",
+      message: expect.stringMatching(why),
+    });
+    expect(() => symbolPackageId(bytes)).toThrow(why);
+  });
+}
 
 test("compileTestApp refuses a test project whose app.json lacks a name", async () => {
   const fx = await fixture({}, { id: TESTS_ID, publisher: "LethAL", version: "1.0.0.2" });
