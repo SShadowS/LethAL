@@ -294,4 +294,112 @@ The rows for b = 0 to 7 match §3's table. What this means:
 - The C4 rates that exclude `afterUnprovenHit` or `postRecovery` sessions are reported beside the §3 total
   and are not separately tested.
 
+## Addendum 2026-09-26, Cronus284, warm-up, smoke facts and the truncation check (before any arm session)
+
+Written before any arm session, on orchestrator rulings received after the Cronus28 smokes. Where it
+disagrees with the addenda above, this one governs.
+
+### D1. Container
+
+- All arms (A1, B'1, B'2, A2) run on **Cronus284**, a container dedicated to R236 (owner allocation
+  2026-09-26). No arm session ran on Cronus28. The Cronus28 smokes below are pre-arm observations only and
+  count toward nothing.
+- The probe and calibrate scripts take the container name from the config's `bcdev.server` host (commit
+  aa41a22) and record it as `container` in every NDJSON record.
+- The read-only calibration (C1, same method and rules) is re-run on Cronus284 before any probe session there,
+  and its verdicts govern. None of the Cronus28 facts is assumed for Cronus284: not the multitenant layout,
+  not the tenant database name, not the session listing. C3 is re-decided from that run: the tenant-scoped
+  `[Active Session]` control is adopted for the mechanism only if Cronus284's calibration shows it `sound`,
+  and adopting it needs a probe change committed before any arm session. Otherwise C3 stands as written.
+
+### D2. Warm-up sessions
+
+R225 reported that the first TestPage baseline on a fresh container tends to be lost. So:
+
+- The first TWO probe sessions run on Cronus284, whatever their arm label, and the first session after every
+  container restart (the `postRecovery: true` session), are **warm-up** sessions.
+- A warm-up session is recorded and reported separately (its counts and outcomes are published). It is
+  EXCLUDED from every rate, every §3 contrast, every drift test and every C5 figure.
+- A warm-up session does not count toward its arm's planned sessions: an arm of 15 needs 15 non-warm-up
+  sessions, so each recovery adds one session to the arm's remaining count.
+- The short-arm rule of §3 counts non-warm-up sessions only.
+
+### D3. Smoke facts (Cronus28, 2026-09-26, pre-arm observations)
+
+Sources, under `C:/Users/SShadowS/AppData/Local/Temp/r236/`: `smoke-traced.ndjson`, `smoke-untraced.ndjson`,
+`log.txt` (and the matching `.log` files). Control app 1.0.0.19 in every session.
+
+Traced smoke, 5 sessions in two segments, **4 of 5 hits**. For each, the TestPage call
+(`RunMutantWithCoverage`, `PageActionComputesNonZero`):
+
+| session | headers after | transfer | bytes received | ended | how | next |
+| --- | --: | --- | --: | --: | --- | --- |
+| seg 1 #1, hit | 701 ms | chunked, no Content-Length | 6534 | 120 007 ms | AbortError (client timer) | preflight FAILED (doctor: HarnessInfo unreachable), restart 1 |
+| seg 2 #1, hit (post-recovery) | 1610 ms | chunked | 6641 | 27 093 ms | socket closed unexpectedly | preflight passed |
+| seg 2 #2, hit | 614 ms | chunked | 6528 | 120 004 ms | AbortError (client timer) | preflight passed |
+| seg 2 #3, clean | 283 ms | chunked | 6615 (full answer) | body complete at 283 ms | answered `fail` with the expected CLR text | |
+| seg 2 #4, hit | 846 ms | chunked | 6534 | 120 013 ms | AbortError (client timer) | last session, no preflight |
+
+Untraced smoke, **2 of 2 hits**: #1 `error` after 27 803 ms (socket closed unexpectedly, preflight passed);
+#2 `deadline-exceeded` after 120 008 ms (preflight before #3 FAILED, restart 2). No byte counts exist for
+untraced sessions.
+
+Wedges: of the 5 hits that were followed by a preflight, 2 failed it (the container stopped answering
+`HarnessInfo`) and needed a container restart. Recovery 1 ran 18:43 to 18:49 and recovery 2 ran 19:00 to
+19:06 local time, each by the full recover-tier sequence.
+
+These smokes kept no body BYTES (the capture landed afterwards, commit ec8384d), so none of the D6 checks can
+be run on them. The byte COUNTS above were seen before D6 was written, and D6 is written knowing them.
+
+### D4. Correction: baseline row counts
+
+A clean session records **68** baseline rows (every test of `sandbox-data-tests`); the TestPage test is the
+22nd. A hit session stops at that call and records **22**. Wherever the plan or Task 4 says "22 baseline rows"
+as a pass condition, read it as **22 rows on a hit, 68 rows on a clean session**.
+
+### D5. Risk stated before running, and the stop rule
+
+- The smokes hit about 80% of the time (6 of 7 sessions), and about 2 in 5 of the hits followed by a
+  preflight wedged the container. With the plan's rule "an arm that stops three times ends short", arms are
+  likely to end short, and every contrast using a short arm reads **"underpowered: not decided"** (§3, C5).
+- The three-stops rule is kept unchanged (orchestrator ruling). An arm that ends short is reported as such,
+  with its counts published.
+- **Wedges are their own reported result.** For each arm and overall: the number of hits followed by a
+  preflight, the number of those whose preflight failed (a wedge, which leads to recovery), and that ratio.
+  Warm-up sessions are included in the wedge counts but marked.
+- **"Truncated reply"** is a descriptive observation class: response headers arrived, then part of the body,
+  then an abort (client timer) or a socket close, with no complete body. It is reported per hit with the
+  headers-after time, bytes received, the ending (AbortError or socket close) and its time. Every smoke hit
+  above is of this class. It replaces §4's H8 "`bytesReceived < Content-Length`" test, which cannot be
+  evaluated: these answers use chunked transfer encoding and send no Content-Length.
+
+### D6. The truncation decision (pre-committed before any Cronus284 data is looked at)
+
+Inputs, from the probe's answer captures (commit ec8384d): for every hit, the partial bytes of the TestPage
+answer and its offset (the number of bytes that arrived; equal to `bytesReceived`); for every clean session,
+the full bytes of the same call's answer. Warm-up sessions are included and marked. Hits without a capture
+(untraced, or a failed write) are listed and left out of both conditions.
+
+- **Consistent offset** holds iff, over all captured hits, (max offset - min offset) <= 256 bytes AND every
+  hit's offset is smaller than the smallest captured full clean answer.
+- **Otherwise identical** holds iff every captured hit's partial bytes equal EVERY captured clean answer up to
+  the hit's offset, after this masking and nothing more:
+  1. Decode both as UTF-8; drop an incomplete final character of the partial.
+  2. Replace every JSON number value whose key name ends in `Ms`, `At`, `timestamp` or `duration` (matched on
+     the key text as it appears, escaped quotes included, so it applies inside the OData `value` string) with
+     `#`. String values of such keys are NOT masked.
+  3. Replace every GUID (8-4-4-4-12 hex digits, with or without braces) with `GUID`.
+  4. Replace the value (number or string) of every key named exactly `attemptId`, `opSeq`, `sessionId`,
+     `serverGeneration` or `epoch` with `#`.
+  5. Compare the masked partial, minus its last 64 characters (a token cut by the break may mask
+     differently), as a prefix of the masked clean answer.
+  If the clean answers differ from one another after this masking, "otherwise identical" is reported as
+  failed on that ground. If a field outside the mask differs, the field and both values are REPORTED; the
+  mask is not widened after looking.
+- **Reading.** If both conditions hold: the loss is on the server's send or serialize side, not the client's.
+  If either fails: report which, with the numbers (min, max and spread of offsets, the smallest clean size,
+  and the first differing position and field for each failing pair).
+- **Descriptive only, not a prediction:** whether the offsets fall on a buffer or chunk boundary, or at a
+  payload position such as inside the CLR callstack text.
+
 ## OUTCOME
