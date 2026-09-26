@@ -100,6 +100,16 @@ describe("parseVerifyRequest", () => {
 });
 
 describe("resolveVerifySource", () => {
+  // Review r1 item 3: parseVerifyRequest refuses an empty list, but a caller building the typed
+  // request directly must be refused too, or it resolves to zero targets and plans as all-skipped.
+  test("an empty id list is refused as malformed-request, never resolved to no targets", () => {
+    const store = new ResultsStore(":memory:");
+    oneBatchRun(store, A1, [mutantRow("M0001", "survived")]);
+    const e = refusal(() => resolveVerifySource(store, { artifactId: A1, ids: [] }));
+    expect(e.reason).toBe("malformed-request");
+    store.close();
+  });
+
   test("verify refuses an artifact id the store does not hold", () => {
     const store = new ResultsStore(":memory:");
     oneBatchRun(store, A1, [mutantRow("M0001", "survived")]);
@@ -536,7 +546,7 @@ describe("planVerify", () => {
     });
   }
 
-  test("a reader-marked survivor is skipped and never reaches runNamedMutants", async () => {
+  test("a reader-marked survivor is skipped and gets no request in the plan", async () => {
     const marks = {
       marks: [
         { key: "hash-M0001|Logic|Post|lethal.negate-conditional|1", reason: "same either way" },
@@ -550,6 +560,20 @@ describe("planVerify", () => {
     const all = await markedPlan(marks, [entry("M0001")]);
     expect(all.requests).toEqual([]);
     expect(all.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+  });
+
+  // Review r1 item 3: an empty target list must not come back looking like "every target was
+  // reader-marked". The all-skipped plan above has a non-empty `skipped`; this one is refused.
+  test("an empty target list is refused as malformed-request, never planned as all skipped", async () => {
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), []),
+        manifest: manifest([]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+      }),
+    );
+    expect(e.reason).toBe("malformed-request");
   });
 
   test("equivalenceRisk alone never skips", async () => {

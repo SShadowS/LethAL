@@ -114,6 +114,11 @@ const PER_ID_ORDER: readonly VerifyRefusal[] = [
  * never touches a file or a server. A per-id refusal names every offending id, not only the first.
  */
 export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
+  // parseVerifyRequest refuses this too; a caller building the request directly must not get a
+  // source with no targets, which planVerify could only answer as "every target was skipped".
+  if (req.ids.length === 0) {
+    throw new VerifyError("malformed-request", "the request names no mutant");
+  }
   let rec: ReturnType<ResultsStore["artifactRecordById"]>;
   try {
     rec = store.artifactRecordById(req.artifactId);
@@ -226,7 +231,8 @@ export async function assertSourceUnchanged(
 }
 
 export interface VerifyPlan {
-  /** One request per survivor that runs. `[]` only when every target was skipped. */
+  /** One request per survivor that runs. `[]` only when every target was skipped, and then
+   *  `skipped` is non-empty: an empty request is refused, never planned. */
   readonly requests: readonly NamedMutantRequest[];
   readonly newTests: readonly TestMethodRef[];
   readonly skipped: ReadonlyArray<{
@@ -252,6 +258,11 @@ export async function planVerify(a: {
   readonly testDir: string;
 }): Promise<VerifyPlan> {
   const { source, manifest, sourceBaseline, testDir } = a;
+  // An empty target list would return the same `requests: []` as "every target was skipped", and
+  // only the second is a real answer. A skipped-all plan always has a non-empty `skipped`.
+  if (source.targets.length === 0) {
+    throw new VerifyError("malformed-request", `run ${source.runId}: the source names no mutant`);
+  }
 
   const byId = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
   const entries = new Map<string, MutantManifestEntry>();
