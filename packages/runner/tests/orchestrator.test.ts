@@ -11360,6 +11360,12 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect((err as TestAppError).reason).toBe("resident-unreadable");
     expect(tlog).toEqual(["read"]); // refused before the fence: no publish
     expect(fx.client.beginPublishArgs).toEqual([]);
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; code?: string } }).event]
+        : [],
+    );
+    expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
     expect(await fx.quarantine()).toBeNull();
     expect(fx.client.releaseCalls).toBe(1);
   });
