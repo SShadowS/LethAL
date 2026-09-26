@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ADMISSIBLE_INTERPRETATIONS } from "../src/explain";
 import { type BasisResolutionDeps, assertBasisResolves } from "../src/interpretation";
-import { CAVEAT_INTERPRETATIONS } from "../src/report";
+import { CAVEAT_INTERPRETATIONS, REACH_INTERPRETATIONS } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
 
 /**
@@ -29,6 +29,15 @@ function realDeps(): BasisResolutionDeps {
 test("adding an attribution variant fails to COMPILE until its interpretation exists", () => {
   // The Record<> type is the real assertion — this test documents it and pins the count.
   expect(Object.keys(ATTRIBUTION_INTERPRETATIONS).sort()).toEqual(["all-green", "exact", "object"]);
+});
+
+test("every reach state has an interpretation (GH-24 added reached-unnoticed)", () => {
+  expect(Object.keys(REACH_INTERPRETATIONS).sort()).toEqual([
+    "covered-but-unreached",
+    "not-decided",
+    "reached-unnoticed",
+    "unreached-and-uncovered",
+  ]);
 });
 
 test("every caveat has an interpretation", () => {

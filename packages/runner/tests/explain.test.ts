@@ -381,6 +381,10 @@ function fullCoverageReport(): SessionReport {
   // undetected.
   const survivorWithMark: MutantOutcome = {
     ...m0001,
+    // GH-24: reaches the `reachGrain` and `reachedBy[]` leaves.
+    reachGrain: "statement",
+    guardReached: true,
+    reachedBy: ["Foo Tests.ComputesTotal"],
     readerMark: {
       key: serializeKey({
         astHash: m0001.astHash,
@@ -516,6 +520,7 @@ function derivedExplainLeafPaths(): readonly string[] {
       "CoverageAttribution",
       "GuardEvidence",
       "SurvivorReach",
+      "ReachGrain",
       "SurvivorRanking",
       "MutantErrorCause",
       "ToolCondition",
@@ -559,7 +564,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].executionProven", // [enum] derived: attribution === "exact"
   "$.survivors[].coveringTests[]", // [verbatim]
   "$.survivors[].guardEvidence", // [enum] GuardEvidence
-  "$.survivors[].reach", // [enum] SurvivorReach — R116, derived from (attribution, guardEvidence)
+  "$.survivors[].reach", // [enum] SurvivorReach, R116 and GH-24: see survivorReachOf
   "$.survivors[].interpretation.meaning", // [registry]
   "$.survivors[].interpretation.entailedNegative", // [registry]
   "$.survivors[].interpretation.basis", // [registry]
@@ -569,6 +574,8 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].reachInterpretation.meaning", // [registry]
   "$.survivors[].reachInterpretation.entailedNegative", // [registry]
   "$.survivors[].reachInterpretation.basis", // [registry]
+  "$.survivors[].reachGrain", // [enum] ReachGrain, verbatim from the report row (GH-24)
+  "$.survivors[].reachedBy[]", // [verbatim] (GH-24)
   "$.survivors[].batchIndex", // [verbatim]
   "$.survivors[].triggerName", // [verbatim]
   "$.survivors[].procedureStartLine", // [verbatim]
@@ -829,6 +836,8 @@ describe("explain — the admissibility rule, made executable", () => {
       triggerName?: string;
       equivalenceRisk?: string;
       readerMark?: { readonly key: string; readonly reason: string };
+      reachGrain?: string;
+      reachedBy?: readonly string[];
     }) => ({
       mutantCode: m.mutantCode,
       file: m.file,
@@ -848,6 +857,10 @@ describe("explain — the admissibility rule, made executable", () => {
       equivalenceRisk: m.equivalenceRisk,
       hasReaderMark: "readerMark" in m,
       readerMark: m.readerMark,
+      hasReachGrain: "reachGrain" in m,
+      reachGrain: m.reachGrain,
+      hasReachedBy: "reachedBy" in m,
+      reachedBy: m.reachedBy,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
@@ -1123,6 +1136,214 @@ describe("explain — survivors", () => {
   });
 });
 
+// GH-24: reach decided PER MUTANT from `guardReached`, the mutant's own statement marker, where
+// the report carries it. The batch-wide `guardObserved` decides only an archived row (no grain).
+
+describe("GH-24: reach decided per mutant", () => {
+  function reachMutant(
+    code: string,
+    attribution: CoverageAttribution,
+    guardObserved: boolean | undefined,
+    extra: Partial<MutantOutcome>,
+  ): MutantOutcome {
+    return { ...survivorMutant(code, attribution, guardObserved), ...extra };
+  }
+
+  test("GH-24: guardReached true reads reached-unnoticed and carries reachedBy", () => {
+    const out = explain(
+      reportFixture({
+        mutants: [
+          reachMutant("M0001", "exact", true, {
+            reachGrain: "statement",
+            guardReached: true,
+            reachedBy: ["Foo Tests.ComputesTotal"],
+          }),
+        ],
+      }),
+    );
+    const s = out.survivors[0];
+    expect(s?.reach).toBe("reached-unnoticed");
+    expect(s?.reachInterpretation).toBe(REACH_INTERPRETATIONS["reached-unnoticed"]);
+    expect(s?.reachedBy).toEqual(["Foo Tests.ComputesTotal"]);
+    expect(s?.reachGrain).toBe("statement");
+  });
+
+  test("GH-24: guardReached false decides unreached even when guardObserved is true", () => {
+    // `guardObserved: true` alone is `not-decided` under R116 (some guard fired SOMEWHERE). The
+    // mutant's own marker answering "not reached" in every run is the per-mutant fact that decides.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          reachMutant("M0001", "exact", true, {
+            reachGrain: "statement",
+            guardReached: false,
+            reachedBy: [],
+          }),
+          reachMutant("M0002", "object", true, {
+            reachGrain: "statement",
+            guardReached: false,
+            reachedBy: [],
+          }),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual([
+      "covered-but-unreached",
+      "unreached-and-uncovered",
+    ]);
+    expect(out.survivors[0]?.reachedBy).toEqual([]);
+  });
+
+  test("GH-24: absent guardReached falls back to the R116 derivation", () => {
+    // Every committed campaign report predates GH-24, so none carries a grain: each survivor must
+    // read exactly what R116's pair says, and every report must still project.
+    const campaignDir = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "..",
+      "docs",
+      "campaign",
+      "2026-08-03-do",
+    );
+    let checked = 0;
+    for (const name of [
+      "rung1.report.json",
+      "rung1.resumed-run.report.json",
+      "rung1.run2-partial.report.json",
+      "rung2.report.json",
+      "rung3.independent-confirm.report.json",
+      "rung3.redcheck.report.json",
+    ]) {
+      const report = assertExplainableReport(
+        JSON.parse(readFileSync(join(campaignDir, name), "utf8")),
+      );
+      for (const s of explain(report).survivors) {
+        const r116 =
+          s.guardEvidence === "not-observed"
+            ? s.executionProven
+              ? "covered-but-unreached"
+              : "unreached-and-uncovered"
+            : "not-decided";
+        expect(`${name} ${s.mutantCode} ${s.reach}`).toBe(`${name} ${s.mutantCode} ${r116}`);
+        expect("reachGrain" in s || "reachedBy" in s).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  test("GH-24: enclosing grain stays not-decided and says so", () => {
+    // `guardObserved: FALSE` on purpose: under R116 alone these read covered-but-unreached and
+    // unreached-and-uncovered. Only the grain arm keeps them `not-decided`, which is the point.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          reachMutant("M0001", "exact", false, { reachGrain: "enclosing" }),
+          reachMutant("M0002", "object", false, { reachGrain: "unplaced" }),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => [s.reach, s.reachGrain])).toEqual([
+      ["not-decided", "enclosing"],
+      ["not-decided", "unplaced"],
+    ]);
+    expect(out.survivors.some((s) => "reachedBy" in s)).toBe(false);
+    expect(REACH_INTERPRETATIONS["not-decided"].meaning).toContain("reachGrain");
+  });
+
+  test("GH-24: a --resume-carried row and a statement run with no answer read not-decided", () => {
+    // A carried row keeps its grain but never `guardReached`, and a statement-grain mutant whose
+    // runs ended without an answer has none either. Neither may fall through to the batch-wide
+    // `guardObserved: false` and read as unreached.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          reachMutant("M0001", "exact", false, { reachGrain: "statement", carried: true }),
+          reachMutant("M0002", "object", false, { reachGrain: "statement" }),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual(["not-decided", "not-decided"]);
+  });
+
+  test("GH-24: an archived row with no grain keeps the R116 derivation", () => {
+    const out = explain(
+      reportFixture({
+        mutants: [
+          survivorMutant("M0001", "exact", false),
+          survivorMutant("M0002", "object", false),
+          survivorMutant("M0003", "exact", true),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual([
+      "covered-but-unreached",
+      "unreached-and-uncovered",
+      "not-decided",
+    ]);
+  });
+
+  test("GH-24: contradictory reach fields are refused", () => {
+    const bad = (extra: Record<string, unknown>, guardObserved: boolean | undefined = true) =>
+      reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact", guardObserved), ...extra }],
+      } as unknown as Partial<SessionReport>);
+    const cases: readonly [string, SessionReport][] = [
+      // A marker runs only inside a branch whose guard ran, so reached without observed is corrupt.
+      [
+        "guardObserved",
+        bad({ reachGrain: "statement", guardReached: true, reachedBy: ["T.A"] }, false),
+      ],
+      // Only a statement-grain mutant carries a marker.
+      ["reachGrain", bad({ reachGrain: "enclosing", guardReached: false, reachedBy: [] })],
+      ["reachGrain", bad({ guardReached: true, reachedBy: ["T.A"] })],
+      // The two travel together.
+      ["reachedBy", bad({ reachGrain: "statement", reachedBy: ["T.A"] })],
+      ["reachedBy", bad({ reachGrain: "statement", guardReached: true })],
+      // Types: a coerced value would decide reach.
+      ["guardReached", bad({ reachGrain: "statement", guardReached: "true", reachedBy: [] })],
+      ["reachedBy", bad({ reachGrain: "statement", guardReached: true, reachedBy: [7] })],
+      ["reachGrain", bad({ reachGrain: "expression" })],
+      // GH-24b: a marker that fired names at least one covering test; guardReached true with
+      // nothing in reachedBy is corrupt the same way as the pairs above.
+      ["reachedBy", bad({ reachGrain: "statement", guardReached: true, reachedBy: [] })],
+    ];
+    for (const [field, report] of cases) {
+      expect(() => explain(report)).toThrow(MalformedReportError);
+      expect(() => explain(report)).toThrow(new RegExp(field));
+    }
+  });
+
+  test("GH-24: reached-unnoticed ranks first", () => {
+    const reached = reachMutant("M0005", "object", true, {
+      reachGrain: "statement",
+      guardReached: true,
+      reachedBy: ["Foo Tests.ComputesTotal"],
+    });
+    const out = explain(
+      reportFixture({
+        mutants: [
+          survivorMutant("M0004", "object", false),
+          survivorMutant("M0003", "object", true),
+          survivorMutant("M0002", "exact", false),
+          survivorMutant("M0001", "exact", true),
+          reached,
+        ],
+      }),
+      { topSurvivors: 5 },
+    );
+    expect(out.survivors.map((s) => [s.mutantCode, s.reach] as const)).toEqual([
+      ["M0005", "reached-unnoticed"],
+      ["M0001", "not-decided"],
+      ["M0002", "covered-but-unreached"],
+      ["M0003", "not-decided"],
+      ["M0004", "unreached-and-uncovered"],
+    ]);
+    expect(out.survivors.map(survivorActionabilityRank)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————————————————————
 // R150 — the bounded projection. `explain` on a real campaign report is 253 KB, 209 KB of it
 // survivors, which is a file an agent consumer cannot hold. `topSurvivors` bounds it. Every test
@@ -1130,15 +1351,16 @@ describe("explain — survivors", () => {
 // ————————————————————————————————————————————————————————————————————————————————————————
 
 describe("explain — survivorSelection and the cap", () => {
-  /** One survivor per rank tier, deliberately in the WORST order, so any test asserting a ranked
-   *  result would also pass on an unsorted one only by accident. Rank comes from the pair
-   *  (attribution, guardObserved): see `survivorActionabilityRank`. */
+  /** One survivor per used rank tier (4 through 1; tier 0, reached-unnoticed, is not in this
+   *  fixture), deliberately in the WORST order, so any test asserting a ranked result would also
+   *  pass on an unsorted one only by accident. Rank comes from the pair (attribution,
+   *  guardObserved): see `survivorActionabilityRank`. */
   function oneOfEachRank(): MutantOutcome[] {
     return [
-      survivorMutant("M0004", "object", false), // rank 3 — unreached-and-uncovered
-      survivorMutant("M0003", "object", true), // rank 2 — not-decided, not execution-proven
-      survivorMutant("M0002", "exact", false), // rank 1 — covered-but-unreached
-      survivorMutant("M0001", "exact", true), // rank 0 — the most evidence
+      survivorMutant("M0004", "object", false), // rank 4: unreached-and-uncovered
+      survivorMutant("M0003", "object", true), // rank 3: not-decided, not execution-proven
+      survivorMutant("M0002", "exact", false), // rank 2: covered-but-unreached
+      survivorMutant("M0001", "exact", true), // rank 1: the most evidence in this fixture
     ];
   }
 
@@ -1196,13 +1418,13 @@ describe("explain — survivorSelection and the cap", () => {
       ["M0003", false, "not-decided"],
       ["M0004", false, "unreached-and-uncovered"],
     ]);
-    expect(out.survivors.map(survivorActionabilityRank)).toEqual([0, 1, 2, 3]);
+    expect(out.survivors.map(survivorActionabilityRank)).toEqual([1, 2, 3, 4]);
   });
 
   test("the order is TOTAL — ties break on file, then line, then mutantCode", () => {
     // Without a total order the contents of `--top n` depend on the sort implementation, so the
     // same report and the same cap could disagree between two machines. Every mutant here is rank
-    // 0, so ONLY the tie-breaks decide, and they are fed in reverse of the expected result.
+    // 1, so ONLY the tie-breaks decide, and they are fed in reverse of the expected result.
     const same = (code: string, file: string, line: number): MutantOutcome => ({
       ...survivorMutant(code, "exact", true),
       file,

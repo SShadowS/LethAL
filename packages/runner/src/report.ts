@@ -1698,7 +1698,8 @@ export const GUARD_EVIDENCE_INTERPRETATIONS: Record<GuardEvidence, Interpretatio
       "more.",
     entailedNegative:
       "Does NOT say that THIS mutant's guard fired, so a survivor carrying it is still unverified: " +
-      "the mutation may never have been in play.",
+      "the mutation may never have been in play. The per-mutant answer, where the report has one, " +
+      "is `guardReached` (GH-24), which `reach` reads first.",
     basis: "R32",
   },
   "not-observed": {
@@ -1744,27 +1745,56 @@ export const GUARD_EVIDENCE_INTERPRETATIONS: Record<GuardEvidence, Interpretatio
  * "if a useful thing to say has no field to hang on, the fix is to add the FIELD". This is that
  * field.
  */
-export type SurvivorReach = "covered-but-unreached" | "unreached-and-uncovered" | "not-decided";
+export type SurvivorReach =
+  | "reached-unnoticed"
+  | "covered-but-unreached"
+  | "unreached-and-uncovered"
+  | "not-decided";
 
 /**
  * The single derivation of `SurvivorReach`, so a projection reads the pair through one function
  * rather than re-deriving the combination — which is where two accounts of one fact would start.
+ *
+ * GH-24: the mutant's own `guardReached` decides first, where the report has it. Without it, a row
+ * this build wrote (it carries `reachGrain`) is `not-decided`: for `enclosing`/`unplaced` grain, a
+ * `--resume`-carried row, or a statement run that ended without an answer, the batch-wide guard
+ * signal must not decide it either, which is the false "unreached" GH-24 exists to stop. Only an
+ * archived row (no grain) keeps the R116 derivation.
  */
 export function survivorReachOf(
   attribution: CoverageAttribution,
   guardEvidence: GuardEvidence,
+  guardReached: boolean | undefined,
+  reachGrain: ReachGrain | undefined,
 ): SurvivorReach {
-  if (guardEvidence !== "not-observed") return "not-decided";
-  return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  if (guardReached === true) return "reached-unnoticed";
+  if (guardReached === false)
+    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  if (reachGrain !== undefined) return "not-decided";
+  if (guardEvidence === "not-observed")
+    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  return "not-decided";
 }
 
 /** What each `SurvivorReach` state means. Co-located with the type, as every registry here is. */
 export const REACH_INTERPRETATIONS: Record<SurvivorReach, Interpretation> = {
+  "reached-unnoticed": {
+    meaning:
+      "The mutant's own statement began executing in at least one covering test (`reachedBy`), " +
+      "and every covering test still passed.",
+    entailedNegative:
+      "The grain is the statement: an expression mutant's statement began, which does not prove " +
+      "the sub-expression was evaluated. Not proof the mutant is killable: an equivalent mutant " +
+      "reads the same.",
+    basis: "R245",
+  },
   "covered-but-unreached": {
     meaning:
-      "A test executed the mutated PROCEDURE (member-level coverage, baseline run) and yet NO " +
-      "guarded statement ran during the mutant's own runs. Both are correct at once: the test " +
-      "enters the procedure and never reaches this statement.",
+      "A test executed the mutated PROCEDURE (member-level coverage, baseline run) and yet the " +
+      "mutated statement did not run during the mutant's own runs: either its own marker answered " +
+      "not reached in every run (`guardReached: false`), or, in a report without it, NO guarded " +
+      "statement ran at all. Both are correct at once: the test enters the procedure and never " +
+      "reaches this statement.",
     entailedNegative:
       "NOT the same as uncovered, so filing it with `no-coverage` throws away the one thing that " +
       "makes it actionable. It is also not evidence about assertion strength: no assertion was " +
@@ -1773,7 +1803,8 @@ export const REACH_INTERPRETATIONS: Record<SurvivorReach, Interpretation> = {
   },
   "unreached-and-uncovered": {
     meaning:
-      "No guarded statement ran, and coverage did not place a test in the mutated procedure " +
+      "The mutated statement did not run (`guardReached: false`, or in a report without it no " +
+      "guarded statement ran), and coverage did not place a test in the mutated procedure " +
       "either. Nothing exercised this code. It belongs with `no-coverage`.",
     entailedNegative:
       "Says nothing about the tests that DO exist — this is a statement about the execution path, " +
@@ -1782,9 +1813,12 @@ export const REACH_INTERPRETATIONS: Record<SurvivorReach, Interpretation> = {
   },
   "not-decided": {
     meaning:
-      "The guard attestation is not decisive for this mutant (`observed` says only that SOME " +
-      "guarded site fired somewhere; `not-measured` says no attestation exists), so the pair says " +
-      "nothing about whether the mutated statement was reached.",
+      "Nothing measured decides whether the mutated statement was reached. Either the mutant has " +
+      "no own-statement marker (`reachGrain` is `enclosing` or `unplaced`), or the backend cannot " +
+      "attest (al-runner), or its runs ended without an answer (a timeout, a stopped run, a " +
+      "`--resume`-carried row). In a report without `reachGrain`, the guard attestation was not " +
+      "decisive (`observed` says only that SOME guarded site fired somewhere; `not-measured` says " +
+      "no attestation exists).",
     entailedNegative:
       'Not evidence that the statement WAS reached. "Not decided" is a statement about this ' +
       "report's evidence, never about the target.",
