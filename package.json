@@ -25,6 +25,7 @@
     "itest:chunked": "bun packages/runner/itest/chunked.itest.ts",
     "itest:testapp": "bun packages/runner/itest/test-app-publish.itest.ts",
     "itest:verify": "bun packages/runner/itest/verify.itest.ts",
+    "itest:agreement": "bun packages/runner/itest/verify-agreement.itest.ts",
     "mutate": "stryker run"
   },
   "devDependencies": {
