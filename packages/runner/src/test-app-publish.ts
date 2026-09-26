@@ -291,7 +291,7 @@ export async function publishTestApp(
         : hashPackage(afterBytes) === app.sha256
           ? { status: "accepted" }
           : { status: "mismatch", reported: hashPackage(afterBytes) };
-    const outcome = decideTestAppOutcome(publishError === undefined, verification);
+    const outcome = decideTestAppOutcome(publishError, verification);
     if (outcome !== "accepted" || afterBytes === undefined) {
       throw new TestAppError(
         // "accepted" here only narrows the type: accepted implies afterBytes is defined.
@@ -323,14 +323,23 @@ export async function publishTestApp(
 }
 
 /**
- * The target's rule (decidePublishOutcome), with one stricter case (ruling 1): a failed exit with
- * an UNAVAILABLE read-back is unknown, never failed. `null` from fetchPublishedAppPackage is a
- * timeout or a refused connection, which cannot show the publish did not land.
+ * The target's rule (decidePublishOutcome), with two stricter cases for a FAILED exit (ruling 1,
+ * review r1). `publishError` is altool's failure text, `undefined` on exit 0.
+ * - An UNAVAILABLE read-back is unknown, never failed: `null` from fetchPublishedAppPackage is a
+ *   timeout or a refused connection, which cannot show the publish did not land.
+ * - A READABLE read-back that is not our bytes is `failed` only when the failure text itself
+ *   proves BC refused the publish (BC's downgrade refusal, read by `parseVersionConflict`).
+ *   Otherwise it is unknown: altool may have lost its response after dispatch while BC is still
+ *   applying the publish, and one immediate read of the old bytes cannot rule that out.
  */
 export function decideTestAppOutcome(
-  publishOk: boolean,
+  publishError: string | undefined,
   verification: DeploymentVerification,
 ): PublishOutcome {
-  if (!publishOk && verification.status === "unavailable") return "indeterminate";
-  return decidePublishOutcome(publishOk, verification);
+  if (publishError !== undefined && verification.status === "unavailable") return "indeterminate";
+  const outcome = decidePublishOutcome(publishError === undefined, verification);
+  if (outcome === "failed" && parseVersionConflict(publishError ?? "") === null) {
+    return "indeterminate";
+  }
+  return outcome;
 }

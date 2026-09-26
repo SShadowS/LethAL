@@ -340,6 +340,27 @@ test("publishTestApp: a BC downgrade refusal inside the fence is publish-failed 
   expect(log).not.toContain("end");
 });
 
+test("publishTestApp: a failed exit with a plain error and the OLD package read back is publish-indeterminate", async () => {
+  // altool may have lost its response after dispatch, so one immediate read of the old bytes does
+  // not show BC refused: only BC's own refusal text (the downgrade, above) proves that.
+  const log: string[] = [];
+  const err = await publishTestApp(
+    loggingFence(log),
+    COMPILED,
+    deps(
+      log,
+      [OLD, OLD],
+      "altool publishapp failed (exit 1):\nPublish failed: the operation timed out.",
+    ),
+  ).catch((e) => e);
+  expect(err).toMatchObject({
+    reason: "publish-indeterminate",
+    confirmedTerminal: false,
+    installedVersion: undefined,
+  });
+  expect(log).not.toContain("end");
+});
+
 test("publishTestApp: altool success but the server still holds the old package is publish-indeterminate", async () => {
   const err = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, OLD])).catch(
     (e) => e,
@@ -361,7 +382,7 @@ test("publishTestApp: a failed exit with an unreadable read-back is publish-inde
     deps([], [OLD, null], DOWNGRADE),
   ).catch((e) => e);
   expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
-  expect(decideTestAppOutcome(false, { status: "unavailable", detail: "timeout" })).toBe(
+  expect(decideTestAppOutcome(DOWNGRADE, { status: "unavailable", detail: "timeout" })).toBe(
     "indeterminate",
   );
   expect(decidePublishOutcome(false, { status: "unavailable", detail: "timeout" })).toBe("failed"); // the target's rule is unchanged

@@ -10288,9 +10288,10 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(attaches(fx.trace)).toBe(1); // the preflight only
   });
 
-  test("C02-05: a plain altool failure ends the marker as failed", async () => {
-    // No BC downgrade text: only the TestAppError line in isConfirmedTerminalPublishFailure can
-    // call it terminal.
+  test("C02-05: a plain altool failure with the old package read back keeps the marker", async () => {
+    // Review r1: no BC refusal text, so the old bytes read back once cannot show BC refused. altool
+    // may have lost its response while BC is still applying the publish. Decision 2's
+    // indeterminate row: marker kept (no EndPublish), container-needs-recycle recorded.
     const tlog: string[] = [];
     const fx = await fixture();
     await expect(
@@ -10303,10 +10304,10 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
         ),
         requests: [{ mutantId: "M0001", methods: [OVER] }],
       }),
-    ).rejects.toMatchObject({ reason: "publish-failed" });
-    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
-    expect(await fx.quarantine()).toBeNull();
-    expect(fx.client.releaseCalls).toBe(1);
+    ).rejects.toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).toMatchObject({ opKind: "container-needs-recycle" });
+    expect(attaches(fx.trace)).toBe(1); // the preflight only
   });
 
   test("C02-05: a failed exit with an unreadable read-back keeps the marker", async () => {
