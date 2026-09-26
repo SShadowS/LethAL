@@ -54,9 +54,17 @@ import { type CallTrace, type TraceHooks, traceFetch } from "./fetch-trace";
  * `U:/Git/LethAL/...` made a worktree's probe read the MAIN checkout's config (and container). A copy
  * in the 7b7fff3 worktree resolves to that worktree's fixture, which needs its own gitignored config.
  */
-const REPO_ROOT = join(import.meta.dir, "..", "..");
-export const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
-export const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
+/** The fixture paths for the repo that holds `scriptDir` (two levels up), so a copy in another worktree uses ITS fixtures. */
+export function fixtureDirsFor(scriptDir: string): { projectDir: string; testDir: string } {
+  const root = join(scriptDir, "..", "..");
+  return {
+    projectDir: join(root, "fixtures", "sandbox-data"),
+    testDir: join(root, "fixtures", "sandbox-data-tests"),
+  };
+}
+const DIRS = fixtureDirsFor(import.meta.dir);
+export const PROJECT_DIR = DIRS.projectDir;
+export const TEST_DIR = DIRS.testDir;
 export const CONFIG_PATH = join(PROJECT_DIR, "lethal.config.local.json");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
