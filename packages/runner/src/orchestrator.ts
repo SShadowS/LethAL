@@ -129,6 +129,7 @@ import {
 } from "./stale-test-app";
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunnerKind } from "./store";
+import { TestAppError } from "./test-app-publish";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -2705,6 +2706,9 @@ class LeaseSession {
  * whose result we cannot state, and must NOT be tombstoned with `EndPublish`.
  */
 function isConfirmedTerminalPublishFailure(err: unknown): boolean {
+  // C02-05, FIRST: an anomalous test-app publish carries altool's text, which may hold BC's
+  // "newer version ... was already installed", and must not reach the version-conflict fallback.
+  if (err instanceof TestAppError) return err.confirmedTerminal;
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
   if (err instanceof PublishFailedError) return true;

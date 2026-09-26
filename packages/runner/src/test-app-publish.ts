@@ -1,10 +1,19 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compareAppVersions, parseVersionConflict } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
 import type { BoundArtifact } from "./backend";
+import { hashPackage } from "./baseline-snapshot";
+import {
+  type DeploymentVerification,
+  type PublishOutcome,
+  decidePublishOutcome,
+} from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
+import type { LeaseFence } from "./orchestrator";
 import { readAppIdentity } from "./published-test-app";
+import type { AppPublisher } from "./publisher";
 
 /**
  * C02-05: compile the TEST app against the installed guarded build, and later publish it under
@@ -162,4 +171,139 @@ export async function compileTestApp(a: {
   } finally {
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+export interface PublishedTestApp {
+  readonly appId: string;
+  readonly name: string;
+  readonly publisher: string;
+  /** The server's own NavxManifest Version, read back after the publish. */
+  readonly version: string;
+  /** sha256 of the package the server returned after the publish: the compiled bytes' hash. */
+  readonly sha256: string;
+  readonly compiledAgainst: CompiledTestApp["compiledAgainst"];
+}
+
+/**
+ * The server's package for this app: bytes, `null` when the read did not answer (never published,
+ * timeout, refused), `undefined` when this configuration cannot form the request at all.
+ */
+export type ReadPublished = (app: {
+  readonly publisher: string;
+  readonly name: string;
+}) => Promise<Uint8Array | null | undefined>;
+
+function versionOf(bytes: Uint8Array): string {
+  try {
+    return readAppIdentity(Buffer.from(bytes)).version;
+  } catch (err) {
+    throw new TestAppError("manifest-unreadable", `the server's package: ${describeThrown(err)}`);
+  }
+}
+
+function compareVersionsOrRefuse(local: string, resident: string): number {
+  try {
+    return compareAppVersions(local, resident);
+  } catch (err) {
+    throw new TestAppError(
+      "manifest-unreadable",
+      `cannot compare app.json version ${local} with the resident ${resident}: ${describeThrown(err)}`,
+    );
+  }
+}
+
+function describeOutcome(
+  publishError: string | undefined,
+  verification: DeploymentVerification,
+  app: CompiledTestApp,
+): string {
+  const altool = publishError === undefined ? "altool exited 0" : `altool failed: ${publishError}`;
+  const server =
+    verification.status === "accepted"
+      ? `the server holds the compiled package (${app.sha256})`
+      : verification.status === "mismatch"
+        ? `the server holds package ${verification.reported}, not the compiled ${app.sha256}`
+        : `the server's package is unreadable (${verification.detail})`;
+  return `${app.name} ${app.version}: ${altool}; ${server}`;
+}
+
+/**
+ * Decision 2 and 3. Refuses a local version below the resident one BEFORE the fence (no marker,
+ * no altool), then publishes only inside `fence.publish` and returns an identity only when the
+ * server's package is byte-for-byte the compiled one. The test app keeps its own app.json version;
+ * nothing here mints one.
+ */
+export async function publishTestApp(
+  fence: LeaseFence,
+  app: CompiledTestApp,
+  deps: { readonly publisher: AppPublisher; readonly readPublished: ReadPublished },
+): Promise<PublishedTestApp> {
+  const key = { publisher: app.publisher, name: app.name };
+  // Before the fence: a refusal here claims no operation marker.
+  const before = await deps.readPublished(key);
+  if (before === undefined) {
+    throw new TestAppError(
+      "unsupported",
+      "this configuration cannot read a published package back (no dev server or no credentials), so a publish could not be verified",
+    );
+  }
+  if (before instanceof Uint8Array) {
+    const resident = versionOf(before);
+    if (compareVersionsOrRefuse(app.version, resident) < 0) {
+      throw new TestAppError(
+        "version-below-resident",
+        `the container holds ${app.name} ${resident}, above this project's app.json ${app.version}. LethAL publishes a test app at its own version and never mints one. Clear the resident record (Sync-NAVApp -Mode Clean, see .claude/skills/control-app) or raise app.json above ${resident}.`,
+        resident,
+      );
+    }
+  }
+  // null: never published, or unreadable. BC's own downgrade refusal inside the fence is the backstop.
+  return fence.publish(async () => {
+    let publishError: string | undefined;
+    try {
+      await deps.publisher.publish(app);
+    } catch (err) {
+      publishError = describeThrown(err);
+    }
+    const after = await deps.readPublished(key);
+    const afterBytes = after instanceof Uint8Array ? after : undefined;
+    const verification: DeploymentVerification =
+      afterBytes === undefined
+        ? {
+            status: "unavailable",
+            detail: "the server's package could not be read back after the publish",
+          }
+        : hashPackage(afterBytes) === app.sha256
+          ? { status: "accepted" }
+          : { status: "mismatch", reported: hashPackage(afterBytes) };
+    const outcome = decideTestAppOutcome(publishError === undefined, verification);
+    if (outcome !== "accepted" || afterBytes === undefined) {
+      throw new TestAppError(
+        `publish-${outcome === "accepted" ? "indeterminate" : outcome}`,
+        describeOutcome(publishError, verification, app),
+        parseVersionConflict(publishError ?? "") ?? undefined,
+      );
+    }
+    return {
+      appId: app.appId,
+      name: app.name,
+      publisher: app.publisher,
+      version: versionOf(afterBytes),
+      sha256: app.sha256,
+      compiledAgainst: app.compiledAgainst,
+    };
+  });
+}
+
+/**
+ * The target's rule (decidePublishOutcome), with one stricter case (ruling 1): a failed exit with
+ * an UNAVAILABLE read-back is unknown, never failed. `null` from fetchPublishedAppPackage is a
+ * timeout or a refused connection, which cannot show the publish did not land.
+ */
+export function decideTestAppOutcome(
+  publishOk: boolean,
+  verification: DeploymentVerification,
+): PublishOutcome {
+  if (!publishOk && verification.status === "unavailable") return "indeterminate";
+  return decidePublishOutcome(publishOk, verification);
 }

@@ -5,8 +5,17 @@ import { join } from "node:path";
 import { readPackageEntry } from "../src/app-package";
 import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
 import type { BoundArtifact } from "../src/backend";
+import { hashPackage, testAppHashFor } from "../src/baseline-snapshot";
+import { decidePublishOutcome } from "../src/deployment-verifier";
+import type { LeaseFence } from "../src/orchestrator";
 import { readAppIdentity } from "../src/published-test-app";
-import { TestAppError, compileTestApp } from "../src/test-app-publish";
+import {
+  type CompiledTestApp,
+  TestAppError,
+  compileTestApp,
+  decideTestAppOutcome,
+  publishTestApp,
+} from "../src/test-app-publish";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a"; // fixtures/sandbox-app
@@ -226,4 +235,144 @@ test("compileTestApp: a missing .alpackages is not an error; alc gets the bound 
     controlSymbolPath: fx.controlPath,
   });
   expect(seen.map((s) => s.id).sort()).toEqual([CONTROL_ID, TARGET_ID].sort());
+});
+
+const NEW = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.2", { "src/T.al": "new" });
+const OLD = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.2", { "src/T.al": "old" });
+const COMPILED: CompiledTestApp = {
+  appPath: "C:/out/x-testapp.app",
+  sha256: hashPackage(NEW),
+  appId: TESTS_ID,
+  name: "LethAL Sandbox Tests",
+  publisher: "LethAL",
+  version: "1.0.0.2",
+  compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+};
+const DOWNGRADE =
+  "altool publishapp failed (exit 1):\nCannot install the extension LethAL Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.0.9 was already installed.";
+
+function loggingFence(log: string[]): LeaseFence {
+  return {
+    publish: async (run) => {
+      log.push("begin");
+      const r = await run();
+      log.push("end");
+      return r;
+    },
+  };
+}
+function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) {
+  const queue = [...reads];
+  return {
+    publisher: {
+      publish: async (a: { sha256: string }) => {
+        log.push(`publish ${a.sha256.slice(0, 8)}`);
+        if (publishFails !== undefined) throw new Error(publishFails);
+      },
+    },
+    readPublished: async () => {
+      log.push("read");
+      return queue.shift();
+    },
+  };
+}
+
+test("publishTestApp returns the server's identity only when its bytes are the compiled ones", async () => {
+  const log: string[] = [];
+  const out = await publishTestApp(loggingFence(log), COMPILED, deps(log, [OLD, NEW]));
+  expect(out).toEqual({
+    appId: TESTS_ID,
+    name: "LethAL Sandbox Tests",
+    publisher: "LethAL",
+    version: "1.0.0.2",
+    sha256: hashPackage(NEW),
+    compiledAgainst: COMPILED.compiledAgainst,
+  });
+  expect(log).toEqual(["read", "begin", `publish ${COMPILED.sha256.slice(0, 8)}`, "read", "end"]);
+});
+
+test("publishTestApp refuses a local version below the resident one before the fence", async () => {
+  const log: string[] = [];
+  const err = await publishTestApp(
+    loggingFence(log),
+    COMPILED,
+    deps(log, [pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.5")]),
+  ).catch((e) => e);
+  expect(err).toMatchObject({ reason: "version-below-resident", installedVersion: "1.0.0.5" });
+  expect((err as Error).message).toContain("1.0.0.2");
+  expect(log).toEqual(["read"]);
+});
+
+test("publishTestApp: a BC downgrade refusal inside the fence is publish-failed and names the installed version", async () => {
+  const log: string[] = [];
+  const err = await publishTestApp(
+    loggingFence(log),
+    COMPILED,
+    deps(log, [null, OLD], DOWNGRADE),
+  ).catch((e) => e);
+  expect(err).toMatchObject({
+    reason: "publish-failed",
+    installedVersion: "1.0.0.9",
+    confirmedTerminal: true,
+  });
+  expect(log).not.toContain("end");
+});
+
+test("publishTestApp: altool success but the server still holds the old package is publish-indeterminate", async () => {
+  const err = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, OLD])).catch(
+    (e) => e,
+  );
+  expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+});
+
+test("publishTestApp: a read-back that fails after an exit 0 is publish-indeterminate", async () => {
+  const err = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, null])).catch(
+    (e) => e,
+  );
+  expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+});
+
+test("publishTestApp: a failed exit with an unreadable read-back is publish-indeterminate, never publish-failed", async () => {
+  const err = await publishTestApp(
+    loggingFence([]),
+    COMPILED,
+    deps([], [OLD, null], DOWNGRADE),
+  ).catch((e) => e);
+  expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
+  expect(decideTestAppOutcome(false, { status: "unavailable", detail: "timeout" })).toBe(
+    "indeterminate",
+  );
+  expect(decidePublishOutcome(false, { status: "unavailable", detail: "timeout" })).toBe("failed"); // the target's rule is unchanged
+});
+
+test("publishTestApp returns the server's version, not app.json's", async () => {
+  // The server's package says 1.0.0.3, the local app.json says 1.0.0.2. COMPILED3 hashes NEW3,
+  // so the byte check passes and the version is the only thing under test.
+  const NEW3 = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.3", { "src/T.al": "new" });
+  const COMPILED3: CompiledTestApp = { ...COMPILED, sha256: hashPackage(NEW3), version: "1.0.0.2" };
+  const out = await publishTestApp(loggingFence([]), COMPILED3, deps([], [OLD, NEW3]));
+  expect(out.version).toBe("1.0.0.3");
+  expect(out.sha256).toBe(hashPackage(NEW3));
+});
+
+test("publishTestApp: a failed exit whose bytes landed anyway is publish-anomalous", async () => {
+  const err = await publishTestApp(
+    loggingFence([]),
+    COMPILED,
+    deps([], [OLD, NEW], DOWNGRADE),
+  ).catch((e) => e);
+  expect(err).toMatchObject({ reason: "publish-anomalous", confirmedTerminal: false });
+});
+
+test("publishTestApp refuses a configuration that cannot read the package back, before the fence", async () => {
+  const log: string[] = [];
+  await expect(
+    publishTestApp(loggingFence(log), COMPILED, deps(log, [undefined])),
+  ).rejects.toMatchObject({ reason: "unsupported" });
+  expect(log).toEqual(["read"]);
+});
+
+test("the published identity's sha256 is the R192 key of the same bytes", async () => {
+  const out = await publishTestApp(loggingFence([]), COMPILED, deps([], [OLD, NEW]));
+  expect(await testAppHashFor(async () => NEW, "unused")).toBe(`package:${out.sha256}`);
 });
