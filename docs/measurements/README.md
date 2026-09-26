@@ -1078,6 +1078,70 @@ identical. Two flag-table rows above also moved, and are marked inline: `--test-
 again, and `--isolation method` now aliases `test` rather than `codeunit`. Neither touches LethAL's
 argv (`--isolation test` by name, the budget through the env var), so no code changed.
 
+**On a warm cache 2.10.0.0 prints NO provisioning sentence at all** (measured 2026-09-02, R200):
+neither `Downloaded <N> app(s) ... to <dir>` nor `platform apps already complete at <dir>.`. Only
+the `[bc] selected BC <build> (<artifact dir>)` line names a directory, and R200 derives
+`<artifact dir>/platform-apps` from it.
+
+**Measured against `al-runner v2.11.0` on 2026-09-26 (R235), and R200's derivation is wrong there.**
+The backend's one-time provisioning call, reproduced with its exact argv on the user's warm cache,
+again prints no `[provision]` line. Non-verbose stderr, verbatim apart from the long `[bc] warning`
+and `[expectations]` lines:
+
+```
+[bc] selected BC 28.1.49838.54487 (C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487)
+[bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.54368, not the selected 28.1.49838.54487 - ...
+al-runner - running 1 bundle(s)
+[1/1] U:\Git\LethAL\fixtures\sandbox-tests - 1 suites
+   0P/0F/0E across 0 tests, 0 suite errors (1.0s)
+```
+
+`<selected>\platform-apps` does NOT exist: the selected build `28.1.49838.54487` holds the engine
+and `test-apps` only. 2.11.0 takes the platform apps from the engine VARIANT's build
+(`28.1.49838.54368`) and names that directory only in verbose output. The same argv with
+`AL_RUNNER_VERBOSE=1` set (the help documents it as "Same as --verbose") adds, verbatim:
+
+```
+[provision] BC 28.1.49838.54487 engine artifacts already complete at C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487.
+[bc] selected BC 28.1.49838.54487 (C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487)
+  package caches (requested): 2 dir(s)
+  package caches (final search set): 2 dir(s)
+    [pkg-cache] C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487\test-apps
+    [pkg-cache] C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps
+```
+
+Note the MIXED separators. Stdout stays the clean JSON envelope under `AL_RUNNER_VERBOSE=1`.
+`provisionOnce` now sets that variable (the provisioning call only, never a mutant run) and the
+parser reads the `[pkg-cache] <dir>` line ending in `platform-apps` before falling back to R200.
+
+**A `[pkg-cache]` line is a SEARCH-set fact, not a resolution fact.** The runner prints it under
+`package caches (final search set)`: it lists directories searched for `.app` dependencies and says
+nothing about which `.app` won. What was measured is that this directory works for this fixture on
+this cache (the fixture's two tests pass both with `--auto-provision` and with only
+`--package-cache ...\28.1.49838.54368\platform-apps`). It is NOT shown that pinning it leaves
+resolution, or verdicts, unchanged for a project with other package caches, and R147's "a wrong pin
+can only error" was measured for a directory that does not exist, not one that exists and holds a
+mismatched build. The verdict evidence for R235 is `itest:alrunner`'s per-mutant equality only.
+
+Cold, on a scratch `AL_RUNNER_ARTIFACTS_ROOT` seeded with the `54368` engine only, the old
+`Downloaded` sentence is unchanged in form and still parses; with `AL_RUNNER_VERBOSE=1` the
+`[pkg-cache]` line names the same directory:
+
+```
+[provision] Downloaded 6 app(s) (116 MB total) to ...\scratchpad\artroot\28.1.49838.55191\platform-apps
+  package caches (final search set): 1 dir(s)
+    [pkg-cache] ...\scratchpad\artroot\28.1.49838.55191\platform-apps
+```
+
+A TRULY empty cache fails on 2.11.0 before any platform-app step, exit 2, because the CDN's latest
+28.x (`28.5.54151.55147`) has no shipped engine variant:
+
+```
+BC version selection failed: no shipped engine variant supports BC 28.5.54151.55147 (major 28). Available variants: 27.0.38460.53934, 27.3.44313.53909, 27.5.46862.53931, 28.0.46665.54371, 28.1.49838.54368, 28.2.50931.54349, 28.3.52162.54374, 28.4.53241.54387. Select a cached BC version this install ships an engine for (--bc-version), or update al-runner.
+```
+
+That is filed as R241, not fixed by R235.
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the

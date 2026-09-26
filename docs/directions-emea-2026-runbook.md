@@ -221,10 +221,10 @@ own 36 verdicts were **pre-committed before the run and all 36 matched** — the
 dated before the run.
 
 **"Which backend should I use?"**
-`bcdev`. `al-runner` is offline and NOT authoritative: it reports no coverage, so an unreached
-mutant comes back survived rather than no-coverage, and `Codeunit.Run` does not scope a write
-transaction there, so a mutant killable only through that rollback survives. Under-reporting only,
-never a false kill, and a startup canary measures the actual binary each session. (The older claim
+`bcdev`. `al-runner` is offline and NOT authoritative: its coverage is CONDITIONAL. LethAL reads
+al-runner's own `--coverage` (R220), but one file declaring more than one object disables it for
+the whole run (upstream #3713), and then an unreached mutant comes back survived rather than
+no-coverage. Under-reporting only, never a false kill, and a startup canary measures the actual binary each session. (The older claim
 that its `asserterror` never fails a test was fixed upstream in v2; the canary confirms it.)
 
 **"You planted that bug."**
