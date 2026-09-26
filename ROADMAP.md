@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 254 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**47 of 255 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -299,6 +299,7 @@ that ordering is the priority.
 - **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · open
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · open
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · open
+- **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
 
 ---
 

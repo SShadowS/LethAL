@@ -11,8 +11,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the JSON report written with `--out` | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Two are hand-written, two are generated, and the split is about SIZE rather than principle.**
-`explain` (34 leaves) and `doctor` (8) are hand-written and pinned against their declarations.
+**Of the five files, three are hand-written and two are generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v5 and the kept v4) and `doctor` (8) are
+hand-written; v5 and `doctor` are pinned against their declarations, and v4 is frozen as it was
+published. `report` and `stream` are generated.
 `SessionReport` walks out to 130 leaves and the stream is a union of 20 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
 forgets, so `bun scripts/generate-schemas.ts` emits both, and `--check` fails when a committed file
