@@ -133,14 +133,22 @@ Written after the probe's adversarial review and before any live probe session r
 
 - **(i) `actionEnded` needs a demonstrated id-space match.** A call's BC session id missing from
   `Get-NAVServerSession` counts as "ended" only when that list is non-empty AND a known session id appears
-  in it: the latest finished op of the same session (its `LC Op Progress` row), the `sessionId` a
-  successful `ran` answer carried, or an id also present in the tenant's `Active Session` table. Without
-  that match (for example a wrong tenant answering an empty list), `actionEnded` is false and the probe
-  stops with exit 3. The probe records this control for every session as `sessionControl`.
-- **(ii) Pooled sessions.** If the smoke shows a finished op's session still listed
-  (`sessionControl.finishedOpListed: true`), sessions outlive their op and the session check cannot
-  separate the two H2 classes. §4 then files every hit whose marker completed but whose session is still
-  listed as **"H2 undetermined (pooled session)"**, never H2-fence.
+  in it: the latest finished op of the same session (its `LC Op Progress` row) or the `sessionId` a
+  successful `ran` answer carried. An overlap with the `Active Session` table is recorded
+  (`activeTableOverlap`) as a diagnostic only: that read has no tenant or instance filter, so it proves
+  nothing (review r2). Without the match (for example a wrong tenant answering an empty list, or a list
+  that lists neither control), `actionEnded` is false and the probe stops with exit 3. The probe records
+  this control for every session as `sessionControl`.
+- **(ii) Unproven session checks are "H2 undetermined".** A hit whose marker completed is filed
+  **"H2 undetermined"**, never H2-fence, when ANY of these holds for its session:
+  `sessionControl.idSpaceMatched` is false, `sessionControl.finishedOpListed` is true, or
+  `sessionControl.ranAnswerListed` is true (a listed control means sessions outlive their op, so a
+  still-listed session proves nothing). H2-fence is filed only when `idSpaceMatched` is true, neither
+  control is listed, and `actionEnded` is false. Note, stated rather than hidden: with (i) as written,
+  `idSpaceMatched` is true only when a control IS listed, so these two conditions cannot both hold and no
+  hit can be filed H2-fence by this probe. Every completed-marker hit that is not H2-action is therefore
+  "H2 undetermined", and H2-fence stays undeclarable until a control that does not rely on a listed
+  session exists.
 - **(iii) Exit 2 after a session started.** An exit 2 after any session started (a harness fault in the
   middle of an arm) is handled like exit 3 or 4: run the recovery procedure before anything else uses
   Cronus28, then resume as a new segment.
