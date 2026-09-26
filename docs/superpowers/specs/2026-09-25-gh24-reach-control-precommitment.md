@@ -225,3 +225,16 @@ Any verdict difference, any mismatch with sections 3 to 5, or any killed stateme
 ## OUTCOME
 
 (Filled in after the owner's live run. Nothing above this line changes.)
+
+**Run order (added 2026-09-26 after the adversarial review; no prediction above changed).** With the
+committed baseline kept, `assertMatchesBaseline` throws on the ten added mutants before the second
+session and before `assertReachControl`, and with the baseline deleted it writes the new file from
+run A before the control is checked. So the verification takes two runs:
+
+1. Baseline KEPT, `EXPECTED` at section 5's figures: the run must stop in `assertMatchesBaseline` with
+   exactly ten "present in after but missing from before" differences, all in `Data Reach Ops`, and
+   zero field differences on existing mutants.
+2. Baseline absent (`tables.baseline.json` moved aside, or `BASELINE_PATH` pointed at a scratch path):
+   the run must pass END TO END, including `assertReachControl` and the determinism check, before any
+   recorded file is kept. If it fails, discard the recorded file.
+
