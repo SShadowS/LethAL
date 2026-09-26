@@ -35,4 +35,7 @@ Wait for confirmation, then check `ListAgents` shows the new name.
   `/loop You are lethal-orchestrator. Follow docs/superpowers/runbooks/autonomy/orchestrator.md: run its start procedure if you have not done so in this session, then do one sweep.`
 - `lethal-code` or `lethal-bugs`: read `lane.md` and follow its "On every start" section.
 
+For a lane, the last start step messages `lethal-orchestrator` that you are online; never skip
+it, the orchestrator waits for it after a `/clear`.
+
 Report which of the other roles are live, and the directory of each that is not.

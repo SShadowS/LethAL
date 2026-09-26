@@ -18,6 +18,9 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 3. `coord doctor`, read `H:\lethal-coord\handoff\<session>.md` if it exists.
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
+5. Tell the orchestrator you are alive, always, also after a `/clear` or a resume: send
+   `lethal-orchestrator` the message `online: <session> (fresh session), state: <doing <id>
+   run <runId> | idle>`. Without it the orchestrator keeps waiting on your old session.
 
 ## Doing a task
 
@@ -35,6 +38,14 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    next free id right before writing, regenerate the index).
 7. Commit on your branch, `coord submit <id> <runId> <token> <sha> <branch>`, message
    `lethal-orchestrator`: `submitted <id> run <runId> commit <sha>`. Rewrite your handoff.
+
+## Context size
+
+You cannot run `/clear` or `/compact` yourself; only the owner can. Every turn re-sends your
+whole context, so keep it small: let subagents do the reading and implementing and keep only
+their conclusions. After you submit a task and rewrite your handoff file, you are ready to be
+cleared; the owner's dashboard shows "ready to /clear" for a session with over 400k context and
+nothing in flight. After a clear, run your start procedure again.
 
 ## Rules
 

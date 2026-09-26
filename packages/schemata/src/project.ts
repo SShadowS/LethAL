@@ -143,6 +143,17 @@ export interface MutantManifestEntry {
   readonly procedureScope?: "local" | "public";
   readonly triggerName?: string;
   /**
+   * C02-01: the 1-based first and last line of the member enclosing this mutant: its `procedure`,
+   * or its `trigger` when there is no procedure (the same member `procedureName || triggerName`
+   * names, selection.ts `identityKeyOf`). Computed with the same `lineOfIndex` over the same
+   * source as `startLine`, so the two can never disagree about numbering. Starts at the
+   * `procedure`/`trigger` keyword line: attributes above it are NOT part of the node (measured).
+   * Absent when neither encloses the site, and on manifests written before this field existed.
+   * Line numbers only, never source text.
+   */
+  readonly procedureStartLine?: number;
+  readonly procedureEndLine?: number;
+  /**
    * R193: this mutant's position, in SOURCE order, among the mutants of this artifact that share
    * its semantic identity tuple (`identityTupleOf`): 0 for the first or only one, 1 for the next
    * byte-identical shape in the same procedure under the same operator, and so on. Every `true`
@@ -447,6 +458,15 @@ function triggerNameOf(spec: MutationSpec): string | undefined {
   return undefined;
 }
 
+/** C02-01: the enclosing `procedure` node, else the nearest `trigger` ancestor, else `null`. */
+function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
+  const proc = findEnclosingProcedure(spec.before);
+  if (proc !== null) return proc;
+  let current: ALSyntaxNode | null = spec.before;
+  while (current !== null && current.kind !== ALNodeKind.trigger) current = current.parent;
+  return current;
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
@@ -483,6 +503,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
       const procedureScope = procedureScopeOf(spec);
+      const member = enclosingMemberOf(spec);
       const reachGrain = grainOf.get(mutantId);
       if (reachGrain === undefined) {
         throw new Error(`writeInstrumentedProject: no reach grain for ${mutantId} in ${f.path}`);
@@ -504,6 +525,12 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         originalText: clipMutationText(spec.before.text),
         mutatedText: clipMutationText(spec.after.text),
         ...(procedureScope !== undefined ? { procedureScope } : {}),
+        ...(member !== null
+          ? {
+              procedureStartLine: lineOfIndex(f.source, member.startIndex),
+              procedureEndLine: lineOfIndex(f.source, member.endIndex),
+            }
+          : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
         ...(spec.platformKillMechanism !== undefined
           ? { platformKillMechanism: spec.platformKillMechanism }

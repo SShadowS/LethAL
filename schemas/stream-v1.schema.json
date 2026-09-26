@@ -801,6 +801,12 @@
             "triggerName": {
               "type": "string"
             },
+            "procedureStartLine": {
+              "type": "number"
+            },
+            "procedureEndLine": {
+              "type": "number"
+            },
             "identityOrdinal": {
               "type": "number"
             },
@@ -1003,6 +1009,12 @@
             "triggerName": {
               "type": "string"
             },
+            "procedureStartLine": {
+              "type": "number"
+            },
+            "procedureEndLine": {
+              "type": "number"
+            },
             "identityOrdinal": {
               "type": "number"
             },
@@ -1165,6 +1177,12 @@
             },
             "triggerName": {
               "type": "string"
+            },
+            "procedureStartLine": {
+              "type": "number"
+            },
+            "procedureEndLine": {
+              "type": "number"
             },
             "identityOrdinal": {
               "type": "number"

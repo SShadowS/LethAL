@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tier1Operators } from "@lethal/builtin-tier1";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
+  ARTIFACT_ID_ABSENCES,
   EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
@@ -27,7 +29,7 @@ import {
   STRANDED_SKIP_INTERPRETATION,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS } from "../src/selection";
+import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
 import { TypeLeafPathError, typeLeafPaths } from "./helpers/type-leaf-paths";
@@ -43,6 +45,7 @@ function survivorMutant(
   code: string,
   attribution: CoverageAttribution,
   guardObserved?: boolean,
+  batchIndex = 0,
 ): MutantOutcome {
   return {
     mutantCode: code,
@@ -50,9 +53,13 @@ function survivorMutant(
     line: 42,
     operatorName: "lethal.negate-conditional",
     verdict: "survived",
-    batchIndex: 0,
+    batchIndex,
     durationMs: 120,
     procedureName: "ComputeTotal",
+    // C02-01: the enclosing procedure's span, distinct from `line` and `startIndex` so a swap
+    // between them is detectable in the verbatim test.
+    procedureStartLine: 38,
+    procedureEndLine: 51,
     startIndex: 100,
     endIndex: 110,
     originalText: "Qty > 0",
@@ -258,7 +265,8 @@ const PINNED_CONTRACT_NOTE =
   "`explainSchemaVersion`, which bumps when one is renamed, removed, or changes meaning. " +
   "`derivedFromReportSchemaVersion` records the report schema this was projected from, so a " +
   "stored output stays self-describing. PROSE is NOT contractual — do not parse `meaning`, " +
-  "`entailedNegative`, `note`, `scoreDescribes`, `detail` or `failureNote`; they may be reworded " +
+  "`entailedNegative`, `note`, `scoreDescribes`, `detail`, `readerMark.reason` or " +
+  "`failureNote`; they may be reworded " +
   "at any time without a version bump. That is safe rather than merely asked-for, because every " +
   "machine-usable atom already appears as a structured field beside the prose that explains it " +
   "(`attribution`/`executionProven`/`guardEvidence`/`cause`/`caveat`/`condition`), so there is " +
@@ -301,6 +309,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   // SurvivorRanking — R150. Describes how this projection ordered its own output, so it can come
   // from nowhere but here.
   ...SURVIVOR_RANKINGS,
+  // ArtifactIdAbsence, C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
+  // artifactId, which the report states only by the absence of a field.
+  ...ARTIFACT_ID_ABSENCES,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -358,12 +369,47 @@ describe("explain — the plan's own four tests", () => {
  *   unstable/deadlineExceeded  1 each, matching M0005 and M0004's `cause`
  *   caveats      `resumed` included because `resumedFrom` is set, which `buildReport` pushes
  *                UNCONDITIONALLY — the final review caught this one missing
- *   resumedFrom  `carriedMutants: 0` because no outcome here is `carried` (the fold counts it 1:1),
- *                which is a documented, meaningful state: the resume found nothing to carry.
+ *   resumedFrom  `carriedMutants: 1` because exactly one outcome here (M0003) is `carried`; the
+ *                fold counts it 1:1.
  *                `skippedStranded: 2` is backed by the two `strandedSkipMutant` rows above.
  */
 function fullCoverageReport(): SessionReport {
   const base = reportFixture();
+  const m0001 = survivorMutant("M0001", "exact", true, 1);
+  // C02-01: the reader's mark, keyed to this row's REAL serialized identity (report.ts's
+  // `markIdentityOf`) rather than a placeholder like `K-M0001`. A wrong key would otherwise go
+  // undetected.
+  const survivorWithMark: MutantOutcome = {
+    ...m0001,
+    readerMark: {
+      key: serializeKey({
+        astHash: m0001.astHash,
+        codeunitName: m0001.codeunitName,
+        procedureName: m0001.procedureName,
+        operatorName: m0001.operatorName,
+        operatorMajor: m0001.operatorMajor,
+        ordinal: 0,
+      }),
+      reason: "reader confirmed this rewrite is never read downstream",
+    },
+  };
+  // C02-01: `lethal.remove-assignment` is the operator whose registry entry declares
+  // "value-rewrite" (remove-assignment.ts), the only way `buildReport` can produce that risk.
+  const survivorWithRisk: MutantOutcome = {
+    ...survivorMutant("M0002", "object", false, 4),
+    operatorName: "lethal.remove-assignment",
+    equivalenceRisk: "value-rewrite",
+  };
+  // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name. It
+  // reaches the `triggerName` leaf the "no dead entries" test needs.
+  // It is also CARRIED, so the `artifactIdAbsent` leaf is reached (as "carried"), while M0001 in
+  // batch 1 reaches `artifactId` through `artifacts` below.
+  const triggerSurvivor: MutantOutcome = {
+    ...survivorMutant("M0003", "all-green", undefined, 6),
+    procedureName: "",
+    triggerName: "OnValidate",
+    carried: true,
+  };
   return {
     ...base,
     validity: {
@@ -385,9 +431,9 @@ function fullCoverageReport(): SessionReport {
     },
     mutationScore: 0.4,
     mutants: [
-      survivorMutant("M0001", "exact", true),
-      survivorMutant("M0002", "object", false),
-      survivorMutant("M0003", "all-green"),
+      survivorWithMark,
+      survivorWithRisk,
+      triggerSurvivor,
       errorMutant("M0004", "deadline-exceeded"),
       errorMutant("M0005", "unstable"),
       strandedSkipMutant("M0006"),
@@ -404,7 +450,17 @@ function fullCoverageReport(): SessionReport {
     ],
     testsOnly: ["test/Posting/**"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
-    resumedFrom: { runId: 7, carriedMutants: 0, skippedStranded: 2 },
+    resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
+    // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
+    // carried, so this run names no artifact for it whatever `artifacts` holds.
+    artifacts: [
+      {
+        batchIndex: 1,
+        artifactId: "0123456789abcdef0123456789abcdef",
+        sha256: "c".repeat(64),
+        appVersion: "1.0.9.9",
+      },
+    ],
   };
 }
 
@@ -463,6 +519,7 @@ function derivedExplainLeafPaths(): readonly string[] {
       "SurvivorRanking",
       "MutantErrorCause",
       "ToolCondition",
+      "ArtifactIdAbsence",
       'ReportValidity["reliability"]',
     ],
   });
@@ -512,6 +569,15 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].reachInterpretation.meaning", // [registry]
   "$.survivors[].reachInterpretation.entailedNegative", // [registry]
   "$.survivors[].reachInterpretation.basis", // [registry]
+  "$.survivors[].batchIndex", // [verbatim]
+  "$.survivors[].triggerName", // [verbatim]
+  "$.survivors[].procedureStartLine", // [verbatim]
+  "$.survivors[].procedureEndLine", // [verbatim]
+  "$.survivors[].equivalenceRisk", // [verbatim]
+  "$.survivors[].readerMark.key", // [verbatim]
+  "$.survivors[].readerMark.reason", // [verbatim]
+  "$.survivors[].artifactId", // [joined] artifacts[].artifactId whose batchIndex equals the row's
+  "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
   "$.notMeasured[].line", // [verbatim]
@@ -604,6 +670,35 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(r.resumedFrom?.skippedStranded).toBe(
       r.mutants.filter((m) => m.failureNote?.startsWith("not re-run on resume:") === true).length,
     );
+    // C02-01: `equivalenceRisk` only on a `survived` row, `readerMark` only on `survived` or
+    // `known-survivor`, and both keyed to what `buildReport` would actually derive rather than to
+    // a value the fixture merely asserts.
+    const riskByOperator = new Map(tier1Operators.map((o) => [o.name, o.equivalenceRisk] as const));
+    for (const m of r.mutants) {
+      if (m.equivalenceRisk !== undefined) {
+        expect(m.verdict).toBe("survived");
+        const risk = riskByOperator.get(m.operatorName);
+        if (risk === undefined) {
+          throw new Error(
+            `no tier1 operator named ${m.operatorName}, or it declares no equivalenceRisk`,
+          );
+        }
+        expect(m.equivalenceRisk).toBe(risk);
+      }
+      if (m.readerMark !== undefined) {
+        expect(["survived", "known-survivor"]).toContain(m.verdict);
+        expect(m.readerMark.key).toBe(
+          serializeKey({
+            astHash: m.astHash,
+            codeunitName: m.codeunitName,
+            procedureName: m.procedureName,
+            operatorName: m.operatorName,
+            operatorMajor: m.operatorMajor,
+            ordinal: m.identityOrdinal ?? 0,
+          }),
+        );
+      }
+    }
   });
 
   test("the pin is exactly what `ExplainOutput`'s TYPE can produce — R115 gap (1)", () => {
@@ -698,14 +793,25 @@ describe("explain — the admissibility rule, made executable", () => {
       firstSurvivor?.mutatedText,
       String(firstSurvivor?.line),
       String(firstSurvivor?.startIndex),
+      // C02-01: the new span, and the batch this row was recorded in, distinct from every value
+      // above and from each other.
+      String(firstSurvivor?.procedureStartLine),
+      String(firstSurvivor?.procedureEndLine),
+      String(firstSurvivor?.batchIndex),
     ];
     expect(new Set(rowValues).size).toBe(rowValues.length);
-    // ALL NINE per-row [verbatim] fields, projected against source as whole rows rather than
-    // field by field. The final review measured what the field-by-field form missed: six survivor
-    // fields and three notMeasured fields had no value assertion anywhere, so swapping `file` with
+    // EVERY per-row [verbatim] field, projected against source as whole rows rather than field by
+    // field. The final review measured what the field-by-field form missed: six survivor fields
+    // and three notMeasured fields had no value assertion anywhere, so swapping `file` with
     // `codeunitName` in `survivorOf` was 1444 pass / 0 fail, and reading `notMeasured[].line` off
     // `startIndex` (77 -> 200) was 48 pass / 0 fail. A whole-row `toEqual` cannot be partially
     // written: adding a field to `ExplainSurvivor` without adding it here fails the row compare.
+    //
+    // C02-01's three optional fields (`triggerName`, `equivalenceRisk`, `readerMark`) are compared
+    // as present-or-absent KEYS rather than by value: reading `m.triggerName` through a plain
+    // property access gives `undefined` whether the key is genuinely missing or present with an
+    // `undefined` value, so a value comparison alone cannot catch `survivorOf` writing the key
+    // where the source omitted it (`...(v !== undefined ? { k: v } : {})` broken into `k: v`).
     const survivorSources = report.mutants.filter((m) => m.verdict === "survived");
     const survivorVerbatim = (m: {
       mutantCode: string;
@@ -717,6 +823,12 @@ describe("explain — the admissibility rule, made executable", () => {
       originalText: string;
       mutatedText: string;
       coveringTests: readonly string[];
+      batchIndex?: number;
+      procedureStartLine?: number;
+      procedureEndLine?: number;
+      triggerName?: string;
+      equivalenceRisk?: string;
+      readerMark?: { readonly key: string; readonly reason: string };
     }) => ({
       mutantCode: m.mutantCode,
       file: m.file,
@@ -727,6 +839,15 @@ describe("explain — the admissibility rule, made executable", () => {
       originalText: m.originalText,
       mutatedText: m.mutatedText,
       coveringTests: m.coveringTests,
+      batchIndex: m.batchIndex,
+      procedureStartLine: m.procedureStartLine,
+      procedureEndLine: m.procedureEndLine,
+      hasTriggerName: "triggerName" in m,
+      triggerName: m.triggerName,
+      hasEquivalenceRisk: "equivalenceRisk" in m,
+      equivalenceRisk: m.equivalenceRisk,
+      hasReaderMark: "readerMark" in m,
+      readerMark: m.readerMark,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
@@ -750,6 +871,52 @@ describe("explain — the admissibility rule, made executable", () => {
     expect(out.toolConditions.find((c) => c.condition === "stranded-skips")?.count).toBe(
       report.resumedFrom?.skippedStranded,
     );
+  });
+
+  test("an archived report projects the new fields as absent, never defaulted (C02-01)", () => {
+    // A pre-C02-01 row: no span, no row-level risk or mark. The RUN-level lists are present and
+    // name this row's mutantCode, to prove explain never joins them.
+    // Destructured off rather than deleted, so the key is genuinely absent from the start,
+    // never present with an `undefined` value.
+    const { procedureStartLine, procedureEndLine, ...row } = survivorMutant("M0001", "exact", true);
+    const report = reportFixture({
+      mutants: [row],
+      likelyEquivalentSurvivors: {
+        count: 1,
+        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+      },
+      readerMarkedEquivalent: {
+        matched: [{ mutantCode: "M0001", key: "K", reason: "R" }],
+        stale: [],
+        contradicted: [],
+      },
+    });
+    const [s] = explain(report).survivors;
+    expect(s?.batchIndex).toBe(row.batchIndex);
+    for (const k of [
+      "procedureStartLine",
+      "procedureEndLine",
+      "equivalenceRisk",
+      "readerMark",
+      "triggerName",
+    ]) {
+      expect(k in (s ?? {})).toBe(false);
+    }
+  });
+
+  test("a trigger survivor carries triggerName and its span (C02-01)", () => {
+    const row: MutantOutcome = {
+      ...survivorMutant("M0001", "exact", true),
+      procedureName: "",
+      triggerName: "OnInsert",
+      procedureStartLine: 11,
+      procedureEndLine: 14,
+    };
+    const [s] = explain(reportFixture({ mutants: [row] })).survivors;
+    expect(s?.procedureName).toBe("");
+    expect(s?.triggerName).toBe("OnInsert");
+    expect(s?.procedureStartLine).toBe(11);
+    expect(s?.procedureEndLine).toBe(14);
   });
 
   test("the contract is EXACTLY the pinned object, field for field, and is the shared constant", () => {
@@ -879,7 +1046,10 @@ describe("explain — survivors", () => {
     expect(s?.reachInterpretation).toBe(REACH_INTERPRETATIONS["covered-but-unreached"]);
     expect(Object.keys(s ?? {}).sort()).toEqual(
       [
+        // C02-01 Task 4: `reportFixture()` has no `artifacts`, so the row says `not-recorded`.
+        "artifactIdAbsent",
         "attribution",
+        "batchIndex",
         "codeunitName",
         "coveringTests",
         "executionProven",
@@ -892,7 +1062,9 @@ describe("explain — survivors", () => {
         "mutatedText",
         "operatorName",
         "originalText",
+        "procedureEndLine",
         "procedureName",
+        "procedureStartLine",
         "reach",
         "reachInterpretation",
       ].sort(),
@@ -1234,6 +1406,155 @@ describe("explain — the split contract", () => {
 });
 
 // ————————————————————————————————————————————————————————————————————————————————————————
+// C02-01 Task 4: each survivor names the artifact its batch recorded, or says why not. Fixture ids
+// are literals, so the oracle is the fixture, never the lookup.
+// ————————————————————————————————————————————————————————————————————————————————————————
+
+describe("explain — artifactId (C02-01)", () => {
+  const A1 = "0123456789abcdef0123456789abcdef";
+  const A4 = "fedcba9876543210fedcba9876543210";
+  const artifacts = [
+    { batchIndex: 1, artifactId: A1, sha256: "a".repeat(64), appVersion: "1.0.1.1" },
+    { batchIndex: 4, artifactId: A4, sha256: "b".repeat(64), appVersion: "1.0.1.2" },
+  ];
+
+  test("each survivor names the artifact its batch recorded", () => {
+    // M0001 in batch 1 and M0001 AGAIN in batch 4 (ids restart per batch). Indexes 1 and 4, not 0
+    // and 1, so a lookup by array position fails here.
+    const out = explain(
+      reportFixture({
+        artifacts,
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0001", "exact", true, 4),
+        ],
+      }),
+    );
+    const [b1, b4] = out.survivors;
+    expect(b1?.batchIndex).toBe(1);
+    expect(b1?.artifactId).toBe(A1);
+    expect(b4?.batchIndex).toBe(4);
+    expect(b4?.artifactId).toBe(A4);
+    expect("artifactIdAbsent" in (b1 ?? {})).toBe(false);
+    expect("artifactIdAbsent" in (b4 ?? {})).toBe(false);
+  });
+
+  test("a carried survivor never borrows its batch's artifactId", () => {
+    const out = explain(
+      reportFixture({
+        artifacts,
+        mutants: [{ ...survivorMutant("M0001", "exact", true, 4), carried: true }],
+      }),
+    );
+    const [s] = out.survivors;
+    expect(s?.artifactIdAbsent).toBe("carried");
+    expect("artifactId" in (s ?? {})).toBe(false);
+  });
+
+  test("a batch with no artifact says not-published beside a published one", () => {
+    const [first] = artifacts;
+    if (first === undefined) throw new Error("fixture has no batch-1 artifact");
+    const out = explain(
+      reportFixture({
+        artifacts: [first],
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0001", "exact", true, 4),
+        ],
+      }),
+    );
+    const [b1, b4] = out.survivors;
+    expect(b1?.artifactId).toBe(A1);
+    expect(b4?.artifactIdAbsent).toBe("not-published");
+    expect("artifactId" in (b4 ?? {})).toBe(false);
+
+    const none = explain(
+      reportFixture({
+        artifacts: [],
+        mutants: [
+          survivorMutant("M0001", "exact", true, 1),
+          survivorMutant("M0002", "exact", true, 4),
+        ],
+      }),
+    );
+    expect(none.survivors.map((s) => s.artifactIdAbsent)).toEqual([
+      "not-published",
+      "not-published",
+    ]);
+  });
+
+  test("a report without artifacts says not-recorded", () => {
+    const out = explain(reportFixture());
+    expect(out.survivors.length).toBeGreaterThan(0);
+    for (const s of out.survivors) {
+      expect(s.artifactIdAbsent).toBe("not-recorded");
+      expect("artifactId" in s).toBe(false);
+    }
+  });
+
+  test("a malformed artifacts[] is refused", () => {
+    const entry = { batchIndex: 1, artifactId: A1, sha256: "a".repeat(64), appVersion: "1.0.1.1" };
+    for (const value of [
+      "not an array",
+      [entry, { ...entry, artifactId: A4 }], // batchIndex 1 twice
+      [{ ...entry, batchIndex: "1" }],
+      [{ ...entry, batchIndex: -1 }],
+      [{ ...entry, batchIndex: 1.5 }],
+      [{ ...entry, artifactId: 7 }],
+      [null],
+    ]) {
+      const bad = reportFixture({ artifacts: value } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/artifacts/);
+    }
+  });
+
+  test("a malformed survivor batchIndex is refused when the report names artifacts", () => {
+    const { batchIndex: _dropped, ...noBatch } = survivorMutant("M0001", "exact", true, 4);
+    for (const row of [noBatch, { ...survivorMutant("M0001", "exact", true), batchIndex: "1" }]) {
+      const bad = reportFixture({ artifacts, mutants: [row] } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/batchIndex/);
+    }
+  });
+
+  // Review finding 1 (C02-01 round 1): `batchIndex` is a REQUIRED report-row field and
+  // `survivorOf` copies it, so a bad one is malformed whether or not the report names artifacts.
+  test("a malformed survivor batchIndex is refused when the report has NO artifacts", () => {
+    const { batchIndex: _dropped, ...noBatch } = survivorMutant("M0007", "exact", true, 4);
+    const rows = [noBatch, "1", -1, 1.5, null].map((bi) =>
+      bi === noBatch ? noBatch : { ...survivorMutant("M0007", "exact", true), batchIndex: bi },
+    );
+    for (const row of rows) {
+      const bad = reportFixture({ mutants: [row] } as unknown as Partial<SessionReport>);
+      expect("artifacts" in bad).toBe(false);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/"M0007".*batchIndex/);
+    }
+  });
+
+  test("a malformed readerMark is refused rather than projected as an empty mark", () => {
+    for (const value of [null, "x", { key: "K" }, { key: "K", reason: 7 }]) {
+      const bad = reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact", true), readerMark: value }],
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/readerMark/);
+    }
+  });
+
+  test("a non-boolean carried is refused", () => {
+    for (const value of ["true", 1, null]) {
+      const bad = reportFixture({
+        mutants: [{ ...survivorMutant("M0001", "exact", true), carried: value }],
+      } as unknown as Partial<SessionReport>);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/carried/);
+    }
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————————————————————
 // R113: `explain` is the first consumer to meet the blind `JSON.parse(...) as SessionReport` cast.
 // ————————————————————————————————————————————————————————————————————————————————————————
 
@@ -1429,6 +1750,30 @@ describe("explain — the real campaign reports", () => {
           .filter((s) => !allowed.has(s))
           .map((s) => `${name}: ${s}`),
       ).toEqual([]);
+      // C02-01: every survivor has exactly one of `artifactId` / `artifactIdAbsent`.
+      for (const s of out.survivors) {
+        expect(`${name}: ${"artifactId" in s} ${"artifactIdAbsent" in s}`).toMatch(
+          /: (true false|false true)$/,
+        );
+      }
+    }
+  });
+
+  test("rung1.resumed-run: carried survivors say carried, the rest say not-recorded (C02-01)", () => {
+    const raw = load("rung1.resumed-run.report.json");
+    const out = explain(raw);
+    // Keyed by (batchIndex, mutantCode): mutant ids restart per batch.
+    const id = (m: { batchIndex?: number; mutantCode: string }) =>
+      `${m.batchIndex}/${m.mutantCode}`;
+    const carried = new Set(
+      raw.mutants.filter((m) => m.verdict === "survived" && m.carried === true).map(id),
+    );
+    expect(carried.size).toBe(54); // measured 2026-09-25: 108 survivors, 54 carried
+    // The OUTPUT count, so the loop below cannot pass on zero projected survivors.
+    expect(out.survivors.length).toBe(108);
+    for (const s of out.survivors) {
+      expect("artifactId" in s).toBe(false);
+      expect(s.artifactIdAbsent).toBe(carried.has(id(s)) ? "carried" : "not-recorded");
     }
   });
 
