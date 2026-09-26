@@ -1303,6 +1303,8 @@ async function prepareArtifactDir(args: {
   readonly projectManifest: Readonly<Record<string, unknown>>;
   readonly appVersion: string;
   readonly artifactId: string;
+  /** C02-06: the generation snapshot to copy the uninstrumented files from; see `prepareBatchProject`. */
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -1315,7 +1317,13 @@ async function prepareArtifactDir(args: {
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
   });
-  await prepareBatchProject(args.projectDir, args.targetDir, args.projectManifest, args.appVersion);
+  await prepareBatchProject(
+    args.projectDir,
+    args.targetDir,
+    args.projectManifest,
+    args.appVersion,
+    args.source,
+  );
 }
 
 /**
@@ -1359,6 +1367,7 @@ async function bisectAndNote(args: {
   // publishing a narrowed candidate to a live server violates spec §8 regardless.
   readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -1372,6 +1381,7 @@ async function bisectAndNote(args: {
           projectManifest: args.projectManifest,
           appVersion: args.appVersion,
           artifactId: args.artifactId,
+          source: args.source,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -3907,6 +3917,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // copies of the uninstrumented files; recorded only when the two agree.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
   const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
+  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
+  // recorded anyway, so the disk is read as before.
+  const sourceSnapshot =
+    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -3923,7 +3938,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
-    ...("snapshot" in sourceHashAtGeneration ? { source: sourceHashAtGeneration.snapshot } : {}),
+    ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
@@ -4200,7 +4215,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // ceiling); build/revision are clock-derived (see app-version.ts). The reservation is
       // wrapped so an out-of-range or malformed app.json version aborts the session with an
       // error naming the actual input, before anything is written or compiled.
-      const projectManifest = await readProjectManifest(cfg.projectDir, batchIdx);
+      const projectManifest = await readProjectManifest(cfg.projectDir, batchIdx, sourceSnapshot);
       const sourceVersion = projectManifest.version;
       if (typeof sourceVersion !== "string") {
         throw new Error(
@@ -4239,6 +4254,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         projectManifest,
         appVersion,
         artifactId,
+        source: sourceSnapshot,
       });
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -4466,6 +4482,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           artifactId: newArtifactId(),
           compileCheck: (dir) => cfg.backend.compileCheck(dir),
           originalErr: deployErr,
+          source: sourceSnapshot,
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -4928,6 +4945,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 // exactly what bisection candidates are — compileCheck doesn't change that.
                 compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
+                source: sourceSnapshot,
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -6704,6 +6722,13 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** A snapshot entry, or a loud bug: a snapshot always holds every file it is asked for. */
+function snapshotBytes(source: ReadonlyMap<string, Buffer>, rel: string): Buffer {
+  const bytes = source.get(rel);
+  if (bytes === undefined) throw new Error(`${rel} is not in the source snapshot`);
+  return bytes;
+}
+
 /**
  * Reads and parses the target project's `app.json`. Throws (aborting the
  * whole session, uncaught by the per-batch deploy try/catch) if it is
@@ -6713,11 +6738,15 @@ async function pathExists(p: string): Promise<boolean> {
 async function readProjectManifest(
   projectDir: string,
   batchIdx: number,
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<Record<string, unknown>> {
   const appJsonPath = join(projectDir, "app.json");
   let raw: string;
   try {
-    raw = await readFile(appJsonPath, "utf8");
+    raw =
+      source !== undefined
+        ? snapshotBytes(source, "app.json").toString("utf8")
+        : await readFile(appJsonPath, "utf8");
   } catch (err) {
     throw new Error(
       `cannot deploy batch ${batchIdx}: target project has no app.json at ${appJsonPath} ` +
@@ -6791,6 +6820,7 @@ export async function prepareBatchProject(
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
   appVersion: string,
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<void> {
   await writeStampedAppJson(batchDir, projectManifest, appVersion);
 
@@ -6808,9 +6838,13 @@ export async function prepareBatchProject(
   // So collisions are detected here on the SOURCE paths, independently of what is already on
   // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
   // files, so the flattening survives there — by luck, not by design.)
-  // C02-06: the `.al` set comes from `targetAlFiles`, which `hashTargetSource` hashes too, so the
-  // recorded source hash covers exactly the AL this copies.
-  const alFiles = await targetAlFiles(projectDir);
+  // C02-06: the `.al` set and bytes come from `source`, the snapshot generation hashed and parsed,
+  // so every batch compiles exactly the recorded bytes whatever happens on disk meanwhile. Without
+  // one, `targetAlFiles`, which `hashTargetSource` enumerates too.
+  const alFiles =
+    source !== undefined
+      ? [...source.keys()].filter((rel) => rel.toLowerCase().endsWith(".al"))
+      : await targetAlFiles(projectDir);
   const alBySeenBasename = new Map<string, string>();
   for (const rel of alFiles) {
     const base = basename(rel);
@@ -6823,7 +6857,8 @@ export async function prepareBatchProject(
     alBySeenBasename.set(base.toLowerCase(), rel);
     const dest = join(batchDir, base);
     if (await pathExists(dest)) continue;
-    await copyFile(join(projectDir, rel), dest);
+    if (source !== undefined) await writeFile(dest, snapshotBytes(source, rel));
+    else await copyFile(join(projectDir, rel), dest);
   }
 
   // Every directory that holds at least one `.al` file. A resource named relative to an AL file is

@@ -3547,6 +3547,68 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // C02-06 run 002 residual: batches copied the uninstrumented `.al` files and `app.json` from disk,
+  // so an edit landing after generation and undone before the last read reached the build while
+  // both source hashes agreed. Every batch now copies the snapshot generation hashed and parsed.
+  // The edit lands when generation ends and is undone right after the batch is prepared, which is
+  // before the last read.
+  test("a batch compiles the generation snapshot, not a later edit that was undone before the last read", async () => {
+    const dirs = await makeProject();
+    const noOp = join(dirs.projectDir, "SandboxNoOp.Codeunit.al");
+    const appJson = join(dirs.projectDir, "app.json");
+    writeFileSync(noOp, NO_MUTANTS_AL);
+    const expected = await hashTargetSource(dirs.projectDir, []);
+    const editedNoOp = NO_MUTANTS_AL.replace("NoOp()", "NoOpEdited()");
+    const editedAppJson = APP_JSON.replace("Sandbox Orchestrator Fixture", "EDITED-APP-JSON");
+    expect(editedNoOp).not.toBe(NO_MUTANTS_AL);
+    expect(editedAppJson).not.toBe(APP_JSON);
+    const real = orchestratorModule.prepareBatchProject;
+    let prepared = 0;
+    const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
+      async (...args) => {
+        await real(...args);
+        prepared += 1;
+        writeFileSync(noOp, NO_MUTANTS_AL);
+        writeFileSync(appJson, APP_JSON);
+      },
+    );
+    const store = new ResultsStore(":memory:");
+    const backend = new PhaseBackend();
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [
+          (e) => {
+            if (e.type === "phase-left" && e.phase === "generate") {
+              writeFileSync(noOp, editedNoOp);
+              writeFileSync(appJson, editedAppJson);
+            }
+          },
+        ],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(prepared).toBe(1);
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const record = store.artifactRecordById(returned.artifactId);
+    expect(record?.sourceSha256).toBe(expected);
+    const instrumentedDir = record?.instrumentedDir;
+    if (instrumentedDir === undefined || instrumentedDir === null) {
+      throw new Error("expected an artifact record with its batch dir");
+    }
+    expect(readFileSync(join(instrumentedDir, "SandboxNoOp.Codeunit.al"), "utf8")).toBe(
+      NO_MUTANTS_AL,
+    );
+    const builtManifest = JSON.parse(readFileSync(join(instrumentedDir, "app.json"), "utf8"));
+    expect(builtManifest.name).toBe("Sandbox Orchestrator Fixture");
+    store.close();
+  });
+
   // C02-06 review r1 item 2: a resume across a preprocessor-symbol change must start fresh, since
   // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
   test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {
