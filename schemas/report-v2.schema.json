@@ -368,6 +368,25 @@
           "procedureEndLine": {
             "type": "number"
           },
+          "equivalenceRisk": {
+            "type": "string"
+          },
+          "readerMark": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "reason"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
           "startIndex": {
             "type": "number"
           },

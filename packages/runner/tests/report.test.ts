@@ -7,6 +7,7 @@ import type { PermissionCanaryResult } from "../src/permission-canary";
 import { buildReport, renderConsole } from "../src/report";
 import type { Caveat, SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
+import { identityKeyOf, serializeKey } from "../src/selection";
 
 // ————————————————————————————————————————————————————————————————————————
 // R7/R8: `renderConsole` repeats the al-runner canary's measured verdict at the END of the
@@ -426,6 +427,190 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     });
     expect("procedureStartLine" in bare).toBe(false);
     expect("procedureEndLine" in bare).toBe(false);
+  });
+
+  // ----------------------------------------------------------------------
+  // C02-01 Task 2: `equivalenceRisk` and `readerMark` are decided per ROW. Mutant ids restart per
+  // batch, so two batches can both hold an `M0001`, and the run-level lists keyed by bare
+  // `mutantCode` cannot say which batch they mean (R231). Operator facts are registry literals:
+  // `lethal.remove-assignment` declares `value-rewrite`, `lethal.negate-conditional` declares none.
+  // ----------------------------------------------------------------------
+  describe("per-row equivalenceRisk and readerMark (C02-01)", () => {
+    const B0 = mutant("M0001", { astHash: "hash-b0" });
+    const B1 = mutant("M0001", { astHash: "hash-b1", operatorName: "lethal.negate-conditional" });
+    // A trigger row: its `procedureName` is "" and its member is named by `triggerName`.
+    const TRIGGER = mutant("M0002", {
+      astHash: "hash-trg",
+      procedureName: "",
+      triggerName: "OnInsert",
+    });
+    const KILLED = mutant("M0003", { astHash: "hash-killed" });
+    const KEY_B1 = serializeKey(identityKeyOf(B1));
+    const KEY_KILLED = serializeKey(identityKeyOf(KILLED));
+    // Today's `??` key for the trigger row, i.e. the way the RUN-LEVEL list keys it: the procedure
+    // field is "" because `"" ?? triggerName` never reaches `triggerName`. This is R229's BUG, not
+    // the correct identity. R229's fix changes this constant to `serializeKey(identityKeyOf(TRIGGER))`;
+    // a test that reads it as the right key would obstruct that fix.
+    const LEGACY_R229_TRIGGER_KEY = serializeKey({ ...identityKeyOf(TRIGGER), procedureName: "" });
+    const STALE_KEY = serializeKey(identityKeyOf(mutant("M0009", { astHash: "hash-gone" })));
+    const MARKS = [
+      { key: KEY_B1, reason: "R-b1" },
+      { key: LEGACY_R229_TRIGGER_KEY, reason: "R-trg" },
+      { key: KEY_KILLED, reason: "R-killed" },
+      { key: STALE_KEY, reason: "R-stale" },
+    ];
+
+    function scored(
+      m: MutantManifestEntry,
+      batchIndex: number,
+      verdict: "survived" | "killed" | "known-survivor",
+    ): RunEventInput {
+      return {
+        type: "mutant-scored",
+        mutant: m,
+        verdict,
+        batchIndex,
+        durationMs: 500,
+        coveringTests: [],
+        ...(verdict === "killed" ? { killingTest: "Sales Helper Tests.T1" } : {}),
+      };
+    }
+
+    function setGenerated(n: number): RunEventInput {
+      return {
+        type: "mutation-set-generated",
+        siteCount: n,
+        deployedCount: n,
+        hangCapableCount: 0,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      };
+    }
+
+    // Two batches, both holding an `M0001`, each batch with its own baseline.
+    const TWO_BATCH_EVENTS = seq([
+      setGenerated(4),
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      scored(B0, 0, "survived"),
+      scored(KILLED, 0, "killed"),
+      { type: "baseline-batch-finished", batchIndex: 1, verdicts: [] },
+      scored(B1, 1, "survived"),
+      scored(TRIGGER, 1, "survived"),
+      { type: "session-finished", elapsedMs: 2_000 },
+    ]);
+
+    test("two batches reusing M0001 keep their own risk and mark (C02-01)", () => {
+      const report = buildReport(
+        { ...STATICS, equivalenceMarks: [{ key: KEY_B1, reason: "R-b1" }] },
+        TWO_BATCH_EVENTS,
+      );
+      const row = (b: number) =>
+        report.mutants.find((m) => m.batchIndex === b && m.mutantCode === "M0001");
+      expect(row(0)).toBeDefined();
+      expect(row(1)).toBeDefined();
+      expect(row(0)?.equivalenceRisk).toBe("value-rewrite");
+      expect("readerMark" in (row(0) ?? {})).toBe(false);
+      expect("equivalenceRisk" in (row(1) ?? {})).toBe(false);
+      expect(row(1)?.readerMark).toEqual({ key: KEY_B1, reason: "R-b1" });
+    });
+
+    test("a killed row whose identity is marked carries no readerMark, and a killed risk row no risk (C02-01)", () => {
+      const survivor = mutant("M0002", { astHash: "hash-ks" });
+      const KEY_KS = serializeKey(identityKeyOf(survivor));
+      const report = buildReport(
+        {
+          ...STATICS,
+          equivalenceMarks: [
+            { key: KEY_KILLED, reason: "R-killed" },
+            { key: KEY_KS, reason: "R-ks" },
+          ],
+        },
+        seq([
+          setGenerated(2),
+          { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+          scored(mutant("M0001", { astHash: "hash-killed" }), 0, "killed"),
+          scored(survivor, 0, "known-survivor"),
+          { type: "session-finished", elapsedMs: 1_000 },
+        ]),
+      );
+      const byId = new Map(report.mutants.map((m) => [m.mutantCode, m]));
+      const killed = byId.get("M0001");
+      const known = byId.get("M0002");
+      if (killed === undefined || known === undefined)
+        throw new Error("buildReport dropped a mutant");
+      // Risk is `survived`-only, like the run-level list: the known-survivor row is checked first
+      // so dropping that filter fails on it, not only on the killed row.
+      expect("equivalenceRisk" in known).toBe(false);
+      expect("equivalenceRisk" in killed).toBe(false);
+      expect("readerMark" in killed).toBe(false);
+      expect(known.readerMark).toEqual({ key: KEY_KS, reason: "R-ks" });
+      expect(report.readerMarkedEquivalent?.contradicted.map((c) => c.mutantCode)).toEqual([
+        "M0001",
+      ]);
+      expect(report.readerMarkedEquivalent?.matched.map((c) => c.mutantCode)).toEqual(["M0002"]);
+    });
+
+    test("run-level lists are unchanged by C02-01", () => {
+      // Both objects are LITERALS captured from `buildReport` at fd72825, before C02-01 Task 2
+      // touched report.ts. Never derive them from the new rows: that would compare the change
+      // with itself.
+      const report = buildReport({ ...STATICS, equivalenceMarks: MARKS }, TWO_BATCH_EVENTS);
+      expect(report.likelyEquivalentSurvivors).toEqual({
+        count: 2,
+        byRisk: [
+          {
+            risk: "value-rewrite",
+            mutants: ["M0001", "M0002"],
+            meaning:
+              "This operator rewrites a written or compared VALUE. Where nothing downstream reads that value, the mutant is equivalent and no source-derived layer can see it without dataflow. Read these survivors as leads only after checking that something actually depends on the value.",
+          },
+        ],
+      });
+      expect(report.readerMarkedEquivalent).toEqual({
+        matched: [
+          {
+            mutantCode: "M0001",
+            key: "hash-b1|Sales Helper|ComputeTotal|lethal.negate-conditional|1",
+            reason: "R-b1",
+          },
+          {
+            mutantCode: "M0002",
+            key: "hash-trg|Sales Helper||lethal.remove-assignment|1",
+            reason: "R-trg",
+          },
+        ],
+        stale: ["hash-gone|Sales Helper|ComputeTotal|lethal.remove-assignment|1"],
+        contradicted: [
+          {
+            mutantCode: "M0003",
+            key: "hash-killed|Sales Helper|ComputeTotal|lethal.remove-assignment|1",
+            reason: "R-killed",
+            verdict: "killed",
+          },
+        ],
+      });
+    });
+
+    test("row marks and the run-level matched list agree (C02-01)", () => {
+      const report = buildReport({ ...STATICS, equivalenceMarks: MARKS }, TWO_BATCH_EVENTS);
+      const rowMarked = report.mutants
+        .filter((m) => m.readerMark !== undefined)
+        .map((m) => ({
+          mutantCode: m.mutantCode,
+          key: m.readerMark?.key,
+          reason: m.readerMark?.reason,
+        }))
+        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+      const matched = report.readerMarkedEquivalent?.matched ?? [];
+      // Non-empty on both sides, so an empty-vs-empty "agreement" cannot pass.
+      expect(matched.length).toBe(2);
+      expect(rowMarked).toEqual(matched.map((m) => ({ ...m })));
+    });
   });
 
   test("explains every hang-capable reason it can carry", () => {

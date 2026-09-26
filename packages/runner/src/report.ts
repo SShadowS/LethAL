@@ -11,7 +11,12 @@ import {
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
 import type { BackendCapabilities } from "./backend";
-import { type EquivalenceMarkReport, applyEquivalenceMarks } from "./equivalence-marks";
+import {
+  type EquivalenceMark,
+  type EquivalenceMarkReport,
+  SURVIVING_VERDICTS,
+  applyEquivalenceMarks,
+} from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
 import type { Interpretation } from "./interpretation";
@@ -1531,6 +1536,16 @@ export interface MutantOutcome {
    */
   readonly procedureStartLine?: number;
   readonly procedureEndLine?: number;
+  /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
+   *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
+   *  mutant ids restart per batch and that list's bare `mutantCode`s cannot say which batch
+   *  (R231). Absent: not recorded, which never means "not equivalent". */
+  readonly equivalenceRisk?: string;
+  /** C02-01. The reader's mark whose key equals this row's R166 identity, on a `survived` or
+   *  `known-survivor` row (the rule `readerMarkedEquivalent.matched` uses). Absent: no mark
+   *  matched, or the run had no marks file. A mark on any other verdict stays in `contradicted`
+   *  and never appears here. `reason` is the reader's own words. */
+  readonly readerMark?: { readonly key: string; readonly reason: string };
   readonly startIndex: number;
   readonly endIndex: number;
   readonly originalText: string;
@@ -1903,6 +1918,23 @@ const EQUIVALENCE_RISK_BY_OPERATOR: ReadonlyMap<string, string> = new Map(
     .map((o) => [o.name, o.equivalenceRisk as string]),
 );
 
+/**
+ * The R166 identity a reader's mark is matched against. ONE definition, used by the per-row
+ * `readerMark` and by the run-level `readerMarkedEquivalent`, so the two can never disagree. The
+ * `??` is R229's bug (a trigger row's `procedureName` is "", so `triggerName` is never reached);
+ * fixing it here fixes both.
+ */
+function markIdentityOf(m: MutantOutcome): string {
+  return serializeKey({
+    astHash: m.astHash,
+    codeunitName: m.codeunitName,
+    procedureName: m.procedureName ?? m.triggerName ?? "",
+    operatorName: m.operatorName,
+    operatorMajor: m.operatorMajor,
+    ordinal: m.identityOrdinal ?? 0,
+  });
+}
+
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
   // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
@@ -1921,6 +1953,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     deadlineExceeded: 0,
   };
   const mutants: MutantOutcome[] = [];
+  const marksByKey = new Map<string, EquivalenceMark>(
+    (statics.equivalenceMarks ?? []).map((mk) => [mk.key, mk]),
+  );
 
   for (const o of input.outcomes) {
     switch (o.verdict) {
@@ -1946,7 +1981,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         break;
     }
     const identity = identityKeyOf(o.mutant);
-    mutants.push({
+    const row: MutantOutcome = {
       mutantCode: o.mutant.mutantId,
       file: o.mutant.file,
       line: o.mutant.startLine,
@@ -1997,6 +2032,19 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.mutant.procedureEndLine !== undefined
         ? { procedureEndLine: o.mutant.procedureEndLine }
         : {}),
+    };
+    // C02-01: decided per ROW, by this row's operator and identity, because mutant ids restart
+    // per batch and the run-level lists below are keyed by bare `mutantCode` (R231). Same rules as
+    // those lists: risk on `survived` only, a mark on a surviving verdict only.
+    const risk =
+      row.verdict === "survived" ? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName) : undefined;
+    const mark = SURVIVING_VERDICTS.has(row.verdict)
+      ? marksByKey.get(markIdentityOf(row))
+      : undefined;
+    mutants.push({
+      ...row,
+      ...(risk !== undefined ? { equivalenceRisk: risk } : {}),
+      ...(mark !== undefined ? { readerMark: { key: mark.key, reason: mark.reason } } : {}),
     });
   }
 
@@ -2162,14 +2210,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       marks,
       mutants.map((m) => ({
         mutantCode: m.mutantCode,
-        identity: serializeKey({
-          astHash: m.astHash,
-          codeunitName: m.codeunitName,
-          procedureName: m.procedureName ?? m.triggerName ?? "",
-          operatorName: m.operatorName,
-          operatorMajor: m.operatorMajor,
-          ordinal: m.identityOrdinal ?? 0,
-        }),
+        identity: markIdentityOf(m),
         verdict: m.verdict,
       })),
     );
