@@ -74,6 +74,8 @@
     "probe-r58-differential.ts",
     "r236-baseline-probe/fetch-trace.ts",
     "r236-baseline-probe/fetch-trace.test.ts",
+    "r236-baseline-probe/probe.ts",
+    "r236-baseline-probe/probe.test.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts"
   ]
