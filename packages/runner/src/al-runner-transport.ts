@@ -319,7 +319,8 @@ function normalisePlatformAppsPath(p: string): string {
 }
 
 /**
- * Read the platform-app directory al-runner said it finished writing. R147.
+ * Read the platform-app directory al-runner said it finished writing, or, since R235, that it
+ * named in a verbose `[pkg-cache]` search-set line. R147.
  *
  * WHY THE COMPLETION SENTENCE AND NOT THE INTENT ONE. The same run also prints
  * `[provision] fetching Microsoft platform R2R apps for BC <v> <SEP> <dir>` BEFORE the download

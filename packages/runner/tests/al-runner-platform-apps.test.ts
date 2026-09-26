@@ -587,6 +587,10 @@ describe("R235: a warm 2.11 run names its platform-app search directory only in 
       { timeoutMs: 60_000, coverage: "none" },
     );
     expect(calls).toHaveLength(2);
+    // envs[1] must actually be the run() call's env, not "no env recorded" (which would also pass
+    // the not.toContain below for the wrong reason). run() always sends alRunnerEnv's own key.
+    expect(envs[1]).toBeDefined();
+    expect(Object.keys(envs[1] ?? {})).toContain("AL_RUNNER_TEST_TIMEOUT_SEC");
     expect(Object.keys(envs[1] ?? {})).not.toContain("AL_RUNNER_VERBOSE");
     expect(calls[1] ?? []).not.toContain("--verbose");
   });

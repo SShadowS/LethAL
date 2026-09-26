@@ -486,9 +486,10 @@ export class AlRunnerBackend implements ExecutionBackend {
    *    provisioning killed mid-download can have printed its completion sentence for the FIRST of
    *    R130's two passes and left the directory half rewritten by the second. `ran` is deliberately
    *    left alone — it exists for R128's warning and means what it says there.
-   * 2. **The runner printed a COMPLETION sentence naming exactly one directory.** See
-   *    `parseAlRunnerPlatformAppsDir` for why the intent sentence is not read and why two agreeing
-   *    passes are one answer.
+   * 2. **The runner printed a COMPLETION sentence naming exactly one directory, or (since R235) a
+   *    verbose `[pkg-cache]` search-set line naming one.** See `parseAlRunnerPlatformAppsDir` for
+   *    why the intent sentence is not read, why the `[pkg-cache]` line also qualifies (basis
+   *    `package-cache`), and why two agreeing passes are one answer.
    * 3. **That directory exists and holds at least as many `*.app` files as the runner said it
    *    wrote.** The count comes from the runner's own sentence; deciding a number ourselves would be
    *    the guess this check exists to avoid. It is what catches a provisioning that stopped part-way
