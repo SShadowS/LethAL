@@ -546,8 +546,9 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
  *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup
  *   - `artifacts` (each `batchIndex` once, `artifactId` a string) : C02-01, the per-batch lookup
- *   - a `survived` row's `batchIndex`, when `artifacts` is present : C02-01, the lookup key; a bad
- *                                            one would silently read as `not-published`
+ *   - a `survived` row's `batchIndex`      : C02-01, a required row field copied to the survivor
+ *                                            and the artifact lookup key; a bad one would silently
+ *                                            read as `not-published`
  *   - every mutant's `readerMark` (an object with string `key` and `reason`) : C02-01, read field
  *                                            by field; a bad one would throw or project as `{}`
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
@@ -719,19 +720,20 @@ export function assertExplainableReport(value: unknown): SessionReport {
       }
       seen.add(batchIndex);
     }
-    // A survivor's `batchIndex` is the lookup key. Missing, `"1"` or `1.5` would never match an
-    // entry and so read as `not-published`, a confident wrong answer. Only checked when the report
-    // names artifacts, so every archived report still projects.
-    for (const m of mutants) {
-      const mutant = m as Record<string, unknown>;
-      if (mutant.verdict !== "survived") continue;
-      const bi = mutant.batchIndex;
-      if (typeof bi !== "number" || !Number.isInteger(bi) || bi < 0) {
-        refuse(
-          `mutant ${JSON.stringify(mutant.mutantCode)} is \`survived\` with a batchIndex that is not a non-negative integer, so its artifact cannot be looked up`,
-          bi,
-        );
-      }
+  }
+  // A survivor's `batchIndex` is a REQUIRED report-row field: `survivorOf` copies it, and it is the
+  // artifact lookup key. Missing, `"1"` or `1.5` is a malformed report whether or not `artifacts`
+  // exists; with artifacts it would also never match an entry and read as `not-published`, a
+  // confident wrong answer. Every committed report carries it, so every one still projects.
+  for (const m of mutants) {
+    const mutant = m as Record<string, unknown>;
+    if (mutant.verdict !== "survived") continue;
+    const bi = mutant.batchIndex;
+    if (typeof bi !== "number" || !Number.isInteger(bi) || bi < 0) {
+      refuse(
+        `mutant ${JSON.stringify(mutant.mutantCode)} is \`survived\` with a batchIndex that is not a non-negative integer`,
+        bi,
+      );
     }
   }
   // The two session-level branches. `quarantined: null` would pass a bare `!== undefined` test and

@@ -1518,6 +1518,21 @@ describe("explain — artifactId (C02-01)", () => {
     }
   });
 
+  // Review finding 1 (C02-01 round 1): `batchIndex` is a REQUIRED report-row field and
+  // `survivorOf` copies it, so a bad one is malformed whether or not the report names artifacts.
+  test("a malformed survivor batchIndex is refused when the report has NO artifacts", () => {
+    const { batchIndex: _dropped, ...noBatch } = survivorMutant("M0007", "exact", true, 4);
+    const rows = [noBatch, "1", -1, 1.5, null].map((bi) =>
+      bi === noBatch ? noBatch : { ...survivorMutant("M0007", "exact", true), batchIndex: bi },
+    );
+    for (const row of rows) {
+      const bad = reportFixture({ mutants: [row] } as unknown as Partial<SessionReport>);
+      expect("artifacts" in bad).toBe(false);
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/"M0007".*batchIndex/);
+    }
+  });
+
   test("a malformed readerMark is refused rather than projected as an empty mark", () => {
     for (const value of [null, "x", { key: "K" }, { key: "K", reason: 7 }]) {
       const bad = reportFixture({
