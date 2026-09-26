@@ -5,6 +5,7 @@ import type { CallTrace } from "./fetch-trace";
 // Imported WITH its extension: R186's importer check matches by basename, so a bare "./probe" is read as
 // importing the unguarded `scripts/r126-server-probe/probe.ts`. This probe.ts is guarded by import.meta.main.
 import {
+  containerFromServer,
   containerScript,
   decideActionEnded,
   decideExit,
@@ -156,6 +157,7 @@ describe("gatherEvidence (review r1 IMPORTANT 3: evidence failures never lose th
     },
   ];
   const input = {
+    container: "Cronus284",
     tenant: "default",
     sessionStartedAt: "2026-09-26T10:00:00.000Z",
     ranAnswerSessionId: null,
@@ -284,12 +286,13 @@ describe("calibration 1: the SQL reads target the TENANT database", () => {
   // database (here `default`) does, and only Get-NAVTenant names it.
   const scripts = {
     probe: containerScript(
+      "Cronus284",
       "default",
       [{ attemptId: "a7", opSeq: 12 }],
       "2026-09-26T10:00:00.000",
       null,
     ),
-    calibrate: calibrationScript("default"),
+    calibrate: calibrationScript("Cronus284", "default"),
   };
   for (const [name, text] of Object.entries(scripts)) {
     test(`${name}: resolves the DB with Get-NAVTenant, prints it, never uses the server's DatabaseName`, () => {
@@ -299,4 +302,22 @@ describe("calibration 1: the SQL reads target the TENANT database", () => {
       expect(text).not.toContain("& $get 'DatabaseName'");
     });
   }
+});
+
+describe("the container comes from the config's server URL", () => {
+  test("the host of bcdev.server, case kept, with or without a port or path", () => {
+    expect(containerFromServer("http://Cronus284")).toBe("Cronus284");
+    expect(containerFromServer("http://Cronus284:7048/BC/")).toBe("Cronus284");
+    expect(containerFromServer("https://Cronus284/")).toBe("Cronus284");
+  });
+  test("an empty, missing or hostless server throws, naming the config field", () => {
+    expect(() => containerFromServer("")).toThrow("bcdev.server");
+    expect(() => containerFromServer(undefined)).toThrow("bcdev.server");
+    expect(() => containerFromServer("Cronus284")).toThrow("bcdev.server");
+  });
+  test("both container scripts target the container they are given", () => {
+    const probe = containerScript("Cronus284", "default", [], "2026-09-26T10:00:00.000", null);
+    expect(probe).toContain("-containerName Cronus284 ");
+    expect(calibrationScript("Cronus284", "default")).toContain("-containerName Cronus284 ");
+  });
 });

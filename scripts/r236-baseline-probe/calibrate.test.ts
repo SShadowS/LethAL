@@ -156,7 +156,7 @@ describe("parseCalibration", () => {
 
 describe("calibration 2: Session Event is scoped by server instance ID", () => {
   test("the Session Event read never names a Server Instance Name column and prints its scope", () => {
-    const text = calibrationScript("default");
+    const text = calibrationScript("Cronus284", "default");
     const evt = text.slice(text.indexOf("'R236-COLS:Session Event:'"));
     expect(evt).not.toContain("[Server Instance Name]");
     expect(evt).toContain("[Server Instance ID] = $instId");

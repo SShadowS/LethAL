@@ -51,7 +51,20 @@ const LAUNCH_LOCAL_PATH = `${PROJECT_DIR}/.vscode/launch.local.json`;
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 /** The fixture's one `return-value` mutant, covered only by the TestPage test: no mutant runs. */
 const ONLY = ["src/DataValueSource.Codeunit.al"];
-export const CONTAINER = "Cronus28";
+/**
+ * The BC container the evidence reads target, taken from the config's `bcdev.server` host (the
+ * probe moved from Cronus28 to Cronus284; a constant would silently read the wrong container).
+ * Case is kept (the URL parser would lowercase it). Throws when it cannot be derived.
+ */
+export function containerFromServer(server: string | undefined): string {
+  const host = /^[a-z][a-z0-9+.-]*:\/\/([^/:?#]+)/i.exec(server ?? "")?.[1];
+  if (host === undefined || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(host)) {
+    throw new Error(
+      `cannot derive the container name from bcdev.server ${JSON.stringify(server)}: expected a URL such as http://Cronus284`,
+    );
+  }
+  return host;
+}
 const HIT = "baseline test in-flight-unknown running PageActionComputesNonZero";
 const OTHER_BASELINE_IN_FLIGHT =
   /baseline test in-flight-unknown running (?!PageActionComputesNonZero)/;
@@ -121,6 +134,8 @@ interface SessionRecord {
   readonly stopReason: string | null;
   /** Not in the plan's shape: where the session's instrumented tree and scratch store live. */
   readonly scratchDir: string;
+  /** The container the evidence reads targeted, from `bcdev.server`. */
+  readonly container: string;
 }
 
 /**
@@ -287,6 +302,7 @@ export const TENANT_SQL_SETUP_PS = `$cfg = Get-NAVServerConfiguration -ServerIns
     if ((Get-Command Invoke-Sqlcmd).Parameters.ContainsKey('TrustServerCertificate')) { $sq.TrustServerCertificate = $true }`;
 
 export function containerScript(
+  container: string,
   tenant: string,
   ops: readonly EvidenceOp[],
   sessionSinceSql: string,
@@ -304,7 +320,7 @@ export function containerScript(
   const opsJson = JSON.stringify(ops.map((o) => ({ a: o.attemptId, s: o.opSeq })));
   return `
 Import-Module BcContainerHelper -DisableNameChecking
-Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant}', '${opsJson}', '${sessionSinceSql}', '${eventsSinceIso ?? ""}') -scriptblock { param($tenant, $opsJson, $sessionSince, $since)
+Invoke-ScriptInBcContainer -containerName ${container} -argumentList @('${tenant}', '${opsJson}', '${sessionSinceSql}', '${eventsSinceIso ?? ""}') -scriptblock { param($tenant, $opsJson, $sessionSince, $since)
   $sq = $null
   try {
     ${TENANT_SQL_SETUP_PS}
@@ -371,7 +387,12 @@ export interface PendingBroken {
  */
 export async function gatherEvidence(
   pending: readonly PendingBroken[],
-  input: { tenant: string; sessionStartedAt: string; ranAnswerSessionId: number | null },
+  input: {
+    container: string;
+    tenant: string;
+    sessionStartedAt: string;
+    ranAnswerSessionId: number | null;
+  },
   run: RunScript = runPwsh,
 ): Promise<{ broken: BrokenCall[]; control: SessionControl; evidence: string }> {
   for (const p of pending) {
@@ -392,6 +413,7 @@ export async function gatherEvidence(
   try {
     const firstDispatch = Math.min(...pending.map((p) => p.trace.dispatchedAt));
     const script = containerScript(
+      input.container,
       input.tenant,
       pending,
       new Date(Date.parse(input.sessionStartedAt) - 5_000).toISOString().slice(0, 23),
@@ -638,6 +660,8 @@ async function main(): Promise<void> {
   const launchCfg = await readOptionalLaunchConfig();
   const configFile = JSON.parse(await readFile(CONFIG_PATH, "utf8")) as LethalConfigFile;
   const bcdev = validateBcDevConfig(configFile.bcdev);
+  const container = containerFromServer(bcdev.server);
+  console.log(`container: ${container} (from bcdev.server ${bcdev.server})`);
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths)
     throw new HarnessFault(
@@ -811,6 +835,7 @@ async function main(): Promise<void> {
     // Slow path, never throws: second marker reads, then ONE container call for the progress rows,
     // the session-list positive control (recorded every session, hit or not) and the event log.
     const { broken, control } = await gatherEvidence(pending, {
+      container,
       tenant: bcdev.tenant ?? "default",
       sessionStartedAt: startedAt,
       ranAnswerSessionId: ran.sessionId,
@@ -846,6 +871,7 @@ async function main(): Promise<void> {
       ),
       stopReason,
       scratchDir,
+      container,
     };
     const written = writeRecord(out, record);
     console.log(

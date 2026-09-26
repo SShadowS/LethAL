@@ -43,7 +43,7 @@ import type { LethalConfigFile } from "../../packages/runner/src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
 import { HarnessVerifier } from "../../packages/runner/src/harness";
 // With the extension: R186's importer check matches by basename (see probe.test.ts).
-import { CONFIG_PATH, CONTAINER, TENANT_SQL_SETUP_PS, runPwsh } from "./probe.ts";
+import { CONFIG_PATH, TENANT_SQL_SETUP_PS, containerFromServer, runPwsh } from "./probe.ts";
 
 export type Verdict = "sound" | "not sound" | "not determinable";
 export type Pooling = "pooled" | "not pooled" | "not determinable";
@@ -278,12 +278,12 @@ export function parseCalibration(
   };
 }
 
-export function calibrationScript(tenant: string): string {
+export function calibrationScript(container: string, tenant: string): string {
   if (!/^[0-9A-Za-z_-]{1,64}$/.test(tenant))
     throw new Error(`refusing tenant ${JSON.stringify(tenant)}`);
   return `
 Import-Module BcContainerHelper -DisableNameChecking
-Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant}') -scriptblock { param($tenant)
+Invoke-ScriptInBcContainer -containerName ${container} -argumentList @('${tenant}') -scriptblock { param($tenant)
   $iso = { param($d) if ($d -is [datetime]) { $d.ToUniversalTime().ToString('o') } else { $null } }
   try {
     'R236-NST:' + (ConvertTo-Json -Compress -InputObject @(Get-NAVServerSession -ServerInstance BC -Tenant $tenant | ForEach-Object { @{ SessionID = [int]$_.SessionID; UserID = [string]$_.UserID; ClientType = [string]$_.ClientType; Login = (& $iso $_.LoginDatetime) } }))
@@ -370,6 +370,8 @@ async function main(): Promise<void> {
   };
   const harness = new HarnessVerifier(odataCfg);
   const tenant = bcdev.tenant ?? "default";
+  const container = containerFromServer(bcdev.server);
+  console.log(`container: ${container} (from bcdev.server ${bcdev.server})`);
   const opts = { recentMs, tolMs: 5_000 };
   const judged: RoundVerdicts[] = [];
   for (let round = 1; round <= rounds; round++) {
@@ -388,7 +390,7 @@ async function main(): Promise<void> {
       }
       burst.end = Date.now();
     })();
-    const r = await runPwsh(calibrationScript(tenant)).catch((err: unknown) => ({
+    const r = await runPwsh(calibrationScript(container, tenant)).catch((err: unknown) => ({
       stdout: "",
       stderr: `spawn failed: ${String(err)}`,
       code: -1,
@@ -414,7 +416,7 @@ async function main(): Promise<void> {
     };
     appendFileSync(
       out,
-      `${JSON.stringify({ kind: "round", round, ...data, verdicts, observed, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
+      `${JSON.stringify({ kind: "round", container, round, ...data, verdicts, observed, raw: { code: r.code, stdout: r.stdout, stderr: r.stderr } })}\n`,
     );
     if (verdicts.pooling === "not determinable" && observed.newestFinishedAgeMin !== null) {
       console.log(
@@ -425,7 +427,10 @@ async function main(): Promise<void> {
     if (round < rounds) await Bun.sleep(intervalMs);
   }
   const summary = aggregate(judged);
-  appendFileSync(out, `${JSON.stringify({ kind: "summary", rounds, recentMs, ...summary })}\n`);
+  appendFileSync(
+    out,
+    `${JSON.stringify({ kind: "summary", container, rounds, recentMs, ...summary })}\n`,
+  );
   console.log(`summary: ${JSON.stringify(summary)}`);
   process.exit(0);
 }
