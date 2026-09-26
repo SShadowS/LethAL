@@ -1759,14 +1759,19 @@ export type SurvivorReach =
  * this build wrote (it carries `reachGrain`) is `not-decided`: for `enclosing`/`unplaced` grain, a
  * `--resume`-carried row, or a statement run that ended without an answer, the batch-wide guard
  * signal must not decide it either, which is the false "unreached" GH-24 exists to stop. Only an
- * archived row (no grain) keeps the R116 derivation.
+ * archived row (no grain, not carried) keeps the R116 derivation. A carried row is `not-decided`
+ * first, before anything else is read (GH-24b).
  */
 export function survivorReachOf(
   attribution: CoverageAttribution,
   guardEvidence: GuardEvidence,
   guardReached: boolean | undefined,
   reachGrain: ReachGrain | undefined,
+  carried: boolean,
 ): SurvivorReach {
+  // GH-24b: a `--resume`-carried row's reach was not measured in this run, grain or no grain. Without
+  // this arm a carried row with no grain looks archived and the batch-wide signal decides it.
+  if (carried) return "not-decided";
   if (guardReached === true) return "reached-unnoticed";
   if (guardReached === false)
     return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
