@@ -292,9 +292,10 @@ A row with no `artifactId` carries `artifactIdAbsent` instead:
 
 Verify works on `bcdev` only. It prints one JSON object on stdout and its progress on stderr. The
 ids are checked when verify runs, not when the argv is parsed, so a wrong id is exit `6` with
-`malformed-request` rather than a usage error. Each call publishes the test app once. **The test
-project IS published, and it stays installed afterwards**: verify does not put back the one that
-was there before.
+`malformed-request` rather than a usage error (exit `1`). Each call that runs at least one survivor
+publishes the test app once. **The test project IS published, and it stays installed afterwards**:
+verify does not put back the one that was there before. A refused or all-skipped call publishes
+nothing.
 
 ### Reading a verify result (checked)
 
@@ -308,15 +309,16 @@ was there before.
 
 `killedBy` never changes the exit code: a kill by a runtime error is still a kill, and says only
 that no assertion caught it. `killedByNewTest` says whether the killing test is one your edit
-added. `invalidBaseline` lists requested tests without a valid green unmutated run, so their
-passing proves nothing.
+added. `invalidBaseline` lists the requested tests that had no fresh green unmutated run. Verify then
+does not run the mutant at all: that survivor's row is `error`. Fix those tests (they must pass
+unmutated, in a fresh session) and run verify again.
 
 ### Verify exit codes (checked)
 
 | code | meaning |
 |---|---|
-| `0` | Every named survivor was killed and every new test is `stable`. Also returned when every survivor skipped, which measured nothing. |
-| `1` | An uncaught failure. There is no result. |
+| `0` | Every named survivor was killed and every new test is `stable`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
+| `1` | An error, including an argv verify refuses (a missing flag, the `--out` trap). The message is on stderr and there is no JSON. |
 | `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`, which leave the container needing a recycle. |
 | `4` | Every non-skipped survivor is `error`: verify measured nothing. |
 | `5` | Not every named survivor was killed, or a new test is not `stable`. |
@@ -330,29 +332,29 @@ The set of reasons is checked; the advice is guidance.
 
 | reason | what to do |
 |---|---|
-| `malformed-request` | Fix the argv: a 32-character hex `--artifact` and `<batchIndex>/<mutantCode>` ids. |
+| `malformed-request` | Fix the argv: a 32-character lowercase hex `--artifact` and `<batchIndex>/<mutantCode>` ids. |
 | `unknown-artifact` | Pass the run's `--db` and the `artifactId` from explain. |
 | `batch-not-installed` | Only the last batch is installed. Run the slice in one batch. |
 | `wrong-batch` | Take the artifact and the id from the same explain row. |
 | `unknown-mutant` | Re-copy the mutant code from explain. |
-| `not-a-survivor` | That mutant was not a survivor. Drop the id. |
+| `not-a-survivor` | That mutant was not a survivor. Drop the id. If it is a known survivor the run skipped, run again without `--skip-known-survivors`. |
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
 | `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. |
 | `source-changed` | The target changed since it was instrumented. Run again. A test project nested inside the target makes every test edit trigger this (R260). |
 | `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
 | `no-tests-to-run` | Write a test first. |
 | `unsupported-config` | Verify runs on `bcdev` only, with no `envTool`. |
-| `project-unreadable` | The run's project path is gone. |
+| `project-unreadable` | The run's project path does not resolve from here. It is stored as `lethal run` was given it: run verify from the same directory, or run `lethal run` again. |
 | `equivalence-marks-unreadable` | Fix `lethal.equivalent.json`. |
 | `stale-artifact` | Another run published since. Run again and use the new artifact id. |
 | `artifact-files-unusable` | The run's local build files are gone or changed. Run again. |
 | `artifact-identity-unavailable` | The server could not say what is installed. Run `lethal doctor`. |
 | `test-app-manifest-unreadable` | Fix the test project's `app.json`. |
-| `test-app-symbols-unreadable` | Fix the test project's `.alpackages`. |
+| `test-app-symbols-unreadable` | Fix the test project's `.alpackages`, or the control app symbol file the config names. |
 | `test-app-compile-failed` | Fix the test AL; the detail has the compiler errors. |
 | `test-app-version-below-resident` | Raise the test app's version above the installed one. |
 | `test-app-publish-failed` | Read the detail. |
-| `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. |
+| `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 
 ### Marking an equivalent survivor (checked)
 

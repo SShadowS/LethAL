@@ -455,7 +455,12 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       .mutants;
     const survivors = rows.filter((m) => m.verdict === "survived" && !m.identityOrdinal);
     expect(survivors.length).toBeGreaterThan(0);
-    expect(survivors.some((m) => m.procedureName === "")).toBe(true); // the trigger rule is exercised
+    // A trigger row is present, so the fallback below matters; the doc must state it, or a reader
+    // following the recipe alone builds a key with an empty procedure name.
+    expect(survivors.some((m) => m.procedureName === "")).toBe(true);
+    expect(flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"))).toContain(
+      "Use `triggerName` when `procedureName` is empty.",
+    );
     const recipe = onlyLine(read(REFERENCE), (l) => l.startsWith("key = ")).slice("key = ".length);
     const keyOf = (m: ReportRow) =>
       recipe.replace(/<([A-Za-z]+)>/g, (_, name: string) => {
@@ -543,6 +548,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(VERIFY_REFUSED_EXIT_CODE).toBe(VERIFY_EXIT.refused);
     const rows = tableRows(section(read(REFERENCE), "Verify exit codes (checked)"));
     const codes = rows.map(([c = ""]) => ticks(c)[0] ?? "");
+    expect(codes.length, "a duplicated exit-code row").toBe(new Set(codes).size);
     expect(new Set(codes)).toEqual(new Set(["1", ...Object.values(VERIFY_EXIT).map(String)]));
     // Exit 3's row names exactly the test-app reasons that quarantine, and the refusal table none.
     const quarantining = Object.entries(TEST_APP_REFUSALS)
