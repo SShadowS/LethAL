@@ -117,12 +117,20 @@ middle, not the tool.
 | 0:00 | One slide: three objects, eight tests, all green. **Start the run immediately.** | "You have all written this app. Eight tests, all passing. Would you ship it?" |
 | 0:20 | The run streams verdicts while you walk the test list | Name the tests: error paths, a trigger assertion, an audit-trail check. Let them believe the suite. |
 | 0:40 | Run finishes. Read the summary. | "25 killed, 11 survived, 7 no-coverage. Coverage on `GetBalance` was 100% the whole time." |
-| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`** — the planted bug ranks sixth of nine and a cap of five cuts it. |
-| 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `executionProven: true` — a test provably ran this line and did not notice." |
+| 1:00 | `lethal explain report.json --top 10` | **Use `--top 10`, not `--top 5`**: on the frozen report the planted bug ranks sixth of nine and a cap of five cuts it (see the note below the table). |
+| 1:20 | The planted survivor: the deleted `SetRange` | "One line gone, every test green. This function now returns the whole store's outstanding balance instead of this card's. `executionProven: true`: a test provably ran `GetBalance`, the procedure this line is in, and did not notice." |
 | 2:10 | The `no-coverage` cluster: `BlockExpiredCards` | "Seven mutants, no test executed any of them. That is the nightly job. Expiry *is* tested — at redeem time, which is different code." |
 | 2:40 | The honest beat: the expiry boundary survivor | "Is a card valid ON its expiry date? Nobody wrote that down, so the tool will not tell you it is a bug. A survivor is a lead, not a verdict." |
 | 3:10 | The agent loop (§ below), or its recording | "The output was built for this: an agent reads the report, writes the test, re-runs." |
 | 4:40 | Close | "Green suite, shippable bug, one loop to close it. It runs on your app this afternoon." |
+
+**Note, 2026-09-26 (GH-24b).** Two claims in this table were measured on the frozen
+`rehearsal.report.json`, which was written before GH-24 gave each survivor its own reach: that the
+planted bug ranks sixth of nine, and the old 1:20 line, which said `executionProven` means a test ran
+this line. Explain now ranks a survivor by its own reach first, so on a report from a current build
+the rank can move. Re-read both on a new report before you quote them (R257). `executionProven` is
+procedure-level: it says a covering test entered the mutated PROCEDURE, not that the mutated line
+ran. On a current report, `reach` and `reachedBy` answer the line question where they are decided.
 
 ### The agent loop (D5)
 
