@@ -530,6 +530,23 @@ describe("BcDevMcpBackend.attach", () => {
     }
   });
 
+  test("a refused attach unbinds the transport an earlier attach had bound", async () => {
+    const s = await attachSetup({});
+    const transportOf = () =>
+      (s.backend as unknown as { runMutantTransport?: unknown }).runMutantTransport;
+    try {
+      await s.backend.attach(s.bound);
+      expect(transportOf()).toBeDefined();
+      const err = await s.backend
+        .attach({ ...s.bound, appPath: join(s.bound.instrumentedDir, "missing.app") })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({ reason: "local-copy-unreadable" });
+      expect(transportOf()).toBeUndefined();
+    } finally {
+      await s.cleanup();
+    }
+  });
+
   test("InstalledArtifactError is not a DeploymentError or an AlcCompileError", () => {
     const err = new InstalledArtifactError("mismatch", "x");
     expect(err).toBeInstanceOf(Error);

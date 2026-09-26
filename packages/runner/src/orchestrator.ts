@@ -31,7 +31,12 @@ import type { AlRunnerProvisionResult } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
-import { AlcCompileError, ArtifactPrepareError, DeploymentError } from "./artifact";
+import {
+  AlcCompileError,
+  ArtifactPrepareError,
+  DeploymentError,
+  InstalledArtifactError,
+} from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
@@ -94,6 +99,7 @@ import type {
   SessionReport,
 } from "./report";
 import type { FoldStatics } from "./report-fold";
+import { applyBatchInvalidations } from "./report-fold";
 import { quarantineResourceKey } from "./resource-key";
 import {
   CARRYABLE_VERDICTS,
@@ -134,7 +140,17 @@ import { describeTestPageUnsupported } from "./testpage-unsupported";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
-export type { NamedMutantRequest } from "./named-mutants";
+export type { InstalledArtifactRef, NamedMutantRequest } from "./named-mutants";
+export { NamedMutantError } from "./named-mutants";
+import {
+  type InstalledArtifactRef,
+  NamedMutantError,
+  type NamedMutantRequest,
+  type ResolvedNamedMutant,
+  baselineTestsOf,
+  loadInstalledArtifact,
+  resolveNamedMutants,
+} from "./named-mutants";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
@@ -2961,6 +2977,8 @@ function assertLeaseConfigured(
 
 /** C02-04: the session's quarantine consult (spec sections 8 and 9). Throws on a quarantined tier. */
 async function consultQuarantine(a: {
+  /** Names the caller in the warning: "runSession" (its text is pinned) or "runNamedMutants". */
+  who: string;
   caps: BackendCapabilities;
   resourceServer?: string;
   resourceServerInstance?: string;
@@ -2997,10 +3015,7 @@ async function consultQuarantine(a: {
     a.emit({
       type: "warning",
       code: "quarantine-consult-disabled",
-      message:
-        "runSession: authoritative backend but SessionConfig.resourceServer/resourceServerInstance " +
-        "are not set — the quarantine consult is DISABLED for this session (a prior strand on this " +
-        "tier will not be detected, and this session cannot durably record a new one).",
+      message: `${a.who}: authoritative backend but SessionConfig.resourceServer/resourceServerInstance are not set — the quarantine consult is DISABLED for this session (a prior strand on this tier will not be detected, and this session cannot durably record a new one).`,
     });
   }
   return { resourceKey, quarantineStore };
@@ -3140,6 +3155,42 @@ function emitLeaseLostInvalidation(
   if (lostBatchIndex !== undefined) {
     const lostBatchNote = `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
     emit({ type: "batch-invalidated", batchIndex: lostBatchIndex, reason: lostBatchNote });
+  }
+}
+
+/**
+ * R232: a hook that publishes through the lease's publication fence, with one set of rules for
+ * both callers (runSession's `afterLeaseAcquired`, runNamedMutants' `inLease`). A failure the
+ * server answered and refused (`isConfirmedTerminalPublishFailure`) was tombstoned by the fence,
+ * so it propagates and the caller's `finally` releases the lease. Any other failure cannot prove
+ * the publish stopped: the session latches, the fence has left its marker set, and `finish()` then
+ * keeps the lease. A refused EndPublish (lease loss) or an unreconciled lost ack latches without
+ * throwing, so the latch is checked once `run` returns, before any server-side work follows.
+ */
+async function runLeaseHook(a: {
+  run: () => Promise<unknown>;
+  safety: SessionSafety;
+  emit: RunEmitter;
+  /** The `assertSafe` label. */
+  who: string;
+  /** How the uncertain-failure reason names the hook. */
+  what: string;
+}): Promise<void> {
+  try {
+    await a.run();
+    a.safety.assertSafe(a.who);
+  } catch (err) {
+    if (err instanceof SessionUnsafeError) throw err;
+    if (!isConfirmedTerminalPublishFailure(err)) {
+      const reason = `${a.what} failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
+      a.safety.latchUnsafe(reason);
+      a.emit({
+        type: "warning",
+        code: "after-lease-acquired-uncertain",
+        message: `[lethal] ${reason}`,
+      });
+    }
+    throw err;
   }
 }
 
@@ -3586,6 +3637,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // mutant loop treats "no store" as "latch only, nothing durable to record" (see
   // `runMutantsOnBackend`'s deadline branch).
   const { resourceKey, quarantineStore } = await consultQuarantine({
+    who: "runSession",
     caps,
     ...(cfg.resourceServer !== undefined ? { resourceServer: cfg.resourceServer } : {}),
     ...(cfg.resourceServerInstance !== undefined
@@ -3996,25 +4048,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // session latches so teardown makes no further call on the tier.
       const hook = cfg.afterLeaseAcquired;
       if (hook !== undefined && leaseSession !== undefined) {
-        try {
-          await leaseSession.publish(hook);
-          // A refused EndPublish (lease loss) or an unreconciled lost ack latches the session
-          // without throwing. Stop here, before the canary runs a server-side test, through the
-          // same SessionUnsafeError exit every other latched dispatch takes.
-          safety.assertSafe("afterLeaseAcquired");
-        } catch (err) {
-          if (err instanceof SessionUnsafeError) throw err;
-          if (!isConfirmedTerminalPublishFailure(err)) {
-            const reason = `afterLeaseAcquired (R19 test-app publish) failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
-            safety.latchUnsafe(reason);
-            emit({
-              type: "warning",
-              code: "after-lease-acquired-uncertain",
-              message: `[lethal] ${reason}`,
-            });
-          }
-          throw err;
-        }
+        const session = leaseSession;
+        await runLeaseHook({
+          run: () => session.publish(hook),
+          safety,
+          emit,
+          who: "afterLeaseAcquired",
+          what: "afterLeaseAcquired (R19 test-app publish)",
+        });
       }
     }
 
@@ -5055,6 +5096,250 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   return report;
 }
 
+/** C02-04b: handed to `inLease`. `publish` runs `run` inside the lease's publication fence. */
+export interface LeaseFence {
+  publish<T>(run: () => Promise<T>): Promise<T>;
+}
+
+/** C02-04b: what `runNamedMutants` runs, against which installed artifact, under which lease. */
+export interface NamedMutantsConfig {
+  readonly backend: ExecutionBackend;
+  readonly store: ResultsStore;
+  /** A run row the caller created for THIS call. Verdict and test rows are written under it. */
+  readonly runId: number;
+  readonly installed: InstalledArtifactRef;
+  readonly requests: readonly NamedMutantRequest[];
+  /**
+   * C02-05's slot: runs under the lease, after acquire and the preflight `attach`, BEFORE the
+   * mandatory `attach` and the baseline. Requires `lease`: its publish must hold the lease's
+   * operation marker, so there is no unfenced fallback.
+   */
+  readonly inLease?: (fence: LeaseFence) => Promise<void>;
+  readonly lease?: LeaseSessionConfig;
+  readonly resourceServer?: string;
+  readonly resourceServerInstance?: string;
+  readonly quarantineDir?: string;
+  readonly mutantTimeoutMs?: number;
+  readonly baselineTimeoutMs?: number;
+  readonly groupRuns?: SessionConfig["groupRuns"];
+  readonly nowIso?: () => string;
+  readonly emit?: SessionConfig["emit"];
+}
+
+export interface NamedMutantsResult {
+  /** Exactly one per request, in request order. Never fewer, never an empty array. */
+  readonly outcomes: readonly SessionOutcome[];
+  /** Set when the session latched unsafe: the text `SessionReport.quarantined.reason` would get. */
+  readonly quarantined?: string;
+}
+
+/**
+ * C02-04b: run named mutants against named test methods on an artifact that is ALREADY
+ * installed, under the same lease, quarantine latch, R194 lost-ack reconciliation and R206 warm
+ * confirmation as `runSession`, through the same functions. Never compiles or publishes the
+ * target (decision 3). The order is decision 4 with ruling 6's preflight: every refusal that
+ * needs no server first, then status, lease, preflight `attach`, `inLease`, rebind, `attach`,
+ * baseline, covering, release.
+ *
+ * Does NOT finish `cfg.runId`: `priorSurvivorKeys` reads finished runs (see C02-06's notes).
+ */
+export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMutantsResult> {
+  const who = "runNamedMutants";
+  const { backend, store, runId, installed } = cfg;
+  // Everything up to `status()` reads only the store, local files and the request.
+  const { artifact, manifest } = await loadInstalledArtifact(store, installed);
+  const named = resolveNamedMutants(manifest, cfg.requests);
+  if (cfg.inLease !== undefined && cfg.lease === undefined) {
+    throw new NamedMutantError(
+      "inLease requires a lease: a publish outside the fence would not hold the lease's operation marker, and the backend's op sequence would be stale for the first RunMutant after it",
+    );
+  }
+  const attach = backend.attach?.bind(backend);
+  if (attach === undefined) {
+    throw new InstalledArtifactError(
+      "unsupported",
+      `${who}: this backend cannot attach to an installed artifact`,
+    );
+  }
+  const safety = new SessionSafety();
+  const caps = backend.capabilities();
+  const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
+  // The section G gate and a lost lease only EMIT `batch-invalidated`; runSession applies them in
+  // the fold. Here they are collected and applied to the returned outcomes before returning.
+  const invalidations: Array<{ batchIndex: number; reason: string }> = [];
+  const emit: RunEmitter = createEmitter([
+    (e) => {
+      if (e.type === "batch-invalidated") {
+        invalidations.push({ batchIndex: e.batchIndex, reason: e.reason });
+      }
+    },
+    ...(cfg.emit ?? []),
+  ]);
+  assertLeaseConfigured(caps, cfg.lease, backend, who);
+  const { resourceKey, quarantineStore } = await consultQuarantine({
+    who,
+    caps,
+    ...(cfg.resourceServer !== undefined ? { resourceServer: cfg.resourceServer } : {}),
+    ...(cfg.resourceServerInstance !== undefined
+      ? { resourceServerInstance: cfg.resourceServerInstance }
+      : {}),
+    ...(cfg.quarantineDir !== undefined ? { quarantineDir: cfg.quarantineDir } : {}),
+    emit,
+  });
+  const status = await backend.status();
+  if (!status.ok) {
+    throw new Error(
+      `backend not ready: ${status.details}. Run \`lethal doctor --config <path>\` for a full read-only diagnosis before retrying.`,
+    );
+  }
+  const minMutantBudgetMs = cfg.mutantTimeoutMs ?? MIN_MUTANT_BUDGET_MS;
+  const groupRuns = resolveGroupRuns({
+    groupRuns: cfg.groupRuns,
+    backend,
+    minMutantBudgetMs,
+    emit,
+  });
+  const { leaseSession, resyncOpSeq } = await openLeaseScope({
+    lease: cfg.lease,
+    backend,
+    safety,
+    runId,
+    quarantineStore,
+    resourceKey,
+    nowIso,
+    emit,
+  });
+  const outcomes: SessionOutcome[] = [];
+  try {
+    // Before the first op: a lease lost from here on invalidates THIS batch's verdicts.
+    if (leaseSession !== undefined) leaseSession.currentBatchIndex = installed.batchIndex;
+    // Ruling 6: a server reporting another target is refused before `inLease` changes anything.
+    await attach(artifact);
+    const inLease = cfg.inLease;
+    if (inLease !== undefined && leaseSession !== undefined) {
+      const session = leaseSession;
+      await runLeaseHook({
+        run: () => inLease({ publish: (run) => session.publish(run) }),
+        safety,
+        emit,
+        who: "inLease",
+        what: "inLease (test-app publish)",
+      });
+      // The hook's publish consumed an op seq; the first RunMutant must follow it.
+      session.rebindBackend(backend);
+    }
+    // Mandatory: binds the transport to this artifact after anything `inLease` published.
+    await attach(artifact);
+    const scope: BatchScope = {
+      backend,
+      caps,
+      safety,
+      leaseSession,
+      resyncOpSeq,
+      quarantineStore,
+      resourceKey,
+      nowIso,
+      store,
+      runId,
+      emit,
+      outcomes,
+      killLedger: newKillLedger(),
+      sessionReuse: { warned: false },
+      groupRuns,
+      minMutantBudgetMs,
+      baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+    };
+    // Scored or not, `safety.isUnsafe` is read below: "scored" is returned even when the covering
+    // loop latched, and every request the latch stopped is answered there.
+    await scoreBatch(scope, {
+      batchIndex: installed.batchIndex,
+      artifactId: artifact.artifactId,
+      tests: baselineTestsOf(named),
+      select: (baseline) => selectNamed(baseline, named, scope, installed.batchIndex),
+    });
+  } catch (err) {
+    if (!(err instanceof SessionUnsafeError)) throw err;
+  } finally {
+    await closeLeaseScope({ backend, workerBackends: [], safety, leaseSession, emit });
+  }
+  emitLeaseLostInvalidation(leaseSession, safety, emit);
+  applyBatchInvalidations(outcomes, invalidations);
+
+  const byId = new Map(outcomes.map((o) => [o.mutant.mutantId, o]));
+  const answered = named.map(({ mutant }): SessionOutcome => {
+    const o = byId.get(mutant.mutantId);
+    if (o !== undefined) return o;
+    if (!safety.isUnsafe) {
+      throw new Error(
+        `${who}: ${mutant.mutantId} got no outcome although the session did not latch (a bug, not a verdict)`,
+      );
+    }
+    return {
+      mutant,
+      verdict: "error",
+      batchIndex: installed.batchIndex,
+      failureNote: `not run: the session latched unsafe before this mutant (${safety.reason ?? "unknown"})`,
+    };
+  });
+  return {
+    outcomes: answered,
+    ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
+  };
+}
+
+/**
+ * C02-04b: `select` for named mutants. Only methods green at THIS baseline run against a mutant;
+ * a mutant with none is recorded `error` with its own methods' baseline failures. Nothing is
+ * attributed, so the attribution and member-count maps are empty.
+ */
+function selectNamed(
+  baseline: readonly BaselineRow[],
+  named: readonly ResolvedNamedMutant[],
+  scope: BatchScope,
+  batchIndex: number,
+): CoveringPlan | undefined {
+  const rowByKey = new Map(baseline.map((b) => [testKeyOf(b.ref), b]));
+  const green = new Set(
+    baseline.filter((b) => b.verdict.outcome === "pass").map((b) => testKeyOf(b.ref)),
+  );
+  const mutants: MutantManifestEntry[] = [];
+  const perMutantTests = new Map<string, readonly TestMethodRef[]>();
+  for (const { mutant, methods } of named) {
+    const greenMethods = methods.filter((m) => green.has(testKeyOf(m)));
+    if (greenMethods.length === 0) {
+      const own = methods.flatMap((m) => {
+        const row = rowByKey.get(testKeyOf(m));
+        return row === undefined ? [] : [row];
+      });
+      record(
+        scope.store,
+        scope.runId,
+        mutant,
+        "error",
+        scope.outcomes,
+        batchIndex,
+        scope.emit,
+        undefined,
+        noGreenBaselineNote(own),
+      );
+      continue;
+    }
+    mutants.push(mutant);
+    perMutantTests.set(mutant.mutantId, greenMethods);
+  }
+  if (mutants.length === 0) return undefined;
+  return {
+    mutants,
+    perMutantTests,
+    coverageAttribution: new Map(),
+    baselineDuration: new Map(
+      baseline
+        .filter((b) => b.verdict.outcome === "pass")
+        .map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
+    ),
+    memberCountsByTest: new Map(),
+  };
+}
 /**
  * R26: runs the configured permission canary and guarantees it cannot end the session.
  *

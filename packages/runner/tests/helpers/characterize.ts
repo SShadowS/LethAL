@@ -75,6 +75,14 @@ export function recording(inner: ExecutionBackend, trace: Trace, tag: string): E
       },
     });
   }
+  // C02-04b: forwarded only when the inner has one, so no characterized fake gains an `attach`.
+  const attach = inner.attach?.bind(inner);
+  if (attach !== undefined) {
+    b.attach = async (a) => {
+      trace.push({ call: "attach", tag, artifactId: a.artifactId });
+      return attach(a);
+    };
+  }
   const fetchPkg = inner.fetchPublishedAppPackage?.bind(inner);
   if (fetchPkg !== undefined) {
     b.fetchPublishedAppPackage = async (a) => {

@@ -288,8 +288,9 @@ export interface ExecutionBackend {
    */
   /**
    * C02-04b, OPTIONAL: bind to an ALREADY-installed artifact. Never compiles or publishes.
-   * Throws `InstalledArtifactError` when the server does not report that artifact; binds nothing
-   * in that case. Absent on a backend that cannot (al-runner, which has nothing installed).
+   * Throws `InstalledArtifactError` when the server does not report that artifact (and may throw
+   * `HarnessVerificationError` from its readiness check); on any throw it binds nothing, not even
+   * a transport an earlier `attach` or `deploy` had bound. Absent on a backend that cannot (al-runner, which has nothing installed).
    */
   attach?(artifact: BoundArtifact): Promise<void>;
   fetchPublishedAppPackage?(app: {

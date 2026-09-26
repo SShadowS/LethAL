@@ -665,6 +665,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * exactly this artifact: `mismatch` and `unavailable` both throw (unavailable fails closed).
    */
   async attach(artifact: BoundArtifact): Promise<void> {
+    // Unbind first, so a refused attach leaves NO transport, not the previous artifact's.
+    this.runMutantTransport = undefined;
     const deployment = this.deployment;
     if (deployment === undefined) {
       throw new InstalledArtifactError(
