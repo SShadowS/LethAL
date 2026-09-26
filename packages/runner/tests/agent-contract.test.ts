@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import {
+  DOCTOR_AL_RUNNER_ONLY_CAVEAT,
+  DOCTOR_CAVEAT_KINDS,
+  DOCTOR_CREATE_MODE_CAVEAT,
+  DOCTOR_NOT_CHECKED_TOKENS,
   DOCTOR_SCHEMA_VERSION,
   FLAG_OWNERS,
   NOTHING_SCORED_EXIT_CODE,
@@ -10,19 +15,24 @@ import {
   RUN_FLAGS,
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
+  doctorJson,
   exitCodeForReport,
   helpText,
   parseCliConfig,
 } from "../src/cli";
+import { checkAlcRuntime } from "../src/doctor";
 import {
   EQUIVALENCE_MARKS_FILENAME,
   applyEquivalenceMarks,
+  loadEquivalenceMarks,
   parseEquivalenceMarks,
 } from "../src/equivalence-marks";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
 import { ARTIFACT_ID_ABSENCES, EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
 import { LARGE_RUN_MUTANT_THRESHOLD } from "../src/orchestrator";
-import { REPORT_SCHEMA_VERSION } from "../src/report";
+import { createNdjsonSink } from "../src/progress-ndjson";
+import { CAVEAT_INTERPRETATIONS, REPORT_SCHEMA_VERSION } from "../src/report";
+import type { SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import {
   KILLED_BY,
@@ -236,6 +246,68 @@ function tableRows(body: string): string[][] {
 /** Every `backticked` token in a cell. */
 const ticks = (cell: string): string[] => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? "");
 
+/** The text directly under one heading, up to the NEXT heading of any level: what that heading's
+ *  tag vouches for, without the subsections it contains. */
+function ownText(text: string, heading: string): string {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => /^#+ /.test(l) && l.replace(/^#+ /, "") === heading);
+  if (start < 0) throw new Error(`no heading "${heading}"`);
+  const end = lines.findIndex((l, i) => i > start && /^#+ /.test(l));
+  return lines.slice(start + 1, end < 0 ? undefined : end).join("\n");
+}
+
+/** Prose only: fenced code blocks removed, so `ticks` sees inline code and not a whole block. */
+const prose = (text: string): string => text.replace(/```[a-z]*\r?\n[\s\S]*?```/g, "");
+
+/** Every property name and every string `enum`/`const` value anywhere in a published schema: the
+ *  field names and value domains the build actually writes, since `generate-schemas --check` keeps
+ *  the schema equal to the code. */
+function schemaVocabulary(file: string): Set<string> {
+  const out = new Set<string>();
+  const walk = (n: unknown): void => {
+    if (Array.isArray(n)) {
+      for (const x of n) walk(x);
+      return;
+    }
+    if (n === null || typeof n !== "object") return;
+    for (const [k, v] of Object.entries(n)) {
+      if (k === "properties" && v !== null && typeof v === "object") {
+        for (const p of Object.keys(v)) out.add(p);
+      }
+      if (k === "const" && typeof v === "string") out.add(v);
+      if (k === "enum" && Array.isArray(v))
+        for (const e of v) if (typeof e === "string") out.add(e);
+      walk(v);
+    }
+  };
+  walk(JSON.parse(read(join(REPO_ROOT, "schemas", file))));
+  return out;
+}
+
+/** The field and value names a section's prose puts in backticks: `a.b[].c: 1` gives a, b, c. Flags,
+ *  commands, paths and placeholders are not names and are skipped. */
+function namedFields(body: string): string[] {
+  return ticks(prose(body))
+    .filter((t) => !/^(--|lethal |\.\.\/|<)/.test(t) && (!t.includes(" ") || t.includes(": ")))
+    .flatMap((t) => (t.split(":")[0] ?? "").split("."))
+    .map((t) => t.replace(/\[\]$/, "").trim())
+    .filter((t) => t !== "" && !/^\d+$/.test(t));
+}
+
+/** `a`, `a or b`, `a, b or c`: how the documents list a code value set in a sentence. */
+function listed(values: readonly string[], conj: string): string {
+  const t = values.map((v) => `\`${v}\``);
+  return t.length <= 2 ? t.join(` ${conj} `) : `${t.slice(0, -1).join(", ")} ${conj} ${t.at(-1)}`;
+}
+
+const CLI = join(REPO_ROOT, "packages", "runner", "src", "cli.ts");
+
+/** Runs the real CLI entry point, so an exit code and the stream a message lands on are measured. */
+function runCli(argv: readonly string[]) {
+  const r = spawnSync("bun", [CLI, ...argv], { cwd: REPO_ROOT, encoding: "utf8" });
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
 describe("C02-07: the documents' commands and tables are the code's", () => {
   const docs: ReadonlyArray<[string, string]> = [
     ["reference", read(REFERENCE)],
@@ -321,13 +393,16 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       (m) => m[1] ?? "",
     );
     for (const f of linked) expect(existsSync(join(REPO_ROOT, "schemas", f)), f).toBe(true);
+    const own = ownText(text, "Reading the result (checked)");
     for (const f of [
       `report-v${REPORT_SCHEMA_VERSION}`,
       `explain-v${EXPLAIN_SCHEMA_VERSION}`,
       `stream-v${STREAM_SCHEMA_VERSION}`,
       `doctor-v${DOCTOR_SCHEMA_VERSION}`,
     ]) {
-      expect(linked, `the reference must link ${f}.schema.json`).toContain(`${f}.schema.json`);
+      expect(own, `Reading the result must link ${f}.schema.json`).toContain(
+        `../schemas/${f}.schema.json`,
+      );
     }
   });
 
@@ -340,9 +415,203 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       };
       readonly mutants: readonly unknown[];
     };
-    expect(flowed(read(REFERENCE))).toContain(
+    expect(flowed(ownText(read(REFERENCE), "Reading the result (checked)"))).toContain(
       `${r.mutants.length} mutants, ${r.counts.killed} killed, ${r.counts.survived} survived, ${r.counts.noCoverage} no-coverage`,
     );
+  });
+
+  test("the doctor sample and its sentences are doctorJson's", () => {
+    const own = ownText(read(REFERENCE), "Before anything else: `doctor` (checked)");
+    const sampleText = /```json\r?\n([\s\S]*?)```/.exec(own)?.[1] ?? "";
+    const sample = JSON.parse(sampleText) as Record<string, unknown>;
+    const report = {
+      ok: false,
+      checks: [checkAlcRuntime({ alcPath: "a", alcVersion: "x", cachePath: "c" })],
+    };
+    const real = doctorJson(report, DOCTOR_CREATE_MODE_CAVEAT) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(new Set(Object.keys(sample))).toEqual(new Set(Object.keys(real)));
+    const first = (x: unknown) => Object.keys((x as readonly object[])[0] ?? {});
+    expect(new Set(first(sample.checks))).toEqual(new Set(first(real.checks)));
+    expect(new Set(Object.keys(sample.caveat as object))).toEqual(
+      new Set(Object.keys(real.caveat as object)),
+    );
+    expect(sample.doctorSchemaVersion).toBe(DOCTOR_SCHEMA_VERSION);
+    expect(sample.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
+    const text = flowed(own);
+    expect(text).toContain(`\`notChecked\` is always ${listed(DOCTOR_NOT_CHECKED_TOKENS, "and")}.`);
+    expect(text).toContain(`\`caveat.kind\` is ${listed(DOCTOR_CAVEAT_KINDS, "or")}.`);
+    // "present only for a config shape that has one": absent without a caveat, and every caveat
+    // constant maps to one of the listed kinds.
+    expect(Object.keys(doctorJson(report))).not.toContain("caveat");
+    expect(
+      [DOCTOR_CREATE_MODE_CAVEAT, DOCTOR_AL_RUNNER_ONLY_CAVEAT].map(
+        (c) => doctorJson(report, c).caveat?.kind,
+      ),
+    ).toEqual([...DOCTOR_CAVEAT_KINDS]);
+    const owners = FLAG_OWNERS.find((r) => r.flag === "json")?.owners ?? [];
+    expect(text).toContain(`\`--json\` is accepted by ${listed(owners, "and")} only.`);
+  });
+
+  test("the running section's database and caveat names are the code's", () => {
+    const own = ownText(read(REFERENCE), "Running (checked)");
+    const withDb = parseCliConfig([
+      "run",
+      "--project",
+      "P",
+      "--tests",
+      "T",
+      "--backend",
+      "bcdev",
+      "--db",
+      "D",
+    ]);
+    expect(withDb.mode === "run" ? withDb.dbPath : "").toBe("D");
+    expect(own).toContain("unless `--db` names another file");
+    const line = own.split("\n").find((l) => l.startsWith("A narrowed run carries")) ?? "";
+    const named = ticks(line).filter((t) => t !== "validity.caveats");
+    expect(named.length).toBeGreaterThan(0);
+    for (const c of named) expect(Object.keys(CAVEAT_INTERPRETATIONS), c).toContain(c);
+    expect(
+      namedFields(line).filter(
+        (f) => !schemaVocabulary(`report-v${REPORT_SCHEMA_VERSION}.schema.json`).has(f),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the dry-run exception names flags dry-run really ignores, and its roadmap row exists", () => {
+    const own = flowed(ownText(read(REFERENCE), "Which subcommand reads which flag (checked)"));
+    const para = own.slice(own.indexOf("One exception remains"));
+    const bare = ["run", "--project", "P", "--dry-run"];
+    const flags = ticks(para)
+      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run")
+      .map((t) => t.slice(2));
+    expect(flags.length).toBeGreaterThan(0);
+    const parsedWith = (flag: string): string => {
+      const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
+      for (const v of spec.type === "boolean" ? [undefined] : ["x", "2", "bcdev"]) {
+        try {
+          return JSON.stringify(
+            parseCliConfig([...bare, `--${flag}`, ...(v === undefined ? [] : [v])]),
+          );
+        } catch {}
+      }
+      throw new Error(`--${flag} is refused on run --dry-run`);
+    };
+    for (const f of flags)
+      expect(parsedWith(f), `--${f}`).toBe(JSON.stringify(parseCliConfig(bare)));
+    const id = /\b(R\d+)\b/.exec(para)?.[1] ?? "";
+    expect(read(join(REPO_ROOT, "docs", "roadmap", `R${id.slice(1).padStart(3, "0")}.md`))).toMatch(
+      /^status: "open"$/m,
+    );
+  });
+
+  test("the run exit sentences are exitCodeForReport's and main's", () => {
+    const own = flowed(ownText(read(REFERENCE), "Exit codes (checked)"));
+    const nothing = Object.keys(CAVEAT_INTERPRETATIONS).filter(
+      (c) => exitCodeForReport({ validity: { caveats: [c] } }) === NOTHING_SCORED_EXIT_CODE,
+    );
+    expect(nothing.length).toBe(1);
+    expect(own).toContain(
+      `\`${NOTHING_SCORED_EXIT_CODE}\` is returned when \`validity.caveats\` carries \`${nothing[0]}\`.`,
+    );
+    // Row 1: an argv the parse refuses exits 1 with its message on stderr. The trap is the one the
+    // Traps table shows for run.
+    const trap = tableRows(section(read(REFERENCE), "Traps (checked)"))
+      .map(([c = ""]) => shellWords(ticks(c)[0] ?? "").slice(1))
+      .find((argv) => argv[0] === "run");
+    if (trap === undefined) throw new Error("no run trap");
+    const r = runCli(trap);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--report is only accepted by");
+    expect(own).toContain(
+      "| `1` | Error, including an argv the parse refuses. The message is on stderr. |",
+    );
+  }, 30_000);
+
+  test("the result sections name fields and values the schemas define", () => {
+    const text = read(REFERENCE);
+    const cases: ReadonlyArray<[string, string]> = [
+      ["`--out report.json`: the record (checked)", `report-v${REPORT_SCHEMA_VERSION}.schema.json`],
+      [
+        "`lethal explain report.json`: what it MEANS (checked)",
+        `explain-v${EXPLAIN_SCHEMA_VERSION}.schema.json`,
+      ],
+      [
+        "`--progress-out events.ndjson`: following a live run (checked)",
+        `stream-v${STREAM_SCHEMA_VERSION}.schema.json`,
+      ],
+      ["Reading a verify result (checked)", `verify-v${VERIFY_SCHEMA_VERSION}.schema.json`],
+    ];
+    for (const [heading, schema] of cases) {
+      const names = namedFields(ownText(text, heading));
+      expect(names.length, heading).toBeGreaterThan(3);
+      const vocab = schemaVocabulary(schema);
+      // The NDJSON header is not an event, so the stream schema does not describe it (schemas/
+      // README.md): its keys come from the sink that writes it.
+      if (schema.startsWith("stream-")) {
+        let header = "";
+        createNdjsonSink((c) => {
+          header += c;
+        });
+        for (const k of Object.keys(JSON.parse(header))) vocab.add(k);
+      }
+      expect(
+        names.filter((n) => !vocab.has(n)),
+        heading,
+      ).toEqual([]);
+    }
+  });
+
+  test("the explain section's behaviour is explain's", () => {
+    const own = flowed(
+      ownText(read(REFERENCE), "`lethal explain report.json`: what it MEANS (checked)"),
+    );
+    const report = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    // Refused, not explained with the value dropped: another schema version, or an unknown verdict.
+    expect(() =>
+      explain({ ...report, schemaVersion: REPORT_SCHEMA_VERSION + 1 } as never),
+    ).toThrow();
+    const [m0, ...rest] = report.mutants;
+    if (m0 === undefined) throw new Error("empty report");
+    expect(() =>
+      explain({ ...report, mutants: [{ ...m0, verdict: "zz" as never }, ...rest] }),
+    ).toThrow(/cannot interpret/);
+    expect(own).toContain("is REFUSED rather than explained with the unrecognised value dropped");
+    const uncapped = explain(report).survivorSelection;
+    const capped = explain(report, { topSurvivors: 1 }).survivorSelection;
+    expect(capped.shown).toBe(1);
+    expect(capped.total).toBe(uncapped.total);
+    expect(own).toContain(
+      `\`rankedBy\` is \`${uncapped.rankedBy}\` when no cap was applied and \`${capped.rankedBy}\` when one was.`,
+    );
+    const sample = JSON.parse(
+      `{${/```json\r?\n([\s\S]*?)```/.exec(ownText(read(REFERENCE), "`lethal explain report.json`: what it MEANS (checked)"))?.[1] ?? ""}}`,
+    ) as {
+      readonly survivorSelection: object;
+    };
+    expect(new Set(Object.keys(sample.survivorSelection))).toEqual(new Set(Object.keys(uncapped)));
+    expect(() => parseCliConfig(["explain", "r.json", "--top", "0"])).toThrow();
+    expect(own).toContain("`--top 0` is refused.");
+  });
+
+  test("the stream header is the sink's first line", () => {
+    const own = flowed(
+      ownText(read(REFERENCE), "`--progress-out events.ndjson`: following a live run (checked)"),
+    );
+    let written = "";
+    createNdjsonSink((c) => {
+      written += c;
+    });
+    const header = JSON.parse(written.split("\n")[0] ?? "") as Record<string, unknown>;
+    const key =
+      ticks(own)
+        .find((t) => t.endsWith(": true"))
+        ?.split(":")[0] ?? "";
+    expect(header[key]).toBe(true);
+    expect(own).toContain("Line 1 is a header this sink writes itself");
   });
 
   test("every section says whether a test checks it", () => {
@@ -351,6 +620,18 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       .filter((l) => /^#{2,6} /.test(l));
     expect(headings.length).toBeGreaterThan(10);
     expect(headings.filter((h) => !/ \((checked|guidance)\)$/.test(h))).toEqual([]);
+  });
+
+  test("every (checked) heading is read by name in this file", () => {
+    // A (checked) heading no test reads is a promise nothing keeps. Names only: WHAT each test
+    // checks is the claim inventory in the C02-07 reject r1 report.
+    const self = read(join(import.meta.dir, "agent-contract.test.ts"));
+    const checked = read(REFERENCE)
+      .split("\n")
+      .filter((l) => /^#{2,6} .* \(checked\)$/.test(l))
+      .map((l) => l.replace(/^#+ /, ""));
+    expect(checked.length).toBeGreaterThan(5);
+    expect(checked.filter((h) => !self.includes(`"${h}"`))).toEqual([]);
   });
 
   test("no em dashes", () => {
@@ -408,6 +689,38 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       expect(examples.length, `${name} shows no literal \`lethal verify\``).toBeGreaterThan(0);
       for (const argv of examples) {
         expect(() => verifyRequestOf(argv), `${name}: lethal ${argv.join(" ")}`).not.toThrow();
+      }
+    }
+  });
+
+  test("each literal verify example targets the run its document shows", () => {
+    // The loop's other half: a valid request against another database, test project or config
+    // hardens nothing. The substitution is the document's own sentence, `<x>` as `y`.
+    for (const [name, text] of docs) {
+      const values = new Map(
+        [...flowed(text).matchAll(/`<([a-z-]+)>` as `([^`]+)`/g)].map((m) => [
+          m[1] ?? "",
+          m[2] ?? "",
+        ]),
+      );
+      expect(values.size, `${name} states no substitution`).toBeGreaterThan(0);
+      const runLine = onlyLine(text, (l) => l.startsWith("lethal run ") && l.includes("--tests"));
+      const filled = runLine.replace(/<([A-Za-z-]+)>/g, (_, p: string) => {
+        const v = values.get(p);
+        if (v === undefined) throw new Error(`${name}: run placeholder <${p}> has no stated value`);
+        return v;
+      });
+      const run = parseCliConfig(shellWords(filled).slice(1));
+      if (run.mode !== "run") throw new Error(`${name}: not a run: ${filled}`);
+      const examples = documentedCommands(text).filter(
+        (c) => c[0] === "verify" && !c.join(" ").includes("<"),
+      );
+      expect(examples.length, `${name} shows no literal verify`).toBeGreaterThan(0);
+      for (const argv of examples) {
+        const { parsed } = verifyRequestOf(argv);
+        expect(normalize(parsed.dbPath), `${name}: --db`).toBe(normalize(run.dbPath));
+        expect(parsed.testDir, `${name}: --tests`).toBe(run.testDir);
+        expect(parsed.configPath, `${name}: --config`).toBe(run.configPath);
       }
     }
   });
@@ -496,9 +809,38 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(result.matched.map((x) => x.mutantCode).sort()).toEqual(
       survivors.map((m) => m.mutantCode).sort(),
     );
-    expect(section(read(REFERENCE), "Marking an equivalent survivor (checked)")).toContain(
-      EQUIVALENCE_MARKS_FILENAME,
+    const own = ownText(read(REFERENCE), "Marking an equivalent survivor (checked)");
+    expect(own).toContain(`\`<project>/${EQUIVALENCE_MARKS_FILENAME}\``);
+  });
+
+  test("the marks file lives where the doc says and has the documented shape", async () => {
+    const own = ownText(read(REFERENCE), "Marking an equivalent survivor (checked)");
+    let path = "";
+    await loadEquivalenceMarks("P", async (p) => {
+      path = p;
+      return JSON.stringify({ marks: [] });
+    });
+    expect(path).toBe(join("P", EQUIVALENCE_MARKS_FILENAME));
+    const sample = JSON.parse(/```json\r?\n([\s\S]*?)```/.exec(own)?.[1] ?? "") as {
+      marks: Array<Record<string, string>>;
+    };
+    const key = serializeKey({
+      astHash: "h",
+      codeunitName: "C",
+      procedureName: "P",
+      operatorName: "o",
+      operatorMajor: 1,
+      ordinal: 0,
+    });
+    const mark: Record<string, string> = { ...sample.marks[0], key };
+    expect(parseEquivalenceMarks(JSON.stringify({ ...sample, marks: [mark] }), "t")).toHaveLength(
+      1,
     );
+    const noReason = Object.fromEntries(Object.entries(mark).filter(([k]) => k !== "reason"));
+    expect(() => parseEquivalenceMarks(JSON.stringify({ marks: [noReason] }), "t")).toThrow(
+      /"reason" is required/,
+    );
+    expect(own).toContain("`reason` is required.");
   });
 
   test("the R230 limit the doc states is the code's", () => {
@@ -537,6 +879,16 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(valuesOf("results[].verdict")).toEqual(new Set(VERIFY_VERDICTS));
     expect(valuesOf("newTests[].state")).toEqual(new Set(NEW_TEST_STATES));
     expect(valuesOf("results[].killedBy")).toEqual(new Set(KILLED_BY));
+    // "`killedBy` never changes the exit code": every value, one exit code.
+    const codes = new Set(
+      KILLED_BY.map((k) =>
+        verifyExitCode({ results: [{ verdict: "killed", killedBy: k }], newTests: [] } as never),
+      ),
+    );
+    expect(codes).toEqual(new Set([VERIFY_EXIT.ok]));
+    expect(ownText(read(REFERENCE), "Reading a verify result (checked)")).toContain(
+      "`killedBy` never changes the exit code.",
+    );
   });
 
   test("the refusal table is VERIFY_REFUSALS", () => {
@@ -600,6 +952,11 @@ describe("C02-07: the hardening loop, run from the documents", () => {
         VERIFY_EXIT.ok,
       ],
       ["0: every survivor skipped", { results: [R("skipped")], newTests: [] }, VERIFY_EXIT.ok],
+      [
+        "0: some killed and the rest skipped",
+        { results: [R("killed"), R("skipped")], newTests: [] },
+        VERIFY_EXIT.ok,
+      ],
     ];
     for (const [why, input, code] of cases) expect(verifyExitCode(input), why).toBe(code);
     const order = [
@@ -620,6 +977,26 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     }
   });
 
+  test("verify exit 1 is an argv refusal on stderr with no JSON", () => {
+    const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
+    const verifyRow = rows.find(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1] === "verify");
+    const argv = shellWords(ticks(verifyRow?.[0] ?? "")[0] ?? "").slice(1);
+    const r = runCli(argv);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("--out");
+    // A missing flag is refused at parse, before verify prints anything.
+    const noTests = argv.filter(
+      (a, i) =>
+        a !== "--tests" && argv[i - 1] !== "--tests" && a !== "--out" && argv[i - 1] !== "--out",
+    );
+    expect(() => parseCliConfig(noTests)).toThrow(/--tests/);
+    const row1 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
+      ([c = ""]) => ticks(c)[0] === "1",
+    );
+    expect(row1?.[1]).toContain("The message is on stderr and there is no JSON.");
+  }, 30_000);
+
   test("verify --out is a documented, refused trap", () => {
     const rows = tableRows(section(read(REFERENCE), "Traps (checked)"));
     const verifyRow = rows.find(([c = ""]) => shellWords(ticks(c)[0] ?? "")[1] === "verify");
@@ -630,7 +1007,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
 
   test("both documents carry the six rules", () => {
     const rules: ReadonlyArray<[string, string]> = [
-      ["reference", section(read(REFERENCE), "The six rules (checked)")],
+      ["reference", section(read(REFERENCE), "The six rules (guidance)")],
       ["skill", section(read(SKILL), "Rules that stop a wrong conclusion")],
     ];
     for (const [name, body] of rules) {
@@ -670,7 +1047,7 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
     const body = flowed(section(readme, "Driving it from an agent, a script or CI"));
     expect(body).toContain(`\`${NOTHING_SCORED_EXIT_CODE}\``);
     expect(body.toLowerCase()).toContain("measured nothing");
-    const count = section(read(REFERENCE), "The six rules (checked)")
+    const count = section(read(REFERENCE), "The six rules (guidance)")
       .split("\n")
       .filter((l) => /^\d+\. /.test(l)).length;
     expect(body).toContain(`the ${NUMBER_WORDS[count]} rules`);

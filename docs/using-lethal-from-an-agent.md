@@ -25,10 +25,6 @@ proven test-suite gap.
 lethal doctor --config lethal.config.json --json
 ```
 
-Read-only, takes seconds, checks every pre-flight refusal in one pass instead of letting a real run
-discover them one at a time. Run it first. Exit `0` means every check passed, `1` means at least
-one failed.
-
 The `--json` payload:
 
 ```json
@@ -41,13 +37,21 @@ The `--json` payload:
 }
 ```
 
+`notChecked` is always `publish-ceiling` and `baseline-test-health`. `caveat` is present only for
+a config shape that has one, and `caveat.kind` is `create-mode` or `al-runner-only`.
+
+`--json` is accepted by `doctor` only. On any other subcommand it is refused rather than ignored.
+
+### Doctor notes (guidance)
+
+Read-only, takes seconds, checks every pre-flight refusal in one pass instead of letting a real run
+discover them one at a time. Run it first. Exit `0` means every check passed, `1` means at least
+one failed.
+
 - `checks[].name` is what to branch on. `detail` is prose for a human.
 - `notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
   report, so a run can still refuse for either reason.
-- `caveat` appears only for a config shape that has one (`create-mode`, `al-runner-only`) and says
-  which checks were skipped and why.
-
-`--json` is accepted by `doctor` only. On any other subcommand it is refused rather than ignored.
+- `caveat` says which checks were skipped and why.
 
 ## Running (checked)
 
@@ -62,29 +66,35 @@ lethal run --project <app-dir> \
            --progress-out events.ndjson
 ```
 
+A run keeps its state in `<project>/lethal.sqlite` unless `--db` names another file.
+
+An unscoped run on a real project is refused by default above 1,000 mutation sites.
+
+A narrowed run carries `narrowed`, `operator-narrowed` or `tests-narrowed` in `validity.caveats`.
+
+### Running notes (guidance)
+
 **Scope it.** `--only <glob>` is an allow-list and `--exclude <glob>` its complement, applied after
 it, so `--only "src/**" --exclude "src/Upgrade/**"` reads the way it sounds. Both are repeatable,
 both select mutants rather than sources (every file is still parsed, compiled and published), and
 both refuse a pattern that matches no file. The report records either narrowing and flags the run
 `narrowed`, so a scoped score can never be mistaken for a project score.
 
-**The database.** A run keeps its state in `<project>/lethal.sqlite` unless `--db` names another
-file. `lethal verify` reads that same file, so give it the run's database, not a new one.
+**The database.** `lethal verify` reads the run's database, so give it that file, not a new one.
 
 Durable exclusions belong in the config rather than the command line: a top-level
 `"exclude": ["src/Upgrade/**"]` in `lethal.config.json` is UNIONED with any `--exclude` flag, never
 replaced by one, so narrowing a run cannot silently re-enable mutation of code the project said to
 leave alone.
 
-An unscoped run on a real project is refused by default above 1,000 mutation sites,
-because it costs days and usually cannot publish at all. `--allow-large-run` overrides the refusal
+The large-run refusal exists because an unscoped run costs days and usually cannot publish at all. `--allow-large-run` overrides the refusal
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
 **Know which flags can move a verdict.** `--only`, `--exclude` and `--operator` select which
 MUTANTS run and cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
-killing test and its mutant is reported survived. The report flags a narrowed run in
-`validity.caveats`, as `narrowed`, `operator-narrowed` or `tests-narrowed`.
+killing test and its mutant is reported survived. `--only` and `--exclude` give the `narrowed`
+caveat, `--operator` gives `operator-narrowed` and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
 CONDITIONAL. LethAL reads al-runner's own coverage output (R220), but one file declaring more than one
@@ -106,11 +116,13 @@ warns (`group-runs-inert`) when that happens.
 ### Which subcommand reads which flag (checked)
 
 Every subcommand refuses a flag it does not read; none but the one exception below accepts one
-and ignores it. "Read" means the parse stores it: a stored flag can still go unused, when a
-precedence rule overrides it (`clear-ceiling --config` under an explicit `--server`/`--instance`
-pair, listed in `cli.test.ts`) or when the config makes it moot. The table lists the flags an agent is most likely to reach for. Any flag on a subcommand not listed for it is
-refused, with a message naming the subcommands that do read it. `campaign` also refuses some of
-its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
+and ignores it. "Read" means the parse stores it: a stored flag can still be overridden by a
+precedence rule (`clear-ceiling --config` under an explicit `--server`/`--instance` pair, listed
+in `cli.test.ts`).
+
+The table lists only the flags an agent is most likely to reach for. A listed flag is refused
+outside its listed owners, with a message naming the subcommands that do read it. `lethal --help`
+has the complete set.
 
 | flag | read by |
 |---|---|
@@ -134,9 +146,15 @@ One exception remains: `lethal run --dry-run` still accepts its execution flags 
 `--out`, `--backend` and `--workers`) and ignores them, because it executes nothing. So
 `--dry-run --out plan.json` writes nothing. That is filed as R266.
 
+#### Flag notes (guidance)
+
+A stored flag can also go unused when the config makes it moot. `campaign` also refuses some of
+its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
+
 ### Traps (checked)
 
 Commands that look right and are refused. Each one below is run by a test and must be refused.
+The `instead` column is guidance.
 
 | command | instead |
 |---|---|
@@ -149,18 +167,24 @@ Commands that look right and are refused. Each one below is run by a test and mu
 | Code | Meaning |
 |---|---|
 | `0` | The run completed. This says nothing about whether mutants survived. |
-| `1` | Error. The run did not produce a result you can use. |
+| `1` | Error, including an argv the parse refuses. The message is on stderr. |
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
+
+`4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
+scored nothing, `3` wins.
+
+#### Exit code notes (guidance)
+
+An exit `1` means the run did not produce a result you can use.
 
 `3` is the one to handle deliberately. It does not mean the tests failed, and the verdicts it
 produced must not be reported as findings. It means LethAL could not prove the server was in a
 state where its answers mean anything. `--resume` continues such a run once the cause is fixed.
 
-`4` means the report exists but holds no verdict: every recorded mutant is an `error`, the score
-is `null`, and `validity.caveats` carries `all-errors`. The cause is in the mutants' `failureNote`
-(the one measured case was an instrumented build the compiler refused). Fix that and re-run; there
-is nothing to `--resume`. When a run is both quarantined and scored nothing, `3` wins.
+`4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
+is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
+build the compiler refused). Fix that and re-run; there is nothing to `--resume`.
 
 A non-zero exit is never "the test suite is bad". Mutation results live in the report, not the exit
 code.
@@ -174,27 +198,34 @@ Each surface below is versioned separately and has a published JSON Schema in [`
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
-Validate against those rather than trusting a shape you inferred from one example. Two caveats
-that [`../schemas/README.md`](../schemas/README.md) spells out: the stream
-schema describes an EVENT line, not the header the sink writes first, and the report schema
-describes the shape the current build writes, so an archived report of the same version can lack a
-now-required property.
-
 **A real report is committed, so you can try this with no server at all:**
 
 ```bash
 lethal explain docs/campaign/2026-08-16-gift-card/rehearsal.report.json --top 10
 ```
 
-It is the gift card demo's rehearsal run: 60 mutants, 34 killed, 15 survived, 11 no-coverage. It
-is kept unredacted because that app is ours. Every other committed report has its source stripped;
-see `scripts/redact-first-party-reports.json` for the rule and how it is enforced.
+It is the gift card demo's rehearsal run: 60 mutants, 34 killed, 15 survived, 11 no-coverage.
+
+### Result notes (guidance)
+
+Validate against the schemas rather than trusting a shape you inferred from one example. Two
+caveats that [`../schemas/README.md`](../schemas/README.md) spells out: the stream schema describes
+an EVENT line, not the header the sink writes first, and the report schema describes the shape the
+current build writes, so an archived report of the same version can lack a now-required property.
+
+The gift card report is kept unredacted because that app is ours. Every other committed report has
+its source stripped; see `scripts/redact-first-party-reports.json` for the rule and how it is
+enforced.
 
 ### `--out report.json`: the record (checked)
 
-`schemaVersion: 2`. The full result: `counts`, `mutationScore`, `validity`, and every mutant with
-its verdict, location, operator, covering tests and coverage attribution. This is the artifact to
-archive.
+`schemaVersion: 2`. The report's fields include `counts`, `mutationScore`, `validity` and
+`mutants`, and `validity` carries `reliability`, `scoreDescribes` and `caveats`.
+
+#### Report notes (guidance)
+
+The report is the full result: every mutant with its verdict, location, operator, covering tests
+and coverage attribution. This is the artifact to archive.
 
 **Read `validity` before quoting `mutationScore`.** `validity.reliability`,
 `validity.scoreDescribes` and `validity.caveats` say what the number covers. A score from a
@@ -203,8 +234,31 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 5`. Reads that file and nothing else: no server, no database, no config.
-Prints JSON on stdout.
+`explainSchemaVersion: 5`. Its fields include `contract`, `score`, `survivors`, `notMeasured` and
+`survivorSelection`, and each `survivors` row carries `executionProven` and `reach`.
+
+A report from another schema version, or carrying a value this build cannot interpret, is REFUSED
+rather than explained with the unrecognised value dropped.
+
+`--top <n>` caps the survivor list:
+
+```bash
+lethal explain report.json --top 15
+```
+
+The output always carries `survivorSelection`, whether or not anything was capped:
+
+```json
+"survivorSelection": { "total": 125, "shown": 15, "omitted": 110, "rankedBy": "actionability" }
+```
+
+`rankedBy` is `report-order` when no cap was applied and `actionability` when one was. `--top 0` is
+refused.
+
+#### Explain notes (guidance)
+
+`explain` reads that file and nothing else: no server, no database, no config. It prints JSON on
+stdout.
 
 Its own `contract` block states the split: **structure is contractual, prose is not.** Field names,
 nesting and value domains are stable under `explainSchemaVersion`. Do not parse `meaning` text;
@@ -219,32 +273,21 @@ the procedure and never reaches the statement. Where the report measured the mut
 (`reachGrain: "statement"`), `reach` is decided by that instead: `reached-unnoticed` means the
 statement ran under the tests listed in `reachedBy` and every one still passed.
 
-A report from another schema version, or carrying a value this build cannot interpret, is REFUSED
-rather than explained with the unrecognised value dropped.
-
-**Bound the output.** The projection of a 473-mutant report is 243 KB, 206 KB of it survivors.
-`--top <n>` caps the survivor list:
-
-```bash
-lethal explain report.json --top 15
-```
-
-The output always carries `survivorSelection`, whether or not anything was capped:
-
-```json
-"survivorSelection": { "total": 125, "shown": 15, "omitted": 110, "rankedBy": "actionability" }
-```
-
-Read `total` before treating `survivors` as the whole set. `rankedBy` is `report-order` when no cap
-was applied and `actionability` when one was, ranked so that the rows carrying the most evidence
-survive the cut, ordered totally, so the same report and the same cap give the same rows every
-time. The cap bounds survivors only; `notMeasured` is never shortened. `--top 0` is refused.
+**Bound the output.** The projection of a 473-mutant report is 243 KB, 206 KB of it survivors. Read
+`total` before treating `survivors` as the whole set. The `actionability` ranking keeps the rows
+carrying the most evidence and is a total order, so the same report and the same cap give the same
+rows every time. The cap bounds survivors only; `notMeasured` is never shortened.
 
 ### `--progress-out events.ndjson`: following a live run (checked)
 
-`streamSchemaVersion: 1`. One JSON object per line, flushed as each event arrives, so a killed
-process still leaves a readable file. Line 1 is a header this sink writes itself and carries
-`ndjsonHeader: true`; every later line is an event with `seq`, `type` and `runId`.
+`streamSchemaVersion: 1`. Line 1 is a header this sink writes itself and carries
+`ndjsonHeader: true`; every later line is an event with `seq`, `type` and `runId`. The event types
+include `session-finished` and `batch-invalidated`.
+
+#### Stream notes (guidance)
+
+One JSON object per line, flushed as each event arrives, so a killed process still leaves a
+readable file.
 
 **Every verdict line is PROVISIONAL until `session-finished` appears.** A `batch-invalidated` event
 can supersede a verdict already written to the file: a lease loss, or a deploy that turns out
@@ -253,7 +296,7 @@ acting on a fact the run itself no longer stands behind.
 
 Unknown event types are ignored by design, so a future event type does not break a consumer.
 
-## The hardening loop (checked)
+## The hardening loop (guidance)
 
 The loop that turns a survivor into a killed mutant: `lethal run`, `lethal explain`, write a test
 that should kill a survivor, `lethal verify`, and repeat until verify exits `0`. Then a fresh
@@ -269,19 +312,18 @@ and `<tests-dir>` the test project you edited:
 lethal verify --db <project>/lethal.sqlite --artifact <artifactId> --survivors <batchIndex>/<mutantCode> --tests <tests-dir> --config <config>
 ```
 
-A filled-in example:
+A filled-in example, for the run shown under Running with `<app-dir>` as `app` and
+`<test-app-dir>` as `tests`:
 
 ```bash
 lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --config lethal.config.json
 ```
 
 `--db` is the database the run wrote: the run's own `--db`, or its default. `--config` is the
-config the run used, as the run was given it; without it verify reads `<project>/lethal.config.json`,
-which is a different file whenever the run's config lived elsewhere. Only the LAST batch a
-run published stays installed on the server, so a survivor from an earlier batch is refused as
-`batch-not-installed`.
+config the run used, as the run was given it. `--tests` is the run's test project.
 
-A row with no `artifactId` carries `artifactIdAbsent` instead:
+A row with no `artifactId` carries `artifactIdAbsent` instead. The values are checked; the meanings
+are guidance.
 
 | artifactIdAbsent | what it means for verify |
 |---|---|
@@ -289,7 +331,13 @@ A row with no `artifactId` carries `artifactIdAbsent` instead:
 | `not-recorded` | The report predates artifact ids. Run again. |
 | `not-published` | The backend published nothing for that batch. Verify cannot help. |
 
-### Running verify (checked)
+#### Recipe notes (guidance)
+
+Without `--config` verify reads `<project>/lethal.config.json`, which is a different file whenever
+the run's config lived elsewhere. Only the LAST batch a run published stays installed on the
+server, so a survivor from an earlier batch is refused as `batch-not-installed`.
+
+### Running verify (guidance)
 
 Verify works on `bcdev` only. It prints one JSON object on stdout and its progress on stderr. The
 ids are checked when verify runs, not when the argv is parsed, so a wrong id is exit `6` with
@@ -308,11 +356,16 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 
-`killedBy` never changes the exit code: a kill by a runtime error is still a kill, and says only
-that no assertion caught it. `killedByNewTest` says whether the killing test is one your edit
-added. `invalidBaseline` lists the requested tests that had no fresh green unmutated run. Verify then
-does not run the mutant at all: that survivor's row is `error`. Fix those tests (they must pass
-unmutated, in a fresh session) and run verify again.
+`killedBy` never changes the exit code. A result row also carries `killedByNewTest`, and the output
+carries `invalidBaseline`.
+
+#### Verify result notes (guidance)
+
+A kill by a runtime error is still a kill, and says only that no assertion caught it.
+`killedByNewTest` says whether the killing test is one your edit added. `invalidBaseline` lists the
+requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
+that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
+run verify again.
 
 ### Verify exit codes (checked)
 
@@ -359,15 +412,13 @@ The set of reasons is checked; the advice is guidance.
 
 ### Marking an equivalent survivor (checked)
 
-Some survivors cannot be killed by any test, because the change does not change behaviour. Mark
-one in `<project>/lethal.equivalent.json`:
+Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
 { "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
-`reason` is required. No command prints the key yet (R265), so build it from the survivor's row in
-`report.json`:
+`reason` is required. Build the key from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
@@ -376,8 +427,12 @@ key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
 Use `triggerName` when `procedureName` is empty. **A row with `identityOrdinal` (a twin after the
 first) cannot be marked today, because the marks file accepts only five-field keys (R230).**
 
-A marked survivor is `skipped`: verify never runs it, and it is not a measured kill or survival.
-`equivalenceRisk` alone never skips a survivor. A mark never changes the score.
+#### Marking notes (guidance)
+
+Some survivors cannot be killed by any test, because the change does not change behaviour. No
+command prints the key yet (R265). A marked survivor is `skipped`: verify never runs it, and it
+is not a measured kill or survival. `equivalenceRisk` alone never skips a survivor. A mark never
+changes the score.
 
 ### Writing the killing test (guidance)
 
@@ -394,7 +449,7 @@ blind spot, not a survival.
 A verify `killed` proves the test kills that mutant in the installed build. Make it the record
 with a fresh `lethal run`, never with `--resume`, which would carry the old verdicts (R247).
 
-## The six rules (checked)
+## The six rules (guidance)
 
 1. **Read `validity` before quoting `mutationScore`.** The number without its caveats is not a
    result.
@@ -471,7 +526,7 @@ field is checked at startup and a missing one is named rather than defaulted. Th
 README's Configuration section. Credentials live in it, so treat it as a secret: do not read it
 into a transcript and do not copy it into an issue.
 
-## Safety (checked)
+## Safety (guidance)
 
 - Point LethAL at a **sandbox or dev container only, never a production tenant.** The changed build
   stays published until you republish your own app, and a plain republish is refused as a

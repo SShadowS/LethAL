@@ -106,7 +106,8 @@ For the full record rather than the interpretation, read `report.json` itself
 Write a test that should kill a survivor, then ask `lethal verify` whether it does. LethAL never
 writes the test. Take `artifactId`, `batchIndex` and `mutantCode` from one `explain` survivor row,
 pass the run's database as `--db` (by default `<app-dir>/lethal.sqlite`) and the run's config as
-`--config`, and name the test project you edited as `--tests`:
+`--config`, and name the test project you edited as `--tests`. The example is for the run above
+with `<app-dir>` as `app` and `<test-app-dir>` as `tests`:
 
 ```bash
 lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --config lethal.config.json
