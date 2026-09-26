@@ -2271,7 +2271,7 @@ const VALUE: Readonly<Record<string, string>> = {
   format: "mutation-elements",
 };
 
-/** MEASURED exemption: flags `run --dry-run` accepts and ignores. Filed (C02-07 Task 5); may only
+/** MEASURED exemption: flags `run --dry-run` accepts and ignores. Filed as R266; may only
  *  shrink. Measured 2026-09-26 once FLAG_OWNERS was total (before it, `--server`, `--instance` and
  *  `--file` were ignored here too; they are now refused as `clear-*` flags). */
 const DRY_RUN_IGNORES: ReadonlySet<string> = new Set([

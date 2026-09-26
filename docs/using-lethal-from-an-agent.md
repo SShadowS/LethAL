@@ -130,8 +130,8 @@ its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `f
 | `--survivors` | `verify` |
 
 One exception remains: `lethal run --dry-run` still accepts its execution flags (such as
-`--backend` and `--workers`) and ignores them, because it executes nothing. That is filed on the
-roadmap.
+`--backend` and `--workers`) and ignores them, because it executes nothing. That is filed as
+R266.
 
 ### Traps (checked)
 
@@ -365,7 +365,8 @@ one in `<project>/lethal.equivalent.json`:
 { "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
-`reason` is required. Build `key` from the survivor's row in `report.json`:
+`reason` is required. No command prints the key yet (R265), so build it from the survivor's row in
+`report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
