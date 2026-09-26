@@ -105,17 +105,17 @@ For the full record rather than the interpretation, read `report.json` itself
 
 Write a test that should kill a survivor, then ask `lethal verify` whether it does. LethAL never
 writes the test. Take `artifactId`, `batchIndex` and `mutantCode` from one `explain` survivor row,
-pass the run's database as `--db` (by default `<app-dir>/lethal.sqlite`), and name the test project
-you edited as `--tests`:
+pass the run's database as `--db` (by default `<app-dir>/lethal.sqlite`) and the run's config as
+`--config`, and name the test project you edited as `--tests`:
 
 ```bash
-lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests
+lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --config lethal.config.json
 ```
 
-It prints JSON on stdout (redirect it; `--out` is refused) and works on `bcdev` only. It publishes
-the test project, and the test app stays installed afterwards.
+It prints JSON on stdout (redirect it; `--out` is refused) and works on `bcdev` only. A call that runs
+any survivor publishes the test project, and the test app stays installed afterwards.
 
-**Exit codes: `0`, `3`, `4`, `5`, `6`.** `0` means every named survivor was killed and every new
+**Exit codes: `0`, `1`, `3`, `4`, `5`, `6`.** `1` is an error with no JSON (an argv it refuses included). `0` means every named survivor was killed and every new
 test is stable; it is also what you get when every survivor skipped, which measured nothing. `3` is
 quarantined, as for a run. `4` means every non-skipped survivor errored and verify measured nothing.
 `5` means not every named survivor was killed, or a new test is not stable. `6` means verify refused

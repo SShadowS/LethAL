@@ -106,8 +106,9 @@ warns (`group-runs-inert`) when that happens.
 ### Which subcommand reads which flag (checked)
 
 Every subcommand refuses a flag it does not read; none but the one exception below accepts one
-and ignores it. The table lists
-the flags an agent is most likely to reach for. Any flag on a subcommand not listed for it is
+and ignores it. "Read" means the parse stores it: a stored flag can still go unused, when a
+precedence rule overrides it (`clear-ceiling --config` under an explicit `--server`/`--instance`
+pair, listed in `cli.test.ts`) or when the config makes it moot. The table lists the flags an agent is most likely to reach for. Any flag on a subcommand not listed for it is
 refused, with a message naming the subcommands that do read it. `campaign` also refuses some of
 its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
 
@@ -130,8 +131,8 @@ its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `f
 | `--survivors` | `verify` |
 
 One exception remains: `lethal run --dry-run` still accepts its execution flags (such as
-`--backend` and `--workers`) and ignores them, because it executes nothing. That is filed as
-R266.
+`--out`, `--backend` and `--workers`) and ignores them, because it executes nothing. So
+`--dry-run --out plan.json` writes nothing. That is filed as R266.
 
 ### Traps (checked)
 
@@ -166,9 +167,7 @@ code.
 
 ## Reading the result (checked)
 
-Three surfaces, three purposes, each versioned separately.
-
-All four have a published JSON Schema in [`../schemas/`](../schemas/):
+Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v2.schema.json](../schemas/report-v2.schema.json)
 - `lethal explain`: [../schemas/explain-v5.schema.json](../schemas/explain-v5.schema.json)
@@ -263,20 +262,22 @@ that should kill a survivor, `lethal verify`, and repeat until verify exits `0`.
 ### From an explain row to a verify command (checked)
 
 Each `explain` survivor row carries the three values verify needs: `artifactId`, `batchIndex` and
-`mutantCode`. The command, with `<project>` the run's `--project` and `<tests-dir>` the test
-project you edited:
+`mutantCode`. The command, with `<project>` the run's `--project`, `<config>` the run's `--config`
+and `<tests-dir>` the test project you edited:
 
 ```bash
-lethal verify --db <project>/lethal.sqlite --artifact <artifactId> --survivors <batchIndex>/<mutantCode> --tests <tests-dir>
+lethal verify --db <project>/lethal.sqlite --artifact <artifactId> --survivors <batchIndex>/<mutantCode> --tests <tests-dir> --config <config>
 ```
 
 A filled-in example:
 
 ```bash
-lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests
+lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors 0/M0004 --tests tests --config lethal.config.json
 ```
 
-`--db` is the database the run wrote: the run's own `--db`, or its default. Only the LAST batch a
+`--db` is the database the run wrote: the run's own `--db`, or its default. `--config` is the
+config the run used, as the run was given it; without it verify reads `<project>/lethal.config.json`,
+which is a different file whenever the run's config lived elsewhere. Only the LAST batch a
 run published stays installed on the server, so a survivor from an earlier batch is refused as
 `batch-not-installed`.
 

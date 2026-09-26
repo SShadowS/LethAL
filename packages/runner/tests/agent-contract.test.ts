@@ -430,6 +430,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       const filled = recipe.replace(/<([A-Za-z-]+)>/g, (_, name: string) => {
         if (name === "project") return "P";
         if (name === "tests-dir") return "T";
+        if (name === "config") return "C";
         const v = fields[name];
         if (v === undefined)
           throw new Error(`recipe placeholder <${name}> is not an explain survivor field`);
@@ -445,6 +446,8 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       // "valid request, wrong hardening loop" case.
       expect(parsed.dbPath).toBe("P/lethal.sqlite");
       expect(parsed.testDir).toBe("T");
+      // Without --config verify reads <project>/lethal.config.json, not the config the run used.
+      expect(parsed.configPath).toBe("C");
     }
     const body = section(read(REFERENCE), "From an explain row to a verify command (checked)");
     const absences = tableRows(body).map(([c = ""]) => ticks(c)[0] ?? "");
@@ -557,7 +560,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       .map(([r]) => r);
     const row3 =
       rows.find(([c = ""]) => ticks(c)[0] === String(VERIFY_EXIT.quarantined))?.[1] ?? "";
-    expect(new Set(ticks(row3).filter((t) => t.startsWith("publish-")))).toEqual(
+    // Filter by membership, not by a name prefix, so a future quarantining reason of any name counts.
+    const testAppReasons: readonly string[] = Object.keys(TEST_APP_REFUSALS);
+    expect(new Set(ticks(row3).filter((t) => testAppReasons.includes(t)))).toEqual(
       new Set(quarantining),
     );
     // One competing-condition case per precedence boundary, run through the real function.
