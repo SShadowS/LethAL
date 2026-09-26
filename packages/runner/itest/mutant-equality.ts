@@ -31,7 +31,7 @@ export interface NormalizedMutant {
   readonly errorClass: string | null;
 }
 
-function keyOf(m: MutantOutcome): string {
+export function keyOf(m: MutantOutcome): string {
   // `procedureName` joined the identity in R166; R193 added `identityOrdinal`, this mutant's
   // position among byte-identical twins in SOURCE order (not report order, which is what R166
   // rightly refused to key on). Appended only when non-zero, so every key without a twin is
