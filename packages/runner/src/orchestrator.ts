@@ -132,6 +132,10 @@ import {
 } from "./test-order";
 import { describeTestPageUnsupported } from "./testpage-unsupported";
 
+// C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
+// public types are re-exported one by one from here, the module the barrel does list.
+export type { NamedMutantRequest } from "./named-mutants";
+
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**

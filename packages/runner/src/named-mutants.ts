@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutantManifest } from "@lethal/schemata";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
-import type { BoundArtifact } from "./backend";
+import type { BoundArtifact, TestMethodRef } from "./backend";
 import { describeThrown } from "./describe-error";
+import { testKeyOf } from "./selection";
 import type { ResultsStore } from "./store";
 
 /** Where the installed artifact came from. The record, not the caller, supplies its identity. */
@@ -87,4 +88,102 @@ export async function loadInstalledArtifact(
     },
     manifest,
   };
+}
+
+/** Decision 3's request-shape refusals (context.md). Plain messages naming every offending id;
+ *  extends `Error` directly, like `InstalledArtifactError` beside it, and never either of it. */
+export class NamedMutantError extends Error {}
+
+export interface ResolvedNamedMutant {
+  readonly mutant: MutantManifestEntry;
+  readonly methods: readonly TestMethodRef[];
+}
+
+/** A caller-named mutant plus the methods to run against it. Chosen by the caller (C02-06: the
+ *  report's coveringTests plus new tests). */
+export interface NamedMutantRequest {
+  readonly mutantId: string;
+  readonly methods: readonly TestMethodRef[];
+}
+
+/**
+ * Decision 3's refusals, all `NamedMutantError`, all before any backend call, in this order: an
+ * empty request list; a repeated mutant id; a mutant id `manifest` does not contain (naming
+ * every unknown one); a request with no methods; a repeated method within one request.
+ * `manifest` is the one `loadInstalledArtifact` matched, so a name is resolved only inside it.
+ * Never returns `[]`.
+ */
+export function resolveNamedMutants(
+  manifest: MutantManifest,
+  requests: readonly NamedMutantRequest[],
+): readonly ResolvedNamedMutant[] {
+  if (requests.length === 0) {
+    throw new NamedMutantError(
+      "resolveNamedMutants refuses an empty request list: name at least one mutant",
+    );
+  }
+
+  const seenIds = new Set<string>();
+  const repeatedIds: string[] = [];
+  for (const { mutantId } of requests) {
+    if (seenIds.has(mutantId)) repeatedIds.push(mutantId);
+    seenIds.add(mutantId);
+  }
+  if (repeatedIds.length > 0) {
+    throw new NamedMutantError(
+      `resolveNamedMutants refuses repeated mutant id(s): ${repeatedIds.join(", ")}`,
+    );
+  }
+
+  const byId = new Map(manifest.mutants.map((mutant) => [mutant.mutantId, mutant] as const));
+  const unknownIds = requests.map((request) => request.mutantId).filter((id) => !byId.has(id));
+  if (unknownIds.length > 0) {
+    throw new NamedMutantError(
+      `resolveNamedMutants refuses mutant id(s) not in artifact ${manifest.artifactId}: ${unknownIds.join(", ")}`,
+    );
+  }
+
+  for (const { mutantId, methods } of requests) {
+    if (methods.length === 0) {
+      throw new NamedMutantError(`resolveNamedMutants refuses ${mutantId}: it names no methods`);
+    }
+    const seenMethods = new Set<string>();
+    const repeatedMethods: string[] = [];
+    for (const method of methods) {
+      const key = testKeyOf(method);
+      if (seenMethods.has(key)) repeatedMethods.push(key);
+      seenMethods.add(key);
+    }
+    if (repeatedMethods.length > 0) {
+      throw new NamedMutantError(
+        `resolveNamedMutants refuses ${mutantId}: repeated method(s) ${repeatedMethods.join(", ")}`,
+      );
+    }
+  }
+
+  // Every id was checked against byId above, so this never falls through to the throw below;
+  // it exists only to satisfy noUncheckedIndexedAccess-style narrowing without a `!` assertion.
+  return requests.map((request) => {
+    const mutant = byId.get(request.mutantId);
+    if (mutant === undefined) {
+      throw new NamedMutantError(`resolveNamedMutants: ${request.mutantId} is not in the manifest`);
+    }
+    return { mutant, methods: request.methods };
+  });
+}
+
+/** Every method any request names, deduplicated by `testKeyOf` (selection.ts), first-seen order. */
+export function baselineTestsOf(named: readonly ResolvedNamedMutant[]): readonly TestMethodRef[] {
+  const seen = new Set<string>();
+  const out: TestMethodRef[] = [];
+  for (const { methods } of named) {
+    for (const method of methods) {
+      const key = testKeyOf(method);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(method);
+      }
+    }
+  }
+  return out;
 }
