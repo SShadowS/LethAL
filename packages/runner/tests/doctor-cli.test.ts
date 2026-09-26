@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,11 +22,12 @@ import {
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "../src/doctor";
 
 /**
- * R131: a directory that does not exist, so the al-runner cache check reports a measured absence
- * and this suite never walks whatever multi-GB artifact cache the machine running it happens to
- * hold. Its own behaviour is tested in `al-runner-cache.test.ts`.
+ * R131, R264: directories that do not exist, unique per process, so a cache check reports a
+ * measured absence and this suite never walks whatever multi-GB cache the machine running it
+ * holds. Their own behaviour is tested in `al-runner-cache.test.ts`.
  */
-const NO_CACHE_DIR = join(tmpdir(), "lethal-doctor-cli-no-al-runner-cache");
+const NO_CACHE_DIR = join(tmpdir(), `lethal-doctor-cli-no-al-runner-cache-${randomUUID()}`);
+const NO_SECONDARY_DIR = join(tmpdir(), `lethal-doctor-cli-no-al-runner-second-${randomUUID()}`);
 import type { DoctorReport } from "../src/doctor";
 import { EnvToolClient, validateEnvToolConfig } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -47,6 +49,26 @@ const fakeAlc18 = async () => ({
 });
 
 /**
+ * R264: everything doctor would otherwise read or spawn on the REAL machine, faked once. Spread
+ * FIRST, so a test that is about one of these (tool-paths with `noExtension`, a cache with
+ * content) overrides it by naming it. `runDoctor` runs every check whose dependency exists, even
+ * when a test asserts only one, so every test needs all of these, not only the ones it asserts.
+ */
+const NO_REAL_IO = {
+  alRunnerCacheDir: NO_CACHE_DIR,
+  alRunnerSecondaryCacheDir: NO_SECONDARY_DIR,
+  alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
+  alcSpawn: fakeAlc18,
+} as const;
+
+function depsOf(
+  configFile: LethalConfigFile,
+  opts: Parameters<typeof buildDoctorDeps>[1] = {},
+): ReturnType<typeof buildDoctorDeps> {
+  return buildDoctorDeps(configFile, { ...NO_REAL_IO, ...opts });
+}
+
+/**
  * R109 ruling, honesty constraint 4: "one pinned test per check that a fixture making `run`
  * refuse also makes doctor non-green." Each test below drives the SAME machinery `lethal run`
  * would use (never a hand-rolled duplicate) against an identical fixture, proving both `run`'s own
@@ -59,7 +81,7 @@ const BCDEV_RAW = {
   mcpCommand: ["bun", "mcp"],
   company: "CRONUS",
   controlSymbolPath: "C:/lethal-control.app",
-  packageCachePath: "C:/pkg",
+  packageCachePath: join(tmpdir(), `lethal-doctor-cli-no-pkg-${randomUUID()}`),
 };
 
 const RESOLVED_BCDEV: BcDevConfigSection = {
@@ -163,8 +185,7 @@ describe("lethal doctor CLI wiring — environment (direct container)", () => {
   test("a healthy direct container reports the reachable sentinel, never an invented status word", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-ok-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
     });
@@ -177,8 +198,7 @@ describe("lethal doctor CLI wiring — environment (direct container)", () => {
   test("an unreachable container fails the environment check with the real HTTP detail, not an invented one", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-500-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: errorFetch(500, "boom"),
     });
@@ -196,8 +216,7 @@ describe("lethal doctor CLI wiring — environment (direct container)", () => {
   test("a wrong appId does not fail the environment check — that mis-attribution is what checkReachable() exists to avoid", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-wrongid-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info({ appId: "not-the-control-app" })),
     });
@@ -274,8 +293,7 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     // per run before this, relying on DNS failing fast.
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-stopped-"));
-    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg: doctorCfg, deps } = await depsOf(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
       fetchFn: okFetch(info()),
       quarantineDir: dir,
@@ -309,8 +327,7 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
     // Final review (Minor 5): same fix as the Stopped test above — no real network/quarantine dir.
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-running-"));
-    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg: doctorCfg, deps } = await depsOf(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
       fetchFn: okFetch(info()),
       quarantineDir: dir,
@@ -371,15 +388,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
   test("doctor omits environment/quarantine/control-version for create mode, keeps tool-paths and the al-runner cache report, and names why", async () => {
     const cfg = createModeCfg();
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
-    const {
-      cfg: doctorCfg,
-      deps,
-      caveat: createModeCaveat,
-    } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
-      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-      alcSpawn: fakeAlc18,
-    });
+    const { cfg: doctorCfg, deps, caveat: createModeCaveat } = await depsOf(configFile, {});
     expect(createModeCaveat).toBe(DOCTOR_CREATE_MODE_CAVEAT);
     const report = await runDoctor(doctorCfg, deps);
     // R131 added `al-runner-cache`, and it belongs in create mode for the same reason `tool-paths`
@@ -406,11 +415,8 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     };
     const cfg = createModeCfg();
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
-    const { cfg: doctorCfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg: doctorCfg, deps } = await depsOf(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn: spawnThatMustNotRun }),
-      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-      alcSpawn: fakeAlc18,
     });
     const report = await runDoctor(doctorCfg, deps);
     expect(report.ok).toBe(true);
@@ -419,15 +425,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
   test("the caveat appears in the rendered report", async () => {
     const cfg = createModeCfg();
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
-    const {
-      cfg: doctorCfg,
-      deps,
-      caveat: createModeCaveat,
-    } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
-      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-      alcSpawn: fakeAlc18,
-    });
+    const { cfg: doctorCfg, deps, caveat: createModeCaveat } = await depsOf(configFile, {});
     const report = await runDoctor(doctorCfg, deps);
     const rendered = renderDoctorReport(report, createModeCaveat);
     expect(rendered).toContain(DOCTOR_CREATE_MODE_CAVEAT);
@@ -483,8 +481,7 @@ describe("lethal doctor CLI wiring — packageCachePath default (fix round 1, Im
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-no-pkgcache-"));
     // The bug threw INSIDE buildDoctorDeps itself, before runDoctor ever ran — so reaching
     // runDoctor at all (rather than a rejected promise here) is already most of this assertion.
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
@@ -515,8 +512,7 @@ describe("lethal doctor CLI wiring — quarantine", () => {
     expect(consulted).not.toBeNull();
 
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
     });
@@ -529,8 +525,7 @@ describe("lethal doctor CLI wiring — quarantine", () => {
   test("an unquarantined tier passes", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-quarantine-clear-"));
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
     });
@@ -552,8 +547,7 @@ describe("lethal doctor CLI wiring — control-version (R28)", () => {
 
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-cv-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn,
     });
@@ -567,8 +561,7 @@ describe("lethal doctor CLI wiring — control-version (R28)", () => {
     const fetchFn = okFetch(info());
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-cv-ok-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn,
     });
@@ -600,8 +593,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     ).rejects.toThrow(/could not locate alc\.exe/);
 
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
       alToolPaths: noExtension,
@@ -616,8 +608,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     const found = async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" });
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-ok-"));
-    const { cfg, deps } = await buildDoctorDeps(configFile, {
-      alRunnerCacheDir: NO_CACHE_DIR,
+    const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
       alToolPaths: found,
@@ -701,7 +692,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     expect(String(runErr)).not.toMatch(/alc\.exe|altool\.exe/);
 
     const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-envtool-"));
-    const { cfg, deps } = await buildDoctorDeps(doctorConfigFile, {
+    const { cfg, deps } = await depsOf(doctorConfigFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
       alToolPaths: noExtension,
@@ -782,7 +773,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
       lines.push(a.map(String).join(" "));
     });
     try {
-      const code = await doctorFromCli({ mode: "doctor", configPath }, deps);
+      const code = await doctorFromCli({ mode: "doctor", configPath }, { ...NO_REAL_IO, ...deps });
       return { code, out: lines.join("\n") };
     } finally {
       log.mockRestore();
@@ -796,8 +787,6 @@ describe("doctorFromCli (final review, Important 1)", () => {
       {
         quarantineDir: dir,
         fetchFn: okFetch(info()),
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(0);
@@ -812,8 +801,6 @@ describe("doctorFromCli (final review, Important 1)", () => {
       {
         quarantineDir: dir,
         fetchFn: okFetch(info({ semver: "1.0.0.0" })),
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(1);
@@ -839,16 +826,25 @@ describe("doctorFromCli (final review, Important 1)", () => {
       deleteEnv: { command: ["env", "delete", "{envId}"] },
       publishApps: ["tests.app"],
     };
-    const { code, out } = await run(
-      { bcdev: BCDEV_RAW, envTool: envCfg },
-      {
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
-      },
-    );
+    const { code, out } = await run({ bcdev: BCDEV_RAW, envTool: envCfg }, {});
     expect(code).toBe(0);
     expect(out).toContain(DOCTOR_CREATE_MODE_CAVEAT);
     expect(out).not.toContain("{envId}");
+  });
+
+  test("doctorFromCli threads BOTH al-runner cache roots to the report (R264)", async () => {
+    const second = await mkdtemp(join(tmpdir(), "lethal-doctor-r264-second-"));
+    await writeFile(join(second, "marker.bin"), "x".repeat(10));
+    const { out } = await run(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-r264-q-")),
+        alRunnerSecondaryCacheDir: second,
+        fetchFn: okFetch(info()),
+      },
+    );
+    expect(out).toContain(`no al-runner artifact cache at ${NO_CACHE_DIR}`);
+    expect(out).toContain(`al-runner keeps 10 B in ${second}`);
   });
 
   // R151 — `--json`. The pre-flight an agent runs first was the one surface it could not parse.
@@ -863,7 +859,10 @@ describe("doctorFromCli (final review, Important 1)", () => {
       lines.push(a.map(String).join(" "));
     });
     try {
-      const code = await doctorFromCli({ mode: "doctor", configPath, json: true }, deps);
+      const code = await doctorFromCli(
+        { mode: "doctor", configPath, json: true },
+        { ...NO_REAL_IO, ...deps },
+      );
       const out = lines.join("\n");
       return { code, parsed: JSON.parse(out), out };
     } finally {
@@ -878,8 +877,6 @@ describe("doctorFromCli (final review, Important 1)", () => {
       {
         quarantineDir: dir,
         fetchFn: okFetch(info()),
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
       },
     );
     expect(code).toBe(0);
@@ -896,8 +893,6 @@ describe("doctorFromCli (final review, Important 1)", () => {
     const deps = {
       quarantineDir: dir,
       fetchFn: okFetch(info({ semver: "1.0.0.0" })),
-      alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-      alcSpawn: fakeAlc18,
     };
     const { code, parsed } = await runJson({ bcdev: RESOLVED_BCDEV }, deps);
     expect(code).toBe(1);
@@ -925,13 +920,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
       deleteEnv: { command: ["env", "delete", "{envId}"] },
       publishApps: ["tests.app"],
     };
-    const { parsed } = await runJson(
-      { bcdev: BCDEV_RAW, envTool: envCfg },
-      {
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
-      },
-    );
+    const { parsed } = await runJson({ bcdev: BCDEV_RAW, envTool: envCfg }, {});
     expect(parsed.caveat).toEqual({ kind: "create-mode", note: DOCTOR_CREATE_MODE_CAVEAT });
   });
 });
@@ -1052,14 +1041,11 @@ describe("issue #23: --tests wires the test-app-present check", () => {
   }
 
   async function reportFor(installed: boolean, testsDir: string | undefined) {
-    const { cfg, deps } = await buildDoctorDeps(
+    const { cfg, deps } = await depsOf(
       { bcdev: RESOLVED_BCDEV },
       {
         quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-testapp-q-")),
-        alRunnerCacheDir: NO_CACHE_DIR,
         fetchFn: fetchWith(installed),
-        alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
-        alcSpawn: fakeAlc18,
         ...(testsDir !== undefined ? { testsDir } : {}),
       },
     );
@@ -1088,5 +1074,24 @@ describe("issue #23: --tests wires the test-app-present check", () => {
 
   test("no --tests means no check at all", async () => {
     expect(check(await reportFor(true, undefined))).toBeUndefined();
+  });
+});
+
+describe("R264: doctor tests never reach the real disk", () => {
+  test("buildDoctorDeps reads al-runner's SECOND cache root from the injected dir (R264)", async () => {
+    const { deps } = await depsOf(
+      { bcdev: RESOLVED_BCDEV },
+      {
+        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-r264-q-")),
+        fetchFn: okFetch(info()),
+      },
+    );
+    const read = deps.alRunnerCache;
+    expect(read).toBeDefined();
+    if (read === undefined) return;
+    const report = await read();
+    expect(report.dir).toBe(NO_CACHE_DIR);
+    expect(report.secondaryDir).toBe(NO_SECONDARY_DIR);
+    expect(report.secondaryBytes).toBeNull();
   });
 });

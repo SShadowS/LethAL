@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
@@ -25,9 +26,11 @@ import type { SpawnFn } from "../src/publisher";
  * that `lethal run --backend al-runner` accepts.
  */
 
-/** A directory that does not exist, so the cache check reports a measured absence and this suite
- *  never walks whatever multi-GB artifact cache the machine running it happens to hold. */
-const NO_CACHE_DIR = join(tmpdir(), "lethal-doctor-al-runner-no-cache");
+/** Directories that do not exist, unique per process (R264), so the cache check reports a
+ *  measured absence and this suite never walks whatever multi-GB cache the machine running it
+ *  happens to hold. */
+const NO_CACHE_DIR = join(tmpdir(), `lethal-doctor-al-runner-no-cache-${randomUUID()}`);
+const NO_SECONDARY_DIR = join(tmpdir(), `lethal-doctor-al-runner-no-second-${randomUUID()}`);
 
 const AL_RUNNER_ONLY: LethalConfigFile = { alRunner: { alRunnerPath: "C:/tools/al-runner.exe" } };
 
@@ -35,7 +38,7 @@ const BCDEV_RAW: Partial<BcDevConfigSection> = {
   mcpCommand: ["bun", "mcp"],
   company: "CRONUS",
   controlSymbolPath: "C:/lethal-control.app",
-  packageCachePath: "C:/pkg",
+  packageCachePath: join(tmpdir(), `lethal-doctor-al-runner-no-pkg-${randomUUID()}`),
   server: "https://host",
   serverInstance: "BC",
   username: "admin",
@@ -56,6 +59,7 @@ function v2Spawn(line = "al-runner v2.1.2.0"): { calls: string[][]; spawn: Spawn
 async function depsFor(configFile: LethalConfigFile, spawn: SpawnFn) {
   return buildDoctorDeps(configFile, {
     alRunnerCacheDir: NO_CACHE_DIR,
+    alRunnerSecondaryCacheDir: NO_SECONDARY_DIR,
     alRunnerSpawn: spawn,
     alToolPaths: async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" }),
   });
@@ -122,12 +126,24 @@ describe("lethal doctor on an al-runner-only project (R146)", () => {
     }
   });
 
+  test("the al-runner-only branch reads al-runner's SECOND cache root from the injected dir (R264)", async () => {
+    const { deps } = await depsFor(AL_RUNNER_ONLY, v2Spawn().spawn);
+    const read = deps.alRunnerCache;
+    expect(read).toBeDefined();
+    if (read === undefined) return;
+    const report = await read();
+    expect(report.secondaryDir).toBe(NO_SECONDARY_DIR);
+  });
+
   test("a config that is NEITHER al-runner NOR bcdev NOR envTool still refuses", async () => {
     // Point 3 of the row: that is a real mistake worth refusing, and widening doctor to accept
     // everything would have thrown it away along with the bug.
-    await expect(buildDoctorDeps({}, { alRunnerCacheDir: NO_CACHE_DIR })).rejects.toThrow(
-      /no "bcdev", "envTool" or "alRunner" section/,
-    );
+    await expect(
+      buildDoctorDeps(
+        {},
+        { alRunnerCacheDir: NO_CACHE_DIR, alRunnerSecondaryCacheDir: NO_SECONDARY_DIR },
+      ),
+    ).rejects.toThrow(/no "bcdev", "envTool" or "alRunner" section/);
   });
 });
 
