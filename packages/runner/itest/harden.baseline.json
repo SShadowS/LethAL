@@ -1,0 +1,149 @@
+[
+  {
+    "key": "000d0e370024d8d3eb6a3ab4d690514cc10f070bfb78bdd84cb82474615bc830|Harden Logic|FirstAmount|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "FirstAmountReadsARow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "01dea415e89299ef312b64963de5df85514c3d1e8a34e9c55ead70e9ca4147e6|Harden Logic|SetAmount|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "SetAmountStoresTheAmount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1da41b373cdc3cddf07c393c4ed8afd7ff646640807c6d41eed2d2068ea09dc9|Harden Logic|FirstAmount|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "FirstAmountReadsARow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "21f8266398bb60cba226e0084507caeb6e813f1e631b8da96abba79462852a67|Harden Logic|CountInCategory|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "CountInCategoryCountsRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "2e821ee40319483c2f98a63dec7173245c4b6530d33ff195266e1d190ff97472|Harden Logic|CountInCategory|lethal.remove-setrange|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Harden Logic|FirstAmount|lethal.negate-guard|1",
+    "verdict": "killed",
+    "killingTest": "FirstAmountReadsARow",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Harden Logic|FirstAmount|lethal.swap-find-direction|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "3fbca8eaf11a092c3e99c78c405edfc95154d9c2ed3473fe247a7e972bf47b3c|Harden Logic|CountInCategory|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "CountInCategoryCountsRows",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Harden Logic|BonusFor|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "BonusForPaysOnlyAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5227ab447d856cc4a4962695a871e5df052e8534f3a04ee212602e0c7ab5a032|Harden Logic|IsLarge|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "IsLargeSeparatesSmallFromLarge",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Harden Logic|IsLarge|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "638d767998ea3f124609bfec66ded15f1c503764273d8ee69f09badf677b5ab1|Harden Entry|OnValidate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "AmountValidateDoublesIt",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Harden Logic|BonusFor|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "BonusForPaysOnlyAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8788f7376c56de39025528e72a41621049a1c2d28483aefe67986a9a1abd0685|Harden Entry|OnValidate|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "AmountValidateDoublesIt",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "91b252c74d99377344740905ba9e8793085a379c27789913561ccb5f9a3aa7e7|Harden Logic|BonusFor|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "BonusForPaysOnlyAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Harden Logic|BonusFor|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Harden Logic|BonusFor|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "BonusForPaysOnlyAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "cf13621963fe1922354a41365812fb0d4e692fe8c2d0ae3e9711fcb3b356e57b|Harden Logic|SetAmount|lethal.validate-to-assign|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "cf13621963fe1922354a41365812fb0d4e692fe8c2d0ae3e9711fcb3b356e57b|Harden Logic|SetAmount|lethal.void-method-call|1",
+    "verdict": "killed",
+    "killingTest": "SetAmountStoresTheAmount",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f0f5ad27553676be6e53bf9ab55e29ed8ae578901bdd94a456fec7d75f8fe051|Harden Logic|IsLarge|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "IsLargeSeparatesSmallFromLarge",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Harden Logic|BonusFor|lethal.conditional-boundary|1",
+    "verdict": "killed",
+    "killingTest": "BonusForPaysOnlyAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  }
+]

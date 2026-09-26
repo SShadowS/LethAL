@@ -1,0 +1,35 @@
+{
+  "id": "1102d75f-39f0-45d1-b8bf-23d2be28386f",
+  "name": "LethAL Sandbox Harden Tests",
+  "brief": "LethAL C02-03 fixture: the base suite for sandbox-harden.",
+  "description": "Exercises fixtures/sandbox-harden and misses exactly its five planted survivors. Asserts via Error(), no Library Assert dependency. Not for production use.",
+  "dependencies": [
+    {
+      "id": "9bc2014f-e12f-4571-9a00-4e7641d19702",
+      "name": "LethAL Sandbox Harden",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [
+    {
+      "from": 79550,
+      "to": 79574
+    }
+  ],
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "screenshots": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
