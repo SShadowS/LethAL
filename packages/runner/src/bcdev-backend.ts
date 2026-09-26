@@ -8,11 +8,12 @@ import {
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { AppMethodIndex, objectTypeName } from "./app-package";
-import { ArtifactPrepareError, DeploymentError } from "./artifact";
+import { ArtifactPrepareError, DeploymentError, InstalledArtifactError } from "./artifact";
 import type { ArtifactCompiler, CompileInput, CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  BoundArtifact,
   CoverageEntry,
   CoverageMap,
   CoverageMode,
@@ -31,7 +32,7 @@ import { describeThrown } from "./describe-error";
 import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
-import { type LineMap, buildLineMap } from "./line-map";
+import { type LineMap, buildLineMap, lineMapFromSources } from "./line-map";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
 import type {
@@ -589,6 +590,24 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
   }
 
+  /** `indexArtifact` over the in-memory copy `loadInstalledArtifact` verified; reads no file. */
+  private async indexInstalled(artifact: BoundArtifact): Promise<void> {
+    this.methodIndex = AppMethodIndex.fromAppBytes(artifact.appBytes);
+    if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
+      this.lineMap = await lineMapFromSources(
+        artifact.alSources,
+        this.methodIndex.declaredObjects(),
+      );
+      this.coverageObjectIdFilter = coverageObjectIdFilterFromText(
+        artifact.appJsonText,
+        join(artifact.instrumentedDir, "app.json"),
+      );
+    } else {
+      this.lineMap = undefined;
+      this.coverageObjectIdFilter = undefined;
+    }
+  }
+
   async deploy(instrumentedDir: string): Promise<CompiledArtifact> {
     const deployment = this.deployment;
     if (!deployment) throw new Error("BcDevMcpBackend: no compiler/deployer/verifier configured");
@@ -655,6 +674,47 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // published. The transport echoes and validates this identity tuple on every call (§I5).
     this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
     return artifact;
+  }
+
+  /**
+   * C02-04b: bind this backend to an artifact that is ALREADY installed, with no compile and no
+   * publish. The same readiness and identity checks `deploy()` runs, in the same order, then the
+   * same coverage index and transport binding. Nothing is bound unless the registry reports
+   * exactly this artifact: `mismatch` and `unavailable` both throw (unavailable fails closed).
+   */
+  async attach(artifact: BoundArtifact): Promise<void> {
+    // Unbind first, so a refused attach leaves NO transport, not the previous artifact's.
+    this.runMutantTransport = undefined;
+    const deployment = this.deployment;
+    if (deployment === undefined) {
+      throw new InstalledArtifactError(
+        "unsupported",
+        "BcDevMcpBackend: no BcDevDeployment configured, so there is no verifier to attach with",
+      );
+    }
+    await deployment.harnessVerifier.verify();
+    const verification = await deployment.verifier.verify({
+      appId: artifact.appId,
+      artifactId: artifact.artifactId,
+    });
+    if (verification.status === "mismatch") {
+      throw new InstalledArtifactError(
+        "mismatch",
+        `expected artifact ${artifact.artifactId}, server reports ${verification.reported}`,
+      );
+    }
+    if (verification.status === "unavailable") {
+      throw new InstalledArtifactError("unavailable", verification.detail);
+    }
+    try {
+      await this.indexInstalled(artifact);
+    } catch (err) {
+      throw new InstalledArtifactError(
+        "local-copy-unreadable",
+        `indexing ${artifact.appPath}: ${describeThrown(err)}`,
+      );
+    }
+    this.runMutantTransport = this.runMutantTransportFactory?.(artifact.appId, artifact.artifactId);
   }
 
   /**
@@ -1212,9 +1272,22 @@ export class BcDevMcpBackend implements ExecutionBackend {
  */
 async function coverageObjectIdFilterOf(instrumentedDir: string): Promise<string> {
   const appJsonPath = join(instrumentedDir, "app.json");
+  let text: string;
+  try {
+    text = await readFile(appJsonPath, "utf8");
+  } catch (err) {
+    throw new ArtifactPrepareError(
+      `cannot read ${appJsonPath} for the fenced-coverage object filter: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return coverageObjectIdFilterFromText(text, appJsonPath);
+}
+
+/** `coverageObjectIdFilterOf` over `app.json` text already read; `appJsonPath` names it in errors. */
+function coverageObjectIdFilterFromText(text: string, appJsonPath: string): string {
   let manifest: Record<string, unknown>;
   try {
-    manifest = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    manifest = JSON.parse(text) as Record<string, unknown>;
   } catch (err) {
     throw new ArtifactPrepareError(
       `cannot read ${appJsonPath} for the fenced-coverage object filter: ${err instanceof Error ? err.message : String(err)}`,
