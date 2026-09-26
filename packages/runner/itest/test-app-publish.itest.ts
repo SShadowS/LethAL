@@ -51,6 +51,7 @@ import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
+import { expectedTestAppVersion } from "./test-app-version";
 
 if (!process.env.LETHAL_ITEST_TESTAPP) {
   console.log(
@@ -73,7 +74,6 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const TEST_CODEUNIT = { codeunitId: 79100, codeunitName: "Sandbox Tests" } as const;
 const TEST_CODEUNIT_FILE = join("src", "SandboxTests.Codeunit.al");
 const MARKER = "ZzC0205Marker";
-const TEST_APP_VERSION = "1.0.0.2";
 /** Microsoft's Base Application: its installed version is the BC build this gate ran against. */
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 /** The two frozen rows this gate drives, by identity key suffix in bcdev.baseline.json. */
@@ -155,6 +155,7 @@ async function main(): Promise<void> {
       "could not locate alc.exe/altool.exe under the AL Language VS Code extension install",
     );
   }
+  const testAppVersion = await expectedTestAppVersion(TEST_DIR);
 
   const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-testapp-"));
   const outputDir = join(scratch, "publish");
@@ -384,7 +385,7 @@ async function main(): Promise<void> {
       });
       assert.ok(fresh instanceof Uint8Array, `${step}: a fresh read-back must answer`);
       assert.equal(hashPackage(fresh), compiled.sha256, `${step}: fresh read-back = compiled`);
-      assert.equal(published.version, TEST_APP_VERSION, `${step}: server version`);
+      assert.equal(published.version, testAppVersion, `${step}: server version`);
       assert.equal(res.quarantined, undefined, `${step}: no quarantine (${res.quarantined})`);
       const [k, s] = res.outcomes;
       assert.ok(k !== undefined && s !== undefined, `${step}: two outcomes`);
