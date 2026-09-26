@@ -5570,7 +5570,7 @@ function selectNamed(
     if (strict) {
       const invalid = methods.flatMap((m) => {
         const why = invalidBaselineReason(rowByKey.get(testKeyOf(m))?.verdict);
-        return why === undefined ? [] : [`${qualifiedTestName(m)} (${why})`];
+        return why === undefined ? [] : [{ ref: m, text: `${qualifiedTestName(m)} (${why})` }];
       });
       if (invalid.length > 0) {
         record(
@@ -5582,8 +5582,15 @@ function selectNamed(
           batchIndex,
           scope.emit,
           undefined,
-          `invalid baseline: every requested test method needs a green unmutated run in a fresh session, and ${invalid.length} did not have one: ${invalid.join("; ")}`,
+          `invalid baseline: every requested test method needs a green unmutated run in a fresh session, and ${invalid.length} did not have one: ${invalid.map((i) => i.text).join("; ")}`,
         );
+        // The same methods as structured data, on the outcome `record` just pushed.
+        const at = scope.outcomes.length - 1;
+        const pushed = scope.outcomes[at];
+        if (pushed?.mutant !== mutant) {
+          throw new Error(`selectNamed: record() did not push ${mutant.mutantId}'s outcome last`);
+        }
+        scope.outcomes[at] = { ...pushed, invalidBaseline: invalid.map((i) => i.ref) };
         continue;
       }
     }

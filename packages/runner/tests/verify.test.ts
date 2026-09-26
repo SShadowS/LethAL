@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -16,9 +16,11 @@ import {
   VerifyError,
   type VerifySource,
   assertSourceUnchanged,
+  killedByOf,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
+  verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
 
@@ -710,5 +712,67 @@ describe("verifyRefusalOf (carried item 2)", () => {
     });
     // Anything else is not a refusal: the caller rethrows it (exit 1).
     expect(verifyRefusalOf(new Error("bug"))).toBeUndefined();
+  });
+});
+
+describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
+  test("killedByOf reads assertion, runtime-error and other from the measured callstack shapes", () => {
+    // Verbatim from a measured report, read from the file so no literal can drift from it.
+    const demo = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "..", "examples", "credit-limit", "demo.report.json"),
+        "utf8",
+      ),
+    ) as { mutants: Array<{ killingTestFailure?: string }> };
+    const texts = demo.mutants.flatMap((m) =>
+      m.killingTestFailure === undefined ? [] : [m.killingTestFailure],
+    );
+    const find = (prefix: string): string => {
+      const t = texts.find((x) => x.startsWith(prefix));
+      if (t === undefined) throw new Error(`demo.report.json has no kill text "${prefix}"`);
+      return t;
+    };
+    const TESTS = "Credit Limit Demo Tests";
+    // A bare Error(...) in the test, whose first frame is in the test app itself.
+    const bare = find("Expected an order of 400, got 0.");
+    expect(bare.split("\n")[1]).toStartWith("Credit Limit Tests(CodeUnit 90250)");
+    expect(killedByOf(bare, TESTS)).toBe("other");
+    // The test's own asserterror expectation failed.
+    expect(
+      killedByOf(find("Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException"), TESTS),
+    ).toBe("assertion");
+    // An error raised in the TARGET app (Credit Limit Demo), measured in the same report. The
+    // brief allowed this shape to be constructed; the demo has a measured one, so it is used.
+    const target = find("An order of 400 would take customer C-10000 over their credit limit.");
+    expect(target.split("\n")[1]).toStartWith(
+      "Credit Limit Mgt(CodeUnit 90204).CheckCreditLimit line",
+    );
+    expect(killedByOf(target, TESTS)).toBe("runtime-error");
+    // Library Assert's prefix is an assertion wherever it was raised.
+    expect(killedByOf("Assert.AreEqual failed. Expected:<1> Actual:<0>.", TESTS)).toBe("assertion");
+    // No second line: nothing to read a frame from.
+    expect(killedByOf("Expected an order of 400, got 0.", TESTS)).toBe("other");
+    expect(killedByOf(undefined, TESTS)).toBe("other");
+  });
+
+  test("the exit code precedence is 3, 6, 4, 5, 0", () => {
+    const killed = { verdict: "killed" as const };
+    const survived = { verdict: "survived" as const };
+    const error = { verdict: "error" as const };
+    const skipped = { verdict: "skipped" as const };
+    const stable = { state: "stable" as const };
+    const flaky = { state: "flaky" as const };
+    const refused = { reason: "carried", detail: "d" };
+    expect(verifyExitCode({ quarantined: "q", refused, results: [error], newTests: [flaky] })).toBe(
+      3,
+    );
+    expect(verifyExitCode({ refused, results: [error], newTests: [flaky] })).toBe(6);
+    expect(verifyExitCode({ results: [error, error, skipped], newTests: [flaky] })).toBe(4);
+    expect(verifyExitCode({ results: [error, killed], newTests: [stable] })).toBe(5);
+    expect(verifyExitCode({ results: [survived, killed], newTests: [stable] })).toBe(5);
+    expect(verifyExitCode({ results: [killed, skipped], newTests: [flaky] })).toBe(5);
+    expect(verifyExitCode({ results: [killed, skipped], newTests: [stable] })).toBe(0);
+    // Every survivor skipped: nothing measured, and nothing wrong either.
+    expect(verifyExitCode({ results: [skipped], newTests: [] })).toBe(0);
   });
 });

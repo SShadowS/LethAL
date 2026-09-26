@@ -2,18 +2,33 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
-import type { TestMethodRef } from "./backend";
+import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
+import type { ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
+import type { BcDevMcpBackend } from "./bcdev-backend";
 import { discoverTests } from "./discovery";
 import { type EquivalenceMark, loadEquivalenceMarks } from "./equivalence-marks";
 import {
   type InstalledArtifactRef,
   NamedMutantError,
   type NamedMutantRequest,
+  loadInstalledArtifact,
 } from "./named-mutants";
+import {
+  type LeaseSessionConfig,
+  type UnmutatedRun as NamedUnmutatedRun,
+  type SessionConfig,
+  runNamedMutants,
+} from "./orchestrator";
+import type { SessionOutcome } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
-import { TestAppError, type TestAppRefusal } from "./test-app-publish";
+import {
+  type CompiledTestApp,
+  type PublishedTestApp,
+  TestAppError,
+  type TestAppRefusal,
+} from "./test-app-publish";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -482,4 +497,460 @@ export async function planVerify(a: {
     );
   }
   return { requests, newTests, skipped, entries };
+}
+
+/** C02-06 decision 7: the JSON `lethal verify` prints. */
+export const VERIFY_SCHEMA_VERSION = 1;
+export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
+export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
+export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown"] as const;
+export type KilledBy = (typeof KILLED_BY)[number];
+export type NewTestState = (typeof NEW_TEST_STATES)[number];
+
+/**
+ * Decision 7's exit codes. 3 and 4 mean what `run`'s `QUARANTINED_EXIT_CODE` and
+ * `NOTHING_SCORED_EXIT_CODE` mean; they are repeated here because verify.ts must not import cli.ts.
+ */
+export const VERIFY_EXIT = {
+  ok: 0,
+  quarantined: 3,
+  nothingMeasured: 4,
+  notAllKilled: 5,
+  refused: 6,
+} as const;
+
+/** One unmutated run of one new test (decision 11). Any non-pass outcome that ran is `fail`. */
+export interface UnmutatedRun {
+  readonly outcome: "pass" | "fail" | "not-run";
+  readonly fresh: boolean;
+  readonly sessionId?: number;
+  readonly testRunsBefore?: number;
+}
+
+export interface NewTestResult {
+  /** Qualified `Codeunit.Method`. */
+  readonly test: string;
+  readonly codeunitId: number;
+  readonly state: NewTestState;
+  /** `[baseline, rerun]`. */
+  readonly runs: readonly UnmutatedRun[];
+  /** The first failing run's text. */
+  readonly failure?: string;
+}
+
+export interface VerifyResult {
+  /** `<batchIndex>/<mutantCode>`. */
+  readonly id: string;
+  readonly batchIndex: number;
+  readonly mutantCode: string;
+  readonly file: string;
+  readonly line: number;
+  readonly operatorName: string;
+  readonly procedureName: string;
+  readonly verdict: (typeof VERIFY_VERDICTS)[number];
+  /** Qualified names sent to `runNamedMutants`. */
+  readonly testsRun?: readonly string[];
+  /** Decision 13: requested methods without a valid green unmutated run. */
+  readonly invalidBaseline?: readonly string[];
+  readonly killingTest?: {
+    readonly codeunitId: number;
+    readonly codeunitName: string;
+    readonly method: string;
+  };
+  /** Decision 14: by `testKeyOf`, never by method name. */
+  readonly killedByNewTest?: boolean;
+  readonly killedBy?: KilledBy;
+  readonly killingTestFailure?: string;
+  readonly failureNote?: string;
+  readonly skipped?: {
+    readonly reason: "reader-marked-equivalent";
+    readonly mark: { readonly key: string; readonly reason: string };
+  };
+}
+
+export interface VerifyOutput {
+  readonly verifySchemaVersion: number;
+  /** `exitCode === 0`. */
+  readonly ok: boolean;
+  readonly exitCode: number;
+  readonly source?: {
+    readonly runId: number;
+    readonly batchIndex: number;
+    readonly artifactId: string;
+    readonly artifactSha256: string;
+    readonly sourceSha256: string;
+    /** Carried item 1: the source run's project path, resolved. */
+    readonly projectPath: string;
+  };
+  readonly verifyRunId?: number;
+  /** The SERVER's read-back identity of the published test app, never the local compile's. */
+  readonly testApp?: {
+    readonly name: string;
+    readonly version: string;
+    readonly sha256: string;
+    readonly compiledAgainst: { readonly artifactId: string; readonly sha256: string };
+  };
+  readonly newTests: readonly NewTestResult[];
+  readonly results: readonly VerifyResult[];
+  readonly counts: {
+    readonly killed: number;
+    readonly survived: number;
+    readonly error: number;
+    readonly skipped: number;
+  };
+  readonly quarantined?: string;
+  readonly refused?: { readonly reason: VerifyRefusal; readonly detail: string };
+  readonly timings: {
+    readonly totalMs: number;
+    readonly compileMs?: number;
+    readonly publishMs?: number;
+  };
+}
+
+// The first callstack frame's shape, measured in examples/credit-limit/demo.report.json:
+// `<Object>(CodeUnit <id>).<Method> line <n> - <App> by <Publisher> version <v>`.
+const CALLSTACK_FRAME = / line \d+ - .+ by .+ version \S+$/;
+
+/**
+ * Ruling 1: what raised the killing failure, from its text. Reported, never gating. `assertion`:
+ * R121's `Assert.` prefix, or BC's own `asserterror` expectation failing. `runtime-error`: the first
+ * callstack frame is in another app than the test app. `other`: everything else, a bare `Error(...)`
+ * in the test and a text with no parseable frame included.
+ */
+export function killedByOf(text: string | undefined, testAppName: string): KilledBy {
+  const t = text ?? "";
+  if (looksLikeAssertionFailure(killMessageOf(t)) || t.includes("NavNCLAssertErrorException")) {
+    return "assertion";
+  }
+  const frame = t.split("\n")[1]?.split(";")[0]?.trim();
+  if (
+    frame !== undefined &&
+    CALLSTACK_FRAME.test(frame) &&
+    !frame.includes(` - ${testAppName} by `)
+  ) {
+    return "runtime-error";
+  }
+  return "other";
+}
+
+/** Decision 7's exit code, precedence 3, 6, 4, 5, 0. `killedBy` plays no part. */
+export function verifyExitCode(o: {
+  readonly quarantined?: string;
+  readonly refused?: unknown;
+  readonly results: readonly Pick<VerifyResult, "verdict">[];
+  readonly newTests: readonly Pick<NewTestResult, "state">[];
+}): number {
+  if (o.quarantined !== undefined) return VERIFY_EXIT.quarantined;
+  if (o.refused !== undefined) return VERIFY_EXIT.refused;
+  const measured = o.results.filter((r) => r.verdict !== "skipped");
+  if (measured.length > 0 && measured.every((r) => r.verdict === "error")) {
+    return VERIFY_EXIT.nothingMeasured;
+  }
+  if (
+    measured.some((r) => r.verdict !== "killed") ||
+    o.newTests.some((t) => t.state !== "stable")
+  ) {
+    return VERIFY_EXIT.notAllKilled;
+  }
+  return VERIFY_EXIT.ok;
+}
+
+const qualified = (ref: TestMethodRef) => `${ref.codeunitName}.${ref.method}`;
+
+function unmutatedRunOf(r: NamedUnmutatedRun): UnmutatedRun {
+  return {
+    outcome: r.outcome === "pass" || r.outcome === "not-run" ? r.outcome : "fail",
+    fresh: r.fresh,
+    ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
+    ...(r.testRunsBefore !== undefined ? { testRunsBefore: r.testRunsBefore } : {}),
+  };
+}
+
+/** Decision 11: red, stable, flaky, or flaky-unknown for anything not attributable. */
+function newTestResultOf(
+  ref: TestMethodRef,
+  baseline: NamedUnmutatedRun,
+  rerun: NamedUnmutatedRun,
+): NewTestResult {
+  const b = unmutatedRunOf(baseline);
+  const r = unmutatedRunOf(rerun);
+  const state: NewTestState =
+    b.fresh && b.outcome === "fail"
+      ? "red"
+      : b.fresh && b.outcome === "pass" && r.fresh && r.outcome === "pass"
+        ? "stable"
+        : b.fresh && b.outcome === "pass" && r.fresh && r.outcome === "fail"
+          ? "flaky"
+          : "flaky-unknown";
+  const failed = [baseline, rerun].find((x) => x.outcome !== "pass" && x.outcome !== "not-run");
+  return {
+    test: qualified(ref),
+    codeunitId: ref.codeunitId,
+    state,
+    runs: [b, r],
+    ...(failed !== undefined ? { failure: failed.failureMessage ?? failed.outcome } : {}),
+  };
+}
+
+export interface VerifyDeps {
+  readonly store: ResultsStore;
+  readonly backend: ExecutionBackend & Pick<BcDevMcpBackend, "compileTestApp" | "publishTestApp">;
+  readonly lease: LeaseSessionConfig;
+  readonly resourceServer: string;
+  readonly resourceServerInstance: string;
+  /** The config's preprocessor symbols: the source hash is recomputed with them (decision 8). */
+  readonly preprocessorSymbols: readonly string[];
+  readonly quarantineDir?: string;
+  readonly emit?: SessionConfig["emit"];
+  readonly now?: () => number;
+  /** Seam for tests; defaults to runNamedMutants. */
+  readonly runNamed?: typeof runNamedMutants;
+}
+
+const NO_COUNTS = { killed: 0, survived: 0, error: 0, skipped: 0 } as const;
+
+/**
+ * C02-06: prove, on the build the source run left installed, that the named survivors are killed
+ * by the test project as it is now. Every refusal comes before anything is measured; the test app
+ * is compiled before the lease and published once, inside its fence; every requested method needs
+ * a fresh green unmutated run, and every new test a second one after the mutants. Never finishes
+ * its run row (decision 4).
+ */
+export async function runVerify(
+  args: {
+    readonly artifact: string;
+    readonly survivors: readonly string[];
+    readonly testDir: string;
+  },
+  deps: VerifyDeps,
+): Promise<VerifyOutput> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  const { store, backend } = deps;
+  let source: VerifySource | undefined;
+  let artifactId: string | undefined;
+  let verifyRunId: number | undefined;
+  let compileMs: number | undefined;
+  let publishMs: number | undefined;
+  let published: PublishedTestApp | undefined;
+  const header = () => ({
+    verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+    ...(source !== undefined && artifactId !== undefined
+      ? {
+          source: {
+            runId: source.runId,
+            batchIndex: source.installed.batchIndex,
+            // Carried item 5: the source has no id of its own; the request named it.
+            artifactId,
+            artifactSha256: source.artifactSha256,
+            sourceSha256: source.sourceSha256,
+            projectPath: source.projectPath,
+          },
+        }
+      : {}),
+    ...(verifyRunId !== undefined ? { verifyRunId } : {}),
+    ...(published !== undefined
+      ? {
+          testApp: {
+            name: published.name,
+            version: published.version,
+            sha256: published.sha256,
+            compiledAgainst: published.compiledAgainst,
+          },
+        }
+      : {}),
+  });
+  const timings = () => ({
+    totalMs: now() - started,
+    ...(compileMs !== undefined ? { compileMs } : {}),
+    ...(publishMs !== undefined ? { publishMs } : {}),
+  });
+
+  try {
+    const req = parseVerifyRequest(args.artifact, args.survivors);
+    artifactId = req.artifactId;
+    source = resolveVerifySource(store, req);
+    await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
+    const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
+    const plan = await planVerify({
+      source,
+      manifest,
+      sourceBaseline: store.baselineTests(source.runId),
+      testDir: args.testDir,
+    });
+    const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
+
+    let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
+    if (plan.requests.length > 0) {
+      // Before any lease: a compile failure costs no lease, no run row and no server call.
+      const tc = now();
+      const compiled: CompiledTestApp = await backend.compileTestApp(args.testDir, artifact);
+      compileMs = now() - tc;
+      verifyRunId = store.createRun({
+        projectPath: source.projectPath,
+        backend: "lethal-verify",
+        appVersion: "0.0.0.0",
+      });
+      res = await (deps.runNamed ?? runNamedMutants)({
+        backend,
+        store,
+        runId: verifyRunId,
+        installed: source.installed,
+        requests: plan.requests,
+        lease: deps.lease,
+        resourceServer: deps.resourceServer,
+        resourceServerInstance: deps.resourceServerInstance,
+        ...(deps.quarantineDir !== undefined ? { quarantineDir: deps.quarantineDir } : {}),
+        ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
+        requireEveryMethodGreen: true,
+        rerunOnUnmutated: plan.newTests,
+        inLease: async (fence) => {
+          const tp = now();
+          published = await backend.publishTestApp(fence, compiled);
+          publishMs = now() - tp;
+        },
+      });
+    }
+
+    // Decision 11: every new test's two unmutated runs, from this call's own answers.
+    const newKeys = new Set(plan.newTests.map(testKeyOf));
+    const ran = res;
+    const newTests =
+      ran === undefined
+        ? []
+        : plan.newTests.map((ref) => {
+            const key = testKeyOf(ref);
+            const b = ran.baseline.find((x) => testKeyOf(x.ref) === key);
+            const r = ran.rerun.find((x) => testKeyOf(x.ref) === key);
+            if (b === undefined || r === undefined) {
+              throw new Error(`verify.ts: runNamedMutants did not answer new test ${key}`);
+            }
+            return newTestResultOf(ref, b, r);
+          });
+
+    const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
+    const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
+    const results = source.targets.map((t): VerifyResult => {
+      const entry = plan.entries.get(t.mutantCode);
+      if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} has no entry`);
+      const base = {
+        id: `${t.batchIndex}/${t.mutantCode}`,
+        batchIndex: t.batchIndex,
+        mutantCode: t.mutantCode,
+        file: entry.file,
+        line: entry.startLine,
+        operatorName: entry.operatorName,
+        procedureName: entry.procedureName,
+      };
+      const skip = skippedBy.get(t.mutantCode);
+      if (skip !== undefined) {
+        return {
+          ...base,
+          verdict: "skipped",
+          skipped: {
+            reason: "reader-marked-equivalent",
+            mark: { key: skip.mark.key, reason: skip.mark.reason },
+          },
+        };
+      }
+      const o = outcomeBy.get(t.mutantCode);
+      const request = requestBy.get(t.mutantCode);
+      if (o === undefined || request === undefined) {
+        throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
+      }
+      return { ...base, ...measuredResultOf(o, request.methods, newKeys, published) };
+    });
+
+    const quarantined = ran?.quarantined;
+    const exitCode = verifyExitCode({
+      ...(quarantined !== undefined ? { quarantined } : {}),
+      results,
+      newTests,
+    });
+    return {
+      ...header(),
+      ok: exitCode === VERIFY_EXIT.ok,
+      exitCode,
+      newTests,
+      results,
+      counts: {
+        killed: results.filter((r) => r.verdict === "killed").length,
+        survived: results.filter((r) => r.verdict === "survived").length,
+        error: results.filter((r) => r.verdict === "error").length,
+        skipped: results.filter((r) => r.verdict === "skipped").length,
+      },
+      ...(quarantined !== undefined ? { quarantined } : {}),
+      timings: timings(),
+    };
+  } catch (err) {
+    const r = verifyRefusalOf(err);
+    if (r === undefined) throw err;
+    const out =
+      r.kind === "quarantined"
+        ? { quarantined: r.detail }
+        : { refused: { reason: r.reason, detail: r.detail } };
+    const exitCode = verifyExitCode({ ...out, results: [], newTests: [] });
+    return {
+      ...header(),
+      ok: false,
+      exitCode,
+      newTests: [],
+      results: [],
+      counts: NO_COUNTS,
+      ...out,
+      timings: timings(),
+    };
+  }
+}
+
+type MeasuredPart = Omit<
+  VerifyResult,
+  "id" | "batchIndex" | "mutantCode" | "file" | "line" | "operatorName" | "procedureName"
+>;
+
+/** One measured mutant's verdict and its kill proof (decisions 13 and 14). */
+function measuredResultOf(
+  o: SessionOutcome,
+  methods: readonly TestMethodRef[],
+  newKeys: ReadonlySet<string>,
+  published: PublishedTestApp | undefined,
+): MeasuredPart {
+  const common = {
+    testsRun: methods.map(qualified),
+    ...(o.invalidBaseline !== undefined
+      ? { invalidBaseline: o.invalidBaseline.map(qualified) }
+      : {}),
+    ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
+  };
+  if (o.verdict === "survived" || o.verdict === "error") {
+    return { ...common, verdict: o.verdict };
+  }
+  if (o.verdict === "timeout-killed") {
+    // A hang, not a failing test: no test failure proves this kill (decision 7: error covers a
+    // timeout).
+    const note = o.failureNote !== undefined ? `; ${o.failureNote}` : "";
+    return {
+      ...common,
+      verdict: "error",
+      failureNote: `timeout-killed: the mutant ran past its time budget, so no test failure proves the kill${note}`,
+    };
+  }
+  if (o.verdict !== "killed") {
+    throw new Error(`verify.ts: runNamedMutants answered ${o.mutant.mutantId} ${o.verdict}`);
+  }
+  const ref = o.killingTestRef;
+  if (ref === undefined) {
+    throw new Error(`verify.ts: ${o.mutant.mutantId} was killed with no killingTestRef (a bug)`);
+  }
+  if (published === undefined) {
+    throw new Error(`verify.ts: ${o.mutant.mutantId} was killed but no test app was published`);
+  }
+  return {
+    ...common,
+    verdict: "killed",
+    killingTest: { codeunitId: ref.codeunitId, codeunitName: ref.codeunitName, method: ref.method },
+    killedByNewTest: newKeys.has(testKeyOf(ref)),
+    killedBy: killedByOf(o.killingTestFailure, published.name),
+    ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
+  };
 }

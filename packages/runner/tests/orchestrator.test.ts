@@ -77,10 +77,17 @@ import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
+import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
-import { type CompiledTestApp, TestAppError, publishTestApp } from "../src/test-app-publish";
+import {
+  type CompiledTestApp,
+  type PublishedTestApp,
+  TestAppError,
+  publishTestApp,
+} from "../src/test-app-publish";
+import { type VerifyDeps, VerifyError, runVerify } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -10362,7 +10369,7 @@ async function installedFixture(
     emit: [traceEvents(trace)],
     ...(withLease ? { lease: leaseCfg(client).lease } : {}),
   };
-  return { cfg, trace, store, client, installed, inner };
+  return { cfg, trace, store, client, installed, inner, dirs, compiled };
 }
 
 async function rewriteManifestKeepingId(
@@ -11355,5 +11362,445 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(fx.client.beginPublishArgs).toEqual([]);
     expect(await fx.quarantine()).toBeNull();
     expect(fx.client.releaseCalls).toBe(1);
+  });
+});
+
+describe("C02-06 Task 5.4: runVerify", () => {
+  const ALL_GREEN = ({ ref }: { ref: TestMethodRef }): TestVerdict => ({
+    ref,
+    outcome: "pass",
+    durationMs: 5,
+  });
+  // A test codeunit written AFTER the source run, so it is new. Its method shares
+  // OverBudgetDetected's NAME with codeunits 79100 and 79101, which are covering tests.
+  const NEW_TESTS_AL = `codeunit 79102 "New Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`;
+  const NEWT = { codeunitId: 79102, codeunitName: "New Tests", method: "OverBudgetDetected" };
+  const PUBLISHED: PublishedTestApp = {
+    appId: COMPILED.appId,
+    name: "Server Tests",
+    publisher: "LethAL",
+    version: "7.7.7.7",
+    sha256: "e".repeat(64),
+    compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+  };
+  const runCount = (s: ResultsStore) => allRows(s, "runs");
+  const testKey = (m: TestMethodRef) => `${m.codeunitId}::${m.method}`;
+
+  async function verifyFixture(
+    o: Parameters<typeof installedFixture>[0] & {
+      readonly withNewTest?: boolean;
+      readonly reads?: Array<Uint8Array | null | undefined>;
+      readonly publishFails?: string;
+      readonly compile?: (testDir: string, target: BoundArtifact) => Promise<CompiledTestApp>;
+      readonly publish?: (fence: LeaseFence, app: CompiledTestApp) => Promise<PublishedTestApp>;
+    } = {},
+  ) {
+    const fx = await installedFixture({ unmutated: ALL_GREEN, session: freshSessions(), ...o });
+    if (o.withNewTest === true) {
+      await Bun.write(join(fx.dirs.testDir, "NewTests.Codeunit.al"), NEW_TESTS_AL);
+    }
+    const log: string[] = [];
+    const tlog: string[] = [];
+    const backend = Object.assign(fx.cfg.backend, {
+      compileTestApp:
+        o.compile ??
+        (async (_dir: string, target: BoundArtifact): Promise<CompiledTestApp> => {
+          log.push("compile");
+          return {
+            ...COMPILED,
+            compiledAgainst: { artifactId: target.artifactId, sha256: target.sha256 },
+          };
+        }),
+      publishTestApp:
+        o.publish ??
+        (async (fence: LeaseFence, app: CompiledTestApp): Promise<PublishedTestApp> => {
+          log.push("publish");
+          return publishTestApp(fence, app, deps(tlog, o.reads ?? [OLD, NEW], o.publishFails));
+        }),
+    });
+    const lease = fx.cfg.lease;
+    if (lease === undefined) throw new Error("verifyFixture: installedFixture gave no lease");
+    const quarantineDir = freshTmpDir();
+    const verifyDeps: VerifyDeps = {
+      store: fx.store,
+      backend,
+      lease,
+      resourceServer: "http://cronus28",
+      resourceServerInstance: "BC",
+      preprocessorSymbols: [],
+      quarantineDir,
+      ...(fx.cfg.emit !== undefined ? { emit: fx.cfg.emit } : {}),
+    };
+    const artifactId = fx.compiled.artifactId;
+    const verify = (survivors: readonly string[], over: Partial<VerifyDeps> = {}) =>
+      runVerify(
+        { artifact: artifactId, survivors, testDir: fx.dirs.testDir },
+        { ...verifyDeps, ...over },
+      );
+    const quarantine = () => new QuarantineStore(quarantineDir).read("http://cronus28|BC");
+    return { ...fx, log, tlog, verify, artifactId, quarantine };
+  }
+
+  /** Leaves M0002's covering tests as OverBudgetDetected alone, so it does not cover RED. */
+  function narrowM0002(fx: Awaited<ReturnType<typeof verifyFixture>>) {
+    fx.store.db
+      .query("UPDATE mutants SET covering_tests = ? WHERE run_id = ? AND mutant_code = ?")
+      .run(JSON.stringify(["Sandbox Tests.OverBudgetDetected"]), fx.installed.fromRunId, "M0002");
+  }
+
+  /** runNamedMutants with every kill's failure text replaced. */
+  const withKillText =
+    (text: string): typeof runNamedMutants =>
+    async (cfg) => {
+      const r = await runNamedMutants(cfg);
+      return {
+        ...r,
+        outcomes: r.outcomes.map((o) =>
+          o.verdict === "killed" ? { ...o, killingTestFailure: text } : o,
+        ),
+      };
+    };
+
+  test("verify compiles before the lease and publishes the test app exactly once, inside the fence", async () => {
+    const fx = await verifyFixture({
+      publish: async (fence) =>
+        fence.publish(async () => {
+          fx.log.push("publish");
+          return PUBLISHED;
+        }),
+    });
+    const out = await fx.verify(["0/M0001"], {
+      runNamed: async (cfg) => {
+        fx.log.push("runNamed");
+        const inLease = cfg.inLease;
+        if (inLease === undefined) throw new Error("verify passed no inLease");
+        return runNamedMutants({
+          ...cfg,
+          inLease: (fence: LeaseFence) =>
+            inLease({
+              publish: async (run) => {
+                fx.log.push("begin");
+                try {
+                  return await fence.publish(run);
+                } finally {
+                  fx.log.push("end");
+                }
+              },
+            }),
+        });
+      },
+    });
+    expect(fx.log).toEqual(["compile", "runNamed", "begin", "publish", "end"]);
+    expect(fx.client.beginPublishArgs).toHaveLength(1);
+    expect(out.exitCode).toBe(0);
+    expect(out.results.map((r) => [r.id, r.verdict])).toEqual([["0/M0001", "killed"]]);
+    // Carried items 1 and 5: the requested artifact id and the resolved project path.
+    expect(out.source).toMatchObject({
+      runId: fx.installed.fromRunId,
+      batchIndex: 0,
+      artifactId: fx.artifactId,
+      projectPath: fx.dirs.projectDir,
+    });
+  });
+
+  test("verify reports the server's read-back identity, not the local compile's", async () => {
+    const fx = await verifyFixture({
+      compile: async () => ({ ...COMPILED, version: "1.0.0.2", sha256: "d".repeat(64) }),
+      publish: async (fence) => fence.publish(async () => PUBLISHED),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.testApp).toEqual({
+      name: "Server Tests",
+      version: "7.7.7.7",
+      sha256: "e".repeat(64),
+      compiledAgainst: PUBLISHED.compiledAgainst,
+    });
+  });
+
+  test("every survivor skipped: no compile, no lease, no publish, exit 0", async () => {
+    const fx = await verifyFixture();
+    const manifest = JSON.parse(
+      await readFile(join(fx.installed.instrumentedDir, "mutant-manifest.json"), "utf8"),
+    ) as { mutants: MutantManifestEntry[] };
+    const keyOf = (code: string) => {
+      const e = manifest.mutants.find((m) => m.mutantId === code);
+      if (e === undefined) throw new Error(`no ${code}`);
+      return serializeKey(identityKeyOf(e));
+    };
+    await Bun.write(
+      join(fx.dirs.projectDir, "lethal.equivalent.json"),
+      JSON.stringify({
+        marks: [
+          { key: keyOf("M0001"), reason: "same either way" },
+          { key: keyOf("M0002"), reason: "also equivalent" },
+        ],
+      }),
+    );
+    const runsBefore = runCount(fx.store);
+    const out = await fx.verify(["0/M0001,0/M0002"]);
+    expect(out.exitCode).toBe(0);
+    expect(out.results.map((r) => [r.id, r.verdict, r.skipped?.mark.reason])).toEqual([
+      ["0/M0001", "skipped", "same either way"],
+      ["0/M0002", "skipped", "also equivalent"],
+    ]);
+    expect(out.counts).toEqual({ killed: 0, survived: 0, error: 0, skipped: 2 });
+    expect(fx.log).toEqual([]);
+    expect(fx.trace).toEqual([]); // no status, no lease, no attach
+    expect(runCount(fx.store)).toBe(runsBefore);
+    expect(out.verifyRunId).toBeUndefined();
+  });
+
+  test("a mutant whose old covering test is red at baseline is error naming that test, although another method is green", async () => {
+    // NamedFake's own baseline: RedAtBaseline fails, every other method passes.
+    const fx = await verifyFixture({ killer: "M0002", unmutated: () => undefined });
+    narrowM0002(fx);
+    const out = await fx.verify(["0/M0001,0/M0002"]);
+    const [m1, m2] = out.results;
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.invalidBaseline).toEqual(["Sandbox Tests.RedAtBaseline"]);
+    expect(m1?.testsRun).toContain("Sandbox Tests.OverBudgetDetected");
+    expect(m2?.verdict).toBe("killed");
+    expect(out.exitCode).toBe(5);
+  });
+
+  test("a mutant whose new test is red at baseline is error, although its covering test is green", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "fail", durationMs: 5, failureMessage: "new-red" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    const [m1] = out.results;
+    expect(m1?.verdict).toBe("error");
+    expect(m1?.invalidBaseline).toEqual(["New Tests.OverBudgetDetected"]);
+    expect(out.newTests.map((t) => [t.test, t.state, t.failure])).toEqual([
+      ["New Tests.OverBudgetDetected", "red", "new-red"],
+    ]);
+    // Every new test joins every survivor's request, so a red one makes each of them `error`:
+    // nothing was measured, which decision 7 answers 4, ahead of 5.
+    expect(out.exitCode).toBe(4);
+  });
+
+  test("killedByNewTest is exact when an old and a new test share a method name", async () => {
+    const byNew = await verifyFixture({ withNewTest: true, killerRef: NEWT });
+    const a = await byNew.verify(["0/M0001"]);
+    expect(a.results[0]?.verdict).toBe("killed");
+    expect(a.results[0]?.killingTest).toEqual(NEWT);
+    expect(a.results[0]?.killedByNewTest).toBe(true);
+    expect(a.exitCode).toBe(0);
+
+    const byOld = await verifyFixture({ withNewTest: true, killerRef: OVER });
+    const b = await byOld.verify(["0/M0001"]);
+    expect(b.results[0]?.verdict).toBe("killed");
+    expect(b.results[0]?.killingTest).toEqual(OVER);
+    expect(b.results[0]?.killedByNewTest).toBe(false);
+  });
+
+  test("a new test that passes the baseline and fails a fresh rerun is flaky and forces exit 5", async () => {
+    // OVER kills, so the new test's only unmutated runs are its baseline and its rerun.
+    const fx = await verifyFixture({
+      withNewTest: true,
+      killerRef: OVER,
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === NEWT.codeunitId && nth === 2
+          ? { ref, outcome: "fail", durationMs: 5, failureMessage: "flaked" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.results[0]?.verdict).toBe("killed");
+    expect(out.newTests).toEqual([
+      {
+        test: "New Tests.OverBudgetDetected",
+        codeunitId: NEWT.codeunitId,
+        state: "flaky",
+        runs: [
+          expect.objectContaining({ outcome: "pass", fresh: true }),
+          expect.objectContaining({ outcome: "fail", fresh: true }),
+        ],
+        failure: "flaked",
+      },
+    ]);
+    expect(out.exitCode).toBe(5);
+  });
+
+  test("a rerun in a session a warm replay already used is flaky-unknown", async () => {
+    // OVER is second in the covering group (after New Tests, by qualified name), so its kill is
+    // confirmed by a warm replay of the new test (R206), which reports session 7. The new test's
+    // rerun, its second unmutated run, reports session 7 too, with testRunsBefore 0.
+    let id = 0;
+    let newRuns = 0;
+    const fx = await verifyFixture({
+      withNewTest: true,
+      killerRef: OVER,
+      session: ({ kind, ref }) => {
+        if (kind === "unmutated" && ref.codeunitId === NEWT.codeunitId) newRuns += 1;
+        if (kind === "replay" || (kind === "unmutated" && newRuns === 2)) {
+          return { sessionId: 7, testRunsBefore: 0 };
+        }
+        id += 1;
+        return { sessionId: 1000 + id, testRunsBefore: 0 };
+      },
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.results[0]?.verdict).toBe("killed");
+    expect(out.results[0]?.killingTest).toEqual(OVER);
+    expect(out.newTests.map((t) => t.state)).toEqual(["flaky-unknown"]);
+    expect(out.newTests[0]?.runs[1]).toMatchObject({ outcome: "pass", sessionId: 7, fresh: false });
+    expect(out.exitCode).toBe(5);
+  });
+
+  test("a baseline run with testRunsBefore above 0 is flaky-unknown, and its mutant is error", async () => {
+    let id = 0;
+    const fx = await verifyFixture({
+      withNewTest: true,
+      session: ({ kind, ref }) => {
+        id += 1;
+        return kind === "unmutated" && ref.codeunitId === NEWT.codeunitId
+          ? { sessionId: 1000 + id, testRunsBefore: 2 }
+          : { sessionId: 1000 + id, testRunsBefore: 0 };
+      },
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.results[0]?.verdict).toBe("error");
+    expect(out.results[0]?.invalidBaseline).toEqual(["New Tests.OverBudgetDetected"]);
+    expect(out.results[0]?.failureNote).toContain("not fresh");
+    expect(out.newTests.map((t) => t.state)).toEqual(["flaky-unknown"]);
+    expect(out.exitCode).toBe(4);
+  });
+
+  test("verify passes every new test, and only new tests, as rerunOnUnmutated, and always requireEveryMethodGreen", async () => {
+    const fx = await verifyFixture({ withNewTest: true });
+    const seen: NamedMutantsConfig[] = [];
+    await fx.verify(["0/M0001,0/M0002"], {
+      runNamed: async (cfg) => {
+        seen.push(cfg);
+        return runNamedMutants(cfg);
+      },
+    });
+    expect(seen).toHaveLength(1);
+    const [cfg] = seen;
+    expect(cfg?.requireEveryMethodGreen).toBe(true);
+    expect(cfg?.rerunOnUnmutated?.map((m) => testKey(m))).toEqual(["79102::OverBudgetDetected"]);
+    const all = [
+      "79100::OverBudgetDetected",
+      "79100::RedAtBaseline",
+      "79101::OverBudgetDetected",
+      "79102::OverBudgetDetected",
+    ];
+    expect(cfg?.requests.map((r) => r.methods.map(testKey))).toEqual([all, all]);
+  });
+
+  test("killedBy never changes the exit code", async () => {
+    for (const [text, killedBy] of [
+      ["Assert.AreEqual failed. Expected:<400> Actual:<0>.", "assertion"],
+      [
+        "Expected an order of 400, got 0.\nSandbox Tests(CodeUnit 79100).OverBudgetDetected line 11 - Server Tests by LethAL version 1.0.0.2;",
+        "other",
+      ],
+    ] as const) {
+      const fx = await verifyFixture({
+        publish: async (fence) => fence.publish(async () => PUBLISHED),
+      });
+      const out = await fx.verify(["0/M0001"], { runNamed: withKillText(text) });
+      expect(out.results.map((r) => [r.verdict, r.killedBy])).toEqual([["killed", killedBy]]);
+      expect(out.exitCode).toBe(0);
+    }
+  });
+
+  test("a kill without killingTestRef is a bug, never a guess", async () => {
+    const fx = await verifyFixture();
+    const err = await fx
+      .verify(["0/M0001"], {
+        runNamed: async (cfg) => {
+          const r = await runNamedMutants(cfg);
+          return { ...r, outcomes: r.outcomes.map(({ killingTestRef: _drop, ...o }) => o) };
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(VerifyError);
+    expect((err as Error).message).toContain("killingTestRef");
+  });
+
+  test("verify never finishes its run row", async () => {
+    const fx = await verifyFixture();
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const id = out.verifyRunId;
+    if (id === undefined) throw new Error("no verify run row");
+    expect(fx.store.getRun(id)?.finished).toBe(false);
+    expect(
+      fx.store.db.query("SELECT backend, config_fingerprint FROM runs WHERE id = ?").get(id),
+    ).toEqual({ backend: "lethal-verify", config_fingerprint: null });
+  });
+
+  test("a TestAppError publish-indeterminate exits 3", async () => {
+    // C02-05: a plain altool failure with the old package read back is publish-indeterminate.
+    const fx = await verifyFixture({
+      reads: [OLD, OLD],
+      publishFails: "altool publishapp failed (exit 1):\nThe app could not be published.",
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(3);
+    expect(out.quarantined).toContain("publish-indeterminate");
+    expect(out.refused).toBeUndefined();
+    expect(out.results).toEqual([]);
+    expect(await fx.quarantine()).toMatchObject({ opKind: "container-needs-recycle" });
+  });
+
+  test("a compile failure is refused as test-app-compile-failed, and no run row or lease exists", async () => {
+    const fx = await verifyFixture({
+      compile: async () => {
+        throw new TestAppError("compile-failed", "alc said no");
+      },
+    });
+    const runsBefore = runCount(fx.store);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(6);
+    expect(out.refused?.reason).toBe("test-app-compile-failed");
+    expect(out.results).toEqual([]);
+    expect(runCount(fx.store)).toBe(runsBefore);
+    expect(fx.trace).toEqual([]);
+    expect(fx.client.acquireArgs).toEqual([]);
+  });
+
+  test("verify: a server holding another artifact is refused as stale-artifact and publishes nothing", async () => {
+    const fx = await verifyFixture({ serverReports: "b".repeat(32) });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(6);
+    expect(out.refused?.reason).toBe("stale-artifact");
+    expect(out.refused?.detail).toContain("run lethal run again");
+    expect(fx.tlog).toEqual([]);
+    expect(fx.client.beginPublishArgs).toEqual([]);
+  });
+
+  test("verify refuses an artifact that is not its run's highest batch, before any server call", async () => {
+    const fx = await verifyFixture();
+    fx.store.recordArtifact(fx.installed.fromRunId, {
+      batchIndex: 1,
+      appVersion: "1.0.1.1",
+      appId: fx.compiled.appId,
+      artifactId: "c".repeat(32),
+      sha256: "1".repeat(64),
+      manifestSha256: "2".repeat(64),
+      appPath: "C:/x/b1.app",
+      instrumentedDir: "C:/x/b1",
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(6);
+    expect(out.refused?.reason).toBe("batch-not-installed");
+    expect(fx.trace).toEqual([]);
+    expect(fx.log).toEqual([]);
   });
 });
