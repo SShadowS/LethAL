@@ -36,14 +36,13 @@ import { HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { defaultQuarantineDir, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
-import type { MutantOutcome } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
-import { diffMutants, normalizeForComparison } from "./mutant-equality";
+import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
 
 if (!process.env.LETHAL_ITEST_VERIFY) {
@@ -93,14 +92,6 @@ async function readJson<T>(path: string, what: string): Promise<T> {
     );
   }
   return JSON.parse(text) as T;
-}
-
-/** The same key `mutant-equality.ts`'s private `keyOf` builds (as test-app-publish.itest.ts). */
-function keyOf(m: MutantOutcome): string {
-  const scope = m.procedureName || m.triggerName || "";
-  const tuple = `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${m.operatorMajor}`;
-  const ordinal = m.identityOrdinal ?? 0;
-  return ordinal > 0 ? `${tuple}|${ordinal}` : tuple;
 }
 
 async function quarantineRecords(dir: string): Promise<string[]> {
