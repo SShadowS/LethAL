@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**34 of 238 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**36 of 241 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -280,9 +280,12 @@ that ordering is the priority.
 - **R224** · The `al-compiler` subagent probes only the `bin/win32` alc layout, which R167 already recorded as insufficient, so a valid install reports BLOCKED · [R224.md](docs/roadmap/R224.md) · open, filed 2026-09-13, one-line fix, diverged from the skill that does it correctly
 - **R225** · A freshly bootstrapped container's FIRST `itest:tables` run quarantines on the TestPage baseline test and scores nothing; the immediately following run passes · [R225.md](docs/roadmap/R225.md) · open, filed 2026-09-18, measured on Cronus285 while qualifying the orchestrator's containers
 - **R233** · `EXPLAIN_SCHEMA_VERSION` 4 drifted: five commits grew its value domains without the bump its own rule requires; from GH-24b on, every added value bumps, and a test enforces it · [R233.md](docs/roadmap/R233.md) · open
-- **R235** · `itest:alrunner` fails on al-runner v2.11.0: no execution context carries a `platformAppsDir`, so R147's platform-app pin never engages · [R235.md](docs/roadmap/R235.md) · open
+- **R235** · `itest:alrunner` fails on al-runner v2.11.0: no execution context carries a `platformAppsDir`, so R147's platform-app pin never engages · [R235.md](docs/roadmap/R235.md) · done (f2420e0)
 - **R236** · `itest:tables` once quarantined its whole run on a fresh Cronus28: the TestPage baseline test came back in-flight-unknown instead of failing · [R236.md](docs/roadmap/R236.md) · open
 - **R237** · An env-tool command that fails to START is read as an uncertain publish, so a missing tool quarantines the tier · [R237.md](docs/roadmap/R237.md) · open
+- **R241** · al-runner v2.11.0 fails on an EMPTY cache before any platform app is provisioned: the CDN's latest 28.x has no shipped engine variant, so every mutant would score `error` · [R241.md](docs/roadmap/R241.md) · open
+- **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · open
+- **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · open
 
 ---
 

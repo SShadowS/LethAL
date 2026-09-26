@@ -235,16 +235,20 @@ describe("buildAlRunnerArgv — the pin and --auto-provision are mutually exclus
 
 interface Spy {
   readonly calls: string[][];
+  /** `opts.env` of each call, index-aligned with `calls` (R235). */
+  readonly envs: (Record<string, string> | undefined)[];
   readonly spawn: SpawnFn;
 }
 
 function spyingSpawn(result: { exitCode: number; stdout: string; stderr: string }): Spy {
   const calls: string[][] = [];
-  const spawn: SpawnFn = async (argv) => {
+  const envs: (Record<string, string> | undefined)[] = [];
+  const spawn: SpawnFn = async (argv, opts) => {
     calls.push([...argv]);
+    envs.push(opts?.env !== undefined ? { ...opts.env } : undefined);
     return result;
   };
-  return { calls, spawn };
+  return { calls, envs, spawn };
 }
 
 /** A platform-apps directory holding `n` `.app` files, plus a decoy that is not one. */
@@ -523,5 +527,110 @@ describe("R200: a warm 2.10 run says nothing about provisioning, and the pin com
     const result = await (await makeBackend(spawn)).provisionOnce();
     expect(result.platformAppsDir).toBeUndefined();
     expect(result.platformAppsRefusal ?? "").toContain(missing);
+  });
+});
+
+/**
+ * R235. al-runner v2.11.0, measured 2026-09-26: a warm provisioning call prints no `[provision]`
+ * sentence, and R200's `<selected>/platform-apps` does not exist, because 2.11 searches the ENGINE
+ * VARIANT's build (`54368`) while `54487` is selected. The runner names that directory only in
+ * verbose output, as a `[pkg-cache]` line of its final search set. Verbatim, home prefix shortened
+ * to `C:\x\`, the MIXED separators kept.
+ */
+const V211_SELECTED = String.raw`[bc] selected BC 28.1.49838.54487 (C:\x\.local/share/al-runner/artifacts\28.1.49838.54487)`;
+const V211_ENGINE = String.raw`[provision] BC 28.1.49838.54487 engine artifacts already complete at C:\x\.local/share/al-runner/artifacts\28.1.49838.54487.`;
+const V211_PKG_TEST = String.raw`    [pkg-cache] C:\x\.local/share/al-runner/artifacts\28.1.49838.54487\test-apps`;
+const V211_PKG_PLATFORM = String.raw`    [pkg-cache] C:\x\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps`;
+const V211_DOWNLOADED = String.raw`[provision] Downloaded 6 app(s) (116 MB total) to C:\x\artroot\28.1.49838.55191\platform-apps`;
+
+describe("R235: a warm 2.11 run names its platform-app search directory only in the verbose [pkg-cache] line", () => {
+  test("R235: a warm 2.11 run pins the [pkg-cache] platform-apps dir, not the [bc] selected derivation", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      [
+        V211_ENGINE,
+        V211_SELECTED,
+        "  package caches (requested): 2 dir(s)",
+        "  package caches (final search set): 2 dir(s)",
+        V211_PKG_TEST,
+        V211_PKG_PLATFORM,
+      ].join("\n"),
+    );
+    expect(p).toEqual({
+      kind: "found",
+      dir: String.raw`C:\x\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps`,
+      appCount: 0,
+      basis: "package-cache",
+    });
+  });
+
+  test("R235: a [pkg-cache] line that disagrees with a provisioning sentence conflicts", () => {
+    const p = parseAlRunnerPlatformAppsDir(`${V211_DOWNLOADED}\n${V211_PKG_PLATFORM}`);
+    if (p.kind !== "conflicting") throw new Error(`expected conflicting, got ${JSON.stringify(p)}`);
+    expect(p.dirs).toContain(String.raw`C:\x\artroot\28.1.49838.55191\platform-apps`);
+    expect(p.dirs).toContain(
+      String.raw`C:\x\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps`,
+    );
+  });
+
+  test("R235: provisionOnce sets AL_RUNNER_VERBOSE=1 and a mutant run does not", async () => {
+    const { calls, envs, spawn } = spyingSpawn({
+      exitCode: 0,
+      stdout: '{"tests":[{"name":"Codeunit1.T","status":"pass"}]}',
+      stderr: "",
+    });
+    const backend = await makeBackend(spawn);
+    await backend.provisionOnce();
+    expect(envs[0]?.AL_RUNNER_VERBOSE).toBe("1");
+    backend.usePlatformAppsDir("C:/cache/pa");
+    await backend.run(
+      { codeunitId: 1, codeunitName: "T Suite", method: "T" },
+      { timeoutMs: 60_000, coverage: "none" },
+    );
+    expect(calls).toHaveLength(2);
+    // envs[1] must actually be the run() call's env, not "no env recorded" (which would also pass
+    // the not.toContain below for the wrong reason). run() always sends alRunnerEnv's own key.
+    expect(envs[1]).toBeDefined();
+    expect(Object.keys(envs[1] ?? {})).toContain("AL_RUNNER_TEST_TIMEOUT_SEC");
+    expect(Object.keys(envs[1] ?? {})).not.toContain("AL_RUNNER_VERBOSE");
+    expect(calls[1] ?? []).not.toContain("--verbose");
+  });
+
+  test("R235: the backend refuses an empty [pkg-cache] directory, naming it", async () => {
+    const dir = await platformAppsDirWith(0);
+    const { spawn } = spyingSpawn({ exitCode: 0, stdout: "", stderr: `    [pkg-cache] ${dir}` });
+    const result = await (await makeBackend(spawn)).provisionOnce();
+    expect(result.platformAppsDir).toBeUndefined();
+    const refusal = result.platformAppsRefusal ?? "";
+    expect(refusal).toContain("[pkg-cache]");
+    expect(refusal).toContain("R235");
+    expect(refusal).toContain(dir);
+  });
+
+  test("R235: the test-apps [pkg-cache] line and the 2.11 engine line are NOT pinned", () => {
+    expect(parseAlRunnerPlatformAppsDir(V211_PKG_TEST)).toEqual({ kind: "no-completion-line" });
+    expect(parseAlRunnerPlatformAppsDir(V211_ENGINE)).toEqual({ kind: "no-completion-line" });
+  });
+
+  test("R235: a v2.11 line that is not the runner's own does not pin", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      String.raw`Assert failed: expected [pkg-cache] C:\x\28.1.49838.54368\platform-apps`,
+    );
+    expect(p).toEqual({ kind: "no-completion-line" });
+  });
+
+  test("R235: a cold 2.11 run keeps the counted basis when Downloaded and [pkg-cache] agree", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      [
+        V211_DOWNLOADED,
+        "  package caches (final search set): 1 dir(s)",
+        String.raw`    [pkg-cache] C:\x\artroot\28.1.49838.55191\platform-apps`,
+      ].join("\n"),
+    );
+    expect(p).toEqual({
+      kind: "found",
+      dir: String.raw`C:\x\artroot\28.1.49838.55191\platform-apps`,
+      appCount: 6,
+      basis: "downloaded",
+    });
   });
 });

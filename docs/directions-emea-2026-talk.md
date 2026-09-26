@@ -130,7 +130,7 @@ Before the close, not after. Every number here is measured; runbook §7 has the 
   kept as a half-answer.
 - **Unscoped runs on a real app are refused by default.** 19,850 sites is days. Scope with `--only`.
 - **A survivor is a lead.** Some survivors cannot be killed by any test.
-- **`al-runner` is not authoritative** — under-reporting only, never a false kill.
+- **`al-runner` is not authoritative.** Its coverage is conditional, so it can report false survivors; use `bcdev` for a score.
 
 Then the sentence that ties it to slide 1:
 
