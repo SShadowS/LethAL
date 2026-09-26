@@ -382,6 +382,16 @@ Submit note: every red-check with its red and restored-green line; that the C02-
 
 # Coord C02-06b (part b): orchestration, schema, CLI, live proof (after C02-06 and C02-05 are accepted)
 
+### Carried in from C02-06 part a's final review (orchestrator, 2026-09-26)
+
+Do these inside Tasks 5 to 7, each with a test and a red-check:
+
+1. `runs.project_path` is stored as typed and can be relative. Resolve it, name the resolved path in output, and turn a missing project directory or `app.json` into a typed refusal (today `hashTargetSource` throws ENOENT and exits 1).
+2. `VERIFY_REFUSALS` does not cover every reason part b catches: `NamedMutantError` has none; `InstalledArtifactError` also throws `no-record`, `manifest-differs`, `unavailable`, `unsupported`; `TestAppError` also throws `manifest-unreadable`, `symbols-unreadable`, `unsupported`. Write the mapping (and any new values) BEFORE Task 6 fixes the schema. No reason may fall through to a generic error.
+3. Under the r2 hash rule a nested test project's `.al` is hashed, so ANY test edit inside a nested test project gives `source-changed`, which blocks the write-a-test-then-verify loop for that layout. The refusal text must say so in plain words when the changed file lies under the test directory. Do NOT change the hash rule; file a roadmap item for the nested layout (check the next free id on master AND both lane branches first).
+4. The `source-predates-verify` text must name all four NULL-hash causes, including "the run stopped before the last batch" and "the tree was unreadable".
+5. `VerifySource` has no `artifactId`: take it from the request.
+
 ### Task 5: Primitive changes, then `runVerify`
 
 Four commits, in this order.
