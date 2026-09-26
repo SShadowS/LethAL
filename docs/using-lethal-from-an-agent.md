@@ -258,6 +258,24 @@ The top level carries `survivorSelection` whether or not anything was capped:
 `rankedBy` is `report-order` when no cap was applied and `actionability` when one was. `--top 0` is
 refused.
 
+The top level can also carry `gaps` and `noCoverageBlocks`. Both are present exactly when the
+report's rows have gap ids, and absent on an older report. A gap block is the innermost branch body
+holding a mutant, and one `gaps` entry lists one block with at least one survivor. Each `gaps` row
+carries `gapId`, `batchIndex`, `members`, `survived`, `killed`, `noCoverage` and `other`. `members`
+lists the block's survivors only; the four counts cover every recorded mutant of the block. Each
+`gaps` row can also carry `unobservedBlock`, `artifactId` and `artifactIdAbsent`.
+`unobservedBlock` says whether every RECORDED mutant of the block survived. It speaks about the
+mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
+`--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block. Each gap has
+exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
+is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
+`--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
+
+`noCoverageBlocks` lists the no-coverage mutants by block. It is a location list, not a verify
+input: an entry has no gap id and no counts.
+
+Each `survivors` row can also carry `gapId`, the gap it belongs to.
+
 #### Explain notes (guidance)
 
 `explain` reads that file and nothing else: no server, no database, no config. It prints JSON on
@@ -334,6 +352,29 @@ are guidance.
 | `not-recorded` | The report predates artifact ids. Run again. |
 | `not-published` | The backend published nothing for that batch. Verify cannot help. |
 
+### From an explain gap to a verify command (checked)
+
+One verify call can prove a whole gap: name the gap id instead of the mutant ids. Take both
+`<artifactId>` and `<gapId>` from the same `gaps[]` entry, never the artifact from a survivor row:
+
+```bash
+lethal verify --db <project>/lethal.sqlite --artifact <artifactId> --survivors <gapId> --tests <tests-dir> --config <config>
+```
+
+A filled-in example, for the same run:
+
+```bash
+lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef --survivors G0123456789ab --tests tests --config lethal.config.json
+```
+
+Verify replaces the gap id by the block's survivors and runs each of them. A gap with no
+`artifactId` has `artifactIdAbsent`, with the meanings in the table above.
+
+#### Gap notes (guidance)
+
+An edited or moved block gets a new gap id, so an id from an older `explain` is refused as
+`unknown-gap`. A checkout with other line endings (CRLF against LF) also gives new gap ids.
+
 #### Recipe notes (guidance)
 
 Without `--config` verify reads `<project>/lethal.config.json`, which is a different file whenever
@@ -351,7 +392,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 1`. Schema: [../schemas/verify-v1.schema.json](../schemas/verify-v1.schema.json).
+`verifySchemaVersion: 2`. Schema: [../schemas/verify-v2.schema.json](../schemas/verify-v2.schema.json).
 
 | field | values |
 |---|---|
@@ -359,8 +400,10 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 
-`killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest` and
-`invalidBaseline`.
+`killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
+`invalidBaseline` and `gapId`.
+Every result names its `gapId`, whether the survivor was named directly or through a gap; only a
+run whose build predates gap ids leaves it out.
 
 #### Verify result notes (guidance)
 
@@ -393,11 +436,13 @@ The set of reasons is checked; the advice is guidance.
 
 | reason | what to do |
 |---|---|
-| `malformed-request` | Fix the argv: a 32-character lowercase hex `--artifact` and `<batchIndex>/<mutantCode>` ids. |
+| `malformed-request` | Fix the argv: a 32-character lowercase hex `--artifact` and `<batchIndex>/<mutantCode>` or gap ids. |
 | `unknown-artifact` | Pass the run's `--db` and the `artifactId` from explain. |
 | `batch-not-installed` | Only the last batch is installed. Run the slice in one batch. |
 | `wrong-batch` | Take the artifact and the id from the same explain row. |
 | `unknown-mutant` | Re-copy the mutant code from explain. |
+| `unknown-gap` | Copy the gap id and its `artifactId` from one explain gap of the run that published this artifact. An edited or moved block, or other line endings, give a new id, and only the run's last batch stays installed. |
+| `gap-has-no-survivor` | Every recorded mutant in this block is killed, not measured or no-coverage, so there is nothing to verify as a gap. Explain lists no-coverage mutants in `noCoverageBlocks`. |
 | `not-a-survivor` | That mutant was not a survivor. Drop the id. If it is a known survivor the run skipped, run again without `--skip-known-survivors`. |
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
 | `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. |
