@@ -15,6 +15,7 @@ import {
   containerScript,
   decideActionEnded,
   decideExit,
+  fixtureDirsFor,
   gatherEvidence,
   guardThenConnect,
   parseContainerEvidence,
@@ -406,9 +407,11 @@ describe("the project is this repo's fixture, not the main checkout's", () => {
     expect(fwd(PROJECT_DIR)).toBe(`${root}/fixtures/sandbox-data`);
     expect(fwd(TEST_DIR)).toBe(`${root}/fixtures/sandbox-data-tests`);
     expect(fwd(CONFIG_PATH)).toBe(`${root}/fixtures/sandbox-data/lethal.config.local.json`);
-    for (const p of [PROJECT_DIR, TEST_DIR, CONFIG_PATH]) {
-      expect(fwd(p)).not.toContain("U:/Git/LethAL/");
-    }
+  });
+  test("the paths follow the script's own directory, so a hardcoded root fails (fake dir)", () => {
+    const d = fixtureDirsFor(join("X:", "fake", "repo", "scripts", "r236-baseline-probe"));
+    expect(fwd(d.projectDir)).toBe("X:/fake/repo/fixtures/sandbox-data");
+    expect(fwd(d.testDir)).toBe("X:/fake/repo/fixtures/sandbox-data-tests");
   });
 });
 
