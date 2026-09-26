@@ -1556,7 +1556,7 @@ export interface MutantOutcome {
   readonly procedureEndLine?: number;
   /**
    * C02-09: a SITE property, carried verbatim from `MutantManifestEntry.gapId` like
-   * `procedureStartLine` — the id of the innermost branch body (`if`/`else`, a loop body, a `case`
+   * `procedureStartLine`: the id of the innermost branch body (`if`/`else`, a loop body, a `case`
    * arm, or else the enclosing member) that contains this mutant. Absent when the manifest entry
    * has no gap id (a report written before this field existed).
    */
