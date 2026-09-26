@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,10 @@ import {
   readAlRunnerCache,
 } from "../src/al-runner-cache";
 import { runDoctor } from "../src/doctor";
+
+/** R264: al-runner's second cache root, pointed at a directory that does not exist so no test here
+ *  walks the machine's real `~/.cache/al-runner`. Unique per process. */
+const NO_SECONDARY = join(tmpdir(), `lethal-alrunner-no-secondary-cache-${randomUUID()}`);
 
 /**
  * R131. al-runner resolves a BC version by PREFIX, so every upstream Microsoft publish adds an
@@ -39,10 +44,14 @@ async function withCache(
 
 describe("readAlRunnerCache", () => {
   test("an absent directory is a MEASURED absence, not a throw and not a zero-sized cache", async () => {
-    const report = await readAlRunnerCache(join(tmpdir(), "lethal-no-such-cache-dir-1234"));
+    const report = await readAlRunnerCache(
+      join(tmpdir(), `lethal-no-such-cache-dir-${randomUUID()}`),
+      NO_SECONDARY,
+    );
     expect(report.present).toBe(false);
     expect(report.builds).toEqual([]);
     expect(report.totalBytes).toBe(0);
+    expect(report.secondaryBytes).toBeNull();
     expect(describeAlRunnerCache(report)).toContain("no al-runner artifact cache");
   });
 
@@ -54,7 +63,7 @@ describe("readAlRunnerCache", () => {
         "28.1.49838.50794/engine/c.dll": 25,
       },
       async (dir) => {
-        const report = await readAlRunnerCache(dir);
+        const report = await readAlRunnerCache(dir, NO_SECONDARY);
         expect(report.present).toBe(true);
         expect(report.totalBytes).toBe(175);
         expect(report.builds.map((b) => [b.version, b.bytes])).toEqual([
@@ -79,7 +88,7 @@ describe("readAlRunnerCache", () => {
         "28.1.49838.50794/a": 10,
       },
       async (dir) => {
-        const report = await readAlRunnerCache(dir);
+        const report = await readAlRunnerCache(dir, NO_SECONDARY);
         expect(report.builds.filter((b) => b.superseded).map((b) => b.version)).toEqual([
           "28.0.46665.53492",
           "28.0.46665.53459",
@@ -97,7 +106,7 @@ describe("readAlRunnerCache", () => {
   /** A string comparison gets `53508` vs `53492` right by accident and gets `9` vs `10` wrong. */
   test("compares version components numerically, not as strings", async () => {
     await withCache({ "28.0.9.1/a": 10, "28.0.10.1/a": 10 }, async (dir) => {
-      const report = await readAlRunnerCache(dir);
+      const report = await readAlRunnerCache(dir, NO_SECONDARY);
       expect(report.builds.map((b) => b.version)).toEqual(["28.0.10.1", "28.0.9.1"]);
       expect(report.builds.filter((b) => b.superseded).map((b) => b.version)).toEqual(["28.0.9.1"]);
     });
@@ -107,7 +116,7 @@ describe("readAlRunnerCache", () => {
 describe("describeAlRunnerCache", () => {
   test("names the total, the superseded builds, and WHOSE cache it is", async () => {
     await withCache({ "28.0.1.1/a": 2048, "28.0.1.2/a": 4096 }, async (dir) => {
-      const detail = describeAlRunnerCache(await readAlRunnerCache(dir));
+      const detail = describeAlRunnerCache(await readAlRunnerCache(dir, NO_SECONDARY));
       expect(detail).toContain("6.0 KB across 2 BC build(s)");
       expect(detail).toContain("1 superseded (2.0 KB): 28.0.1.1");
       // The ruling, in the text a user actually reads. A number with no owner is a chore nobody
@@ -118,7 +127,9 @@ describe("describeAlRunnerCache", () => {
 
   test("says so plainly when nothing is superseded", async () => {
     await withCache({ "28.0.1.2/a": 4096 }, async (dir) => {
-      expect(describeAlRunnerCache(await readAlRunnerCache(dir))).toContain("none superseded");
+      expect(describeAlRunnerCache(await readAlRunnerCache(dir, NO_SECONDARY))).toContain(
+        "none superseded",
+      );
     });
   });
 });

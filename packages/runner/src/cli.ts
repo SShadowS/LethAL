@@ -4115,6 +4115,10 @@ export async function buildDoctorDeps(
      *  1 GB cache the machine running it happens to have — and so its result is the machine's,
      *  not the suite's. Absent means al-runner's own default location. */
     readonly alRunnerCacheDir?: string;
+    /** R264: al-runner's SECOND cache root (`~/.cache/al-runner`, R168). Injected by tests for the
+     *  same reason as `alRunnerCacheDir`: a unit test must never walk the machine's real cache.
+     *  Absent means al-runner's own default location. */
+    readonly alRunnerSecondaryCacheDir?: string;
     /** R146: the spawn the al-runner `--version` probe uses. Injected by tests so the check can be
      *  driven without a real al-runner install; absent means the real one. */
     readonly alRunnerSpawn?: SpawnFn;
@@ -4159,7 +4163,8 @@ export async function buildDoctorDeps(
         // defined, which is the only thing `alRunnerStatusFor` returns `undefined` for. Narrowed
         // rather than asserted — `!` is banned here.
         ...(alRunnerProbe !== undefined ? { alRunner: alRunnerProbe } : {}),
-        alRunnerCache: () => readAlRunnerCache(opts.alRunnerCacheDir),
+        alRunnerCache: () =>
+          readAlRunnerCache(opts.alRunnerCacheDir, opts.alRunnerSecondaryCacheDir),
       },
       caveat: DOCTOR_AL_RUNNER_ONLY_CAVEAT,
     };
@@ -4350,7 +4355,7 @@ export async function buildDoctorDeps(
   // inside doctor's read-only boundary (constraint 4) by construction rather than by promise, and
   // it runs in create mode too, where there is no environment but there is still a disk.
   const alRunnerCache = async (): Promise<AlRunnerCacheReport> =>
-    readAlRunnerCache(opts.alRunnerCacheDir);
+    readAlRunnerCache(opts.alRunnerCacheDir, opts.alRunnerSecondaryCacheDir);
 
   // R146: the al-runner probe follows the CONFIG, not the `--backend` flag doctor does not have. A
   // bcdev project that also declares an `alRunner` section gets it alongside the live-BC checks; a
@@ -4555,6 +4560,10 @@ export async function doctorFromCli(
      *  1 GB cache the machine running it happens to have — and so its result is the machine's,
      *  not the suite's. Absent means al-runner's own default location. */
     readonly alRunnerCacheDir?: string;
+    /** R264: al-runner's SECOND cache root (`~/.cache/al-runner`, R168). Injected by tests for the
+     *  same reason as `alRunnerCacheDir`: a unit test must never walk the machine's real cache.
+     *  Absent means al-runner's own default location. */
+    readonly alRunnerSecondaryCacheDir?: string;
     /** R146: the spawn the al-runner `--version` probe uses. Injected by tests; absent means the
      *  real one. */
     readonly alRunnerSpawn?: SpawnFn;
@@ -4579,6 +4588,9 @@ export async function doctorFromCli(
     // nothing when reached through the CLI and a unit test driving `lethal doctor` walked whatever
     // multi-GB artifact cache the machine happened to hold.
     ...(deps.alRunnerCacheDir !== undefined ? { alRunnerCacheDir: deps.alRunnerCacheDir } : {}),
+    ...(deps.alRunnerSecondaryCacheDir !== undefined
+      ? { alRunnerSecondaryCacheDir: deps.alRunnerSecondaryCacheDir }
+      : {}),
     ...(deps.alRunnerSpawn !== undefined ? { alRunnerSpawn: deps.alRunnerSpawn } : {}),
   });
   const report = await runDoctor(cfg, doctorDeps);
