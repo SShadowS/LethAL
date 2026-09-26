@@ -1,0 +1,4 @@
+[test]
+# R264: hide the developer's real home directory from every unit test. See scripts/test-preload.ts.
+# Applies to `bun test` only; the itest:* scripts run `bun <file>` and keep the real home.
+preload = ["./scripts/test-preload.ts"]
