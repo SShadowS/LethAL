@@ -36,11 +36,11 @@ export function compileSchemataForFile(
   const rewrites = new Map<ALSyntaxNode, string>();
   // R246. Before the chains: a latch insertion can end exactly where a body-rooted chain starts,
   // and the printer keeps map order on a tie, so the zero-width insertion must come first.
-  injectReachLatches(components, rewrites, filePath ?? "<file>");
+  const latches = injectReachLatches(components, rewrites, filePath ?? "<file>");
   for (const component of components) {
     rewrites.set(
       component.root,
-      wrapIfSingleStatementSlot(component.root, emitDispatch(component)),
+      wrapIfSingleStatementSlot(component.root, emitDispatch(component, latches.get(component))),
     );
   }
 
@@ -62,18 +62,21 @@ export function compileSchemataForFile(
 }
 
 /**
- * R246. Declares `REACH_LATCH` as a local of every procedure or trigger that holds a
+ * R246. Declares a latch Boolean as a local of every procedure or trigger that holds a
  * statement-grain reach marker, once each. Appended to an existing `var` section, or added as one
  * right after the header. The inserted text has no newline, so no line moves. A LOCAL, not a
  * selector or object global: it is fresh on every call, so a hit can never outlive the test that
  * made it, which the per-test reach reading depends on.
+ *
+ * Returns each marked component's latch name, which its markers must use (see `latchNameFor`).
  */
 function injectReachLatches(
   components: readonly Component[],
   rewrites: Map<ALSyntaxNode, string>,
   filePath: string,
-): void {
-  const done = new Set<number>();
+): Map<Component, string> {
+  const latches = new Map<Component, string>();
+  const byOwner = new Map<number, string>();
   for (const c of components) {
     if (!c.members.some((m) => reachGrainOf(m, c.root) === "statement")) continue;
     let owner: ALSyntaxNode | null = c.root;
@@ -90,8 +93,14 @@ function injectReachLatches(
         `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared.`,
       );
     }
-    if (done.has(owner.startIndex)) continue;
-    done.add(owner.startIndex);
+    const known = byOwner.get(owner.startIndex);
+    if (known !== undefined) {
+      latches.set(c, known);
+      continue;
+    }
+    const latch = latchNameFor(owner);
+    byOwner.set(owner.startIndex, latch);
+    latches.set(c, latch);
     // Fix round 1: a comment is a node of its own, so neither anchor may be "the node before
     // begin". After a `//` comment the declaration would be commented out (AL0118), and a comment
     // between the var section and begin used to hide the section and emit a second one.
@@ -100,12 +109,45 @@ function injectReachLatches(
     const lastDecl = decls?.children.filter((n) => !isComment(n)).at(-1);
     if (vars !== undefined && lastDecl !== undefined) {
       // After the last DECLARATION, before any trailing comment on its line.
-      rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${REACH_LATCH}: Boolean;`);
+      rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${latch}: Boolean;`);
     } else {
       // Directly before `begin`, after any comment: the header's own line comment ends at a newline.
-      rewrites.set(insertionNodeAt(begin, begin.startIndex), `var ${REACH_LATCH}: Boolean; `);
+      rewrites.set(insertionNodeAt(begin, begin.startIndex), `var ${latch}: Boolean; `);
     }
   }
+  return latches;
+}
+
+/**
+ * GH-24 review r1. The latch is a new local, so a name already in scope would be shadowed (an
+ * object global or table field, which even the dispatch chain's ORIGINAL branch would then read)
+ * or redeclared (a parameter, a local or the return value: no compile). So the name is
+ * `REACH_LATCH`, suffixed `2`, `3`, ... until it is none of the identifiers the owner can see,
+ * compared case-insensitively and without quotes, as AL compares them: every identifier in the
+ * enclosing object except those inside OTHER procedures and triggers (their locals are not in
+ * scope here; a call to one of them is a token in the owner itself).
+ *
+ * Identifier TOKENS of the parsed object, never its text: a comment or a string is a node of its
+ * own, so the name inside one forces no rename. Over-avoiding (a name the owner only references)
+ * costs nothing but a suffix.
+ */
+function latchNameFor(owner: ALSyntaxNode): string {
+  let object = owner;
+  while (object.parent !== null && object.parent.rawKind !== "source_file") object = object.parent;
+  const used = new Set<string>();
+  const walk = (n: ALSyntaxNode): void => {
+    // Span, not identity: the engine's wrapper nodes are created per traversal.
+    const isOwner = n.startIndex === owner.startIndex && n.endIndex === owner.endIndex;
+    if (!isOwner && (n.kind === ALNodeKind.procedure || n.kind === ALNodeKind.trigger)) return;
+    if (n.rawKind === ALNodeKind.identifier || n.rawKind === "quoted_identifier") {
+      used.add(n.text.replace(/^"|"$/g, "").toLowerCase());
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(object);
+  let name = REACH_LATCH;
+  for (let k = 2; used.has(name.toLowerCase()); k++) name = `${REACH_LATCH}${k}`;
+  return name;
 }
 
 function isComment(n: ALSyntaxNode): boolean {

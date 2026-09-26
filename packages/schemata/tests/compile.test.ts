@@ -1351,6 +1351,64 @@ describe("GH-24: reach grain and marker placement", () => {
     expect(out).toContain(REACH_MARKER("M0002"));
   });
 
+  // GH-24 review r1: the latch is a new local, so a name already in scope would be shadowed (an
+  // object global, which even the ORIGINAL branch would then read) or redeclared (a parameter or a
+  // local: no compile). The name is chosen per procedure from the parsed object's identifiers.
+  const latchOf = (out: string): string | undefined =>
+    /if not (\S+) then begin MutationSelector\.Reached\(/.exec(out)?.[1];
+
+  it("GH-24: an object global named like the latch keeps the original branch reading the global", () => {
+    const src = `codeunit 51920 "R" { var LethALReachLatch: Boolean; procedure P() var X: Integer; begin if LethALReachLatch then X := 2; end; }`;
+    const root = parse(src);
+    const body = bodyOf(root, "P");
+    const out = compile({
+      src,
+      root,
+      specs: [spec(body, "begin end", "lethal.empty-block")],
+      wrapped: [],
+    });
+    expect(latchOf(out)).toBe(`${REACH_LATCH}2`);
+    expect(out).toContain(REACH_MARKER("M0001", `${REACH_LATCH}2`));
+    expect(out).toContain(`var X: Integer; ${REACH_LATCH}2: Boolean; begin`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1); // the global only
+    // The unmutated branch is the un-instrumented body, byte for byte, still reading the global.
+    expect(out).toContain(`end else begin\n  ${body.text}\nend`);
+  });
+
+  it("GH-24: a parameter named like the latch, in any case, gets a different latch", () => {
+    for (const name of ["LethALReachLatch", "lethalreachlatch"]) {
+      const out = latchOut(
+        `codeunit 51921 "R" { procedure P(${name}: Integer) var X: Integer; begin X := 1; X := 2; end; }`,
+      );
+      expect(latchOf(out)).toBe(`${REACH_LATCH}2`);
+      expect(out).toContain(`var X: Integer; ${REACH_LATCH}2: Boolean; begin`);
+      expect(out).toContain(REACH_MARKER("M0001", `${REACH_LATCH}2`));
+    }
+  });
+
+  it("GH-24: a local named like the latch (quoted too) gets a different latch, suffixed until free", () => {
+    const out = latchOut(
+      `codeunit 51922 "R" { procedure P() var X: Integer; "LethALReachLatch": Integer; LethALReachLatch2: Integer; begin X := 1; X := 2; end; }`,
+    );
+    expect(latchOf(out)).toBe(`${REACH_LATCH}3`);
+    expect(out).toContain(`LethALReachLatch2: Integer; ${REACH_LATCH}3: Boolean; begin`);
+  });
+
+  it("GH-24: another procedure's local of that name is not in scope and forces no rename", () => {
+    const out = latchOut(
+      `codeunit 51924 "R" { procedure P() var X: Integer; begin X := 1; X := 2; end; procedure Q() var LethALReachLatch: Integer; begin LethALReachLatch := 1; end; }`,
+    );
+    expect(latchOf(out)).toBe(REACH_LATCH);
+  });
+
+  it("GH-24: the latch name in a comment or a string forces no rename", () => {
+    const out = latchOut(
+      `codeunit 51923 "R" { procedure P() var X: Integer; T: Text; begin // LethALReachLatch\n T := 'LethALReachLatch'; X := 1; X := 2; end; }`,
+    );
+    expect(latchOf(out)).toBe(REACH_LATCH);
+    expect(out).toContain(`T: Text; ${REACH_LATCH}: Boolean; begin`);
+  });
+
   it("GH-24: the marker adds no line and appears only in its own branch", () => {
     for (const make of [thenCall, thenExit, listPrefix, ifBody, repeatBody, caseArms]) {
       const s = make();

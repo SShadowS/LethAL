@@ -18,11 +18,11 @@ import type { Component, ComponentMember } from "./components";
  * replaced by its `after` text. Uniform for mutation, deletion (empty after) and
  * block replacement.
  */
-export function emitDispatch(component: Component): string {
+export function emitDispatch(component: Component, latch: string = REACH_LATCH): string {
   const original = component.root.text;
   const branches = component.members.map((m) => ({
     mutantId: m.mutantId,
-    text: placeReach(component.root, m).text,
+    text: placeReach(component.root, m, latch).text,
   }));
 
   const parts: string[] = [];
@@ -52,6 +52,9 @@ export function emitDispatch(component: Component): string {
  * so cannot survive any of the control app's `ObservedActive` resets, which all run between tests.
  * The first hit still reaches `NoteReached`, so a mismatched tuple still latches
  * `ObservedIdentityMismatch` there.
+ *
+ * This is the DEFAULT name. Where it is already an identifier in the procedure's scope, the compiler picks a
+ * suffixed one per procedure (`latchNameFor` in compile.ts) and passes it to `emitDispatch`.
  */
 export const REACH_LATCH = "LethALReachLatch";
 
@@ -59,8 +62,8 @@ export const REACH_LATCH = "LethALReachLatch";
  * GH-24. The call a statement-grain mutant's branch makes at its OWN statement, so the control app
  * can say that statement began executing. No newline, anywhere: line numbers must not move.
  */
-export const REACH_MARKER = (mutantId: string): string =>
-  `if not ${REACH_LATCH} then begin MutationSelector.Reached('${mutantId}'); ${REACH_LATCH} := true; end;`;
+export const REACH_MARKER = (mutantId: string, latch: string = REACH_LATCH): string =>
+  `if not ${latch} then begin MutationSelector.Reached('${mutantId}'); ${latch} := true; end;`;
 
 /**
  * Where reach can be measured for one mutant, decided at compile time.
@@ -100,7 +103,11 @@ const LEADING_BEGIN = /^\s*begin(?![A-Za-z0-9_])/i;
  * P2 `S` sits in a statement list: prefix at `S`.
  * P3 `S` occupies a single-statement slot: `begin <marker> <S> end`.
  */
-function placeReach(root: ALSyntaxNode, m: ComponentMember): { grain: ReachGrain; text: string } {
+function placeReach(
+  root: ALSyntaxNode,
+  m: ComponentMember,
+  latch: string = REACH_LATCH,
+): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any
@@ -112,7 +119,7 @@ function placeReach(root: ALSyntaxNode, m: ComponentMember): { grain: ReachGrain
   }
   if (n === null) return { grain: "unplaced", text };
 
-  const marker = REACH_MARKER(m.mutantId);
+  const marker = REACH_MARKER(m.mutantId, latch);
   if (sameNode(s, root)) return { grain: "statement", text: `${marker} ${text}` };
   // `S`'s span in the spliced text: the member's edit sits inside `S`, so only its end moves.
   const start = s.startIndex - root.startIndex;
