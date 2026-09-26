@@ -513,6 +513,10 @@ export const VERIFY_SCHEMA_VERSION = 1;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown"] as const;
+// Named, not inline, like KilledBy and NewTestState below it: schemas.test.ts's typeLeafPaths walk
+// (C02-06 Task 6) resolves a field's domain by the NAME at that property, and an inline
+// `(typeof X)[number]` there has no name to resolve.
+export type VerifyVerdict = (typeof VERIFY_VERDICTS)[number];
 export type KilledBy = (typeof KILLED_BY)[number];
 export type NewTestState = (typeof NEW_TEST_STATES)[number];
 
@@ -556,7 +560,7 @@ export interface VerifyResult {
   readonly line: number;
   readonly operatorName: string;
   readonly procedureName: string;
-  readonly verdict: (typeof VERIFY_VERDICTS)[number];
+  readonly verdict: VerifyVerdict;
   /** Qualified names sent to `runNamedMutants`. */
   readonly testsRun?: readonly string[];
   /** Decision 13: requested methods without a valid green unmutated run. */
