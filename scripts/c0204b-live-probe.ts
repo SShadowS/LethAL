@@ -15,7 +15,8 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertMatchesBaseline } from "../packages/runner/itest/baseline-guard";
+import { itestConfigPath } from "../packages/runner/itest/config-path";
+import { diffMutants, normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
 import { ArtifactCompiler, defaultArtifactIo } from "../packages/runner/src/artifact";
 import type { TestMethodRef } from "../packages/runner/src/backend";
@@ -51,6 +52,10 @@ function keyOf(m: MutantOutcome): string {
 }
 
 async function main(): Promise<void> {
+  // The oracle is the COMMITTED baseline. Refuse before touching a container if it is missing.
+  if (!(await Bun.file(BASELINE_PATH).exists())) {
+    throw new Error(`no committed baseline at ${BASELINE_PATH}; the probe never creates one`);
+  }
   const scratch =
     process.env.LETHAL_PROBE_SCRATCH ?? (await mkdtemp(join(tmpdir(), "c0204b-probe-")));
   await mkdir(scratch, { recursive: true });
@@ -71,8 +76,10 @@ async function main(): Promise<void> {
   };
   const launchCfg = launch.configurations[0];
   if (launchCfg === undefined) throw new Error("launch.local.json has no configurations[0]");
+  // Same selection as itest:bcdev (LETHAL_ITEST_CONFIG, default lethal.config.local.json), so the
+  // probe and the gate always target the same container.
   const configFile = JSON.parse(
-    await readFile(join(PROJECT_DIR, "lethal.config.local.json"), "utf8"),
+    await readFile(itestConfigPath(PROJECT_DIR), "utf8"),
   ) as LethalConfigFile;
   const bcdev = validateBcDevConfig(configFile.bcdev);
   const toolPaths = await defaultAlToolPaths();
@@ -152,7 +159,15 @@ async function main(): Promise<void> {
     if (report.quarantined !== undefined) {
       throw new Error(`first run quarantined: ${JSON.stringify(report.quarantined)}`);
     }
-    await assertMatchesBaseline(report, BASELINE_PATH, "c0204b first run");
+    // Compare READ-ONLY against the COMMITTED baseline. The probe never writes it: a baseline this
+    // run created would be an oracle that agrees with whatever the run produced.
+    const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
+    const firstRunDiffs = diffMutants(committed, normalizeForComparison(report));
+    if (firstRunDiffs.length > 0) {
+      throw new Error(
+        `first run differs from the committed ${BASELINE_PATH} (${firstRunDiffs.length} mutant(s)):\n${firstRunDiffs.map((d) => `  - ${d}`).join("\n")}`,
+      );
+    }
     const counts = (v: string) => report.mutants.filter((m) => m.verdict === v).length;
     say(
       `first run: ${report.mutants.length} mutants, killed ${counts("killed")} / survived ${counts("survived")} / no-coverage ${counts("no-coverage")} / error ${counts("error")}; per-mutant equal to bcdev.baseline.json`,
