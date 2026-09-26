@@ -1,9 +1,9 @@
-import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { afterAll, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPackageEntry } from "../src/app-package";
-import { AlcCompileError, ArtifactCompiler } from "../src/artifact";
+import { AlcCompileError, ArtifactCompiler, ArtifactPrepareError } from "../src/artifact";
 import type { BoundArtifact } from "../src/backend";
 import { readAppIdentity } from "../src/published-test-app";
 import { TestAppError, compileTestApp } from "../src/test-app-publish";
@@ -18,8 +18,19 @@ const manifest = (id: string, name: string, version: string) =>
 const pkg = (id: string, name: string, version: string, extra: Record<string, string> = {}) =>
   buildFakeAppWithEntries({ "NavxManifest.xml": manifest(id, name, version), ...extra });
 
+const tempDirs: string[] = [];
+afterAll(async () => {
+  await Promise.all(tempDirs.map((d) => rm(d, { recursive: true, force: true })));
+});
+async function temp(prefix: string): Promise<string> {
+  const d = await mkdtemp(join(tmpdir(), prefix));
+  tempDirs.push(d);
+  return d;
+}
+
+/** `alpackages: null` leaves the test project with no `.alpackages` directory at all. */
 async function fixture(
-  alpackages: Record<string, Buffer>,
+  alpackages: Record<string, Buffer> | null,
   appJson: Record<string, unknown> = {
     id: TESTS_ID,
     name: "LethAL Sandbox Tests",
@@ -27,10 +38,14 @@ async function fixture(
     version: "1.0.0.2",
   },
 ) {
-  const dir = await mkdtemp(join(tmpdir(), "c0205-"));
+  const dir = await temp("c0205-");
   await writeFile(join(dir, "app.json"), JSON.stringify(appJson));
-  await mkdir(join(dir, ".alpackages"));
-  for (const [f, b] of Object.entries(alpackages)) await writeFile(join(dir, ".alpackages", f), b);
+  if (alpackages !== null) {
+    await mkdir(join(dir, ".alpackages"));
+    for (const [f, b] of Object.entries(alpackages)) {
+      await writeFile(join(dir, ".alpackages", f), b);
+    }
+  }
   const targetPath = join(dir, "bound.app");
   const targetBytes = pkg(TARGET_ID, "LethAL Sandbox App", "1.0.20357.100", {
     "marker.txt": "INSTRUMENTED",
@@ -48,7 +63,7 @@ async function fixture(
     appJsonText: "{}",
     alSources: [],
   };
-  return { dir, target, controlPath, out: await mkdtemp(join(tmpdir(), "c0205-out-")) };
+  return { dir, target, controlPath, out: await temp("c0205-out-") };
 }
 
 /** A compiler whose alc records what is in the package cache it was handed. */
@@ -154,4 +169,61 @@ test("compileTestApp refuses a test project whose app.json lacks a name", async 
     }),
   ).rejects.toMatchObject({ reason: "manifest-unreadable" });
   expect(seen).toEqual([]);
+});
+
+test("compileTestApp skips a stale target whose manifest Id differs from the bound id only in case", async () => {
+  const fx = await fixture({
+    "LethAL_LethAL Sandbox App_1.0.0.0.app": pkg(
+      TARGET_ID.toUpperCase(),
+      "LethAL Sandbox App",
+      "1.0.0.0",
+      {
+        "marker.txt": "STALE",
+      },
+    ),
+  });
+  const seen: Array<{ id: string; marker: string | null }> = [];
+  await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    compiler: watchingCompiler(fx.out, seen),
+    controlSymbolPath: fx.controlPath,
+  });
+  expect(seen.filter((s) => s.id.toLowerCase() === TARGET_ID).map((s) => s.marker)).toEqual([
+    "INSTRUMENTED",
+  ]);
+});
+
+test("compileTestApp passes an ArtifactPrepareError through unchanged, never as a TestAppError", async () => {
+  const fx = await fixture({});
+  const compiler = new ArtifactCompiler(
+    { alcPath: "alc", packageCachePath: "UNUSED", outputDir: fx.out },
+    {
+      spawn: async () => {
+        throw new Error("spawn ENOENT");
+      },
+      readArtifact: async () => new Uint8Array(),
+      writeArtifact: async () => {},
+    },
+  );
+  const err = await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    compiler,
+    controlSymbolPath: fx.controlPath,
+  }).catch((e) => e);
+  expect(err).toBeInstanceOf(ArtifactPrepareError);
+  expect(err).not.toBeInstanceOf(TestAppError);
+});
+
+test("compileTestApp: a missing .alpackages is not an error; alc gets the bound build and the control symbol", async () => {
+  const fx = await fixture(null);
+  const seen: Array<{ id: string; marker: string | null }> = [];
+  await compileTestApp({
+    testDir: fx.dir,
+    target: fx.target,
+    compiler: watchingCompiler(fx.out, seen),
+    controlSymbolPath: fx.controlPath,
+  });
+  expect(seen.map((s) => s.id).sort()).toEqual([CONTROL_ID, TARGET_ID].sort());
 });

@@ -129,8 +129,9 @@ export async function compileTestApp(a: {
         throw new TestAppError("symbols-unreadable", `${path}: ${describeThrown(err)}`);
       }
       // An entry we cannot identify could be the stale target, so it is refused, never skipped.
-      const id = identityOf(bytes, path);
-      if (id === a.target.appId || id === controlId) continue;
+      // BC app ids are GUIDs, so case carries no meaning: an upper-case id is still the target.
+      const id = identityOf(bytes, path).toLowerCase();
+      if (id === a.target.appId.toLowerCase() || id === controlId.toLowerCase()) continue;
       await writeFile(join(scratch, name), bytes);
     }
     // The VERIFIED in-memory bytes (the ones matched to the trusted record), not a re-read of
