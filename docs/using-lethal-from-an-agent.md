@@ -70,7 +70,8 @@ A run keeps its state in `<project>/lethal.sqlite` unless `--db` names another f
 
 An unscoped run on a real project is refused by default above 1,000 mutation sites.
 
-A narrowed run carries `narrowed`, `operator-narrowed` or `tests-narrowed` in `validity.caveats`.
+A narrowed run carries `narrowed`, `operator-narrowed`, `line-narrowed` or `tests-narrowed` in
+`validity.caveats`.
 
 ### Running notes (guidance)
 
@@ -91,10 +92,12 @@ The large-run refusal exists because an unscoped run costs days and usually cann
 and does not make the run cheaper. Find the size first with `--dry-run`, which lists what would be
 mutated, executes nothing, and reports both the raw site count and the deployed count.
 
-**Know which flags can move a verdict.** `--only`, `--exclude` and `--operator` select which
+**Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--lines` and
+`--changed-since` select which
 MUTANTS run and cannot change a verdict. `--tests-only` selects which TESTS run at baseline and CAN: exclude a
 killing test and its mutant is reported survived. `--only` and `--exclude` give the `narrowed`
-caveat, `--operator` gives `operator-narrowed` and `--tests-only` gives `tests-narrowed`.
+caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
+and `--tests-only` gives `tests-narrowed`.
 
 **Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
 CONDITIONAL. LethAL reads al-runner's own coverage output (R220), but one file declaring more than one
@@ -105,7 +108,7 @@ it every session.)
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.17 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.19 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -219,8 +222,8 @@ enforced.
 
 ### `--out report.json`: the record (checked)
 
-`schemaVersion: 2`. The report's fields include `counts`, `mutationScore`, `validity` and
-`mutants`, and `validity` carries `reliability`, `scoreDescribes` and `caveats`.
+`schemaVersion: 2`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
+`validity` carries `reliability`, `scoreDescribes` and `caveats`.
 
 #### Report notes (guidance)
 
@@ -234,8 +237,8 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 5`. Its fields include `contract`, `score`, `survivors`, `notMeasured` and
-`survivorSelection`, and each `survivors` row carries `executionProven` and `reach`.
+`explainSchemaVersion: 5`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
+and `survivorSelection`. Each `survivors` row carries `executionProven` and `reach`.
 
 A report from another schema version, or carrying a value this build cannot interpret, is REFUSED
 rather than explained with the unrecognised value dropped.
@@ -246,7 +249,7 @@ rather than explained with the unrecognised value dropped.
 lethal explain report.json --top 15
 ```
 
-The output always carries `survivorSelection`, whether or not anything was capped:
+The top level carries `survivorSelection` whether or not anything was capped:
 
 ```json
 "survivorSelection": { "total": 125, "shown": 15, "omitted": 110, "rankedBy": "actionability" }
@@ -280,9 +283,9 @@ rows every time. The cap bounds survivors only; `notMeasured` is never shortened
 
 ### `--progress-out events.ndjson`: following a live run (checked)
 
-`streamSchemaVersion: 1`. Line 1 is a header this sink writes itself and carries
-`ndjsonHeader: true`; every later line is an event with `seq`, `type` and `runId`. The event types
-include `session-finished` and `batch-invalidated`.
+`streamSchemaVersion: 1`. Line 1 is a header this sink writes itself, with `ndjsonHeader: true`.
+Every later line is an event. Every event carries `seq` and `type`. The `stream-started` event
+carries `runId`. The `type` values include `session-finished` and `batch-invalidated`.
 
 #### Stream notes (guidance)
 
@@ -304,7 +307,7 @@ that should kill a survivor, `lethal verify`, and repeat until verify exits `0`.
 
 ### From an explain row to a verify command (checked)
 
-Each `explain` survivor row carries the three values verify needs: `artifactId`, `batchIndex` and
+The three values verify needs come from one `explain` survivor row: `artifactId`, `batchIndex` and
 `mutantCode`. The command, with `<project>` the run's `--project`, `<config>` the run's `--config`
 and `<tests-dir>` the test project you edited:
 
@@ -322,7 +325,7 @@ lethal verify --db app/lethal.sqlite --artifact 0123456789abcdef0123456789abcdef
 `--db` is the database the run wrote: the run's own `--db`, or its default. `--config` is the
 config the run used, as the run was given it. `--tests` is the run's test project.
 
-A row with no `artifactId` carries `artifactIdAbsent` instead. The values are checked; the meanings
+A row with no `artifactId` has `artifactIdAbsent` instead. The values are checked; the meanings
 are guidance.
 
 | artifactIdAbsent | what it means for verify |
@@ -356,14 +359,14 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 
-`killedBy` never changes the exit code. A result row also carries `killedByNewTest`, and the output
-carries `invalidBaseline`.
+`killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest` and
+`invalidBaseline`.
 
 #### Verify result notes (guidance)
 
 A kill by a runtime error is still a kill, and says only that no assertion caught it.
-`killedByNewTest` says whether the killing test is one your edit added. `invalidBaseline` lists the
-requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
+`killedByNewTest` says whether the killing test is one your edit added. A row's `invalidBaseline`
+lists the requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
 run verify again.
 
@@ -373,12 +376,16 @@ run verify again.
 |---|---|
 | `0` | Every named survivor was killed and every new test is `stable`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
 | `1` | An error, including an argv verify refuses (a missing flag, the `--out` trap). The message is on stderr and there is no JSON. |
-| `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`, which leave the container needing a recycle. |
+| `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`. |
 | `4` | Every non-skipped survivor is `error`: verify measured nothing. |
 | `5` | Not every named survivor was killed, or a new test is not `stable`. |
 | `6` | Refused before measuring; `refused.reason` says why. |
 
 When several apply, the first in this order wins. Precedence: `3`, `6`, `4`, `5`, `0`.
+
+#### Verify exit code notes (guidance)
+
+`publish-indeterminate` and `publish-anomalous` leave the container needing a recycle.
 
 ### Verify refusals (checked)
 

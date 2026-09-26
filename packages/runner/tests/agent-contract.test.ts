@@ -19,6 +19,7 @@ import {
   exitCodeForReport,
   helpText,
   parseCliConfig,
+  resolveSelectorIds,
 } from "../src/cli";
 import { checkAlcRuntime } from "../src/doctor";
 import {
@@ -28,10 +29,22 @@ import {
   parseEquivalenceMarks,
 } from "../src/equivalence-marks";
 import { STREAM_SCHEMA_VERSION } from "../src/events";
+import type { RunEvent, RunEventInput } from "../src/events";
 import { ARTIFACT_ID_ABSENCES, EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { LARGE_RUN_MUTANT_THRESHOLD } from "../src/orchestrator";
+import { MIN_CONTROL_VERSION } from "../src/harness";
+import {
+  LARGE_RUN_MUTANT_THRESHOLD,
+  MIN_MUTANT_BUDGET_MS,
+  REQUEST_CEILING_MS,
+  STOP_GRACE_MS,
+} from "../src/orchestrator";
 import { createNdjsonSink } from "../src/progress-ndjson";
-import { CAVEAT_INTERPRETATIONS, REPORT_SCHEMA_VERSION, renderConsole } from "../src/report";
+import {
+  CAVEAT_INTERPRETATIONS,
+  REPORT_SCHEMA_VERSION,
+  buildReport,
+  renderConsole,
+} from "../src/report";
 import type { SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import {
@@ -304,8 +317,118 @@ const CLI = join(REPO_ROOT, "packages", "runner", "src", "cli.ts");
 
 /** Runs the real CLI entry point, so an exit code and the stream a message lands on are measured. */
 function runCli(argv: readonly string[]) {
-  const r = spawnSync("bun", [CLI, ...argv], { cwd: REPO_ROOT, encoding: "utf8" });
+  const r = spawnSync(process.execPath, [CLI, ...argv], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+type SchemaNode = { readonly [k: string]: unknown };
+
+/** Follows `$ref` (`#/$defs/X`) and flattens `anyOf`/`oneOf` into the object variants a value can be. */
+function variantsOf(root: SchemaNode, node: unknown): SchemaNode[] {
+  if (node === null || typeof node !== "object") return [];
+  const n = node as SchemaNode;
+  if (typeof n.$ref === "string") {
+    const target = n.$ref
+      .replace(/^#\//, "")
+      .split("/")
+      .reduce<unknown>((acc, k) => (acc as SchemaNode | undefined)?.[k], root);
+    return variantsOf(root, target);
+  }
+  const union = (n.anyOf ?? n.oneOf) as unknown[] | undefined;
+  return union === undefined ? [n] : union.flatMap((v) => variantsOf(root, v));
+}
+
+/** The nodes at a path like `validity` or `survivors[]` (`[]` steps into `items`). A missing
+ *  property on any variant throws: the path IS the claim. */
+function nodesAt(root: SchemaNode, from: SchemaNode[], path: string): SchemaNode[] {
+  if (path === "") return from;
+  return path.split(".").reduce<SchemaNode[]>(
+    (nodes, seg) =>
+      nodes.flatMap((node) => {
+        const name = seg.replace(/\[\]$/, "");
+        const prop = (node.properties as SchemaNode | undefined)?.[name];
+        if (prop === undefined) throw new Error(`no property "${name}" on the path "${path}"`);
+        const inner = seg.endsWith("[]") ? variantsOf(root, prop).map((v) => v.items) : [prop];
+        if (inner.some((x) => x === undefined)) throw new Error(`"${name}" is not an array`);
+        return inner.flatMap((x) => variantsOf(root, x));
+      }),
+    from,
+  );
+}
+
+/**
+ * The location claims a checked result section makes, checked against its schema. Every sentence
+ * that says `carries`, `carry` or `values include` must have one of these shapes, so a location
+ * claim cannot be written in a form this skips:
+ *   The top level carries `a` and `b`.          (required at the root)
+ *   `x.y` carries `a`.  Each `x` row carries `a`.  (required on that object, or on every array item)
+ *   Every event carries `a`.  The `t` event carries `a`.  (every variant; the variant with type t)
+ *   ... can carry ... / can also carry ...      (present, not necessarily required)
+ *   The `f` values include `v` and `w`.         (each v is a const/enum value of f)
+ * Returns the failures; an empty list means every claim holds.
+ */
+function locationClaimFailures(body: string, schemaFile: string): string[] {
+  const root = JSON.parse(read(join(REPO_ROOT, "schemas", schemaFile))) as SchemaNode;
+  const top = variantsOf(root, root);
+  const failures: string[] = [];
+  const sentences = flowed(prose(body))
+    .split(/(?<=[.:])\s+(?=[A-Z`])/)
+    .map((x) => x.trim())
+    .filter((x) => /\bcarr(?:y|ies)\b|values include/.test(x));
+  for (const sentence of sentences) {
+    const carry =
+      /^(?:(The top level)|(Every event)|The `([^`]+)` event|Each `([^`]+)` row|`([^`]+)`) (carries|can carry|can also carry) (.+)[.:]$/.exec(
+        sentence,
+      );
+    const values = /^The `([^`]+)` values include (.+)\.$/.exec(sentence);
+    try {
+      if (carry !== null) {
+        const [, , , event, row, path, verb = "", rest = ""] = carry;
+        let at: SchemaNode[];
+        if (event !== undefined) {
+          at = top
+            .filter((v) => (v.properties as SchemaNode)?.type !== undefined)
+            .filter((v) => ((v.properties as SchemaNode).type as SchemaNode).const === event);
+          if (at.length !== 1) throw new Error(`no single "${event}" event`);
+        } else {
+          at = nodesAt(root, top, row !== undefined ? `${row}[]` : (path ?? ""));
+        }
+        for (const field of ticks(rest)) {
+          for (const node of at) {
+            const ok =
+              verb === "carries"
+                ? ((node.required as readonly string[] | undefined) ?? []).includes(field)
+                : (node.properties as SchemaNode | undefined)?.[field] !== undefined;
+            if (!ok)
+              throw new Error(
+                `\`${field}\` is not ${verb === "carries" ? "required" : "a property"} there`,
+              );
+          }
+        }
+      } else if (values !== null) {
+        const [, field = "", rest = ""] = values;
+        const domain = new Set(
+          top.flatMap((v) => {
+            const f = (v.properties as SchemaNode | undefined)?.[field] as SchemaNode | undefined;
+            if (f === undefined) return [];
+            return [f.const, ...((f.enum as unknown[] | undefined) ?? [])].filter(
+              (x): x is string => typeof x === "string",
+            );
+          }),
+        );
+        for (const v of ticks(rest)) if (!domain.has(v)) throw new Error(`\`${v}\` is not a value`);
+      } else {
+        throw new Error("not a recognised location-claim shape");
+      }
+    } catch (e) {
+      failures.push(`${sentence} :: ${(e as Error).message}`);
+    }
+  }
+  return failures;
 }
 
 describe("C02-07: the documents' commands and tables are the code's", () => {
@@ -363,6 +486,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     const meaning = (code: number) =>
       flowed(rows.find(([c = ""]) => ticks(c)[0] === String(code))?.[1] ?? "").toLowerCase();
     expect(meaning(0)).toContain("says nothing about whether mutants survived");
+    // exitCodeForReport never sees counts, so a narrowed report returning 0 is the whole proof.
     expect(exitCodeForReport({ validity: { caveats: ["narrowed"] } })).toBe(0);
     expect(meaning(1)).toContain("error");
     expect(meaning(QUARANTINED_EXIT_CODE)).toContain("vouch for its own verdicts");
@@ -440,6 +564,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     );
     expect(sample.doctorSchemaVersion).toBe(DOCTOR_SCHEMA_VERSION);
     expect(sample.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
+    expect(real.notChecked).toEqual([...DOCTOR_NOT_CHECKED_TOKENS]);
     const text = flowed(own);
     expect(text).toContain(`\`notChecked\` is always ${listed(DOCTOR_NOT_CHECKED_TOKENS, "and")}.`);
     expect(text).toContain(`\`caveat.kind\` is ${listed(DOCTOR_CAVEAT_KINDS, "or")}.`);
@@ -470,15 +595,50 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     ]);
     expect(withDb.mode === "run" ? withDb.dbPath : "").toBe("D");
     expect(own).toContain("unless `--db` names another file");
-    const line = own.split("\n").find((l) => l.startsWith("A narrowed run carries")) ?? "";
-    const named = ticks(line).filter((t) => t !== "validity.caveats");
-    expect(named.length).toBeGreaterThan(0);
-    for (const c of named) expect(Object.keys(CAVEAT_INTERPRETATIONS), c).toContain(c);
-    expect(
-      namedFields(line).filter(
-        (f) => !schemaVocabulary(`report-v${REPORT_SCHEMA_VERSION}.schema.json`).has(f),
-      ),
-    ).toEqual([]);
+    const line =
+      /A narrowed run carries (.*?) in `validity\.caveats`\./.exec(flowed(own))?.[1] ?? "";
+    // The narrowing caveats, MEASURED: what buildReport adds for each scope a run can be given.
+    const events = (
+      [
+        {
+          type: "mutation-set-generated",
+          siteCount: 1,
+          deployedCount: 1,
+          hangCapableCount: 0,
+          totalFiles: 1,
+          instrumentableFiles: 1,
+          notInstrumentedFiles: [],
+          declarativeSiteFiles: [],
+          excludedByOnly: 0,
+          excludedByExclude: 0,
+          excludedByOperator: 0,
+          excludedByLines: 0,
+        },
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+        { type: "session-finished", elapsedMs: 1 },
+      ] as RunEventInput[]
+    ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+    const caps = {
+      authoritative: true,
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+    } as const;
+    const caveatsOf = (scope: object) =>
+      buildReport({ caps, ...scope }, events).validity.caveats as readonly string[];
+    const plain = new Set(caveatsOf({}));
+    const scopes = [
+      { only: { patterns: ["x"] } },
+      { exclude: { patterns: ["x"] } },
+      { operators: { names: ["x"] } },
+      { lines: { ranges: [{ file: "f.al", start: 1, end: 1 }] } },
+      { testsOnly: ["x"] },
+    ];
+    const narrowing = new Set(scopes.flatMap((sc) => caveatsOf(sc).filter((c) => !plain.has(c))));
+    expect(new Set(ticks(line))).toEqual(narrowing);
+    // A narrowing caveat with no scope above would be missed by the measurement; the names say so.
+    for (const c of Object.keys(CAVEAT_INTERPRETATIONS).filter((k) => /narrowed$/.test(k)))
+      expect([...narrowing], `${c} has no scope in this test`).toContain(c);
   });
 
   test("the dry-run exception names flags dry-run really ignores, and its roadmap row exists", () => {
@@ -562,6 +722,12 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
         names.filter((n) => !vocab.has(n)),
         heading,
       ).toEqual([]);
+      // Where each field lives, not only that the name exists somewhere.
+      expect(
+        /\b(carries|carry)\b/.test(ownText(text, heading)),
+        `${heading} makes no location claim`,
+      ).toBe(true);
+      expect(locationClaimFailures(ownText(text, heading), schema), heading).toEqual([]);
     }
   });
 
@@ -635,7 +801,43 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
   });
 
   test("no em dashes", () => {
-    for (const [name, text] of docs) expect(text.includes("—"), name).toBe(false);
+    for (const [name, text] of [...docs, ["README", read(join(REPO_ROOT, "README.md"))] as const])
+      expect(text.includes("—"), name).toBe(false);
+  });
+
+  test("the code constants the documents quote are the code's", () => {
+    // I4: a figure copied from a constant goes stale silently, guidance section or not.
+    const readme = read(join(REPO_ROOT, "README.md"));
+    for (const [name, text] of [...docs, ["README", readme] as const]) {
+      const versions = [...text.matchAll(/\b1\.0\.0\.\d+\b/g)].map((m) => m[0]);
+      expect(
+        versions.filter((v) => v !== MIN_CONTROL_VERSION),
+        name,
+      ).toEqual([]);
+    }
+    for (const [name, text] of docs)
+      expect(flowed(text), name).toContain(`LethAL Control ${MIN_CONTROL_VERSION} or newer`);
+    const ref = flowed(read(REFERENCE));
+    expect(ref).toContain(`the default is ${REQUEST_CEILING_MS / 1000} s`);
+    expect(ref).toContain(`above the ceiling minus ${STOP_GRACE_MS / 1000} s`);
+    // README's Configuration table: each default the code owns.
+    const rows = tableRows(section(readme, "Configuration"));
+    const defaultOf = (flag: string) =>
+      rows.find(([f = ""]) => ticks(f).some((t) => t.split(" ")[0] === flag))?.[1] ?? "";
+    expect(defaultOf("--mutant-timeout-ms")).toBe(`\`${MIN_MUTANT_BUDGET_MS}\``);
+    const run = parseCliConfig(["run", "--project", "P", "--tests", "T", "--backend", "bcdev"]);
+    if (run.mode !== "run") throw new Error("not a run");
+    expect(defaultOf("--workers")).toBe(`\`${run.workers}\``);
+    expect(normalize(ticks(defaultOf("--config"))[0] ?? "").replace("<project>", "P")).toBe(
+      normalize(run.configPath),
+    );
+    expect(normalize(ticks(defaultOf("--db"))[0] ?? "").replace("<project>", "P")).toBe(
+      normalize(run.dbPath),
+    );
+    const ids = Object.values(resolveSelectorIds({}, undefined));
+    expect(defaultOf("--selector-id")).toBe(`\`${Math.min(...ids)}\` to \`${Math.max(...ids)}\``);
+    const large = rows.find(([f = ""]) => ticks(f)[0] === "--allow-large-run")?.[2] ?? "";
+    expect(large).toContain(LARGE_RUN_MUTANT_THRESHOLD.toLocaleString("en-US"));
   });
 });
 
@@ -761,6 +963,11 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       expect(parsed.testDir).toBe("T");
       // Without --config verify reads <project>/lethal.config.json, not the config the run used.
       expect(parsed.configPath).toBe("C");
+    }
+    // "A row with no `artifactId` has `artifactIdAbsent` instead": the report without artifacts.
+    for (const row of explain(JSON.parse(read(GIFT_CARD))).survivors) {
+      expect(row.artifactId).toBeUndefined();
+      expect(row.artifactIdAbsent).toBeDefined();
     }
     const body = section(read(REFERENCE), "From an explain row to a verify command (checked)");
     const absences = tableRows(body).map(([c = ""]) => ticks(c)[0] ?? "");
@@ -995,6 +1202,17 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       ([c = ""]) => ticks(c)[0] === "1",
     );
     expect(row1?.[1]).toContain("The message is on stderr and there is no JSON.");
+    // Row 6 names `refused.reason`: it must be where the verify schema puts it.
+    const verifySchema = JSON.parse(
+      read(join(REPO_ROOT, "schemas", `verify-v${VERIFY_SCHEMA_VERSION}.schema.json`)),
+    ) as SchemaNode;
+    const row6 = tableRows(section(read(REFERENCE), "Verify exit codes (checked)")).find(
+      ([c = ""]) => ticks(c)[0] === String(VERIFY_EXIT.refused),
+    );
+    for (const path of ticks(row6?.[1] ?? "").filter((t) => t.includes(".")))
+      expect(() =>
+        nodesAt(verifySchema, variantsOf(verifySchema, verifySchema), path),
+      ).not.toThrow();
   }, 30_000);
 
   test("verify --out is a documented, refused trap", () => {

@@ -67,7 +67,7 @@ lethal run --project <app-dir> \
   chooses which tests run and CAN: excluding a killing test reports its mutant as survived.
 - Runs take minutes to hours. Do not poll `events.ndjson` in a tight loop; read it when the run
   ends, or tail it if the user wants progress. A mutant's covering tests run in ONE server call
-  (LethAL Control 1.0.0.17 or newer; older is refused up front), so survivors are no longer the
+  (LethAL Control 1.0.0.19 or newer; older is refused up front), so survivors are no longer the
   expensive half. Leave `--max-methods-per-call`, `--request-ceiling-ms` and `--no-group-runs`
   alone unless the run warns `group-runs-inert`.
 
