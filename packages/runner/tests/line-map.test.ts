@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
+import { writeInstrumentedProject } from "@lethal/schemata";
 import { LineMap, buildLineMap, fileLineMapEntries } from "../src/line-map";
+import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 /**
  * R58's crux. BC's fenced coverage reports a LINE, and this maps it to the procedure that owns it.
@@ -431,5 +433,61 @@ describe("R175: isNamingGap tells a declined name from a failed one", () => {
   test("an object this map never indexed is not a gap — it is not ours to place", () => {
     const map = mapFor(WITH_TRIGGER);
     expect(map.isNamingGap("Codeunit", 99999, 5)).toBe(false);
+  });
+});
+
+describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  // Measured, not derived: `LETHAL_FENCED_COVERAGE_DUMP` of the lane-head fenced run on Cronus28,
+  // 2026-09-26 (GH-09 run001, fenced-rows.jsonl), `Codeunit 79000`, positive hits, lineNo > 0.
+  // BC emits a row only for a statement that executed, never for a `procedure` line.
+  const OVER_BUDGET_DETECTED = [10, 12, 16, 22];
+  const CLAMP_PERCENT_RUNS = [29, 31, 37, 43, 49, 57, 59, 66, 68, 74, 81, 83, 87, 93, 99, 107, 108];
+
+  test("GH-09: the measured namespaced rows resolve under base 1 (OverBudgetDetected to IsOverBudget, ClampPercentRuns never to IsOverBudget)", async () => {
+    const repo = resolve(import.meta.dir, "../../..");
+    const set = await generateMutationSet(join(repo, "fixtures/sandbox-app"));
+    const dir = await mkdtemp(join(tmpdir(), "lethal-gh09-"));
+    try {
+      // The selector ids the live run used; the guard layout does not depend on the artifact id.
+      await writeInstrumentedProject({
+        targetDir: dir,
+        files: set.files,
+        selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+        operatorTiers,
+      });
+      const map = await buildLineMap(dir, new Set(["codeunit:79000", "codeunit:79001"]));
+      for (const row of OVER_BUDGET_DETECTED) {
+        expect(map.lookup("Codeunit", 79000, row)).toBe("IsOverBudget");
+      }
+      expect(map.lookup("Codeunit", 79000, 29)).toBe("ClampPercent");
+      expect(map.lookup("Codeunit", 79000, 31)).toBe("ClampPercent");
+      for (const row of CLAMP_PERCENT_RUNS) {
+        expect(map.lookup("Codeunit", 79000, row)).not.toBe("IsOverBudget");
+      }
+
+      // The member names above hold under shift 1 and 2 too: every measured row is two or more
+      // lines inside its procedure. What decides the frame is the STATEMENT: under the frame
+      // `fileLineMapEntries` computes, each row must land on a line the baseline run executed. With
+      // no mutant active, an inactive arm (`Reached`), a bare `begin`/`end` or a blank never runs.
+      const src = await readFile(join(dir, "SandboxLogic.Codeunit.al"), "utf8");
+      const lines = src.split(/\r?\n/);
+      const entry = fileLineMapEntries(wrapRoot(parseAL(src)), identify).find(
+        (e) => e.objectId === 79000,
+      );
+      if (entry === undefined) throw new Error("no line-map entry for Codeunit 79000");
+      const cannotRun = [...OVER_BUDGET_DETECTED, ...CLAMP_PERCENT_RUNS].filter((row) => {
+        const text = (lines[row + entry.baseLine - 2] ?? "").trim();
+        return text === "" || /^(begin|end;?)$/.test(text) || text.includes("Reached(");
+      });
+      expect(cannotRun).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
