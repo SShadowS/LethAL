@@ -25,6 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { hashPackage } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
@@ -63,6 +64,7 @@ import {
   runSession,
 } from "../src/orchestrator";
 import type {
+  LeaseFence,
   LeaseSessionConfig,
   LeaseTimers,
   MutationSetResult,
@@ -78,8 +80,10 @@ import { isStrandedNote } from "../src/resume";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
 import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
+import { type CompiledTestApp, TestAppError, publishTestApp } from "../src/test-app-publish";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
@@ -10169,5 +10173,252 @@ describe("C02-04b: runNamedMutants", () => {
       expect(o.failureNote).toContain("unattested artifact");
     }
     expect(res.quarantined).toContain("unattested artifact");
+  });
+});
+// C02-05 Task 6. COMPILED, deps, NEW, OLD and DOWNGRADE are copied from test-app-publish.test.ts:
+// importing that file would register its tests a second time.
+const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests
+const testsPkg = (version: string, extra: Record<string, string> = {}) =>
+  buildFakeAppWithEntries({
+    "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${TESTS_ID}" Name="LethAL Sandbox Tests" Publisher="LethAL" Version="${version}" /></Package>`,
+    ...extra,
+  });
+const NEW = testsPkg("1.0.0.2", { "src/T.al": "new" });
+const OLD = testsPkg("1.0.0.2", { "src/T.al": "old" });
+const COMPILED: CompiledTestApp = {
+  appPath: "C:/out/x-testapp.app",
+  sha256: hashPackage(NEW),
+  appId: TESTS_ID,
+  name: "LethAL Sandbox Tests",
+  publisher: "LethAL",
+  version: "1.0.0.2",
+  compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+};
+const DOWNGRADE =
+  "altool publishapp failed (exit 1):\nCannot install the extension LethAL Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.0.9 was already installed.";
+function deps(log: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) {
+  const queue = [...reads];
+  return {
+    publisher: {
+      publish: async (a: { sha256: string }) => {
+        log.push(`publish ${a.sha256.slice(0, 8)}`);
+        if (publishFails !== undefined) throw new Error(publishFails);
+      },
+    },
+    readPublished: async () => {
+      log.push("read");
+      return queue.shift();
+    },
+  };
+}
+
+describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
+  // ONE log PER TEST: a shared log lets an earlier test's publish leak into a later assertion.
+  const inLease =
+    (tlog: string[], reads: Array<Uint8Array | null | undefined>, publishFails?: string) =>
+    async (fence: LeaseFence) => {
+      await publishTestApp(fence, COMPILED, deps(tlog, reads, publishFails));
+    };
+  const attaches = (t: Trace) =>
+    calls(t).filter((c) => (c as { call: string }).call === "attach").length;
+  async function fixture(o: { serverReports?: string } = {}) {
+    const fx = await installedFixture(o);
+    const quarantineDir = freshTmpDir();
+    const cfg: NamedMutantsConfig = {
+      ...fx.cfg,
+      quarantineDir,
+      resourceServer: "http://cronus28",
+      resourceServerInstance: "BC",
+    };
+    const quarantine = () => new QuarantineStore(quarantineDir).read("http://cronus28|BC");
+    return { ...fx, cfg, quarantine };
+  }
+
+  test("C02-05: a server reporting another target is refused before any test-app publish", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture({ serverReports: "b".repeat(32) });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("mismatch");
+    expect(tlog).toEqual([]); // no read, no publish: the server was not modified
+    expect(fx.client.beginPublishArgs).toEqual([]); // no marker claimed
+    expect(fx.client.releaseCalls).toBe(1);
+  });
+
+  test("C02-05: a verified test-app publish is followed by rebind, attach and the baseline", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["succeeded"]);
+    const tr = calls(fx.trace) as Array<{ call: string; lastCompletedOpSeq?: number }>;
+    const preflight = tr.findIndex((c) => c.call === "attach");
+    const rebind = tr.findIndex(
+      (c) => c.call === "setLease" && c.lastCompletedOpSeq === fx.client.beginPublishArgs[0]?.opSeq,
+    );
+    const postPublish = tr.findIndex((c, i) => i > rebind && c.call === "attach");
+    const firstRun = tr.findIndex((c) => c.call === "run" || c.call === "runMany");
+    expect(preflight).toBeGreaterThan(-1);
+    expect(rebind).toBeGreaterThan(preflight);
+    expect(postPublish).toBeGreaterThan(rebind);
+    expect(firstRun).toBeGreaterThan(postPublish);
+    expect(attaches(fx.trace)).toBe(2);
+  });
+
+  test("C02-05: a confirmed test-app publish failure ends the marker as failed and records no recycle", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [null, OLD], DOWNGRADE),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toMatchObject({ reason: "publish-failed", installedVersion: "1.0.0.9" });
+    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+    expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
+    expect(attaches(fx.trace)).toBe(1); // the preflight only
+  });
+
+  test("C02-05: a plain altool failure ends the marker as failed", async () => {
+    // No BC downgrade text: only the TestAppError line in isConfirmedTerminalPublishFailure can
+    // call it terminal.
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(
+          tlog,
+          [OLD, OLD],
+          "altool publishapp failed (exit 1):\nThe app could not be published.",
+        ),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-failed" });
+    expect(fx.client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+    expect(await fx.quarantine()).toBeNull();
+  });
+
+  test("C02-05: a failed exit with an unreadable read-back keeps the marker", async () => {
+    // Ruling 1: null is a timeout or a refused connection; it cannot show the publish did not land.
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, null], DOWNGRADE),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-indeterminate" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+    expect(attaches(fx.trace)).toBe(1);
+  });
+
+  test("C02-05: an indeterminate test-app publish leaves the marker and records container-needs-recycle", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, OLD]),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-indeterminate" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+  });
+
+  test("C02-05: an anomalous publish carrying BC's downgrade text is not treated as terminal", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, NEW], DOWNGRADE),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toMatchObject({ reason: "publish-anomalous" });
+    expect(fx.client.endPublishArgs).toEqual([]);
+    expect(await fx.quarantine()).not.toBeNull();
+  });
+
+  // The brief said "releases the lease" (releaseCalls 1). A refused BeginPublish is lease LOSS
+  // (LeaseSession.publish calls noteLeaseLost), and finish() deliberately releases nothing after a
+  // loss: our tuple is already invalid and the lease belongs to whoever holds it. Pinned as 0.
+  test("C02-05: BeginPublish refused spawns no altool and does not release a lost lease", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.beginPublishOutcome = { begun: false, alreadyCompleted: false };
+    await expect(
+      runNamedMutants({
+        ...fx.cfg,
+        inLease: inLease(tlog, [OLD, NEW]),
+        requests: [{ mutantId: "M0001", methods: [OVER] }],
+      }),
+    ).rejects.toBeInstanceOf(LeaseUnavailableError);
+    expect(tlog.some((l) => l.startsWith("publish"))).toBe(false);
+    expect(tlog).toEqual(["read"]); // the pre-fence resident read only
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("C02-05: a lease lost across the test-app publish runs nothing after it", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.endPublishOutcome = { ended: false };
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+    });
+    expect(res.quarantined).toMatch(/lease-lost/);
+    expect(res.outcomes.map((o) => [o.verdict, o.failureNote?.startsWith("not run: ")])).toEqual([
+      ["error", true],
+      ["error", true],
+    ]);
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string; id?: string | null };
+      return (
+        x.call === "run" ||
+        x.call === "runMany" ||
+        (x.call === "activate" && typeof x.id === "string")
+      );
+    });
+    expect(work).toEqual([]);
+    expect(attaches(fx.trace)).toBe(1); // the preflight ran; the post-publish attach did not
+  });
+
+  test("C02-05: a version-below-resident refusal from inLease throws TestAppError, emits no after-lease-acquired-uncertain, does not latch, and releases the lease", async () => {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [testsPkg("1.0.0.5")]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(TestAppError);
+    expect((err as TestAppError).reason).toBe("version-below-resident");
+    expect(tlog).toEqual(["read"]); // refused before the fence: no publish
+    expect(fx.client.beginPublishArgs).toEqual([]);
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; code?: string } }).event]
+        : [],
+    );
+    expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
+    expect(await fx.quarantine()).toBeNull();
+    expect(fx.client.releaseCalls).toBe(1);
   });
 });
