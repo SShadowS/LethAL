@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { mkdtempSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,12 +22,13 @@ import {
   CONTROL_UPGRADE_FILENAME,
   assignIdentityOrdinals,
   attributeHeader,
+  gapIdOf,
   identityTupleOf,
   scanDeclaredObjects,
   stripAlComments,
   writeInstrumentedProject,
 } from "../src/project";
-import type { ObjectHeader } from "../src/project";
+import type { MutantManifest, ObjectHeader, WriteInput } from "../src/project";
 
 // The target project's own app.json `id` — threaded into the delegating selector and the
 // register-install codeunit so the control extension keys state on the full identity tuple.
@@ -1448,6 +1450,123 @@ describe("GH-24: the manifest records each mutant's reach grain", () => {
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// C02-09: instrument a real fixture through the real operator set and return its manifest. The
+// runner owns spec generation and depends on this package, so it is loaded by a computed path at
+// runtime: a static import would pull the runner into this package's type-check program.
+async function manifestOfFixture(name: string): Promise<MutantManifest> {
+  const orchestratorPath = join(import.meta.dir, "../../runner/src/orchestrator.ts");
+  const orch = (await import(orchestratorPath)) as {
+    generateMutationSet: (dir: string) => Promise<{ files: WriteInput["files"] }>;
+    operatorTiers: WriteInput["operatorTiers"];
+  };
+  const set = await orch.generateMutationSet(join(import.meta.dir, "../../../fixtures", name));
+  const dir = await mkdtemp(join(tmpdir(), "lethal-gap-"));
+  try {
+    await writeInstrumentedProject({
+      targetDir: dir,
+      files: set.files,
+      selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+      targetAppId: TARGET_APP_ID,
+      operatorTiers: orch.operatorTiers,
+    });
+    return JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as MutantManifest;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// C02-09: two procedures, one mutant in each, so the writer sees two distinct gap blocks.
+function twoProcedureInput(): WriteInput {
+  const src = `codeunit 51950 "Two" { procedure A() begin X := 1; end; procedure B() begin Y := 2; end; }`;
+  const root = wrapRoot(parseAL(src));
+  const specs: MutationSpec[] = findAll(root, ALNodeKind.assignment_statement).map((a) => ({
+    operatorName: "op.flip",
+    operatorVersion: "1.0.0",
+    astNodeId: `${a.startIndex}`,
+    before: a,
+    after: { ...a, text: "Z := 0" } as never,
+    parentContext: "statement-position",
+  }));
+  if (specs.length !== 2) throw new Error("fixture shape: expected two assignments");
+  return {
+    targetDir: mkdtempSync(join(tmpdir(), "lethal-gapcollide-")),
+    files: [{ path: "Two.Codeunit.al", source: src, root, specs }],
+    selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+    artifactId: "0123456789abcdef0123456789abcdef",
+    targetAppId: TARGET_APP_ID,
+    operatorTiers: NO_TIERS,
+  };
+}
+
+describe("gap ids (C02-09)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("gapIdOf is G plus 12 hex, deterministic, and blind to path separators", () => {
+    const a = gapIdOf("src\\Logic.Codeunit.al", 100, 200, "begin X := 1; end");
+    expect(a).toMatch(/^G[0-9a-f]{12}$/);
+    expect(gapIdOf("src/Logic.Codeunit.al", 100, 200, "begin X := 1; end")).toBe(a);
+    expect(gapIdOf("src/Logic.Codeunit.al", 101, 200, "begin X := 1; end")).not.toBe(a);
+    expect(gapIdOf("src/Other.Codeunit.al", 100, 200, "begin X := 1; end")).not.toBe(a);
+  });
+
+  it("an edit to the block's text gives a new id even when its offsets are unchanged (owner, Q1)", () => {
+    // Same length, same position, one character different: the review's stale-id case.
+    const before = gapIdOf("src/A.al", 100, 117, "begin X := 1; end");
+    expect(gapIdOf("src/A.al", 100, 117, "begin X := 2; end")).not.toBe(before);
+  });
+
+  it("sandbox-app: LogAudit has two gaps, the body and the then-block, and every entry has one", async () => {
+    const m = await manifestOfFixture("sandbox-app");
+    for (const e of m.mutants) {
+      expect(e.gapId).toMatch(/^G[0-9a-f]{12}$/);
+      expect(e.blockStartLine).toBeLessThanOrEqual(e.startLine);
+      expect(e.blockEndLine).toBeGreaterThanOrEqual(e.startLine);
+    }
+    const log = m.mutants.filter((e) => e.procedureName === "LogAudit");
+    expect(new Set(log.map((e) => e.gapId)).size).toBe(2);
+    const then = log.find((e) => e.operatorName === "lethal.remove-assignment");
+    const cond = log.find((e) => e.operatorName === "lethal.negate-conditional");
+    expect(then?.gapId).not.toBe(cond?.gapId);
+    expect(
+      log
+        .filter((e) => e.gapId === then?.gapId)
+        .map((e) => e.operatorName)
+        .sort(),
+    ).toEqual(["lethal.empty-block", "lethal.remove-assignment"]);
+    expect(
+      log
+        .filter((e) => e.gapId === cond?.gapId)
+        .map((e) => e.operatorName)
+        .sort(),
+    ).toEqual(["lethal.empty-block", "lethal.negate-conditional", "lethal.shift-integer"]);
+  });
+
+  it("sandbox-app: ClampPercent, ApplyAudit, IsOverBudget and DiscountedPrice each have ONE gap", async () => {
+    const m = await manifestOfFixture("sandbox-app");
+    for (const p of ["ClampPercent", "ApplyAudit", "IsOverBudget", "DiscountedPrice"]) {
+      expect(new Set(m.mutants.filter((e) => e.procedureName === p).map((e) => e.gapId)).size).toBe(
+        1,
+      );
+    }
+  });
+
+  it("the WRITER refuses two blocks that hash to one id, never merges them", async () => {
+    // Integration test of the call site, not of a helper: writeInstrumentedProject over a source
+    // with two procedures, through the gapIdOf seam returning one constant id for every block.
+    const input = twoProcedureInput();
+    try {
+      await expect(
+        writeInstrumentedProject({ ...input, gapIdOf: () => "G000000000000" }),
+      ).rejects.toThrow(/two blocks share gap id G000000000000/);
+    } finally {
+      await rm(input.targetDir, { recursive: true, force: true });
     }
   });
 });
