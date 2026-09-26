@@ -18,6 +18,7 @@ import {
   rankSurvivors,
   survivorActionabilityRank,
 } from "../src/explain";
+import type { ArtifactIdAbsence } from "../src/explain";
 import type { Interpretation } from "../src/interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
@@ -381,6 +382,10 @@ function fullCoverageReport(): SessionReport {
   // undetected.
   const survivorWithMark: MutantOutcome = {
     ...m0001,
+    // C02-09: a gap of its own, whose batch published an artifact.
+    gapId: "G1a2b3c4d5e01",
+    blockStartLine: 39,
+    blockEndLine: 45,
     // GH-24: reaches the `reachGrain` and `reachedBy[]` leaves.
     reachGrain: "statement",
     guardReached: true,
@@ -403,6 +408,9 @@ function fullCoverageReport(): SessionReport {
     ...survivorMutant("M0002", "object", false, 4),
     operatorName: "lethal.remove-assignment",
     equivalenceRisk: "value-rewrite",
+    gapId: "G1a2b3c4d5e02",
+    blockStartLine: 41,
+    blockEndLine: 46,
   };
   // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name. It
   // reaches the `triggerName` leaf the "no dead entries" test needs.
@@ -413,7 +421,30 @@ function fullCoverageReport(): SessionReport {
     procedureName: "",
     triggerName: "OnValidate",
     carried: true,
+    gapId: "G1a2b3c4d5e03",
+    blockStartLine: 43,
+    blockEndLine: 44,
   };
+  // C02-09: a no-coverage row in the trigger's block, so that gap counts it and `noCoverageBlocks`
+  // reaches its `triggerName` leaf.
+  const triggerNoCoverage: MutantOutcome = {
+    ...plainMutant("M0010", "no-coverage"),
+    file: triggerSurvivor.file,
+    line: 44,
+    batchIndex: triggerSurvivor.batchIndex,
+    codeunitName: triggerSurvivor.codeunitName,
+    procedureName: "",
+    triggerName: "OnValidate",
+    gapId: "G1a2b3c4d5e03",
+    blockStartLine: 43,
+    blockEndLine: 44,
+  };
+  // C02-09: every other row carries a gap id too (a report has them on all rows or none).
+  const inBlock =
+    (gapId: string, blockStartLine: number, blockEndLine: number) =>
+    (m: MutantOutcome): MutantOutcome => ({ ...m, gapId, blockStartLine, blockEndLine });
+  const errorBlock = inBlock("G1a2b3c4d5e04", 70, 80);
+  const barBlock = inBlock("G1a2b3c4d5e05", 5, 20);
   return {
     ...base,
     validity: {
@@ -438,19 +469,19 @@ function fullCoverageReport(): SessionReport {
       survivorWithMark,
       survivorWithRisk,
       triggerSurvivor,
-      errorMutant("M0004", "deadline-exceeded"),
-      errorMutant("M0005", "unstable"),
-      strandedSkipMutant("M0006"),
-      strandedSkipMutant("M0007"),
-      plainMutant("M0008", "killed"),
-      plainMutant("M0009", "killed"),
-      plainMutant("M0010", "no-coverage"),
-      plainMutant("M0011", "known-survivor"),
-      plainMutant("M0012", "known-survivor"),
-      plainMutant("M0013", "known-survivor"),
-      plainMutant("M0014", "known-survivor"),
-      plainMutant("M0015", "known-survivor"),
-      plainMutant("M0016", "known-survivor"),
+      errorBlock(errorMutant("M0004", "deadline-exceeded")),
+      errorBlock(errorMutant("M0005", "unstable")),
+      errorBlock(strandedSkipMutant("M0006")),
+      errorBlock(strandedSkipMutant("M0007")),
+      barBlock(plainMutant("M0008", "killed")),
+      barBlock(plainMutant("M0009", "killed")),
+      triggerNoCoverage,
+      barBlock(plainMutant("M0011", "known-survivor")),
+      barBlock(plainMutant("M0012", "known-survivor")),
+      barBlock(plainMutant("M0013", "known-survivor")),
+      barBlock(plainMutant("M0014", "known-survivor")),
+      barBlock(plainMutant("M0015", "known-survivor")),
+      barBlock(plainMutant("M0016", "known-survivor")),
     ],
     testsOnly: ["test/Posting/**"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
@@ -585,6 +616,31 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].readerMark.reason", // [verbatim]
   "$.survivors[].artifactId", // [joined] artifacts[].artifactId whose batchIndex equals the row's
   "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
+  "$.survivors[].gapId", // [verbatim] (C02-09)
+  "$.gaps[].gapId", // [verbatim] (C02-09)
+  "$.gaps[].batchIndex", // [verbatim]
+  "$.gaps[].file", // [verbatim]
+  "$.gaps[].blockStartLine", // [verbatim]
+  "$.gaps[].blockEndLine", // [verbatim]
+  "$.gaps[].codeunitName", // [verbatim]
+  "$.gaps[].procedureName", // [verbatim]
+  "$.gaps[].triggerName", // [verbatim]
+  "$.gaps[].members[]", // [verbatim] the survived rows' mutantCodes
+  "$.gaps[].survived", // [derived] tallyGaps count
+  "$.gaps[].killed", // [derived]
+  "$.gaps[].noCoverage", // [derived]
+  "$.gaps[].other", // [derived]
+  "$.gaps[].unobservedBlock", // [derived] every recorded row survived; withheld when narrowed
+  "$.gaps[].artifactId", // [verbatim] artifacts[].artifactId whose batchIndex equals the gap's
+  "$.gaps[].artifactIdAbsent", // [enum] ArtifactIdAbsence
+  "$.noCoverageBlocks[].batchIndex", // [verbatim] (C02-09)
+  "$.noCoverageBlocks[].file", // [verbatim]
+  "$.noCoverageBlocks[].blockStartLine", // [verbatim]
+  "$.noCoverageBlocks[].blockEndLine", // [verbatim]
+  "$.noCoverageBlocks[].codeunitName", // [verbatim]
+  "$.noCoverageBlocks[].procedureName", // [verbatim]
+  "$.noCoverageBlocks[].triggerName", // [verbatim]
+  "$.noCoverageBlocks[].members[]", // [verbatim] the no-coverage rows' mutantCodes
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
   "$.notMeasured[].line", // [verbatim]
@@ -805,6 +861,9 @@ describe("explain — the admissibility rule, made executable", () => {
       String(firstSurvivor?.procedureStartLine),
       String(firstSurvivor?.procedureEndLine),
       String(firstSurvivor?.batchIndex),
+      // C02-09: the gap block's lines.
+      String(firstSurvivor?.blockStartLine),
+      String(firstSurvivor?.blockEndLine),
     ];
     expect(new Set(rowValues).size).toBe(rowValues.length);
     // EVERY per-row [verbatim] field, projected against source as whole rows rather than field by
@@ -838,6 +897,7 @@ describe("explain — the admissibility rule, made executable", () => {
       readerMark?: { readonly key: string; readonly reason: string };
       reachGrain?: string;
       reachedBy?: readonly string[];
+      gapId?: string;
     }) => ({
       mutantCode: m.mutantCode,
       file: m.file,
@@ -861,6 +921,8 @@ describe("explain — the admissibility rule, made executable", () => {
       reachGrain: m.reachGrain,
       hasReachedBy: "reachedBy" in m,
       reachedBy: m.reachedBy,
+      hasGapId: "gapId" in m,
+      gapId: m.gapId,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
@@ -878,6 +940,78 @@ describe("explain — the admissibility rule, made executable", () => {
       failureNote: m.failureNote,
     });
     expect(out.notMeasured.map(notMeasuredVerbatim)).toEqual(errorSources.map(notMeasuredVerbatim));
+    // C02-09: every [verbatim] gap and no-coverage-block field, as whole objects, against the rows
+    // of its block. The fixture's blocks sit in one file in gap-id order, so source order is the
+    // output's order.
+    const byLineThenCode = (a: MutantOutcome, b: MutantOutcome) =>
+      a.line - b.line || a.mutantCode.localeCompare(b.mutantCode);
+    const blockSource = (gapId: string | undefined, verdict: MutantVerdict) => {
+      const rows = report.mutants.filter((m) => m.gapId === gapId);
+      const [r] = rows;
+      if (r === undefined) throw new Error(`no row for ${gapId}`);
+      return {
+        batchIndex: r.batchIndex,
+        file: r.file,
+        blockStartLine: r.blockStartLine,
+        blockEndLine: r.blockEndLine,
+        codeunitName: r.codeunitName,
+        procedureName: r.procedureName,
+        hasTriggerName: r.triggerName !== undefined,
+        triggerName: r.triggerName,
+        members: rows
+          .filter((m) => m.verdict === verdict)
+          .sort(byLineThenCode)
+          .map((m) => m.mutantCode),
+      };
+    };
+    const locationVerbatim = (b: {
+      batchIndex: number;
+      file: string;
+      blockStartLine?: number;
+      blockEndLine?: number;
+      codeunitName: string;
+      procedureName: string;
+      triggerName?: string;
+      members: readonly string[];
+    }) => ({
+      batchIndex: b.batchIndex,
+      file: b.file,
+      blockStartLine: b.blockStartLine,
+      blockEndLine: b.blockEndLine,
+      codeunitName: b.codeunitName,
+      procedureName: b.procedureName,
+      hasTriggerName: "triggerName" in b,
+      triggerName: b.triggerName,
+      members: b.members,
+    });
+    const survivedGapIds = [...new Set(survivorSources.map((m) => m.gapId))];
+    expect(
+      (out.gaps ?? []).map((g) => ({
+        gapId: g.gapId as string | undefined,
+        ...locationVerbatim(g),
+        artifactId: g.artifactId,
+      })),
+    ).toEqual(
+      survivedGapIds.map((gapId) => {
+        const src = blockSource(gapId, "survived");
+        const carried = report.mutants.some(
+          (m) => m.gapId === gapId && m.verdict === "survived" && m.carried === true,
+        );
+        return {
+          gapId,
+          ...src,
+          artifactId: carried
+            ? undefined
+            : report.artifacts?.find((a) => a.batchIndex === src.batchIndex)?.artifactId,
+        };
+      }),
+    );
+    const noCoverageGapIds = [
+      ...new Set(report.mutants.filter((m) => m.verdict === "no-coverage").map((m) => m.gapId)),
+    ];
+    expect((out.noCoverageBlocks ?? []).map(locationVerbatim)).toEqual(
+      noCoverageGapIds.map((gapId) => blockSource(gapId, "no-coverage")),
+    );
     expect(out.toolConditions.find((c) => c.condition === "quarantined")?.detail).toBe(
       report.quarantined?.reason,
     );
@@ -2184,5 +2318,354 @@ describe("lethal explain — CLI", () => {
     const text = helpText("0.0.0");
     expect(text).toContain("--top <n>");
     expect(text).toContain("survivorSelection");
+  });
+});
+// ----------------------------------------------------------------------------------------
+// C02-09: survivors grouped into gaps, one per innermost branch body.
+// ----------------------------------------------------------------------------------------
+
+describe("explain: gaps (C02-09)", () => {
+  interface Block {
+    readonly gapId: string;
+    readonly file: string;
+    readonly blockStartLine: number;
+    readonly blockEndLine: number;
+    readonly batchIndex: number;
+    readonly codeunitName: string;
+    readonly procedureName: string;
+  }
+  const blockA: Block = {
+    gapId: "G0000000000a1",
+    file: "src/A.Codeunit.al",
+    blockStartLine: 10,
+    blockEndLine: 20,
+    batchIndex: 6,
+    codeunitName: "A Mgt.",
+    procedureName: "DoA",
+  };
+  const blockB: Block = {
+    gapId: "G0000000000b2",
+    file: "src/B.Codeunit.al",
+    blockStartLine: 30,
+    blockEndLine: 37,
+    batchIndex: 7,
+    codeunitName: "B Mgt.",
+    procedureName: "DoB",
+  };
+  const artifactA = "a".repeat(32);
+  const artifactB = "b".repeat(32);
+  const entryA = {
+    batchIndex: 6,
+    artifactId: artifactA,
+    sha256: "1".repeat(64),
+    appVersion: "1.0.0.6",
+  };
+  const entryB = {
+    batchIndex: 7,
+    artifactId: artifactB,
+    sha256: "2".repeat(64),
+    appVersion: "1.0.0.7",
+  };
+  const artifactsAB = [entryA, entryB];
+
+  function gapRow(
+    code: string,
+    verdict: MutantVerdict,
+    block: Block,
+    line: number,
+    over: Partial<MutantOutcome> = {},
+  ): MutantOutcome {
+    const base =
+      verdict === "survived"
+        ? survivorMutant(code, "exact", true, block.batchIndex)
+        : { ...plainMutant(code, verdict), batchIndex: block.batchIndex };
+    return {
+      ...base,
+      file: block.file,
+      line,
+      codeunitName: block.codeunitName,
+      procedureName: block.procedureName,
+      gapId: block.gapId,
+      blockStartLine: block.blockStartLine,
+      blockEndLine: block.blockEndLine,
+      ...over,
+    };
+  }
+
+  /** Block A: two survivors, nothing else. Block B: 1 survived, 2 killed, 3 other, 4 no-coverage,
+   *  so every count differs from every other and a swap between two shows. */
+  function twoGapRows(): MutantOutcome[] {
+    return [
+      gapRow("M0101", "survived", blockA, 12),
+      gapRow("M0102", "survived", blockA, 11),
+      gapRow("M0201", "survived", blockB, 31),
+      gapRow("M0202", "killed", blockB, 32),
+      gapRow("M0203", "timeout-killed", blockB, 33),
+      gapRow("M0204", "error", blockB, 34),
+      gapRow("M0205", "known-survivor", blockB, 35),
+      gapRow("M0206", "known-survivor", blockB, 36),
+      gapRow("M0207", "no-coverage", blockB, 31),
+      gapRow("M0208", "no-coverage", blockB, 32),
+      gapRow("M0209", "no-coverage", blockB, 33),
+      gapRow("M0210", "no-coverage", blockB, 34),
+    ];
+  }
+
+  test("gaps group survivors by gapId and count the whole recorded block", () => {
+    const out = explain(reportFixture({ mutants: twoGapRows(), artifacts: artifactsAB }));
+    expect(out.gaps).toEqual([
+      {
+        gapId: "G0000000000a1",
+        batchIndex: 6,
+        file: "src/A.Codeunit.al",
+        blockStartLine: 10,
+        blockEndLine: 20,
+        codeunitName: "A Mgt.",
+        procedureName: "DoA",
+        members: ["M0102", "M0101"],
+        survived: 2,
+        killed: 0,
+        noCoverage: 0,
+        other: 0,
+        unobservedBlock: true,
+        artifactId: artifactA,
+      },
+      {
+        gapId: "G0000000000b2",
+        batchIndex: 7,
+        file: "src/B.Codeunit.al",
+        blockStartLine: 30,
+        blockEndLine: 37,
+        codeunitName: "B Mgt.",
+        procedureName: "DoB",
+        members: ["M0201"],
+        survived: 1,
+        killed: 2,
+        noCoverage: 4,
+        other: 3,
+        unobservedBlock: false,
+        artifactId: artifactB,
+      },
+    ]);
+  });
+
+  test("a gap with no survivor is not listed", () => {
+    const rows = [
+      gapRow("M0101", "survived", blockA, 12),
+      gapRow("M0202", "killed", blockB, 32),
+      gapRow("M0207", "no-coverage", blockB, 33),
+    ];
+    const out = explain(reportFixture({ mutants: rows }));
+    expect(out.gaps?.map((g) => g.gapId)).toEqual(["G0000000000a1"]);
+  });
+
+  test("no-coverage mutants are listed in noCoverageBlocks, never in a gap", () => {
+    const rows = [
+      gapRow("M0101", "survived", blockA, 12),
+      gapRow("M0103", "no-coverage", blockA, 14),
+      gapRow("M0207", "no-coverage", blockB, 33),
+      gapRow("M0208", "no-coverage", blockB, 32),
+    ];
+    const out = explain(reportFixture({ mutants: rows }));
+    expect(out.gaps?.map((g) => [g.gapId, g.members, g.noCoverage])).toEqual([
+      ["G0000000000a1", ["M0101"], 1],
+    ]);
+    expect(out.noCoverageBlocks).toEqual([
+      {
+        batchIndex: 6,
+        file: "src/A.Codeunit.al",
+        blockStartLine: 10,
+        blockEndLine: 20,
+        codeunitName: "A Mgt.",
+        procedureName: "DoA",
+        members: ["M0103"],
+      },
+      {
+        batchIndex: 7,
+        file: "src/B.Codeunit.al",
+        blockStartLine: 30,
+        blockEndLine: 37,
+        codeunitName: "B Mgt.",
+        procedureName: "DoB",
+        members: ["M0208", "M0207"],
+      },
+    ]);
+  });
+
+  test("each survivor names its gap", () => {
+    const rows = twoGapRows();
+    const out = explain(reportFixture({ mutants: rows }));
+    expect(out.survivors.map((s) => [s.mutantCode, s.gapId])).toEqual(
+      rows.filter((m) => m.verdict === "survived").map((m) => [m.mutantCode, m.gapId]),
+    );
+  });
+
+  test("every gap names its artifact", () => {
+    const artifactOfGap = (mutants: MutantOutcome[], over: Partial<SessionReport>) =>
+      (explain(reportFixture({ mutants, ...over })).gaps ?? []).map((g) => ({
+        artifactId: g.artifactId,
+        artifactIdAbsent: g.artifactIdAbsent,
+        exactlyOne: "artifactId" in g !== "artifactIdAbsent" in g,
+      }));
+    const one = (artifactId?: string, artifactIdAbsent?: ArtifactIdAbsence) => ({
+      artifactId,
+      artifactIdAbsent,
+      exactlyOne: true,
+    });
+    // (i) the batch's artifacts[] entry.
+    expect(
+      artifactOfGap([gapRow("M0101", "survived", blockA, 12)], { artifacts: artifactsAB }),
+    ).toEqual([one(artifactA)]);
+    // (ii) one carried member, although the batch has an artifact. The carried row is NOT the
+    // first member in report order, so a lookup on one row alone would miss it.
+    expect(
+      artifactOfGap(
+        [
+          gapRow("M0101", "survived", blockA, 12),
+          gapRow("M0102", "survived", blockA, 13, { carried: true }),
+        ],
+        { artifacts: artifactsAB },
+      ),
+    ).toEqual([one(undefined, "carried")]);
+    // (iii) no artifacts field at all.
+    expect(artifactOfGap([gapRow("M0101", "survived", blockA, 12)], {})).toEqual([
+      one(undefined, "not-recorded"),
+    ]);
+    // (iv) artifacts, but none for this batch.
+    expect(
+      artifactOfGap([gapRow("M0101", "survived", blockA, 12)], { artifacts: [entryB] }),
+    ).toEqual([one(undefined, "not-published")]);
+  });
+
+  test("a gap keeps its artifact when --top dropped all its survivor rows", () => {
+    const out = explain(reportFixture({ mutants: twoGapRows(), artifacts: artifactsAB }), {
+      topSurvivors: 1,
+    });
+    expect(out.survivors).toHaveLength(1);
+    const shown = new Set(out.survivors.map((s) => s.gapId));
+    const hidden = (out.gaps ?? []).filter((g) => !shown.has(g.gapId));
+    expect(hidden.map((g) => [g.gapId, g.artifactId])).toEqual([
+      shown.has(blockA.gapId) ? [blockB.gapId, artifactB] : [blockA.gapId, artifactA],
+    ]);
+  });
+
+  test("unobservedBlock is withheld on an operator- or line-narrowed run", () => {
+    const keyPresence = (caveat: Caveat) => {
+      const base = reportFixture({ mutants: twoGapRows() });
+      const out = explain({ ...base, validity: { ...base.validity, caveats: [caveat] } });
+      return (out.gaps ?? []).map((g) => "unobservedBlock" in g);
+    };
+    expect(keyPresence("line-narrowed")).toEqual([false, false]);
+    expect(keyPresence("operator-narrowed")).toEqual([false, false]);
+    expect(keyPresence("narrowed")).toEqual([true, true]);
+    expect(keyPresence("tests-narrowed")).toEqual([true, true]);
+  });
+
+  test("an archived report has no gaps field, never an empty one", () => {
+    const archived = explain(reportFixture());
+    expect("gaps" in archived).toBe(false);
+    expect("noCoverageBlocks" in archived).toBe(false);
+    expect(archived.survivors.some((s) => "gapId" in s)).toBe(false);
+    const noSurvivor = explain(reportFixture({ mutants: [gapRow("M0202", "killed", blockB, 32)] }));
+    expect(noSurvivor.gaps).toEqual([]);
+    expect(noSurvivor.noCoverageBlocks).toEqual([]);
+  });
+
+  test("gap ids on some rows and not others are refused", () => {
+    const {
+      gapId: _g,
+      blockStartLine: _s,
+      blockEndLine: _e,
+      ...bare
+    } = gapRow("M0102", "survived", blockA, 13);
+    const report = reportFixture({ mutants: [gapRow("M0101", "survived", blockA, 12), bare] });
+    expect(() => explain(report)).toThrow(MalformedReportError);
+    expect(() => explain(report)).toThrow(/all or none/);
+  });
+
+  test("one gap id naming two blocks is refused", () => {
+    const first = gapRow("M0101", "survived", blockA, 12);
+    const overs: Partial<MutantOutcome>[] = [
+      { file: "src/Other.Codeunit.al" },
+      { blockStartLine: 11 },
+      { blockEndLine: 19 },
+      { batchIndex: 9 },
+    ];
+    for (const over of overs) {
+      const report = reportFixture({
+        mutants: [first, gapRow("M0102", "survived", blockA, 13, over)],
+      });
+      expect(() => explain(report)).toThrow(MalformedReportError);
+      expect(() => explain(report)).toThrow(/G0000000000a1/);
+    }
+  });
+
+  test("a non-string gapId, or a gapId without both block lines, is refused", () => {
+    const row = gapRow("M0101", "survived", blockA, 12);
+    const { blockStartLine: _s, ...noStart } = row;
+    const { blockEndLine: _e, ...noEnd } = row;
+    const bad: unknown[] = [
+      { ...row, gapId: 7 },
+      { ...row, gapId: null },
+      noStart,
+      noEnd,
+      { ...row, blockStartLine: 0 },
+      { ...row, blockEndLine: 1.5 },
+      { ...row, blockStartLine: "10" },
+    ];
+    for (const m of bad) {
+      expect(() => explain(reportFixture({ mutants: [m as MutantOutcome] }))).toThrow(
+        MalformedReportError,
+      );
+    }
+  });
+
+  test("--top caps survivors, never gaps", () => {
+    const rows = [
+      gapRow("M0101", "survived", blockA, 12),
+      gapRow("M0102", "survived", blockA, 11),
+      gapRow("M0103", "survived", blockA, 13),
+      gapRow("M0201", "survived", blockB, 31),
+      gapRow("M0202", "survived", blockB, 32),
+    ];
+    const out = explain(reportFixture({ mutants: rows }), { topSurvivors: 1 });
+    expect(out.survivors).toHaveLength(1);
+    expect(out.gaps?.map((g) => g.members)).toEqual([
+      ["M0102", "M0101", "M0103"],
+      ["M0201", "M0202"],
+    ]);
+  });
+
+  test("gaps and noCoverageBlocks are ordered by file, then blockStartLine, then gap id", () => {
+    const at = (gapId: string, file: string, start: number): Block => ({
+      ...blockA,
+      gapId,
+      file,
+      blockStartLine: start,
+      blockEndLine: start + 5,
+    });
+    const blocks = [
+      at("G00000000000c", "src/B.al", 1),
+      at("G00000000000b", "src/A.al", 40),
+      at("G00000000000e", "src/A.al", 7),
+      at("G00000000000d", "src/A.al", 7),
+    ];
+    const rows = blocks.flatMap((b, i) => [
+      gapRow(`M010${i}`, "survived", b, b.blockStartLine + 1),
+      gapRow(`M020${i}`, "no-coverage", b, b.blockStartLine + 1),
+    ]);
+    const out = explain(reportFixture({ mutants: rows }));
+    expect(out.gaps?.map((g) => g.gapId)).toEqual([
+      "G00000000000d",
+      "G00000000000e",
+      "G00000000000b",
+      "G00000000000c",
+    ]);
+    expect(out.noCoverageBlocks?.map((b) => b.members[0])).toEqual([
+      "M0203",
+      "M0202",
+      "M0201",
+      "M0200",
+    ]);
   });
 });

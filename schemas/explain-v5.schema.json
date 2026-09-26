@@ -248,6 +248,10 @@
             "type": "string",
             "enum": ["carried", "not-recorded", "not-published"],
             "description": "Why artifactId is absent. carried: the verdict was carried by --resume and measured against a prior run's artifact, which this report does not name. not-recorded: the report has no artifacts field (written before it existed). not-published: the report has artifacts but no entry for this batch."
+          },
+          "gapId": {
+            "type": "string",
+            "description": "C02-09: verbatim from the report row, the gap this survivor belongs to. Absent on a row from a report written before C02-09."
           }
         }
       }
@@ -285,6 +289,112 @@
           },
           "failureNote": { "type": "string" },
           "interpretation": { "$ref": "#/$defs/interpretation" }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "description": "C02-09: survivors grouped by gap block, one entry per gap id with at least one survived row. Present exactly when the report's rows carry gap ids, [] when none survived; absent on an older report. Never capped by --top.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gapId",
+          "batchIndex",
+          "file",
+          "blockStartLine",
+          "blockEndLine",
+          "codeunitName",
+          "procedureName",
+          "members",
+          "survived",
+          "killed",
+          "noCoverage",
+          "other"
+        ],
+        "properties": {
+          "gapId": {
+            "type": "string",
+            "description": "G followed by 12 lowercase hex characters."
+          },
+          "batchIndex": { "type": "integer" },
+          "file": { "type": "string" },
+          "blockStartLine": {
+            "type": "integer",
+            "description": "1-based first line of the gap block, the innermost branch body holding the mutants."
+          },
+          "blockEndLine": {
+            "type": "integer",
+            "description": "1-based last line of the gap block."
+          },
+          "codeunitName": { "type": "string" },
+          "procedureName": { "type": "string" },
+          "triggerName": {
+            "type": "string",
+            "description": "Present on a trigger block, whose procedureName is \"\"."
+          },
+          "members": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "mutantCodes of the gap's survived rows, ordered by line then mutantCode."
+          },
+          "survived": { "type": "integer" },
+          "killed": { "type": "integer", "description": "killed plus timeout-killed rows." },
+          "noCoverage": { "type": "integer" },
+          "other": { "type": "integer", "description": "error and known-survivor rows." },
+          "unobservedBlock": {
+            "type": "boolean",
+            "description": "Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, which can drop mutants inside a block."
+          },
+          "artifactId": {
+            "type": "string",
+            "description": "The artifact to pass to lethal verify --artifact for this gap. Exactly one of this and artifactIdAbsent is present."
+          },
+          "artifactIdAbsent": {
+            "type": "string",
+            "enum": ["carried", "not-recorded", "not-published"],
+            "description": "Why there is no artifact to verify this gap against. Same values as on a survivor; carried when any member is carried."
+          }
+        }
+      }
+    },
+    "noCoverageBlocks": {
+      "type": "array",
+      "description": "C02-09: blocks with at least one no-coverage row. A location list, not a verify input: no gap id, no counts. Present exactly when gaps is.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batchIndex",
+          "file",
+          "blockStartLine",
+          "blockEndLine",
+          "codeunitName",
+          "procedureName",
+          "members"
+        ],
+        "properties": {
+          "batchIndex": { "type": "integer" },
+          "file": { "type": "string" },
+          "blockStartLine": {
+            "type": "integer",
+            "description": "1-based first line of the gap block, the innermost branch body holding the mutants."
+          },
+          "blockEndLine": {
+            "type": "integer",
+            "description": "1-based last line of the gap block."
+          },
+          "codeunitName": { "type": "string" },
+          "procedureName": { "type": "string" },
+          "triggerName": {
+            "type": "string",
+            "description": "Present on a trigger block, whose procedureName is \"\"."
+          },
+          "members": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "mutantCodes of the block's no-coverage rows, ordered by line then mutantCode."
+          }
         }
       }
     },
