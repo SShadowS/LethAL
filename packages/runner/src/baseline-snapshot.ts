@@ -25,7 +25,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
   CONTROL_SELECTOR_FILENAME,
@@ -71,6 +71,71 @@ export async function hashAlTree(dir: string): Promise<string> {
     h.update(await readFile(join(dir, rel)));
     h.update("\n");
   }
+  return h.digest("hex");
+}
+
+/**
+ * Every `.al` file under `projectDir`, project-relative with the OS separator: exactly the AL that
+ * `prepareBatchProject` copies into a batch dir, dot-directories included (see
+ * `isToolResourcePath` there). One enumeration for both, so the source hash below cannot drift
+ * from what the target build compiles.
+ */
+export async function targetAlFiles(projectDir: string): Promise<string[]> {
+  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((e) => e.isFile())
+    .map((e) => relative(projectDir, join(e.parentPath, e.name)))
+    .filter((rel) => rel.toLowerCase().endsWith(".al"));
+}
+
+/**
+ * C02-06 decision 8: SHA-256 over the target build's inputs, so `lethal verify` can refuse a run
+ * whose installed build was made from other source. Every file `targetAlFiles` names plus
+ * `app.json`, as `<forward-slash relative path> NUL <bytes> NUL` in sorted path order, then the
+ * sorted preprocessor symbols as one line. A test project nested inside the target is IN, because
+ * the target build copies its `.al` too. `app.json` is IN as a compile input: a version-only bump
+ * also changes the hash, which costs one `lethal run`.
+ *
+ * ponytail: resources (`.xlf`, report layouts) and the rest of `lethal.config.json` are not hashed;
+ * they do not change AL behaviour under test the way AL does. Add them if a measured case shows
+ * otherwise.
+ */
+export async function hashTargetSource(
+  projectDir: string,
+  preprocessorSymbols: readonly string[],
+): Promise<string> {
+  return hashSourceSnapshot(await readTargetSource(projectDir), preprocessorSymbols);
+}
+
+/**
+ * The target build's inputs read ONCE: every `targetAlFiles` path plus `app.json`, keyed by the
+ * path as `targetAlFiles` spells it. `runSession` hashes this snapshot AND hands it to
+ * `generateMutationSet` to parse, so the recorded hash is of the bytes generation consumed, not of
+ * a separate read that an edit could land between.
+ */
+export async function readTargetSource(projectDir: string): Promise<ReadonlyMap<string, Buffer>> {
+  const snapshot = new Map<string, Buffer>();
+  for (const rel of [...(await targetAlFiles(projectDir)), "app.json"]) {
+    snapshot.set(rel, await readFile(join(projectDir, rel)));
+  }
+  return snapshot;
+}
+
+/** `hashTargetSource` over a snapshot `readTargetSource` took. */
+export function hashSourceSnapshot(
+  snapshot: ReadonlyMap<string, Buffer>,
+  preprocessorSymbols: readonly string[],
+): string {
+  const files = [...snapshot.entries()]
+    .map(([rel, bytes]) => [rel.replaceAll("\\", "/"), bytes] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const h = createHash("sha256");
+  for (const [rel, bytes] of files) {
+    h.update(`${rel}\0`);
+    h.update(bytes);
+    h.update("\0");
+  }
+  h.update(`preprocessorSymbols\0${JSON.stringify([...preprocessorSymbols].sort())}\n`);
   return h.digest("hex");
 }
 

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage } from "../src/baseline-snapshot";
+import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
@@ -3423,6 +3423,162 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(last.artifact_id).toBe(secondArtifact.artifactId);
     // C02-02 Task 3: the report's own `artifacts[]` names the same batches the store recorded.
     expect(report.artifacts).toEqual(store.artifactsForRun(run.id));
+    store.close();
+  });
+
+  // C02-06: lethal verify finds the installed files through the store alone, so step 3d must
+  // record the ones the compiler actually produced. PhaseBackend.returned is the oracle.
+  test("step 3d records the app path and batch dir it compiled", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const record = store.artifactRecordById(returned.artifactId);
+    expect(record?.appPath).toBe(returned.appPath);
+    // The batch dir runSession names, independent of where PhaseBackend writes its package.
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    expect(record?.instrumentedDir).toBe(join(dirs.instrumentedDir, `run-${run.id}-batch-0`));
+    store.close();
+  });
+
+  test("runSession records the target source hash when generation and the last batch agree", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const backend = new PhaseBackend();
+    await runSession({ backend, store, ...dirs, selectorIds, preprocessorSymbols: ["CLEAN24"] });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const expected = await hashTargetSource(dirs.projectDir, ["CLEAN24"]);
+    expect(store.artifactRecordById(returned.artifactId)?.sourceSha256).toBe(expected);
+    store.close();
+  });
+
+  test("an edit between generation and the last batch's preparation records NULL and warns", async () => {
+    const dirs = await makeProject();
+    // A second carrier file so maxGuardsPerBatch: 1 gives two batches; the edit lands while the
+    // first batch publishes, after generation read the source and before the last batch's
+    // preparation.
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    const backend = new PhaseBackend({
+      onPublish: (attempt) => {
+        if (attempt === 1) {
+          writeFileSync(join(dirs.projectDir, "Helper.Codeunit.al"), "codeunit 79003 Helper { }");
+        }
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    const run = store.db.query("SELECT id, source_sha256 FROM runs LIMIT 1").get() as {
+      id: number;
+      source_sha256: string | null;
+    };
+    expect(run.source_sha256).toBeNull();
+    const warned = events.filter(
+      (e) => e.type === "warning" && e.code === "source-changed-during-run",
+    );
+    expect(warned).toHaveLength(1);
+    const message = warned[0]?.type === "warning" ? warned[0].message : "";
+    expect(message).toContain(`run ${run.id}`);
+    expect(message).toContain("changed between generation and the last batch's preparation");
+    store.close();
+  });
+
+  // C02-06 review r1 item 1: an edit that lands after the source hash is read and is undone before
+  // the last batch's read was invisible to the two-read check, while generation had consumed the
+  // edited bytes. Generation now parses the SAME in-memory snapshot the first hash is taken over,
+  // so the build carries exactly the hashed bytes whatever happens on disk in between. The edit
+  // lands when generation starts and is undone when it ends: before the fix the published file
+  // carried the edit under a hash of the original.
+  test("an edit undone during generation cannot reach the build: generation parses the hashed snapshot", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const expected = await hashTargetSource(dirs.projectDir, []);
+    const edited = TARGET_AL.replace(
+      "    begin\n",
+      "    begin\n        // EDITED-DURING-GENERATION\n",
+    );
+    expect(edited).not.toBe(TARGET_AL);
+    const store = new ResultsStore(":memory:");
+    const backend = new PhaseBackend();
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [
+        (e) => {
+          if (e.type === "phase-entered" && e.phase === "generate") writeFileSync(file, edited);
+          if (e.type === "phase-left" && e.phase === "generate") writeFileSync(file, TARGET_AL);
+        },
+      ],
+    });
+    const returned = backend.returned[0];
+    if (returned === undefined) throw new Error("expected one published batch");
+    const record = store.artifactRecordById(returned.artifactId);
+    expect(record?.sourceSha256).toBe(expected);
+    const instrumentedDir = record?.instrumentedDir;
+    if (instrumentedDir === undefined || instrumentedDir === null) {
+      throw new Error("expected an artifact record with its batch dir");
+    }
+    const built = readFileSync(join(instrumentedDir, "SandboxLogic.Codeunit.al"), "utf8");
+    expect(built).toContain("exit(");
+    expect(built).not.toContain("EDITED-DURING-GENERATION");
+    store.close();
+  });
+
+  // C02-06 review r1 item 2: a resume across a preprocessor-symbol change must start fresh, since
+  // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
+  test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: ["CLEAN24", "CLEAN25"],
+    });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const resumed = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: ["CLEAN25", "CLEAN24"],
+      resume: run.id,
+    });
+    expect(resumed.validity.caveats).toContain("resumed");
+    await expect(
+      runSession({
+        backend: new PhaseBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: ["CLEAN24"],
+        resume: run.id,
+      }),
+    ).rejects.toThrow(/was scoped differently from this session/);
     store.close();
   });
 });

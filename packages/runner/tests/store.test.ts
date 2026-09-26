@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CARRYABLE_VERDICTS } from "../src/resume";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -536,5 +537,231 @@ CREATE TABLE IF NOT EXISTS mutants (
       );
       store.close();
     });
+  });
+});
+// C02-06: the five columns `lethal verify` reads, and the queries that read them.
+describe("ResultsStore: what lethal verify reads (C02-06)", () => {
+  const A0 = `${"0".repeat(31)}a`;
+  const A1 = `${"0".repeat(31)}b`;
+
+  function artifact(batchIndex: number, artifactId: string, over: Record<string, unknown> = {}) {
+    return {
+      batchIndex,
+      appVersion: `1.0.1.${batchIndex}`,
+      appId: APP,
+      artifactId,
+      sha256: String(batchIndex).repeat(64),
+      manifestSha256: "c".repeat(64),
+      ...over,
+    };
+  }
+
+  test("recordArtifact stores the app path and batch dir, and artifactRecordById returns the batch, its run's highest batch and the source hash", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(
+      runId,
+      artifact(0, A0, { appPath: "C:/s/b0/x.app", instrumentedDir: "C:/s/b0" }),
+    );
+    store.recordArtifact(
+      runId,
+      artifact(1, A1, { appPath: "C:/s/b1/x.app", instrumentedDir: "C:/s/b1" }),
+    );
+    store.recordSourceHash(runId, "5".repeat(64));
+    expect(store.artifactRecordById(A0)).toEqual({
+      runId,
+      projectPath: "P",
+      batchIndex: 0,
+      highestBatchIndex: 1,
+      artifactSha256: "0".repeat(64),
+      sourceSha256: "5".repeat(64),
+      appPath: "C:/s/b0/x.app",
+      instrumentedDir: "C:/s/b0",
+    });
+    expect(store.artifactRecordById(A1)?.batchIndex).toBe(1);
+    expect(store.artifactRecordById(A1)?.highestBatchIndex).toBe(1);
+
+    // Absent paths and no recorded source hash read back null, never a plausible default.
+    const other = store.createRun({ projectPath: "Q", backend: "bcdev", appVersion: "0.0.0.0" });
+    const a2 = `${"0".repeat(31)}c`;
+    store.recordArtifact(other, artifact(0, a2));
+    expect(store.artifactRecordById(a2)).toMatchObject({
+      runId: other,
+      highestBatchIndex: 0,
+      sourceSha256: null,
+      appPath: null,
+      instrumentedDir: null,
+    });
+    store.close();
+  });
+
+  test("artifactRecordById is null for an unknown id", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runId, artifact(0, A0));
+    expect(store.artifactRecordById(A1)).toBeNull();
+    store.close();
+  });
+
+  test("artifactRecordById throws when the store records one id twice", () => {
+    const store = new ResultsStore(":memory:");
+    const r1 = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const r2 = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(r1, artifact(0, A0));
+    store.recordArtifact(r2, artifact(0, A0));
+    expect(() => store.artifactRecordById(A0)).toThrow(/twice/);
+    store.close();
+  });
+
+  test("a database from before C02-06 gains the five columns, and old rows read back null", () => {
+    const path = join(tmpdir(), `lethal-store-c0206-${Date.now()}.sqlite`);
+    const before = new ResultsStore(path);
+    const runId = before.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    before.recordArtifact(runId, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
+    before.recordSourceHash(runId, "5".repeat(64));
+    before.recordMutant(runId, mutantRow("survived", { carried: false, coveringTests: [] }));
+    before.recordTestResult(runId, null, null, ref, "pass", 30, undefined, undefined, 7);
+    before.close();
+    // Take the database back to its pre-C02-06 shape: the five columns did not exist.
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE batch_artifacts DROP COLUMN app_path");
+    legacy.exec("ALTER TABLE batch_artifacts DROP COLUMN instrumented_dir");
+    legacy.exec("ALTER TABLE mutants DROP COLUMN carried");
+    legacy.exec("ALTER TABLE runs DROP COLUMN source_sha256");
+    legacy.exec("ALTER TABLE test_results DROP COLUMN codeunit_name");
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    expect(store.artifactRecordById(A0)).toMatchObject({
+      runId,
+      sourceSha256: null,
+      appPath: null,
+      instrumentedDir: null,
+    });
+    expect(store.batchMutantRows(runId, 0)).toEqual([
+      { mutantCode: "M0001", verdict: "survived", coveringTests: [], carried: null },
+    ]);
+    expect(store.baselineTests(runId)).toEqual([
+      { codeunitId: ref.codeunitId, codeunitName: null, method: ref.method },
+    ]);
+    // And the widened tables accept the new writes.
+    store.recordMutant(
+      runId,
+      mutantRow("killed", { mutantCode: "M0002", carried: true, coveringTests: [] }),
+    );
+    store.recordTestResult(runId, null, null, { ...ref, method: "Other" }, "pass", 1);
+    expect(store.batchMutantRows(runId, 0).map((r) => r.carried)).toEqual([null, true]);
+    expect(store.baselineTests(runId).map((t) => t.codeunitName)).toEqual(["Sandbox Tests", null]);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
+  test("batchMutantRows reads carried as true, false, or null", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordMutant(
+      runId,
+      mutantRow("survived", { carried: true, coveringTests: ["Sandbox Tests.A"] }),
+    );
+    store.recordMutant(
+      runId,
+      mutantRow("killed", { mutantCode: "M0002", carried: false, coveringTests: [] }),
+    );
+    store.recordMutant(runId, mutantRow("no-coverage", { mutantCode: "M0003", coveringTests: [] }));
+    // Another batch's row is not this batch's.
+    store.recordMutant(
+      runId,
+      mutantRow("survived", { batchIndex: 1, carried: false, coveringTests: [] }),
+    );
+    expect(store.batchMutantRows(runId, 0)).toEqual([
+      {
+        mutantCode: "M0001",
+        verdict: "survived",
+        coveringTests: ["Sandbox Tests.A"],
+        carried: true,
+      },
+      { mutantCode: "M0002", verdict: "killed", coveringTests: [], carried: false },
+      { mutantCode: "M0003", verdict: "no-coverage", coveringTests: [], carried: null },
+    ]);
+    store.close();
+  });
+
+  test("baselineTests reads only baseline rows, with their codeunit names", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const other = { codeunitId: 79101, codeunitName: "Other Tests", method: "B" };
+    store.recordTestResult(runId, null, null, ref, "pass", 1);
+    store.recordTestResult(runId, null, null, ref, "pass", 1); // one method baselined twice
+    store.recordTestResult(runId, null, null, other, "fail", 1);
+    // A mutant's run of a method the baseline never ran is not a baseline row.
+    const m = store.recordMutant(runId, mutantRow("killed"));
+    store.recordTestResult(runId, m, "M0001", { ...ref, method: "OnlyUnderMutant" }, "fail", 1);
+    const later = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordTestResult(later, null, null, { ...ref, method: "LaterRun" }, "pass", 1);
+    expect(store.baselineTests(runId)).toEqual([
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" },
+      { codeunitId: 79101, codeunitName: "Other Tests", method: "B" },
+    ]);
+    store.close();
+  });
+
+  test("sessionIdsOf returns every session id of a run and none of another's", () => {
+    const store = new ResultsStore(":memory:");
+    const a = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const b = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordTestResult(a, null, null, ref, "pass", 1, undefined, undefined, 11);
+    const m = store.recordMutant(a, mutantRow("killed"));
+    store.recordTestResult(a, m, "M0001", ref, "fail", 1, "x", "many", 12);
+    store.recordTestResult(a, null, null, ref, "timeout", 1); // no answer, no session id
+    store.recordTestResult(b, null, null, ref, "pass", 1, undefined, undefined, 13);
+    expect(store.sessionIdsOf(a)).toEqual(new Set([11, 12]));
+    expect(store.sessionIdsOf(b)).toEqual(new Set([13]));
+    store.close();
+  });
+
+  test("a verify run row is never found by findResumableRun, priorSurvivorKeys or artifactRecordById", () => {
+    const store = new ResultsStore(":memory:");
+    // Run A, shaped the way runSession writes one.
+    const a = store.createRun({
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+      configFingerprint: "fp",
+    });
+    store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
+    store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
+    store.finishRun(a, { batchCount: 1, baselineGreen: true });
+    const aKeys = store.priorSurvivorKeys("P");
+    expect(aKeys.size).toBe(1);
+    // Run B, the verify row, created exactly as decision 4 says.
+    const b = store.createRun({
+      projectPath: "P",
+      backend: "lethal-verify",
+      appVersion: "0.0.0.0",
+    });
+    store.recordMutant(b, mutantRow("survived", { astHash: "verify1", carried: false }));
+    store.recordMutant(b, mutantRow("killed", { mutantCode: "M0002", astHash: "verify2" }));
+
+    const query = {
+      projectPath: "P",
+      backend: "bcdev",
+      configFingerprint: "fp",
+      carryableVerdicts: [...CARRYABLE_VERDICTS],
+    };
+    expect(store.findResumableRun(query)).toBeNull();
+    expect(store.priorSurvivorKeys("P")).toEqual(aKeys);
+    expect(store.artifactRecordById(A0)?.runId).toBe(a);
+
+    // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
+    // null above is the verify row's exclusion, not a query that can find nothing.
+    const c = store.createRun({
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+      configFingerprint: "fp",
+    });
+    store.recordMutant(c, mutantRow("survived", { astHash: "c1" }));
+    expect(store.findResumableRun(query)).toBe(c);
+    store.close();
   });
 });

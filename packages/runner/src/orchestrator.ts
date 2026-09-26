@@ -48,7 +48,14 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { hashAlTree, snapshotApplies, testAppHashFor } from "./baseline-snapshot";
+import {
+  hashAlTree,
+  hashSourceSnapshot,
+  readTargetSource,
+  snapshotApplies,
+  targetAlFiles,
+  testAppHashFor,
+} from "./baseline-snapshot";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
@@ -404,6 +411,12 @@ export interface MutationSetOptions {
    * just to preserve their existing console output.
    */
   readonly emit?: RunEmitter;
+  /**
+   * C02-06: a `readTargetSource` snapshot to parse instead of reading the disk. `runSession`
+   * passes the snapshot it hashed, so the recorded source hash is of exactly the bytes generation
+   * consumed. The `.al` set is the snapshot's keys; absent, the disk is enumerated and read.
+   */
+  readonly source?: ReadonlyMap<string, Buffer>;
 }
 
 /**
@@ -543,7 +556,10 @@ export async function generateMutationSet(
   const files: InstrumentedFile[] = [];
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
-  const entries = (await readdir(projectDir, { recursive: true })).filter(isEnumeratedAl);
+  const snapshot = options.source;
+  const entries = (
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+  ).filter(isEnumeratedAl);
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
@@ -591,7 +607,15 @@ export async function generateMutationSet(
   // spec-generation set would make `--only` change verdicts rather than just how many run.
   const parsed = await Promise.all(
     entries.sort().map(async (rel) => {
-      const source = await readFile(join(projectDir, rel), "utf8");
+      const bytes = snapshot?.get(rel);
+      if (snapshot !== undefined && bytes === undefined) {
+        throw new Error(`generateMutationSet: ${rel} is not in the source snapshot`);
+      }
+      // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
+      const source =
+        bytes !== undefined
+          ? bytes.toString("utf8")
+          : await readFile(join(projectDir, rel), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
@@ -1249,6 +1273,25 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
     );
   }
   return id;
+}
+
+/** C02-06: `hashTargetSource` plus the snapshot it hashed (generation parses that snapshot), or
+ *  the reason the tree could not be read (no `app.json`, say). An
+ *  unread tree never matches, so it records no hash rather than a wrong one, and the warning can
+ *  say which of "edited" and "unreadable" happened. */
+async function readTargetSourceHash(
+  projectDir: string,
+  symbols: readonly string[],
+): Promise<
+  | { readonly hash: string; readonly snapshot: ReadonlyMap<string, Buffer> }
+  | { readonly unreadable: string }
+> {
+  try {
+    const snapshot = await readTargetSource(projectDir);
+    return { hash: hashSourceSnapshot(snapshot, symbols), snapshot };
+  } catch (err) {
+    return { unreadable: messageOf(err) };
+  }
 }
 
 async function prepareArtifactDir(args: {
@@ -2835,7 +2878,7 @@ function resolveResume(
     }
     if (row.configFingerprint !== configFingerprint) {
       throw new Error(
-        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids). Carrying its verdicts would report one scope's measurements as another's${
+        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
           row.configFingerprint === null
             ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
             : ""
@@ -3815,6 +3858,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
+    // C02-06: symbols change what `#if` compiles, which the R192 baseline key cannot see.
+    ...(cfg.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: cfg.preprocessorSymbols }
+      : {}),
   });
   const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
 
@@ -3853,6 +3900,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
+  const sourceSymbols = cfg.preprocessorSymbols ?? [];
+  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -3869,6 +3923,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
+    ...("snapshot" in sourceHashAtGeneration ? { source: sourceHashAtGeneration.snapshot } : {}),
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
@@ -4185,6 +4240,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         appVersion,
         artifactId,
       });
+      if (batchIdx === artifacts.length - 1) {
+        const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+        if (
+          "hash" in atLastBatch &&
+          "hash" in sourceHashAtGeneration &&
+          atLastBatch.hash === sourceHashAtGeneration.hash
+        ) {
+          cfg.store.recordSourceHash(runId, atLastBatch.hash);
+        } else {
+          const why =
+            "unreadable" in sourceHashAtGeneration
+              ? `could not be read before generation (${sourceHashAtGeneration.unreadable})`
+              : "unreadable" in atLastBatch
+                ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
+                : "changed between generation and the last batch's preparation";
+          emit({
+            type: "warning",
+            code: "source-changed-during-run",
+            message: `[lethal] run ${runId}: the target's source ${why}, so no source hash is recorded and \`lethal verify\` will refuse this run. Re-run \`lethal run\` on a readable tree that nothing edits mid-run to verify against it.`,
+          });
+        }
+      }
       const manifest = JSON.parse(
         await readFile(join(batchDir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
@@ -4409,6 +4486,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           // C02-04b: the manifest the compiler was GIVEN, in the same insert as the .app hash.
           // This is the only moment both are in hand; loadInstalledArtifact trusts nothing else.
           manifestSha256: Bun.SHA256.hash(JSON.stringify(compiled.mutantManifest), "hex"),
+          // C02-06: where lethal verify finds the installed build's files. Not identity: verify
+          // re-hashes them against this row.
+          appPath: compiled.appPath,
+          instrumentedDir: batchDir,
         });
       }
       // 3e. R90: the OTHER half of the measurement. A ceiling recorded only from failures is a
@@ -6727,11 +6808,11 @@ export async function prepareBatchProject(
   // So collisions are detected here on the SOURCE paths, independently of what is already on
   // disk, and refused loudly. (Continia Document Output has 551 distinct basenames across 551
   // files, so the flattening survives there — by luck, not by design.)
+  // C02-06: the `.al` set comes from `targetAlFiles`, which `hashTargetSource` hashes too, so the
+  // recorded source hash covers exactly the AL this copies.
+  const alFiles = await targetAlFiles(projectDir);
   const alBySeenBasename = new Map<string, string>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
-    if (!rel.toLowerCase().endsWith(".al")) continue;
+  for (const rel of alFiles) {
     const base = basename(rel);
     const previous = alBySeenBasename.get(base.toLowerCase());
     if (previous !== undefined) {
@@ -6749,12 +6830,7 @@ export async function prepareBatchProject(
   // named relative to ITS directory, and the `.al` files above were just flattened onto the batch
   // root, so the resource has to appear at the batch root under the same relative tail. See the
   // second copy below.
-  const alDirs = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const rel = relative(projectDir, join(entry.parentPath, entry.name));
-    if (rel.toLowerCase().endsWith(".al")) alDirs.add(dirname(rel));
-  }
+  const alDirs = new Set(alFiles.map((rel) => dirname(rel)));
 
   // Resources: same set minus the `.al` files above, minus the stamped `app.json` and any
   // already-built `.app` package, copied with their directory structure intact.
@@ -7266,6 +7342,8 @@ export function record(
     coveringTests,
     ...(coverageAttribution !== undefined ? { coverageAttribution } : {}),
     ...(unplaceable !== undefined ? { unplaceable } : {}),
+    // C02-06: always written, so a NULL can only mean a row from before the column existed.
+    carried: carried === true,
   });
   outcomes.push({
     mutant: m,

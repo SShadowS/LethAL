@@ -57,7 +57,10 @@ import {
   startEnvToolSession,
 } from "./env-tool-session";
 import type { EnvToolSession } from "./env-tool-session";
-import { type EquivalenceMark, parseEquivalenceMarks } from "./equivalence-marks";
+import { loadEquivalenceMarks } from "./equivalence-marks";
+
+// Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
+export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
 import { assertExplainableReport, explain } from "./explain";
 import { HarnessVerifier } from "./harness";
@@ -3061,39 +3064,6 @@ export function withAlRunnerCanary(
   return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
-/**
- * R172 proposal 3 — load the reader's equivalence rulings for this project, if any.
- *
- * Discovery is a fixed filename beside the project rather than a CLI flag: a mark is a durable
- * property of the CODEBASE (this mutant, in this procedure, cannot be killed, and here is why), not
- * a choice a particular invocation makes. A flag would let one run apply the rulings and the next
- * one silently not, and two runs of the same project would then disagree about which survivors a
- * human had already examined.
- *
- * Absent file means absent feature, silently — that is the overwhelmingly common case and warning
- * about it every run would train people to ignore the line. A file that EXISTS and is malformed
- * throws, because a partially-loaded set of rulings is indistinguishable from survivors nobody has
- * looked at yet.
- */
-export const EQUIVALENCE_MARKS_FILENAME = "lethal.equivalent.json";
-
-export async function loadEquivalenceMarks(
-  projectDir: string,
-  readFileFn: (p: string) => Promise<string> = (p) => readFile(p, "utf8"),
-): Promise<readonly EquivalenceMark[] | undefined> {
-  const path = join(projectDir, EQUIVALENCE_MARKS_FILENAME);
-  let text: string;
-  try {
-    text = await readFileFn(path);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
-    throw new Error(
-      `cannot read ${path}: ${err instanceof Error ? err.message : String(err)}. Remove the file to run without equivalence marks; an unreadable one is not treated as an absent one.`,
-    );
-  }
-  return parseEquivalenceMarks(text, path);
-}
-
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -3340,6 +3310,9 @@ export async function runFromCli(
         ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
         ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
         ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+        // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
+        // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
+        preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
         ...afterLeaseAcquiredFor(envSession),
         ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
         ...(parsed.compileConcurrency !== undefined

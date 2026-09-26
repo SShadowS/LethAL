@@ -391,6 +391,7 @@ Do these inside Tasks 5 to 7, each with a test and a red-check:
 3. Under the r2 hash rule a nested test project's `.al` is hashed, so ANY test edit inside a nested test project gives `source-changed`, which blocks the write-a-test-then-verify loop for that layout. The refusal text must say so in plain words when the changed file lies under the test directory. Do NOT change the hash rule; file a roadmap item for the nested layout (check the next free id on master AND both lane branches first).
 4. The `source-predates-verify` text must name all four NULL-hash causes, including "the run stopped before the last batch" and "the tree was unreadable".
 5. `VerifySource` has no `artifactId`: take it from the request.
+6. (C02-06 run 002 residual, orchestrator ruling) `prepareBatchProject` copies non-mutated `.al` files and `app.json` from disk per batch, so an edit to one of them after generation, undone before the last read, is invisible to the agree-or-NULL check. Copy them from the SAME single source snapshot generation hashed and parsed, so every batch compiles exactly the recorded bytes by construction. Test: edit a non-mutated file and `app.json` after generation and restore them before the last read; the compiled batch must match the snapshot. Red-check by reading from disk again.
 
 ### Task 5: Primitive changes, then `runVerify`
 

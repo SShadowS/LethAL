@@ -448,6 +448,23 @@ describe("sessionFingerprint (R47)", () => {
     );
   });
 
+  // C02-06 review r1 item 2: `#if` branches compile differently under other symbols, and R192's
+  // baseline key hashes AL bytes only, so a resume across a symbol change would reuse measurements
+  // made under the old symbols. Order selects nothing different, so it must not defeat a resume.
+  test("different preprocessor symbols change it, and symbol order does not", () => {
+    const ab = sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN24", "CLEAN25"] });
+    expect(ab).not.toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN24"] }));
+    expect(ab).not.toBe(sessionFingerprint(base));
+    expect(ab).toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN25", "CLEAN24"] }));
+  });
+
+  // The key is conditional like `exclude`'s, so a run with no symbols keeps the digest pinned
+  // above and every store recorded before this change still resumes.
+  test("no preprocessor symbols, or an empty list, keeps the pre-symbol digest", () => {
+    const pinned = "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307";
+    expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(pinned);
+  });
+
   test("--tests-only changes it — that narrowing CAN change a verdict", () => {
     expect(sessionFingerprint({ ...base, testsOnly: ["x/**"] })).not.toBe(sessionFingerprint(base));
   });
@@ -1071,6 +1088,37 @@ describe("runSession --resume (R47)", () => {
         .sort();
     expect(verdictsOf(report)).toEqual(verdictsOf(control));
     expect(report.validity.baselineTests).toEqual(control.validity.baselineTests);
+  });
+
+  // C02-06: lethal verify refuses a carried row, because a carried verdict was measured against
+  // an earlier build. Same run as the test above: batch 0 carries whole, batch 1 runs.
+  test("a carried verdict is stored carried, a measured one not", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new CountingBackend("pass", undefined, 2),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+    });
+    const run = store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number };
+    const batch0 = store.batchMutantRows(run.id, 0);
+    const batch1 = store.batchMutantRows(run.id, 1);
+    // Batch 0 carried whole (three mutants); batch 1 measured its own, including the stranded one
+    // it skips as error, which is recorded, not carried.
+    expect(batch0.map((r) => r.carried)).toEqual([true, true, true]);
+    expect(batch1.map((r) => r.carried)).toEqual([false, false, false]);
+    // The report, built from events rather than the store, agrees on how many carried.
+    expect(report.mutants.filter((m) => m.carried === true)).toHaveLength(3);
   });
 
   test("R192 (second half): a changed test app means the baseline IS re-run", async () => {
