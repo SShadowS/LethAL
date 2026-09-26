@@ -249,6 +249,15 @@ test("R268: a Ready-to-Run wrapper of an unrelated app is staged, byte for byte"
 test("R268: symbolPackageId reads a wrapper's embedded id, and a plain package's own", () => {
   expect(symbolPackageId(goodR2r(TEST_RUNNER_ID))).toBe(TEST_RUNNER_ID);
   expect(symbolPackageId(pkg(SYSTEM_ID, "System", "28.0.0.0"))).toBe(SYSTEM_ID);
+  // Microsoft may write the JSON with a UTF-8 byte order mark; it is stripped before parsing.
+  expect(
+    symbolPackageId(
+      r2r({
+        [R2R_JSON]: `\uFEFF${r2rJson(TEST_RUNNER_ID)}`,
+        "inner_28014.app": pkg(TEST_RUNNER_ID, "Test Runner", "28.0.46665.50383"),
+      }),
+    ),
+  ).toBe(TEST_RUNNER_ID);
   // A root manifest makes it a plain package: the Ready-to-Run file beside it is not consulted.
   expect(
     symbolPackageId(pkg(SYSTEM_ID, "System", "28.0.0.0", { [R2R_JSON]: r2rJson(TEST_RUNNER_ID) })),
@@ -281,12 +290,12 @@ for (const [label, bytes, why] of [
       [R2R_JSON]: r2rJson(TEST_RUNNER_ID),
       "inner.app": buildFakeAppWithEntries({ "x.txt": "x" }),
     }),
-    /NavxManifest/,
+    /Ready-to-Run embedded inner\.app: .*NavxManifest/,
   ],
   [
     "embeds an .app that is not a package",
     r2r({ [R2R_JSON]: r2rJson(TEST_RUNNER_ID), "inner.app": "not a zip" }),
-    /not a zip archive/,
+    /Ready-to-Run embedded inner\.app: not a zip archive/,
   ],
   [
     "has a readytorunappmanifest.json that is not JSON",

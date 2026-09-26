@@ -121,7 +121,7 @@ export function symbolPackageId(bytes: Buffer): string {
   }
   let embeddedId: unknown;
   try {
-    const parsed = JSON.parse(r2r.toString("utf8").replace(/^﻿/, "")) as {
+    const parsed = JSON.parse(r2r.toString("utf8").replace(/^\uFEFF/, "")) as {
       EmbeddedAppId?: unknown;
     } | null;
     embeddedId = parsed?.EmbeddedAppId;
@@ -140,7 +140,13 @@ export function symbolPackageId(bytes: Buffer): string {
   }
   const innerBytes = readPackageEntry(bytes, only);
   if (innerBytes === null) throw new Error(`Ready-to-Run package lost its entry ${only}`);
-  const id = readAppIdentity(innerBytes).id;
+  let id: string;
+  try {
+    id = readAppIdentity(innerBytes).id;
+  } catch (err) {
+    // Named by entry, so a refusal from the inner app is distinguishable from the outer one's.
+    throw new Error(`Ready-to-Run embedded ${only}: ${describeThrown(err)}`);
+  }
   if (id.toLowerCase() !== embeddedId.toLowerCase()) {
     throw new Error(
       `Ready-to-Run embedded app ${only} has Id ${id}, which does not match EmbeddedAppId ${embeddedId}`,
