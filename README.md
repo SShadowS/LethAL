@@ -157,12 +157,13 @@ both of which have a green test suite that misses something real. Each runs in s
 what a survivor, a `no-coverage` row and a killed mutant look like on code you can read in one
 sitting.
 
-- [`examples/gift-card`](examples/gift-card/README.md) — one planted bug in a balance calculation,
+- [`examples/gift-card`](examples/gift-card/README.md): one planted bug in a balance calculation,
   and the shortest path to seeing the point. 60 mutants, 34 killed, 15 survived, 11 no-coverage:
   a score of 69.4%.
-- [`examples/credit-limit`](examples/credit-limit/README.md) — three gaps rather than one, and the
+- [`examples/credit-limit`](examples/credit-limit/README.md): three gaps rather than one, and the
   only demo that can show `remove-calcfields`: it reads a FlowField through `CalcFields`, which the
-  gift-card app deliberately does not. 32 mutants, 70.8%.
+  gift-card app deliberately does not. 42 mutants, 23 killed, 8 survived, 11 no-coverage: a
+  score of 74.2%.
 
 Both are frozen per mutant, so you can check a re-run against the committed baseline rather than
 against a total:

@@ -1055,8 +1055,11 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
       expect(body).not.toContain(`the ${w} rules`);
   });
 
-  test("README's gift-card figures are the committed report's", () => {
-    const r = JSON.parse(read(GIFT_CARD)) as SessionReport;
+  test.each([
+    ["gift-card", GIFT_CARD],
+    ["credit-limit", join(REPO_ROOT, "examples", "credit-limit", "demo.report.json")],
+  ])("README's %s figures are the committed report's", (_name, reportPath) => {
+    const r = JSON.parse(read(reportPath)) as SessionReport;
     // The score as the report itself renders it.
     const score = /score: (\S+%)/.exec(renderConsole(r))?.[1] ?? "";
     expect(score).toMatch(/^\d+\.\d%$/);
