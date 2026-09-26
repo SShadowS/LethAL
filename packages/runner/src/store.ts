@@ -693,7 +693,12 @@ export class ResultsStore {
   trustedArtifactRecord(
     runId: number,
     batchIndex: number,
-  ): { artifactId: string; sha256: string; manifestSha256: string | null; appId: string } | null {
+  ): {
+    artifactId: string;
+    sha256: string;
+    manifestSha256: string | null;
+    appId: string | null;
+  } | null {
     const row = this.db
       .query(
         "SELECT b.artifact_id, b.artifact_sha256, b.manifest_sha256, r.app_id " +
@@ -707,11 +712,8 @@ export class ResultsStore {
       app_id: string | null;
     } | null;
     if (row === null) return null;
-    if (row.app_id === null) {
-      throw new Error(
-        `trustedArtifactRecord: run ${runId} has a batch_artifacts row but no runs.app_id`,
-      );
-    }
+    // A NULL app_id is returned, not thrown: the caller (`loadInstalledArtifact`) refuses it as
+    // a typed InstalledArtifactError before any server call.
     return {
       artifactId: row.artifact_id,
       sha256: row.artifact_sha256,

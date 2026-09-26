@@ -142,6 +142,34 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     });
   });
 
+  // Review r1 fix 3: the trusted record is validated here, as a typed refusal, never a plain Error.
+  test("loadInstalledArtifact refuses a record whose artifactId is not 32 lowercase hex", async () => {
+    const bad = { ...MANIFEST, artifactId: ARTIFACT_ID.toUpperCase() };
+    await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(bad));
+    const runB = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    store.recordArtifact(runB, {
+      batchIndex: 0,
+      appVersion: "1.0.1.1",
+      appId: APP_ID,
+      artifactId: bad.artifactId,
+      sha256: sha(appBytes),
+      manifestSha256: sha(JSON.stringify(bad)),
+    });
+    const err = await loadInstalledArtifact(store, { ...ref, fromRunId: runB }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect(err).toMatchObject({ reason: "no-record" });
+    expect((err as InstalledArtifactError).detail).toContain(bad.artifactId);
+  });
+
+  test("loadInstalledArtifact refuses a record whose run has no app id", async () => {
+    store.db.query("UPDATE runs SET app_id = NULL WHERE id = ?").run(runId);
+    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect(err).toMatchObject({ reason: "no-record" });
+  });
+
   test("loadInstalledArtifact returns the parsed manifest whose hash matched", async () => {
     const { artifact, manifest } = await loadInstalledArtifact(store, ref);
     expect(manifest).toEqual(MANIFEST as unknown as typeof manifest);

@@ -9931,6 +9931,37 @@ describe("C02-04b: runNamedMutants", () => {
     expect(calls(fx.trace)).toEqual([]);
   });
 
+  // Review r1 fix 3: a malformed trusted record is a typed refusal before any server call.
+  test("runNamedMutants refuses a record with no run app id before any backend call", async () => {
+    const fx = await installedFixture();
+    fx.store.db.query("UPDATE runs SET app_id = NULL WHERE id = ?").run(fx.installed.fromRunId);
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("no-record");
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  test("runNamedMutants refuses a record whose artifactId is not 32 lowercase hex before any backend call", async () => {
+    const fx = await installedFixture();
+    // The manifest and the record agree on the bad id, so only the format check can refuse it.
+    let rewritten = "";
+    await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => {
+      const next = { ...m, artifactId: m.artifactId.toUpperCase() };
+      rewritten = JSON.stringify(next);
+      return next;
+    });
+    const upper = (JSON.parse(rewritten) as { artifactId: string }).artifactId;
+    fx.store.db
+      .query(
+        "UPDATE batch_artifacts SET artifact_id = ?, manifest_sha256 = ? WHERE run_id = ? AND batch_index = 0",
+      )
+      .run(upper, Bun.SHA256.hash(rewritten, "hex"), fx.installed.fromRunId);
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("no-record");
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
   test("runNamedMutants: a same-id wrong manifest is refused before any backend call", async () => {
     const fx = await installedFixture();
     await rewriteManifestKeepingId(fx.installed.instrumentedDir, (m) => ({

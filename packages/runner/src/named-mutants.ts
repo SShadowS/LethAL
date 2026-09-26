@@ -55,6 +55,19 @@ export async function loadInstalledArtifact(
       `run ${ref.fromRunId} batch ${ref.batchIndex} was recorded without a manifest hash (written before that column existed), so it cannot be trusted`,
     );
   }
+  // Review r1 fix 3: the record is validated here, typed, before anything reaches a verifier.
+  if (record.appId === null) {
+    throw new InstalledArtifactError(
+      "no-record",
+      `run ${ref.fromRunId} recorded batch ${ref.batchIndex} but no app id, so it cannot be trusted`,
+    );
+  }
+  if (!/^[0-9a-f]{32}$/.test(record.artifactId)) {
+    throw new InstalledArtifactError(
+      "no-record",
+      `run ${ref.fromRunId} batch ${ref.batchIndex} records artifact id "${record.artifactId}", which is not 32 lowercase hex, so it cannot be trusted`,
+    );
+  }
   const manifestPath = join(ref.instrumentedDir, "mutant-manifest.json");
   const appBytes = await readLocal(ref.appPath, () => readFile(ref.appPath));
   const manifestText = await readLocal(manifestPath, () => readFile(manifestPath, "utf8"));
