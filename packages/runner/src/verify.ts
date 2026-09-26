@@ -1,11 +1,19 @@
+import { stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { InstalledArtifactError } from "./artifact";
 import type { TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import { discoverTests } from "./discovery";
 import { type EquivalenceMark, loadEquivalenceMarks } from "./equivalence-marks";
-import type { InstalledArtifactRef, NamedMutantRequest } from "./named-mutants";
+import {
+  type InstalledArtifactRef,
+  NamedMutantError,
+  type NamedMutantRequest,
+} from "./named-mutants";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
+import { TestAppError, type TestAppRefusal } from "./test-app-publish";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -21,10 +29,14 @@ export const VERIFY_REFUSALS = [
   "covering-test-unmatched",
   "no-tests-to-run",
   "unsupported-config",
+  "project-unreadable",
   // InstalledArtifactError
   "stale-artifact",
   "artifact-files-unusable",
+  "artifact-identity-unavailable",
   // TestAppError
+  "test-app-manifest-unreadable",
+  "test-app-symbols-unreadable",
   "test-app-compile-failed",
   "test-app-version-below-resident",
   "test-app-publish-failed",
@@ -42,6 +54,80 @@ export class VerifyError extends Error {
     super(`verify refused (${reason}): ${detail}`);
     this.name = "VerifyError";
   }
+}
+
+/**
+ * Carried item 2: what each `InstalledArtifactError` reason refuses as. A `Record` over the error's
+ * own reason union, so a reason added there fails the typecheck here until it is mapped.
+ */
+export const INSTALLED_ARTIFACT_REFUSALS: Readonly<
+  Record<InstalledArtifactError["reason"], VerifyRefusal>
+> = {
+  // loadInstalledArtifact: the trusted record lacks a manifest hash or app id (an older row).
+  "no-record": "source-predates-verify",
+  "local-copy-unreadable": "artifact-files-unusable",
+  "local-copy-differs": "artifact-files-unusable",
+  "manifest-differs": "artifact-files-unusable",
+  mismatch: "stale-artifact",
+  unavailable: "artifact-identity-unavailable",
+  // The backend cannot attach to an installed artifact: only bcdev can, and verify is bcdev only.
+  unsupported: "unsupported-config",
+};
+
+/**
+ * Carried item 2: what each `TestAppRefusal` refuses as. The two that leave the container marked
+ * for a recycle are not refusals: they quarantine (exit 3). Exhaustive by type, like the above.
+ */
+export const TEST_APP_REFUSALS: Readonly<Record<TestAppRefusal, VerifyRefusal | "quarantined">> = {
+  "manifest-unreadable": "test-app-manifest-unreadable",
+  "symbols-unreadable": "test-app-symbols-unreadable",
+  "compile-failed": "test-app-compile-failed",
+  unsupported: "unsupported-config",
+  "resident-unreadable": "test-app-resident-unreadable",
+  "version-below-resident": "test-app-version-below-resident",
+  "publish-failed": "test-app-publish-failed",
+  "publish-indeterminate": "quarantined",
+  "publish-anomalous": "quarantined",
+};
+
+const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
+  "stale-artifact":
+    "the server holds another build now; run lethal run again, then verify with its artifact id",
+  "artifact-files-unusable":
+    "the run's local .app or instrumented files are gone or changed; run lethal run again, then verify",
+};
+
+/**
+ * Carried item 2: every typed error verify catches, as a refusal or a quarantine. `undefined` for
+ * anything else, which the caller rethrows (exit 1): a bug is never dressed up as a refusal.
+ */
+export function verifyRefusalOf(
+  err: unknown,
+):
+  | { readonly kind: "refused"; readonly reason: VerifyRefusal; readonly detail: string }
+  | { readonly kind: "quarantined"; readonly detail: string }
+  | undefined {
+  const refused = (reason: VerifyRefusal, detail: string) => {
+    const hint = REFUSAL_HINTS[reason];
+    return {
+      kind: "refused" as const,
+      reason,
+      detail: hint === undefined ? detail : `${detail}; ${hint}`,
+    };
+  };
+  if (err instanceof VerifyError)
+    return { kind: "refused", reason: err.reason, detail: err.detail };
+  if (err instanceof NamedMutantError) return refused("malformed-request", err.message);
+  if (err instanceof InstalledArtifactError) {
+    return refused(INSTALLED_ARTIFACT_REFUSALS[err.reason], err.message);
+  }
+  if (err instanceof TestAppError) {
+    const to = TEST_APP_REFUSALS[err.reason];
+    return to === "quarantined"
+      ? { kind: "quarantined", detail: err.message }
+      : refused(to, err.message);
+  }
+  return undefined;
 }
 
 export interface VerifyRequest {
@@ -149,7 +235,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
   if (appPath === null || instrumentedDir === null || sourceSha256 === null) {
     throw new VerifyError(
       "source-predates-verify",
-      `run ${rec.runId} did not record its installed files or its source hash (recorded before lethal verify existed, or its source changed during the run); run lethal run again, then verify`,
+      `run ${rec.runId} did not record its installed files or its source hash. That happens when the run was recorded before lethal verify existed, its source changed during the run, the run stopped before the last batch, or its source tree was unreadable; run lethal run again, then verify`,
     );
   }
 
@@ -205,7 +291,8 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
 
   return {
     runId: rec.runId,
-    projectPath: rec.projectPath,
+    // Carried item 1: stored as typed, so possibly relative. Resolved once, here.
+    projectPath: resolve(rec.projectPath),
     artifactSha256: rec.artifactSha256,
     sourceSha256,
     installed: { fromRunId: rec.runId, batchIndex: rec.batchIndex, appPath, instrumentedDir },
@@ -220,12 +307,39 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
 export async function assertSourceUnchanged(
   source: VerifySource,
   preprocessorSymbols: readonly string[],
+  /** The test project, only to say so when it lies inside the target (carried item 3). */
+  testDir?: string,
 ): Promise<void> {
+  // Carried item 1: a missing project or app.json is a refusal, not an ENOENT from the hash.
+  for (const [path, want] of [
+    [source.projectPath, "directory"],
+    [join(source.projectPath, "app.json"), "file"],
+  ] as const) {
+    const st = await stat(path).catch(() => undefined);
+    if (st === undefined || (want === "directory" ? !st.isDirectory() : !st.isFile())) {
+      throw new VerifyError(
+        "project-unreadable",
+        `${path} is missing or not a ${want}: the source run's project path is stored as it was typed and resolved against the current directory; run verify from where lethal run ran, or run lethal run again`,
+      );
+    }
+  }
   const now = await hashTargetSource(source.projectPath, preprocessorSymbols);
   if (now !== source.sourceSha256) {
+    // Carried item 3: one whole-source hash cannot say WHICH file changed, so this says the one
+    // thing it can: a nested test project is part of the hash, and a test edit alone refuses.
+    const tests = testDir === undefined ? undefined : resolve(testDir);
+    const rel = tests === undefined ? undefined : relative(source.projectPath, tests);
+    const nested =
+      tests !== undefined &&
+      rel !== undefined &&
+      rel !== "" &&
+      !rel.startsWith("..") &&
+      !isAbsolute(rel)
+        ? ` The test project ${tests} lies inside the target project, so its .al files are part of the target's source hash: editing or adding a test there refuses too, even when no target file changed. Move the test project beside the target, or run lethal run again after editing tests.`
+        : "";
     throw new VerifyError(
       "source-changed",
-      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id`,
+      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.${nested}`,
     );
   }
 }
