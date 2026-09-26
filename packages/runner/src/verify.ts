@@ -7,10 +7,13 @@ import type { ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
 import { discoverTests } from "./discovery";
-import { type EquivalenceMark, loadEquivalenceMarks } from "./equivalence-marks";
+import {
+  type EquivalenceMark,
+  EquivalenceMarksError,
+  loadEquivalenceMarks,
+} from "./equivalence-marks";
 import {
   type InstalledArtifactRef,
-  NamedMutantError,
   type NamedMutantRequest,
   loadInstalledArtifact,
 } from "./named-mutants";
@@ -18,6 +21,7 @@ import {
   type LeaseSessionConfig,
   type UnmutatedRun as NamedUnmutatedRun,
   type SessionConfig,
+  qualifiedTestName,
   runNamedMutants,
 } from "./orchestrator";
 import type { SessionOutcome } from "./report";
@@ -45,6 +49,7 @@ export const VERIFY_REFUSALS = [
   "no-tests-to-run",
   "unsupported-config",
   "project-unreadable",
+  "equivalence-marks-unreadable",
   // InstalledArtifactError
   "stale-artifact",
   "artifact-files-unusable",
@@ -132,7 +137,11 @@ export function verifyRefusalOf(
   };
   if (err instanceof VerifyError)
     return { kind: "refused", reason: err.reason, detail: err.detail };
-  if (err instanceof NamedMutantError) return refused("malformed-request", err.message);
+  // NOT NamedMutantError: verify refuses every user-reachable cause of one upstream, so one that
+  // reaches here means verify built a bad call. A bug, rethrown (exit 1), never a refusal.
+  if (err instanceof EquivalenceMarksError) {
+    return refused("equivalence-marks-unreadable", err.message);
+  }
   if (err instanceof InstalledArtifactError) {
     return refused(INSTALLED_ARTIFACT_REFUSALS[err.reason], err.message);
   }
@@ -655,8 +664,6 @@ export function verifyExitCode(o: {
   return VERIFY_EXIT.ok;
 }
 
-const qualified = (ref: TestMethodRef) => `${ref.codeunitName}.${ref.method}`;
-
 function unmutatedRunOf(r: NamedUnmutatedRun): UnmutatedRun {
   return {
     outcome: r.outcome === "pass" || r.outcome === "not-run" ? r.outcome : "fail",
@@ -684,7 +691,7 @@ function newTestResultOf(
           : "flaky-unknown";
   const failed = [baseline, rerun].find((x) => x.outcome !== "pass" && x.outcome !== "not-run");
   return {
-    test: qualified(ref),
+    test: qualifiedTestName(ref),
     codeunitId: ref.codeunitId,
     state,
     runs: [b, r],
@@ -916,9 +923,9 @@ function measuredResultOf(
   published: PublishedTestApp | undefined,
 ): MeasuredPart {
   const common = {
-    testsRun: methods.map(qualified),
+    testsRun: methods.map(qualifiedTestName),
     ...(o.invalidBaseline !== undefined
-      ? { invalidBaseline: o.invalidBaseline.map(qualified) }
+      ? { invalidBaseline: o.invalidBaseline.map(qualifiedTestName) }
       : {}),
     ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
   };

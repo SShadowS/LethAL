@@ -11785,6 +11785,57 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(fx.client.beginPublishArgs).toEqual([]);
   });
 
+  test("a NamedMutantError from runNamedMutants is verify's own bug: it propagates, never a refusal", async () => {
+    const fx = await verifyFixture();
+    const err = await fx
+      .verify(["0/M0001"], {
+        runNamed: async () => {
+          throw new NamedMutantError("runNamedMutants: a bad call verify built");
+        },
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+  });
+
+  test("a timeout-killed outcome is error with its note, never killed", async () => {
+    const fx = await verifyFixture();
+    const out = await fx.verify(["0/M0001"], {
+      runNamed: async (cfg) => {
+        const r = await runNamedMutants(cfg);
+        return {
+          ...r,
+          outcomes: r.outcomes.map((o) => ({
+            ...o,
+            verdict: "timeout-killed" as const,
+            failureNote: "ran past 30000 ms",
+          })),
+        };
+      },
+    });
+    expect(out.results.map((r) => [r.verdict, r.failureNote])).toEqual([
+      [
+        "error",
+        "timeout-killed: the mutant ran past its time budget, so no test failure proves the kill; ran past 30000 ms",
+      ],
+    ]);
+    expect(out.results[0]?.killingTest).toBeUndefined();
+    expect(out.exitCode).toBe(4);
+  });
+
+  test("a malformed lethal.equivalent.json is refused as equivalence-marks-unreadable, before any server call", async () => {
+    const fx = await verifyFixture();
+    await Bun.write(join(fx.dirs.projectDir, "lethal.equivalent.json"), "{ not json");
+    const runsBefore = runCount(fx.store);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(6);
+    expect(out.refused?.reason).toBe("equivalence-marks-unreadable");
+    expect(out.refused?.detail).toContain("lethal.equivalent.json");
+    expect(out.results).toEqual([]);
+    expect(fx.trace).toEqual([]);
+    expect(fx.log).toEqual([]);
+    expect(runCount(fx.store)).toBe(runsBefore);
+  });
+
   test("verify refuses an artifact that is not its run's highest batch, before any server call", async () => {
     const fx = await verifyFixture();
     fx.store.recordArtifact(fx.installed.fromRunId, {

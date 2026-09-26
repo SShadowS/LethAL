@@ -701,9 +701,14 @@ describe("verifyRefusalOf (carried item 2)", () => {
         expect(members.has(r?.kind === "refused" ? r.reason : "")).toBe(true);
       }
     }
-    expect(verifyRefusalOf(new NamedMutantError("x"))).toMatchObject({
+    // Verify refuses every user-reachable NamedMutantError cause upstream, so one that reaches
+    // here is verify's own bad call: rethrown (exit 1), never a refusal the user cannot fix.
+    expect(verifyRefusalOf(new NamedMutantError("x"))).toBeUndefined();
+    // A malformed lethal.equivalent.json is the user's own input to fix.
+    expect(verifyRefusalOf(new EquivalenceMarksError("bad marks"))).toEqual({
       kind: "refused",
-      reason: "malformed-request",
+      reason: "equivalence-marks-unreadable",
+      detail: "bad marks",
     });
     expect(verifyRefusalOf(new VerifyError("carried", "d"))).toEqual({
       kind: "refused",

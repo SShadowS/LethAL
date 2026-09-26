@@ -5746,7 +5746,7 @@ export function unsupportedCoverageNote(
 }
 
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
-function qualifiedTestName(ref: TestMethodRef): string {
+export function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
 }
 
