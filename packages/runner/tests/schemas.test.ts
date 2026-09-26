@@ -39,6 +39,7 @@ import {
   VERIFY_SCHEMA_VERSION,
   VERIFY_VERDICTS,
   type VerifyDeps,
+  type VerifyOutput,
   runVerify,
 } from "../src/verify";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
@@ -532,7 +533,7 @@ async function buildVerifyRefusedOutput() {
   return out;
 }
 
-describe("published JSON Schema — verify (C02-06 Task 6)", () => {
+describe("published JSON Schema - verify (C02-06 Task 6)", () => {
   const verifySchema = loadSchema("verify-v1.schema.json");
 
   test("the verify schema describes exactly the leaves VerifyOutput declares", () => {
@@ -574,6 +575,81 @@ describe("published JSON Schema — verify (C02-06 Task 6)", () => {
     expect(refused.refused?.reason).toBe("malformed-request");
     expect(refused.source).toBeUndefined();
     expect(conformsTo(verifySchema, refused)).toEqual([]);
+
+    // Neither fixture above reaches a killed or survived verdict, testApp, or a populated newTests
+    // entry: planVerify returns before any of those are touched once every survivor is skipped, and
+    // parseVerifyRequest refuses before source resolves at all. The leaf-path test further up only
+    // confirms those paths EXIST in both the type and the schema -- it never checks `required` or
+    // `additionalProperties` on them, which live only in the hand-written JSON. This literal is
+    // typed `: VerifyOutput` with no `as` anywhere, so tsc itself forces every field VerifyOutput
+    // requires to be present, and it fills every optional leaf `killingTest`/`killedBy`/`testApp`/
+    // `newTests[].runs` touch -- closing that gap without a runNamed fake or a committed report.
+    const measured: VerifyOutput = {
+      verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+      ok: false,
+      exitCode: 5,
+      source: {
+        runId: 1,
+        batchIndex: 0,
+        artifactId: "a".repeat(32),
+        artifactSha256: "b".repeat(64),
+        sourceSha256: "c".repeat(64),
+        projectPath: "C:/fixtures/sandbox-app",
+      },
+      verifyRunId: 2,
+      testApp: {
+        name: "Server Tests",
+        version: "7.7.7.7",
+        sha256: "d".repeat(64),
+        compiledAgainst: { artifactId: "a".repeat(32), sha256: "b".repeat(64) },
+      },
+      newTests: [
+        {
+          test: "New Tests.OverBudgetDetected",
+          codeunitId: 79102,
+          state: "stable",
+          runs: [
+            { outcome: "pass", fresh: true, sessionId: 11, testRunsBefore: 0 },
+            { outcome: "pass", fresh: true, sessionId: 12, testRunsBefore: 0 },
+          ],
+        },
+      ],
+      results: [
+        {
+          id: "0/M0001",
+          batchIndex: 0,
+          mutantCode: "M0001",
+          file: "Logic.Codeunit.al",
+          line: 3,
+          operatorName: "lethal.negate-conditional",
+          procedureName: "Post",
+          verdict: "killed",
+          testsRun: ["Sandbox Tests.OverBudgetDetected"],
+          killingTest: {
+            codeunitId: 79100,
+            codeunitName: "Sandbox Tests",
+            method: "OverBudgetDetected",
+          },
+          killedByNewTest: false,
+          killedBy: "assertion",
+          killingTestFailure: "Assert.AreEqual failed. Expected:<400> Actual:<0>.",
+        },
+        {
+          id: "0/M0002",
+          batchIndex: 0,
+          mutantCode: "M0002",
+          file: "Logic.Codeunit.al",
+          line: 9,
+          operatorName: "lethal.remove-assignment",
+          procedureName: "Post",
+          verdict: "survived",
+          testsRun: ["Sandbox Tests.OverBudgetDetected"],
+        },
+      ],
+      counts: { killed: 1, survived: 1, error: 0, skipped: 0 },
+      timings: { totalMs: 1234, compileMs: 200, publishMs: 50 },
+    };
+    expect(conformsTo(verifySchema, measured)).toEqual([]);
   });
 });
 
