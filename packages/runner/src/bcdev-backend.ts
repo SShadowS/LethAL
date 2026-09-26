@@ -763,7 +763,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /**
    * C02-05: compile a test project against an installed guarded build. Local only: alc, no
-   * server call. A thin hand-off — the module does the staging/compile work; this only supplies
+   * server call. A thin hand-off: the module does the staging/compile work, this only supplies
    * the backend's own compiler and control symbol.
    */
   async compileTestApp(testDir: string, target: BoundArtifact): Promise<CompiledTestApp> {
@@ -779,7 +779,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
 
   /**
    * C02-05: publish it inside the lease fence and verify it by the server's own bytes. Another
-   * thin hand-off — the module decides the outcome; this only supplies the backend's own
+   * thin hand-off: the module decides the outcome, this only supplies the backend's own
    * deployer and its existing `fetchPublishedAppPackage` read-back (R139 check 2).
    */
   async publishTestApp(fence: LeaseFence, app: CompiledTestApp): Promise<PublishedTestApp> {

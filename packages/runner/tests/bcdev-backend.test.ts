@@ -1572,7 +1572,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
 // C02-05 Task 5: `compileTestApp`/`publishTestApp` are thin hand-offs to the module in
 // test-app-publish.ts (Tasks 3-4, tested exhaustively there). These tests only pin the WIRING:
 // the backend's own compiler/control symbol reach compileTestApp, and its own deployer/
-// fetchPublishedAppPackage reach publishTestApp — never the MCP client, never a server call for
+// fetchPublishedAppPackage reach publishTestApp, never the MCP client, never a server call for
 // compileTestApp.
 describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
   const TESTS_APP_ID = "22222222-2222-2222-2222-222222222222";
