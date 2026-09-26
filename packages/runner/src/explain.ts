@@ -352,7 +352,8 @@ export interface ExplainGap {
   readonly killed: number;
   readonly noCoverage: number;
   readonly other: number;
-  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run. */
+  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, and
+   *  on a quarantined run. */
   readonly unobservedBlock?: boolean;
   /** The artifact to pass to `lethal verify --artifact` for this gap. Exactly one of this and
    *  `artifactIdAbsent` is present. */
@@ -1086,11 +1087,12 @@ function blocksOf(
     if (e instanceof GapGroupingError) refuse(e.message, undefined);
     throw e;
   }
-  // An operator- or line-narrowed run drops mutants INSIDE a block, so "every recorded row
-  // survived" says nothing about the block's unrecorded neighbours.
-  const withhold = report.validity.caveats.some(
-    (c) => c === "operator-narrowed" || c === "line-narrowed",
-  );
+  // An operator- or line-narrowed run drops mutants INSIDE a block, and a quarantined run stops
+  // scheduling mutants mid-run, so "every recorded row survived" says nothing about the block's
+  // unrecorded neighbours.
+  const withhold =
+    report.quarantined !== undefined ||
+    report.validity.caveats.some((c) => c === "operator-narrowed" || c === "line-narrowed");
   const gaps: { readonly key: string; readonly gap: ExplainGap }[] = [];
   const noCoverageBlocks: { readonly key: string; readonly block: ExplainNoCoverageBlock }[] = [];
   for (const [gapId, t] of tallies) {

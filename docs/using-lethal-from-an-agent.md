@@ -266,7 +266,8 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 `gaps` row can also carry `unobservedBlock`, `artifactId` and `artifactIdAbsent`.
 `unobservedBlock` says whether every RECORDED mutant of the block survived. It speaks about the
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
-`--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block. Each gap has
+`--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
+quarantined run, which stops scheduling mutants mid-run. Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
@@ -442,10 +443,10 @@ The set of reasons is checked; the advice is guidance.
 | `wrong-batch` | Take the artifact and the id from the same explain row. |
 | `unknown-mutant` | Re-copy the mutant code from explain. |
 | `unknown-gap` | Copy the gap id and its `artifactId` from one explain gap of the run that published this artifact. An edited or moved block, or other line endings, give a new id, and only the run's last batch stays installed. |
-| `gap-has-no-survivor` | Every recorded mutant in this block is killed, not measured or no-coverage, so there is nothing to verify as a gap. Explain lists no-coverage mutants in `noCoverageBlocks`. |
+| `gap-has-no-survivor` | Every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap. |
 | `not-a-survivor` | That mutant was not a survivor. Drop the id. If it is a known survivor the run skipped, run again without `--skip-known-survivors`. |
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
-| `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. |
+| `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. A gap id against an artifact whose manifest was written before gap ids existed refuses this way too; name its mutants as `<batchIndex>/<mutantCode>` ids instead, or run again. |
 | `source-changed` | The target changed since it was instrumented. Run again. A test project nested inside the target makes every test edit trigger this (R260). |
 | `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
 | `no-tests-to-run` | Write a test first. |

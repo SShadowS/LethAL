@@ -803,7 +803,13 @@ describe("explain — the admissibility rule, made executable", () => {
     // The other direction: a path left behind by a removed field would silently license anything
     // later reintroduced under that name. `fullCoverageReport` exists to reach every branch, so
     // every pinned path must appear in its projection.
-    const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
+    // C02-09: a quarantined run withholds `gaps[].unobservedBlock`, and the fixture is
+    // quarantined, so that one leaf is reached through the same report without `quarantined`.
+    const { quarantined: _q, ...unquarantined } = fullCoverageReport();
+    const produced = new Set([
+      ...leafPathsIn(explain(fullCoverageReport())),
+      ...leafPathsIn(explain(unquarantined)),
+    ]);
     expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([]);
   });
 
@@ -2549,7 +2555,7 @@ describe("explain: gaps (C02-09)", () => {
     ]);
   });
 
-  test("unobservedBlock is withheld on an operator- or line-narrowed run", () => {
+  test("unobservedBlock is withheld on an operator- or line-narrowed or quarantined run", () => {
     const keyPresence = (caveat: Caveat) => {
       const base = reportFixture({ mutants: twoGapRows() });
       const out = explain({ ...base, validity: { ...base.validity, caveats: [caveat] } });
@@ -2559,6 +2565,12 @@ describe("explain: gaps (C02-09)", () => {
     expect(keyPresence("operator-narrowed")).toEqual([false, false]);
     expect(keyPresence("narrowed")).toEqual([true, true]);
     expect(keyPresence("tests-narrowed")).toEqual([true, true]);
+    // A quarantined run stops scheduling mutants mid-run, so a killable neighbour may never have
+    // run either.
+    const quarantined = explain(
+      reportFixture({ mutants: twoGapRows(), quarantined: { reason: "test in-flight-unknown" } }),
+    );
+    expect((quarantined.gaps ?? []).map((g) => "unobservedBlock" in g)).toEqual([false, false]);
   });
 
   test("an archived report has no gaps field, never an empty one", () => {
