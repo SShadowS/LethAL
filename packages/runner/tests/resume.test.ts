@@ -448,6 +448,23 @@ describe("sessionFingerprint (R47)", () => {
     );
   });
 
+  // C02-06 review r1 item 2: `#if` branches compile differently under other symbols, and R192's
+  // baseline key hashes AL bytes only, so a resume across a symbol change would reuse measurements
+  // made under the old symbols. Order selects nothing different, so it must not defeat a resume.
+  test("different preprocessor symbols change it, and symbol order does not", () => {
+    const ab = sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN24", "CLEAN25"] });
+    expect(ab).not.toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN24"] }));
+    expect(ab).not.toBe(sessionFingerprint(base));
+    expect(ab).toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["CLEAN25", "CLEAN24"] }));
+  });
+
+  // The key is conditional like `exclude`'s, so a run with no symbols keeps the digest pinned
+  // above and every store recorded before this change still resumes.
+  test("no preprocessor symbols, or an empty list, keeps the pre-symbol digest", () => {
+    const pinned = "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307";
+    expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(pinned);
+  });
+
   test("--tests-only changes it — that narrowing CAN change a verdict", () => {
     expect(sessionFingerprint({ ...base, testsOnly: ["x/**"] })).not.toBe(sessionFingerprint(base));
   });

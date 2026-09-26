@@ -2855,7 +2855,7 @@ function resolveResume(
     }
     if (row.configFingerprint !== configFingerprint) {
       throw new Error(
-        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids). Carrying its verdicts would report one scope's measurements as another's${
+        `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
           row.configFingerprint === null
             ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
             : ""
@@ -3835,6 +3835,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
+    // C02-06: symbols change what `#if` compiles, which the R192 baseline key cannot see.
+    ...(cfg.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: cfg.preprocessorSymbols }
+      : {}),
   });
   const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
 

@@ -3503,6 +3503,41 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(message).toContain("changed between generation and the last batch's preparation");
     store.close();
   });
+
+  // C02-06 review r1 item 2: a resume across a preprocessor-symbol change must start fresh, since
+  // R192's baseline key hashes AL bytes only and would reuse measurements made under old symbols.
+  test("a resume under other preprocessor symbols is refused; the same symbols in another order resume", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: ["CLEAN24", "CLEAN25"],
+    });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const resumed = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: ["CLEAN25", "CLEAN24"],
+      resume: run.id,
+    });
+    expect(resumed.validity.caveats).toContain("resumed");
+    await expect(
+      runSession({
+        backend: new PhaseBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: ["CLEAN24"],
+        resume: run.id,
+      }),
+    ).rejects.toThrow(/was scoped differently from this session/);
+    store.close();
+  });
 });
 
 // ————————————————————————————————————————————————————————————————————————
