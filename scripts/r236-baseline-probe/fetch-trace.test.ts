@@ -124,4 +124,51 @@ describe("traceFetch", () => {
     );
     expect(caught).toBe(boom);
   });
+
+  test("review r1: a stalling REAL body still rejects with AbortError through the rebuilt Response; the pre-hook error class is kept", async () => {
+    let tick: ReturnType<typeof setInterval> | undefined;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode('{"value":'));
+              tick = setInterval(() => {}, 1000); // never closes: the body stalls
+            },
+          }),
+        ),
+    });
+    try {
+      const sink: CallTrace[] = [];
+      const seenInHook: string[] = [];
+      const ac = new AbortController();
+      const f = traceFetch(fetch, sink, {
+        onBrokenCall: async (t) => {
+          seenInHook.push(`${t.errorName}`);
+          await Bun.sleep(300); // a slow marker read
+          t.error = "relabelled by a slow hook";
+        },
+      });
+      const res = await f(`http://localhost:${server.port}/BC/ODataV4/LethALControl_RunMutant`, {
+        method: "POST",
+        body: BODY,
+        signal: ac.signal,
+      });
+      setTimeout(() => ac.abort(), 100);
+      const caught = await res.text().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((caught as Error | null)?.name).toBe("AbortError");
+      expect(seenInHook).toEqual(["AbortError"]);
+      expect(sink[0]?.errorName).toBe("AbortError");
+      expect(sink[0]?.preHookError).toContain("AbortError");
+      expect(sink[0]?.preHookError).not.toContain("relabelled");
+      expect(sink[0]?.bytesReceived).toBe(9);
+    } finally {
+      if (tick !== undefined) clearInterval(tick);
+      server.stop(true);
+    }
+  });
 });

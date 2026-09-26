@@ -64,11 +64,13 @@ export interface MarkerRead {
 export interface BrokenCall {
   readonly attemptId: string;
   readonly opSeq: number;
+  readonly testMethod: string | null;
   readonly reads: readonly MarkerRead[];
   readonly sessionId: number | null;
   readonly nstSessions: number[] | null;
   readonly actionEnded: boolean;
   readonly nstEvidence: string;
+  readonly evidenceError?: string;
 }
 
 interface PostFence {
@@ -103,6 +105,9 @@ interface SessionRecord {
   readonly calls: readonly CallTrace[];
   readonly postFence: readonly PostFence[];
   readonly broken: readonly BrokenCall[];
+  /** Review r1: the session-list positive control, read every session (see `SessionControl`). */
+  readonly sessionControl: SessionControl;
+  readonly storeReadError: string | null;
   readonly warnings: ReadonlyArray<{ code: string; message: string }>;
   readonly stopReason: string | null;
   /** Not in the plan's shape: where the session's instrumented tree and scratch store live. */
@@ -110,9 +115,29 @@ interface SessionRecord {
 }
 
 /**
- * Task 2 requirement 7c. True only when the marker says THIS op completed, the control app's own
- * progress row names exactly one BC session for it, the server's session list was read, and that
- * session is not in it. A `completed: true` for a DIFFERENT op than ours does not count: only
+ * Review r1: the positive control for the session check. An id missing from the server's session
+ * list means "ended" only if that list is non-empty and is proven to use the SAME id space as the
+ * control app's `SessionId()` (wrong tenant or wrong instance would list other ids, or none). Proof
+ * is a known session id appearing in the list: the latest FINISHED op of this session (from
+ * `LC Op Progress`), the `sessionId` a successful `ran` answer carried, or an id also found in the
+ * tenant's `Active Session` table. `finishedOpListed: true` also says pooled sessions outlive their
+ * op, in which case the session check cannot separate H2-fence from H2-action.
+ */
+export interface SessionControl {
+  readonly finishedOpSessionId: number | null;
+  readonly finishedOpListed: boolean | null;
+  readonly ranAnswerSessionId: number | null;
+  readonly ranAnswerListed: boolean | null;
+  readonly activeTableOverlap: number[] | null;
+  readonly idSpaceMatched: boolean;
+  readonly error?: string;
+}
+
+/**
+ * Task 2 requirement 7c, tightened by review r1. True only when the marker says THIS op completed,
+ * the control app's own progress row names exactly one BC session for it, the server's session list
+ * was read, is non-empty and is proven to share the id space (`idSpaceMatched`), and that session is
+ * not in it. A `completed: true` for a DIFFERENT op than ours does not count: only
  * `lastCompletedOpSeq` speaks for an op the marker no longer names.
  */
 export function decideActionEnded(
@@ -121,6 +146,7 @@ export function decideActionEnded(
   reads: readonly MarkerRead[],
   sqlSessionIds: readonly number[] | null,
   nstSessions: readonly number[] | null,
+  idSpaceMatched: boolean,
 ): boolean {
   const markerDone = reads.some(
     ({ status: s }) =>
@@ -129,56 +155,133 @@ export function decideActionEnded(
         opSeq <= s.lastCompletedOpSeq),
   );
   if (!markerDone || sqlSessionIds === null || nstSessions === null) return false;
+  if (nstSessions.length === 0 || !idSpaceMatched) return false;
   const [sessionId] = sqlSessionIds;
   if (sqlSessionIds.length !== 1 || sessionId === undefined || sessionId <= 0) return false;
   return !nstSessions.includes(sessionId);
 }
 
-/** Parses the `R236-SQL:` and `R236-NST:` lines of the container script. `null` = not read. */
-export function parseContainerEvidence(stdout: string): {
-  sqlSessionIds: number[] | null;
-  nstSessions: number[] | null;
-} {
-  const line = (prefix: string) =>
-    stdout
-      .split(/\r?\n/)
-      .find((l) => l.startsWith(prefix))
-      ?.slice(prefix.length);
-  const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : v === null ? [] : [v]);
-  let sqlSessionIds: number[] | null = null;
-  let nstSessions: number[] | null = null;
-  try {
-    const sql = line("R236-SQL:");
-    if (sql !== undefined) {
-      const ids = asArray((JSON.parse(sql) as { ids?: unknown }).ids);
-      if (ids.every((n) => typeof n === "number")) sqlSessionIds = ids as number[];
-    }
-  } catch {
-    sqlSessionIds = null;
-  }
-  try {
-    const nst = line("R236-NST:");
-    if (nst !== undefined) {
-      const ids = asArray(nst.trim() === "" ? null : JSON.parse(nst)).map(
-        (s) => (s as { SessionID?: unknown }).SessionID,
-      );
-      if (ids.every((n) => typeof n === "number")) nstSessions = ids as number[];
-    }
-  } catch {
-    nstSessions = null;
-  }
-  return { sqlSessionIds, nstSessions };
+export interface ContainerEvidence {
+  /** `${attemptId}:${opSeq}` to the progress row's session ids; a missing key was not read. */
+  readonly opSessionIds: Map<string, number[]>;
+  readonly finishedOps: Array<{ sessionId: number; attemptId: string; opSeq: number }> | null;
+  readonly activeSessionIds: number[] | null;
+  readonly nstSessions: number[] | null;
 }
 
-function containerScript(attemptId: string, opSeq: number, sinceIso: string): string {
-  if (!/^[0-9A-Za-z-]{1,64}$/.test(attemptId) || !Number.isSafeInteger(opSeq)) {
-    throw new Error(
-      `refusing to build a SQL read for attemptId ${JSON.stringify(attemptId)} / opSeq ${opSeq}`,
-    );
+/** Parses the tagged lines of the container script. `null` (or a missing key) = not read. */
+export function parseContainerEvidence(stdout: string): ContainerEvidence {
+  const lines = stdout.split(/\r?\n/);
+  const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : v === null ? [] : [v]);
+  const tagged = (prefix: string) =>
+    lines.filter((l) => l.startsWith(prefix)).map((l) => l.slice(prefix.length));
+  const one = <T>(prefix: string, parse: (v: unknown[]) => T | null): T | null => {
+    const [raw] = tagged(prefix);
+    if (raw === undefined) return null;
+    try {
+      return parse(asArray(raw.trim() === "" ? null : JSON.parse(raw)));
+    } catch {
+      return null;
+    }
+  };
+  const numbers = (v: unknown[]) =>
+    v.every((n) => typeof n === "number") ? (v as number[]) : null;
+  const opSessionIds = new Map<string, number[]>();
+  for (const raw of tagged("R236-SQL-OP:")) {
+    try {
+      const o = JSON.parse(raw) as { attemptId?: unknown; opSeq?: unknown; ids?: unknown };
+      const ids = numbers(asArray(o.ids ?? null));
+      if (typeof o.attemptId === "string" && typeof o.opSeq === "number" && ids !== null) {
+        opSessionIds.set(`${o.attemptId}:${o.opSeq}`, ids);
+      }
+    } catch {
+      // unread
+    }
   }
+  const finishedOps = one("R236-SQL-FIN:", (v) => {
+    const rows = v.map((r) => r as { sid?: unknown; attemptId?: unknown; opSeq?: unknown });
+    if (
+      !rows.every(
+        (r) =>
+          typeof r.sid === "number" &&
+          typeof r.attemptId === "string" &&
+          typeof r.opSeq === "number",
+      )
+    ) {
+      return null;
+    }
+    return rows.map((r) => ({
+      sessionId: r.sid as number,
+      attemptId: r.attemptId as string,
+      opSeq: r.opSeq as number,
+    }));
+  });
+  return {
+    opSessionIds,
+    finishedOps,
+    activeSessionIds: one("R236-ACTIVE:", numbers),
+    nstSessions: one("R236-NST:", (v) =>
+      numbers(v.map((s) => (s as { SessionID?: unknown }).SessionID)),
+    ),
+  };
+}
+
+export function sessionControl(
+  ev: ContainerEvidence,
+  brokenAttemptIds: readonly string[],
+  ranAnswerSessionId: number | null,
+): SessionControl {
+  const nst = ev.nstSessions;
+  const listed = (id: number | null) => (id === null || nst === null ? null : nst.includes(id));
+  // finishedOps come newest first; a broken op is never its own control (that would be circular).
+  const finished = ev.finishedOps?.find((o) => !brokenAttemptIds.includes(o.attemptId));
+  const finishedOpSessionId =
+    finished !== undefined && finished.sessionId > 0 ? finished.sessionId : null;
+  const activeTableOverlap =
+    nst === null || ev.activeSessionIds === null
+      ? null
+      : ev.activeSessionIds.filter((id) => id > 0 && nst.includes(id));
+  const finishedOpListed = listed(finishedOpSessionId);
+  const ranAnswerListed = listed(ranAnswerSessionId);
+  return {
+    finishedOpSessionId,
+    finishedOpListed,
+    ranAnswerSessionId,
+    ranAnswerListed,
+    activeTableOverlap,
+    idSpaceMatched:
+      nst !== null &&
+      nst.length > 0 &&
+      (finishedOpListed === true ||
+        ranAnswerListed === true ||
+        (activeTableOverlap?.length ?? 0) > 0),
+  };
+}
+
+interface EvidenceOp {
+  readonly attemptId: string;
+  readonly opSeq: number;
+}
+
+function containerScript(
+  tenant: string,
+  ops: readonly EvidenceOp[],
+  sessionSinceSql: string,
+  eventsSinceIso: string | null,
+): string {
+  if (!/^[0-9A-Za-z_-]{1,64}$/.test(tenant))
+    throw new Error(`refusing tenant ${JSON.stringify(tenant)}`);
+  for (const { attemptId, opSeq } of ops) {
+    if (!/^[0-9A-Za-z-]{1,64}$/.test(attemptId) || !Number.isSafeInteger(opSeq)) {
+      throw new Error(
+        `refusing to build a SQL read for attemptId ${JSON.stringify(attemptId)} / opSeq ${opSeq}`,
+      );
+    }
+  }
+  const opsJson = JSON.stringify(ops.map((o) => ({ a: o.attemptId, s: o.opSeq })));
   return `
 Import-Module BcContainerHelper -DisableNameChecking
-Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${attemptId}', ${opSeq}, '${sinceIso}') -scriptblock { param($attemptId, $opSeq, $since)
+Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${tenant}', '${opsJson}', '${sessionSinceSql}', '${eventsSinceIso ?? ""}') -scriptblock { param($tenant, $opsJson, $sessionSince, $since)
   try {
     $cfg = Get-NAVServerConfiguration -ServerInstance BC -AsXml
     $get = { param($k) ($cfg.configuration.appSettings.add | Where-Object { $_.key -eq $k }).value }
@@ -188,43 +291,52 @@ Invoke-ScriptInBcContainer -containerName ${CONTAINER} -argumentList @('${attemp
     if ((Get-Command Invoke-Sqlcmd).Parameters.ContainsKey('TrustServerCertificate')) { $sq.TrustServerCertificate = $true }
     $tables = @(Invoke-Sqlcmd @sq -Query "SELECT name FROM sys.tables WHERE name LIKE '%LC Op Progress%'" | ForEach-Object { $_.name })
     if ($tables.Count -ne 1) { throw "expected one LC Op Progress table, found $($tables.Count): $($tables -join ', ')" }
-    $ids = @(Invoke-Sqlcmd @sq -Query "SELECT [Session Id] AS sid FROM [dbo].[$($tables[0])] WHERE [Attempt Id] = N'$attemptId' AND [Op Seq] = $opSeq" | ForEach-Object { [int]$_.sid })
-    'R236-SQL:' + (ConvertTo-Json -Compress -InputObject @{ table = $tables[0]; ids = $ids })
+    $t = $tables[0]
+    'R236-SQL-TABLE:' + $t
+    foreach ($o in @(ConvertFrom-Json $opsJson)) {
+      $ids = @(Invoke-Sqlcmd @sq -Query "SELECT [Session Id] AS sid FROM [dbo].[$t] WHERE [Attempt Id] = N'$($o.a)' AND [Op Seq] = $($o.s)" | ForEach-Object { [int]$_.sid })
+      'R236-SQL-OP:' + (ConvertTo-Json -Compress -InputObject @{ attemptId = [string]$o.a; opSeq = [long]$o.s; ids = $ids })
+    }
+    # State 2 = done (OptionMembers running,between,done). Newest first.
+    $fin = @(Invoke-Sqlcmd @sq -Query "SELECT [Session Id] AS sid, [Attempt Id] AS aid, [Op Seq] AS seq FROM [dbo].[$t] WHERE [State] = 2 AND [Started At] >= '$sessionSince' ORDER BY [Started At] DESC" | ForEach-Object { @{ sid = [int]$_.sid; attemptId = [string]$_.aid; opSeq = [long]$_.seq } })
+    'R236-SQL-FIN:' + (ConvertTo-Json -Compress -InputObject $fin)
   } catch { 'R236-SQL-ERR:' + $_.Exception.Message }
   try {
-    'R236-NST:' + (ConvertTo-Json -Compress -InputObject @(Get-NAVServerSession -ServerInstance BC | Select-Object SessionID,ClientType,UserID,LoginDatetime))
+    $act = @(Invoke-Sqlcmd @sq -Query "SELECT [Session ID] AS sid FROM [dbo].[Active Session]" | ForEach-Object { [int]$_.sid })
+    'R236-ACTIVE:' + (ConvertTo-Json -Compress -InputObject $act)
+  } catch { 'R236-ACTIVE-ERR:' + $_.Exception.Message }
+  try {
+    'R236-NST:' + (ConvertTo-Json -Compress -InputObject @(Get-NAVServerSession -ServerInstance BC -Tenant $tenant | Select-Object SessionID,ClientType,UserID,LoginDatetime))
   } catch { 'R236-NST-ERR:' + $_.Exception.Message }
-  '----'
-  Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=[datetime]$since} -ErrorAction SilentlyContinue |
-    Where-Object ProviderName -like 'MicrosoftDynamicsNav*' |
-    Select-Object TimeCreated,Id,LevelDisplayName,@{n='Msg';e={$_.Message.Substring(0,[Math]::Min(2000,$_.Message.Length))}} |
-    Format-List | Out-String -Width 300
+  if ($since) {
+    '----'
+    Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=[datetime]$since} -ErrorAction SilentlyContinue |
+      Where-Object ProviderName -like 'MicrosoftDynamicsNav*' |
+      Select-Object TimeCreated,Id,LevelDisplayName,@{n='Msg';e={$_.Message.Substring(0,[Math]::Min(2000,$_.Message.Length))}} |
+      Format-List | Out-String -Width 300
+  }
 }`;
 }
 
-async function containerEvidence(attemptId: string, opSeq: number, sinceIso: string) {
-  const proc = Bun.spawn(
-    ["pwsh", "-NoProfile", "-Command", containerScript(attemptId, opSeq, sinceIso)],
-    { env: { ...process.env, DOCKER_CONTEXT: "desktop-windows" }, stdout: "pipe", stderr: "pipe" },
-  );
+export type RunScript = (
+  script: string,
+) => Promise<{ stdout: string; stderr: string; code: number }>;
+
+async function runPwsh(script: string) {
+  const proc = Bun.spawn(["pwsh", "-NoProfile", "-Command", script], {
+    env: { ...process.env, DOCKER_CONTEXT: "desktop-windows" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  return {
-    ...parseContainerEvidence(stdout),
-    nstEvidence: `exit ${code}\n--- stdout\n${stdout}\n--- stderr\n${stderr}`,
-  };
+  return { stdout, stderr, code };
 }
 
-function timedFetch(ms: number): FetchFn {
-  const f = (input: Parameters<FetchFn>[0], init?: Parameters<FetchFn>[1]) =>
-    bcFetch(input, { ...init, signal: AbortSignal.timeout(ms) });
-  return Object.assign(f, { preconnect: bcFetch.preconnect });
-}
-
-interface Pending {
+export interface PendingBroken {
   readonly trace: CallTrace;
   readonly attemptId: string;
   readonly opSeq: number;
@@ -232,11 +344,133 @@ interface Pending {
   readonly reads: MarkerRead[];
 }
 
+/**
+ * The slow path, once per session: the second marker read of every broken RunMutant call, then ONE
+ * container call for the progress rows, the session-list control and the event log. Never throws:
+ * any failure is recorded and leaves `actionEnded` false, so the caller still writes the record.
+ */
+export async function gatherEvidence(
+  pending: readonly PendingBroken[],
+  input: { tenant: string; sessionStartedAt: string; ranAnswerSessionId: number | null },
+  run: RunScript = runPwsh,
+): Promise<{ broken: BrokenCall[]; control: SessionControl; evidence: string }> {
+  for (const p of pending) {
+    try {
+      p.reads.push(await p.readMarker());
+    } catch (err) {
+      p.reads.push({ atMs: -1, error: String(err) });
+    }
+  }
+  let ev: ContainerEvidence = {
+    opSessionIds: new Map(),
+    finishedOps: null,
+    activeSessionIds: null,
+    nstSessions: null,
+  };
+  let evidence = "";
+  let evidenceError: string | undefined;
+  try {
+    const firstDispatch = Math.min(...pending.map((p) => p.trace.dispatchedAt));
+    const script = containerScript(
+      input.tenant,
+      pending,
+      new Date(Date.parse(input.sessionStartedAt) - 5_000).toISOString().slice(0, 23),
+      pending.length > 0 ? new Date(firstDispatch - 5_000).toISOString() : null,
+    );
+    const r = await run(script);
+    ev = parseContainerEvidence(r.stdout);
+    evidence = `exit ${r.code}\n--- stdout\n${r.stdout}\n--- stderr\n${r.stderr}`;
+  } catch (err) {
+    evidenceError = String(err);
+    evidence = `evidence step failed: ${evidenceError}`;
+  }
+  const control: SessionControl = {
+    ...sessionControl(
+      ev,
+      pending.map((p) => p.attemptId),
+      input.ranAnswerSessionId,
+    ),
+    ...(evidenceError !== undefined ? { error: evidenceError } : {}),
+  };
+  const broken = pending.map((p): BrokenCall => {
+    const ids = ev.opSessionIds.get(`${p.attemptId}:${p.opSeq}`) ?? null;
+    const [only] = ids ?? [];
+    return {
+      attemptId: p.attemptId,
+      opSeq: p.opSeq,
+      testMethod: p.trace.testMethod ?? null,
+      reads: p.reads,
+      sessionId: ids?.length === 1 && only !== undefined ? only : null,
+      nstSessions: ev.nstSessions,
+      actionEnded: decideActionEnded(
+        p.attemptId,
+        p.opSeq,
+        p.reads,
+        ids,
+        ev.nstSessions,
+        control.idSpaceMatched,
+      ),
+      nstEvidence: evidence,
+      ...(evidenceError !== undefined ? { evidenceError } : {}),
+    };
+  });
+  return { broken, control, evidence };
+}
+
+/**
+ * Requirements 8 and 9 plus review r1's minor: 0 only when nothing threw, every broken call is
+ * proven ended, and a quarantine names a test that IS one of the broken calls.
+ */
+export function decideExit(s: {
+  thrown: string | null;
+  quarantined: string | null;
+  broken: ReadonlyArray<{ testMethod: string | null; actionEnded: boolean }>;
+}): { exitCode: 0 | 3 | 4; stopReason: string | null } {
+  if (s.thrown !== null) {
+    return { exitCode: 4, stopReason: "session threw; a thrown session is never an observation" };
+  }
+  if (s.broken.some((b) => !b.actionEnded)) {
+    return {
+      exitCode: 3,
+      stopReason: "a broken RunMutant call's whole action could not be confirmed ended",
+    };
+  }
+  if (s.quarantined !== null) {
+    const test = /in-flight-unknown running (\S+)/.exec(s.quarantined)?.[1];
+    if (test === undefined || !s.broken.some((b) => b.testMethod === test)) {
+      return {
+        exitCode: 3,
+        stopReason: "quarantined, and the quarantined test is not a broken call proven ended",
+      };
+    }
+  }
+  return { exitCode: 0, stopReason: null };
+}
+
+/** Always leaves the record somewhere: the file, else stdout. Returns false if the file failed. */
+export function writeRecord(out: string, record: unknown): boolean {
+  const line = JSON.stringify(record);
+  try {
+    appendFileSync(out, `${line}\n`);
+    return true;
+  } catch (err) {
+    console.error(`could not append to ${out}: ${String(err)}; the record follows on stdout`);
+    console.log(`R236-RECORD:${line}`);
+    return false;
+  }
+}
+function timedFetch(ms: number): FetchFn {
+  const f = (input: Parameters<FetchFn>[0], init?: Parameters<FetchFn>[1]) =>
+    bcFetch(input, { ...init, signal: AbortSignal.timeout(ms) });
+  return Object.assign(f, { preconnect: bcFetch.preconnect });
+}
+
 /** Hooks for one session: the fast broken-call read and the post-fence cost capture. */
 function sessionHooks(
   odataCfg: ActivationConfig,
-  pending: Pending[],
+  pending: PendingBroken[],
   postFence: PostFence[],
+  ran: { sessionId: number | null },
 ): TraceHooks {
   return {
     onBrokenCall: async (trace, body) => {
@@ -267,18 +501,23 @@ function sessionHooks(
           return { atMs: at - brokeAt, error: String(err) };
         }
       };
-      const p: Pending = { trace, attemptId, opSeq, readMarker, reads: [] };
+      const p: PendingBroken = { trace, attemptId, opSeq, readMarker, reads: [] };
       pending.push(p);
       p.reads.push(await readMarker());
     },
     onBody: (trace, text) => {
-      if (trace.action !== "LethALControl_RunMutantWithCoverage") return;
+      if (!trace.action.startsWith("LethALControl_RunMutant")) return;
       const method = trace.testMethod ?? "?";
       try {
         const inner = JSON.parse(String((JSON.parse(text) as { value?: unknown }).value)) as Record<
           string,
           unknown
         >;
+        // Review r1: a `ran` answer's own session id (AddSessionKeys) is one positive control.
+        if (inner.status === "ran" && typeof inner.sessionId === "number") {
+          ran.sessionId = inner.sessionId;
+        }
+        if (trace.action !== "LethALControl_RunMutantWithCoverage") return;
         const num = (k: string) =>
           typeof inner[k] === "number" ? { [k]: inner[k] as number } : {};
         postFence.push({
@@ -380,11 +619,12 @@ async function main(): Promise<void> {
     const outputDir = join(scratchDir, "publish");
     await mkdir(outputDir, { recursive: true });
     const calls: CallTrace[] = [];
-    const pending: Pending[] = [];
+    const pending: PendingBroken[] = [];
     const postFence: PostFence[] = [];
+    const ran: { sessionId: number | null } = { sessionId: null };
     const events: RunEvent[] = [];
     const fetchFn = traced
-      ? traceFetch(bcFetch, calls, sessionHooks(odataCfg, pending, postFence))
+      ? traceFetch(bcFetch, calls, sessionHooks(odataCfg, pending, postFence, ran))
       : bcFetch;
     const backend = new BcDevMcpBackend(
       {
@@ -434,6 +674,7 @@ async function main(): Promise<void> {
     let thrown: string | null = null;
     let appVersion: string | null = null;
     let baseline: SessionRecord["baseline"] = [];
+    let storeReadError: string | null = null;
     try {
       const report = await runSession({
         backend,
@@ -484,50 +725,28 @@ async function main(): Promise<void> {
             failureHead: r.failure_message === null ? null : r.failure_message.slice(0, 300),
           }));
         }
+      } catch (err) {
+        storeReadError = String(err);
       } finally {
-        store.close();
-        await backend.close();
+        // A failed close must not escape to exit 2 and lose this session's record.
+        try {
+          store.close();
+          await backend.close();
+        } catch (err) {
+          storeReadError = `${storeReadError ?? ""} close failed: ${String(err)}`.trim();
+        }
       }
     }
 
-    // Slow path: second marker read, then the server's own record of the call's BC session.
-    const broken: BrokenCall[] = [];
-    for (const p of pending) {
-      p.reads.push(await p.readMarker());
-      const since = new Date(p.trace.dispatchedAt - 5_000).toISOString();
-      const ev = await containerEvidence(p.attemptId, p.opSeq, since);
-      const [only] = ev.sqlSessionIds ?? [];
-      broken.push({
-        attemptId: p.attemptId,
-        opSeq: p.opSeq,
-        reads: p.reads,
-        sessionId: ev.sqlSessionIds?.length === 1 && only !== undefined ? only : null,
-        nstSessions: ev.nstSessions,
-        actionEnded: decideActionEnded(
-          p.attemptId,
-          p.opSeq,
-          p.reads,
-          ev.sqlSessionIds,
-          ev.nstSessions,
-        ),
-        nstEvidence: ev.nstEvidence,
-      });
-    }
-
-    let stopReason: string | null = null;
-    let exitCode = 0;
-    if (thrown !== null) {
-      quarantined = `THREW: ${thrown}`;
-      stopReason = "session threw; a thrown session is never an observation";
-      exitCode = 4;
-    } else if (broken.some((b) => !b.actionEnded)) {
-      stopReason = "a broken RunMutant call's whole action could not be confirmed ended";
-      exitCode = 3;
-    } else if (quarantined !== null && broken.length === 0) {
-      // Untraced, or a quarantine with no broken call on record: nothing proves the server is idle.
-      stopReason = "quarantined with no broken RunMutant call on record to prove the action ended";
-      exitCode = 3;
-    }
+    // Slow path, never throws: second marker reads, then ONE container call for the progress rows,
+    // the session-list positive control (recorded every session, hit or not) and the event log.
+    const { broken, control } = await gatherEvidence(pending, {
+      tenant: bcdev.tenant ?? "default",
+      sessionStartedAt: startedAt,
+      ranAnswerSessionId: ran.sessionId,
+    });
+    if (thrown !== null) quarantined = `THREW: ${thrown}`;
+    const { exitCode, stopReason } = decideExit({ thrown, quarantined, broken });
 
     const record: SessionRecord = {
       arm,
@@ -547,17 +766,20 @@ async function main(): Promise<void> {
       calls,
       postFence,
       broken,
+      sessionControl: control,
+      storeReadError,
       warnings: events.flatMap((e) =>
         e.type === "warning" ? [{ code: e.code, message: e.message }] : [],
       ),
       stopReason,
       scratchDir,
     };
-    appendFileSync(out, `${JSON.stringify(record)}\n`);
+    const written = writeRecord(out, record);
     console.log(
       `${arm} #${index}: ${record.hit ? "HIT" : "no hit"}, ${broken.length} broken call(s)${stopReason !== null ? `, STOP: ${stopReason}` : ""}`,
     );
     if (exitCode !== 0) process.exit(exitCode);
+    if (!written) process.exit(3); // the record reached stdout only: stop, never continue silently
     afterHit = broken.length > 0;
   }
   process.exit(0);

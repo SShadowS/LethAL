@@ -22,6 +22,10 @@ export interface CallTrace {
   errorPhase?: "fetch" | "body";
   errorAt?: number;
   error?: string;
+  /** Review r1: the error class and text as the transport saw them, captured BEFORE the hook runs, so a
+   * slow or misbehaving marker read cannot relabel the failure. */
+  errorName?: string;
+  preHookError?: string;
 }
 
 export interface TraceHooks {
@@ -77,6 +81,8 @@ export function traceFetch(inner: FetchFn, sink: CallTrace[], hooks: TraceHooks 
       trace.errorPhase = "fetch";
       trace.errorAt = Date.now();
       trace.error = String(err);
+      trace.errorName = err instanceof Error ? err.name : typeof err;
+      trace.preHookError = `${trace.errorName}: ${String(err)}`;
       await runHook(hooks, trace, body);
       throw err;
     }
@@ -111,6 +117,8 @@ export function traceFetch(inner: FetchFn, sink: CallTrace[], hooks: TraceHooks 
           trace.errorPhase = "body";
           trace.errorAt = Date.now();
           trace.error = String(err);
+          trace.errorName = err instanceof Error ? err.name : typeof err;
+          trace.preHookError = `${trace.errorName}: ${String(err)}`;
           await runHook(hooks, trace, body);
           throw err;
         }
