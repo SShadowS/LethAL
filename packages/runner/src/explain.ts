@@ -572,7 +572,8 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *   - every mutant's `guardReached`, `reachGrain` and `reachedBy` : GH-24, decide `reach`; also
  *                                            refused in a combination the producer cannot write
  *   - every mutant's `cause`               — selects an `ERROR_CAUSE_INTERPRETATIONS` entry
- *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup
+ *   - every mutant's `carried`             : C02-01, decides `artifactIdAbsent` before the lookup;
+ *                                            GH-24b, decides `reach` first and refuses reach fields
  *   - `artifacts` (each `batchIndex` once, `artifactId` a string) : C02-01, the per-batch lookup
  *   - a `survived` row's `batchIndex`      : C02-01, a required row field copied to the survivor
  *                                            and the artifact lookup key; a bad one would silently
@@ -727,12 +728,27 @@ export function assertExplainableReport(value: unknown): SessionReport {
         reachedBy,
       );
     }
+    // GH-24b: "not reached" beside a test that reached the marker is the same corruption, reversed.
+    if (guardReached === false && Array.isArray(reachedBy) && reachedBy.length > 0) {
+      refuse(
+        `${where} has guardReached false with a non-empty reachedBy; a test that reached the marker contradicts "not reached"`,
+        reachedBy,
+      );
+    }
     // C02-01: `carried` decides `artifactIdAbsent`, and wins over the batch lookup, so a coerced
     // `"true"` or `null` would hand a carried verdict this run's artifact or the reverse.
     if (mutant.carried !== undefined && typeof mutant.carried !== "boolean") {
       refuse(
         `${where} has a non-boolean carried, which would decide its artifactId by coercion`,
         mutant.carried,
+      );
+    }
+    // GH-24b: a carried row's reach was not measured in this run, so the writer never gives it a
+    // reach answer; one present came from somewhere else and would be projected as this run's.
+    if (mutant.carried === true && (guardReached !== undefined || reachedBy !== undefined)) {
+      refuse(
+        `${where} is carried and has guardReached or reachedBy; a carried row's reach was not measured in this run`,
+        { guardReached, reachedBy },
       );
     }
     // C02-01: `survivorOf` reads `readerMark.key` and `.reason`. `null` would throw a TypeError
@@ -879,7 +895,13 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
     refuse(`survivor ${JSON.stringify(m.mutantCode)} has no coverageAttribution`, undefined);
   }
   const guardEvidence = guardEvidenceOf(m.guardObserved);
-  const reach = survivorReachOf(attribution, guardEvidence, m.guardReached, m.reachGrain);
+  const reach = survivorReachOf(
+    attribution,
+    guardEvidence,
+    m.guardReached,
+    m.reachGrain,
+    m.carried === true,
+  );
   return {
     mutantCode: m.mutantCode,
     file: m.file,

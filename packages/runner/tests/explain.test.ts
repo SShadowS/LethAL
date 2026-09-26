@@ -1267,6 +1267,21 @@ describe("GH-24: reach decided per mutant", () => {
     expect(out.survivors.map((s) => s.reach)).toEqual(["not-decided", "not-decided"]);
   });
 
+  test("GH-24b: a carried row with NO grain reads not-decided, never the R116 fallback", () => {
+    // `guardObserved: false` and `exact` on purpose: without the carried arm this row has no grain,
+    // looks archived, and reads covered-but-unreached from a batch signal this run never measured
+    // for it.
+    const out = explain(
+      reportFixture({
+        mutants: [
+          reachMutant("M0001", "exact", false, { carried: true }),
+          reachMutant("M0002", "object", false, { carried: true }),
+        ],
+      }),
+    );
+    expect(out.survivors.map((s) => s.reach)).toEqual(["not-decided", "not-decided"]);
+  });
+
   test("GH-24: an archived row with no grain keeps the R116 derivation", () => {
     const out = explain(
       reportFixture({
@@ -1312,6 +1327,44 @@ describe("GH-24: reach decided per mutant", () => {
     for (const [field, report] of cases) {
       expect(() => explain(report)).toThrow(MalformedReportError);
       expect(() => explain(report)).toThrow(new RegExp(field));
+    }
+  });
+
+  test("GH-24b: guardReached false with a non-empty reachedBy is refused, naming the mutant", () => {
+    // A test that reached the marker contradicts "not reached"; projecting it would print an
+    // unreached survivor beside the name of a test that reached it.
+    const report = reportFixture({
+      mutants: [
+        {
+          ...survivorMutant("M0001", "exact", true),
+          reachGrain: "statement",
+          guardReached: false,
+          reachedBy: ["T.A"],
+        },
+      ],
+    });
+    expect(() => explain(report)).toThrow(MalformedReportError);
+    expect(() => explain(report)).toThrow(/M0001.*guardReached false/);
+  });
+
+  test("GH-24b: reach fields on a carried row are refused, naming the mutant", () => {
+    // A carried row's reach was not measured this run, so the writer never gives it either field.
+    for (const extra of [
+      { guardReached: false, reachedBy: [] },
+      { guardReached: true, reachedBy: ["T.A"] },
+    ]) {
+      const report = reportFixture({
+        mutants: [
+          {
+            ...survivorMutant("M0001", "exact", true),
+            reachGrain: "statement",
+            carried: true,
+            ...extra,
+          },
+        ],
+      });
+      expect(() => explain(report)).toThrow(MalformedReportError);
+      expect(() => explain(report)).toThrow(/M0001.*carried/);
     }
   });
 
