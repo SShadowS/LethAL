@@ -291,8 +291,8 @@ above, not only an appeal to the AL spec.
 
 ### The answer-key app, and why it is separate
 
-`fixtures/sandbox-harden-answers` (`codeunit 79575 "Harden Answer Key"`) is a third app, not a fifth
-test method added to `sandbox-harden-tests`. Two reasons: the base suite's frozen baseline must
+`fixtures/sandbox-harden-answers` (`codeunit 79575 "Harden Answer Key"`) is a third app, not more
+test methods in `sandbox-harden-tests`. Two reasons: the base suite's frozen baseline must
 never contain the killers, or "the base suite misses it" stops being true, and C02-08 needs a fixed
 control it can measure against without touching the committed base suite. Its gate leg only asserts
 the five planted verdicts, S1 to S4 killed by name, S5 survived. Every other row is printed, not
@@ -302,7 +302,8 @@ practice some of them do anyway just by exercising the same procedures.
 Measured 2026-09-26 on Cronus28, twice, identical results: the base suite
 (`sandbox-harden-tests`) gives 16 killed, 5 survived, 0 no-coverage over 21 deployed mutants in one
 batch. The answers suite (`sandbox-harden-answers`) gives 18 killed, 3 survived: S5, plus two
-non-planted mutants the answer key does not target but kills incidentally.
+non-planted mutants the answer key does not target and so does not kill (`IsLarge`'s
+`empty-block`, `BonusFor`'s `conditional-boundary`).
 
 ### Hand-off rule for C02-08
 
@@ -312,16 +313,17 @@ non-planted mutants the answer key does not target but kills incidentally.
   `StaleTestAppError` until the committed suite is republished. Give the copy its own id, or
   republish afterwards.
 - `lethal verify --tests fixtures/sandbox-harden-answers` is NOT a usable control on its own.
-  `planVerify`'s `matchCovering` (`packages/runner/src/verify.ts`) takes each mutant's
-  `coveringTests` names from the base run's baseline, `Harden Tests.IsLargeSeparatesSmallFromLarge`
-  and so on, and requires that same `(codeunitId, method)` under that same codeunit name to still
-  exist in whatever `--tests` directory is passed. `sandbox-harden-answers` contains only
-  `Harden Answer Key` (codeunit 79575), never `Harden Tests` (codeunit 79550), so every one of S1 to
-  S4's covering-test names fails to resolve and `planVerify` throws `covering-test-unmatched` before
-  anything runs. The working deterministic control is a temporary copy of `sandbox-harden-tests`
-  with `Harden Answer Key`'s five test methods added alongside `Harden Tests` (kept, not replaced,
-  per the bullet above): it must report S1 to S4 killed and S5 skipped. C02-08 needs its own copy of
-  `sandbox-harden-tests` for this, per the first bullet's own-id-or-republish rule.
+  `planVerify`'s `matchCovering` (`packages/runner/src/verify.ts`) resolves each survivor's
+  covering-test name against that SAME codeunit name in `--tests`. S1 to S4's covering tests are
+  `Harden Tests.*` (codeunit 79550), and `sandbox-harden-answers` holds only `Harden Answer Key`
+  (codeunit 79575), so `planVerify` throws `covering-test-unmatched` before anything runs.
+  C02-08's working control is a temporary copy of `sandbox-harden-tests` whose `app.json` stays
+  byte-identical (same id, name, version), so publishing it REPLACES the committed suite, plus one
+  new codeunit, `79574 "Harden Verify Answers"` (inside the tests app's own 79550-79574 `idRanges`,
+  so `alc` accepts it and it cannot collide with the published `sandbox-harden-answers` app at
+  79575), holding the five answer-key methods. C02-08 publishes that copy, runs `lethal verify`,
+  restores the committed suite in a `finally`, and runs `itest:harden` around the whole sequence to
+  confirm nothing drifted.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
