@@ -24,15 +24,19 @@ const base = (over: Partial<RoundData>): RoundData => ({
 
 describe("judgeRound: pooling (a), from the cmdlet list", () => {
   test("a recently finished op's session listed with a login before the op: pooled", () => {
-    const r = judgeRound(base({ nst: [{ id: 41, user: "ADMIN", login: T0 - 1_000 }] }), opts);
+    const r = judgeRound(
+      base({ nst: [{ id: 41, user: "ADMIN", login: T0 - 1_000, clientType: null }] }),
+      opts,
+    );
     expect(r.pooling).toBe("pooled");
   });
   test("not listed: not pooled; listed but logged in AFTER the op (id reused): not pooled", () => {
-    expect(judgeRound(base({ nst: [{ id: 9, user: "x", login: T0 }] }), opts).pooling).toBe(
-      "not pooled",
-    );
     expect(
-      judgeRound(base({ nst: [{ id: 41, user: "x", login: T0 + 30_000 }] }), opts).pooling,
+      judgeRound(base({ nst: [{ id: 9, user: "x", login: T0, clientType: null }] }), opts).pooling,
+    ).toBe("not pooled");
+    expect(
+      judgeRound(base({ nst: [{ id: 41, user: "x", login: T0 + 30_000, clientType: null }] }), opts)
+        .pooling,
     ).toBe("not pooled");
   });
   test("no recent finished op, an unread list, or a listed id with no login time: not determinable", () => {
@@ -40,9 +44,10 @@ describe("judgeRound: pooling (a), from the cmdlet list", () => {
       "not determinable",
     );
     expect(judgeRound(base({ nst: null }), opts).pooling).toBe("not determinable");
-    expect(judgeRound(base({ nst: [{ id: 41, user: null, login: null }] }), opts).pooling).toBe(
-      "not determinable",
-    );
+    expect(
+      judgeRound(base({ nst: [{ id: 41, user: null, login: null, clientType: null }] }), opts)
+        .pooling,
+    ).toBe("not determinable");
   });
 });
 
@@ -54,7 +59,7 @@ describe("judgeRound: the Active Session soundness criteria (b)", () => {
   test("finished disappears: sound when the finished op's session is absent from a NON-empty scoped table", () => {
     expect(judgeRound(base({ active: [live] }), opts).finishedDisappears).toBe("sound");
     const stays = judgeRound(
-      base({ active: [live, { id: 41, user: "admin", login: T0 - 1 }] }),
+      base({ active: [live, { id: 41, user: "admin", login: T0 - 1, clientType: null }] }),
       opts,
     );
     expect(stays.finishedDisappears).toBe("not sound");
