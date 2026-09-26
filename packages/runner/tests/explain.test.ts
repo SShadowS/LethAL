@@ -804,13 +804,22 @@ describe("explain — the admissibility rule, made executable", () => {
     // later reintroduced under that name. `fullCoverageReport` exists to reach every branch, so
     // every pinned path must appear in its projection.
     // C02-09: a quarantined run withholds `gaps[].unobservedBlock`, and the fixture is
-    // quarantined, so that one leaf is reached through the same report without `quarantined`.
-    const { quarantined: _q, ...unquarantined } = fullCoverageReport();
-    const produced = new Set([
-      ...leafPathsIn(explain(fullCoverageReport())),
-      ...leafPathsIn(explain(unquarantined)),
+    // quarantined, so that ONE leaf is the only pinned path the original fixture may miss. Every
+    // other path must still come from the original fixture alone; the next test reaches the
+    // conditional leaf.
+    const produced = new Set(leafPathsIn(explain(fullCoverageReport())));
+    expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([
+      "$.gaps[].unobservedBlock",
     ]);
-    expect(EXPLAIN_LEAF_PATHS.filter((p) => !produced.has(p))).toEqual([]);
+  });
+
+  test("the conditional `gaps[].unobservedBlock` path is reached without quarantine and withheld with it", () => {
+    const report = fullCoverageReport();
+    expect(report.quarantined).toBeDefined();
+    const { quarantined: _q, ...unquarantined } = report;
+    expect(leafPathsIn(explain(unquarantined))).toContain("$.gaps[].unobservedBlock");
+    expect(leafPathsIn(explain(report))).not.toContain("$.gaps[].unobservedBlock");
+    expect(EXPLAIN_LEAF_PATHS).toContain("$.gaps[].unobservedBlock");
   });
 
   test("every [verbatim] path really is verbatim — the projection copies, it does not compose", () => {
@@ -2593,6 +2602,35 @@ describe("explain: gaps (C02-09)", () => {
     const report = reportFixture({ mutants: [gapRow("M0101", "survived", blockA, 12), bare] });
     expect(() => explain(report)).toThrow(MalformedReportError);
     expect(() => explain(report)).toThrow(/all or none/);
+  });
+
+  // Review r1 finding 2: only a row with NONE of the three keys is legacy. Block lines without a
+  // gapId are a damaged new row; skipping them would make the whole report read as pre-C02-09 and
+  // silently omit both gap lists.
+  test("block lines without a gapId are refused, on every row or on one, one key or both", () => {
+    const rows = [
+      gapRow("M0101", "survived", blockA, 12),
+      gapRow("M0102", "killed", blockA, 13),
+      gapRow("M0201", "survived", blockB, 31),
+    ];
+    const strip = (m: MutantOutcome, keep: "both" | "start" | "end"): MutantOutcome => {
+      const { gapId: _g, blockStartLine, blockEndLine, ...rest } = m;
+      return {
+        ...rest,
+        ...(keep !== "end" ? { blockStartLine } : {}),
+        ...(keep !== "start" ? { blockEndLine } : {}),
+      } as MutantOutcome;
+    };
+    for (const keep of ["both", "start", "end"] as const) {
+      const all = reportFixture({ mutants: rows.map((m) => strip(m, keep)) });
+      expect(() => explain(all)).toThrow(MalformedReportError);
+      expect(() => explain(all)).toThrow(/but no gapId/);
+      const [first, ...others] = rows;
+      if (first === undefined) throw new Error("no rows");
+      const one = reportFixture({ mutants: [strip(first, keep), ...others] });
+      expect(() => explain(one)).toThrow(MalformedReportError);
+      expect(() => explain(one)).toThrow(/but no gapId/);
+    }
   });
 
   test("one gap id naming two blocks is refused", () => {

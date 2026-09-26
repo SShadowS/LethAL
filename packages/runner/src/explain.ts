@@ -895,8 +895,16 @@ export function assertExplainableReport(value: unknown): SessionReport {
   for (const m of mutants) {
     const mutant = m as Record<string, unknown>;
     const { gapId } = mutant;
-    if (gapId === undefined) continue;
     const where = `mutant ${JSON.stringify(mutant.mutantCode)}`;
+    // Only a row with NONE of the three keys is a pre-C02-09 row. Block lines without a gapId are
+    // a damaged new row, which would otherwise read as an old report and omit both gap lists.
+    if (gapId === undefined) {
+      const stray = (["blockStartLine", "blockEndLine"] as const).filter(
+        (k) => mutant[k] !== undefined,
+      );
+      if (stray.length === 0) continue;
+      refuse(`${where} has ${stray.join(" and ")} but no gapId`, stray);
+    }
     if (typeof gapId !== "string") refuse(`${where} has a gapId that is not a string`, gapId);
     for (const k of ["blockStartLine", "blockEndLine"] as const) {
       const v = mutant[k];

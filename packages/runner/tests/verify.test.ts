@@ -991,6 +991,7 @@ describe("C02-09: gap ids", () => {
 
   // Review fix round 1: a run that quarantined or threw partway through its last batch records its
   // artifact, but its unscored manifest entries have no row. Those are not measured, not corruption.
+  // `installedRun` never calls `finishRun`, so these runs are UNFINISHED, which is what allows it.
   test("a gap with one recorded survivor and one unrecorded entry expands to the survivor", async () => {
     const store = new ResultsStore(":memory:");
     installedRun(store, A1, [
@@ -1015,6 +1016,39 @@ describe("C02-09: gap ids", () => {
     const b = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GB])));
     expect(b.reason).toBe("gap-has-no-survivor");
     expect(b.detail).toContain("not measured 1");
+    store.close();
+  });
+
+  // Review r1 finding 1: "not measured" is allowed ONLY on a run that did not finish. A finished
+  // run scored every manifest entry, so a missing row is a lost row, and reading it as "not
+  // measured" would silently drop a survivor (or turn a gap into gap-has-no-survivor).
+  test("on a FINISHED run, a manifest entry with no row throws as a corrupt store, never a refusal or a smaller expansion", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+      seed("M0003", GB, "survived", { unrecorded: true }),
+    ]);
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    for (const g of [GA, GB]) {
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [g])).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(Error);
+      expect(e).not.toBeInstanceOf(VerifyError);
+      expect((e as Error).message).toContain("run 1 finished");
+      expect((e as Error).message).toContain("M0002, M0003");
+      expect((e as Error).message).toContain("(a corrupt store)");
+    }
+    store.close();
+  });
+
+  test("on a FINISHED run with every row recorded, a gap still expands", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "killed"),
+    ]);
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
     store.close();
   });
 
