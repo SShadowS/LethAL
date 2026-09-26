@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**56 of 266 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**55 of 266 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -309,7 +309,7 @@ that ordering is the priority.
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · open
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
-- **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · open
+- **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
 
 ---
