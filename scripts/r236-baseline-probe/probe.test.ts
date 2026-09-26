@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { OperationStatus } from "../../packages/runner/src/lease";
-import { decideActionEnded, parseContainerEvidence } from "./probe";
+// Imported WITH its extension: R186's importer check matches by basename, so a bare "./probe" is read as
+// importing the unguarded `scripts/r126-server-probe/probe.ts`. This probe.ts is guarded by import.meta.main.
+import { decideActionEnded, parseContainerEvidence } from "./probe.ts";
 
 const status = (s: Partial<OperationStatus>): OperationStatus => ({
   opKind: "idle",
