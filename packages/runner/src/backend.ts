@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { AlSource } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
 export interface TestMethodRef {
@@ -231,6 +232,10 @@ export type RunManyResult =
 /**
  * C02-04b: an installed artifact whose local .app and manifest matched the trusted store record
  * (`loadInstalledArtifact`). Identity comes from that record, never from the caller.
+ *
+ * The local copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
+ * (the bytes whose hash matched) and the sources below, never the files again, so a file changed
+ * after the check cannot reach the index. `appPath` and `instrumentedDir` are for messages only.
  */
 export interface BoundArtifact {
   /** `runs.app_id` of the run that published it (every batch of a run publishes one app id). */
@@ -239,6 +244,12 @@ export interface BoundArtifact {
   readonly sha256: string;
   readonly appPath: string;
   readonly instrumentedDir: string;
+  /** The .app bytes whose SHA-256 is `sha256`. */
+  readonly appBytes: Uint8Array;
+  /** `<instrumentedDir>/app.json`, verbatim. */
+  readonly appJsonText: string;
+  /** Every `.al` under `instrumentedDir` (`readAlSources`). */
+  readonly alSources: readonly AlSource[];
 }
 
 export interface ExecutionBackend {

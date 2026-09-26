@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -26,6 +26,9 @@ const MANIFEST = {
   ],
 };
 
+const APP_JSON = '{ "idRanges": [{ "from": 79000, "to": 79099 }] }';
+const AL_SOURCE = 'codeunit 79000 "A" { }';
+
 const sha = (bytes: string | Uint8Array) => Bun.SHA256.hash(bytes, "hex");
 
 describe("loadInstalledArtifact (C02-04b Task 6)", () => {
@@ -42,6 +45,8 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       join(instrumentedDir, "mutant-manifest.json"),
       JSON.stringify(MANIFEST, null, 2),
     );
+    await Bun.write(join(instrumentedDir, "app.json"), APP_JSON);
+    await Bun.write(join(instrumentedDir, "src", "A.Codeunit.al"), AL_SOURCE);
     const appPath = join(dir, `${sha(appBytes).slice(0, 16)}-${ARTIFACT_ID}.app`);
     await Bun.write(appPath, appBytes);
     store = new ResultsStore(":memory:");
@@ -146,6 +151,27 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       sha256: sha(appBytes),
       appPath: ref.appPath,
       instrumentedDir: ref.instrumentedDir,
+      appBytes: new Uint8Array(Buffer.from(appBytes)),
+      appJsonText: APP_JSON,
+      alSources: [{ path: join("src", "A.Codeunit.al"), text: AL_SOURCE }],
+    });
+  });
+
+  // Review r1 fix 2: every local read attach needs happens here, so a bad one is refused before
+  // any server call rather than after the lease and the registry check.
+  test("loadInstalledArtifact refuses an unreadable AL source or app.json as local-copy-unreadable", async () => {
+    // A directory named like a source: it is listed as an .al file, and reading it fails.
+    const bad = join(ref.instrumentedDir, "Bad.Codeunit.al");
+    await mkdir(bad);
+    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect(err).toMatchObject({ reason: "local-copy-unreadable" });
+    expect((err as InstalledArtifactError).detail).toContain(ref.instrumentedDir);
+
+    await rm(bad, { recursive: true });
+    await rm(join(ref.instrumentedDir, "app.json"));
+    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
+      reason: "local-copy-unreadable",
     });
   });
 });

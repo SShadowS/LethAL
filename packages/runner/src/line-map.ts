@@ -340,15 +340,37 @@ export async function buildLineMap(
   projectDir: string,
   declared: ReadonlySet<string>,
 ): Promise<LineMap> {
-  await initParser();
+  return lineMapFromSources(await readAlSources(projectDir), declared);
+}
+
+/** One `.al` file of a project: its path relative to the project dir, and its text. */
+export interface AlSource {
+  readonly path: string;
+  readonly text: string;
+}
+
+/** Every `.al` under `projectDir`, recursively, sorted by relative path: what `buildLineMap` parses. */
+export async function readAlSources(projectDir: string): Promise<AlSource[]> {
   const files = (await readdir(projectDir, { recursive: true }))
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
+  const out: AlSource[] = [];
+  for (const path of files) {
+    out.push({ path, text: await readFile(join(projectDir, path), "utf8") });
+  }
+  return out;
+}
+
+/** `buildLineMap` over sources already read (C02-04b: the preflight's in-memory copy). */
+export async function lineMapFromSources(
+  sources: readonly AlSource[],
+  declared: ReadonlySet<string>,
+): Promise<LineMap> {
+  await initParser();
   const entries: LineMapEntry[] = [];
-  for (const rel of files) {
-    const source = await readFile(join(projectDir, rel), "utf8");
-    entries.push(...fileLineMapEntries(wrapRoot(parseAL(source)), objectIdentityOf));
+  for (const { text } of sources) {
+    entries.push(...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf));
   }
   return new LineMap(entries, declared);
 }

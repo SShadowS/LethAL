@@ -255,7 +255,12 @@ export class AppMethodIndex {
   }
 
   static async fromAppFile(appPath: string): Promise<AppMethodIndex> {
-    const buf = await readFile(appPath);
+    return AppMethodIndex.fromAppBytes(await readFile(appPath));
+  }
+
+  /** `fromAppFile` over bytes already read (C02-04b: the preflight's verified copy). */
+  static fromAppBytes(bytes: Uint8Array): AppMethodIndex {
+    const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const symbolReferenceBytes = extractZipEntry(buf, "SymbolReference.json");
     // AL writes SymbolReference.json with a UTF-8 BOM — strip it before JSON.parse.
     let text = symbolReferenceBytes.toString("utf8");

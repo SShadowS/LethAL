@@ -467,6 +467,11 @@ describe("BcDevMcpBackend.attach", () => {
       sha256: first.artifact.sha256,
       appPath: first.artifact.appPath,
       instrumentedDir: first.deployDir,
+      // What `loadInstalledArtifact` hands over: the bytes it hashed. "procedure" coverage reads
+      // no source, so the source fields are empty here.
+      appBytes: new Uint8Array(await readFile(first.artifact.appPath)),
+      appJsonText: "{}",
+      alSources: [],
     };
     return {
       backend,
@@ -517,11 +522,25 @@ describe("BcDevMcpBackend.attach", () => {
     }
   });
 
-  test("attach refuses an unreadable local .app as local-copy-unreadable, after the registry agreed", async () => {
+  // Review r1 fix 2: attach indexes the bytes the preflight verified and never re-reads appPath,
+  // so a file changed or removed after the preflight cannot reach the index.
+  test("attach indexes the verified in-memory bytes, never the file at appPath", async () => {
+    const s = await attachSetup({});
+    try {
+      await s.backend.attach({ ...s.bound, appPath: join(s.bound.instrumentedDir, "missing.app") });
+      expect(s.factoryCalls).toEqual([[TEST_APP_ID, TEST_ARTIFACT_ID]]);
+      const v = await s.backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries[0]?.procedure).toBe("Post");
+    } finally {
+      await s.cleanup();
+    }
+  });
+
+  test("attach refuses bytes it cannot index as local-copy-unreadable, after the registry agreed", async () => {
     const s = await attachSetup({});
     try {
       const err = await s.backend
-        .attach({ ...s.bound, appPath: join(s.bound.instrumentedDir, "missing.app") })
+        .attach({ ...s.bound, appBytes: new Uint8Array([1, 2, 3]) })
         .catch((e: unknown) => e);
       expect(err).toMatchObject({ reason: "local-copy-unreadable" });
       expect(s.factoryCalls).toEqual([]);
@@ -538,7 +557,7 @@ describe("BcDevMcpBackend.attach", () => {
       await s.backend.attach(s.bound);
       expect(transportOf()).toBeDefined();
       const err = await s.backend
-        .attach({ ...s.bound, appPath: join(s.bound.instrumentedDir, "missing.app") })
+        .attach({ ...s.bound, appBytes: new Uint8Array([1, 2, 3]) })
         .catch((e: unknown) => e);
       expect(err).toMatchObject({ reason: "local-copy-unreadable" });
       expect(transportOf()).toBeUndefined();

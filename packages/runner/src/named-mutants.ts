@@ -4,6 +4,7 @@ import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import type { BoundArtifact, TestMethodRef } from "./backend";
 import { describeThrown } from "./describe-error";
+import { readAlSources } from "./line-map";
 import { testKeyOf } from "./selection";
 import type { ResultsStore } from "./store";
 
@@ -29,7 +30,9 @@ async function readLocal<T>(what: string, read: () => Promise<T>): Promise<T> {
 /**
  * Links 1 and 2 of decision 1: the trusted store record exists and carries a manifest hash, and
  * the local .app and manifest are exactly the recorded ones. Reads only the store and local files;
- * never a backend. Returns the PARSED manifest; names are resolved in it and nowhere else.
+ * never a backend. Returns the PARSED manifest; names are resolved in it and nowhere else. The
+ * returned artifact carries the verified .app bytes, `app.json` and every `.al` source, so no
+ * later step re-reads a file this check did not see.
  *
  * Trust assumption: an artifactId is assumed to name one source set. A forged or partial build
  * carrying the same id is NOT detected here, so a named guard absent from it could still score
@@ -59,6 +62,11 @@ export async function loadInstalledArtifact(
     manifestPath,
     async () => JSON.parse(manifestText) as MutantManifest,
   );
+  // Every other local read `attach` needs, done here and only here (review r1 fix 2): an
+  // unreadable source is refused before any server call, and what attach indexes is what was read.
+  const appJsonPath = join(ref.instrumentedDir, "app.json");
+  const appJsonText = await readLocal(appJsonPath, () => readFile(appJsonPath, "utf8"));
+  const alSources = await readLocal(ref.instrumentedDir, () => readAlSources(ref.instrumentedDir));
 
   const appSha = Bun.SHA256.hash(appBytes, "hex");
   if (appSha !== record.sha256) {
@@ -89,6 +97,9 @@ export async function loadInstalledArtifact(
       sha256: record.sha256,
       appPath: ref.appPath,
       instrumentedDir: ref.instrumentedDir,
+      appBytes: new Uint8Array(appBytes),
+      appJsonText,
+      alSources,
     },
     manifest,
   };

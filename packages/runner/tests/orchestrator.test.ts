@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
@@ -9687,6 +9687,8 @@ const NAMED_TESTS_AL = `codeunit 79100 "Sandbox Tests"
  * `deadline-exceeded` + `in-flight-unknown`, everything else passes; each attests `observedAny`.
  */
 class NamedFake implements ExecutionBackend {
+  /** Every artifact `attach` was handed, in call order. */
+  readonly attached: BoundArtifact[] = [];
   private active: string | null = null;
   private manySeq = 0;
   constructor(
@@ -9710,6 +9712,7 @@ class NamedFake implements ExecutionBackend {
     throw new Error("NamedFake: runNamedMutants must never compile the target");
   }
   async attach(a: BoundArtifact): Promise<void> {
+    this.attached.push(a);
     const reported = this.o.serverReports ?? a.artifactId;
     const fetchFn = (async () =>
       new Response(JSON.stringify({ value: reported }), {
@@ -9821,7 +9824,7 @@ async function installedFixture(
     emit: [traceEvents(trace)],
     ...(withLease ? { lease: leaseCfg(client).lease } : {}),
   };
-  return { cfg, trace, store, client, installed };
+  return { cfg, trace, store, client, installed, inner };
 }
 
 async function rewriteManifestKeepingId(
@@ -9889,6 +9892,42 @@ describe("C02-04b: runNamedMutants", () => {
     );
     expect(err).toBeInstanceOf(NamedMutantError);
     expect((err as Error).message).toMatch(/the run that published/);
+    expect(calls(fx.trace)).toEqual([]);
+  });
+
+  // Review r1 fix 2: the local copy is read ONCE, in the preflight, and what was hashed there is
+  // what attach indexes. A file rewritten afterwards cannot reach the index.
+  test("runNamedMutants: a local file changed after the preflight cannot change what attach indexes", async () => {
+    const fx = await installedFixture();
+    const record = fx.store.trustedArtifactRecord(fx.installed.fromRunId, 0);
+    if (record === null) throw new Error("fixture recorded no artifact");
+    const alPath = join(fx.installed.instrumentedDir, "SandboxLogic.Codeunit.al");
+    const alBefore = await readFile(alPath, "utf8");
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      inLease: async (fence) => {
+        await fence.publish(async () => {
+          await Bun.write(fx.installed.appPath, "tampered after the preflight");
+          await Bun.write(alPath, "// tampered after the preflight");
+        });
+      },
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(fx.inner.attached).toHaveLength(2);
+    for (const a of fx.inner.attached) {
+      expect(Bun.SHA256.hash(a.appBytes, "hex")).toBe(record.sha256);
+      expect(a.alSources.find((x) => x.path === "SandboxLogic.Codeunit.al")?.text).toBe(alBefore);
+    }
+  });
+
+  test("runNamedMutants refuses an unreadable AL source before any backend call", async () => {
+    const fx = await installedFixture();
+    // A directory named like a source: listed as an .al file, and reading it fails.
+    await mkdir(join(fx.installed.instrumentedDir, "Unreadable.Codeunit.al"));
+    const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect((err as InstalledArtifactError).reason).toBe("local-copy-unreadable");
+    expect((err as InstalledArtifactError).detail).toContain(fx.installed.instrumentedDir);
     expect(calls(fx.trace)).toEqual([]);
   });
 
