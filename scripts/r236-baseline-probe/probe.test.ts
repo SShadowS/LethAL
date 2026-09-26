@@ -82,12 +82,16 @@ describe("sessionControl (review r1: the id-space positive control)", () => {
     expect(c.idSpaceMatched).toBe(true);
   });
 
-  test("the ran answer's session id, or an Active Session overlap, also proves it", () => {
+  test("the ran answer's session id also proves it", () => {
     expect(sessionControl(ev({ nstSessions: [77] }), [], 77).idSpaceMatched).toBe(true);
     expect(sessionControl(ev({ nstSessions: [77] }), [], 77).ranAnswerListed).toBe(true);
-    const viaTable = sessionControl(ev({ nstSessions: [5], activeSessionIds: [5, 6] }), [], null);
+  });
+
+  test("review r2: an Active Session overlap is diagnostic only (the table read has no tenant filter)", () => {
+    // wrong-tenant list [5] overlaps the unfiltered table but lists neither control
+    const viaTable = sessionControl(ev({ nstSessions: [5], activeSessionIds: [5, 6] }), [], 77);
     expect(viaTable.activeTableOverlap).toEqual([5]);
-    expect(viaTable.idSpaceMatched).toBe(true);
+    expect(viaTable.idSpaceMatched).toBe(false);
   });
 
   test("an empty or unread list, or no control listed, proves nothing", () => {
@@ -172,6 +176,19 @@ describe("gatherEvidence (review r1 IMPORTANT 3: evidence failures never lose th
     expect(r.broken[0]?.evidenceError).toContain("refusing");
   });
 
+  test("review r2: a wrong-tenant list that overlaps the table but lists neither control: NOT ended", async () => {
+    const stdout = [
+      'R236-SQL-OP:{"attemptId":"a7","opSeq":12,"ids":[55]}',
+      'R236-SQL-FIN:[{"sid":41,"attemptId":"ok","opSeq":11}]',
+      "R236-ACTIVE:[5,6]",
+      'R236-NST:[{"SessionID":5}]',
+    ].join("\n");
+    const r = await gatherEvidence(pending, input, async () => ({ stdout, stderr: "", code: 0 }));
+    expect(r.control.activeTableOverlap).toEqual([5]);
+    expect(r.control.idSpaceMatched).toBe(false);
+    expect(r.broken[0]?.actionEnded).toBe(false);
+  });
+
   test("a healthy read with a listed control and our session gone: ended", async () => {
     const stdout = [
       'R236-SQL-OP:{"attemptId":"a7","opSeq":12,"ids":[55]}',
@@ -224,5 +241,11 @@ describe("decideExit", () => {
 describe("writeRecord (review r1 IMPORTANT 3)", () => {
   test("an unwritable --out never throws: the record goes to stdout and the caller learns it failed", () => {
     expect(writeRecord("C:/r236-no-such-dir-xyz/out.ndjson", { a: 1 })).toBe(false);
+  });
+
+  test("review r2 nit: a record that cannot be serialised never throws either", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(writeRecord("C:/r236-no-such-dir-xyz/out.ndjson", cyclic)).toBe(false);
   });
 });

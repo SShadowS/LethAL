@@ -119,9 +119,10 @@ interface SessionRecord {
  * list means "ended" only if that list is non-empty and is proven to use the SAME id space as the
  * control app's `SessionId()` (wrong tenant or wrong instance would list other ids, or none). Proof
  * is a known session id appearing in the list: the latest FINISHED op of this session (from
- * `LC Op Progress`), the `sessionId` a successful `ran` answer carried, or an id also found in the
- * tenant's `Active Session` table. `finishedOpListed: true` also says pooled sessions outlive their
- * op, in which case the session check cannot separate H2-fence from H2-action.
+ * `LC Op Progress`) or the `sessionId` a successful `ran` answer carried. `activeTableOverlap` is
+ * DIAGNOSTIC ONLY (review r2): the `Active Session` read has no tenant or instance filter, so a
+ * wrong-tenant list could overlap it. `finishedOpListed: true` also says pooled sessions outlive
+ * their op, in which case the session check cannot separate H2-fence from H2-action.
  */
 export interface SessionControl {
   readonly finishedOpSessionId: number | null;
@@ -250,11 +251,7 @@ export function sessionControl(
     ranAnswerListed,
     activeTableOverlap,
     idSpaceMatched:
-      nst !== null &&
-      nst.length > 0 &&
-      (finishedOpListed === true ||
-        ranAnswerListed === true ||
-        (activeTableOverlap?.length ?? 0) > 0),
+      nst !== null && nst.length > 0 && (finishedOpListed === true || ranAnswerListed === true),
   };
 }
 
@@ -449,13 +446,14 @@ export function decideExit(s: {
 
 /** Always leaves the record somewhere: the file, else stdout. Returns false if the file failed. */
 export function writeRecord(out: string, record: unknown): boolean {
-  const line = JSON.stringify(record);
+  let line = "";
   try {
+    line = JSON.stringify(record);
     appendFileSync(out, `${line}\n`);
     return true;
   } catch (err) {
     console.error(`could not append to ${out}: ${String(err)}; the record follows on stdout`);
-    console.log(`R236-RECORD:${line}`);
+    console.log(`R236-RECORD:${line === "" ? String(record) : line}`);
     return false;
   }
 }
