@@ -2,7 +2,7 @@
   "id": "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7",
   "name": "LethAL Sandbox Tests",
   "publisher": "LethAL",
-  "version": "1.0.0.2",
+  "version": "1.0.0.3",
   "brief": "LethAL Layer 4 fixture: test app for the sandbox mutation target.",
   "description": "Test codeunit exercising fixtures/sandbox-app. Asserts via Error() \u2014 no Library Assert dependency. Not for production use \u2014 see fixtures/README.md.",
   "privacyStatement": "",
@@ -15,7 +15,7 @@
       "id": "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
       "name": "LethAL Sandbox App",
       "publisher": "LethAL",
-      "version": "1.0.0.0"
+      "version": "1.0.0.1"
     }
   ],
   "screenshots": [],

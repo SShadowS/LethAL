@@ -1,3 +1,5 @@
+namespace LethAL.Sandbox.Logic;
+
 codeunit 79000 "Sandbox Logic"
 {
     procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean

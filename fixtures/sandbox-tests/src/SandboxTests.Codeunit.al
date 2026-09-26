@@ -1,3 +1,5 @@
+using LethAL.Sandbox.Logic;
+
 codeunit 79100 "Sandbox Tests"
 {
     Subtype = Test;
