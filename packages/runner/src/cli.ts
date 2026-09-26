@@ -1196,7 +1196,10 @@ const RUN_ONLY_FLAGS = [
  * named exceptions live there: `run --dry-run`'s exact, shrink-only list of execution flags it
  * accepts and ignores, and one precedence override (`clear-ceiling --config` is stored but not
  * opened when an explicit `--server`/`--instance` pair is given; see `resolveCeilingIdentity`).
- * `instead` is optional: without it the message ends with the owners list.
+ * "Read" means the parse STORES the flag. A config can still leave a stored flag unused (for
+ * example `doctor --project`/`--tests` on an al-runner-only config, `force-reset-lease --project`
+ * on a config without an environment tool); those depend on the config, not on another flag.
+ * `instead` is optional: without it the message names the owners and the refused subcommand only.
  */
 export const FLAG_OWNERS: ReadonlyArray<{
   readonly flag: string;
