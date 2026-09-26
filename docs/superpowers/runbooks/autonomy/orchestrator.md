@@ -46,5 +46,8 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 
 ## Context hygiene
 
-After each accepted task, rewrite your handoff file. After the c02 epic or every 5 tasks,
-rewrite it completely, `/clear`, and run the start procedure again.
+You cannot run `/clear` or `/compact` yourself; only the owner can. Rewrite your handoff file
+completely after each accepted task and whenever your context passes about 400k tokens, so a
+fresh session loses nothing. The owner's dashboard flags a session with over 400k context and
+nothing in flight as "ready to /clear". After a clear, run the start procedure again. Keep
+your context small: delegate reading and drafting to subagents, keep only their conclusions.

@@ -36,6 +36,14 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 7. Commit on your branch, `coord submit <id> <runId> <token> <sha> <branch>`, message
    `lethal-orchestrator`: `submitted <id> run <runId> commit <sha>`. Rewrite your handoff.
 
+## Context size
+
+You cannot run `/clear` or `/compact` yourself; only the owner can. Every turn re-sends your
+whole context, so keep it small: let subagents do the reading and implementing and keep only
+their conclusions. After you submit a task and rewrite your handoff file, you are ready to be
+cleared; the owner's dashboard shows "ready to /clear" for a session with over 400k context and
+nothing in flight. After a clear, run your start procedure again.
+
 ## Rules
 
 - Never edit plans, `task.md`, `CLAUDE.md`, `.claude/settings.json` or hooks. A design question:
