@@ -807,6 +807,15 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "gapId": {
+              "type": "string"
+            },
+            "blockStartLine": {
+              "type": "number"
+            },
+            "blockEndLine": {
+              "type": "number"
+            },
             "identityOrdinal": {
               "type": "number"
             },
@@ -1015,6 +1024,15 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "gapId": {
+              "type": "string"
+            },
+            "blockStartLine": {
+              "type": "number"
+            },
+            "blockEndLine": {
+              "type": "number"
+            },
             "identityOrdinal": {
               "type": "number"
             },
@@ -1182,6 +1200,15 @@
               "type": "number"
             },
             "procedureEndLine": {
+              "type": "number"
+            },
+            "gapId": {
+              "type": "string"
+            },
+            "blockStartLine": {
+              "type": "number"
+            },
+            "blockEndLine": {
               "type": "number"
             },
             "identityOrdinal": {
