@@ -45,7 +45,7 @@ async function withCache(
 describe("readAlRunnerCache", () => {
   test("an absent directory is a MEASURED absence, not a throw and not a zero-sized cache", async () => {
     const report = await readAlRunnerCache(
-      join(tmpdir(), "lethal-no-such-cache-dir-1234"),
+      join(tmpdir(), `lethal-no-such-cache-dir-${randomUUID()}`),
       NO_SECONDARY,
     );
     expect(report.present).toBe(false);

@@ -133,6 +133,7 @@ describe("lethal doctor on an al-runner-only project (R146)", () => {
     if (read === undefined) return;
     const report = await read();
     expect(report.secondaryDir).toBe(NO_SECONDARY_DIR);
+    expect(report.secondaryBytes).toBeNull();
   });
 
   test("a config that is NEITHER al-runner NOR bcdev NOR envTool still refuses", async () => {
