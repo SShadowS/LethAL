@@ -743,6 +743,99 @@ codeunit 50101 "Lib"
   });
 });
 
+describe("review round 2: fail-closed fixes", () => {
+  test("a quoted Codeunit name containing a dot resolves without namespace splitting (#A)", () => {
+    const lib = unit(
+      `
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+      50200,
+      "Lib.Pages",
+      false,
+    );
+    const got = scan(
+      unit(`
+    var
+        Lib2: Codeunit "Lib.Pages";
+
+    [Test]
+    procedure A()
+    begin
+        Lib2.Open();
+    end;`),
+      [ref(50100, "A")],
+      [{ path: "lib.al", text: lib }],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a quoted dotted Codeunit name still resolves when its declaration is wrapped in #if (#A)", () => {
+    const lib = `#if not CLEAN24
+${unit(
+  `
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+  50200,
+  "Lib.Pages",
+  false,
+)}
+#endif
+`;
+    const got = scan(
+      unit(`
+    var
+        Lib2: Codeunit "Lib.Pages";
+
+    [Test]
+    procedure A()
+    begin
+        Lib2.Open();
+    end;`),
+      [ref(50100, "A")],
+      [{ path: "lib.al", text: lib }],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("with a Codeunit variable, a bare call unresolved in the current codeunit refuses (#B)", () => {
+    const lib = unit(
+      `
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+      50200,
+      "Lib",
+      false,
+    );
+    const got = scan(
+      unit(`
+    var
+        LibVar: Codeunit Lib;
+
+    [Test]
+    procedure A()
+    begin
+        with LibVar do
+            Open();
+    end;`),
+      [ref(50100, "A")],
+      [{ path: "lib.al", text: lib }],
+    );
+    expect(got.size).toBe(1);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");

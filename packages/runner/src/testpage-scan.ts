@@ -106,6 +106,22 @@ const SWALLOWS_CODEUNIT = /\bcodeunit\b/i;
 
 const within = (off: number, n: ALSyntaxNode) => off >= n.startIndex && off <= n.endIndex;
 
+/**
+ * Is `n` lexically inside some enclosing `with_statement`'s body (not its `record:` target
+ * expression)? A `with X do ...` shadows a bare call's receiver with `X`, which the scanner does
+ * not resolve (review round 2, #B); stops at the enclosing procedure/trigger, since a with-statement
+ * never spans a procedure boundary.
+ */
+function insideWithStatement(n: ALSyntaxNode): boolean {
+  let cur = n.parent;
+  while (cur !== null) {
+    if (cur.rawKind === "with_statement") return true;
+    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") return false;
+    cur = cur.parent;
+  }
+  return false;
+}
+
 interface Unit {
   readonly file: string;
   readonly node: ALSyntaxNode;
@@ -219,11 +235,19 @@ class Scanner {
   unitFor(typeText: string): Unit | undefined {
     const raw = CODEUNIT_TYPE.exec(typeText)?.[1];
     if (raw === undefined) return undefined;
+    // A bare quoted name can itself contain a dot (`Codeunit "Lib.Pages"`), which is NOT a
+    // namespace separator: try the WHOLE normalised name first (review round 2, #A).
+    const whole = this.byName(normalizeAlName(raw));
+    if (whole !== undefined) return whole;
     // A namespace-qualified reference (`Codeunit My.Tests."Lib"`) carries the namespace as leading
-    // dotted segments; the object itself is always the LAST one (review round 1, #3).
-    const segments = raw.split(".");
+    // dotted segments OUTSIDE any quotes; the object itself is always the LAST such segment
+    // (review round 1, #3). A quoted segment is kept whole even if it contains its own dot.
+    const segments = raw.match(/"[^"]*"|[^.]+/g) ?? [raw];
     const last = segments[segments.length - 1] ?? raw;
-    const want = normalizeAlName(last);
+    return this.byName(normalizeAlName(last));
+  }
+
+  private byName(want: string): Unit | undefined {
     return this.units.find((u) => String(u.id) === want || u.name === want);
   }
 
@@ -261,7 +285,11 @@ class Scanner {
    * with-statement's implicit receiver, which parses as a bare name too). When no procedure of
    * that name and arity exists, an ordinary call could not have compiled, so this is either a
    * with-statement's implicit receiver method or a shape the scanner does not otherwise resolve.
-   * Refused only when the name itself is opening-shaped (safety-first; review round 1, #6).
+   * Refused when the name itself is opening-shaped (safety-first; review round 1, #6), or, for a
+   * genuinely bare call (`site` given), when it sits inside a `with` body: the scanner does not
+   * resolve the with-target's own type, so an unresolved bare call there could be a call into that
+   * codeunit instead (safety-first; review round 2, #B). `this.Name` never passes `site`, since an
+   * explicit receiver is not ambiguous with a with-statement's implicit one.
    */
   private sameCodeunitCall(
     unit: Unit,
@@ -269,10 +297,16 @@ class Scanner {
     args: number,
     path: readonly string[],
     st: TestState,
+    site?: ALSyntaxNode,
   ): void {
     const matched = this.calls(unit, rawName, args, path, st);
-    if (!matched && OPENING_METHODS.has(normalizeAlName(rawName))) {
+    if (matched) return;
+    if (OPENING_METHODS.has(normalizeAlName(rawName))) {
       st.reason ??= `${path.join(" -> ")} calls ${rawName} (unresolved same-codeunit call, safety-first)`;
+      return;
+    }
+    if (site !== undefined && insideWithStatement(site)) {
+      st.reason ??= `${path.join(" -> ")} calls ${rawName} inside a with-statement, unresolved in this codeunit (safety-first)`;
     }
   }
 
@@ -282,7 +316,7 @@ class Scanner {
       const args =
         n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
       if (fn === null) return;
-      if (NAME_KINDS.has(fn.rawKind)) this.sameCodeunitCall(p.unit, fn.text, args, path, st);
+      if (NAME_KINDS.has(fn.rawKind)) this.sameCodeunitCall(p.unit, fn.text, args, path, st, n);
       else if (fn.rawKind === "member_expression") this.member(p, fn, args, path, st);
       return;
     }
@@ -297,7 +331,7 @@ class Scanner {
     }
     if (n.rawKind === "call_statement") {
       const id = nameNode(n);
-      if (id !== undefined) this.sameCodeunitCall(p.unit, id.text, 0, path, st);
+      if (id !== undefined) this.sameCodeunitCall(p.unit, id.text, 0, path, st, n);
     }
   }
 
