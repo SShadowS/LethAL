@@ -86,7 +86,9 @@ export function tallyGaps(rows: readonly GapRow[]): ReadonlyMap<string, GapTally
         break;
       default: {
         const unknown: never = r.verdict;
-        throw new GapGroupingError(`mutant ${r.mutantCode} has an unknown verdict ${String(unknown)}`);
+        throw new GapGroupingError(
+          `mutant ${r.mutantCode} has an unknown verdict ${String(unknown)}`,
+        );
       }
     }
   }
