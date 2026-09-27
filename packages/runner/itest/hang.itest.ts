@@ -38,7 +38,7 @@
  * every run but treats publishing the TEST app as the user's own workflow — R56).
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,15 +48,22 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import type { EventSubscriber } from "../src/events";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
+import type { QuarantineRecord } from "../src/quarantine-store";
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
+import {
+  type QuarantineDiagnostic,
+  type WarningDiagnostic,
+  printHangLegFailureDiagnostics,
+} from "./hang-diagnostics";
 
 if (!process.env.LETHAL_ITEST_HANG) {
   console.log(
@@ -233,6 +240,13 @@ interface LegResult {
   readonly quarantineDir: string;
   /** R206: `ResultsStore.sessionIdLiveness` for this run, read before the store closes. */
   readonly sessionLiveness: ReturnType<ResultsStore["sessionIdLiveness"]>;
+  /**
+   * Diagnostics only, never asserted on: this run's `{ type: "warning" }` events (events.ts),
+   * collected via `emit` since `runSession` otherwise reports them only to a subscriber this gate
+   * did not use to pass — see the 2026-09-27 hang investigation
+   * (`.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`, point 8).
+   */
+  readonly warnings: readonly WarningDiagnostic[];
 }
 
 async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<LegResult> {
@@ -298,6 +312,10 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
   const store = new ResultsStore(
     join(scratchRoot, `hang-${stopHungSessions ? "on" : "off"}.sqlite`),
   );
+  const warnings: WarningDiagnostic[] = [];
+  const collectWarnings: EventSubscriber = (event) => {
+    if (event.type === "warning") warnings.push({ code: event.code, message: event.message });
+  };
   try {
     const report = await runSession({
       backend,
@@ -315,6 +333,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
       resourceServer: bcdev.server,
       resourceServerInstance: bcdev.serverInstance,
       quarantineDir,
+      emit: [collectWarnings],
     });
     const testRows = store.db
       .query(
@@ -323,13 +342,63 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
       .all() as LegResult["testRows"];
     const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
     const sessionLiveness = store.sessionIdLiveness(runId);
-    return { report, testRows, odataCfg, quarantineDir, sessionLiveness };
+    return { report, testRows, odataCfg, quarantineDir, sessionLiveness, warnings };
   } finally {
     store.close();
     // Without this the spawned bc-dev MCP child keeps the event loop alive and the script hangs —
     // which would be a particularly poor failure mode for the hang gate.
     await backend.close();
   }
+}
+
+/**
+ * Best-effort: lists every record under a `QuarantineStore`'s dir and parses it, without needing
+ * the `resourceKey` a `.read()` call would require. Diagnostics only — a file that fails to parse
+ * is reported as such rather than thrown, since a broken quarantine record must not hide whatever
+ * the test assertion above already found.
+ */
+async function readQuarantineRecords(dir: string): Promise<readonly QuarantineDiagnostic[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const records: QuarantineDiagnostic[] = [];
+  for (const name of names.filter((n) => n.endsWith(".json"))) {
+    try {
+      records.push(JSON.parse(await readFile(join(dir, name), "utf8")) as QuarantineRecord);
+    } catch (err) {
+      records.push({
+        resourceKey: name,
+        opKind: "unreadable",
+        detail: `could not read/parse this quarantine record: ${err instanceof Error ? err.message : String(err)}`,
+        recordedAtIso: "",
+        generation: 0,
+      });
+    }
+  }
+  return records;
+}
+
+/**
+ * R-236b/2026-09-27 hang investigation: on a failed assertion, print what the scratch store and
+ * quarantine dir hold before `main()`'s `finally` deletes them — otherwise the ONLY record of why
+ * a leg failed is gone by the time anyone reads the gate's output (see
+ * `.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`).
+ */
+async function printLegFailureDiagnostics(label: string, leg: LegResult): Promise<void> {
+  const errorMutants = leg.report.mutants
+    .filter((m) => m.verdict === "error")
+    .map((m) => ({
+      mutantCode: m.mutantCode,
+      failureMessages: leg.testRows
+        .filter((r) => r.mutant_code === m.mutantCode)
+        .map((r) => r.failure_message ?? "(test_results row has no failure_message)"),
+    }));
+  const quarantine = await readQuarantineRecords(leg.quarantineDir);
+  printHangLegFailureDiagnostics({ leg: label, errorMutants, quarantine, warnings: leg.warnings });
 }
 
 function dump(label: string, report: SessionReport): void {
@@ -575,11 +644,21 @@ async function main(): Promise<void> {
     // deliberate quarantine.
     const on = await runLeg(scratchRoot, true);
     odataCfg = on.odataCfg;
-    assertOnLeg(on);
+    try {
+      assertOnLeg(on);
+    } catch (err) {
+      await printLegFailureDiagnostics("stop-hung-sessions ON", on);
+      throw err;
+    }
 
     const off = await runLeg(scratchRoot, false);
     odataCfg = off.odataCfg;
-    assertOffLeg(off);
+    try {
+      assertOffLeg(off);
+    } catch (err) {
+      await printLegFailureDiagnostics("stop-hung-sessions OFF", off);
+      throw err;
+    }
 
     console.log("hang itest: PASS");
     await emitPassed("hang", {
