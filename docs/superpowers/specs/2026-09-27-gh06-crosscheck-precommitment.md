@@ -127,3 +127,19 @@ run exhausted host memory. Accepted on byte-identical output against the `ab2d2f
 `--json` files, 8 of 8 `.txt` files.
 
 Items: R283 (C1a), R284 (C1b), R285 (C2), R286 (C3), R216 widened (C4), R287 (C5 to C7), R288 (P1).
+
+Run 002 (review r1, 2026-09-27), appended; nothing above changes:
+- Instrument: the compiler dump's file records are now checked against the list by identity
+  (`assertDumpCoversList`; a file whose compiler parse returns null keeps its record and is excluded
+  as unhealthy through `parseErrorFiles`), and the duplicate context-key check now runs after the R1
+  health filter, so an excluded file only warns, as R1/R5 require. All seven corpora re-run: every
+  output byte-identical to run 001's, except `fixtures`' JSON, which differs only in the worktree's
+  absolute path. No check threw, so no result above moves.
+- The prediction row "no reference corpus produces an over-claim that survives the filtered
+  pipeline" measured that the over-claims reach a PLANNED mutant (the census plants them). No run
+  deployed or scored them; "survives" there is not a mutant verdict.
+- C4 re-assessed: besides the LethAL slot gap (R216), tree-sitter-al 4.3.0 gives the `asserterror`
+  body an expression rule where the compiler has a statement, which is why the assignment is
+  `assignment_expression`. Drafted as upstream issue U3; recorded in R216 and the findings.
+- R287 groups three containers (C5 to C7) in one item. That is an exception to "one item per
+  container" above, allowed by the lane ruling because one fix closes all three.

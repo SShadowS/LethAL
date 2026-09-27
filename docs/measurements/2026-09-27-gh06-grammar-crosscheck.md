@@ -18,9 +18,9 @@ a hand-written file. An eighth cluster, P1, is parse health: two files tree-sitt
 cleanly and the compiler can. Four corpora have unexplained records (do-rel2, DC, System Application,
 BaseApp); three have none (fixtures, BusinessCentral.Sentinel, BC.History BusinessFoundation). Two
 clusters are grammar defects (C1, one construct seen from both sides, and P1), for which two upstream
-issues are drafted. A ninth finding, C0 (`UnaryPlusExpression`), was a mapping gap in LethAL's own
+issues are drafted; C4 is a LethAL gap AND, re-assessed at review, a third grammar issue (U3). A ninth finding, C0 (`UnaryPlusExpression`), was a mapping gap in LethAL's own
 audit, fixed in `b645a9b` before the final runs. The other six clusters (C2 to C7) are LethAL's
-statement-slot predicate or its directive handling, not the grammar. Filed: R283, R284,
+statement-slot predicate or its directive handling; of those, only C4 also has a grammar cause. Filed: R283, R284,
 R285, R286, R287 and R288, plus R216 widened (C4). Predictions: the controls and the fixtures held
 exactly; "over-claims only under R2" held for BusinessFoundation and System Application but NOT for
 BaseApp (C1); "no reference corpus produces an over-claim that survives the filtered pipeline" did
@@ -58,6 +58,28 @@ so splitting the corpus did not fix it. `2d2ece1` streams the dump as NDJSON ins
 only on byte-identical output: 10 of 10 `--json` files and 8 of 8 `.txt` files identical to the
 `ab2d2fc` outputs (both controls, both 4.3.0 control rows, the six finished corpora). PowerShell
 peaked at 188 MB on System Application afterwards. BaseApp then ran whole in one foreground call.
+
+**Run 002 changes (review r1), and why no number on this page moved.** Three harness changes:
+- The compiler dump's FILE IDENTITIES are checked against the list, not only its count
+  (`assertDumpCoversList`). The summary's `fileCount` is the list's length, so a file the PowerShell
+  loop skipped used to pass the count check; its tree-sitter sites then read as over-claims. Now the
+  run throws naming the file. `dump-compiler-kinds.ps1` writes every file record BEFORE parsing, so a
+  file whose parse returns null still has its record (no nodes) and is named in `parseErrorFiles`,
+  which excludes it as unhealthy: it counts as listed, not as missing.
+- The duplicate context-key check runs AFTER the health filter (`checkContextKeys`, pre-commitment
+  R1/R5): a duplicate made by error recovery in an excluded file is a warning, one in a comparable
+  file still throws.
+- The per-run `%TEMP%/gh06-*` list directory is removed on exit, on a thrown error too.
+
+All seven corpora were re-run with these changes. Every `--json` and `.txt` output is byte-identical
+to the final run 001 outputs, except `fixtures`, whose JSON differs only in the absolute path of the
+worktree it ran from (identical after substituting it). No check threw.
+
+**Tests.** The comparison logic is unit-tested in `scripts/lib/grammar-crosscheck.test.ts`. One test
+there, the real PowerShell round trip (a path with backslashes, an apostrophe, a space, non-ASCII
+letters and an emoji written by `dump-compiler-kinds.ps1` and read back, no BOM), needs the AL
+compiler's DLL and so is OPT-IN: it runs only when `LETHAL_ALC_BIN` names the AL extension's `bin`
+directory, and is skipped in the normal `bun test` run.
 
 ## 3. Positive controls
 
@@ -309,8 +331,9 @@ Corpus: DC `Modules/Approvals/Codeunits/CDCApprovalManagement.Codeunit.al`, offs
 ### C4. An assignment that is the body of `asserterror` (R216, widened)
 
 Same container as R216, `asserterror_statement.body`. The new facts: assignments are lost too, and
-tree-sitter spells that body `assignment_expression`, not `assignment_statement`. The node is
-structurally right, so this is not a grammar defect. But rule R3 matches the probe's kind
+tree-sitter spells that body `assignment_expression`, not `assignment_statement`. That is an
+upstream grammar issue as well as a LethAL gap (drafted as U3, assessed at review in run 002, see
+below). For the audit, rule R3 matches the probe's kind
 (`assignment_statement`), so it cannot explain these, and `remove-assignment` targets
 `assignment_statement` only, so adding the slot alone would still miss them.
 
@@ -340,6 +363,23 @@ explained-asserterror 1, as R3 expects.
 
 Corpus: System Application 8 (HttpExceptionTests 5, CustomDimensionsTest 2, RetentionPeriodTest 1);
 BaseApp 72 across 30 files, all under `BaseApp/Test`, none in `Source`.
+
+**Upstream assessment (run 002).** The first submission called the kind difference "structurally
+right". Review asked for it to be checked, and it does not hold. tree-sitter-al 4.3.0 (`f7af22a`)
+defines `asserterror_statement.body` as `choice($._expression, $.code_block)`; `node-types.json`
+lists no statement kind for that field. Elsewhere an assignment is `assignment_statement` (through
+`_statement_inner`); `assignment_expression` exists in `_expression` "for asserterror and other
+contexts". The AL compiler's `AssertErrorStatement` holds a statement. A hand-written repro shows
+the second symptom of the same rule: `asserterror if X = 2 then Error('two');` and
+`asserterror exit;` each parse as an `asserterror_statement` with NO body followed by a sibling
+`if_statement` / `exit_statement`, with no ERROR node, where the compiler's parser builds
+`AssertErrorStatement > IfStatement` / `> ExitStatement` with no error. That symptom was not seen
+in any corpus: no `asserterror` in the 16,898 BC.History files is followed by `if`, `exit`, `case`,
+`repeat`, `while`, `for`, `foreach`, `with` or `begin`, and the cross-check cannot see it (run on the
+repro, the harness reports only the assignment; the detached `if` keeps its position, so the call in
+its `then` branch agrees on both sides). Drafted as upstream
+issue U3; R216 records it. R216 stays open for the LethAL side: a fixed grammar still needs the
+slot in `SINGLE_STATEMENT_SLOTS`.
 
 **A stated departure from "one new item per cluster".** C4 WIDENS **R216** rather than filing a new
 row. The pre-commitment says one item per container, and the container is R216's; a second row would
@@ -484,7 +524,9 @@ Corpus: DC `Modules/Purchase Contracts/Base/src/Pages/CDCPurchContractCard.Page.
 
 C1 and P1 are grammar defects. Issues for `SShadowS/tree-sitter-al` are drafted as U1 (C1) and U2
 (P1) in GH-06's submit note, checked against open #24 and #25 and closed #20 to #23; neither
-duplicates them. Numbers are assigned at filing. C2 to C7 are not grammar defects.
+duplicates them. Numbers are assigned at filing. C4 has a grammar cause too (the `asserterror` body
+takes an expression, not a statement), drafted as U3 in run 002 and checked against the same issue
+list. C2, C3 and C5 to C7 are not grammar defects.
 
 ## 8. Corrections to earlier claims
 
@@ -496,7 +538,8 @@ duplicates them. Numbers are assigned at filing. C2 to C7 are not grammar defect
 - **D3, `.dependencies` included.** Both parsers recursed into `.dependencies`, while the corpus
   fingerprint excludes it, so the harness measured a different file set than the hash named
   (do-rel2/Cloud: 554 files, 137 under `.dependencies`; DC/Cloud: 1,135, 660 under it). Both parsers
-  now read the fingerprint's list, and the harness asserts both parsed exactly that many.
+  now read the fingerprint's list, and the harness asserts both parsed exactly that many (and, since
+run 002, that the compiler dump recorded exactly those files).
 - **D4, no corpus identity.** The harness now prints the fingerprint first (R187).
 - **D5, one-sided directive split.** Only tree-sitter-only deltas were checked against `#if` spans,
   so a compiler-only site inside a directive was reported as a blind spot. Containment now applies in
