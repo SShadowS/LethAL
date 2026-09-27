@@ -8,7 +8,9 @@ import {
   EXIT_CODE,
   type Site,
   type Span,
+  assertDumpCoversList,
   assertUniqueKeys,
+  checkContextKeys,
   contextKey,
   diffSites,
   parseHealth,
@@ -178,6 +180,61 @@ describe("duplicate context keys fail loudly", () => {
     );
     expect(() => assertUniqueKeys([a], contextKey, "compiler")).not.toThrow();
   });
+
+  // Pre-commitment R1/R5: an unhealthy file never changes the outcome. The harness calls
+  // checkContextKeys on the full site list with the comparable set, so this is its exact path.
+  test("a duplicate in an EXCLUDED file is a warning, not a throw", () => {
+    const a = site("bad.al", "call in statement position", 10, 20);
+    const b = site("bad.al", "call in statement position", 10, 25);
+    const ok = site("good.al", "call in statement position", 10, 20);
+    expect(checkContextKeys([a, b, ok], new Set(["good.al"]), contextKey, "tree-sitter")).toEqual([
+      "WARNING: tree-sitter: duplicate key bad.al|call in statement position|10 in an excluded file, ignored",
+    ]);
+  });
+
+  test("a duplicate in a COMPARABLE file still throws", () => {
+    const a = site("good.al", "call in statement position", 10, 20);
+    const b = site("good.al", "call in statement position", 10, 25);
+    expect(() => checkContextKeys([a, b], new Set(["good.al"]), contextKey, "compiler")).toThrow(
+      "compiler: duplicate key good.al|call in statement position|10",
+    );
+  });
+});
+
+describe("assertDumpCoversList: the dump's file identities equal the list", () => {
+  const dump = (files: string[], parseErrorFiles: string[] = [], fileCount = files.length) => ({
+    files,
+    fileCount,
+    parseErrorFiles,
+  });
+
+  test("every listed file recorded once passes, a null-parse file included", () => {
+    // A null parse writes its record and no nodes, and is named as a parse-error file.
+    expect(() => assertDumpCoversList(["a", "b"], dump(["a", "b"], ["b"]))).not.toThrow();
+  });
+
+  test("a listed file with no record throws naming it, even when the count matches", () => {
+    // The summary's fileCount is the LIST's length, so it agrees even when a record is missing.
+    expect(() => assertDumpCoversList(["a", "b"], dump(["a"], [], 2))).toThrow("no file record: b");
+  });
+
+  test("a file recorded twice, or one not in the list, throws naming it", () => {
+    expect(() => assertDumpCoversList(["a", "b"], dump(["a", "a"], [], 2))).toThrow(
+      "recorded twice: a",
+    );
+    expect(() => assertDumpCoversList(["a"], dump(["a", "z"], [], 1))).toThrow(
+      "not in the list: z",
+    );
+  });
+
+  test("a parse-error file outside the list, or a count off the list, throws", () => {
+    expect(() => assertDumpCoversList(["a"], dump(["a"], ["q"]))).toThrow(
+      "parse-error file not in the list: q",
+    );
+    expect(() => assertDumpCoversList(["a"], dump(["a"], [], 2))).toThrow(
+      "summary fileCount 2, listed 1",
+    );
+  });
 });
 
 describe("splitArgs: both CLI forms", () => {
@@ -257,7 +314,12 @@ describe("readCompilerDump: the NDJSON the compiler side streams", () => {
       SUMMARY,
     ]);
     expect(nodes).toEqual([['C:\\dir\\a"b\u0007ø.al', "CodeunitSyntax", 0, 5, ""]]);
-    expect(summary).toEqual({ parserVersion: "1.2", fileCount: 1, parseErrorFiles: [] });
+    expect(summary).toEqual({
+      parserVersion: "1.2",
+      fileCount: 1,
+      parseErrorFiles: [],
+      files: ['C:\\dir\\a"b\u0007ø.al'],
+    });
   });
 
   test("nodes belong to the most recent file record, in order", async () => {
