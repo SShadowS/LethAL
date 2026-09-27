@@ -17,13 +17,15 @@
  *    `census-fixture-mutants.ts`, which mirrors `generateMutationSet`.
  * 4. Role, by APP (ruling 1), exactly three outcomes:
  *    test     the nearest app.json (searched up to, and not above, <corpus-dir>) declares a
- *             dependency whose name or id is in TEST_APP_NAMES / TEST_APP_IDS, exact match; OR
+ *             dependency whose `publisher` is exactly `Microsoft` AND whose name or id is in
+ *             TEST_APP_NAMES / TEST_APP_IDS, exact match; OR
  *             that app holds any codeunit with `Subtype = Test` or `TestRunner`; OR there is no
  *             app.json and the enclosing object is itself such a codeunit.
  *    product  an app.json was found, parsed, and the app is not a test app.
  *    unknown  anything else (no app.json and not a test codeunit, or an app.json that fails to
  *             parse). Never counted as product; any unknown row stops the lane.
  * Prints counts, operator names, object names, files and lines only, never source text.
+ * The role decision is exported for `r216-classify-gained.test.ts`; the CLI runs only as main.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
@@ -51,7 +53,7 @@ interface Row {
 }
 
 /** Microsoft test-library apps (plan fact 9). Exact, case-sensitive; no regex. */
-const TEST_APP_NAMES = new Set([
+export const TEST_APP_NAMES: ReadonlySet<string> = new Set([
   "Library Assert",
   "Test Runner",
   "Any",
@@ -59,48 +61,26 @@ const TEST_APP_NAMES = new Set([
   "Permissions Mock",
 ]);
 /** Only ids read off a real app.json by name. Add others the same way, never by guess. */
-const TEST_APP_IDS = new Set(["5095f467-0a01-4b99-99d1-9ff1237d286f"]);
+export const TEST_APP_IDS: ReadonlySet<string> = new Set(["5095f467-0a01-4b99-99d1-9ff1237d286f"]);
 
-const [beforePath, afterPath, corpusArg] = process.argv.slice(2);
-if (beforePath === undefined || afterPath === undefined || corpusArg === undefined) {
-  console.error(
-    "usage: bun scripts/r216-classify-gained.ts <before.json> <after.json> <corpus-dir>",
+export interface AppDependency {
+  readonly name?: string;
+  readonly id?: string;
+  readonly appId?: string;
+  readonly publisher?: string;
+}
+
+/** A test library counts only when Microsoft publishes it: a Contoso "Library Assert" is not one. */
+export function declaresTestLibrary(deps: readonly AppDependency[]): boolean {
+  return deps.some(
+    (d) =>
+      d.publisher === "Microsoft" &&
+      ((d.name !== undefined && TEST_APP_NAMES.has(d.name)) ||
+        (d.id !== undefined && TEST_APP_IDS.has(d.id.toLowerCase())) ||
+        (d.appId !== undefined && TEST_APP_IDS.has(d.appId.toLowerCase()))),
   );
-  process.exit(2);
 }
-const corpusDir = resolve(corpusArg);
 
-const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
-const key = (r: Row): string =>
-  JSON.stringify([r.operator, r.file, r.line, r.column, r.before, r.after]);
-const load = async (p: string): Promise<Row[]> => JSON.parse(await readFile(p, "utf8")) as Row[];
-
-// 1. Multiset diff.
-const remaining = new Map<string, number>();
-for (const r of await load(beforePath)) remaining.set(key(r), (remaining.get(key(r)) ?? 0) + 1);
-const gained: Row[] = [];
-for (const r of await load(afterPath)) {
-  const n = remaining.get(key(r)) ?? 0;
-  if (n > 0) remaining.set(key(r), n - 1);
-  else gained.push(r);
-}
-let lost = 0;
-for (const n of remaining.values()) lost += n;
-
-// Parse the corpus exactly as the census does (sorted, recursive), for one semantic context.
-await initParser();
-const rels = (await readdir(corpusDir, { recursive: true }))
-  .filter((f) => f.toLowerCase().endsWith(".al"))
-  .sort();
-const roots = new Map<string, ALSyntaxNode>();
-for (const rel of rels) {
-  roots.set(rel, wrapRoot(parseAL(await readFile(join(corpusDir, rel), "utf8"))));
-}
-const ctx = buildSemanticContext([...roots].map(([path, root]) => ({ path, root })));
-const operators = [...tier1Operators, ...tier2Operators];
-const tiers = new Map(operators.map((op) => [op.name, op.tier]));
-
-// 4. App roles.
 function subtypeOf(obj: ALSyntaxNode): string | null {
   for (const m of declarationMembers(obj)) {
     if (m.rawKind !== "property") continue;
@@ -109,132 +89,192 @@ function subtypeOf(obj: ALSyntaxNode): string | null {
   }
   return null;
 }
-const isTestCodeunit = (obj: ALSyntaxNode): boolean =>
+export const isTestCodeunit = (obj: ALSyntaxNode): boolean =>
   obj.rawKind === "codeunit_declaration" && /^(Test|TestRunner)$/i.test(subtypeOf(obj) ?? "");
 
-function appRootOf(rel: string): string | null {
-  let d = dirname(join(corpusDir, rel));
+/** The nearest directory holding an app.json, searched up to and not above `corpusDir`. */
+export function appRootOf(corpusDir: string, rel: string): string | null {
+  const top = resolve(corpusDir);
+  let d = dirname(join(top, rel));
   for (;;) {
     if (existsSync(join(d, "app.json"))) return d;
-    if (resolve(d) === corpusDir) return null;
+    if (resolve(d) === top) return null;
     const up = dirname(d);
-    if (up === d || relative(corpusDir, up).startsWith("..")) return null;
+    if (up === d || relative(top, up).startsWith("..")) return null;
     d = up;
   }
 }
-const appsWithTestCodeunit = new Set<string>();
-for (const [rel, root] of roots) {
-  let has = false;
-  visit(root, (n) => {
-    if (isTestCodeunit(n)) has = true;
-  });
-  const app = appRootOf(rel);
-  if (has && app !== null) appsWithTestCodeunit.add(app);
+
+/** Every app root that holds a `Subtype = Test` or `TestRunner` codeunit. */
+export function testCodeunitApps(
+  corpusDir: string,
+  roots: ReadonlyMap<string, ALSyntaxNode>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const [rel, root] of roots) {
+    let has = false;
+    visit(root, (n) => {
+      if (isTestCodeunit(n)) has = true;
+    });
+    const app = appRootOf(corpusDir, rel);
+    if (has && app !== null) out.add(app);
+  }
+  return out;
 }
+
 /** true = test app, false = product app, null = app.json unreadable. */
-function appIsTest(app: string): boolean | null {
+export function appIsTest(app: string, appsWithTestCodeunit: ReadonlySet<string>): boolean | null {
   try {
     const j = JSON.parse(readFileSync(join(app, "app.json"), "utf8").replace(/^\uFEFF/, "")) as {
-      dependencies?: { name?: string; id?: string; appId?: string }[];
+      dependencies?: AppDependency[];
     };
-    const deps = j.dependencies ?? [];
-    const declares = deps.some(
-      (d) =>
-        (d.name !== undefined && TEST_APP_NAMES.has(d.name)) ||
-        (d.id !== undefined && TEST_APP_IDS.has(d.id.toLowerCase())) ||
-        (d.appId !== undefined && TEST_APP_IDS.has(d.appId.toLowerCase())),
-    );
-    return declares || appsWithTestCodeunit.has(app);
+    return declaresTestLibrary(j.dependencies ?? []) || appsWithTestCodeunit.has(app);
   } catch {
     return null;
   }
 }
 
-// 3. Deployed specs per file, the runner's pipeline, computed only for files with gained rows.
-const deployedKeys = new Map<string, Set<string>>();
-function deployedIn(rel: string, root: ALSyntaxNode): Set<string> {
-  const hit = deployedKeys.get(rel);
-  if (hit !== undefined) return hit;
-  const out = new Set<string>();
-  if (isEnumeratedAl(rel) && canCarryMutationSelectorVar(root)) {
-    const spanIndex = buildSpanIndex(root);
-    const raw: MutationSpec[] = [];
-    visit(root, (node) => {
-      for (const op of operators) {
-        if (!op.targets(node, ctx)) continue;
-        for (const spec of op.generate(node, ctx)) {
-          if (!validateSpec(spec, root, spanIndex).ok) continue;
-          if (!isMutableSite(spec.before)) continue;
-          raw.push(spec);
-        }
-      }
-    });
-    for (const s of dedupeSpecs(raw, (name) => tiers.get(name))) {
-      out.add(
-        key({
-          operator: s.operatorName,
-          file: rel,
-          line: s.before.startPosition.row + 1,
-          column: s.before.startPosition.column,
-          before: squash(s.before.text),
-          after: squash(s.after.text),
-        }),
-      );
-    }
-  }
-  deployedKeys.set(rel, out);
-  return out;
+export type Role = "product" | "test" | "unknown";
+
+/** The role of object `obj` (null when none encloses the site) in corpus file `rel`. */
+export function roleOf(
+  corpusDir: string,
+  rel: string,
+  obj: ALSyntaxNode | null,
+  appsWithTestCodeunit: ReadonlySet<string>,
+): Role {
+  const app = appRootOf(corpusDir, rel);
+  if (app === null) return obj !== null && isTestCodeunit(obj) ? "test" : "unknown";
+  const t = appIsTest(app, appsWithTestCodeunit);
+  return t === null ? "unknown" : t ? "test" : "product";
 }
 
-const counts = new Map<string, number>();
-const bump = (k: string): void => {
-  counts.set(k, (counts.get(k) ?? 0) + 1);
-};
-let bad = 0;
-let unknown = 0;
-for (const r of gained) {
-  const root = roots.get(r.file);
-  if (root === undefined) throw new Error(`r216-classify-gained: ${r.file} is not in ${corpusDir}`);
-  let node: ALSyntaxNode | undefined;
-  visit(root, (n) => {
-    if (node !== undefined) return;
-    if (
-      n.startPosition.row + 1 === r.line &&
-      n.startPosition.column === r.column &&
-      squash(n.text) === r.before &&
-      n.fieldName === "body" &&
-      n.parent?.rawKind === "asserterror_statement"
-    )
-      node = n;
-  });
-  if (node === undefined) {
-    bad += 1;
-    console.log(
-      `BAD\t${r.operator}\t${r.file}:${r.line}\tnot the body of an asserterror_statement`,
+const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
+const key = (r: Row): string =>
+  JSON.stringify([r.operator, r.file, r.line, r.column, r.before, r.after]);
+const load = async (p: string): Promise<Row[]> => JSON.parse(await readFile(p, "utf8")) as Row[];
+
+async function main(): Promise<void> {
+  const [beforePath, afterPath, corpusArg] = process.argv.slice(2);
+  if (beforePath === undefined || afterPath === undefined || corpusArg === undefined) {
+    console.error(
+      "usage: bun scripts/r216-classify-gained.ts <before.json> <after.json> <corpus-dir>",
     );
-    continue;
+    process.exit(2);
   }
-  let obj: ALSyntaxNode | null = node.parent;
-  while (obj !== null && !obj.rawKind.endsWith("_declaration")) obj = obj.parent;
-  while (obj !== null && obj.parent !== null && obj.parent.rawKind !== "source_file")
-    obj = obj.parent;
-  // The object's name is its `object_name` field (read off a real parse), not `name`.
-  const objName = obj?.childForFieldName("object_name")?.text ?? "(no object)";
-  const app = appRootOf(r.file);
-  let role: "product" | "test" | "unknown";
-  if (app === null) role = obj !== null && isTestCodeunit(obj) ? "test" : "unknown";
-  else {
-    const t = appIsTest(app);
-    role = t === null ? "unknown" : t ? "test" : "product";
+  const corpusDir = resolve(corpusArg);
+
+  // 1. Multiset diff.
+  const remaining = new Map<string, number>();
+  for (const r of await load(beforePath)) remaining.set(key(r), (remaining.get(key(r)) ?? 0) + 1);
+  const gained: Row[] = [];
+  for (const r of await load(afterPath)) {
+    const n = remaining.get(key(r)) ?? 0;
+    if (n > 0) remaining.set(key(r), n - 1);
+    else gained.push(r);
   }
-  const deployable = deployedIn(r.file, root).has(key(r));
-  bump(`${role}\t${deployable ? "deployable" : "not-deployed"}\t${r.operator}`);
-  if (role === "unknown") unknown += 1;
-  if (role !== "test")
-    console.log(
-      `${role}\t${deployable ? "deployable" : "not-deployed"}\t${r.operator}\t${objName}\t${r.file}:${r.line}`,
-    );
+  let lost = 0;
+  for (const n of remaining.values()) lost += n;
+
+  // Parse the corpus exactly as the census does (sorted, recursive), for one semantic context.
+  await initParser();
+  const rels = (await readdir(corpusDir, { recursive: true }))
+    .filter((f) => f.toLowerCase().endsWith(".al"))
+    .sort();
+  const roots = new Map<string, ALSyntaxNode>();
+  for (const rel of rels) {
+    roots.set(rel, wrapRoot(parseAL(await readFile(join(corpusDir, rel), "utf8"))));
+  }
+  const ctx = buildSemanticContext([...roots].map(([path, root]) => ({ path, root })));
+  const operators = [...tier1Operators, ...tier2Operators];
+  const tiers = new Map(operators.map((op) => [op.name, op.tier]));
+
+  // 4. App roles.
+  const appsWithTestCodeunit = testCodeunitApps(corpusDir, roots);
+
+  // 3. Deployed specs per file, the runner's pipeline, computed only for files with gained rows.
+  const deployedKeys = new Map<string, Set<string>>();
+  function deployedIn(rel: string, root: ALSyntaxNode): Set<string> {
+    const hit = deployedKeys.get(rel);
+    if (hit !== undefined) return hit;
+    const out = new Set<string>();
+    if (isEnumeratedAl(rel) && canCarryMutationSelectorVar(root)) {
+      const spanIndex = buildSpanIndex(root);
+      const raw: MutationSpec[] = [];
+      visit(root, (node) => {
+        for (const op of operators) {
+          if (!op.targets(node, ctx)) continue;
+          for (const spec of op.generate(node, ctx)) {
+            if (!validateSpec(spec, root, spanIndex).ok) continue;
+            if (!isMutableSite(spec.before)) continue;
+            raw.push(spec);
+          }
+        }
+      });
+      for (const s of dedupeSpecs(raw, (name) => tiers.get(name))) {
+        out.add(
+          key({
+            operator: s.operatorName,
+            file: rel,
+            line: s.before.startPosition.row + 1,
+            column: s.before.startPosition.column,
+            before: squash(s.before.text),
+            after: squash(s.after.text),
+          }),
+        );
+      }
+    }
+    deployedKeys.set(rel, out);
+    return out;
+  }
+
+  const counts = new Map<string, number>();
+  const bump = (k: string): void => {
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  };
+  let bad = 0;
+  let unknown = 0;
+  for (const r of gained) {
+    const root = roots.get(r.file);
+    if (root === undefined)
+      throw new Error(`r216-classify-gained: ${r.file} is not in ${corpusDir}`);
+    let node: ALSyntaxNode | undefined;
+    visit(root, (n) => {
+      if (node !== undefined) return;
+      if (
+        n.startPosition.row + 1 === r.line &&
+        n.startPosition.column === r.column &&
+        squash(n.text) === r.before &&
+        n.fieldName === "body" &&
+        n.parent?.rawKind === "asserterror_statement"
+      )
+        node = n;
+    });
+    if (node === undefined) {
+      bad += 1;
+      console.log(
+        `BAD\t${r.operator}\t${r.file}:${r.line}\tnot the body of an asserterror_statement`,
+      );
+      continue;
+    }
+    let obj: ALSyntaxNode | null = node.parent;
+    while (obj !== null && !obj.rawKind.endsWith("_declaration")) obj = obj.parent;
+    while (obj !== null && obj.parent !== null && obj.parent.rawKind !== "source_file")
+      obj = obj.parent;
+    // The object's name is its `object_name` field (read off a real parse), not `name`.
+    const objName = obj?.childForFieldName("object_name")?.text ?? "(no object)";
+    const role = roleOf(corpusDir, r.file, obj, appsWithTestCodeunit);
+    const deployable = deployedIn(r.file, root).has(key(r));
+    bump(`${role}\t${deployable ? "deployable" : "not-deployed"}\t${r.operator}`);
+    if (role === "unknown") unknown += 1;
+    if (role !== "test")
+      console.log(
+        `${role}\t${deployable ? "deployable" : "not-deployed"}\t${r.operator}\t${objName}\t${r.file}:${r.line}`,
+      );
+  }
+  console.log(`\ngained ${gained.length}, lost ${lost}, bad ${bad}, unknown ${unknown}`);
+  for (const [k, n] of [...counts].sort()) console.log(`${k}\t${n}`);
+  process.exit(lost > 0 || bad > 0 ? 1 : unknown > 0 ? 3 : 0);
 }
-console.log(`\ngained ${gained.length}, lost ${lost}, bad ${bad}, unknown ${unknown}`);
-for (const [k, n] of [...counts].sort()) console.log(`${k}\t${n}`);
-process.exit(lost > 0 || bad > 0 ? 1 : unknown > 0 ? 3 : 0);
+
+if (import.meta.main) await main();
