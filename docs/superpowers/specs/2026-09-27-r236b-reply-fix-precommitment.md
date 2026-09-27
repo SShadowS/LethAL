@@ -122,3 +122,24 @@ narrowed.
 - Orchestrator ruling: §A2 is NOT re-run.
 - Size-arm defect found: a wedge before calibration (its first read, `odataReadRegisteredArtifact`,
   timing out with a `DOMException`) exits 2 ("harness fault") with an empty message, instead of 3 (wedge).
+
+### Task 9 Step 1 and an INVALID C1b attempt (2026-09-27, Cronus284)
+
+- Lease: `coord lease Cronus284 bugs`, attempt `007`, heartbeated, released after the attempt.
+- Orphaned LethAL lease (holder `SShadowS-PC:18460:1`, expired 11:48:57Z): Windows process 18460 did not
+  exist. The lane client's `force-reset-lease` refused, because its `MIN_CONTROL_VERSION` 1.0.0.20 check
+  rejected the installed 1.0.0.19. The reset was done with the main checkout's client (`bde825c`,
+  minimum 1.0.0.19), same flags, the lane config: serverGeneration `0305a098...` -> `c78d51e7...`,
+  epoch -> 371. The epoch before is not exposed by any non-mutating read.
+- Publish: `LethAL_LethAL Control_1.0.0.20.app` from the lane worktree, `-sync -upgrade`, succeeded;
+  1.0.0.20 installed, 1.0.0.19 not installed. Doctor then exit 0 (control-version and lease ok).
+- **INVALID C1b attempt.** `size-arm.ts --kept-check 10` was run WITHOUT the prescribed prep session, on
+  the artifact already registered. It is not a C1b result either way. Facts:
+  - Call 1: `whole` false, `deadline-exceeded`, `in-flight-unknown`, `replyRecovered` null. Orchestrator
+    reading: a before-headers deadline on the R225 cold path (the first TestPage call after a fresh
+    publish), which the fix correctly leaves alone.
+  - Call 2: no record. About 15.5 s after call 1's record the script died with exit 2,
+    `harness fault: abort@[native code]`: the kept-answer read's 15 s abort escaped the script
+    uncaught. Fixed in `8706a34` and `3f83605` (a failed readback now counts as bad, exit 1, and every
+    call is traced from its original action).
+  - Doctor right after: all ok, no lease held. No wedge.
