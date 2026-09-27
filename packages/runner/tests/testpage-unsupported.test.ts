@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { unsupportedCoverageNote } from "../src/orchestrator";
+import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
+import { describeStaleTestApp } from "../src/stale-test-app";
 import {
   TESTPAGE_REFUSED_DIAGNOSIS,
   describeTestPageUnsupported,
@@ -139,6 +141,8 @@ describe("describeTestPageUnsupported (R69)", () => {
     expect(isTestPageNotRunMessage("some other failure")).toBe(false);
     expect(isTestPageNotRunMessage(undefined)).toBe(false);
     expect(describeTestPageUnsupported(m)).toBeUndefined();
+    expect(describeTestPermissionsRefusal(m)).toBeUndefined();
+    expect(describeStaleTestApp(m)).toBeUndefined();
   });
 
   test("R-236c: the diagnosis states the static policy, not a runtime claim", () => {
@@ -190,6 +194,22 @@ describe("SessionReport.testPageUnsupported (R69)", () => {
 
   test("the console report says nothing when no test hit the refusal", () => {
     expect(renderConsole(build())).not.toContain("TESTPAGE UNSUPPORTED");
+  });
+
+  test("R-236c: the console report names tests refused before sending, apart from BC's refusal", () => {
+    // The legacy builder predates the field, so the report is built and the field set on it.
+    const text = renderConsole({
+      ...build(),
+      testPageRefused: { tests: ["Tests.OpensPage"], diagnosis: TESTPAGE_REFUSED_DIAGNOSIS },
+    });
+    expect(text).toContain("TESTPAGE REFUSED, NOT RUN: 1 test(s) were not sent.");
+    expect(text).toContain(TESTPAGE_REFUSED_DIAGNOSIS);
+    expect(text).toContain("  Tests.OpensPage");
+    expect(text).not.toContain("TESTPAGE UNSUPPORTED");
+  });
+
+  test("R-236c: the console report says nothing when no test was refused before sending", () => {
+    expect(renderConsole(build())).not.toContain("TESTPAGE REFUSED");
   });
 });
 

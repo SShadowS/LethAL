@@ -980,8 +980,9 @@ describe("R-236c: tests refused before sending, as their own category", () => {
       { name: "Data Tests.Green", outcome: "pass", classification: [] },
       { name: "Data Tests.Red", outcome: "fail", classification: [] },
     ]);
-    expect(report.validity.scoreDescribes).toContain(", with 1 of 2 baseline tests failing");
-    expect(report.validity.scoreDescribes).not.toContain("refused");
+    expect(report.validity.scoreDescribes).toBe(
+      "0 scored mutant(s) in 1 .al file(s), with 1 of 2 baseline tests failing",
+    );
   });
 
   test("BC's own TestPage refusal stays BC's, never relabelled 'not run' (resume)", () => {
