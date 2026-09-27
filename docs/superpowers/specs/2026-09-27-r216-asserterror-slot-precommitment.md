@@ -161,3 +161,11 @@ Prediction lines:
 ### P3. Gates: MATCHED
 0 census rows gained or lost on all seven fixture targets, so no deployed mutant is added or
 removed on any fixture. No live gate was run, as predicted.
+
+### Decision
+Decision: STOP (b). 0 deployable product sites on every input (seven fixture targets, do, dc,
+sentinel, bcf, sysapp, BaseApp/Source, BaseApp/Test; fingerprints in the Corpora table). All
+7,846 gained sites are in test apps (sentinel 1, bcf 35, sysapp 305, BaseApp/Test 7,505), which
+LethAL does not mutate. P1 shows alc accepts asserterror in a codeunit with no Subtype, so the
+reason is the measured absence of product sites, not legality. Reported to the coordinator
+before any roadmap change, per its stop instruction.
