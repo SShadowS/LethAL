@@ -441,8 +441,8 @@ trigger. Every site is inside a procedure or trigger body. One container family,
 ### P1. `Type = Type::X` as a page property value (grammar, U2)
 
 A page control property whose value is a comparison starting with the bare identifier `Type` takes
-the `link_value` path and emits an ERROR node spanning `Type::`. Any other leading name, or
-`Rec.Type`, parses as `comparison_expression`. Close to the inverse of closed upstream #20.
+the `link_value` path and emits an ERROR node spanning `Type::`. `Kind` or a qualified
+`Rec.Type` parse clean, as `comparison_expression`; no other names were tried. Close to the inverse of closed upstream #20.
 
 `scripts/lib/al-kind-mapping-type-property.al`:
 
