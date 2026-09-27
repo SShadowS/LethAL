@@ -11689,6 +11689,121 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.exitCode).toBe(4);
   });
 
+  test("a new test whose fresh baseline answers error is infra-error, not red, and its mutant is error (R262)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "error", durationMs: 5, failureMessage: "tool answered isError" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.results[0]?.verdict).toBe("error");
+    expect(out.results[0]?.invalidBaseline).toEqual(["New Tests.OverBudgetDetected"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome, t.runs[0]?.fresh])).toEqual([
+      ["infra-error", "error", true],
+    ]);
+    expect(out.exitCode).toBe(4);
+  });
+
+  test("a NON-fresh baseline that answers error is infra-error, not flaky-unknown: the rule ignores freshness (R262)", async () => {
+    let id = 0;
+    const fx = await verifyFixture({
+      withNewTest: true,
+      session: ({ kind, ref }) => {
+        id += 1;
+        return kind === "unmutated" && ref.codeunitId === NEWT.codeunitId
+          ? { sessionId: 1000 + id, testRunsBefore: 2 }
+          : { sessionId: 1000 + id, testRunsBefore: 0 };
+      },
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "error", durationMs: 5, failureMessage: "tool answered isError" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome, t.runs[0]?.fresh])).toEqual([
+      ["infra-error", "error", false],
+    ]);
+  });
+
+  test("a fresh rerun that answers deadline-exceeded is infra-error, not flaky, and forces exit 5 (R262)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      killerRef: OVER,
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === NEWT.codeunitId && nth === 2
+          ? { ref, outcome: "deadline-exceeded", durationMs: 5, failureMessage: "client timer" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.results[0]?.verdict).toBe("killed");
+    expect(out.newTests.map((t) => [t.state, t.runs.map((r) => r.outcome)])).toEqual([
+      ["infra-error", ["pass", "deadline-exceeded"]],
+    ]);
+    expect(out.exitCode).toBe(5);
+  });
+
+  test("a fresh baseline fail stays red even when the rerun answers error (R262)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId !== NEWT.codeunitId
+          ? ALL_GREEN({ ref })
+          : nth === 1
+            ? { ref, outcome: "fail", durationMs: 5, failureMessage: "new-red" }
+            : { ref, outcome: "error", durationMs: 5, failureMessage: "call failed" },
+    });
+    const out = await fx.verify(["0/M0001"]);
+    // The rerun does run, fresh, and answers error: rule 1 (red) must win over rule 4.
+    expect(out.newTests.map((t) => [t.state, t.runs.map((r) => [r.outcome, r.fresh])])).toEqual([
+      [
+        "red",
+        [
+          ["fail", true],
+          ["error", true],
+        ],
+      ],
+    ]);
+  });
+
+  test("an unmutated run with an outcome verify does not know throws, never a default state (R262)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "vanished" as unknown as TestVerdict["outcome"], durationMs: 5 }
+          : ALL_GREEN({ ref }),
+    });
+    await expect(fx.verify(["0/M0001"])).rejects.toThrow(
+      "verify.ts: unmutated run of 79102::OverBudgetDetected has unknown outcome vanished",
+    );
+  });
+
+  test("a runner-confirmed timeout at baseline is red, and its run says timeout, not fail (R262)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "timeout", durationMs: 5, failureMessage: "stopped server-side" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome])).toEqual([["red", "timeout"]]);
+  });
+
+  test("a skipped new test at baseline stays red, and its run says skip (R262, ruling Q3)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "skip", durationMs: 5, failureMessage: "skipped" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome])).toEqual([["red", "skip"]]);
+  });
+
   test("verify passes every new test, and only new tests, as rerunOnUnmutated, and always requireEveryMethodGreen", async () => {
     const fx = await verifyFixture({ withNewTest: true });
     const seen: NamedMutantsConfig[] = [];

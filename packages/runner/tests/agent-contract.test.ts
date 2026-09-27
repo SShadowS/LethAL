@@ -51,6 +51,7 @@ import {
   KILLED_BY,
   NEW_TEST_STATES,
   TEST_APP_REFUSALS,
+  UNMUTATED_OUTCOMES,
   VERIFY_EXIT,
   VERIFY_REFUSALS,
   VERIFY_SCHEMA_VERSION,
@@ -1170,6 +1171,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     };
     expect(valuesOf("results[].verdict")).toEqual(new Set(VERIFY_VERDICTS));
     expect(valuesOf("newTests[].state")).toEqual(new Set(NEW_TEST_STATES));
+    expect(valuesOf("newTests[].runs[].outcome")).toEqual(new Set(UNMUTATED_OUTCOMES));
     expect(valuesOf("results[].killedBy")).toEqual(new Set(KILLED_BY));
     // "`killedBy` never changes the exit code": every value, one exit code.
     const codes = new Set(

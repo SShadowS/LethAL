@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 275 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 276 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -177,7 +177,7 @@ that ordering is the priority.
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · open
 - **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · open
 - **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · open
-- **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · open
+- **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · done (d24e766)
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · open
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · open
 - **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · open
@@ -187,6 +187,7 @@ that ordering is the priority.
 - **R275** · an explain gap does not print its verify command; the gap id and artifact id are the inputs, the command still has to be assembled · [R275.md](docs/roadmap/R275.md) · open
 - **R276** · gap ids change when a block is moved, and differ between a CRLF and an LF checkout of the same commit · [R276.md](docs/roadmap/R276.md) · open
 - **R277** · `unobservedBlock` is withheld on operator- and line-narrowed runs and on quarantined runs, so a `--changed-since` PR run never gets the mark · [R277.md](docs/roadmap/R277.md) · open
+- **R278** · lethal verify selects an edited COVERING test as an old test, so it never gets the new-test double run or a new-test state · [R278.md](docs/roadmap/R278.md) · open
 
 ## Backends and tooling
 
