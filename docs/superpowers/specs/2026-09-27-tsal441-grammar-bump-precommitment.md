@@ -110,7 +110,60 @@ A failed P1 to P4 stops the plan before the next dependent step: explain every r
 new, and commit an AMENDMENT section to this spec, alone.
 
 ## OUTCOME
-(Filled in after the runs.)
+
+- **P1 MATCHED.** Zero changed nodes in any of the 40 fixture files under g430 vs g441 (the diff
+  instrument was proven live first on a hand-written probe outside the fixtures: 22 changed nodes
+  inside a property, 8 outside). Parse health (ERROR, MISSING) is 0/0 in every fixture file under
+  both grammars. Zero value-start contextual-name hits across all 40 files.
+- **P2 MATCHED.** `census-operator-sites.ts` moved 0 rows on all five fixture targets (sandbox-app,
+  sandbox-data, sandbox-hang, sandbox-harden, sandbox-coverage-probe).
+- **P3 MATCHED.** The `astSubtreeHash` listing and the full identity-key listing are byte-identical
+  on every fixture target under both grammars. sandbox-data: 407 raw / 387 deployed specs,
+  unchanged under both grammars.
+- **P4 MISSED, see AMENDMENT 1.** Two clusters the prediction did not name, each explained by a
+  single named upstream commit, so no new grammar bug: (a) dc gained a 7th
+  `lethal.negate-conditional` row, in `.dependencies/DC/Page/CDCeOrderDocumentCard.Page.al` (step C,
+  #27), a file the prediction's list missed; declarative, dropped by `isMutableSite`, no run
+  changes. (b) BaseApp/Test gained 8 `lethal.toggle-blank-string` rows (step B, #28) at
+  `asserterror` bodies assigning a string literal to a page field's `Value`, now parsed as an
+  `assignment_statement`; these are real new mutants, not declarative no-ops. The predicted 34
+  `lethal.void-method-call` removals under BaseApp/Test (step B, #26, R284's fragments) matched
+  exactly, and do/sentinel/bcf/sysapp moved 0 rows, as predicted.
+- **P5 MATCHED.** `bun test` under g441, before any test edit: 3775 pass / 7 skip / 0 fail,
+  identical to g430 at the same HEAD. `grammar-shapes.test.ts` (Task 5): under g430, 1 pass / 7
+  fail, every failure matching the brief's named assertion for #24, #25, #26, #27 and #28; the R216
+  case is the 1 pass (unchanged on both grammars, since R216 is still open on both). Under g441: 8
+  pass / 0 fail. Full suite after adding the file: 3783 pass / 7 skip / 0 fail.
+- **P6 MATCHED.** Cross-check run 003
+  (`docs/measurements/2026-09-27-gh06-grammar-crosscheck.md` section 10): fixtures, do, sentinel,
+  bcf identical to run 002; dc comparable 475 (was 473), unhealthy 0 (was 2 files / 6 ERROR),
+  unexplained 8, the two re-admitted files add 0 records; sysapp assignment compiler-only 0/8/0;
+  baseapp kinds compiler-only and tree-sitter-only both 34 -> 0; baseapp call probe compiler-only
+  56 -> 22 (the 34 moving to explained), tree-sitter-only 34 -> 0; baseapp assignment probe
+  compiler-only 82 -> 10 (the 72 moving to explained). Total unexplained 261 -> 45 (do 5, dc 8,
+  sysapp 0, baseapp 32).
+- **P7 MATCHED.** Every control reproduced exactly: the v3.2.1 and v4.0.1 tag-wasm controls
+  unchanged; the g430 asserterror-index, asserterror-assign and type-property controls unchanged;
+  the g441 asserterror-index and asserterror-assign controls both explained-asserterror with 0
+  unexplained; the g441 type-property control comparable 1, agree, exit 0; `census-fixture-mutants`
+  on the asserterror-index-only directory under g441 plants no row whose before-text starts with
+  `[`.
+- **P8, landing gates.** Measured by the controller on the merged tree `b995f89` (includes master
+  `bc62877`; Cronus28, lease attempt 053, released):
+  - `lethal doctor`: all ok. Control app 1.0.0.20 (>= `MIN_CONTROL_VERSION` 1.0.0.20). alc
+    18.0.41.45789. al-runner build: **v2.11.0**.
+  - `itest:bcdev`: PASS, killed 3 / survived 12 / no-coverage 4, `baselineGreen`, protocol-invariant
+    probes PASS.
+  - `itest:chunked`: PASS, both legs 17 / 7 / 2, errors 0; control `warmKills` 9 / `groupedCalls`
+    33; chunked leg `warmKills` 5 / `groupedCalls` 57.
+  - `itest:alrunner`: PASS, 3 / 12 / 4 on all four legs, the `--server` and resource-selector legs'
+    verdicts identical to the one-shot transport; build line "al-runner v2.11.0".
+  - Unit suite on the merged tree: typecheck clean, `bun test` 0 fail / 7 skip over 3851 tests.
+  - No baseline was deleted, regenerated or edited anywhere in this bump.
+  - itest:tables: not run by this lane (ruling Q1); owed by the combined check after the GH-24
+    re-record and R-236c, which must show 0 grammar-attributable differences (P3).
+  - `itest:lease` and `itest:stale-publish` were not run for this bump, by ruling; neither pins a
+    per-mutant baseline.
 
 ## AMENDMENT 1 (2026-09-27): P4 missed, both misses explained
 Written after the Task 3 offline census (`.superpowers/sdd/2026-09-27-TSAL-441-grammar-bump/task-2-3-report.md`),
