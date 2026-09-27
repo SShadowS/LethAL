@@ -98,3 +98,32 @@ assign every site by a mechanical rule written down with the cluster.
 
 ## Measured
 (filled after the runs, below this line only)
+
+Full write-up: `docs/measurements/2026-09-27-gh06-grammar-crosscheck.md`. Final runs at `b645a9b`.
+Scope of every "agree" and "zero" below: the six audited families and two context probes, on
+comparable files (12,467 of 12,469 listed).
+
+| prediction | measured | held |
+| --- | --- | --- |
+| control A (v3.2.1, linkprobe): comparable 1; tree-sitter-only UNEXPLAINED `comparison_expression` [218,247] and `call_expression` [235,247]; nothing else; disagree | exactly that, exit 1 | yes, A PROVEN |
+| control B (v4.0.1, continue): comparable 1; compiler-only UNEXPLAINED `call_expression` [89,104]; call probe compiler-only at 89; nothing else | exactly that, exit 1 | yes, B PROVEN |
+| 4.3.0 on both control files: agree, exit 0 | agree, exit 0, both | yes |
+| fixtures/: six kinds agree; call-probe gap 9 explained, 0 unexplained; U = 0 | exactly that (68 of 68 comparable) | yes |
+| BC.History parts: over-claims only under R2 | BusinessFoundation 0 tree-sitter-only; System Application 1, guarded; BaseApp 34 tree-sitter-only UNEXPLAINED (C1b, `asserterror` before a call on an array element) | no, for BaseApp |
+| BC.History parts: the R215 and #20 to #23 shapes at ZERO | none of the 261 unexplained records is one of those shapes | yes |
+| No reference corpus produces an over-claim that survives the filtered pipeline | two survive: C1b (BaseApp, `void-method-call` on the split fragment) and C2 (do-rel2, `remove-not` and `void-method-call` in an inactive `#if` arm) | no |
+
+Rule outcomes: R4 fired once (BaseApp, `UnaryPlusExpression`); ruled in `f11a9fc`, then corrected to a
+mapping in `b645a9b`, and all seven corpora re-run. R1 excluded two DC files (tree-sitter ERROR 6,
+MISSING 0; the compiler parses both clean): cluster P1. No cluster was UNRESOLVED.
+
+Recorded, not changed: R2 recognises only `preproc_conditional*` spans, and tree-sitter-al 4.x also
+uses `preproc_split_*` and `preproc_fragmented_*` containers for directive code, so every corpus's
+"guarded" counts are understated. Changing R2 after reading the output would edit the rule to fit
+the data.
+
+Instrument change during the runs: the compiler dump was streamed (`2d2ece1`) after the whole-BaseApp
+run exhausted host memory. Accepted on byte-identical output against the `ab2d2fc` runs: 10 of 10
+`--json` files, 8 of 8 `.txt` files.
+
+Items: R283 (C1a), R284 (C1b), R285 (C2), R286 (C3), R216 widened (C4), R287 (C5 to C7), R288 (P1).
