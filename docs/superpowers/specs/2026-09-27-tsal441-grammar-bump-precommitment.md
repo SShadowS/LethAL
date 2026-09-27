@@ -111,3 +111,57 @@ new, and commit an AMENDMENT section to this spec, alone.
 
 ## OUTCOME
 (Filled in after the runs.)
+
+## AMENDMENT 1 (2026-09-27): P4 missed, both misses explained
+Written after the Task 3 offline census (`.superpowers/sdd/2026-09-27-TSAL-441-grammar-bump/task-2-3-report.md`),
+before any cross-check or live gate that depends on it.
+
+- **P1 MATCHED.** Zero changed nodes in any fixture file under g430 vs g441 (the instrument was
+  proven live first, on a hand-written probe outside the fixtures), and parse health is 0/0 in all
+  40 fixture files under both grammars.
+- **P2 MATCHED.** Zero census rows moved on any of the five fixture targets.
+- **P3 MATCHED.** Hashes and full identity-key listings are byte-identical on every fixture target
+  under both grammars, including sandbox-data's raw 407 / deployed 387 under both grammars.
+- The released v4.4.1 asset equals the tag's checked-in wasm, and the local build (tree-sitter CLI
+  0.27.0) is byte-identical to both.
+
+**Deviation from the plan: the whole-BaseApp census cannot run in one pass.**
+`census-operator-sites.ts` over BaseApp's 9,620 files aborts under g430 after about 20 s
+(`RuntimeError: Aborted()` in web-tree-sitter) and writes nothing: the census keeps every parsed
+tree alive for its one semantic context, and the wasm heap runs out. So baseapp was measured as two
+halves instead, BaseApp/Source (8,020 files) and BaseApp/Test (1,600 files), each run twice under
+g430 and stable at 0/0 only-in-A / only-in-B both times. The blind spot: a Tier-2 operator's claim
+in a Test file that resolves a symbol declared in Source is judged without Source's declarations in
+scope. Every moved row found end to end is from a Tier-1 operator, so this run does not exercise
+that blind spot, but the instrument cannot rule it out. Filed as R292 (Job 2).
+
+**P4 misses, each explained by a named upstream change, so no new grammar bug:**
+
+(a) dc: 7 new `lethal.negate-conditional` census rows, all attributed to #27 (`551829e`),
+    a value-start `Type = Type::<member>` comparison inside a page control's `Visible` or `Enabled`
+    property value. One of the 7 is in `.dependencies/DC/Page/CDCeOrderDocumentCard.Page.al`, a file
+    P4 did not name (P4 named only the two pages under `Modules/Purchase Contracts/Base/src/Pages/`).
+    All 7 rows are dropped by `isMutableSite` (declarative), and the deployed-mutant listing is
+    byte-identical under both grammars for the affected directories, so no run changes.
+(b) baseapp/Test: 8 new `lethal.toggle-blank-string` rows, attributed to #28 (`209d038`), at an
+    `asserterror` body that assigns a string literal to a page field's `Value`, which is now parsed
+    as an `assignment_statement` (it was not a statement under g430). Files: `ItemTrackingTest` 4,
+    `RTCAdminUserPermissionSet` 2, `TestJobQueue` 1, `ServiceDemandOverview` 1. These are real new
+    mutants a run would plant, not a declarative no-op. `remove-assignment` and `void-method-call`
+    gained nothing at these bodies, as predicted ([[R216]]'s statement-slot gap is still missing
+    them).
+    The 34 predicted `lethal.void-method-call` removals under BaseApp/Test are exact, and do,
+    sentinel, bcf, sysapp all move 0 rows, as predicted.
+
+No intermediate grammar was built: no moved row anywhere sits in directive code, and each cluster's
+construct settles which single issue (#26, #27 or #28) it belongs to on its own.
+
+bc281 (exploratory, build `28.1.49838.50244`): 0 unhealthy files under both grammars, including
+upstream's five named files, which are present and clean even under g430 on this build; 0 census
+rows moved. It gates nothing and this amendment changes no prediction about it.
+
+**Revised predictions for later steps.** P6's dc and baseapp cross-check expectations in this spec
+are UNCHANGED by this amendment: the census (this document) and the cross-check
+(`probe-grammar-crosscheck.ts`) measure different things, one server's parse tree against a fixed
+set of AL kind shapes it treats as sites, the other tree-sitter's output against the compiler's own
+parse. A miss in one is not a prediction about the other.
