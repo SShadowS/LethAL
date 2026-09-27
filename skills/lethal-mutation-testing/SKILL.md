@@ -75,7 +75,10 @@ lethal run --project <app-dir> \
 mutant errored and the run measured nothing: no score, no survivors, read the failure notes and
 fix the cause (there is nothing to resume). `3` means the run refused to vouch for
 its own verdicts, not that the tests failed. Do not report verdicts from a quarantined run;
-`--resume` continues it once the cause is fixed.
+`--resume` continues it once the cause is fixed. On bcdev a resumed run re-scans the test app: a
+test with a reachable call that may open a TestPage is reported as refused and never sent, whatever
+the saved run recorded for it, and any saved mutant verdict it took part in is scored again
+without it (warning `resume-testpage-rescored`).
 
 ## 4. Read the result
 

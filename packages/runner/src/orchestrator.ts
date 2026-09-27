@@ -117,6 +117,7 @@ import {
   carriedVerdictFor,
   sessionFingerprint,
   wasStranded,
+  withoutRefusedTests,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
@@ -2860,6 +2861,8 @@ function resolveResume(
   backendName: string,
   configFingerprint: string,
   emit: RunEmitter,
+  /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
+  refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
 ): { runId: number; index: ResumeIndex } | undefined {
   if (cfg.resume === undefined) return undefined;
 
@@ -2904,10 +2907,17 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
-  const index = buildResumeIndex(
-    cfg.store.mutantVerdicts(priorRunId),
-    cfg.stopHungSessions === true,
+  const { index, dropped: refusedDropped } = withoutRefusedTests(
+    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    refusedTests,
   );
+  if (refusedDropped > 0) {
+    emit({
+      type: "warning",
+      code: "resume-testpage-rescored",
+      message: `[lethal] --resume: ${refusedDropped} prior verdict(s) from run ${priorRunId} were measured with a test this session refuses because it has a reachable call that may open a TestPage (${refusedTests.map((t) => t.qualifiedName).join(", ")}). They are not carried; each is scored again without that test (R-236c).`,
+    });
+  }
   emit({
     type: "warning",
     code: "resume-reusing-run",
@@ -3945,7 +3955,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { preprocessorSymbols: cfg.preprocessorSymbols }
       : {}),
   });
-  const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
+  const resumeState = resolveResume(
+    cfg,
+    backendName,
+    configFingerprint,
+    emit,
+    tests
+      .filter((t) => testPageRefused.has(testKeyOf(t)))
+      .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method })),
+  );
 
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,

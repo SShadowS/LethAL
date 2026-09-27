@@ -185,6 +185,13 @@ An exit `1` means the run did not produce a result you can use.
 produced must not be reported as findings. It means LethAL could not prove the server was in a
 state where its answers mean anything. `--resume` continues such a run once the cause is fixed.
 
+On bcdev a resumed run scans the test app again before it sends anything. A test the scan refuses
+(it has a reachable call that may open a TestPage) is reported in `testPageRefused` as refused and
+is never sent, even if the saved run recorded it green or recorded BC's own TestPage refusal. A
+saved mutant verdict that such a test took part in (it killed the mutant, or it was among the
+tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
+test, and says so in a `resume-testpage-rescored` warning.
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.

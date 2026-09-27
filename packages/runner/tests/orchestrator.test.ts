@@ -1817,6 +1817,62 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
   });
 
+  // A resume also carries per-mutant verdicts. One the refused test took part in (here, killed it)
+  // was measured with a test this session will not send, so it is re-scored, never carried.
+  test("resume: a saved kill by the refused test is re-scored without it, not carried", async () => {
+    const PLAIN_TEST_AL = PAGE_TEST_AL.replace(
+      '    var\n        Card: TestPage "Some Card";\n    begin\n        Card.OpenView();',
+      "    begin",
+    );
+    const dirs = await project(PLAIN_TEST_AL);
+    const store = new ResultsStore(":memory:");
+    // Run 1: the test opens no TestPage yet, passes, covers IsUnderBudget and kills its 3 mutants.
+    const first = await runSession({
+      backend: new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      ),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    const killedBefore = first.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(killedBefore.map((m) => m.verdict)).toEqual(["killed", "killed", "killed"]);
+    expect(killedBefore.every((m) => m.killingTest === "UnsupportedTest")).toBe(true);
+    store.db.run("UPDATE runs SET finished_at = NULL");
+
+    // Run 2: the test now has a reachable call that may open a TestPage.
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
+    const backend = new RecordingBackend(CAPS_NST);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    const rescored = events.find(
+      (e) => e.type === "warning" && e.code === "resume-testpage-rescored",
+    );
+    expect(rescored?.type === "warning" ? rescored.message : "").toContain(
+      "3 prior verdict(s) from run 1",
+    );
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) {
+      expect(m.verdict).toBe("no-coverage");
+      expect(m.carried === true).toBe(false);
+    }
+    // The verdicts the refused test took no part in still carry.
+    const overBudget = report.mutants.filter((m) => m.procedureName === "IsOverBudget");
+    expect(overBudget.length).toBe(3);
+    for (const m of overBudget) expect(m.carried).toBe(true);
+  });
   // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
   // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
   // LethAL's own not-run message is filed as refused. A non-authoritative backend does no scan, so
