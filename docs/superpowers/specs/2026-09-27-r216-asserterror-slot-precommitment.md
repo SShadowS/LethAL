@@ -169,3 +169,16 @@ sentinel, bcf, sysapp, BaseApp/Source, BaseApp/Test; fingerprints in the Corpora
 LethAL does not mutate. P1 shows alc accepts asserterror in a codeunit with no Subtype, so the
 reason is the measured absence of product sites, not legality. Reported to the coordinator
 before any roadmap change, per its stop instruction.
+
+[Correction 2026-09-27, after review R-216-001 r1: "LethAL does not mutate" in the Decision above
+is too broad. It holds for a run targeting a product app. The scoped claim: 0 deployable PRODUCT
+sites on these inputs; the 7,846 gained sites are in test apps, which a run targeting a product app
+does not mutate (a run targeting a test project would enumerate them).]
+
+[Classifier re-run 2026-09-27: after the run, `scripts/r216-classify-gained.ts` was tightened so a
+test-library dependency counts only when its `publisher` is exactly `Microsoft` (retained test
+`scripts/r216-classify-gained.test.ts`). Re-run on the saved census rows of all fourteen inputs, each
+output byte-identical to the original, so no count moved: sandbox-app, sandbox-data, sandbox-hang,
+sandbox-harden, sandbox-coverage-probe, gift-card, credit-limit, do, dc and baseapp-source gained 0;
+sentinel 1 test; bcf 35 test; sysapp 305 test; baseapp-test 7,505 test; product 0 and unknown 0
+everywhere.]
