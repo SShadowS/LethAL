@@ -174,8 +174,10 @@ describe("the session-freshness predicate (R206 §2.1)", () => {
   });
 
   test("both actions read it at the very top, before phase 1 claims", () => {
+    // R236b: RunMutant is now a thin wrapper (see the GetOpAnswer describe block below); the
+    // single-method logic this pin is about, including this read, lives in RunMutantCore.
     const api = read("ControlApi.Codeunit.al");
-    for (const action of ["RunMutant", "RunMutantMany"]) {
+    for (const action of ["RunMutantCore", "RunMutantMany"]) {
       const body = procedureBody(api, action);
       const readAt = body.indexOf("TestRunsBefore := State.TestMethodRunsSoFar();");
       const claimAt = body.indexOf("State.TryBeginRun(");
@@ -257,7 +259,8 @@ describe("GH-24: ObservedActive, reset per method and read after ProgressBetween
     }
   });
   test("RunMutant reads ObservedActive before phase 3 and answers it", () => {
-    const body = procedureBody(read("ControlApi.Codeunit.al"), "RunMutant");
+    // R236b: the phases live in RunMutantCore now; RunMutant is the thin public wrapper.
+    const body = procedureBody(read("ControlApi.Codeunit.al"), "RunMutantCore");
     const readAt = at(body, "State.AttestationObservedActive()");
     const phase3 = at(body, "State.TryFinishRun(");
     expect(readAt).toBeLessThan(phase3);
@@ -265,5 +268,33 @@ describe("GH-24: ObservedActive, reset per method and read after ProgressBetween
       procedureBody(read("ControlApi.Codeunit.al"), "BuildStatus"),
       "Obj.Add('observedActive', ObservedActive);",
     );
+  });
+});
+
+describe("R236b: RunMutant is a thin wrapper over RunMutantCore, ran answers are kept", () => {
+  test("RunMutantCore reports whether it reached 'ran', false at entry, true only on that exit", () => {
+    const body = procedureBody(read("ControlApi.Codeunit.al"), "RunMutantCore");
+    expect(body).toContain("var Ran: Boolean) ResultJson: Text");
+    const start = at(body, "Ran := false;");
+    const beforeExit = body.indexOf("Ran := true;\n        exit(BuildStatus('ran',");
+    expect(beforeExit).toBeGreaterThan(start);
+    // No other assignment to Ran anywhere in the body (every non-'ran' exit leaves it false).
+    const writes = body.match(/Ran\s*:=/g) ?? [];
+    expect(writes).toEqual(["Ran :=", "Ran :="]);
+  });
+
+  test("the public RunMutant wrapper delegates to RunMutantCore and keeps the answer only when it ran", () => {
+    const body = procedureBody(read("ControlApi.Codeunit.al"), "RunMutant");
+    expect(body).toContain(
+      "ResultJson := RunMutantCore(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq, Ran);",
+    );
+    const delegateAt = at(body, "ResultJson := RunMutantCore(");
+    const ifRanAt = at(body, "if Ran then");
+    const keepAt = at(
+      body,
+      "KeepAnswer(AttemptId, OpSeq, LeaseEpoch, ServerGeneration, ResultJson);",
+    );
+    expect(ifRanAt).toBeGreaterThan(delegateAt);
+    expect(keepAt).toBeGreaterThan(ifRanAt);
   });
 });
