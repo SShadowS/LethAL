@@ -1,100 +1,90 @@
 # R-236c: TestPage scan census over the GH-06 corpora
 
 Task: `.superpowers/sdd/2026-09-27-R-236c-testpage-pre-refusal/task-2-brief.md`. Harness:
-`scripts/r236c-testpage-census.ts`. Run before the R-236c wiring lands, offline, no container.
+`scripts/r236c-testpage-census.ts`. Offline, no container.
 
-This page carries corpus names, file paths, counts and offsets only. No source text is quoted:
-every `loudErrors` list below is empty, so there is nothing to redact.
+This page carries corpus names, file paths, procedure and test names, counts and offsets only. No
+source text is quoted.
 
 ## 1. Result in one paragraph
 
-Nine corpora discovered tests and ran the scan clean: zero loud errors on every one. Two are the
-main "Cloud" app trees, not their Test siblings, so they legitimately discover zero tests (recorded
-as "no tests", not a pass, per the brief). The tenth corpus, `BC.History/BaseApp` (9,620 `.al`
-files), **threw** before it could be scored: the underlying WASM parser printed `Aborted()` and the
-script's per-corpus `try`/`catch` turned that into a `threw` result rather than crashing the whole
-run. That is a real, non-fixture corpus with a hard failure, so per the brief's Step 3 decision rule
-this session stops here: Task 4 (wiring the scan into the run path) does not start until the
-orchestrator rules. The scanner itself was not touched.
+The first run (at `e7d397a`) scored nine corpora and **threw** on the tenth, `BC.History/BaseApp`
+(9,620 `.al` files), with web-tree-sitter's `Aborted()`. The cause was the scanner keeping every parse
+tree alive, which filled the wasm heap (section 2). After the fix (`e01e88c`, each tree deleted once
+its facts are read), the second run completes on all ten corpora. Nine have zero loud errors. BaseApp
+now scores 40,291 tests and refuses 11,098, but reports **127 loud errors**, all of one shape: a test
+the discovery finds but the scanner does not see, because it sits in an `#if not CLEANnn` region the
+grammar attaches to the codeunit's global `var` section (section 4). Those errors predate the fix
+(section 4), and they are the brief's stop condition, so this goes back to the orchestrator.
 
-## 2. Instrument
+## 2. Root cause of the first run's abort
 
-| item | value |
-| --- | --- |
-| harness | `scripts/r236c-testpage-census.ts`, consuming `discoverTests` (`packages/runner/src/discovery.ts`) and `readTestAppSources`/`analyzeTestPageSources` (`packages/runner/src/testpage-scan.ts`) |
-| command | `bun scripts/r236c-testpage-census.ts fixtures/sandbox-data-tests fixtures/sandbox-tests fixtures/sandbox-hang-tests fixtures/sandbox-harden-tests "U:/Git/do-rel2/Cloud" "U:/Git/DC/Cloud" "U:/Git/BusinessCentral.Sentinel" "U:/Git/BC.History/BusinessFoundation" "U:/Git/BC.History/System Application" "U:/Git/BC.History/BaseApp"` |
-| run mode | foreground, one process, corpora processed in argv order |
-| repo state | `e7d397a` (HEAD at the time of this run) |
-| raw output | saved to the session scratchpad (`r236c-census.txt`), reproduced verbatim in §4 below |
+Measured with a scratch probe that parses every BaseApp file in order and samples the wasm heap (the
+module's `WebAssembly.Memory` buffer size) every 500 files.
 
-## 3. Census table
+| mode | heap at file 0 | file 4,000 | file 8,000 | file 9,000 | end |
+| --- | --- | --- | --- | --- | --- |
+| keep every tree (old scanner) | 32 MB | 591 MB | 1,263 MB | 2,048 MB | **aborts at file 9,007**, 164.6 M chars parsed |
+| delete each tree after use | 32 MB | 32 MB | 32 MB | 32 MB | completes, 9,620 files, 196.3 M chars |
 
-One line per corpus, in run order. "threw" means the script's `catch` fired instead of the normal
-per-corpus report; "-" means the field was never reached for that corpus.
+Kept trees cost about 12.5 bytes of wasm heap per source character, and 2,048 MB is the heap's hard
+ceiling, so the abort is heap exhaustion, not a bad file. The fix extracts every fact the traversal
+needs (procedures, scopes, call sites in source order, parse damage) into plain objects per file and
+deletes the tree before the next file.
 
-| corpus | files | tests | refused | loud errors | threw | ms |
-| --- | --- | --- | --- | --- | --- | --- |
-| `fixtures/sandbox-data-tests` | 1 | 68 | 1 | 0 | no | 44 |
-| `fixtures/sandbox-tests` | 1 | 2 | 0 | 0 | no | 6 |
-| `fixtures/sandbox-hang-tests` | 1 | 5 | 0 | 0 | no | 3 |
-| `fixtures/sandbox-harden-tests` | 1 | 6 | 0 | 0 | no | 3 |
-| `U:/Git/do-rel2/Cloud` | 554 | 0 (no tests) | 0 | 0 | no | 906 |
-| `U:/Git/DC/Cloud` | 1135 | 0 (no tests) | 0 | 0 | no | 2477 |
-| `U:/Git/BusinessCentral.Sentinel` | 67 | 54 | 0 | 0 | no | 78 |
-| `U:/Git/BC.History/BusinessFoundation` | 104 | 89 | 19 | 0 | no | 278 |
-| `U:/Git/BC.History/System Application` | 1718 | 1889 | 209 | 0 | no | 10530 |
-| `U:/Git/BC.History/BaseApp` | - | - | - | - | **yes** | - |
+The operator-site census hit the same class on the same corpus (R292, filed on the TSAL-441 branch:
+`scripts/census-operator-sites.ts` keeps every tree for one shared semantic context and aborts between
+file 9,000 and 9,500). That item is a separate fix; only the TestPage scanner changed here.
 
-`BaseApp`'s thrown message (no source, just the runtime's own text):
-`Aborted(). Build with -sASSERTIONS for more info.`
+## 3. Census table (second run, at `e01e88c`)
 
-The first four rows are fixtures, listed for completeness per the brief; the decision rule in §5
-below is about the six real corpora only (`do-rel2/Cloud`, `DC/Cloud`, `BusinessCentral.Sentinel`,
-and the three `BC.History` trees).
+| corpus | files | tests | refused | loud errors | ms |
+| --- | --- | --- | --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 68 | 1 | 0 | 39 |
+| `fixtures/sandbox-tests` | 1 | 2 | 0 | 0 | 7 |
+| `fixtures/sandbox-hang-tests` | 1 | 5 | 0 | 0 | 8 |
+| `fixtures/sandbox-harden-tests` | 1 | 6 | 0 | 0 | 5 |
+| `U:/Git/do-rel2/Cloud` | 554 | 0 (no tests) | 0 | 0 | 781 |
+| `U:/Git/DC/Cloud` | 1135 | 0 (no tests) | 0 | 0 | 2471 |
+| `U:/Git/BusinessCentral.Sentinel` | 67 | 54 | 0 | 0 | 65 |
+| `U:/Git/BC.History/BusinessFoundation` | 104 | 89 | 19 | 0 | 195 |
+| `U:/Git/BC.History/System Application` | 1718 | 1889 | 209 | 0 | 6718 |
+| `U:/Git/BC.History/BaseApp` | 9620 | 40291 | 11098 | **127** | 472935 |
 
-## 4. Raw output (verbatim)
+Every corpus that the first run scored gives the same files, tests and refused counts in the second.
+`do-rel2/Cloud` and `DC/Cloud` are the main app trees, not their `Test` siblings, so zero discovered
+tests is expected there: recorded as "no tests", not as a pass. Refused/tests: BusinessFoundation
+19/89 (21.3%), System Application 209/1,889 (11.1%), BaseApp 11,098/40,291 (27.5%).
 
-```
-{"corpus":"fixtures/sandbox-data-tests","files":1,"tests":68,"refused":1,"loudErrors":0,"firstErrors":[],"ms":44}
-{"corpus":"fixtures/sandbox-tests","files":1,"tests":2,"refused":0,"loudErrors":0,"firstErrors":[],"ms":6}
-{"corpus":"fixtures/sandbox-hang-tests","files":1,"tests":5,"refused":0,"loudErrors":0,"firstErrors":[],"ms":3}
-{"corpus":"fixtures/sandbox-harden-tests","files":1,"tests":6,"refused":0,"loudErrors":0,"firstErrors":[],"ms":3}
-{"corpus":"U:/Git/do-rel2/Cloud","files":554,"tests":0,"refused":0,"loudErrors":0,"firstErrors":[],"ms":906}
-{"corpus":"U:/Git/DC/Cloud","files":1135,"tests":0,"refused":0,"loudErrors":0,"firstErrors":[],"ms":2477}
-{"corpus":"U:/Git/BusinessCentral.Sentinel","files":67,"tests":54,"refused":0,"loudErrors":0,"firstErrors":[],"ms":78}
-{"corpus":"U:/Git/BC.History/BusinessFoundation","files":104,"tests":89,"refused":19,"loudErrors":0,"firstErrors":[],"ms":278}
-{"corpus":"U:/Git/BC.History/System Application","files":1718,"tests":1889,"refused":209,"loudErrors":0,"firstErrors":[],"ms":10530}
-Aborted()
-{"corpus":"U:/Git/BC.History/BaseApp","threw":"Aborted(). Build with -sASSERTIONS for more info."}
-```
+## 4. BaseApp's 127 loud errors
+
+All 127 read `<codeunit>.<test> (codeunit <id>) was discovered but the parser found it 0 time(s) as
+a parameterless procedure`. By codeunit: 137308 (52), 136130 (51), 134393 (11), 134098 (7),
+134395 (2), and one each in 134106, 134394, 134287 and 134605. First named examples: `ERM Sales
+Subform.InvoiceAddingLinesUpdatesTotals` (134393), `ERM Document Totals
+UT.SalesUpdateTotalsControlsUpdateTotals` (134395).
+
+Shape, checked on 134393: the test sits inside an `#if not CLEAN26` region that begins right after the
+codeunit's global `var` section. tree-sitter-al parses that region as a `preproc_conditional_var`
+INSIDE the `var_section`, so the procedure's path is `codeunit_declaration > declaration_body >
+var_section > var_body > preproc_conditional_var > procedure`, and the file has no parse error. The
+scanner collects procedures only from the body's direct members (with `#if` wrappers flattened), so it
+never sees these. It fails loud, which is the designed, safe outcome: nothing is sent unclassified.
+
+These errors are not caused by the memory fix. On `BaseApp/Test` alone (1,600 files, which fits in the
+heap under the old code), the old scanner (`e7d397a`) and the new one give byte-identical results:
+40,291 tests, the same 11,098 refused keys with the same reasons, and the same 127 errors.
 
 ## 5. Decision (Step 3 of the brief)
 
-The brief's rule: if ANY real corpus (not a fixture) has `loudErrors > 0` or `threw`, stop, write
-and commit the doc and script, return `NEEDS_CONTEXT` with the table, and do not start Task 4.
-
-`BC.History/BaseApp` threw. That satisfies the stop condition. Per the brief, the scanner
-(`packages/runner/src/testpage-scan.ts`) was not touched, and Task 4 (wiring the scan into the run
-path) was not started.
+BaseApp now completes, but `loudErrors` is 127 on a real corpus. That is the stop condition: the
+table goes to the orchestrator, and Task 4 (wiring the scan into the run path) does not start until it
+rules on the `var`-attached `#if` shape.
 
 ## 6. Notes
 
-- **Reach sanity check.** On the two corpora that did discover tests and did find refusals,
-  `refused`/`tests` is 19/89 (21.3%) for `BusinessFoundation` and 209/1889 (11.1%) for
-  `System Application`. Both are the same order of magnitude as the brief's cited reference point
-  (Continia Document Output: 9 of 104 test *files* declare a TestPage; not a directly comparable
-  ratio, since this census counts refused *tests*, not files declaring a TestPage, and Continia is
-  not one of the corpora this run covers). Nothing here suggests the policy is refusing everything
-  or refusing nothing.
-- **`do-rel2/Cloud` and `DC/Cloud` show `tests: 0`.** Both paths are the corpora's main app tree
-  (`Cloud`), not their `Test` sibling directory; the brief's corpus list names `Cloud` specifically,
-  so zero discovered tests is the expected shape for that path, not a scan failure. Recorded as "no
-  tests" per the brief's instruction, not scored as a pass.
-- **The `BaseApp` failure is in the parser, not in the census script's own logic.** `Aborted()` is
-  an Emscripten/WASM runtime abort message, printed to the process's output ahead of the script's
-  own `catch` handling it as a thrown `Error`. The script's per-corpus `try`/`catch` worked as
-  designed: one corpus's failure did not stop the other nine from being scored, and did not crash
-  the `bun` process. `BaseApp` is confirmed at 9,620 `.al` files (`find ... -iname '*.al' | wc -l`),
-  matching the brief's "~9,600 files" estimate for the largest corpus in the set.
-- No attempt was made to diagnose or fix the abort. Per the brief, that decision belongs to the
-  orchestrator's ruling, not this task.
+- BaseApp took 473 s, almost all of it after parsing: reading and parsing all 9,620 files takes
+  16 s in the heap probe. The per-test walk is repeated for each of 40,291 tests. Fine for a census;
+  worth a look before the scan runs on every `lethal run` of a project this size.
+- The first run's raw output and this run's are in the session scratchpad (`r236c-census.txt`,
+  `r236c-census-2.txt`).
