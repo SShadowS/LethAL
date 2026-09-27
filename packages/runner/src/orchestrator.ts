@@ -1855,7 +1855,7 @@ async function runFenced(
   emit: RunEmitter,
   resyncOpSeq?: () => Promise<void>,
 ): Promise<FencedRunOutcome> {
-  const first = await runOnce(backend, safety, ref, opts, resyncOpSeq);
+  const first = await runOnce(backend, safety, ref, opts, resyncOpSeq, emit);
   if (!isLostAck(first)) return { verdict: first, lostAck: "none", retried: false };
   // Announce it. A lost ack is rare, it means a result really was thrown away, and a silent
   // recovery is indistinguishable from the fault never happening — which is exactly the ambiguity
@@ -1897,7 +1897,7 @@ async function runFenced(
     }
   }
   const original = first.fencedOp;
-  const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq);
+  const retry = await runOnce(backend, safety, ref, opts, resyncOpSeq, emit);
   const provenance = {
     retryAfter: firstOutcome,
     ...(original !== undefined ? { original } : {}),
@@ -3281,6 +3281,7 @@ async function dispatchUnmutated(
       timeoutMs: scope.baselineTimeoutMs,
     },
     scope.resyncOpSeq,
+    scope.emit,
   );
   // Baseline test results are not tied to any mutant: mutant_row_id stays NULL. R206: the
   // session id rides along as data (the store's liveness check counts baseline rows too).
@@ -7187,22 +7188,33 @@ export async function activateOnce(
  * send a too-high `opSeq` and be refused as `lease-invalid` — a FALSE lease loss (see
  * `LeaseSession.resyncOpSeq`).
  */
+/** R236b: a verdict read back after a lost reply is a real incident even though it scores. */
+export function announceRecovered(v: TestVerdict, emit: RunEmitter | undefined): void {
+  if (v.replyRecovered === undefined) return;
+  emit?.({
+    type: "warning",
+    code: "lost-reply-recovered",
+    message: `[lethal] ${v.ref.codeunitName}.${v.ref.method}: the HTTP reply was lost (${v.replyRecovered}); the verdict was read back from the answer the server committed as the action's last step, and the test was not dispatched again (R236b)`,
+  });
+}
+
 export async function runOnce(
   backend: ExecutionBackend,
   safety: SessionSafety,
   ref: TestMethodRef,
   opts: { coverage: CoverageMode; timeoutMs: number },
   resyncOpSeq?: () => Promise<void>,
+  emit?: RunEmitter,
 ): Promise<TestVerdict> {
   safety.assertSafe(`run(${ref.codeunitName}.${ref.method})`);
-  const first = await backend.run(ref, opts);
-  if (first.outcome !== "error") return first;
-  if (first.operation !== undefined && isRetrySafe(first.operation)) {
+  let v = await backend.run(ref, opts);
+  if (v.outcome === "error" && v.operation !== undefined && isRetrySafe(v.operation)) {
     safety.assertSafe(`run(${ref.codeunitName}.${ref.method}) retry`);
     if (resyncOpSeq !== undefined) await resyncOpSeq();
-    return backend.run(ref, opts);
+    v = await backend.run(ref, opts);
   }
-  return first;
+  announceRecovered(v, emit);
+  return v;
 }
 
 /**
