@@ -5362,8 +5362,10 @@ export interface NamedMutantsConfig {
    * R-236c: tests with a reachable call that may open a TestPage, by `testKeyOf`, each with its
    * reason. Never sent: their baseline and rerun are the synthetic refused `skip`, so they are
    * never green and never run against a mutant. `lethal verify` never plans one; this is the guard.
+   * REQUIRED, empty when nothing is refused (run 002, review r1 #2): an optional map let a direct
+   * caller send a TestPage test. A call without it is refused before anything is read or sent.
    */
-  readonly testPageRefused?: ReadonlyMap<string, string>;
+  readonly testPageRefused: ReadonlyMap<string, string>;
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -5435,6 +5437,12 @@ function unmutatedRun(
  */
 export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMutantsResult> {
   const who = "runNamedMutants";
+  // The type requires it; this catches an untyped caller (run 002, review r1 #2).
+  if (!(cfg.testPageRefused instanceof Map)) {
+    throw new NamedMutantError(
+      `${who}: testPageRefused is required (the R-236c TestPage scan of the test app, empty when nothing is refused); without it a test that opens a TestPage could be sent`,
+    );
+  }
   const { backend, store, runId, installed } = cfg;
   // Everything up to `status()` reads only the store, local files and the request.
   // Review r1 fix 1: rows written under a finished run, or under the source run, would be read
@@ -5569,7 +5577,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       groupRuns,
       minMutantBudgetMs,
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
-      ...(cfg.testPageRefused !== undefined ? { testPageRefused: cfg.testPageRefused } : {}),
+      testPageRefused: cfg.testPageRefused,
     };
     // Scored or not, `safety.isUnsafe` is read below: "scored" is returned even when the covering
     // loop latched, and every request the latch stopped is answered there.

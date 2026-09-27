@@ -10981,6 +10981,7 @@ async function installedFixture(
     runId,
     installed,
     requests: [{ mutantId: "M0001", methods: [OVER] }],
+    testPageRefused: new Map(),
     emit: [traceEvents(trace)],
     ...(withLease ? { lease: leaseCfg(client).lease } : {}),
   };
@@ -11029,6 +11030,19 @@ describe("C02-04b: runNamedMutants", () => {
     expect(err).toBeInstanceOf(NamedMutantError);
     expect((err as Error).message).toMatch(/run 9999 does not exist/);
     expect(calls(fx.trace)).toEqual([]);
+  });
+
+  // R-236c run 002, review r1 #2: an optional map let a direct caller send a TestPage test.
+  test("runNamedMutants refuses a call with no testPageRefused map before any backend call", async () => {
+    const fx = await installedFixture();
+    const { testPageRefused: _omitted, ...rest } = fx.cfg;
+    const err = await runNamedMutants(rest as unknown as NamedMutantsConfig).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/testPageRefused/);
+    expect(calls(fx.trace)).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
   });
 
   test("runNamedMutants refuses a finished run before any backend call", async () => {
