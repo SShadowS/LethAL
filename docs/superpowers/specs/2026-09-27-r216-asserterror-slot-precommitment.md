@@ -88,4 +88,76 @@ The reason for STOP is only the measured absence of deployable product sites. It
 that the sites carry no information: validate-to-assign's rewrite can.
 
 ## OUTCOME
-(empty until the run)
+Run 2026-09-27 on HEAD 9c9d741 (branch lethal/r216). The predicate change was applied in the working
+tree only, for the AFTER census and the classifier, then removed with an exact edit;
+`git diff --quiet -- packages/engine/src/ast/tree-walks.ts` exited 0 afterwards.
+
+### P1. Legality: MATCHED
+alc from the AL extension 18.0.2732683 (compiler 18.0.41.45789; newer than the 18.0.2668733 R216
+used), runtime 16.0, symbols `Microsoft_System_28.0.47067.0.app`.
+- Probe (no Subtype): `asserterror Raise();` and `asserterror ;` compile. Exit 0, `.app` written,
+  no diagnostic.
+- Control (`Subtype = Test;`, same body): exit 0, `.app` written, no diagnostic.
+So alc accepts `asserterror`, including an empty body, in a codeunit that is not a test codeunit.
+STOP (a) does not apply.
+
+### Stability (R218)
+BEFORE twice on BaseApp/Test: 977451 rows both times, 0 only-in-A, 0 only-in-B.
+
+### Inputs read
+Census file counts equal the pre-committed census-inputs counts on every corpus: do 554, dc 1135,
+sentinel 67, bcf 104, sysapp 1718, baseapp-source 8020, baseapp-test 1600. Fixtures: sandbox-app 2,
+sandbox-data 32, sandbox-hang 1, sandbox-harden 2, sandbox-coverage-probe 3, gift-card 4,
+credit-limit 5. Every census, diff and classifier run exited 0.
+
+### P2. Census, per input
+Gained / lost / bad / unknown, then gained rows by role, deployability and operator.
+
+| input | BEFORE rows | gained | lost | bad | unknown | deployable product | test |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| sandbox-app | 19 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sandbox-data | 413 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sandbox-hang | 40 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sandbox-harden | 22 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sandbox-coverage-probe | 86 | 0 | 0 | 0 | 0 | 0 | 0 |
+| gift-card | 64 | 0 | 0 | 0 | 0 | 0 | 0 |
+| credit-limit | 46 | 0 | 0 | 0 | 0 | 0 | 0 |
+| do | 38583 | 0 | 0 | 0 | 0 | 0 | 0 |
+| dc | 103205 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sentinel | 1422 | 1 | 0 | 0 | 0 | 0 | 1 |
+| bcf | 3643 | 35 | 0 | 0 | 0 | 0 | 35 |
+| sysapp | 78504 | 305 | 0 | 0 | 0 | 0 | 305 |
+| baseapp-source | 791762 | 0 | 0 | 0 | 0 | 0 | 0 |
+| baseapp-test | 977451 | 7505 | 0 | 0 | 0 | 0 | 7505 |
+
+Test rows per operator (no product row and no unknown row exists on any input, deployable or not):
+- sentinel: void-method-call 1 deployable. The one row is `AnalysisNotSchedTestSESTM`
+  (a `Subtype = Test` codeunit in app `BusinessCentral.Sentinel.Test`),
+  `BusinessCentral.Sentinel.Test/src/AnalysisNotScheduled.Test.Codeunit.al` line 79.
+- bcf: void-method-call 35 deployable.
+- sysapp: void-method-call 295, remove-assignment 8, validate-to-assign 2; all deployable.
+- baseapp-test: void-method-call 6108 deployable and 9 not-deployed, validate-to-assign 1307,
+  remove-assignment 72, remove-testfield 6, remove-commit 3; all of the last four deployable.
+
+Product rows, by object name: none, on every input. Unknown rows: none, on every input.
+Deployable product sites: 0 on every input.
+
+Prediction lines:
+- LOST 0 on every input: MATCHED. BAD 0: MATCHED.
+- Every gained row from one of the seven gated operators: MATCHED (five of them appear:
+  void-method-call, remove-assignment, validate-to-assign, remove-testfield, remove-commit).
+- Fixtures 0 gained: MATCHED.
+- do, dc 0 gained: MATCHED.
+- sentinel 0 gained: MISSED. 1 gained, a test row (above). The plan's grep facts covered do and
+  dc only; sentinel's test app holds `asserterror` with a call body.
+- Deployable product gained 0 on every corpus and operator: MATCHED.
+- Unknown 0 on every corpus: MATCHED.
+- bcf void-method-call >= 35: MATCHED (35).
+- sysapp remove-assignment 8: MATCHED (8).
+- BaseApp/Test remove-assignment 72: MATCHED (72).
+- BaseApp/Test void-method-call >= 34: MATCHED (6117).
+- Existing rows inside asserterror bodies unchanged: MATCHED (lost 0 on every input).
+
+### P3. Gates: MATCHED
+0 census rows gained or lost on all seven fixture targets, so no deployed mutant is added or
+removed on any fixture. No live gate was run, as predicted.
