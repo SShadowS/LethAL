@@ -3439,6 +3439,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    // R-236c: a snapshot is found by its two hashes from ANY run, so it can come from a run with a
+    // wider --tests-only. The TestPage scan read only this session's tests, so a saved row for any
+    // other test is DROPPED: it must not come back green and be sent. A snapshot missing one of
+    // this session's tests is not reused at all, since that test would then never be measured.
+    if (reused !== undefined) {
+      const inScope = new Set(tests.map(testKeyOf));
+      const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
+      reused =
+        new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
+          ? { ...reused, baseline: kept }
+          : undefined;
+    }
     snapshotKey = { batchHash, testAppHash };
     if (reused !== undefined) {
       emit({
@@ -3916,9 +3928,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
-  // R-236c: before the run row and before anything reaches a server, in every bcdev coverage mode
-  // (a hub-mode baseline would make the test green and send it FENCED in the covering loop). Throws
-  // TestPageScanError when source a test can reach cannot be read: an unread test is not sent.
+  // R-236c: before the run row and before any test is sent (status and quarantine checks run
+  // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
+  // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
+  // source a test can reach cannot be read: an unread test is not sent.
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
     ? await scanTestPageTests(cfg.testDir, tests)
     : new Map();

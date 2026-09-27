@@ -1635,11 +1635,13 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     constructor(
       private readonly caps: BackendCapabilities,
       failureMessage?: string,
+      /** What UnsupportedTest would answer at baseline if it were sent. */
+      unsupportedOutcome: "error" | "pass" = "error",
     ) {
       super((method: string) =>
         method === "UnsupportedTest"
           ? {
-              outcome: "error" as const,
+              outcome: unsupportedOutcome,
               procedure: "IsUnderBudget",
               ...(failureMessage !== undefined ? { failureMessage } : {}),
             }
@@ -1690,13 +1692,18 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
   });
 
+  // D2: on the hub a TestPage opens, so a baseline there would PASS and put the test in the
+  // covering set of IsUnderBudget's mutants, whose runs are fenced. The stub answers green to say so.
   test("hub coverage mode refuses too: its mutant runs are fenced", async () => {
     const dirs = await project();
-    const backend = new RecordingBackend(CAPS_NST); // coverage "procedure"
+    const backend = new RecordingBackend(CAPS_NST, undefined, "pass"); // coverage "procedure"
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
     expect(backend.baselineSent).toEqual(["GreenTest"]);
+    // Never sent at baseline AND never in a covering run.
     expect(backend.sent).not.toContain("UnsupportedTest");
+    for (const m of report.mutants.filter((m) => m.procedureName === "IsUnderBudget"))
+      expect(m.verdict).toBe("no-coverage");
     expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
   });
 
@@ -1749,12 +1756,12 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   // A `--resume` that reuses a saved baseline skips `dispatchUnmutated`. A snapshot recorded before
   // R-236c on a hub-mode run can hold the TestPage test as GREEN with coverage, which would put it
   // in a covering set and send it fenced. The scan still runs on resume and overrides that row.
-  test("resume: a saved baseline recording the refused test green is overridden, never sent", async () => {
-    const dirs = await project();
-    const store = new ResultsStore(":memory:");
-    await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
-    // Make run 1 look like a pre-R-236c hub run: its snapshot holds UnsupportedTest as a pass
-    // covering IsUnderBudget, and it left every mutant to score (so the batch deploys and reuses).
+  /**
+   * Rewrites the store's only baseline snapshot so UnsupportedTest reads as a PASS covering
+   * IsUnderBudget (the hub-mode shape a run before R-236c could save), deletes every mutant verdict
+   * so a resumed batch must deploy and reuse that snapshot, and marks the runs unfinished.
+   */
+  function plantGreenSnapshot(store: ResultsStore): void {
     const snap = store.db.query("SELECT id, payload FROM baseline_snapshots").all() as {
       id: number;
       payload: string;
@@ -1788,6 +1795,15 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
     store.db.run("DELETE FROM mutants");
     store.db.run("UPDATE runs SET finished_at = NULL");
+  }
+
+  test("resume: a saved baseline recording the refused test green is overridden, never sent", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
+    // Make run 1 look like a pre-R-236c hub run: its snapshot holds UnsupportedTest as a pass
+    // covering IsUnderBudget, and it left every mutant to score (so the batch deploys and reuses).
+    plantGreenSnapshot(store);
 
     const backend = new RecordingBackend(CAPS_NST);
     const events: RunEvent[] = [];
@@ -1817,6 +1833,58 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
   });
 
+  // A snapshot is found by its two hashes from ANY run, so a `--tests-only` resume can reuse one
+  // saved by a run with a wider test list. The scan reads only this session's tests, so a saved row
+  // for a test outside them must not come back: here it is the TestPage test, saved green.
+  // `--tests-only` selects FILES, so the TestPage test gets a file of its own.
+  for (const [label, testsOnly] of [
+    ["excluding", ["SandboxTests.Codeunit.al"]],
+    ["including", ["*.al"]],
+  ] as const) {
+    test(`resume with --tests-only ${label} the refused test: never sent`, async () => {
+      const [greenPart, pagePart] = PAGE_TEST_AL.split(
+        "    [Test]\n    procedure UnsupportedTest()",
+      );
+      if (greenPart === undefined || pagePart === undefined) throw new Error("fixture shape");
+      const dirs = await project(`${greenPart}}\n`);
+      await Bun.write(
+        join(dirs.testDir, "PageTests.Codeunit.al"),
+        `codeunit 79101 "Page Tests"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure UnsupportedTest()${pagePart}`,
+      );
+      const store = new ResultsStore(":memory:");
+      // Run 1: the whole suite. Its snapshot is the one a later resume finds.
+      await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
+      plantGreenSnapshot(store);
+      // Run 2: narrowed. Its own snapshot is removed, so the resume of run 2 reuses run 1's.
+      await runSession({
+        backend: new RecordingBackend(CAPS_NST),
+        store,
+        ...dirs,
+        selectorIds,
+        testsOnly: [...testsOnly],
+      });
+      store.db.run("DELETE FROM baseline_snapshots WHERE run_id = 2");
+      store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+      store.db.run("DELETE FROM mutants");
+      store.db.run("UPDATE runs SET finished_at = NULL");
+
+      const backend = new RecordingBackend(CAPS_NST);
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        testsOnly: [...testsOnly],
+        resume: 2,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+        true,
+      );
+      expect(backend.sent).not.toContain("UnsupportedTest");
+    });
+  }
   // A resume also carries per-mutant verdicts. One the refused test took part in (here, killed it)
   // was measured with a test this session will not send, so it is re-scored, never carried.
   test("resume: a saved kill by the refused test is re-scored without it, not carried", async () => {
