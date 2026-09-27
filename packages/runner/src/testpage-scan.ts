@@ -340,7 +340,7 @@ class Scanner {
   }
 
   /**
-   * Every codeunit a `Codeunit <type text>` reference could plausibly name — ALL candidates, not
+   * Every codeunit a `Codeunit <type text>` reference could plausibly name, ALL candidates, not
    * the first (review round 3): a reference is genuinely ambiguous without full AL symbol
    * resolution (which the scanner deliberately does not do), so every textually-plausible reading
    * is walked, and a call is resolved, or a test refused, if ANY of them says so.

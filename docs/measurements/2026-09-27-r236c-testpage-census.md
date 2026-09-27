@@ -99,7 +99,10 @@ rules on the `var`-attached `#if` shape.
 procedure inside such a region a `MethodDeclaration` whose parent is `CodeunitObject`, and ends the
 `GlobalVarSection` before the `#if`. tree-sitter-al 4.4.1 (`7819df5`) puts it under `var_section >
 var_body > preproc_conditional_var` with no error node. Filed upstream as tree-sitter-al #29
-(<https://github.com/SShadowS/tree-sitter-al/issues/29>). Until it is fixed, the scanner collects
+(<https://github.com/SShadowS/tree-sitter-al/issues/29>). The second run (section 3) used grammar
+4.3.0 and this third run used 4.4.1; under the OLD scanner, 4.3.0 (`e01e88c`) and 4.4.1 (`c7376f2`)
+gave byte-identical results, so the grammar bump is not what changed BaseApp's count below. Until
+it is fixed, the scanner collects
 procedures from every branch of such a region, in source order, and keeps their locals out of the
 codeunit's globals (`c7c5ea3`).
 
