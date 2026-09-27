@@ -15,6 +15,7 @@ lethal.config.local.json
 lethal.config.envtool.json
 lethal.config.agent.json
 lethal.config.cronus*.json
+scripts/r289-probe/sidecar-creds.*.json
 *.app
 
 # Local MCP server config — contains credentials
