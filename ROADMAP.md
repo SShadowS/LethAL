@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**77 of 296 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**78 of 297 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -206,6 +206,7 @@ that ordering is the priority.
 - **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
 - **R292** · The operator-site census (`scripts/census-operator-sites.ts`) exhausts wasm memory on BC.History/BaseApp's 9,620 files, so a grammar bump can only census it in halves · [R292.md](docs/roadmap/R292.md) · open, filed 2026-09-27
 - **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
+- **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
 
 ## Backends and tooling
 
