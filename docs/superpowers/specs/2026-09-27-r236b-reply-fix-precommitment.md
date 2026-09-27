@@ -100,4 +100,25 @@ is not a session; S differs from T in more than size.
 
 ## §OUTCOME
 
-(empty)
+### §A2 read-out (2026-09-27, Cronus284)
+
+**Reading: grouped fix required.** This is the pre-committed DEFAULT from rule 1 (an incomplete arm
+cannot clear the grouped path), reached because a wedge stopped the run before the arm started. It is not
+a measurement of the grouped path, and it is not a root-cause statement. R236 is neither closed nor
+narrowed.
+
+- Lease: `coord lease Cronus284 bugs`, attempt `005`, heartbeated, released after the wedge.
+- Before: `LethAL Control` 1.0.0.19 installed on Cronus284. The control app was not published.
+- Prep session (`probe.ts --arm a2-prep --sessions 1`, client `81b5add`): record `container` `Cronus284`.
+  It was a hit. The `PageActionComputesNonZero` call (attempt `a22`, opSeq 8761) got `200` headers at
+  772 ms, chunked, then the body broke at 6 616 bytes on a socket close (`errorPhase` `"body"`, about
+  26.6 s after dispatch). Both op status reads timed out (at 0 ms and 45 032 ms); `actionEnd` `unproven`;
+  the session was quarantined. RenewLease returned HTTP 503 twice.
+- Wedge: afterwards `HarnessInfo` was unreachable (`AbortError`) and `LethALControl_RegisteredArtifact`
+  timed out. Cronus284 did not answer OData. No restart was done; the owner was asked
+  (`q-20260927T120229-ef48a407`).
+- The arm: calibration never ran and the loop never ran. T: 0 breaks over n = 0. S: 0 breaks over n = 0.
+  pairsDone 0 of 60. No break bytes, headers times or op statuses to report.
+- Orchestrator ruling: §A2 is NOT re-run.
+- Size-arm defect found: a wedge before calibration (its first read, `odataReadRegisteredArtifact`,
+  timing out with a `DOMException`) exits 2 ("harness fault") with an empty message, instead of 3 (wedge).
