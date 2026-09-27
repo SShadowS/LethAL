@@ -119,3 +119,26 @@ real answer tests, or on a real project. State this limit here and in any R270 c
 ## Stop rule
 
 Any BLOCK stops the task and goes to the owner with the per-mutant diff.
+
+## Appended 2026-09-27: a quarantined run is no measurement
+
+Written after live session 1 (lease 044), before any rerun. That session's source run A came back
+quarantined with no mutants scored; the driver then misread it as "every baseline mutant missing"
+(fixed in 9751a39, 2f48b06 and 48df6b0). The likely cause is R236: the TestPage test
+`Data Tests.PageActionComputesNonZero` sometimes gets a truncated reply, the session is marked
+in-flight-unknown, and the whole run scores nothing.
+
+Policy, fixed before the rerun:
+
+1. A session in which A, B1, B2 or any verify call is quarantined, for any reason, is NO
+   MEASUREMENT. It is not "met" and not "not met", and none of its timings enter a ratio, a range
+   check or the noise policy. It is not a BLOCK either: a quarantine is not a verdict difference.
+2. The driver's restore still runs. After it, the session may be retried under a new lease. A retry
+   is the same session, not a third one, and needs no further note.
+3. The quarantine reason printed at step 3 or step 7 is recorded in the Results. An in-flight-unknown
+   on the baseline's TestPage test is attributed to R236, not to R270.
+4. Three quarantined attempts in a row for one session stop the task. It goes to the owner as
+   "R270 cannot be measured on sandbox-data while R236 is open", with every reason printed.
+5. Session 1 (lease 044) is recorded here as no measurement. It also failed for a second reason:
+   GH-24 added 10 sites and `tables.baseline.json` had not been re-recorded, so the rerun waits for
+   that re-record and then uses the re-recorded baseline's survivor count in place of 63.
