@@ -836,6 +836,100 @@ ${unit(
   });
 });
 
+describe("review round 3: fail-closed fixes", () => {
+  test("a namespace path is not shadowed by an unrelated codeunit whose OWN quoted name matches it as text (#A)", () => {
+    const decoy = unit("    procedure Open()\n    begin\n    end;", 59901, "A.B", false);
+    const real = `namespace A;
+${unit(
+  `
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+  59902,
+  "B",
+  false,
+)}`;
+    const got = scan(
+      unit(`
+    var
+        Lib: Codeunit A.B;
+
+    [Test]
+    procedure A()
+    begin
+        Lib.Open();
+    end;`),
+      [ref(50100, "A")],
+      [
+        { path: "decoy.al", text: decoy },
+        { path: "real.al", text: real },
+      ],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a quoted Codeunit name containing a dot still resolves (regression, #A)", () => {
+    const lib = unit(
+      `
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+      50200,
+      "Lib.Pages",
+      false,
+    );
+    const got = scan(
+      unit(`
+    var
+        Lib2: Codeunit "Lib.Pages";
+
+    [Test]
+    procedure A()
+    begin
+        Lib2.Open();
+    end;`),
+      [ref(50100, "A")],
+      [{ path: "lib.al", text: lib }],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a namespace-qualified Codeunit type still resolves on the last segment (regression, #A)", () => {
+    const got = scan(
+      `namespace My.Tests;
+codeunit 50100 "T"
+{
+    Subtype = Test;
+    [Test]
+    procedure A()
+    var
+        Lib: Codeunit My.Tests."Lib";
+    begin
+        Lib.Open();
+    end;
+}
+codeunit 50101 "Lib"
+{
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+}
+`,
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");

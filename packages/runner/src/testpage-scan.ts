@@ -232,23 +232,37 @@ interface TestState {
 class Scanner {
   constructor(private readonly units: readonly Unit[]) {}
 
-  unitFor(typeText: string): Unit | undefined {
+  /**
+   * Every codeunit a `Codeunit <type text>` reference could plausibly name — ALL candidates, not
+   * the first (review round 3): a reference is genuinely ambiguous without full AL symbol
+   * resolution (which the scanner deliberately does not do), so every textually-plausible reading
+   * is walked, and a call is resolved, or a test refused, if ANY of them says so.
+   */
+  unitsFor(typeText: string): Unit[] {
     const raw = CODEUNIT_TYPE.exec(typeText)?.[1];
-    if (raw === undefined) return undefined;
-    // A bare quoted name can itself contain a dot (`Codeunit "Lib.Pages"`), which is NOT a
-    // namespace separator: try the WHOLE normalised name first (review round 2, #A).
-    const whole = this.byName(normalizeAlName(raw));
-    if (whole !== undefined) return whole;
+    if (raw === undefined) return [];
     // A namespace-qualified reference (`Codeunit My.Tests."Lib"`) carries the namespace as leading
     // dotted segments OUTSIDE any quotes; the object itself is always the LAST such segment
-    // (review round 1, #3). A quoted segment is kept whole even if it contains its own dot.
+    // (review round 1, #3). A quoted segment is kept whole even if it contains its own dot
+    // (review round 2, #A): the quote-and-dot alternation matches a whole `"..."` run as one token.
     const segments = raw.match(/"[^"]*"|[^.]+/g) ?? [raw];
+    const candidates = new Set<Unit>();
+    // The WHOLE text as one literal name: only when it cannot itself be a namespace-dotted path,
+    // i.e. it is a single quoted identifier or a bare name with no dots at all (one segment either
+    // way). An UNQUOTED multi-segment reference (`Codeunit A.B`) must NOT be tried as a literal
+    // name here, since it can coincidentally equal an UNRELATED codeunit's own quoted name
+    // (`"A.B"`) that has nothing to do with namespace `A`'s object `B` (review round 3).
+    if (segments.length === 1) {
+      for (const u of this.byNameAll(normalizeAlName(raw))) candidates.add(u);
+    }
     const last = segments[segments.length - 1] ?? raw;
-    return this.byName(normalizeAlName(last));
+    for (const u of this.byNameAll(normalizeAlName(last))) candidates.add(u);
+    return [...candidates];
   }
 
-  private byName(want: string): Unit | undefined {
-    return this.units.find((u) => String(u.id) === want || u.name === want);
+  /** By id (numeric) or by declared name; both checked for every candidate string above. */
+  private byNameAll(want: string): Unit[] {
+    return this.units.filter((u) => String(u.id) === want || u.name === want);
   }
 
   walk(p: Proc, path: readonly string[], st: TestState): void {
@@ -374,13 +388,16 @@ class Scanner {
       return;
     }
     if (!CODEUNIT_TYPE.test(type)) return;
-    const target = this.unitFor(type);
-    if (target === undefined) {
+    const targets = this.unitsFor(type);
+    if (targets.length === 0) {
       st.unresolvedTargets.add(type.trim());
       return;
     }
-    st.reached.add(target);
-    this.calls(target, member.text, args, path, st);
+    // Resolved if ANY candidate was found; walk every one, like overloads (review round 3).
+    for (const target of targets) {
+      st.reached.add(target);
+      this.calls(target, member.text, args, path, st);
+    }
   }
 }
 
