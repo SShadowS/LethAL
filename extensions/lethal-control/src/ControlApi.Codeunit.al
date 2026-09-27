@@ -151,10 +151,11 @@ codeunit 91003 "LC Control API"
         SerializeEnded: DateTime;
         ScannedRows: Integer;
         EmittedRows: Integer;
+        Ran: Boolean;
     begin
         CodeCoverageMgt.StartApplicationCoverage();
         RunStarted := CurrentDateTime();
-        Raw := RunMutant(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq);
+        Raw := RunMutantCore(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq, Ran);
         CodeCoverageMgt.StopApplicationCoverage();
         RunEnded := CurrentDateTime();
 
@@ -175,6 +176,8 @@ codeunit 91003 "LC Control API"
         Obj.Add('coverageScannedRows', ScannedRows);
         Obj.Add('coverageEmittedRows', EmittedRows);
         Obj.WriteTo(Out);
+        if Ran then
+            KeepAnswer(AttemptId, OpSeq, LeaseEpoch, ServerGeneration, Out);
         exit(Out);
     end;
 
@@ -361,6 +364,71 @@ codeunit 91003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
+    /// <summary>R236b: keep Answer as op (AttemptId, OpSeq)'s committed answer. Callers call it ONLY
+    /// for an answer that ran, and ONLY as the last statement before exit: its Commit is what makes a
+    /// read-back row mean "the AL answer construction completed".</summary>
+    local procedure KeepAnswer(AttemptId: Text; OpSeq: BigInteger; LeaseEpoch: Integer; ServerGeneration: Text; Answer: Text)
+    var
+        Kept: Record "LC Op Answer";
+        OutS: OutStream;
+    begin
+        if not Kept.Get('') then begin
+            Kept.Init();
+            Kept."Primary Key" := '';
+            Kept.Insert();
+        end;
+        Kept."Attempt Id" := CopyStr(AttemptId, 1, MaxStrLen(Kept."Attempt Id"));
+        Kept."Op Seq" := OpSeq;
+        Kept."Lease Epoch" := LeaseEpoch;
+        Kept."Server Generation" := CopyStr(ServerGeneration, 1, MaxStrLen(Kept."Server Generation"));
+        Kept."Kept At" := CurrentDateTime();
+        Kept.Answer.CreateOutStream(OutS, TextEncoding::UTF8);
+        OutS.WriteText(Answer);
+        Kept.Modify();
+        Commit();
+    end;
+
+    /// <summary>OData action (R236b): the kept answer, only if the row names exactly this op under this
+    /// lease. Echoes all four key values so the client verifies them itself. Read COMMITTED, so a row
+    /// inside an uncommitted transaction is never returned. JSON: {found:true, attemptId, opSeq, epoch,
+    /// generation, answer} or {found:false, keptAttemptId?, keptOpSeq?}.</summary>
+    procedure GetOpAnswer(Epoch: Integer; Generation: Text; AttemptId: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        Kept: Record "LC Op Answer";
+        InS: InStream;
+        Part: Text;
+        Answer: Text;
+        Obj: JsonObject;
+    begin
+        Kept.ReadIsolation := IsolationLevel::ReadCommitted;
+        if not Kept.Get('') then begin
+            Obj.Add('found', false);
+            Obj.WriteTo(ResultJson);
+            exit;
+        end;
+        if (Kept."Attempt Id" <> AttemptId) or (Kept."Op Seq" <> OpSeq) or (Kept."Lease Epoch" <> Epoch) or (Kept."Server Generation" <> Generation) then begin
+            Obj.Add('found', false);
+            Obj.Add('keptAttemptId', Kept."Attempt Id");
+            Obj.Add('keptOpSeq', Kept."Op Seq");
+            Obj.WriteTo(ResultJson);
+            exit;
+        end;
+        Kept.CalcFields(Answer);
+        Kept.Answer.CreateInStream(InS, TextEncoding::UTF8);
+        // Compact JSON (JsonObject.WriteTo) holds no raw line break, so ReadText loses nothing.
+        while not InS.EOS() do begin
+            InS.ReadText(Part);
+            Answer += Part;
+        end;
+        Obj.Add('found', true);
+        Obj.Add('attemptId', Kept."Attempt Id");
+        Obj.Add('opSeq', Kept."Op Seq");
+        Obj.Add('epoch', Kept."Lease Epoch");
+        Obj.Add('generation', Kept."Server Generation");
+        Obj.Add('answer', Answer);
+        Obj.WriteTo(ResultJson);
+    end;
+
     /// <summary>R198: `opProgress` (the marker's own op's progress row, with the row's own attemptId
     /// and opSeq so a client can tell whose it is; absent when there is none) and `serverNow` (the
     /// clock "startedAt" came from, so elapsed time is computed from server values only).</summary>
@@ -513,37 +581,7 @@ codeunit 91003 "LC Control API"
         Obj.WriteTo(ResultJson);
     end;
 
-    /// <summary>
-    /// Run-scoped, single-method execution primitive, fenced by the machine-global lease (design §5).
-    /// Three phases, and the split is the whole point: a mutant run that cannot PROVE, after the fact,
-    /// that it still held the lease it started under must not have its result recorded.
-    ///
-    /// Phase 1 — claim, under LockTable, one transaction, one Commit (in TryBeginRun). Validates
-    /// (leaseEpoch, leaseToken, serverGeneration) + the artifact + the opSeq rules, sets Op Kind = run
-    /// and the active tuple together. Refusal -&gt; 'lease-invalid' / 'artifact-mismatch', nothing
-    /// claimed, nothing run. A still-active same-attempt duplicate claim is ALSO refused (design §5
-    /// requires Op Kind = none for admission — never an idempotent re-claim on the run path, unlike
-    /// publish) and is reported at the wire's 'lease-invalid' status too, with the finer 'op-in-flight'
-    /// reason surfaced via the `reason` key below.
-    ///
-    /// Phase 2 — run, with NO lease lock held (phase 1's Commit released it), behind a catchable
-    /// Codeunit.Run boundary. A server-known terminal error (test framework / AL exception) is captured
-    /// as a terminal error outcome instead of unwinding past phase 3 and stranding the marker; it is
-    /// reported in codeunitResults as {"error": ...}, the same fail-closed shape RunOneMethod already
-    /// uses, so it can never be mistaken for a test verdict.
-    ///
-    /// Phase 3 — verify-and-clear, under LockTable, ONE transaction with exactly ONE Commit (in
-    /// TryFinishRun). Only an exact (epoch, token, generation) + Op Kind = run + attemptId + opSeq
-    /// match records the result; anything else returns 'lease-invalid' having touched no row.
-    ///
-    /// JSON: the 5C-A status shape, with the new status 'lease-invalid', plus an optional `reason` key
-    /// on phase-1 refusals — e.g. 'op-in-flight' for a still-active same-attempt duplicate, distinct
-    /// from a genuine 'lease-invalid' — so a client can tell "poll, do not retry" from "you lost the
-    /// lease" WITHOUT a new top-level status (the runner tasks are written against the existing
-    /// vocabulary). On any non-'ran' status the result and attestation are deliberately reported as
-    /// empty/false — there is no verdict to carry.
-    /// </summary>
-    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    local procedure RunMutantCore(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger; var Ran: Boolean) ResultJson: Text
     var
         State: Codeunit "LC Control State";
         Runner: Codeunit "LC Run Method";
@@ -558,6 +596,7 @@ codeunit 91003 "LC Control API"
         ObservedActive: Boolean;
         TestRunsBefore: Integer;
     begin
+        Ran := false;
         // R206 §2.1: the session-freshness predicate, read ONCE at the very top, before anything
         // builds a suite or runs a method. The coverage action delegates here and re-opens this
         // JSON, so both answers carry this one read. 0 = a fresh session.
@@ -601,7 +640,47 @@ codeunit 91003 "LC Control API"
         if not Verified then
             exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1));
 
+        Ran := true;
         exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore));
+    end;
+
+    /// <summary>
+    /// Run-scoped, single-method execution primitive, fenced by the machine-global lease (design §5).
+    /// Three phases, and the split is the whole point: a mutant run that cannot PROVE, after the fact,
+    /// that it still held the lease it started under must not have its result recorded.
+    ///
+    /// Phase 1 — claim, under LockTable, one transaction, one Commit (in TryBeginRun). Validates
+    /// (leaseEpoch, leaseToken, serverGeneration) + the artifact + the opSeq rules, sets Op Kind = run
+    /// and the active tuple together. Refusal -&gt; 'lease-invalid' / 'artifact-mismatch', nothing
+    /// claimed, nothing run. A still-active same-attempt duplicate claim is ALSO refused (design §5
+    /// requires Op Kind = none for admission — never an idempotent re-claim on the run path, unlike
+    /// publish) and is reported at the wire's 'lease-invalid' status too, with the finer 'op-in-flight'
+    /// reason surfaced via the `reason` key below.
+    ///
+    /// Phase 2 — run, with NO lease lock held (phase 1's Commit released it), behind a catchable
+    /// Codeunit.Run boundary. A server-known terminal error (test framework / AL exception) is captured
+    /// as a terminal error outcome instead of unwinding past phase 3 and stranding the marker; it is
+    /// reported in codeunitResults as {"error": ...}, the same fail-closed shape RunOneMethod already
+    /// uses, so it can never be mistaken for a test verdict.
+    ///
+    /// Phase 3 — verify-and-clear, under LockTable, ONE transaction with exactly ONE Commit (in
+    /// TryFinishRun). Only an exact (epoch, token, generation) + Op Kind = run + attemptId + opSeq
+    /// match records the result; anything else returns 'lease-invalid' having touched no row.
+    ///
+    /// JSON: the 5C-A status shape, with the new status 'lease-invalid', plus an optional `reason` key
+    /// on phase-1 refusals — e.g. 'op-in-flight' for a still-active same-attempt duplicate, distinct
+    /// from a genuine 'lease-invalid' — so a client can tell "poll, do not retry" from "you lost the
+    /// lease" WITHOUT a new top-level status (the runner tasks are written against the existing
+    /// vocabulary). On any non-'ran' status the result and attestation are deliberately reported as
+    /// empty/false — there is no verdict to carry.
+    /// </summary>
+    procedure RunMutant(TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; LeaseEpoch: Integer; LeaseToken: Text; ServerGeneration: Text; OpSeq: BigInteger) ResultJson: Text
+    var
+        Ran: Boolean;
+    begin
+        ResultJson := RunMutantCore(TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, LeaseEpoch, LeaseToken, ServerGeneration, OpSeq, Ran);
+        if Ran then
+            KeepAnswer(AttemptId, OpSeq, LeaseEpoch, ServerGeneration, ResultJson);
     end;
 
     /// <summary>
@@ -677,7 +756,10 @@ codeunit 91003 "LC Control API"
         if Displaced and (RunError = '') then
             RunError := 'displaced-but-verified: the loop stopped because the marker no longer named this op, yet phase 3 verified it; the results are not trusted.';
 
-        exit(BuildManyStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, GroupResults, RunError, ObservedAny, IdentityMismatch, '', TestRunsBefore));
+        ResultJson := BuildManyStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, GroupResults, RunError, ObservedAny, IdentityMismatch, '', TestRunsBefore);
+        // R236b: only a clean ran answer; a runError answer is not a verdict set and is never kept.
+        if RunError = '' then
+            KeepAnswer(AttemptId, OpSeq, LeaseEpoch, ServerGeneration, ResultJson);
     end;
 
     /// <summary>

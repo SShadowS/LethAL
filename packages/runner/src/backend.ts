@@ -144,6 +144,13 @@ export interface TestVerdict {
    */
   readonly fencedOp?: { readonly attemptId: string; readonly opSeq: number };
   /**
+   * R236b: set when the HTTP reply was lost and this verdict was scored from the answer the control
+   * app committed as the action's last statement (`GetOpAnswer`). Only ever set on an identity-checked
+   * `pass` or `fail`. The value is the lost reply's own failure text, so the incident stays visible.
+   * The readback dispatched nothing; the verdict is the original call's own.
+   */
+  readonly replyRecovered?: string;
+  /**
    * R206 §2.1, bcdev `ran` answers only (control app 1.0.0.18): the server's per-session count of
    * test methods run BEFORE the call that produced this verdict (0 = a fresh session, the guard's
    * predicate) and that session's id (data, asserted constant within a group call). Absent on

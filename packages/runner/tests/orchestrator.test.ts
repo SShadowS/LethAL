@@ -5456,6 +5456,45 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
   });
 });
 
+describe("runSession: R236b, a verdict read back after a lost reply", () => {
+  test("is the test's verdict, is announced by a lost-reply-recovered warning, and quarantines nothing", async () => {
+    const dir = freshTmpDir();
+    const events: RunEvent[] = [];
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      run: async (ref) => ({
+        ref,
+        outcome: "pass",
+        durationMs: 1,
+        // A read-back verdict is scored by the same parser, so it carries the attestation an
+        // authoritative backend needs (design §G); without it the session quarantines for that.
+        attestation: { observedAny: true, identityMismatch: false },
+        replyRecovered:
+          "RunMutant 2xx body could not be read: The socket connection was closed unexpectedly.",
+      }),
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.quarantined).toBeUndefined();
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    const warnings = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-reply-recovered",
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+    const [first] = warnings;
+    expect(first?.type === "warning" ? first.message : "").toContain(
+      "socket connection was closed",
+    );
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————
 // Layer 5C-A Task 8, Task 10 (design §G): two orchestrator-side safety properties for the
 // AUTHORITATIVE (bcdev) backend only.
@@ -7406,6 +7445,173 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
     expect(report.quarantined).toBeUndefined();
     expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("R236b 2. an ACCEPTED readback short-circuits the reconcile: one dispatch, no lost-ack warning", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const recovered: Partial<TestVerdict> = {
+      outcome: "pass",
+      attestation: ATTESTED,
+      replyRecovered: "RunMutant 2xx body could not be read: socket closed",
+    };
+    const report = await runSessionForTest(m2Answers([recovered], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(1);
+    expect(codes.filter((c) => c.startsWith("lost-ack"))).toEqual([]);
+    expect(codes).toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R236b 3. a FAILED readback reaches the unchanged reconcile and its one existing fresh attempt", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const failedReadback: Partial<TestVerdict> = {
+      ...LOST_ANSWER,
+      failureMessage: `${LOST_ANSWER.failureMessage}; answer readback failed: ECONNRESET`,
+    };
+    const report = await runSessionForTest(
+      m2Answers([failedReadback, { outcome: "pass", attestation: ATTESTED }], dispatches),
+      { quarantineDir: dir, lease, emit: [(e) => events.push(e)] },
+    );
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(2);
+    expect(codes).toContain("lost-ack-unreadable");
+    expect(codes).toContain("lost-ack-retry");
+    expect(codes).not.toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  /** `m2Answers`' grouped twin: M0002's covering CALLS are answered from `answers` in order
+   *  (last repeating), every other call passes every method. `dispatches` counts M0002's calls. */
+  function m2ManyAnswers(
+    answers: readonly ((opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]) => RunManyResult)[],
+    dispatches: { count: number },
+  ): ExecutionBackend {
+    let activeMutant: string | null = null;
+    let issued = 0;
+    const passAll = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => ({ ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED }),
+      runMany: async (opts) => {
+        issued++;
+        const fencedOp = { attemptId: `g${issued}`, opSeq: 300 + issued };
+        if (activeMutant !== "M0002") return passAll(opts, fencedOp);
+        const answer = answers[Math.min(dispatches.count, answers.length - 1)] ?? passAll;
+        dispatches.count++;
+        return answer(opts, fencedOp);
+      },
+    });
+  }
+
+  test("R236b 6b(a). a grouped call read back as completed passes: one dispatch, no lost-ack warning, announced", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const recovered = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+        replyRecovered: "RunMutantMany 2xx body could not be read: socket closed",
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    const report = await runSessionForTest(m2ManyAnswers([recovered], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(1);
+    expect(codes.filter((c) => c.startsWith("lost-ack"))).toEqual([]);
+    expect(codes).toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R236b 6b(b). a grouped FAILED readback reaches the unchanged reconcile and its one fresh attempt of the chunk", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const lostCall = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => {
+      const [m] = opts.methods;
+      if (m === undefined) throw new Error("a chunk with no methods");
+      return {
+        kind: "call",
+        verdict: {
+          ref: m.ref,
+          outcome: "error",
+          durationMs: 1,
+          operation: "in-flight-unknown",
+          failureMessage: `${LOST_ANSWER.failureMessage}; answer readback failed: ECONNRESET`,
+          fencedOp,
+        },
+        methodIndex: 1,
+        fencedOp,
+      };
+    };
+    const passAll = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    const report = await runSessionForTest(m2ManyAnswers([lostCall, passAll], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(2);
+    expect(codes).toContain("lost-ack-unreadable");
+    expect(codes).toContain("lost-ack-retry");
+    expect(codes).not.toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
   });
 });
 

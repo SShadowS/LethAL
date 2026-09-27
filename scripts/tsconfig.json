@@ -79,6 +79,8 @@
     "r236-baseline-probe/fetch-trace.test.ts",
     "r236-baseline-probe/probe.ts",
     "r236-baseline-probe/probe.test.ts",
+    "r236-baseline-probe/size-arm.ts",
+    "r236-baseline-probe/size-arm.test.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts"
   ]

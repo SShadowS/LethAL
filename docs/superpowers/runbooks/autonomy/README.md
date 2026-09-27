@@ -44,10 +44,14 @@ CentralGauge's lanes and the other way round.
 
 - **LethAL may use `Cronus28` and `Cronus284`** (owner allocation 2026-09-25, Cronus284 added
   2026-09-26, enforced by coord through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and
-  Cronus283 belong to CentralGauge; never lease or publish to them. Cronus28 serves every gate
-  (`sandbox-app`, `sandbox-data`, `sandbox-hang`), one at a time. **Cronus284 is dedicated to
-  R-236's measurement** (control 1.0.0.19, `sandbox-data` 1.0.0.10 + tests 1.0.0.18, set up
-  2026-09-26); no gate or other task uses it until the orchestrator says so.
+  Cronus283 belong to CentralGauge; never lease or publish to them. **Owner (2026-09-27): load
+  balance across both.** Each container runs one gate at a time under a coord lease; the two lanes
+  use whichever is free (the orchestrator may assign one per lane). Cronus28 carries every fixture
+  (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Cronus284 carries control 1.0.0.20 and the
+  `sandbox-data` pair only (others unpublished 2026-09-26): publish a fixture pair there before its
+  first gate, and point a lane's gitignored `lethal.config.local.json` at `http://Cronus284` for that
+  run. Both have stalled on TestPage tests (R236, `docs/measurements/2026-09-27-nst-wedge-incidents.md`);
+  an unrecoverable container goes to the owner.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
   is running (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`), then
   `coord lease Cronus28 <lane>`, heartbeat every 5 minutes, release right after. Held by

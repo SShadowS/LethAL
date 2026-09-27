@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**73 of 287 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**76 of 290 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -111,6 +111,7 @@ that ordering is the priority.
 - **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#26 (U1)
 - **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
 - **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#27 (U2)
+- **R289** · itest:hang M0004 is sometimes not stopped (StopHungRunAt flake), second recurrence · [R289.md](docs/roadmap/R289.md) · open
 
 ## Product gaps a real project hits
 
@@ -332,6 +333,8 @@ that ordering is the priority.
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · open
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
+- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
+- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
 
 ---
 
