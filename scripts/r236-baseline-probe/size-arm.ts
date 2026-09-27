@@ -16,13 +16,18 @@
  * readback itself failed (recorded as `readError`; a failed readback never aborts the run with exit 2,
  * and does not stop the loop unless the server itself becomes unreachable). Every call line, whole or
  * not, carries the T call's own trace fields so a lost body can be classified per §C1's definition.
+ * Orchestrator ruling (Task 9 Step 2): if ZERO calls arrive whole, the byte-equality check never ran
+ * once, so the run is NOT MEASURED rather than a vacuous pass; it exits 4 and the summary records
+ * `measured: false` with a `reason`. A `bad` call wins over that (see `keptCheckVerdict`): a bad call is
+ * a real failure whether or not any call arrived whole.
  *
  * This script issues no network call itself when the env var is unset (prints `skipped`, exit 0), and
  * refuses (exit 2) before any network call if the required flags are missing, the config's `bcdev.server`
  * host does not match `--expect-container`, or `--out`'s directory does not exist.
  *
- * Exit codes: 0 the arm ran to completion (or S was not runnable); 1 a `--kept-check` mismatch; 2 a harness/config fault, before any
- * network call; 3 a wedge (a failed preflight after a break).
+ * Exit codes: 0 the arm ran to completion (or S was not runnable), or `--kept-check` passed; 1 a
+ * `--kept-check` mismatch; 2 a harness/config fault, before any network call; 3 a wedge (a failed
+ * preflight after a break); 4 `--kept-check` ran but was NOT MEASURED (zero calls arrived whole).
  */
 import { appendFileSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -262,6 +267,27 @@ export function keptCheckRecord(
   };
 }
 
+/** The counts `keptCheckVerdict` needs out of a `--kept-check` run: how many calls arrived whole, and
+ *  how many (whole or not) were classified `bad` by `keptCheckRecord`. */
+export interface KeptCheckSummaryCounts {
+  readonly whole: number;
+  readonly bad: number;
+}
+
+/**
+ * Orchestrator ruling (R236b Task 9 Step 2): C1b must not pass vacuously. If zero calls arrived whole,
+ * the byte-equality check never ran once, so the run is `not-measured`, never `pass`. A `bad` call wins
+ * over that, though: a bad call (e.g. an ambiguous trace) is a real failure whether or not any call
+ * arrived whole, so it is never softened to `not-measured` for lack of whole calls.
+ */
+export function keptCheckVerdict(
+  summary: KeptCheckSummaryCounts,
+): "pass" | "fail" | "not-measured" {
+  if (summary.bad > 0) return "fail";
+  if (summary.whole === 0) return "not-measured";
+  return "pass";
+}
+
 async function main(): Promise<void> {
   if (process.env.LETHAL_R236_SIZE_ARM !== "1") {
     console.log("skipped");
@@ -358,6 +384,7 @@ async function main(): Promise<void> {
     let bad = 0;
     let lostBodies = 0;
     let notWhole = 0;
+    let whole = 0;
     try {
       for (let i = 1; i <= pairsPlanned; i++) {
         const attemptId = `r236s-k-${i}`;
@@ -390,6 +417,7 @@ async function main(): Promise<void> {
             recoveryReadback,
           };
         } else {
+          whole++;
           const clr = verdict.failureMessage?.includes("CreateNavTestService") === true;
           try {
             const kept = await tx.readKeptAnswer(lease, attemptId, lease.opSeq, 15_000);
@@ -437,14 +465,19 @@ async function main(): Promise<void> {
     } finally {
       await probe.stop();
     }
+    const verdict = keptCheckVerdict({ whole, bad });
     writeRecord(out, {
       kind: "kept-check-summary",
       calls: pairsPlanned,
       bad,
       lostBodies,
       notWhole,
+      whole,
+      verdict,
+      measured: verdict !== "not-measured",
+      ...(verdict === "not-measured" ? { reason: "zero calls arrived whole" } : {}),
     });
-    process.exit(bad > 0 ? 1 : 0);
+    process.exit(verdict === "fail" ? 1 : verdict === "not-measured" ? 4 : 0);
   }
 
   let tBreaks = 0;

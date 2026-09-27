@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { CallTrace } from "./fetch-trace";
-import { keepOriginalBody, keptCheckRecord, readA2, selectOriginalTrace } from "./size-arm";
+import {
+  keepOriginalBody,
+  keptCheckRecord,
+  keptCheckVerdict,
+  readA2,
+  selectOriginalTrace,
+} from "./size-arm";
 
 function trace(partial: Partial<CallTrace> = {}): CallTrace {
   return { action: "LethALControl_RunMutantWithCoverage", dispatchedAt: 0, ...partial };
@@ -146,5 +152,27 @@ describe("keptCheckRecord", () => {
     expect(bad).toBe(true);
     expect(lostBody).toBe(false);
     expect(record).toMatchObject({ traceAmbiguous: true, recoveryReadback: true });
+  });
+});
+
+describe("keptCheckVerdict", () => {
+  // Orchestrator ruling (R236b Task 9 Step 2): C1b must not pass vacuously. A run where zero calls
+  // arrived whole never exercised the byte-equality check once, so it is not-measured, not a pass.
+  test("zero whole calls, zero bad, is not-measured", () => {
+    expect(keptCheckVerdict({ whole: 0, bad: 0 })).toBe("not-measured");
+  });
+
+  test("at least one whole call and zero bad is pass", () => {
+    expect(keptCheckVerdict({ whole: 1, bad: 0 })).toBe("pass");
+  });
+
+  test("any bad call fails, even with whole calls present", () => {
+    expect(keptCheckVerdict({ whole: 5, bad: 1 })).toBe("fail");
+  });
+
+  // Bad wins over not-measured: a bad call can happen with zero whole calls (e.g. an ambiguous trace on
+  // a call that never arrived whole), and that is a real failure, not "nothing was measured".
+  test("bad wins over not-measured: zero whole but a bad call is still fail", () => {
+    expect(keptCheckVerdict({ whole: 0, bad: 1 })).toBe("fail");
   });
 });
