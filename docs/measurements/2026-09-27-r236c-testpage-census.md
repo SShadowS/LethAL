@@ -17,6 +17,9 @@ the discovery finds but the scanner does not see, because it sits in an `#if not
 grammar attaches to the codeunit's global `var` section (section 4). Those errors predate the fix
 (section 4), and they are the brief's stop condition, so this goes back to the orchestrator.
 
+Update (third run, section 7): the shape is tree-sitter-al #29, the scanner now reads it, and BaseApp
+has zero loud errors and runs in 55 s instead of 358 s.
+
 ## 2. Root cause of the first run's abort
 
 Measured with a scratch probe that parses every BaseApp file in order and samples the wasm heap (the
@@ -88,3 +91,42 @@ rules on the `var`-attached `#if` shape.
   worth a look before the scan runs on every `lethal run` of a project this size.
 - The first run's raw output and this run's are in the session scratchpad (`r236c-census.txt`,
   `r236c-census-2.txt`).
+
+## 7. Round 2: the `var`-section shape fixed, the lookup indexed (third run)
+
+**The shape is a grammar defect.** The AL compiler's own parser (`Microsoft.Dynamics.Nav.CodeAnalysis`
+18.0.41.45789, through `scripts/lib/dump-compiler-kinds.ps1` on a hand-written repro) makes a
+procedure inside such a region a `MethodDeclaration` whose parent is `CodeunitObject`, and ends the
+`GlobalVarSection` before the `#if`. tree-sitter-al 4.4.1 (`7819df5`) puts it under `var_section >
+var_body > preproc_conditional_var` with no error node. Filed upstream as tree-sitter-al #29
+(<https://github.com/SShadowS/tree-sitter-al/issues/29>). Until it is fixed, the scanner collects
+procedures from every branch of such a region, in source order, and keeps their locals out of the
+codeunit's globals (`c7c5ea3`).
+
+**The lookup is indexed.** A CPU profile of the BaseApp run put 349 of 415 s in one line: a linear
+filter over every codeunit, run for each call site whose receiver is a codeunit. It is now a map by
+id and by name that keeps the original order (`c9750b5`), so candidate lists, walk order and the
+first reason found are unchanged. No per-procedure result is cached.
+
+**Proof that the index changes nothing.** Both versions dumped every corpus's full refused map (test
+key and reason text) and full error list to JSON: the index (`c9750b5`) against the unindexed scanner
+at `c7c5ea3`. All ten dumps are byte-identical, BaseApp's included (2,759,172 bytes).
+
+| corpus | files | tests | refused | loud errors | ms, unindexed (`c7c5ea3`) | ms, indexed (`c9750b5`) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 68 | 1 | 0 | 43 | 41 |
+| `fixtures/sandbox-tests` | 1 | 2 | 0 | 0 | 3 | 6 |
+| `fixtures/sandbox-hang-tests` | 1 | 5 | 0 | 0 | 2 | 1 |
+| `fixtures/sandbox-harden-tests` | 1 | 6 | 0 | 0 | 3 | 3 |
+| `U:/Git/do-rel2/Cloud` | 554 | 0 (no tests) | 0 | 0 | 770 | 750 |
+| `U:/Git/DC/Cloud` | 1135 | 0 (no tests) | 0 | 0 | 2348 | 2377 |
+| `U:/Git/BusinessCentral.Sentinel` | 67 | 54 | 0 | 0 | 46 | 49 |
+| `U:/Git/BC.History/BusinessFoundation` | 104 | 89 | 19 | 0 | 144 | 156 |
+| `U:/Git/BC.History/System Application` | 1718 | 1889 | 209 | 0 | 5162 | 2897 |
+| `U:/Git/BC.History/BaseApp` | 9620 | 40291 | 11173 | **0** | 357937 | 55217 |
+
+The indexed column is `scripts/r236c-testpage-census.ts` itself. The unindexed run shared the machine
+with a full `bun test` for part of its time, so its small-corpus figures are noise; BaseApp's 6.5x is
+not. BaseApp's 127 loud errors are gone, and its refused count moves from 11,098 to 11,173 (27.7%):
+the 127 recovered tests are now classified, and 75 more tests are refused than before. Every other
+corpus is unchanged from the second run. The stop condition of section 5 no longer holds.
