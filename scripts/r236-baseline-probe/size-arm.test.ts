@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CallTrace } from "./fetch-trace";
-import { keepOriginalBody, keptCheckRecord, readA2 } from "./size-arm";
+import { keepOriginalBody, keptCheckRecord, readA2, selectOriginalTrace } from "./size-arm";
 
 function trace(partial: Partial<CallTrace> = {}): CallTrace {
   return { action: "LethALControl_RunMutantWithCoverage", dispatchedAt: 0, ...partial };
@@ -39,6 +39,29 @@ describe("keepOriginalBody", () => {
   });
 });
 
+describe("selectOriginalTrace", () => {
+  test("picks the original (lost) trace, not the transport's own recovery GetOpAnswer readback", () => {
+    // Review r1: this is the shape `runWithCoverage` adds after a lost body it then recovers: the
+    // original action broke mid-body, and a later, CLEAN `GetOpAnswer` readback follows it. Naive
+    // `calls.at(-1)` picks the clean readback and `isLostBody` reads false for a genuine lost body.
+    const added: CallTrace[] = [
+      trace({ action: "LethALControl_RunMutantWithCoverage", errorPhase: "body" }),
+      trace({ action: "LethALControl_GetOpAnswer", headersAt: 5, bodyEndAt: 6 }),
+    ];
+    expect(selectOriginalTrace(added)).toBe(added[0]);
+  });
+
+  test("ambiguous (not exactly one original-action trace) resolves to undefined", () => {
+    expect(selectOriginalTrace([trace({ action: "LethALControl_GetOpAnswer" })])).toBeUndefined();
+    expect(
+      selectOriginalTrace([
+        trace({ action: "LethALControl_RunMutantWithCoverage" }),
+        trace({ action: "LethALControl_RunMutantWithCoverage" }),
+      ]),
+    ).toBeUndefined();
+  });
+});
+
 describe("keptCheckRecord", () => {
   test("a whole call with a matching readback is not bad", () => {
     const t = trace({ headersAt: 750, bodyEndAt: 820, status: 200, bytesReceived: 6616 });
@@ -46,6 +69,8 @@ describe("keptCheckRecord", () => {
       whole: true,
       outcome: "fail",
       clr: true,
+      replyRecovered: null,
+      recoveryReadback: false,
       read: { ok: true, found: true, byteEqual: true },
     });
     expect(bad).toBe(false);
@@ -66,12 +91,14 @@ describe("keptCheckRecord", () => {
   });
 
   test("a whole call whose readback itself failed is bad, and is NOT a lost body", () => {
-    // R236b: this is the C1b defect — readKeptAnswer threw (its 15s abort) after a whole body.
+    // R236b: this is the C1b defect. readKeptAnswer threw (its 15s abort) after a whole body.
     const t = trace({ headersAt: 750, bodyEndAt: 820 });
     const { record, bad, lostBody } = keptCheckRecord(2, t, {
       whole: true,
       outcome: "fail",
       clr: true,
+      replyRecovered: null,
+      recoveryReadback: false,
       read: { ok: false, readError: "AbortError: The operation was aborted" },
     });
     expect(bad).toBe(true);
@@ -90,6 +117,7 @@ describe("keptCheckRecord", () => {
       outcome: "deadline-exceeded",
       operation: "in-flight-unknown",
       replyRecovered: null,
+      recoveryReadback: false,
     });
     expect(lostBody).toBe(true);
     expect(bad).toBe(false);
@@ -102,7 +130,21 @@ describe("keptCheckRecord", () => {
       outcome: "deadline-exceeded",
       operation: "in-flight-unknown",
       replyRecovered: null,
+      recoveryReadback: false,
     });
     expect(lostBody).toBe(false);
+  });
+
+  test("an ambiguous trace selection (the original trace could not be resolved) is recorded and bad", () => {
+    const { record, bad, lostBody } = keptCheckRecord(5, undefined, {
+      whole: false,
+      outcome: "deadline-exceeded",
+      operation: "in-flight-unknown",
+      replyRecovered: null,
+      recoveryReadback: true,
+    });
+    expect(bad).toBe(true);
+    expect(lostBody).toBe(false);
+    expect(record).toMatchObject({ traceAmbiguous: true, recoveryReadback: true });
   });
 });

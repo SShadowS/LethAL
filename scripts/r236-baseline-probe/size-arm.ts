@@ -52,6 +52,17 @@ export function readA2(r: {
   return "grouped fix not required";
 }
 
+/** The T call's own action names, shared by `keepOriginalBody` and `selectOriginalTrace`: never the
+ *  `GetOpAnswer` readback the transport (or this script) makes for the SAME attempt id afterward. */
+const ORIGINAL_ACTIONS = new Set([
+  "LethALControl_RunMutant",
+  "LethALControl_RunMutantWithCoverage",
+]);
+
+function isOriginalAction(action: string): boolean {
+  return ORIGINAL_ACTIONS.has(action);
+}
+
 /**
  * R236b C1b: keep a response body ONLY for the original action. The transport's own `GetOpAnswer`
  * readback carries the SAME attempt id, and an unfiltered map would replace the original body with
@@ -62,11 +73,7 @@ export function keepOriginalBody(
   trace: { readonly action: string; readonly attemptId?: string },
   text: string,
 ): void {
-  if (
-    trace.action !== "LethALControl_RunMutant" &&
-    trace.action !== "LethALControl_RunMutantWithCoverage"
-  )
-    return;
+  if (!isOriginalAction(trace.action)) return;
   if (trace.attemptId === undefined) return;
   bodies.set(trace.attemptId, text);
 }
@@ -149,6 +156,19 @@ export function isLostBody(trace: CallTrace | undefined): boolean {
   return trace?.errorPhase === "body" && trace?.bodyEndAt === undefined;
 }
 
+/**
+ * Review r1: `runWithCoverage` can make its OWN internal recovery readback (a `GetOpAnswer` call, for
+ * the SAME attempt id) after a lost body, so the traces one T call adds are sometimes
+ * `[original (broken), recovery GetOpAnswer (clean)]`. Picking `calls.at(-1)` then reads the CLEAN
+ * recovery trace and `isLostBody` always says false. Selects the original action's own trace (the same
+ * filter `keepOriginalBody` uses) out of exactly the traces this one call added. Anything other than
+ * exactly one match is ambiguous: the caller records that and treats the call as bad.
+ */
+export function selectOriginalTrace(added: readonly CallTrace[]): CallTrace | undefined {
+  const originals = added.filter((t) => isOriginalAction(t.action));
+  return originals.length === 1 ? originals[0] : undefined;
+}
+
 /** One `--kept-check` call's outcome, as `keptCheckRecord` classifies it. */
 export type KeptCheckCall =
   | {
@@ -156,22 +176,27 @@ export type KeptCheckCall =
       readonly outcome: TestOutcome;
       readonly operation: string | null;
       readonly replyRecovered: string | null;
+      readonly recoveryReadback: boolean;
     }
   | {
       readonly whole: true;
       readonly outcome: TestOutcome;
       readonly clr: boolean;
+      readonly replyRecovered: string | null;
+      readonly recoveryReadback: boolean;
       readonly read:
         | { readonly ok: true; readonly found: boolean; readonly byteEqual: boolean }
         | { readonly ok: false; readonly readError: string };
     };
 
 /**
- * Pure (Task 8 Step 2 / C1b fix): builds one kept-check NDJSON line from the T call's own trace and
- * its outcome, and classifies it. A whole call whose readback failed (abort, timeout, network error,
- * bad response) is `bad` — §C1b already exits 1 on any mismatch, a failed readback is one — but it is
- * NEVER a lost body: the body already arrived whole, `GetOpAnswer` is what failed. `lostBody` (§C1's
- * definition) applies only to a `whole: false` call.
+ * Pure (Task 8 Step 2 / C1b fix): builds one kept-check NDJSON line from the T call's own trace (as
+ * `selectOriginalTrace` resolved it, `undefined` when ambiguous) and its outcome, and classifies it.
+ * An ambiguous trace is always `bad` (its `lostBody` cannot be judged). A whole call whose readback
+ * failed (abort, timeout, network error, bad response) is `bad`: §C1b already exits 1 on any mismatch,
+ * and a failed readback is one. It is NEVER a lost body, though: the body already arrived whole,
+ * `GetOpAnswer` is what failed. `lostBody` (§C1's definition) applies only to a `whole: false` call with
+ * a resolved trace.
  */
 export function keptCheckRecord(
   i: number,
@@ -179,6 +204,7 @@ export function keptCheckRecord(
   call: KeptCheckCall,
 ): { readonly record: Record<string, unknown>; readonly bad: boolean; readonly lostBody: boolean } {
   const fields = traceFieldsOf(trace);
+  const traceAmbiguous = trace === undefined;
   if (!call.whole) {
     return {
       record: {
@@ -188,10 +214,12 @@ export function keptCheckRecord(
         outcome: call.outcome,
         operation: call.operation,
         replyRecovered: call.replyRecovered,
+        recoveryReadback: call.recoveryReadback,
+        traceAmbiguous,
         ...fields,
       },
-      bad: false,
-      lostBody: isLostBody(trace),
+      bad: traceAmbiguous,
+      lostBody: traceAmbiguous ? false : isLostBody(trace),
     };
   }
   if (!call.read.ok) {
@@ -204,6 +232,9 @@ export function keptCheckRecord(
         readError: call.read.readError,
         outcome: call.outcome,
         clr: call.clr,
+        replyRecovered: call.replyRecovered,
+        recoveryReadback: call.recoveryReadback,
+        traceAmbiguous,
         ...fields,
       },
       bad: true,
@@ -211,7 +242,7 @@ export function keptCheckRecord(
     };
   }
   const { found, byteEqual } = call.read;
-  const bad = !found || !byteEqual || call.outcome !== "fail" || !call.clr;
+  const bad = !found || !byteEqual || call.outcome !== "fail" || !call.clr || traceAmbiguous;
   return {
     record: {
       kind: "kept-check",
@@ -221,6 +252,9 @@ export function keptCheckRecord(
       byteEqual,
       outcome: call.outcome,
       clr: call.clr,
+      replyRecovered: call.replyRecovered,
+      recoveryReadback: call.recoveryReadback,
+      traceAmbiguous,
       ...fields,
     },
     bad,
@@ -328,6 +362,7 @@ async function main(): Promise<void> {
       for (let i = 1; i <= pairsPlanned; i++) {
         const attemptId = `r236s-k-${i}`;
         const lease = fence();
+        const before = calls.length;
         const { verdict } = await tx.runWithCoverage({
           ref: T_REF,
           mutantId: "",
@@ -336,7 +371,12 @@ async function main(): Promise<void> {
           lease,
           coverageObjectIdFilter: T_FILTER,
         });
-        const trace = calls.at(-1);
+        // Review r1: only the traces THIS call added, never `calls.at(-1)`, which after a lost body is
+        // the transport's own recovery `GetOpAnswer` readback rather than the original action's trace.
+        const added = calls.slice(before);
+        const trace = selectOriginalTrace(added);
+        const recoveryReadback = added.some((t) => t.action === "LethALControl_GetOpAnswer");
+        const replyRecovered = verdict.replyRecovered ?? null;
         const body = bodies.get(attemptId);
         let call: KeptCheckCall;
         let readFailed = false;
@@ -346,7 +386,8 @@ async function main(): Promise<void> {
             whole: false,
             outcome: verdict.outcome,
             operation: verdict.operation ?? null,
-            replyRecovered: verdict.replyRecovered ?? null,
+            replyRecovered,
+            recoveryReadback,
           };
         } else {
           const clr = verdict.failureMessage?.includes("CreateNavTestService") === true;
@@ -356,6 +397,8 @@ async function main(): Promise<void> {
               whole: true,
               outcome: verdict.outcome,
               clr,
+              replyRecovered,
+              recoveryReadback,
               read: {
                 ok: true,
                 found: kept.found,
@@ -371,6 +414,8 @@ async function main(): Promise<void> {
               whole: true,
               outcome: verdict.outcome,
               clr,
+              replyRecovered,
+              recoveryReadback,
               read: { ok: false, readError: String(err) },
             };
           }
