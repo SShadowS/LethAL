@@ -49,9 +49,14 @@ export const COMPILER_TO_TREE_SITTER: ReadonlyMap<string, string> = new Map([
   ["LogicalOrExpression", "logical_expression"],
   ["LogicalXorExpression", "logical_expression"],
 
-  // Unary. `not` and arithmetic negation; tree-sitter carries both as one kind.
+  // Unary. `not`, arithmetic negation and unary plus; tree-sitter carries all three as one kind.
+  // Unary plus (`+X`) was first ruled a deferral (f11a9fc). That was wrong: `unary_expression` is
+  // an audited family, and tree-sitter DOES emit `unary_expression` for `+X` (measured on a
+  // hand-written probe), so leaving the compiler side unmapped manufactured tree-sitter-only
+  // "over-claims" at every unary plus. A correction inside an audited family, not a widening.
   ["UnaryNotExpression", "unary_expression"],
   ["UnaryMinusExpression", "unary_expression"],
+  ["UnaryPlusExpression", "unary_expression"],
 
   // Calls.
   ["InvocationExpression", "call_expression"],

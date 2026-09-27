@@ -25,6 +25,7 @@ import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
 import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
+import { parseHealth } from "./lib/grammar-crosscheck";
 
 interface FileResult {
   readonly file: string;
@@ -66,14 +67,15 @@ for (const [i, name] of entries.entries()) {
   if (i % 250 === 0) console.log(`  ... ${i}/${entries.length}`);
   const source = await readFile(join(dir, name), "utf8");
   let root: ALSyntaxNode;
+  let tree: ReturnType<typeof parseAL>;
   try {
-    root = wrapRoot(parseAL(source));
+    tree = parseAL(source);
+    root = wrapRoot(tree);
   } catch {
     parseFailures++;
     continue;
   }
   let errorNodes = 0;
-  let missingNodes = 0;
   let worstErrorBytes = 0;
   walk(root, (n) => {
     kindHistogram.set(n.kind, (kindHistogram.get(n.kind) ?? 0) + 1);
@@ -84,8 +86,6 @@ for (const [i, name] of entries.entries()) {
     if (n.rawKind === "ERROR") {
       errorNodes++;
       worstErrorBytes = Math.max(worstErrorBytes, n.endIndex - n.startIndex);
-    } else if (n.rawKind === "MISSING") {
-      missingNodes++;
     }
     if (n.kind === ALNodeKind.block) {
       siteCounts.blocks++;
@@ -102,6 +102,8 @@ for (const [i, name] of entries.entries()) {
       siteCounts.statementCalls++;
     }
   });
+  // A MISSING node carries the missing token's type, never "MISSING"; see parseHealth.
+  const missingNodes = parseHealth(tree.rootNode).missingNodes;
   results.push({ file: name, bytes: source.length, errorNodes, missingNodes, worstErrorBytes });
 }
 
