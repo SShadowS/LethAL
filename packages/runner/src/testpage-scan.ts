@@ -122,9 +122,30 @@ function insideWithStatement(n: ALSyntaxNode): boolean {
   return false;
 }
 
+/**
+ * Plain facts only, no syntax nodes: every tree is deleted as soon as its file is read (a kept tree
+ * lives in the wasm heap, and BC.History/BaseApp's 9,620 kept trees hit its 2,048 MB ceiling and
+ * aborted). A call site, in source pre-order, as the traversal will need it.
+ */
+type Site =
+  /** A bare call (`Name(...)` or a call statement): same codeunit, possibly a with-receiver. */
+  | {
+      readonly kind: "bare";
+      readonly name: string;
+      readonly args: number;
+      readonly inWith: boolean;
+    }
+  /** `receiver.member`, called or not; `plain` when the receiver is a bare declared name. */
+  | {
+      readonly kind: "member";
+      readonly plain: boolean;
+      readonly receiver: string;
+      readonly member: string;
+      readonly args: number;
+    };
+
 interface Unit {
   readonly file: string;
-  readonly node: ALSyntaxNode;
   readonly id: number;
   readonly name: string; // normalised
   readonly display: string;
@@ -137,7 +158,8 @@ interface Unit {
 
 interface Proc {
   readonly unit: Unit;
-  readonly node: ALSyntaxNode;
+  /** Undefined when the procedure has no code block. */
+  readonly sites: readonly Site[] | undefined;
   readonly name: string; // normalised
   readonly display: string;
   readonly params: number;
@@ -175,7 +197,6 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
   const pageNamesAnywhere = new Set<string>();
   const unitShell = {
     file,
-    node,
     id,
     name: normalizeAlName(display),
     display,
@@ -208,9 +229,10 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
       }
       const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
       if (vars !== undefined) addDeclarations(vars, scope, `${display}.${id2.text}`, problems);
+      const block = p.namedChildren.find((c) => c.rawKind === "code_block");
       unitShell.procs.push({
         unit: unitShell,
-        node: p,
+        sites: block === undefined ? undefined : callSites(block),
         name: normalizeAlName(id2.text),
         display: `${display}.${id2.text}`,
         params: params.length,
@@ -219,6 +241,49 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
     }
   }
   return unitShell;
+}
+
+/** The call sites under `block`, in the pre-order the traversal used to visit them live. */
+function callSites(block: ALSyntaxNode): Site[] {
+  const out: Site[] = [];
+  const member = (m: ALSyntaxNode, args: number): void => {
+    const [receiver, name] = m.namedChildren;
+    if (receiver === undefined || name === undefined) return;
+    out.push({
+      kind: "member",
+      plain: NAME_KINDS.has(receiver.rawKind),
+      receiver: receiver.text,
+      member: name.text,
+      args,
+    });
+  };
+  visit(block, (n) => {
+    if (n.rawKind === "call_expression") {
+      const fn = n.childForFieldName("function");
+      const args =
+        n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
+      if (fn === null) return;
+      if (NAME_KINDS.has(fn.rawKind))
+        out.push({ kind: "bare", name: fn.text, args, inWith: insideWithStatement(n) });
+      else if (fn.rawKind === "member_expression") member(fn, args);
+      return;
+    }
+    if (n.rawKind === "member_expression") {
+      const parent = n.parent;
+      const isCallee =
+        parent !== null &&
+        parent.rawKind === "call_expression" &&
+        parent.childForFieldName("function")?.startIndex === n.startIndex;
+      if (!isCallee) member(n, 0);
+      return;
+    }
+    if (n.rawKind === "call_statement") {
+      const id = nameNode(n);
+      if (id !== undefined)
+        out.push({ kind: "bare", name: id.text, args: 0, inWith: insideWithStatement(n) });
+    }
+  });
+  return out;
 }
 
 interface TestState {
@@ -270,9 +335,12 @@ class Scanner {
     st.visited.add(p);
     st.reached.add(p.unit);
     const here = [...path, p.display];
-    const block = p.node.namedChildren.find((c) => c.rawKind === "code_block");
-    if (block === undefined) return;
-    visit(block, (n) => this.visitNode(p, n, here, st));
+    if (p.sites === undefined) return;
+    for (const site of p.sites) {
+      if (site.kind === "bare")
+        this.sameCodeunitCall(p.unit, site.name, site.args, here, st, site.inWith);
+      else this.member(p, site, here, st);
+    }
   }
 
   /** Returns whether at least one procedure of `owner` matched (and was walked). */
@@ -300,9 +368,9 @@ class Scanner {
    * that name and arity exists, an ordinary call could not have compiled, so this is either a
    * with-statement's implicit receiver method or a shape the scanner does not otherwise resolve.
    * Refused when the name itself is opening-shaped (safety-first; review round 1, #6), or, for a
-   * genuinely bare call (`site` given), when it sits inside a `with` body: the scanner does not
+   * genuinely bare call, when it sits inside a `with` body: the scanner does not
    * resolve the with-target's own type, so an unresolved bare call there could be a call into that
-   * codeunit instead (safety-first; review round 2, #B). `this.Name` never passes `site`, since an
+   * codeunit instead (safety-first; review round 2, #B). `this.Name` passes `inWith` false, since an
    * explicit receiver is not ambiguous with a with-statement's implicit one.
    */
   private sameCodeunitCall(
@@ -311,7 +379,7 @@ class Scanner {
     args: number,
     path: readonly string[],
     st: TestState,
-    site?: ALSyntaxNode,
+    inWith: boolean,
   ): void {
     const matched = this.calls(unit, rawName, args, path, st);
     if (matched) return;
@@ -319,72 +387,45 @@ class Scanner {
       st.reason ??= `${path.join(" -> ")} calls ${rawName} (unresolved same-codeunit call, safety-first)`;
       return;
     }
-    if (site !== undefined && insideWithStatement(site)) {
+    if (inWith) {
       st.reason ??= `${path.join(" -> ")} calls ${rawName} inside a with-statement, unresolved in this codeunit (safety-first)`;
-    }
-  }
-
-  private visitNode(p: Proc, n: ALSyntaxNode, path: readonly string[], st: TestState): void {
-    if (n.rawKind === "call_expression") {
-      const fn = n.childForFieldName("function");
-      const args =
-        n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
-      if (fn === null) return;
-      if (NAME_KINDS.has(fn.rawKind)) this.sameCodeunitCall(p.unit, fn.text, args, path, st, n);
-      else if (fn.rawKind === "member_expression") this.member(p, fn, args, path, st);
-      return;
-    }
-    if (n.rawKind === "member_expression") {
-      const parent = n.parent;
-      const isCallee =
-        parent !== null &&
-        parent.rawKind === "call_expression" &&
-        parent.childForFieldName("function")?.startIndex === n.startIndex;
-      if (!isCallee) this.member(p, n, 0, path, st);
-      return;
-    }
-    if (n.rawKind === "call_statement") {
-      const id = nameNode(n);
-      if (id !== undefined) this.sameCodeunitCall(p.unit, id.text, 0, path, st, n);
     }
   }
 
   private member(
     p: Proc,
-    m: ALSyntaxNode,
-    args: number,
+    site: Extract<Site, { kind: "member" }>,
     path: readonly string[],
     st: TestState,
   ): void {
-    const [receiver, member] = m.namedChildren;
-    if (receiver === undefined || member === undefined) return;
-    if (!NAME_KINDS.has(receiver.rawKind)) {
+    const { args, receiver, member } = site;
+    if (!site.plain) {
       // A non-plain receiver (parenthesised, subscripted, chained, ...) cannot be resolved to a
       // declared name, so scope cannot be checked. Refuse only when the member itself is
       // opening-shaped: safety-first, never silently "not an edge" (review round 1, #4).
-      if (OPENING_METHODS.has(normalizeAlName(member.text))) {
-        st.reason ??= `${path.join(" -> ")} calls ${receiver.text}.${member.text} on an unresolved receiver`;
+      if (OPENING_METHODS.has(normalizeAlName(member))) {
+        st.reason ??= `${path.join(" -> ")} calls ${receiver}.${member} on an unresolved receiver`;
       }
       return;
     }
-    const key = normalizeAlName(receiver.text);
+    const key = normalizeAlName(receiver);
     if (key === "this") {
       // `this` refers to the codeunit instance itself (review round 1, #1): not a declared name,
       // so it is never in scope/globals, and must not silently fall through as "not a TestPage".
-      this.sameCodeunitCall(p.unit, member.text, args, path, st);
+      this.sameCodeunitCall(p.unit, member, args, path, st, false);
       return;
     }
     const type = p.scope.get(key) ?? p.unit.globals.get(key);
     if (type === undefined) {
       if (p.unit.pageNamesAnywhere.has(key)) {
         st.problems.push(
-          `${p.display} uses ${receiver.text}, which matches a TestPage declaration the scanner cannot place in scope`,
+          `${p.display} uses ${receiver}, which matches a TestPage declaration the scanner cannot place in scope`,
         );
       }
       return;
     }
-    if (PAGE_TYPE.test(type) && OPENING_METHODS.has(normalizeAlName(member.text))) {
-      st.reason ??= `${path.join(" -> ")} calls ${receiver.text}.${member.text} on ${type.trim()}`;
+    if (PAGE_TYPE.test(type) && OPENING_METHODS.has(normalizeAlName(member))) {
+      st.reason ??= `${path.join(" -> ")} calls ${receiver}.${member} on ${type.trim()}`;
       return;
     }
     if (!CODEUNIT_TYPE.test(type)) return;
@@ -396,7 +437,38 @@ class Scanner {
     // Resolved if ANY candidate was found; walk every one, like overloads (review round 3).
     for (const target of targets) {
       st.reached.add(target);
-      this.calls(target, member.text, args, path, st);
+      this.calls(target, member, args, path, st);
+    }
+  }
+}
+
+/** Reads one file's codeunits and parse damage into plain facts; `tree` is not kept. */
+function scanFile(
+  path: string,
+  tree: ReturnType<typeof parseAL>,
+  units: Unit[],
+  suspect: string[],
+): void {
+  const errors = errorOffsets(tree.rootNode);
+  const root = wrapRoot(tree);
+  const objects = flattenPreproc(root.namedChildren).filter(
+    (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
+  );
+  for (const o of objects) {
+    if (o.rawKind === "codeunit_declaration") units.push(buildUnit(path, o, errors));
+  }
+  for (const e of errors) {
+    const owner = objects.find((o) => within(e.startIndex, o));
+    // Suspect exactly as before (inside a codeunit, or outside every object) PLUS an ERROR span
+    // that itself names a `codeunit` keyword: an unclosed object can swallow the next one whole,
+    // so the swallowed codeunit never becomes a `Unit` and a call into it reads as "not found"
+    // rather than as the parse damage it actually is (review round 1, #5).
+    if (
+      owner === undefined ||
+      owner.rawKind === "codeunit_declaration" ||
+      SWALLOWS_CODEUNIT.test(e.text)
+    ) {
+      suspect.push(`${path} at offset ${e.startIndex}`);
     }
   }
 }
@@ -410,27 +482,11 @@ export function analyzeTestPageSources(
   const suspect: string[] = [];
   for (const f of files) {
     const tree = parseAL(f.text);
-    const errors = errorOffsets(tree.rootNode);
-    const root = wrapRoot(tree);
-    const objects = flattenPreproc(root.namedChildren).filter(
-      (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
-    );
-    for (const o of objects) {
-      if (o.rawKind === "codeunit_declaration") units.push(buildUnit(f.path, o, errors));
-    }
-    for (const e of errors) {
-      const owner = objects.find((o) => within(e.startIndex, o));
-      // Suspect exactly as before (inside a codeunit, or outside every object) PLUS an ERROR span
-      // that itself names a `codeunit` keyword: an unclosed object can swallow the next one whole,
-      // so the swallowed codeunit never becomes a `Unit` and a call into it reads as "not found"
-      // rather than as the parse damage it actually is (review round 1, #5).
-      if (
-        owner === undefined ||
-        owner.rawKind === "codeunit_declaration" ||
-        SWALLOWS_CODEUNIT.test(e.text)
-      ) {
-        suspect.push(`${f.path} at offset ${e.startIndex}`);
-      }
+    try {
+      scanFile(f.path, tree, units, suspect);
+    } finally {
+      // Units hold plain facts only, so the tree can go now (see `Site`).
+      tree.delete();
     }
   }
   const scanner = new Scanner(units);

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { initParser } from "@lethal/engine";
+import { initParser, parseAL } from "@lethal/engine";
 import type { TestMethodRef } from "../src/backend";
 import { discoverTests } from "../src/discovery";
 import {
@@ -948,4 +948,71 @@ describe("scanTestPageTests on the real fixtures (offline pin of the live gates)
       expect(refused.size).toBe(0);
     });
   }
+});
+
+describe("memory: every parse tree is released once its facts are read", () => {
+  // BC.History/BaseApp (9,620 files) aborted inside web-tree-sitter when every tree was kept:
+  // the wasm heap grew linearly to its 2,048 MB ceiling at file 9,007. Parsing that corpus here
+  // would take far too long for a unit test, so this pins the mechanism instead: one
+  // `Tree.delete()` per file, observed on web-tree-sitter's own `Tree` prototype with no
+  // production hook, and a correct verdict for a call that crosses into the LAST file after every
+  // tree is gone (so the traversal reads only extracted facts).
+  test("3,000 files: every tree deleted, and a cross-file opening call still refused", () => {
+    const files: Src[] = [];
+    const n = 3000;
+    for (let i = 1; i < n; i++) {
+      const opens = i === n - 1;
+      files.push({
+        path: `lib${i}.al`,
+        text: unit(
+          `
+    procedure Run()
+    var
+        Card: TestPage "X";
+    begin
+        ${opens ? "Card.OpenView();" : "Card.Close();"}
+    end;`,
+          60000 + i,
+          `Lib ${i}`,
+          false,
+        ),
+      });
+    }
+    const tree = parseAL("");
+    const proto = Object.getPrototypeOf(tree) as { delete: () => void };
+    tree.delete();
+    const original = proto.delete;
+    let deletes = 0;
+    proto.delete = function (this: unknown) {
+      deletes++;
+      original.call(this);
+    };
+    try {
+      const got = analyze(
+        unit(`
+    [Test]
+    procedure Opens()
+    var
+        L: Codeunit "Lib ${n - 1}";
+    begin
+        L.Run();
+    end;
+
+    [Test]
+    procedure Safe()
+    var
+        L: Codeunit "Lib 1";
+    begin
+        L.Run();
+    end;`),
+        [ref(50100, "Opens"), ref(50100, "Safe")],
+        files,
+      );
+      expect(got.errors).toEqual([]);
+      expect([...got.refused.keys()]).toEqual(["50100::Opens"]);
+      expect(deletes).toBe(n);
+    } finally {
+      proto.delete = original;
+    }
+  });
 });
