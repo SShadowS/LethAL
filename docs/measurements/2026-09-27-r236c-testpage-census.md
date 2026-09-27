@@ -239,3 +239,28 @@ Everything else in this section is committed, and with it the census is unchange
 | `U:/Git/BC.History/BusinessFoundation` | 19 | 0 |
 | `U:/Git/BC.History/System Application` | 209 | 0 |
 | `U:/Git/BC.History/BaseApp` | 11179 | 0 |
+
+## 11. Run 003: every `#if` arm's type of a name (seventh run)
+
+Review r2 found that declarations were kept in a map from name to ONE type, the last one written.
+A name declared as `Codeunit Opener` in one `#if` arm and `Codeunit Safe` in the other kept only
+`Safe`, so a call through it walked only the safe arm and the test was sent. Every name now keeps
+all its types, a call is walked on each, and a local declaration still hides every global of the
+same name. The test's own codeunit is now found by every codeunit with its id, and a test declared
+in two arms is walked in both instead of raising an error (`7e52ed8`).
+
+Same command, same corpora, run at `7e52ed8`:
+
+| corpus | refused before (section 10) | refused after | loud errors before | loud errors after |
+| --- | --- | --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 1 | 0 | 0 |
+| `fixtures/sandbox-tests`, `sandbox-hang-tests`, `sandbox-harden-tests` | 0 | 0 | 0 | 0 |
+| `U:/Git/do-rel2/Cloud`, `U:/Git/DC/Cloud` (no tests) | 0 | 0 | 0 | 0 |
+| `U:/Git/BusinessCentral.Sentinel` | 0 | 0 | 0 | 0 |
+| `U:/Git/BC.History/BusinessFoundation` | 19 | 19 | 0 | 0 |
+| `U:/Git/BC.History/System Application` | 209 | 209 | 0 | 0 |
+| `U:/Git/BC.History/BaseApp` | 11179 | 11179 | 0 | 0 |
+
+No count moved: none of these corpora declares one name with different types across `#if` arms on
+a path a test reaches. The fixture pin still holds: in `sandbox-data-tests` exactly
+`Data Tests.PageActionComputesNonZero` is refused.
