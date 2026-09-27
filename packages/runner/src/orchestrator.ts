@@ -3935,6 +3935,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
     ? await scanTestPageTests(cfg.testDir, tests)
     : new Map();
+  const testPageRefusedNames = tests
+    .filter((t) => testPageRefused.has(testKeyOf(t)))
+    .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
+  if (testPageRefusedNames.length > 0) {
+    emit({
+      type: "tests-testpage-refused",
+      tests: testPageRefusedNames.map((t) => t.qualifiedName),
+    });
+  }
 
   // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named
   // in seconds rather than after a full baseline round trip. Reports, never refuses — check 1 owns
@@ -3973,9 +3982,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backendName,
     configFingerprint,
     emit,
-    tests
-      .filter((t) => testPageRefused.has(testKeyOf(t)))
-      .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method })),
+    testPageRefusedNames,
   );
 
   const runId = cfg.store.createRun({

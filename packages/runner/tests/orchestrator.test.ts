@@ -1941,6 +1941,39 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(overBudget.length).toBe(3);
     for (const m of overBudget) expect(m.carried).toBe(true);
   });
+  // A resume whose every batch carries runs no baseline at all, so no baseline row can name the
+  // refused test. The report still names it, from the session's own scan, and only once.
+  test("resume: an all-carried resume still names the refused test and the caveat", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new RecordingBackend(FENCED),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    store.db.run("UPDATE runs SET finished_at = NULL");
+
+    const backend = new RecordingBackend(FENCED);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    // Nothing was sent at all: every verdict carried, so no baseline ran.
+    expect(backend.sent).toEqual([]);
+    expect(events.some((e) => e.type === "baseline-batch-finished")).toBe(false);
+    expect(report.mutants.every((m) => m.carried === true)).toBe(true);
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
+      "tests-testpage-refused",
+    ]);
+  });
   // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
   // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
   // LethAL's own not-run message is filed as refused. A non-authoritative backend does no scan, so
