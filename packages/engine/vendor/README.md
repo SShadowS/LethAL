@@ -464,11 +464,15 @@ The released v4.4.1 asset equals the tag's checked-in wasm, and a local build (t
 chasing.
 
 **What this bump does NOT prove.** None of the fixtures, and none of the `do` corpus, hold any of
-the #24, #25, #26 or #28 shapes: only `dc` and `BaseApp/Test` do (for #27, #26 and #28), and only
-the exploratory `bc281` copy speaks to #24/#25's directive fixes at all, and it already parsed
-those five files clean under the OLD grammar, so it adds no local confirmation of upstream's own
-5 -> 0 measurement. The directive gain (step A) is proven only by upstream's BC.History and BC 28.1
-figures; this repository has no corpus that witnesses it happening here.
+the #24, #25, #26 or #28 shapes: only `dc`, `BaseApp/Test` and `sysapp` do (`dc` for #27,
+`BaseApp/Test` for #26 and #28, and `sysapp` for #28 on its own: 8 generic `asserterror` assignment
+bodies, the TSAL-441 spec's P4 and run 003's cluster C4 sysapp count). Unlike BaseApp/Test's 8,
+none of sysapp's assign a string literal to a page field's `Value`, so no operator claims them and
+the census there stays at 0 rows moved. Only the exploratory `bc281` copy speaks to #24/#25's
+directive fixes at all, and it already parsed those five files clean under the OLD grammar, so it
+adds no local confirmation of upstream's own 5 -> 0 measurement. The directive gain (step A) is
+proven only by upstream's BC.History and BC 28.1 figures; this repository has no corpus that
+witnesses it happening here.
 
 ### Landing gates
 

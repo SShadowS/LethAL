@@ -624,7 +624,8 @@ R284 pipeline check: `census-fixture-mutants.ts` on a directory holding only
 
 ### 10.2 Corpus table (section 4 layout)
 
-Every fingerprint equals the pre-commitment's table and run 002's. Every verdict is DISAGREE (exit 1).
+Every fingerprint equals the pre-commitment's table and run 002's, except `fixtures`, which has no
+pre-commitment row and matches run 002's fingerprint instead. Every verdict is DISAGREE (exit 1).
 
 | corpus | files | sha256 (first 16) | comparable | tree-sitter unhealthy files | compiler parse-error files | unexplained records (run 002 -> run 003) |
 | --- | ---: | --- | ---: | --- | ---: | ---: |
@@ -663,8 +664,8 @@ brackets.
 
 The comparison against run 002 was made on the records, not on these counts. For every corpus and
 every bucket, the set of `file|kind|start|end` records was diffed against run 002's `--json`. No
-record was added to any bucket in any corpus. The only records that left a bucket are the ones in
-brackets above, and each one that left UNEXPLAINED for EXPLAINED is the same record (sysapp 8
+record was added to any bucket, except the ones that moved from UNEXPLAINED to explained (the
+bracketed cells above): each one that left UNEXPLAINED for EXPLAINED is the same record (sysapp 8
 assignment; baseapp 34 call and 72 assignment, set-equal). DC's two re-admitted pages added no
 record to any bucket.
 
