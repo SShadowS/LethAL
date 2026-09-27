@@ -87,6 +87,8 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
+import { TestPageScanError } from "../src/testpage-scan";
+import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import { type VerifyDeps, VerifyError, runVerify } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
@@ -1605,6 +1607,177 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   });
 });
 
+describe("R-236c: a test with a reachable call that may open a TestPage is refused before sending", () => {
+  const PAGE_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    var
+        Card: TestPage "Some Card";
+    begin
+        Card.OpenView();
+    end;
+}
+`;
+
+  class RecordingBackend extends QualificationBackend {
+    /** Unmutated runs with coverage asked for: the baseline. A kill's confirm rerun asks for none. */
+    baselineSent: string[] = [];
+    /** Every method sent, baseline, covering or confirm. */
+    sent: string[] = [];
+    constructor(
+      private readonly caps: BackendCapabilities,
+      failureMessage?: string,
+    ) {
+      super((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: "error" as const,
+              procedure: "IsUnderBudget",
+              ...(failureMessage !== undefined ? { failureMessage } : {}),
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+    }
+    override capabilities() {
+      return this.caps;
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      this.sent.push(ref.method);
+      if ((this.activations.at(-1) ?? null) === null && opts.coverage !== "none")
+        this.baselineSent.push(ref.method);
+      return super.run(ref, opts);
+    }
+  }
+
+  async function project(testAl = PAGE_TEST_AL) {
+    const dirs = await makeProject(testAl);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    return dirs;
+  }
+  const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
+
+  test("fenced: never sent, named, recorded as skip with the reason", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    expect(backend.baselineSent).toEqual(["GreenTest"]);
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.unsupportedTests).toEqual([]);
+    expect(report.validity.baselineTests.failing).toBe(0);
+    expect(report.validity.caveats).toContain("tests-testpage-refused");
+    expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
+    expect(report.baselineGreen).toBe(false);
+    const rows = store.db
+      .query(
+        "SELECT outcome, failure_message AS msg FROM test_results WHERE method = 'UnsupportedTest'",
+      )
+      .all() as { outcome: string; msg: string }[];
+    expect(rows.map((r) => r.outcome)).toEqual(["skip"]);
+    expect(rows[0]?.msg).toContain("OpenView");
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
+  });
+
+  test("hub coverage mode refuses too: its mutant runs are fenced", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend(CAPS_NST); // coverage "procedure"
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.baselineSent).toEqual(["GreenTest"]);
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+  });
+
+  test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend({ ...FENCED, authoritative: false });
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.baselineSent).toContain("UnsupportedTest");
+    expect(report.testPageRefused).toBeUndefined();
+  });
+
+  test("a reachable parse error stops the run before anything is sent and before a run row", async () => {
+    const broken = PAGE_TEST_AL.replace(
+      "procedure GreenTest()\n    begin",
+      "procedure GreenTest()\n    begin\n        if then;",
+    );
+    const dirs = await project(broken);
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TestPageScanError);
+    expect(backend.sent).toEqual([]);
+    expect(backend.deploys).toEqual([]);
+    const runs = store.db.query("SELECT COUNT(*) AS n FROM runs").get() as { n: number };
+    expect(runs.n).toBe(0);
+  });
+
+  test("every test refused: nothing sent, every mutant error, the sentence names the refusals", async () => {
+    const allPages = PAGE_TEST_AL.replace(
+      "procedure GreenTest()\n    begin",
+      'procedure GreenTest()\n    var\n        P: TestPage "X";\n    begin\n        P.OpenView();',
+    );
+    const dirs = await project(allPages);
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.sent).toEqual([]);
+    expect(report.testPageRefused?.tests.length).toBe(2);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.verdict).toBe("error");
+    expect(report.validity.scoreDescribes).toContain(
+      "2 refused before sending (TestPage), not run",
+    );
+  });
+
+  // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
+  // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
+  // LethAL's own not-run message is filed as refused. A non-authoritative backend does no scan, so
+  // each message reaches the orchestrator's classifier exactly as a reused snapshot row does.
+  test("the classifier keeps BC's old refusal as BC's and files only the not-run message as refused", async () => {
+    const R69_TEXT =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+      "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+    const classify = async (failureMessage: string) => {
+      const dirs = await project();
+      const backend = new RecordingBackend({ ...FENCED, authoritative: false }, failureMessage);
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const finished = events.find((e) => e.type === "baseline-batch-finished");
+      if (finished === undefined || finished.type !== "baseline-batch-finished")
+        throw new Error("no baseline-batch-finished event");
+      return finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+        ?.classification;
+    };
+    expect(await classify(R69_TEXT)).toEqual(["tests-testpage-unsupported"]);
+    expect(
+      await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
+    ).toEqual(["tests-testpage-refused"]);
+  });
+});
 describe("runSession — C3 batch app.json + full source copy", () => {
   test("batch dir gets app.json with bumped version + no-mutant files copied verbatim", async () => {
     const dirs = await makeProject();

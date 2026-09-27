@@ -144,7 +144,12 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { describeTestPageUnsupported } from "./testpage-unsupported";
+import { scanTestPageTests } from "./testpage-scan";
+import {
+  describeTestPageUnsupported,
+  isTestPageNotRunMessage,
+  testPageNotRunMessage,
+} from "./testpage-unsupported";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -2988,6 +2993,11 @@ interface BatchScope {
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
   readonly baselineTimeoutMs: number;
+  /**
+   * R-236c: `testKeyOf(ref)` to the reason, for each test with a reachable call that may open a
+   * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
+   */
+  readonly testPageRefused?: ReadonlyMap<string, string>;
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 /** What `select` hands the covering loop: the mutants to run and everything that orders them. */
@@ -3273,6 +3283,15 @@ async function dispatchUnmutated(
     store,
     runId,
   } = scope;
+  // R-236c: a test with a reachable call that may open a TestPage is never sent. Its verdict is a
+  // synthetic `skip` carrying the reason, recorded like any baseline row, so the report names it and
+  // nothing downstream mistakes it for an answer from BC.
+  const refusedFor = scope.testPageRefused?.get(testKeyOf(ref));
+  if (refusedFor !== undefined) {
+    const failureMessage = testPageNotRunMessage(refusedFor);
+    store.recordTestResult(runId, null, null, ref, "skip", 0, failureMessage);
+    return { verdict: { ref, outcome: "skip", durationMs: 0, failureMessage }, stop: false };
+  }
   const v = await runOnce(
     backend,
     safety,
@@ -3506,6 +3525,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
       if (describeStaleTestApp(b.verdict.failureMessage) !== undefined) {
         classification.push("stale-test-app");
+      }
+      if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
+        classification.push("tests-testpage-refused");
       }
       return {
         name: qualifiedTestName(b.ref),
@@ -3868,6 +3890,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
+  // R-236c: before the run row and before anything reaches a server, in every bcdev coverage mode
+  // (a hub-mode baseline would make the test green and send it FENCED in the covering loop). Throws
+  // TestPageScanError when source a test can reach cannot be read: an unread test is not sent.
+  const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
+    ? await scanTestPageTests(cfg.testDir, tests)
+    : new Map();
 
   // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named
   // in seconds rather than after a full baseline round trip. Reports, never refuses — check 1 owns
@@ -4223,6 +4251,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       groupRuns,
       minMutantBudgetMs,
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      testPageRefused,
     };
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
