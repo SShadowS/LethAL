@@ -626,22 +626,7 @@ export class RunMutantTransport {
     const started = Date.now();
     const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
     const pollMs = req.watchdogPollMs ?? WATCHDOG_POLL_MS;
-    // R206: a `call` result names the request position of the method it is about, so the
-    // orchestrator's warm confirmation can take the chunk's prefix without re-deriving it.
-    const methodIndexOf = (ref: TestMethodRef): number => {
-      const at = methods.findIndex(
-        (m) => m.ref.codeunitId === ref.codeunitId && m.ref.method === ref.method,
-      );
-      return at < 0 ? 1 : at + 1;
-    };
-    const call = (verdict: TestVerdict, extra?: { cause?: GroupCause; abortSession?: string }) =>
-      ({
-        kind: "call",
-        verdict,
-        methodIndex: methodIndexOf(verdict.ref),
-        ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
-        ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
-      }) as const;
+    const call = this.callOf(methods);
 
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
@@ -951,6 +936,63 @@ export class RunMutantTransport {
         ),
       );
     }
+    return this.scoreManyAnswer(value, {
+      req,
+      firstMethod,
+      watchedRef,
+      call,
+      durationMs,
+      fencedOp,
+    });
+  }
+
+  /**
+   * R206: a `call` result names the request position of the method it is about, so the
+   * orchestrator's warm confirmation can take the chunk's prefix without re-deriving it.
+   */
+  private callOf(
+    methods: readonly GroupMethod[],
+  ): (
+    verdict: TestVerdict,
+    extra?: { cause?: GroupCause; abortSession?: string },
+  ) => RunMutantManyResult {
+    const methodIndexOf = (ref: TestMethodRef): number => {
+      const at = methods.findIndex(
+        (m) => m.ref.codeunitId === ref.codeunitId && m.ref.method === ref.method,
+      );
+      return at < 0 ? 1 : at + 1;
+    };
+    return (verdict, extra) =>
+      ({
+        kind: "call",
+        verdict,
+        methodIndex: methodIndexOf(verdict.ref),
+        ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
+        ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
+      }) as const;
+  }
+
+  /**
+   * `RunMutantMany`'s answer `value`, scored. Everything it needs arrives in `ctx`, so a caller
+   * other than the live reply (R236b's readback) scores by exactly the same rules.
+   */
+  private scoreManyAnswer(
+    value: string,
+    ctx: {
+      readonly req: RunMutantManyRequest;
+      readonly firstMethod: GroupMethod;
+      /** The method the watchdog last saw running; names an unparseable `value`'s verdict. */
+      readonly watchedRef: TestMethodRef;
+      readonly call: (
+        verdict: TestVerdict,
+        extra?: { cause?: GroupCause; abortSession?: string },
+      ) => RunMutantManyResult;
+      readonly durationMs: number;
+      readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
+    },
+  ): RunMutantManyResult {
+    const { methods, attemptId, mutantId } = ctx.req;
+    const { firstMethod, watchedRef, call, durationMs, fencedOp } = ctx;
     let result: RunMutantManyAnswer;
     try {
       result = JSON.parse(value) as RunMutantManyAnswer;
