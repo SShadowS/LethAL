@@ -4,6 +4,7 @@ import type { TestMethodRef } from "../src/backend";
 import { MAX_ATTEMPT_ID_LENGTH } from "../src/lease";
 import {
   FencedCoverageError,
+  KEPT_ANSWER_READ_MS,
   RunMutantTransport,
   isAlStopResponse,
 } from "../src/run-mutant-transport";
@@ -947,7 +948,9 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
   /** The live shape: everything but the envelope's final `}`. */
   const TRUNCATED = wrap(FAILED).slice(0, -1);
   const KEY = { attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1" };
-  type Kept = { readonly status: number; readonly body: string } | "throw" | "hang";
+  type Kept = { readonly status: number; readonly body: string } | "throw" | "hang" | "deaf";
+  /** A readback that never answers ends here, so a broken bound FAILS the test instead of hanging the run. */
+  const UNBOUNDED_MS = 3000;
   const found = (answer: string, key: Record<string, unknown> = KEY): Kept => ({
     status: 200,
     body: wrap({ found: true, ...key, answer }),
@@ -965,11 +968,20 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       if (action === "GetOpAnswer") {
         bodies.push(JSON.parse(String(init?.body)));
         if (kept === "throw") throw new Error("ECONNRESET");
-        if (kept === "hang") {
+        if (kept === "hang" || kept === "deaf") {
           return new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-              once: true,
-            });
+            setTimeout(() => reject(new Error("readback not bounded")), UNBOUNDED_MS);
+            // "deaf" is a fetch that ignores its abort signal; only the client's own race bounds it.
+            if (kept === "hang") {
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  calls.push("GetOpAnswer:aborted");
+                  reject(new Error("aborted"));
+                },
+                { once: true },
+              );
+            }
           });
         }
         return new Response(kept.body, { status: kept.status });
@@ -1048,11 +1060,38 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
   });
 
   test("5. the readback hangs: bounded by the call's budget, then in-flight-unknown", async () => {
+    const calls: string[] = [];
     const started = Date.now();
-    const v = await transport(routed("truncated", "hang", [])).run({ ...REQ, timeoutMs: 30 });
+    const v = await transport(routed("truncated", "hang", calls)).run({ ...REQ, timeoutMs: 30 });
     keptUnknown(v);
     expect(v.failureMessage).toContain("answer readback failed");
     expect(Date.now() - started).toBeLessThan(2000);
+    // The request itself was ended, not merely abandoned.
+    expect(calls).toContain("GetOpAnswer:aborted");
+  });
+
+  test("5b. a readback whose fetch ignores the abort is still bounded", async () => {
+    const started = Date.now();
+    const v = await transport(routed("truncated", "deaf", [])).run({ ...REQ, timeoutMs: 30 });
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback failed");
+    expect(v.failureMessage).not.toContain("readback not bounded");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("5c. the readback bound is the call's budget, capped at KEPT_ANSWER_READ_MS", async () => {
+    // Seam: `readKeptAnswer` is public, so the bound it is handed is observed directly.
+    const seen: number[] = [];
+    for (const timeoutMs of [60_000, 30]) {
+      const t = transport(routed("truncated", "throw", []));
+      t.readKeptAnswer = async (_lease, _attemptId, _opSeq, bound) => {
+        seen.push(bound);
+        return { found: false };
+      };
+      keptUnknown(await t.run({ ...REQ, timeoutMs }));
+    }
+    expect(seen).toEqual([KEPT_ANSWER_READ_MS, 30]);
+    expect(KEPT_ANSWER_READ_MS).toBe(15_000);
   });
 
   test("6. a kept answer that is not JSON is never accepted", async () => {
@@ -1094,6 +1133,7 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
       { ...KEY, epoch: 4 },
       { ...KEY, generation: "gen-2" },
       { ...KEY, opSeq: 8 },
+      { ...KEY, attemptId: "a9" },
     ]) {
       const v = await transport(routed("truncated", found(JSON.stringify(FAILED), key), [])).run(
         REQ,
@@ -1144,5 +1184,29 @@ describe("RunMutantTransport: a lost reply is read back from the committed answe
     );
     keptUnknown(r.verdict);
     expect(r.coverageRows).toBeUndefined();
+  });
+
+  test("16. a refused readback leaves the original verdict AND its coverage rows exactly as dispatch left them", async () => {
+    // `status: ran` with coverage but no codeunitResults: dispatch parses the rows, then answers
+    // in-flight-unknown. That is today's path, and a refused readback must not change it.
+    // `undefined` drops the key from the JSON on the wire.
+    const noResults = echo({
+      coverage: [{ objectType: 5, objectId: 79300, lineNo: 10, hits: 1 }],
+      codeunitResults: undefined,
+    });
+    const fetchFn = (async (url: unknown) => {
+      if (String(url).includes("LethALControl_GetOpAnswer")) {
+        return new Response(wrap({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }), {
+          status: 200,
+        });
+      }
+      return new Response(wrap(noResults), { status: 200 });
+    }) as typeof fetch;
+    const r = await transport(fetchFn).runWithCoverage(REQ);
+    keptUnknown(r.verdict);
+    expect(r.verdict.failureMessage).toStartWith(
+      "RunMutant status=ran but no codeunitResults; answer readback: the server holds no committed answer",
+    );
+    expect(r.coverageRows).toEqual([{ objectType: 5, objectId: 79300, lineNo: 10, hits: 1 }]);
   });
 });

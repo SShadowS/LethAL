@@ -1186,27 +1186,32 @@ export class RunMutantTransport {
     fencedOp: { readonly attemptId: string; readonly opSeq: number },
   ): Promise<TestVerdict> {
     const lostText = lost.failureMessage ?? "no detail";
-    const keep = (why: string): TestVerdict => {
-      // A readback that is not accepted must leave no rows behind. `exactOptionalPropertyTypes`
-      // forbids assigning `undefined`, so the keys are removed.
-      // biome-ignore lint/performance/noDelete: see above
-      delete sink.rows;
-      // biome-ignore lint/performance/noDelete: see above
-      delete sink.stats;
-      return { ...lost, failureMessage: `${lostText}; ${why}` };
-    };
+    // A readback that is not accepted changes nothing but the message: the verdict and whatever
+    // `dispatch` put in `sink` go on exactly as today. The kept answer is scored into `scratch`,
+    // which reaches `sink` only on acceptance.
+    const keep = (why: string): TestVerdict => ({ ...lost, failureMessage: `${lostText}; ${why}` });
+    const scratch: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
+    // ponytail: one read, bounded by the call's own budget (15 s at most); a throttled server
+    // fails closed. A second read is the upgrade if C1 shows closed-on-timeout readbacks.
+    const bound = Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs);
+    let guard: ReturnType<typeof setTimeout> | undefined;
     let kept: KeptAnswer;
     try {
-      // ponytail: one read, bounded by the call's own budget (15 s at most); a throttled server
-      // fails closed. A second read is the upgrade if C1 shows closed-on-timeout readbacks.
-      kept = await this.readKeptAnswer(
-        req.lease,
-        fencedOp.attemptId,
-        fencedOp.opSeq,
-        Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
-      );
+      // The abort inside `postAction` ends the request; this race holds the bound even for a
+      // fetch that ignores its abort signal.
+      kept = await Promise.race([
+        this.readKeptAnswer(req.lease, fencedOp.attemptId, fencedOp.opSeq, bound),
+        new Promise<never>((_resolve, reject) => {
+          guard = setTimeout(
+            () => reject(new Error(`GetOpAnswer gave no answer within ${bound} ms`)),
+            bound,
+          );
+        }),
+      ]);
     } catch (err) {
       return keep(`answer readback failed: ${describeThrown(err)}`);
+    } finally {
+      if (guard !== undefined) clearTimeout(guard);
     }
     if (!kept.found) {
       const holds =
@@ -1221,7 +1226,7 @@ export class RunMutantTransport {
     try {
       // `parseCoverageRows` throws `FencedCoverageError` on a malformed coverage array; from a
       // readback that is one more answer not accepted, never a thrown session.
-      v = this.scoreAnswer(kept.answer, req, collectCoverage, sink, lost.durationMs, fencedOp);
+      v = this.scoreAnswer(kept.answer, req, collectCoverage, scratch, lost.durationMs, fencedOp);
     } catch (err) {
       return keep(`answer readback not accepted: ${describeThrown(err)}`);
     }
@@ -1232,6 +1237,7 @@ export class RunMutantTransport {
         `answer readback not accepted (${v.outcome}${op}): ${v.failureMessage ?? "no detail"}`,
       );
     }
+    Object.assign(sink, scratch);
     return { ...v, replyRecovered: lostText };
   }
 
