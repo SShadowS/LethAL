@@ -618,7 +618,8 @@ The short version, before the evidence:
 - **Sandbox or dev container only.** The changed build stays published until you republish your own
   app. Never point this at a production tenant.
 - **Tests run without a GUI**, so code behind a `Confirm` or a dialog may be unmeasurable.
-- **A test that opens a `TestPage` cannot be scored**, and one kind of them can stall a whole run.
+- **A test that has a reachable call that may open a `TestPage` is refused before it is sent**,
+  reported as not run; a page LethAL cannot detect can still stall a whole run.
 - **Big apps must be run in slices** (`--only`). An unscoped run on a real project is refused by
   default.
 - **One tenant per server.** LethAL cannot fence a second tenant publishing to the same instance.
@@ -706,11 +707,19 @@ a LethAL feature or a mode.
   limit was closed. A `pageextension`'s implicit `Rec` is still refused deliberately: it resolves to
   the extended page's `SourceTable`, which the project usually cannot see, and guessing would claim
   sites wrongly. Measured on a real extension: zero sites would have been gained by guessing.)
-- **A test that opens a `TestPage` cannot be scored, and on the default path one can end your whole
-  run.** LethAL runs tests in a locked-down session with no GUI and a web-service client
-  (`GuiAllowed=No`, `ClientType=ODataV4`), and that session cannot create the test service a
-  `TestPage` needs. What happens next depends on the page, which is the part worth
-  knowing:
+- **A test that has a reachable call that may open a `TestPage` is refused before it is sent.**
+  LethAL reads the test app's source before the run and never sends such a test, whether the call
+  is in the test itself or in a helper codeunit in the test app. The report lists each one as
+  "TestPage refused, not run", naming the call path it was refused for. The policy is static and
+  safety-first: conditions are not read, so a call behind `if GuiAllowed then`, which would never
+  run here anyway, is refused too. If a reachable part of the test app has a parse error, the run
+  stops before anything is sent, with the file that failed to parse named.
+
+  **Not detected, and sent as before:** a page opened by the code under test and handled through a
+  handler function, and a helper outside the test app. For those, LethAL still runs tests in a
+  locked-down session with no GUI and a web-service client (`GuiAllowed=No`, `ClientType=ODataV4`),
+  and that session cannot create the test service a `TestPage` needs. What can happen to a
+  TestPage test LethAL cannot see:
 
   | Page | Fenced (default) | Hub (`coverageMode: "procedure"`) |
   |------|------------------|-----------------------------------|
@@ -722,15 +731,8 @@ a LethAL feature or a mode.
   does **not** rescue it: it makes the failure faster, not survivable, because the baseline loop
   quarantines on the forced-stop result exactly as it does on a hang.
 
-  **Mitigation that works today:** run with `coverageMode: "procedure"`, which routes baseline
-  discovery to the bcdev hub. Measured: the run completes and everything else gets scored. Note the
-  trade R58 made deliberately when it moved off that mode. The hub runs `GuiAllowed=Yes`, so it can
-  disagree with the fenced runner about a test's outcome.
-
-  **What is still not recovered:** mutant *verdicts* always execute on the fenced path regardless of
-  coverage mode, so a mutant covered only by `TestPage` tests still receives no verdict; it is
-  reported unscoreable with the refusal named, never guessed at. Recovering those verdicts is built
-  but deliberately not wired; see ROADMAP R69/R74/R75.
+  **What is still not recovered:** a mutant reached only by a refused test is reported
+  `no-coverage`, with the refused tests named in the report. See ROADMAP R69/R74/R75.
 - **Procedure-level coverage** from the `bcdev` backend, so `no-coverage` means no test calls that
   procedure. Coverage for extension objects is object-level only.
 - **A red baseline bounds what any run can measure.** Tests that fail before mutation are named in

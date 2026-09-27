@@ -125,9 +125,10 @@ Before the close, not after. Every number here is measured; runbook §7 has the 
 - **Every verdict describes the non-interactive branch.** `GuiAllowed=No`, `ClientType=ODataV4`.
   Measured whole-app: **62 of 19,850 sites, 0.3%**, sit inside a `GuiAllowed`- or `Confirm`-guarded
   branch.
-- **A `TestPage` test cannot be scored**, and on the default path one can hang a whole run. Recovery
-  was measured at **2.30%** of a real app's mutants and the routed path was **deleted** rather than
-  kept as a half-answer.
+- **A test that has a reachable call that may open a `TestPage` is refused before it is sent**, and
+  the report names it as not run. A page LethAL cannot see this way can still hang the default
+  fenced path. Recovery was measured at **2.30%** of a real app's mutants and the routed path was
+  **deleted** rather than kept as a half-answer.
 - **Unscoped runs on a real app are refused by default.** 19,850 sites is days. Scope with `--only`.
 - **A survivor is a lead.** Some survivors cannot be killed by any test.
 - **`al-runner` is not authoritative.** Its coverage is conditional, so it can report false survivors; use `bcdev` for a score.

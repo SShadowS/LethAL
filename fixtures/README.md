@@ -618,6 +618,11 @@ So the `pageextension` half of R30's receiver resolution is **claimed, deployed 
 the operator claims the site, the mutant is compiled into the published artifact, and nothing ever
 executes it. The `tableextension` half is proven end to end.
 
+Since R-236c, a test that has a reachable call that may open a `TestPage`, like the one above, is
+refused before it is sent, so it no longer reaches the fenced session to be quarantined or fast
+refused there. The R69 mechanism this section measured still applies to a TestPage test LethAL's
+static scan cannot see, for example one reached only through a handler function.
+
 Two traps worth keeping written down, both hit while building this:
 
 - **A variable declared in a TRIGGER's own `var` section is never resolved**, in any object kind —
