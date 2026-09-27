@@ -237,7 +237,8 @@ interface Unit {
   readonly name: string; // normalised
   readonly display: string;
   readonly damaged: boolean;
-  readonly globals: ReadonlyMap<string, string>; // every declared name -> type text
+  /** Every declared name -> EVERY type text it has across `#if` arms (run 003). */
+  readonly globals: ReadonlyMap<string, readonly string[]>;
   readonly pageNamesAnywhere: ReadonlySet<string>;
   readonly procs: readonly Proc[];
   readonly problems: readonly string[];
@@ -252,11 +253,23 @@ interface Proc {
   readonly params: number;
   /** The declared return type's text, when there is one. */
   readonly returnType: string | undefined;
-  readonly scope: ReadonlyMap<string, string>; // parameters and locals, every name
+  /** Parameters, named return value and locals -> every type text across `#if` arms. A name here
+   *  hides every global of that name (ordinary shadowing). */
+  readonly scope: ReadonlyMap<string, readonly string[]>;
 }
 
 function nameNode(n: ALSyntaxNode): ALSyntaxNode | undefined {
   return n.namedChildren.find((c) => NAME_KINDS.has(c.rawKind));
+}
+
+/** Adds `type` to `name`'s types: a name declared in two `#if` arms keeps BOTH (run 003, review r2:
+ *  a Map that kept the last type walked only one arm's codeunit). Not named `declare`: Bun's
+ *  transpiler dropped a statement `declare(...)` as a TypeScript ambient declaration, silently. */
+function addType(into: Map<string, string[]>, name: string, type: string): void {
+  const key = normalizeAlName(name);
+  const list = into.get(key);
+  if (list === undefined) into.set(key, [type]);
+  else if (!list.includes(type)) list.push(type);
 }
 
 /**
@@ -266,7 +279,7 @@ function nameNode(n: ALSyntaxNode): ALSyntaxNode | undefined {
  */
 function addDeclarations(
   section: ALSyntaxNode,
-  into: Map<string, string>,
+  into: Map<string, string[]>,
   where: string,
   problems: string[],
   skipProcedures = false,
@@ -279,7 +292,7 @@ function addDeclarations(
       if (names.length === 0 && PAGE_TYPE.test(type)) {
         problems.push(`${where}: a TestPage declaration whose name the scanner cannot read`);
       }
-      for (const n of names) into.set(normalizeAlName(n.text), type);
+      for (const n of names) addType(into, n.text, type);
     }
     for (const c of d.children) walk(c);
   };
@@ -310,7 +323,7 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
   const body = node.namedChildren.find((c) => c.rawKind === "declaration_body");
   const problems: string[] = [];
-  const globals = new Map<string, string>();
+  const globals = new Map<string, string[]>();
   const pageNamesAnywhere = new Set<string>();
   const unitShell = {
     file,
@@ -331,27 +344,27 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
       if (c.rawKind.endsWith("var_section"))
         addDeclarations(c, globals, `${display} globals`, problems, true);
     }
-    const all = new Map<string, string>();
+    const all = new Map<string, string[]>();
     addDeclarations(body, all, `${display}`, []);
-    for (const [n, t] of all) if (PAGE_TYPE.test(t)) pageNamesAnywhere.add(n);
+    for (const [n, ts] of all) if (ts.some((t) => PAGE_TYPE.test(t))) pageNamesAnywhere.add(n);
     for (const p of members) {
       if (p.rawKind !== "procedure") continue;
       const id2 = nameNode(p);
       if (id2 === undefined) continue;
-      const scope = new Map<string, string>();
+      const scope = new Map<string, string[]>();
       const plist = p.namedChildren.find((c) => c.rawKind === "parameter_list");
       const params = plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
       for (const prm of params) {
         const n = nameNode(prm);
         const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
-        if (n !== undefined) scope.set(normalizeAlName(n.text), t);
+        if (n !== undefined) addType(scope, n.text, t);
       }
       // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
       // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
       const returnType = p.childForFieldName("return_type")?.text;
       const returnValue = p.childForFieldName("return_value");
       if (returnValue !== null && returnType !== undefined)
-        scope.set(normalizeAlName(returnValue.text), returnType);
+        addType(scope, returnValue.text, returnType);
       const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
       if (vars !== undefined) addDeclarations(vars, scope, `${display}.${id2.text}`, problems);
       const block = p.namedChildren.find((c) => c.rawKind === "code_block");
@@ -563,8 +576,8 @@ class Scanner {
       this.sameCodeunitCall(p.unit, member, args, path, st, false);
       return;
     }
-    const type = p.scope.get(key) ?? p.unit.globals.get(key);
-    if (type === undefined) {
+    const types = p.scope.get(key) ?? p.unit.globals.get(key);
+    if (types === undefined) {
       if (p.unit.pageNamesAnywhere.has(key)) {
         st.problems.push(
           `${p.display} uses ${receiver}, which matches a TestPage declaration the scanner cannot place in scope`,
@@ -572,7 +585,7 @@ class Scanner {
       }
       return;
     }
-    this.callOn(type, receiver, member, args, path, st);
+    for (const t of types) this.callOn(t, receiver, member, args, path, st);
   }
 
   /** `receiver.member(args)` where the receiver's declared type text is `type`. */
@@ -617,8 +630,7 @@ class Scanner {
       case "name": {
         const key = normalizeAlName(r.name);
         if (key === "this") return [`Codeunit ${p.unit.id}`];
-        const t = p.scope.get(key) ?? p.unit.globals.get(key);
-        return t === undefined ? [] : [t];
+        return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? [])];
       }
       case "either": {
         const out: string[] = [];
@@ -715,11 +727,14 @@ export function analyzeTestPageSources(
       errors.push(`${label} has no file`);
       continue;
     }
-    const owner = units.find((u) => u.id === t.codeunitId);
-    const decls =
-      owner?.procs.filter((p) => p.name === normalizeAlName(t.method) && p.params === 0) ?? [];
-    const [decl] = decls;
-    if (decl === undefined || decls.length > 1) {
+    // EVERY codeunit with the test's id and EVERY parameterless procedure of its name: a codeunit
+    // or a test declared in two `#if` arms is walked in both, never only the first (run 003).
+    const decls = units
+      .filter((u) => u.id === t.codeunitId)
+      .flatMap((u) =>
+        u.procs.filter((p) => p.name === normalizeAlName(t.method) && p.params === 0),
+      );
+    if (decls.length === 0) {
       errors.push(
         `${label} (codeunit ${t.codeunitId}) was discovered but the parser found it ${decls.length} time(s) as a parameterless procedure`,
       );
@@ -732,7 +747,7 @@ export function analyzeTestPageSources(
       problems: [],
       reason: undefined,
     };
-    scanner.walk(decl, [], st);
+    for (const decl of decls) scanner.walk(decl, [], st);
     for (const u of st.reached) {
       if (u.damaged)
         errors.push(`${label} reaches ${u.display} (${u.file}), which does not parse cleanly`);

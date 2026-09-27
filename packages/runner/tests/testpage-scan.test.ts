@@ -1617,3 +1617,230 @@ describe("declaration-form completeness: every form that can hold a codeunit is 
     expect(got.errors.join("\n")).toContain("Hidden");
   });
 });
+
+// Run 003 (review r2): a name declared with different types in two `#if` arms kept only the LAST
+// type, so a test could walk the safe arm's codeunit and never the arm that opens a TestPage.
+describe("run 003: every #if arm's type of a name is walked, never only the last", () => {
+  const lib = (id: number, name: string, opens: boolean) =>
+    unit(
+      `
+    procedure Go()
+    var
+        C: TestPage "Z";
+    begin
+        ${opens ? "C.OpenView();" : ""}
+    end;`,
+      id,
+      name,
+      false,
+    );
+  const libs = [
+    { path: "opener.al", text: lib(50200, "Opener", true) },
+    { path: "safe.al", text: lib(50201, "Safe", false) },
+  ];
+  const arms = (first: string, second: string) =>
+    `#if OPENS\n        L: ${first};\n#else\n        L: ${second};\n#endif`;
+  const orders: Array<[string, string]> = [
+    ["Codeunit Opener", "Codeunit Safe"],
+    ["Codeunit Safe", "Codeunit Opener"],
+  ];
+  for (const [a, b] of orders) {
+    for (const call of ["L.Go();", "(L).Go();"]) {
+      test(`local, arms ${a} / ${b}, ${call}`, () => {
+        const got = analyze(
+          unit(`
+    [Test]
+    procedure T()
+    var
+${arms(a, b)}
+    begin
+        ${call}
+    end;`),
+          [ref(50100, "T")],
+          libs,
+        );
+        expect(got.errors).toEqual([]);
+        expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+      });
+      test(`global, arms ${a} / ${b}, ${call}`, () => {
+        const got = analyze(
+          unit(`
+    var
+${arms(a, b)}
+
+    [Test]
+    procedure T()
+    begin
+        ${call}
+    end;`),
+          [ref(50100, "T")],
+          libs,
+        );
+        expect(got.errors).toEqual([]);
+        expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+      });
+    }
+  }
+
+  test("shadowing holds: a local Safe in every arm hides a global Opener", () => {
+    const got = analyze(
+      unit(`
+    var
+        L: Codeunit Opener;
+
+    [Test]
+    procedure T()
+    var
+${arms("Codeunit Safe", "Codeunit Safe")}
+    begin
+        L.Go();
+    end;`),
+      [ref(50100, "T")],
+      libs,
+    );
+    expect(got.errors).toEqual([]);
+    expect(got.refused.size).toBe(0);
+  });
+
+  const pageArms: Array<[string, string]> = [
+    ['TestPage "X"', "Record Customer"],
+    ["Record Customer", 'TestPage "X"'],
+  ];
+  for (const [a, b] of pageArms) {
+    test(`arms ${a} / ${b}: the name is TestPage-typed`, () => {
+      const got = analyze(
+        unit(`
+    [Test]
+    procedure T()
+    var
+${arms(a, b)}
+    begin
+        L.OpenView();
+    end;`),
+        [ref(50100, "T")],
+      );
+      expect(got.errors).toEqual([]);
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    });
+  }
+
+  test("a test procedure declared in two #if arms walks both", () => {
+    const pairs: Array<[string, string]> = [
+      ["", "Opener"],
+      ["Opener", ""],
+    ];
+    for (const [a, b] of pairs) {
+      const body = (lib: string) => (lib === "" ? "        Message('');" : "        O.Go();");
+      const got = analyze(
+        unit(`
+    var
+        O: Codeunit Opener;
+
+#if OPENS
+    [Test]
+    procedure T()
+    begin
+${body(a)}
+    end;
+#else
+    [Test]
+    procedure T()
+    begin
+${body(b)}
+    end;
+#endif`),
+        [ref(50100, "T")],
+        libs,
+      );
+      expect(got.errors).toEqual([]);
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    }
+  });
+
+  test("a helper procedure declared in two #if arms: both are walked (already held)", () => {
+    for (const opensFirst of [true, false]) {
+      const helper = (opens: boolean) => `
+    local procedure Help()
+    var
+        C: TestPage "Z";
+    begin
+        ${opens ? "C.OpenView();" : "Message('');"}
+    end;`;
+      const got = analyze(
+        unit(`
+#if OPENS${helper(opensFirst)}
+#else${helper(!opensFirst)}
+#endif
+
+    [Test]
+    procedure T()
+    begin
+        Help();
+    end;`),
+        [ref(50100, "T")],
+      );
+      expect(got.errors).toEqual([]);
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    }
+  });
+
+  test("a helper codeunit declared in two #if arms: both are walked (already held)", () => {
+    for (const opensFirst of [true, false]) {
+      const helperCu = (opens: boolean) => lib(50202, "Helper", opens);
+      const got = analyze(
+        unit(`
+    var
+        H: Codeunit Helper;
+
+    [Test]
+    procedure T()
+    begin
+        H.Go();
+    end;`),
+        [ref(50100, "T")],
+        [
+          {
+            path: "helper.al",
+            text: `#if OPENS
+${helperCu(opensFirst)}
+#else
+${helperCu(!opensFirst)}
+#endif
+`,
+          },
+        ],
+      );
+      expect(got.errors).toEqual([]);
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    }
+  });
+
+  test("a test codeunit declared in two #if arms walks both", () => {
+    for (const opensFirst of [true, false]) {
+      const cu = (opens: boolean) => `codeunit 50100 "T"
+{
+    Subtype = Test;
+    var
+        O: Codeunit ${opens ? "Opener" : "Safe"};
+
+    [Test]
+    procedure T()
+    begin
+        O.Go();
+    end;
+}`;
+      const got = analyzeTestPageSources(
+        [
+          {
+            path: "t.al",
+            text: `#if OPENS\n${cu(opensFirst)}\n#else\n${cu(!opensFirst)}\n#endif\n`,
+          },
+          ...libs,
+        ],
+        [ref(50100, "T")],
+      );
+      expect(got.errors).toEqual([]);
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    }
+  });
+});
