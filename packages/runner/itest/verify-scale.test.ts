@@ -48,6 +48,7 @@ function mutant(overrides: Overrides & { mutantCode: string }): MutantOutcome {
 interface Extra {
   readonly batches?: number;
   readonly unsupportedTests?: readonly string[];
+  readonly quarantined?: { readonly reason: string };
 }
 
 function report(mutants: readonly MutantOutcome[], extra: Extra = {}): SessionReport {
@@ -56,6 +57,7 @@ function report(mutants: readonly MutantOutcome[], extra: Extra = {}): SessionRe
     batches: extra.batches ?? 1,
     unsupportedTests: extra.unsupportedTests ?? [],
     validity: { caveats: [] },
+    ...(extra.quarantined !== undefined ? { quarantined: extra.quarantined } : {}),
   } as unknown as SessionReport;
 }
 
@@ -137,6 +139,19 @@ describe("verdictDiffs", () => {
     expect(() => verdictDiffs([norm(K), norm(K)], report([K]))).toThrow(VerifyScaleError);
     const K2 = mutant({ ...K, mutantCode: "M0009" });
     expect(() => verdictDiffs([norm(K)], report([K, K2]))).toThrow(VerifyScaleError);
+  });
+
+  // The R270 s1 anomaly: a session quarantined before scoring returns a report with NO mutants
+  // (orchestrator.test.ts pins that), and the diff read it as every baseline key "missing".
+  test("a quarantined report throws naming the reason, never a list of missing keys", () => {
+    const q = report([], { quarantined: { reason: "baseline test in-flight-unknown running X" } });
+    expect(() => verdictDiffs([norm(K), norm(S)], q)).toThrow(
+      /quarantined: baseline test in-flight-unknown running X/,
+    );
+  });
+
+  test("a report with no mutants against a non-empty baseline throws", () => {
+    expect(() => verdictDiffs([norm(K)], report([]))).toThrow(/no mutants/);
   });
 });
 

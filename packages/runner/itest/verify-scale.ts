@@ -49,12 +49,32 @@ export function firstSurvivorIds(report: SessionReport, expected: number, k: num
   return all.slice(0, k);
 }
 
+/** One line for the log, printed BEFORE any diff: a quarantined or empty run shows here. */
+export function runSummary(report: SessionReport): string {
+  const c = report.counts;
+  const q = report.quarantined !== undefined ? `, QUARANTINED: ${report.quarantined.reason}` : "";
+  return `${report.mutants.length} mutants, killed/survived/noCoverage ${c.killed}/${c.survived}/${c.noCoverage}, errors ${c.errors}${q}`;
+}
+
 /** Per-identity VERDICT differences only (never killingTest). Throws on a key present twice on
- *  either side. Returns one line per missing, extra or differing key. */
+ *  either side, on a quarantined report, and on a report with no mutants against a non-empty
+ *  baseline: a session quarantined before scoring returns zero mutants, which a diff would
+ *  otherwise print as every baseline key "missing" (R270 s1). Returns one line per missing, extra
+ *  or differing key. */
 export function verdictDiffs(
   committed: readonly NormalizedMutant[],
   report: SessionReport,
 ): string[] {
+  if (report.quarantined !== undefined) {
+    throw new VerifyScaleError(
+      `the run quarantined: ${report.quarantined.reason}; its ${report.mutants.length} mutant(s) are not a measurement`,
+    );
+  }
+  if (report.mutants.length === 0 && committed.length > 0) {
+    throw new VerifyScaleError(
+      `the report has no mutants against a baseline of ${committed.length}: nothing was scored`,
+    );
+  }
   const index = (pairs: ReadonlyArray<readonly [string, string]>, side: string) => {
     const m = new Map<string, string>();
     for (const [k, v] of pairs) {

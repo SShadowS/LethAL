@@ -64,6 +64,7 @@ import {
   firstSurvivorIds,
   foldLibraryTimeline,
   noOpTestCodeunit,
+  runSummary,
   verdictDiffs,
   worstRatio,
 } from "./verify-scale";
@@ -330,6 +331,7 @@ async function main(): Promise<void> {
       // ---- 3. Source run A, committed suite.
       began.push({ leg: "A", path: aDb });
       const { report: a, outerMs: aOuterMs } = await fullRun("a", aDb, TEST_DIR);
+      console.log(`step 3: A ${runSummary(a)}`);
       const committed = JSON.parse(await readFile(BASELINE_PATH, "utf8")) as NormalizedMutant[];
       const aDiffs = verdictDiffs(committed, a);
       assert.deepEqual(
@@ -431,6 +433,7 @@ async function main(): Promise<void> {
       ] as const) {
         began.push({ leg, path: db });
         const { report: b, outerMs } = await fullRun(leg.toLowerCase(), db, scratchTests);
+        console.log(`step 7: ${leg} ${runSummary(b)}`);
         assertFreshFullRun(b);
         const d = verdictDiffs(committed, b);
         assert.deepEqual(
