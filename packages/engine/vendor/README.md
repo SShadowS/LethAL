@@ -472,7 +472,23 @@ figures; this repository has no corpus that witnesses it happening here.
 
 ### Landing gates
 
-Filled in by Task 7.
+| gate | frozen figures | result |
+| --- | --- | --- |
+| `itest:bcdev` | killed 3 / survived 12 / no-coverage 4, `baselineGreen=true`, protocol-invariant probes PASS | PASS |
+| `itest:chunked` | both legs 17 / 7 / 2, errors 0; control `warmKills` 9 / `groupedCalls` 33, chunked leg `warmKills` 5 / `groupedCalls` 57 | PASS |
+| `itest:alrunner` | 3 / 12 / 4 on all four legs, `--server` and resource-selector legs identical to one-shot; build `al-runner v2.11.0` | PASS |
+
+Measured by the controller on the merged tree `b995f89` (includes master `bc62877`; Cronus28,
+lease attempt 053, released). `lethal doctor` all ok; control app 1.0.0.20 (>=
+`MIN_CONTROL_VERSION` 1.0.0.20); alc 18.0.41.45789. Unit suite on the merged tree: typecheck clean,
+`bun test` 0 fail / 7 skip over 3851 tests. No baseline was deleted, regenerated or edited.
+
+`itest:tables`, `itest:lease` and `itest:stale-publish` were NOT run for this bump, by ruling
+(only `itest:bcdev`, `itest:chunked` and `itest:alrunner` are the landing set). `itest:tables` is
+owed by the combined check after the GH-24 re-record and R-236c, which must show 0
+grammar-attributable differences (P3 predicts `sandbox-data` unchanged: 407 raw / 387 deployed,
+identity keys byte-identical). `itest:lease` and `itest:stale-publish` pin no per-mutant baseline,
+so this bump does not owe them a re-run.
 
 ## Bumping the vendored WASM
 
