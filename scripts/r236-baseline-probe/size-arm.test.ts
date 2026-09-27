@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CallTrace } from "./fetch-trace";
 import {
+  classifyDispatch,
   keepOriginalBody,
   keptCheckRecord,
   keptCheckVerdict,
@@ -65,6 +66,39 @@ describe("selectOriginalTrace", () => {
         trace({ action: "LethALControl_RunMutantWithCoverage" }),
       ]),
     ).toBeUndefined();
+  });
+});
+
+describe("classifyDispatch", () => {
+  // Review r1: this is the exact shape `dispatchOne` must classify correctly. `added.at(-1)` (the old
+  // `calls.at(-1)` bug) would pick the clean recovery trace and read `broke` as false, hiding a real
+  // break behind a GetOpAnswer readback for the SAME attempt id.
+  test("a lost body recovered by a clean GetOpAnswer readback is still a break", () => {
+    const added: CallTrace[] = [
+      trace({ action: "LethALControl_RunMutantWithCoverage", errorPhase: "body" }),
+      trace({ action: "LethALControl_GetOpAnswer", headersAt: 5, bodyEndAt: 6 }),
+    ];
+    const result = classifyDispatch(added);
+    expect(result.broke).toBe(true);
+    expect(result.trace).toBe(added[0]);
+    expect(result.traceAmbiguous).toBe(false);
+  });
+
+  test("ambiguous (not exactly one original-action trace) is conservative: treated as a break", () => {
+    expect(classifyDispatch([])).toEqual({ trace: undefined, traceAmbiguous: true, broke: true });
+    expect(
+      classifyDispatch([
+        trace({ action: "LethALControl_RunMutantWithCoverage" }),
+        trace({ action: "LethALControl_RunMutantWithCoverage" }),
+      ]).broke,
+    ).toBe(true);
+  });
+
+  test("a clean original trace, with no recovery readback, is not a break", () => {
+    const added: CallTrace[] = [trace({ action: "LethALControl_RunMutantWithCoverage" })];
+    const result = classifyDispatch(added);
+    expect(result.broke).toBe(false);
+    expect(result.traceAmbiguous).toBe(false);
   });
 });
 

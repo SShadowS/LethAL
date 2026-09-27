@@ -174,6 +174,25 @@ export function selectOriginalTrace(added: readonly CallTrace[]): CallTrace | un
   return originals.length === 1 ? originals[0] : undefined;
 }
 
+/**
+ * Pure (review r1, the `dispatchOne` fix): the classification `dispatchOne` needs from the traces ONE
+ * dispatch added, via `selectOriginalTrace` rather than `added.at(-1)`. After a lost body that
+ * `runWithCoverage` recovers internally, the traces added are `[original (broken), recovery
+ * GetOpAnswer (clean)]`; `at(-1)` would read the clean recovery trace and hide the break from the A2
+ * arm's classification. An ambiguous resolution (not exactly one original-action trace) is
+ * conservative: treated as a break, and `traceAmbiguous` records why on the call line.
+ */
+export function classifyDispatch(added: readonly CallTrace[]): {
+  readonly trace: CallTrace | undefined;
+  readonly traceAmbiguous: boolean;
+  readonly broke: boolean;
+} {
+  const trace = selectOriginalTrace(added);
+  const broke =
+    trace === undefined ? true : trace.errorPhase === "body" || trace.errorPhase === "fetch";
+  return { trace, traceAmbiguous: trace === undefined, broke };
+}
+
 /** One `--kept-check` call's outcome, as `keptCheckRecord` classifies it. */
 export type KeptCheckCall =
   | {
@@ -487,7 +506,9 @@ async function main(): Promise<void> {
   let wedged = false;
 
   /** One dispatch of `ref` under `filter`. A throw (e.g. malformed coverage) leaves outcome/operation
-   *  null; `broke` reads only the trace's own `errorPhase`, which `fetch-trace` sets independently. */
+   *  null; `broke` comes from `classifyDispatch` over the traces THIS dispatch added (review r1: never
+   *  `calls.at(-1)`, which after a lost body is the transport's own recovery `GetOpAnswer` readback and
+   *  would hide a broken body behind a clean read). */
   const dispatchOne = async (
     ref: TestMethodRef,
     attemptId: string,
@@ -496,6 +517,7 @@ async function main(): Promise<void> {
   ): Promise<{
     broke: boolean;
     trace: CallTrace | undefined;
+    traceAmbiguous: boolean;
     opSeq: number;
     outcome: string | null;
     operation: string | null;
@@ -503,6 +525,7 @@ async function main(): Promise<void> {
     const lease = fence();
     let outcome: string | null = null;
     let operation: string | null = null;
+    const before = calls.length;
     try {
       const result = await tx.runWithCoverage({
         ref,
@@ -517,9 +540,8 @@ async function main(): Promise<void> {
     } catch {
       // handled below via the trace's own error fields
     }
-    const trace = calls.at(-1);
-    const broke = trace?.errorPhase === "body" || trace?.errorPhase === "fetch";
-    return { broke, trace, opSeq: lease.opSeq, outcome, operation };
+    const { trace, traceAmbiguous, broke } = classifyDispatch(calls.slice(before));
+    return { broke, trace, traceAmbiguous, opSeq: lease.opSeq, outcome, operation };
   };
 
   /** One arm of one pair: dispatch, record the `call` line, and on a break read the status and the
@@ -542,6 +564,7 @@ async function main(): Promise<void> {
       error: r.trace?.error ?? null,
       outcome: r.outcome,
       operation: r.operation,
+      traceAmbiguous: r.traceAmbiguous,
     });
     if (!r.broke) return false;
     if (arm === "T") tBreaks++;
