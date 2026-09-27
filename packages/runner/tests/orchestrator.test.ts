@@ -1943,6 +1943,9 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   });
   // A resume whose every batch carries runs no baseline at all, so no baseline row can name the
   // refused test. The report still names it, from the session's own scan, and only once.
+  // Run 002, review r1 #3: this test used to pin `baselineGreen` TRUE here, a wrong reading. A
+  // refused test is a test of the suite that does not pass, resumed or not, so the resumed report
+  // must say what the first run said: baseline not green, `baseline-red`, degraded.
   test("resume: an all-carried resume still names the refused test and the caveat", async () => {
     const dirs = await project();
     const store = new ResultsStore(":memory:");
@@ -1973,9 +1976,19 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
       "tests-testpage-refused",
     ]);
-    expect(report.baselineGreen).toBe(true);
+    expect(first.baselineGreen).toBe(false);
+    expect(report.baselineGreen).toBe(false);
+    expect(report.validity.caveats).toContain("baseline-red");
+    expect(report.validity.caveats).toEqual([...first.validity.caveats, "resumed"]);
+    expect(report.validity.reliability).toBe(first.validity.reliability);
+    const rows = store.db.query("SELECT baseline_green AS g FROM runs ORDER BY id").all() as Array<{
+      g: number;
+    }>;
+    expect(rows.map((r) => r.g)).toEqual(rows.map(() => 0));
+    // The same sentence as the first run, which ran the baseline.
+    expect(report.validity.scoreDescribes).toBe(first.validity.scoreDescribes);
     expect(report.validity.scoreDescribes).toEndWith(
-      ", with 1 test(s) refused before sending (TestPage), not run",
+      "with 0 of 2 baseline tests failing and 1 refused before sending (TestPage), not run",
     );
   });
   // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a

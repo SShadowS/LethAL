@@ -4130,7 +4130,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
-  let baselineGreenOverall = true;
+  // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
+  // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
+  let baselineGreenOverall = testPageRefusedNames.length === 0;
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the

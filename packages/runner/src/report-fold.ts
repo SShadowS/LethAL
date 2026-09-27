@@ -341,6 +341,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         // R-236c: the session's scan. The Set means a baseline row naming the same test adds
         // nothing, so a test is counted once whether or not a baseline ran.
         for (const t of e.tests) testPageRefusedTests.add(t);
+        // A refused test does not pass, so the baseline is not green, also on a resume whose
+        // every batch carries and so runs no baseline (run 002, review r1 #3).
+        if (e.tests.length > 0) baselineGreen = false;
         break;
       case "tests-discovered":
         baselineTests = e.tests.map((t) => ({
