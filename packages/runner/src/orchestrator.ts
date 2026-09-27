@@ -117,6 +117,7 @@ import {
   carriedVerdictFor,
   sessionFingerprint,
   wasStranded,
+  withoutRefusedTests,
 } from "./resume";
 import type { ResumeIndex } from "./resume";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
@@ -144,7 +145,12 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { describeTestPageUnsupported } from "./testpage-unsupported";
+import { scanTestPageTests } from "./testpage-scan";
+import {
+  describeTestPageUnsupported,
+  isTestPageNotRunMessage,
+  testPageNotRunMessage,
+} from "./testpage-unsupported";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -2855,6 +2861,8 @@ function resolveResume(
   backendName: string,
   configFingerprint: string,
   emit: RunEmitter,
+  /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
+  refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
 ): { runId: number; index: ResumeIndex } | undefined {
   if (cfg.resume === undefined) return undefined;
 
@@ -2899,10 +2907,17 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
-  const index = buildResumeIndex(
-    cfg.store.mutantVerdicts(priorRunId),
-    cfg.stopHungSessions === true,
+  const { index, dropped: refusedDropped } = withoutRefusedTests(
+    buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
+    refusedTests,
   );
+  if (refusedDropped > 0) {
+    emit({
+      type: "warning",
+      code: "resume-testpage-rescored",
+      message: `[lethal] --resume: ${refusedDropped} prior verdict(s) from run ${priorRunId} were measured with a test this session refuses because it has a reachable call that may open a TestPage (${refusedTests.map((t) => t.qualifiedName).join(", ")}). They are not carried; each is scored again without that test (R-236c).`,
+    });
+  }
   emit({
     type: "warning",
     code: "resume-reusing-run",
@@ -2988,6 +3003,11 @@ interface BatchScope {
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
   readonly baselineTimeoutMs: number;
+  /**
+   * R-236c: `testKeyOf(ref)` to the reason, for each test with a reachable call that may open a
+   * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
+   */
+  readonly testPageRefused?: ReadonlyMap<string, string>;
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 /** What `select` hands the covering loop: the mutants to run and everything that orders them. */
@@ -3253,6 +3273,18 @@ async function runLeaseHook(a: {
 }
 
 /**
+ * R-236c: the synthetic `skip` for a test with a reachable call that may open a TestPage, or
+ * `undefined` when the test is not refused. Shared by a fresh baseline and a reused one, so a
+ * `--resume` cannot bring back as green a test this session refuses.
+ */
+function testPageRefusedVerdict(scope: BatchScope, ref: TestMethodRef): TestVerdict | undefined {
+  const reason = scope.testPageRefused?.get(testKeyOf(ref));
+  return reason === undefined
+    ? undefined
+    : { ref, outcome: "skip", durationMs: 0, failureMessage: testPageNotRunMessage(reason) };
+}
+
+/**
  * One unmutated run of `ref` (no mutant active), recorded as a baseline row, with the lease and
  * in-flight rules a baseline run needs. `stop: true` means the session can do nothing more: the
  * lease answer was handled or the run was quarantined in flight, and `verdict` is not a result.
@@ -3273,6 +3305,14 @@ async function dispatchUnmutated(
     store,
     runId,
   } = scope;
+  // R-236c: a test with a reachable call that may open a TestPage is never sent. Its verdict is a
+  // synthetic `skip` carrying the reason, recorded like any baseline row, so the report names it and
+  // nothing downstream mistakes it for an answer from BC.
+  const refused = testPageRefusedVerdict(scope, ref);
+  if (refused !== undefined) {
+    store.recordTestResult(runId, null, null, ref, "skip", 0, refused.failureMessage);
+    return { verdict: refused, stop: false };
+  }
   const v = await runOnce(
     backend,
     safety,
@@ -3399,6 +3439,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
+    // R-236c: a snapshot is found by its two hashes from ANY run, so it can come from a run with a
+    // wider --tests-only. The TestPage scan read only this session's tests, so a saved row for any
+    // other test is DROPPED: it must not come back green and be sent. A snapshot missing one of
+    // this session's tests is not reused at all, since that test would then never be measured.
+    if (reused !== undefined) {
+      const inScope = new Set(tests.map(testKeyOf));
+      const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
+      reused =
+        new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
+          ? { ...reused, baseline: kept }
+          : undefined;
+    }
     snapshotKey = { batchHash, testAppHash };
     if (reused !== undefined) {
       emit({
@@ -3406,7 +3458,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         code: "resume-baseline-reused",
         message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
       });
-      for (const b of reused.baseline) {
+      for (const saved of reused.baseline) {
+        // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
+        // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
+        // its stored coverage is dropped with it, so it can never enter a covering set.
+        const refused = testPageRefusedVerdict(scope, saved.ref);
+        const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
         baseline.push(b);
         store.recordTestResult(
           runId,
@@ -3506,6 +3563,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
       if (describeStaleTestApp(b.verdict.failureMessage) !== undefined) {
         classification.push("stale-test-app");
+      }
+      if (isTestPageNotRunMessage(b.verdict.failureMessage)) {
+        classification.push("tests-testpage-refused");
       }
       return {
         name: qualifiedTestName(b.ref),
@@ -3868,6 +3928,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
+  // R-236c: before the run row and before any test is sent (status and quarantine checks run
+  // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
+  // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
+  // source a test can reach cannot be read: an unread test is not sent.
+  const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
+    ? await scanTestPageTests(cfg.testDir, tests)
+    : new Map();
+  const testPageRefusedNames = tests
+    .filter((t) => testPageRefused.has(testKeyOf(t)))
+    .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
+  if (testPageRefusedNames.length > 0) {
+    emit({
+      type: "tests-testpage-refused",
+      tests: testPageRefusedNames.map((t) => t.qualifiedName),
+    });
+  }
 
   // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named
   // in seconds rather than after a full baseline round trip. Reports, never refuses — check 1 owns
@@ -3901,7 +3977,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { preprocessorSymbols: cfg.preprocessorSymbols }
       : {}),
   });
-  const resumeState = resolveResume(cfg, backendName, configFingerprint, emit);
+  const resumeState = resolveResume(
+    cfg,
+    backendName,
+    configFingerprint,
+    emit,
+    testPageRefusedNames,
+  );
 
   const runId = cfg.store.createRun({
     projectPath: cfg.projectDir,
@@ -4048,7 +4130,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   });
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
-  let baselineGreenOverall = true;
+  // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
+  // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
+  let baselineGreenOverall = testPageRefusedNames.length === 0;
   // Math.floor: a fractional workers value (e.g. 2.5) would otherwise reach
   // shardEvenly's `Array.from({ length: n }, ...)`, which silently truncates
   // to a shorter array than `i % n` can index into — mutants landing on the
@@ -4223,6 +4307,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       groupRuns,
       minMutantBudgetMs,
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      testPageRefused,
     };
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
@@ -5275,6 +5360,14 @@ export interface NamedMutantsConfig {
    * which drops a red method and scores the mutant on the rest.
    */
   readonly requireEveryMethodGreen?: boolean;
+  /**
+   * R-236c: tests with a reachable call that may open a TestPage, by `testKeyOf`, each with its
+   * reason. Never sent: their baseline and rerun are the synthetic refused `skip`, so they are
+   * never green and never run against a mutant. `lethal verify` never plans one; this is the guard.
+   * REQUIRED, empty when nothing is refused (run 002, review r1 #2): an optional map let a direct
+   * caller send a TestPage test. A call without it is refused before anything is read or sent.
+   */
+  readonly testPageRefused: ReadonlyMap<string, string>;
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -5346,6 +5439,12 @@ function unmutatedRun(
  */
 export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMutantsResult> {
   const who = "runNamedMutants";
+  // The type requires it; this catches an untyped caller (run 002, review r1 #2).
+  if (!(cfg.testPageRefused instanceof Map)) {
+    throw new NamedMutantError(
+      `${who}: testPageRefused is required (the R-236c TestPage scan of the test app, empty when nothing is refused); without it a test that opens a TestPage could be sent`,
+    );
+  }
   const { backend, store, runId, installed } = cfg;
   // Everything up to `status()` reads only the store, local files and the request.
   // Review r1 fix 1: rows written under a finished run, or under the source run, would be read
@@ -5480,6 +5579,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       groupRuns,
       minMutantBudgetMs,
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      testPageRefused: cfg.testPageRefused,
     };
     // Scored or not, `safety.isUnsafe` is read below: "scored" is returned even when the covering
     // loop latched, and every request the latch stopped is answered there.

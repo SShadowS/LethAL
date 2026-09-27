@@ -34,6 +34,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { discoverTests } from "../src/discovery";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { loadInstalledArtifact } from "../src/named-mutants";
@@ -47,6 +48,7 @@ import { StaleTestAppError } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "../src/test-app-publish";
+import { scanTestPageTests } from "../src/testpage-scan";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
@@ -215,6 +217,8 @@ async function main(): Promise<void> {
     resourceServerInstance: bcdev.serverInstance,
     // A SCRATCH quarantine dir, never ~/.lethal/quarantine, for the reason bcdev.itest.ts gives.
     quarantineDir,
+    // Required (R-236c): the same scan `lethal run` and `lethal verify` apply before sending.
+    testPageRefused: await scanTestPageTests(TEST_DIR, await discoverTests(TEST_DIR)),
   };
   const instrumentedDir = join(scratch, "instrumented");
   const store = new ResultsStore(join(scratch, "testapp.sqlite"));

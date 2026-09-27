@@ -42,6 +42,7 @@ import {
 } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { discoverTests } from "../src/discovery";
 import type { EquivalenceMark } from "../src/equivalence-marks";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
@@ -52,6 +53,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import type { PublishedTestApp } from "../src/test-app-publish";
+import { scanTestPageTests } from "../src/testpage-scan";
 import { VERIFY_EXIT } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { itestConfigName, itestConfigPath } from "./config-path";
@@ -761,6 +763,8 @@ async function main(): Promise<void> {
         runId,
         installed,
         requests: [{ mutantId: s1.mutantId, methods: [RESTORE_METHOD] }],
+        // Required (R-236c): the same scan `lethal run` and `lethal verify` apply before sending.
+        testPageRefused: await scanTestPageTests(TEST_DIR, await discoverTests(TEST_DIR)),
         lease,
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,

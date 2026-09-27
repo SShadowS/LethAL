@@ -921,25 +921,35 @@ function assertVerdictTable(report: SessionReport): void {
     console.log(`  quarantined: ${JSON.stringify(report.quarantined)}`);
   }
 
-  // R78 turned this from a blanket `baselineGreen === true` into an EXACT statement of the one
-  // expected failure. Flipping it to `false` would have been the lazy update and would have gutted
-  // the guard: any newly-broken fixture test would then pass unnoticed. The fixture now contains
-  // exactly one test that CANNOT run on the fenced path — `PageActionComputesNonZero` opens a
-  // TestPage, which this session type refuses — so the honest assertion is "exactly that one fails,
-  // by name, for that reason", which still catches every other regression.
-  assert.equal(
-    report.unsupportedTests.length,
-    1,
-    `expected exactly 1 baseline failure (the TestPage test), got ${report.unsupportedTests.length}: ${report.unsupportedTests.join(", ")}`,
+  // R-236c replaced R78's "exactly one baseline FAILURE" with "exactly one TestPage refusal, NOT
+  // RUN". `PageActionComputesNonZero` has a reachable call that may open a TestPage; sending it into
+  // the fenced session lost its reply and wedged the container repeatedly (R236), so LethAL now
+  // refuses it from source before sending. The guard keeps its strength: ANY test failing at
+  // baseline fails the gate (the list must be empty), the refusal is named, by name, and BC's own
+  // TestPage refusal must be ABSENT, which is what shows the test was never sent.
+  assert.deepEqual(
+    report.unsupportedTests,
+    [],
+    `expected no baseline failure, got ${report.unsupportedTests.length}: ${report.unsupportedTests.join(", ")}`,
   );
-  assert.equal(
-    report.unsupportedTests[0],
-    "Data Tests.PageActionComputesNonZero",
-    "the only permitted baseline failure is the TestPage test",
+  assert.deepEqual(
+    report.testPageRefused?.tests,
+    ["Data Tests.PageActionComputesNonZero"],
+    "the only refused test must be the TestPage test, by name",
   );
   assert.ok(
-    report.validity.caveats.includes("tests-testpage-unsupported"),
-    "the TestPage refusal must be NAMED in the report, not left as an unexplained baseline failure",
+    report.validity.caveats.includes("tests-testpage-refused"),
+    "the refusal must be NAMED in the report",
+  );
+  assert.ok(
+    !report.validity.caveats.includes("tests-testpage-unsupported"),
+    "BC refused a TestPage test, so one was SENT: the pre-refusal did not engage",
+  );
+  assert.equal(report.validity.baselineTests.failing, 0, "failing counts real failures only");
+  assert.equal(
+    report.baselineGreen,
+    false,
+    "a refused test is not a green one: baselineGreen keeps its meaning (every discovered test passed)",
   );
   assert.equal(report.counts.killed, EXPECTED.killed, "killed count mismatch");
   assert.equal(report.counts.survived, EXPECTED.survived, "survived count mismatch");

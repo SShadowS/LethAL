@@ -208,12 +208,13 @@ branch.** The three constructs differ: `Message` is a no-op, `Confirm` forces it
 the non-default arm is the unreachable one, and `Page.RunModal` errors.
 
 **"Does it work with TestPage tests?"**
-No, and it says so. A `TestPage` test cannot be scored; on the default fenced path one can hang and
-quarantine the whole run. The mitigation is `coverageMode: "procedure"`, which completes but runs
-the hub GUI-allowed, so it can disagree with the fenced runner about a test's outcome. Mutant
-verdicts always execute on the fenced path, so a mutant covered only by TestPage tests receives no
-verdict and is reported unscoreable rather than guessed at. Recovery was measured at **2.30% of a
-real app's mutants** and the routed path was deleted rather than kept as a half-answer.
+No, and it says so. A test that has a reachable call that may open a `TestPage` is refused before
+it is sent, in every coverage mode, and the report names it as not run. A page LethAL's static scan
+cannot see, such as one opened only through a handler function or a helper outside the test app, is
+still sent as before, and on the default fenced path one can hang and quarantine the whole run.
+Mutant verdicts always execute on the fenced path, so a mutant covered only by a refused test
+receives no verdict and is reported `no-coverage` rather than guessed at. Recovery was measured at
+**2.30% of a real app's mutants** and the routed path was deleted rather than kept as a half-answer.
 
 **"Is a survivor a bug?"**
 No. It is a lead. What HAS been established on a real product: coverage selection does not hide

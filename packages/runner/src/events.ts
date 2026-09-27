@@ -51,10 +51,14 @@ export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardow
  * `bun run typecheck` here, so a purely type-level coupling is invisible to the test runner
  * (R115). The array below is the runtime half: `events.test.ts` walks it against
  * `CAVEAT_INTERPRETATIONS`'s own keys, so a drift reddens `bun test` too, not only `tsc`.
+ *
+ * `tests-testpage-refused` (R-236c) is keyed on the exact `TESTPAGE_NOT_RUN_PREFIX`, not on
+ * outcome, because its verdict is a synthetic `skip`.
  */
 export const BASELINE_CLASSIFICATIONS = [
   "tests-permission-refused",
   "tests-testpage-unsupported",
+  "tests-testpage-refused",
   "stale-test-app",
 ] as const satisfies readonly Caveat[];
 
@@ -166,6 +170,16 @@ export type RunEventInput =
        *  would be false granularity, not liveness. */
       readonly type: "tests-discovered";
       readonly tests: readonly TestMethodRef[];
+    }
+  | {
+      /**
+       * R-236c: the session's own scan, emitted once before anything is sent and only when it
+       * refused a test: every test not sent because it has a reachable call that may open a
+       * TestPage, by qualified name. A baseline row also names each one it runs; this event is what
+       * names them when no baseline runs at all (a resume whose every batch carries).
+       */
+      readonly type: "tests-testpage-refused";
+      readonly tests: readonly string[];
     }
   | {
       readonly type: "batch-published";

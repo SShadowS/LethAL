@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { unsupportedCoverageNote } from "../src/orchestrator";
+import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
-import { describeTestPageUnsupported } from "../src/testpage-unsupported";
+import { describeStaleTestApp } from "../src/stale-test-app";
+import {
+  TESTPAGE_REFUSED_DIAGNOSIS,
+  describeTestPageUnsupported,
+  isTestPageNotRunMessage,
+  testPageNotRunMessage,
+} from "../src/testpage-unsupported";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
@@ -127,6 +134,36 @@ describe("describeTestPageUnsupported (R69)", () => {
       "supported. at Microsoft.Dynamics.Nav.Runtime.NavStream.Seek()";
     expect(describeTestPageUnsupported(unrelated)).toBeUndefined();
   });
+
+  test("R-236c: the not-run message is recognised by prefix and trips neither older diagnosis", () => {
+    const m = testPageNotRunMessage('T.X calls Card.OpenView on TestPage "X"');
+    expect(isTestPageNotRunMessage(m)).toBe(true);
+    expect(isTestPageNotRunMessage("some other failure")).toBe(false);
+    expect(isTestPageNotRunMessage(undefined)).toBe(false);
+    expect(describeTestPageUnsupported(m)).toBeUndefined();
+    expect(describeTestPermissionsRefusal(m)).toBeUndefined();
+    expect(describeStaleTestApp(m)).toBeUndefined();
+  });
+
+  test("R-236c: the diagnosis states the static policy, not a runtime claim", () => {
+    expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("reachable call that may open a TestPage");
+    expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("GuiAllowed");
+  });
+
+  test("R-236c: the diagnosis names the scanner's documented limits and its safety-first refusals", () => {
+    for (const limit of [
+      "handler function",
+      "outside the test app or in a non-codeunit object",
+      "Codeunit.Run",
+      "event subscriber",
+      "interface dispatch",
+      "`B := Helper;`",
+      "receiver the scanner cannot resolve",
+      "`with` statement",
+    ]) {
+      expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain(limit);
+    }
+  });
 });
 
 describe("SessionReport.testPageUnsupported (R69)", () => {
@@ -172,6 +209,22 @@ describe("SessionReport.testPageUnsupported (R69)", () => {
 
   test("the console report says nothing when no test hit the refusal", () => {
     expect(renderConsole(build())).not.toContain("TESTPAGE UNSUPPORTED");
+  });
+
+  test("R-236c: the console report names tests refused before sending, apart from BC's refusal", () => {
+    // The legacy builder predates the field, so the report is built and the field set on it.
+    const text = renderConsole({
+      ...build(),
+      testPageRefused: { tests: ["Tests.OpensPage"], diagnosis: TESTPAGE_REFUSED_DIAGNOSIS },
+    });
+    expect(text).toContain("TESTPAGE REFUSED, NOT RUN: 1 test(s) were not sent.");
+    expect(text).toContain(TESTPAGE_REFUSED_DIAGNOSIS);
+    expect(text).toContain("  Tests.OpensPage");
+    expect(text).not.toContain("TESTPAGE UNSUPPORTED");
+  });
+
+  test("R-236c: the console report says nothing when no test was refused before sending", () => {
+    expect(renderConsole(build())).not.toContain("TESTPAGE REFUSED");
   });
 });
 

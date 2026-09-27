@@ -450,6 +450,29 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "tests",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tests-testpage-refused"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "guardCount",
         "elapsedMs",
@@ -554,6 +577,7 @@
                   "enum": [
                     "tests-permission-refused",
                     "tests-testpage-unsupported",
+                    "tests-testpage-refused",
                     "stale-test-app"
                   ]
                 }

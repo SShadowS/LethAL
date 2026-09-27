@@ -179,8 +179,10 @@ import type { MutantVerdict } from "./store";
  * cannot ship silently.
  * C02-09 added `gaps`, `noCoverageBlocks` and `survivors[].gapId`, fields only;
  * `gaps[].artifactIdAbsent` reuses the survivor's domain; no bump.
+ *
+ * 6: R-236c added the caveat value `tests-testpage-refused`.
  */
-export const EXPLAIN_SCHEMA_VERSION = 5;
+export const EXPLAIN_SCHEMA_VERSION = 6;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

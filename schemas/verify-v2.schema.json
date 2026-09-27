@@ -149,6 +149,11 @@
             "description": "Qualified names sent to runNamedMutants.",
             "items": { "type": "string" }
           },
+          "notRun": {
+            "type": "array",
+            "description": "R-236c: qualified names of requested methods not sent, each with a reachable call that may open a TestPage.",
+            "items": { "type": "string" }
+          },
           "invalidBaseline": {
             "type": "array",
             "description": "Requested methods without a valid green unmutated run; the mutant is then error.",
@@ -248,6 +253,16 @@
           ]
         },
         "detail": { "type": "string" }
+      }
+    },
+    "testPageRefused": {
+      "type": "object",
+      "description": "R-236c: every discovered test not sent because it has a reachable call that may open a TestPage. Absent when none was refused.",
+      "additionalProperties": false,
+      "required": ["tests", "diagnosis"],
+      "properties": {
+        "tests": { "type": "array", "items": { "type": "string" } },
+        "diagnosis": { "type": "string" }
       }
     },
     "timings": {

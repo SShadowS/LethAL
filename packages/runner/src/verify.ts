@@ -34,6 +34,8 @@ import {
   TestAppError,
   type TestAppRefusal,
 } from "./test-app-publish";
+import { scanTestPageTests } from "./testpage-scan";
+import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -544,8 +546,8 @@ export async function assertSourceUnchanged(
 }
 
 export interface VerifyPlan {
-  /** One request per survivor that runs. `[]` only when every target was skipped, and then
-   *  `skipped` is non-empty: an empty request is refused, never planned. */
+  /** One request per survivor that runs. `[]` only when every target was skipped or all-refused,
+   *  and then `skipped` or `allRefused` is non-empty: an empty request is refused, never planned. */
   readonly requests: readonly NamedMutantRequest[];
   readonly newTests: readonly TestMethodRef[];
   readonly skipped: ReadonlyArray<{
@@ -554,6 +556,13 @@ export interface VerifyPlan {
   }>;
   /** Every target's trusted manifest entry, skipped or not, by mutant code. */
   readonly entries: ReadonlyMap<string, MutantManifestEntry>;
+  /** R-236c: every discovered test with a reachable call that may open a TestPage, by
+   *  `testKeyOf`. None of them is planned. */
+  readonly testPageRefused: ReadonlyMap<string, { readonly test: string; readonly reason: string }>;
+  /** R-236c: mutant code to the qualified names of the requested methods refused for it. */
+  readonly notRun: ReadonlyMap<string, readonly string[]>;
+  /** R-236c: mutant codes with no method left once the refused ones are taken out. */
+  readonly allRefused: ReadonlySet<string>;
 }
 
 /**
@@ -601,7 +610,17 @@ export async function planVerify(a: {
     if (mark !== undefined) skipped.push({ entry, mark });
     else running.push(t);
   }
-  if (running.length === 0) return { requests: [], newTests: [], skipped, entries };
+  if (running.length === 0) {
+    return {
+      requests: [],
+      newTests: [],
+      skipped,
+      entries,
+      testPageRefused: new Map(),
+      notRun: new Map(),
+      allRefused: new Set(),
+    };
+  }
 
   if (sourceBaseline.length === 0) {
     throw new VerifyError(
@@ -623,7 +642,24 @@ export async function planVerify(a: {
       testKeyOf({ codeunitId: r.codeunitId, codeunitName: "", method: r.method }),
     ),
   );
-  const newTests = discovered.filter((ref) => !baselineKeys.has(testKeyOf(ref)));
+  // R-236c: verify runs fenced, so a test with a reachable call that may open a TestPage is never
+  // planned. Throws TestPageScanError on unreadable reachable source, before anything is published.
+  // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
+  // VERIFY_REFUSALS keeps its value set.
+  const refusedWhy = await scanTestPageTests(testDir, discovered);
+  const testPageRefused = new Map(
+    discovered.flatMap((ref) => {
+      const reason = refusedWhy.get(testKeyOf(ref));
+      return reason === undefined
+        ? []
+        : [[testKeyOf(ref), { test: qualifiedTestName(ref), reason }] as const];
+    }),
+  );
+  const isRefused = (ref: TestMethodRef) => testPageRefused.has(testKeyOf(ref));
+  const newTests = discovered.filter((ref) => !baselineKeys.has(testKeyOf(ref)) && !isRefused(ref));
+  const refusedNew = discovered.filter(
+    (ref) => !baselineKeys.has(testKeyOf(ref)) && isRefused(ref),
+  );
 
   // Decision 5, ruling 10: a covering NAME picks exactly one source baseline row, and the test
   // project must still hold that row's (codeunitId, method) under the same codeunit name.
@@ -650,7 +686,10 @@ export async function planVerify(a: {
   const unmatched: string[] = [];
   const noTests: string[] = [];
   const requests: NamedMutantRequest[] = [];
+  const notRun = new Map<string, readonly string[]>();
+  const allRefused = new Set<string>();
   for (const t of running) {
+    const notRunHere: string[] = [];
     const seen = new Set<string>();
     const methods: TestMethodRef[] = [];
     const add = (ref: TestMethodRef) => {
@@ -662,10 +701,18 @@ export async function planVerify(a: {
     for (const name of t.coveringTests) {
       const ref = matchCovering(name);
       if (typeof ref === "string") unmatched.push(`${t.batchIndex}/${t.mutantCode}: ${ref}`);
+      else if (isRefused(ref)) notRunHere.push(qualifiedTestName(ref));
       else add(ref);
     }
     for (const ref of newTests) add(ref);
-    if (methods.length === 0) noTests.push(`${t.batchIndex}/${t.mutantCode}`);
+    notRunHere.push(...refusedNew.map(qualifiedTestName));
+    if (notRunHere.length > 0) notRun.set(t.mutantCode, notRunHere);
+    if (methods.length === 0) {
+      // Every test that reaches it was refused: a structured result, not an empty refusal.
+      if (notRunHere.length > 0) allRefused.add(t.mutantCode);
+      else noTests.push(`${t.batchIndex}/${t.mutantCode}`);
+      continue;
+    }
     requests.push({ mutantId: t.mutantCode, methods });
   }
   if (unmatched.length > 0) {
@@ -680,7 +727,7 @@ export async function planVerify(a: {
       `no covering test and no new test for: ${noTests.join(", ")}; add a test that reaches the mutated code`,
     );
   }
-  return { requests, newTests, skipped, entries };
+  return { requests, newTests, skipped, entries, testPageRefused, notRun, allRefused };
 }
 
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons. */
@@ -752,6 +799,9 @@ export interface VerifyResult {
   readonly verdict: VerifyVerdict;
   /** Qualified names sent to `runNamedMutants`. */
   readonly testsRun?: readonly string[];
+  /** R-236c: qualified names of requested methods not sent, each with a reachable call that may
+   *  open a TestPage. */
+  readonly notRun?: readonly string[];
   /** Decision 13: requested methods without a valid green unmutated run. */
   readonly invalidBaseline?: readonly string[];
   readonly killingTest?: {
@@ -802,6 +852,9 @@ export interface VerifyOutput {
   };
   readonly quarantined?: string;
   readonly refused?: { readonly reason: VerifyRefusal; readonly detail: string };
+  /** R-236c: every discovered test not sent because it has a reachable call that may open a
+   *  TestPage. Absent when none was refused. */
+  readonly testPageRefused?: { readonly tests: readonly string[]; readonly diagnosis: string };
   readonly timings: {
     readonly totalMs: number;
     readonly compileMs?: number;
@@ -1020,6 +1073,8 @@ export async function runVerify(
         ...(deps.emit !== undefined ? { emit: deps.emit } : {}),
         requireEveryMethodGreen: true,
         rerunOnUnmutated: plan.newTests,
+        // R-236c: nothing refused is planned; this is the guard if one ever were.
+        testPageRefused: new Map([...plan.testPageRefused].map(([k, v]) => [k, v.reason])),
         inLease: async (fence) => {
           const tp = now();
           published = await backend.publishTestApp(fence, compiled);
@@ -1070,12 +1125,27 @@ export async function runVerify(
           },
         };
       }
+      if (plan.allRefused.has(t.mutantCode)) {
+        return {
+          ...base,
+          verdict: "error",
+          testsRun: [],
+          notRun: plan.notRun.get(t.mutantCode) ?? [],
+          failureNote:
+            "TestPage refused, not run: every test that reaches this mutant has a reachable call that may open a TestPage, so none was sent (R-236c)",
+        };
+      }
       const o = outcomeBy.get(t.mutantCode);
       const request = requestBy.get(t.mutantCode);
       if (o === undefined || request === undefined) {
         throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
       }
-      return { ...base, ...measuredResultOf(o, request.methods, newKeys, published) };
+      const notRun = plan.notRun.get(t.mutantCode);
+      return {
+        ...base,
+        ...measuredResultOf(o, request.methods, newKeys, published),
+        ...(notRun !== undefined ? { notRun } : {}),
+      };
     });
 
     const quarantined = ran?.quarantined;
@@ -1097,6 +1167,14 @@ export async function runVerify(
         skipped: results.filter((r) => r.verdict === "skipped").length,
       },
       ...(quarantined !== undefined ? { quarantined } : {}),
+      ...(plan.testPageRefused.size > 0
+        ? {
+            testPageRefused: {
+              tests: [...plan.testPageRefused.values()].map((v) => v.test).sort(),
+              diagnosis: TESTPAGE_REFUSED_DIAGNOSIS,
+            },
+          }
+        : {}),
       timings: timings(),
     };
   } catch (err) {

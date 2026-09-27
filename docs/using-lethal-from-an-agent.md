@@ -185,6 +185,13 @@ An exit `1` means the run did not produce a result you can use.
 produced must not be reported as findings. It means LethAL could not prove the server was in a
 state where its answers mean anything. `--resume` continues such a run once the cause is fixed.
 
+On bcdev a resumed run scans the test app again before it sends anything. A test the scan refuses
+(it has a reachable call that may open a TestPage) is reported in `testPageRefused` as refused and
+is never sent, even if the saved run recorded it green or recorded BC's own TestPage refusal. A
+saved mutant verdict that such a test took part in (it killed the mutant, or it was among the
+tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
+test, and says so in a `resume-testpage-rescored` warning.
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.
@@ -197,7 +204,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v2.schema.json](../schemas/report-v2.schema.json)
-- `lethal explain`: [../schemas/explain-v5.schema.json](../schemas/explain-v5.schema.json)
+- `lethal explain`: [../schemas/explain-v6.schema.json](../schemas/explain-v6.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -237,7 +244,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 5`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
+`explainSchemaVersion: 6`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
 and `survivorSelection`. Each `survivors` row carries `executionProven` and `reach`.
 
 A report from another schema version, or carrying a value this build cannot interpret, is REFUSED

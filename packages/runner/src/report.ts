@@ -29,7 +29,7 @@ import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf, serializeKey } from "./selection";
 import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
-import { TESTPAGE_DIAGNOSIS } from "./testpage-unsupported";
+import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
 export type { BatchArtifact };
 
@@ -198,6 +198,7 @@ export type Caveat =
   | "stale-test-app"
   | "tests-permission-refused"
   | "tests-testpage-unsupported"
+  | "tests-testpage-refused"
   | "runner-disagreement"
   | "stop-hung-sessions"
   | "resumed"
@@ -234,10 +235,11 @@ export type Caveat =
 export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "baseline-red": {
     meaning:
-      "The baseline was not green — some tests failed or errored before any mutant ran. " +
-      "Consequence (R55): baseline-red dropped those tests from the green set, so mutants " +
-      "covered only by them read `no-coverage`, not `survived`. Resolve this before reading " +
-      "survivors.",
+      "The baseline was not green: some tests failed or errored before any mutant ran, or were " +
+      "refused before sending because they have a reachable call that may open a TestPage (see " +
+      "tests-testpage-refused). Consequence (R55): baseline-red dropped those tests from the " +
+      "green set, so mutants covered only by them read `no-coverage`, not `survived`. Resolve " +
+      "this before reading survivors.",
     entailedNegative:
       "Does not mean the score is merely lower than it should be — it means some mutants could " +
       "not be scored at all.",
@@ -326,6 +328,14 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "user's own source. This one says the degradation has NO target-side fix at all — these " +
       "tests cannot run on this execution path.",
     basis: "R69",
+  },
+  "tests-testpage-refused": {
+    meaning: TESTPAGE_REFUSED_DIAGNOSIS,
+    entailedNegative:
+      "Distinct from `tests-testpage-unsupported`: that one is BC's own refusal of a test LethAL " +
+      "sent; this one is LethAL's static decision from the test source, and the test never reached " +
+      "BC. It does not say the test is wrong, nor that it would open a page on this path.",
+    basis: "R236",
   },
   "runner-disagreement": {
     meaning:
@@ -702,7 +712,9 @@ export interface ReportValidity {
   /** One sentence naming what the score covers. Written for a consumer that will quote it. */
   readonly scoreDescribes: string;
   /** Tests that ran at baseline, and how many of them failed. `failing > 0` bounds how much this
-   *  run could measure at all: a mutant covered only by failing tests cannot be scored. */
+   *  run could measure at all: a mutant covered only by failing tests cannot be scored. `failing`
+   *  counts fail/error only; tests refused before sending (R-236c) are in `testPageRefused`, not
+   *  here. */
   readonly baselineTests: { readonly total: number; readonly failing: number };
   /** Mutants that produced a scoreable verdict (killed/survived/timeout-killed), out of all
    *  recorded. The denominator `mutationScore` is actually computed over. */
@@ -1047,6 +1059,15 @@ export interface SessionReport {
   readonly testPageUnsupported?: {
     readonly tests: readonly string[];
     /** The explanation, stated once here rather than repeated per mutant. */
+    readonly diagnosis: string;
+  };
+  /**
+   * R-236c: tests LethAL did not send because each has a reachable call that may open a TestPage
+   * (see `CAVEAT_INTERPRETATIONS["tests-testpage-refused"]`). NOT part of `unsupportedTests` or of
+   * `validity.baselineTests.failing`: nothing ran. Absent when no test was refused.
+   */
+  readonly testPageRefused?: {
+    readonly tests: readonly string[];
     readonly diagnosis: string;
   };
   /**
@@ -2281,6 +2302,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // reader.
   const testPageUnsupportedTests = input.testPageUnsupportedTests ?? [];
   if (testPageUnsupportedTests.length > 0) caveats.push("tests-testpage-unsupported");
+  // See CAVEAT_INTERPRETATIONS["tests-testpage-refused"].
+  const testPageRefusedTests = input.testPageRefusedTests ?? [];
+  if (testPageRefusedTests.length > 0) caveats.push("tests-testpage-refused");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
@@ -2448,9 +2472,17 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (input.lines !== undefined
       ? `, ${input.lines.ranges.length} line range(s) only (${input.lines.excludedSiteCount} site(s) on other lines excluded)`
       : "");
+  const refusedText =
+    testPageRefusedTests.length > 0
+      ? ` and ${testPageRefusedTests.length} refused before sending (TestPage), not run`
+      : "";
+  // R-236c: a resume whose every batch carries runs no baseline, so it is not degraded, yet the
+  // scan still refused tests; the sentence says so rather than reading as nothing refused.
   const baselineText = degraded
-    ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing`
-    : "";
+    ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing${refusedText}`
+    : testPageRefusedTests.length > 0
+      ? `, with ${testPageRefusedTests.length} test(s) refused before sending (TestPage), not run`
+      : "";
   const executionContexts = buildExecutionContexts(
     input.outcomes,
     input.caps,
@@ -2488,6 +2520,14 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           testPageUnsupported: {
             tests: [...testPageUnsupportedTests].sort(),
             diagnosis: TESTPAGE_DIAGNOSIS,
+          },
+        }
+      : {}),
+    ...(testPageRefusedTests.length > 0
+      ? {
+          testPageRefused: {
+            tests: [...testPageRefusedTests].sort(),
+            diagnosis: TESTPAGE_REFUSED_DIAGNOSIS,
           },
         }
       : {}),
@@ -2721,6 +2761,15 @@ export function renderConsole(r: SessionReport): string {
       `TESTPAGE UNSUPPORTED ON THIS PATH: ${n} baseline test(s) were refused for opening a TestPage. ${r.testPageUnsupported.diagnosis}`,
     );
     for (const t of r.testPageUnsupported.tests.slice(0, 10)) lines.push(`  ${t}`);
+    if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // R-236c: a test LethAL never sent, distinct from R69's BC-side refusal above.
+  if (r.testPageRefused !== undefined) {
+    const n = r.testPageRefused.tests.length;
+    lines.push(
+      `TESTPAGE REFUSED, NOT RUN: ${n} test(s) were not sent. ${r.testPageRefused.diagnosis}`,
+    );
+    for (const t of r.testPageRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
   }
   // R72: same prominence, and the reader's default reading is the one to interrupt — a kill counts

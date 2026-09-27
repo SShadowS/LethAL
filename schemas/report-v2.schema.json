@@ -66,6 +66,7 @@
               "stale-test-app",
               "tests-permission-refused",
               "tests-testpage-unsupported",
+              "tests-testpage-refused",
               "runner-disagreement",
               "stop-hung-sessions",
               "resumed",
@@ -769,6 +770,25 @@
       }
     },
     "testPageUnsupported": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tests",
+        "diagnosis"
+      ],
+      "properties": {
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "testPageRefused": {
       "type": "object",
       "additionalProperties": false,
       "required": [
