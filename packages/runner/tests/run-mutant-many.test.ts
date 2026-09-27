@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1093,28 +1093,57 @@ describe("runMany, a connection failure keeps the watchdog's story (R289)", () =
     expect(f.calls).not.toContain("RunMutantMany");
   });
 
-  test("R289 trace: a write that fails inside the watchdog stops tracing, never rejects the watchdog, and is named in the verdict", async () => {
-    const tracePath = join(traceDir(), "trace.ndjson");
-    const f = fakes({
-      many: "hold",
-      status: () => statusOf({ serverNow: "2026-09-03T10:00:00Z" }),
-    });
-    const writes: string[] = [];
-    const traceWrite = (_path: string, line: string) => {
-      writes.push(line);
-      if (line.includes('"poll-sent"')) throw new Error("disk full");
-    };
-    const r = await withTraceEnv(tracePath, async () => {
-      const pending = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { traceWrite }).runMany(req());
-      await until(() => f.polls() >= 3, 2_000, "three polls after the failed write");
-      f.release(odata(answer()));
+  test("R289 trace: a write that fails inside the watchdog stops tracing, never rejects the watchdog, leaves every verdict untouched and is warned once on stderr", async () => {
+    // A passing prefix then a FAIL: the fail's message is what becomes `killingTestFailure`.
+    const inner = () =>
+      odata(
+        answer({
+          endedBy: "failure",
+          ranCount: 2,
+          methods: [entry(1, "Alpha", 2), entry(2, "Beta", 1)],
+        }),
+      );
+    const run = async (traceWrite?: (path: string, line: string) => void) => {
+      const f = fakes({
+        many: "hold",
+        status: () => statusOf({ serverNow: "2026-09-03T10:00:00Z" }),
+      });
+      const t =
+        traceWrite === undefined
+          ? transport(f.fetchFn)
+          : new RunMutantTransport(CFG, TA, AR, f.fetchFn, { traceWrite });
+      const pending = t.runMany(req());
+      await until(() => f.polls() >= 3, 2_000, "three polls");
+      f.release(inner());
       return within(pending, 2_000, "runMany to settle");
+    };
+    const tracePath = join(traceDir(), "trace.ndjson");
+    const writes: string[] = [];
+    const warnings: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
     });
-    if (r.kind !== "verdicts") throw new Error("expected verdicts");
-    expect(r.verdicts.map((v) => v.outcome)).toEqual(["pass", "pass", "pass"]);
-    for (const v of r.verdicts) {
-      expect(v.failureMessage?.endsWith(" trace: write failed 1 times;")).toBe(true);
+    let traced: Awaited<ReturnType<typeof run>>;
+    let plain: Awaited<ReturnType<typeof run>>;
+    try {
+      traced = await withTraceEnv(tracePath, () =>
+        run((_path, line) => {
+          writes.push(line);
+          if (line.includes('"poll-sent"')) throw new Error("disk full");
+        }),
+      );
+      plain = await withTraceEnv(undefined, () => run());
+    } finally {
+      warn.mockRestore();
     }
+    if (traced.kind !== "verdicts") throw new Error("expected verdicts");
+    expect(traced.verdicts.map((v) => v.outcome)).toEqual(["pass", "fail"]);
+    // The verdicts are exactly what an untraced call returns: no suffix on any failureMessage.
+    if (plain.kind !== "verdicts") throw new Error("expected verdicts");
+    expect(traced.verdicts).toEqual(plain.verdicts);
+    // Named once, on stderr, with the path and the count.
+    expect(warnings).toEqual([expect.stringContaining(`LETHAL_R289_TRACE=${tracePath}`)]);
+    expect(warnings[0]).toContain("trace write failed 1 times");
     // Bounded: `dispatch`, then the first `poll-sent` that threw, and nothing after it.
     expect(writes.length).toBe(2);
   });

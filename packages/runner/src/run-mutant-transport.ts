@@ -653,18 +653,18 @@ export class RunMutantTransport {
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const trace = { failures: 0 };
     const r = await this.runManyScored(req, trace);
-    if (trace.failures === 0) return r;
-    // R289: a trace that stopped writing is named on every verdict the call returns.
-    const note = (v: TestVerdict): TestVerdict => ({
-      ...v,
-      failureMessage: `${v.failureMessage ?? ""} trace: write failed ${trace.failures} times;`,
-    });
-    return r.kind === "call"
-      ? { ...r, verdict: note(r.verdict) }
-      : { ...r, verdicts: r.verdicts.map(note) };
+    // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
+    // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
+    // callstack match, so a diagnostic suffix there would change what a kill is classified as.
+    if (trace.failures > 0) {
+      console.warn(
+        `LETHAL_R289_TRACE=${this.tracePath ?? ""}: trace write failed ${trace.failures} times during ${req.mutantId} (attempt ${req.attemptId}, opSeq ${req.lease.opSeq}); tracing stopped for this call`,
+      );
+    }
+    return r;
   }
 
-  /** `runMany` without R289's trace-failure note: one dispatch plus R236b's readback. */
+  /** `runMany` before R289's trace warning: one dispatch plus R236b's readback. */
   private async runManyScored(
     req: RunMutantManyRequest,
     trace: { failures: number },
@@ -746,6 +746,8 @@ export class RunMutantTransport {
     const tracePath = this.tracePath;
     if (tracePath !== undefined) {
       // R289: refuse an unwritable trace before anything is dispatched, not halfway through.
+      // Calls the real `appendFileSync`, not the injected writer: the writer is a test seam for
+      // LATER failures, and the preflight must check the actual file whatever the seam does.
       try {
         appendFileSync(tracePath, "");
       } catch (err) {
@@ -753,7 +755,7 @@ export class RunMutantTransport {
       }
     }
     // R289: a diagnostic trace, kept on purpose (orchestrator ruling), documented in
-    // docs/measurements/README.md. One failed write stops it; `runMany` names the failure.
+    // docs/measurements/README.md. One failed write stops it; `runMany` warns once on stderr.
     // It never throws, so it cannot reject the watchdog and leave the main request open.
     const trace = (event: string, extra: Record<string, unknown> = {}) => {
       if (tracePath === undefined || traceState.failures > 0) return;

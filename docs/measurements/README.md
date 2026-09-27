@@ -1859,9 +1859,12 @@ The events, in the order a call can produce them:
 
 An unwritable path (a missing directory, say) is refused BEFORE anything is dispatched, with an
 error naming the variable and the path. A write that fails later stops the trace for the rest of
-that call (no retry, no second attempt), never rejects the watchdog, and is named at the end of
-every verdict the call returns: ` trace: write failed <n> times;`.
+that call (no retry), never rejects the watchdog, and is named ONCE per call on stderr
+(`console.warn`, with the path and the failure count). It never touches a verdict: a verdict's
+`failureMessage` feeds `killingTestFailure` and the kill classifier, so a diagnostic there would
+change what a kill is classified as.
 
-The same R289 change made the connection-failure and body-read-failure messages carry the
-watchdog's story too: ` watchdog: polls ok <n>, polls failed <n>[, last poll ok at +<ms>][; stop
+The same R289 change added the watchdog's story to every `RunMutantMany` message that carries the stop
+detail (the abort, the unconfirmed 408, the non-2xx, and now also the connection-failure and
+body-read-failure messages): ` watchdog: polls ok <n>, polls failed <n>[, last poll ok at +<ms>][; stop
 sent at +<ms>, answered at +<ms> | unanswered][; failed at +<ms>];`, relative to the call's start.
