@@ -880,3 +880,41 @@ describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => 
     expect(f.calls).not.toContain("GetOpAnswer");
   });
 });
+
+describe("runMany — a confirmed stop with no 408 (2026-09-27 hang investigation, offline scenario B)", () => {
+  /**
+   * `.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`, evidence
+   * item 4, scenario B: `StopHungRunAt` answers `stopped: true` (the server confirms the stop) but
+   * the held `RunMutantMany` request never gets its 408 back — the exact shape a stranded op takes
+   * when the confirmation itself does not land. `runManyOnce` alone already decides
+   * `in-flight-unknown` at the hard cap, before any readback runs; `runMany` must reach the SAME
+   * classification and only APPEND to the message, and `GetOpAnswer` must never be called before
+   * that hard-cap abort — calling it earlier would mean the readback could influence a
+   * classification it is defined never to change (review ruling C2, run-mutant-transport.ts).
+   */
+  test("StopHungRunAt confirms but the held request is never released: the hard cap decides in-flight-unknown, and GetOpAnswer runs only after the abort", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () => statusOf(),
+      stopAt: () => ({ stopped: true, sessionId: 9 }), // confirmed — but the held fetch never releases
+      kept: () => odata({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }),
+    });
+    const r = await transport(f.fetchFn).runMany(
+      req({ requestCeilingMs: 30, stopGraceMs: 10, stopHungSessions: true }),
+    );
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.outcome).toBe("deadline-exceeded");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.failureMessage).toContain("hard cap");
+    // The watchdog's stopDetail() — proof the stop was decided before the hard cap ended the call,
+    // not routed around it.
+    expect(r.verdict.failureMessage).toContain("progress row:");
+    // The readback ran (this is what makes it "in-flight-unknown", not silently dropped) but found
+    // nothing, so it only appended a reason — it never replaced the verdict or its operation.
+    expect(r.verdict.failureMessage).toContain("answer readback:");
+    expect(f.stops.length).toBe(1);
+    // Call order is the assertion that matters: StopHungRunAt before the abort, GetOpAnswer only
+    // after runManyOnce has already settled via that abort.
+    expect(f.calls).toEqual(["RunMutantMany", "StopHungRunAt", "GetOpAnswer"]);
+  });
+});
