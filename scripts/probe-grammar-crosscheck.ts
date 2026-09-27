@@ -20,8 +20,9 @@
  *
  * Usage: bun scripts/probe-grammar-crosscheck.ts <file-or-dir> [alc-bin-dir] [grammar.wasm] [--json <out>]
  * Exit codes (EXIT_CODE in ./lib/grammar-crosscheck): 0 agree, 1 disagree, 2 inconclusive,
- * 3 unruled-mapping. A usage error (no target) prints usage and exits 64. A file-count mismatch or
- * a duplicate context key throws.
+ * 3 unruled-mapping. A usage error (no target) prints usage and exits 64. A file-count mismatch, a
+ * compiler dump whose file records differ from the list, or a duplicate context key in a
+ * comparable file throws.
  */
 import { spawnSync } from "node:child_process";
 import { createReadStream, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -48,7 +49,8 @@ import {
   type SiteDiff,
   type Span,
   type Split,
-  assertUniqueKeys,
+  assertDumpCoversList,
+  checkContextKeys,
   contextKey,
   diffSites,
   parseHealth,
@@ -83,7 +85,11 @@ if (fp !== null) console.log(describeFingerprint(target, fp)); // FIRST output l
 const files = isDir
   ? (await corpusEntries(target)).map((rel) => resolve(join(target, rel)))
   : [resolve(target)];
-const listFile = join(mkdtempSync(join(tmpdir(), "gh06-")), "files.txt");
+const listDir = mkdtempSync(join(tmpdir(), "gh06-"));
+// An exit handler, not a `finally`: `process.exit` below skips a `finally`, and this also runs when
+// the run throws.
+process.on("exit", () => rmSync(listDir, { recursive: true, force: true }));
+const listFile = join(listDir, "files.txt");
 writeFileSync(listFile, files.join("\n"));
 
 interface TreeSitterResult {
@@ -195,6 +201,8 @@ interface CompilerResult {
   readonly parserVersion: string;
   readonly fileCount: number;
   readonly parseErrorFiles: string[];
+  /** Every file record the dump wrote, resolved, for `assertDumpCoversList`. */
+  readonly dumpFiles: string[];
   // Per-occurrence, with the FILE it came from, not pre-aggregated: an unmapped kind that exists
   // only inside a file either parser could not read cleanly must not flip the verdict (comparable
   // files decide it), so the file has to survive until the caller knows which files are comparable.
@@ -269,7 +277,8 @@ async function compilerSites(alcBin: string, listFile: string): Promise<Compiler
       context,
       parserVersion: summary.parserVersion,
       fileCount: summary.fileCount,
-      parseErrorFiles: summary.parseErrorFiles,
+      parseErrorFiles: summary.parseErrorFiles.map((f) => resolve(f)),
+      dumpFiles: summary.files.map((f) => resolve(f)),
       unmappedKindSites,
     };
   } finally {
@@ -293,10 +302,17 @@ if (files.length !== expected || treeSitterParsed !== expected || compiled.fileC
     `file-count mismatch: fingerprint ${expected}, listed ${files.length}, tree-sitter parsed ${treeSitterParsed}, compiler parsed ${compiled.fileCount}`,
   );
 }
+// Counts are not identities: the compiler summary's count is the LIST's length. Every listed file
+// must have written its own record, or the run stops here naming it (review r1, GH-06).
+assertDumpCoversList(files, {
+  files: compiled.dumpFiles,
+  fileCount: compiled.fileCount,
+  parseErrorFiles: compiled.parseErrorFiles,
+});
 
 // C1/D2: drop every site in a file either parser could not read cleanly, on BOTH sides, before
 // diffing anything. Every count printed from here on is over `comparable` only.
-const ccErrorFiles = new Set(compiled.parseErrorFiles.map((f) => resolve(f)));
+const ccErrorFiles = new Set(compiled.parseErrorFiles);
 const tsUnhealthyByFile = new Map(tsResult.unhealthy.map((u) => [u.file, u]));
 const bad = new Set([...tsUnhealthyByFile.keys(), ...ccErrorFiles]);
 const comparable = new Set(files.filter((f) => !bad.has(f)));
@@ -362,6 +378,8 @@ printSplit("only compiler", kindsDiff.onlyCompiler, siteKey);
 printSplit("only tree-sitter", kindsDiff.onlyTreeSitter, siteKey);
 
 // Context probes: compared by POSITION (contextKey), per probe, restricted to comparable files.
+// Duplicate keys in an excluded file come back as warnings (printed with the others below).
+const duplicateKeyWarnings: string[] = [];
 const context: Record<
   string,
   { diff: SiteDiff; totals: { treeSitter: number; compiler: number } }
@@ -371,10 +389,12 @@ for (const probe of CONTEXT_PROBES) {
   const tsProbeSites = tsResult.context.filter((s) => s.kind === probe.name);
   const ccProbeSites = compiled.context.filter((s) => s.kind === probe.name);
   // Guards contextKey's assumption that two statement-position sites of one probe never share a
-  // start. Checked before restricting to comparable, so a duplicate is caught regardless of which
-  // files happen to be excluded.
-  assertUniqueKeys(tsProbeSites, contextKey, "tree-sitter");
-  assertUniqueKeys(ccProbeSites, contextKey, "compiler");
+  // start. Applied AFTER the health filter (pre-commitment R1/R5): a duplicate in a comparable file
+  // throws, one that error recovery made in an excluded file is only a warning.
+  duplicateKeyWarnings.push(
+    ...checkContextKeys(tsProbeSites, comparable, contextKey, "tree-sitter"),
+    ...checkContextKeys(ccProbeSites, comparable, contextKey, "compiler"),
+  );
   const tsComparable = restrictToComparable(tsProbeSites, comparable);
   const ccComparable = restrictToComparable(ccProbeSites, comparable);
   const explained = tsResult.explainedByProbe.get(probe.name) ?? new Set<string>();
@@ -407,7 +427,7 @@ if (unmappedKinds.length > 0) {
 
 // tree-sitter's own parse health plus the compiler's, on the same footing: a grammar that REJECTS
 // valid AL would otherwise look like agreement on the sites it still managed to produce.
-const warnings: string[] = [];
+const warnings: string[] = [...duplicateKeyWarnings];
 for (const file of files) {
   const tsBad = tsUnhealthyByFile.get(file);
   const ccBad = ccErrorFiles.has(file);

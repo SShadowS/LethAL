@@ -87,6 +87,53 @@ export function diffSites(ts: readonly Site[], cc: readonly Site[], opts: DiffOp
 }
 
 /**
+ * The dump must name exactly the files it was given: one `file` record per listed path, none
+ * missing, none extra, none twice, and every parse-error file among them. A count alone cannot say
+ * this (the summary's `fileCount` is the LIST's length), and a skipped file would otherwise read as
+ * a file whose every tree-sitter site is an over-claim, or be dropped silently. A file the compiler
+ * could not parse at all still writes its record, emits no nodes, and is named in
+ * `parseErrorFiles`, so it is accounted for here and excluded as unhealthy by the caller. Paths are
+ * compared as given; the caller normalises both sides the same way first.
+ */
+export function assertDumpCoversList(
+  listed: readonly string[],
+  dump: Pick<DumpSummary, "files" | "fileCount" | "parseErrorFiles">,
+): void {
+  const want = new Set(listed);
+  const seen = new Set<string>();
+  const problems: string[] = [];
+  for (const f of dump.files) {
+    if (seen.has(f)) problems.push(`recorded twice: ${f}`);
+    else if (!want.has(f)) problems.push(`not in the list: ${f}`);
+    seen.add(f);
+  }
+  for (const f of listed) if (!seen.has(f)) problems.push(`no file record: ${f}`);
+  for (const f of dump.parseErrorFiles) {
+    if (!want.has(f)) problems.push(`parse-error file not in the list: ${f}`);
+  }
+  if (dump.fileCount !== listed.length) {
+    problems.push(`summary fileCount ${dump.fileCount}, listed ${listed.length}`);
+  }
+  if (problems.length > 0) {
+    const shown = problems.slice(0, 20).join("\n  ");
+    const more = problems.length > 20 ? `\n  ... and ${problems.length - 20} more` : "";
+    throw new Error(`compiler dump does not cover the file list:\n  ${shown}${more}`);
+  }
+}
+
+/** Keys that occur more than once, each named once. */
+function duplicateKeys(sites: readonly Site[], key: (s: Site) => string): string[] {
+  const seen = new Set<string>();
+  const dups = new Set<string>();
+  for (const s of sites) {
+    const k = key(s);
+    if (seen.has(k)) dups.add(k);
+    seen.add(k);
+  }
+  return [...dups];
+}
+
+/**
  * Throws when one side has two sites with the same key. Guards `contextKey`'s assumption that two
  * statement-position sites of one probe never share a start. If it ever fails, stop and look.
  */
@@ -95,12 +142,26 @@ export function assertUniqueKeys(
   key: (s: Site) => string,
   side: string,
 ): void {
-  const seen = new Set<string>();
-  for (const s of sites) {
-    const k = key(s);
-    if (seen.has(k)) throw new Error(`${side}: duplicate key ${k}`);
-    seen.add(k);
-  }
+  const [first] = duplicateKeys(sites, key);
+  if (first !== undefined) throw new Error(`${side}: duplicate key ${first}`);
+}
+
+/**
+ * The duplicate-key guard, applied AFTER the health filter (pre-commitment R1/R5: an unhealthy file
+ * never changes the outcome). A duplicate in a comparable file throws, as `assertUniqueKeys` does;
+ * one in an excluded file is error recovery's output, not evidence, and comes back as a warning.
+ */
+export function checkContextKeys(
+  sites: readonly Site[],
+  comparable: ReadonlySet<string>,
+  key: (s: Site) => string,
+  side: string,
+): string[] {
+  assertUniqueKeys(restrictToComparable(sites, comparable), key, side);
+  const excluded = sites.filter((s) => !comparable.has(s.file));
+  return duplicateKeys(excluded, key).map(
+    (k) => `WARNING: ${side}: duplicate key ${k} in an excluded file, ignored`,
+  );
 }
 
 export type Verdict = "agree" | "disagree" | "unruled-mapping" | "inconclusive";
@@ -180,6 +241,8 @@ export interface DumpSummary {
   readonly parserVersion: string;
   readonly fileCount: number;
   readonly parseErrorFiles: string[];
+  /** Every `file` record's path, in dump order. Checked against the list by `assertDumpCoversList`. */
+  readonly files: string[];
 }
 
 /**
@@ -195,6 +258,7 @@ export async function readCompilerDump(
 ): Promise<DumpSummary> {
   let file: string | undefined;
   let summary: DumpSummary | undefined;
+  const files: string[] = [];
   let lineNo = 0;
   const bad = (what: string): Error => new Error(`compiler dump line ${lineNo}: ${what}`);
   for await (const line of lines) {
@@ -204,6 +268,7 @@ export async function readCompilerDump(
     const r = JSON.parse(line) as Record<string, unknown>;
     if (r.t === "file" && typeof r.path === "string") {
       file = r.path;
+      files.push(r.path);
     } else if (r.t === "node") {
       if (file === undefined) throw bad("node before any file record");
       const { kind, start, end, parent } = r;
@@ -226,7 +291,7 @@ export async function readCompilerDump(
       ) {
         throw bad("malformed summary record");
       }
-      summary = { parserVersion, fileCount, parseErrorFiles };
+      summary = { parserVersion, fileCount, parseErrorFiles, files };
     } else {
       throw bad(`unknown record ${line.slice(0, 80)}`);
     }

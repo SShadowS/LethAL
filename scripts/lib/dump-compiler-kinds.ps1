@@ -10,7 +10,7 @@
 # as each file is parsed, so memory does not grow with the corpus. (Holding every node for one
 # ConvertTo-Json drove pwsh to 16.4 GB private on BaseApp/Test, Task 6b.) Three record types:
 #
-#   {"t":"file","path":"<absolute path>"}          written before that file's nodes
+#   {"t":"file","path":"<absolute path>"}          one per listed file, before its nodes
 #   {"t":"node","kind":"<Kind>","start":<n>,"end":<n>,"parent":"<Kind, or empty for the root>"}
 #   {"t":"summary","parserVersion":"<v>","fileCount":<n>,"parseErrors":<n>,"parseErrorFiles":[...]}
 #
@@ -60,6 +60,12 @@ $w.NewLine = "`n"
 try {
   foreach ($f in $files) {
     $src = [System.IO.File]::ReadAllText($f.FullName)
+    # The file record is written FIRST, before anything can skip the file, so every listed file
+    # writes exactly one. The reader checks the records against the list by identity
+    # (`assertDumpCoversList`): a file this loop skipped must fail the run by name, never read as
+    # compiler-only sites. A null parse keeps its record, emits no nodes, and is named in
+    # `parseErrorFiles`, so the harness excludes it as unhealthy.
+    $w.WriteLine('{"t":"file","path":' + (ConvertTo-JsonString $f.FullName) + '}')
     $tree = $treeType::ParseObjectText($src, $f.FullName, $null, $null, [System.Threading.CancellationToken]::None)
     if ($null -eq $tree) { $parseErrorFiles.Add($f.FullName); continue }
 
@@ -71,7 +77,6 @@ try {
       Where-Object { $_.Severity -eq "Error" }
     if ($errs.Count -gt 0) { $parseErrorFiles.Add($f.FullName) }
 
-    $w.WriteLine('{"t":"file","path":' + (ConvertTo-JsonString $f.FullName) + '}')
     $root = $tree.GetRoot([System.Threading.CancellationToken]::None)
     foreach ($n in $root.DescendantNodes()) {
       $span = $n.Span
