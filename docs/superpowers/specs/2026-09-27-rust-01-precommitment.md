@@ -151,3 +151,19 @@ no release binary reports DIRTY.
 
 ## OUTCOME
 (filled in by Task 10)
+
+## Clarification 1 (2026-09-28, before any native timing, memory figure or corpus-scale native parse)
+Committed alone. It changes no prediction and no ceiling.
+- The header's "before any native parse ... was read" is exact only in this narrower form: before any
+  native timing, memory figure, corpus-scale native parse, census, dump or run was read. Task 1 Steps 1
+  to 8 had already run native smoke parses and one 38-node native versus WASM tree comparison, and the
+  UTF-16 column fact came from that; none of it informs a ceiling (see "Native build facts").
+- Why the spec-level capture is safe where instrumentation fails: the four steps the switch turns off
+  (the object-mix refusal, compileSchemataForFile, the reach-grain step, the file write) only throw or
+  produce output. None of them filters the id-assigned mutant list or changes any input of
+  assignIdentityOrdinals (file, startIndex, mutantId, the identity tuple), and identityKeyOf does not
+  read reachGrain. So on the refused corpora the listing still comes from the product's own spec,
+  id and ordinal code; it describes parser identity, not what the product would instrument there.
+- The capture patch scripts are kept beside the session ledger for Task 6, and the whole-BaseApp WASM
+  listing (sha256 a66a270e1530907e2b6c2b468b29f409fcd822b2ee92e02e6827bd083c59621b) is kept in scratch
+  until Task 6 is done.
