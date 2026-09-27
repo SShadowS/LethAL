@@ -170,22 +170,50 @@ function nameNode(n: ALSyntaxNode): ALSyntaxNode | undefined {
   return n.namedChildren.find((c) => NAME_KINDS.has(c.rawKind));
 }
 
-/** Every name of every `variable_declaration` under `section`, into `into`. */
+/**
+ * Every name of every `variable_declaration` under `section`, into `into`. With `skipProcedures`,
+ * a `procedure` subtree is not entered: see `procsInVarSection`, whose procedures' locals must not
+ * read as globals.
+ */
 function addDeclarations(
   section: ALSyntaxNode,
   into: Map<string, string>,
   where: string,
   problems: string[],
+  skipProcedures = false,
 ): void {
-  visit(section, (d) => {
-    if (d.rawKind !== "variable_declaration") return;
-    const type = d.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
-    const names = d.namedChildren.filter((c) => NAME_KINDS.has(c.rawKind));
-    if (names.length === 0 && PAGE_TYPE.test(type)) {
-      problems.push(`${where}: a TestPage declaration whose name the scanner cannot read`);
+  const walk = (d: ALSyntaxNode): void => {
+    if (skipProcedures && d.rawKind === "procedure") return;
+    if (d.rawKind === "variable_declaration") {
+      const type = d.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
+      const names = d.namedChildren.filter((c) => NAME_KINDS.has(c.rawKind));
+      if (names.length === 0 && PAGE_TYPE.test(type)) {
+        problems.push(`${where}: a TestPage declaration whose name the scanner cannot read`);
+      }
+      for (const n of names) into.set(normalizeAlName(n.text), type);
     }
-    for (const n of names) into.set(normalizeAlName(n.text), type);
-  });
+    for (const c of d.children) walk(c);
+  };
+  walk(section);
+}
+
+/**
+ * tree-sitter-al 4.4.1 parses an `#if` region that directly follows the global `var` section INSIDE
+ * that section (`var_section > var_body > preproc_conditional_var > procedure`), where the AL
+ * compiler places the same procedures at codeunit level (measured with the compiler's own parser,
+ * R-236c round 2). Every branch's procedures are returned, in source order.
+ */
+function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    if (n.rawKind === "procedure") {
+      out.push(n);
+      return;
+    }
+    for (const c of n.namedChildren) walk(c);
+  };
+  walk(section);
+  return out;
 }
 
 function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[]): Unit {
@@ -207,10 +235,12 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
     procs: [] as Proc[],
   };
   if (body !== undefined) {
-    const members = flattenPreproc(body.namedChildren);
+    const members = flattenPreproc(body.namedChildren).flatMap((c) =>
+      c.rawKind.endsWith("var_section") ? [c, ...procsInVarSection(c)] : [c],
+    );
     for (const c of members) {
       if (c.rawKind.endsWith("var_section"))
-        addDeclarations(c, globals, `${display} globals`, problems);
+        addDeclarations(c, globals, `${display} globals`, problems, true);
     }
     const all = new Map<string, string>();
     addDeclarations(body, all, `${display}`, []);

@@ -930,6 +930,78 @@ codeunit 50101 "Lib"
   });
 });
 
+describe("procedures the grammar places inside the global var section (R-236c round 2)", () => {
+  // tree-sitter-al 4.4.1 parses an `#if` region that directly follows the global `var` section
+  // INSIDE it (`var_section > var_body > preproc_conditional_var > procedure`); the AL compiler
+  // puts the same procedures at codeunit level. BaseApp had 127 tests in this shape.
+  const text = unit(`
+    var
+        Counter: Integer;
+#if not CLEAN27
+    [Test]
+    procedure OpensInRegion()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+
+    [Test]
+    procedure SafeInRegion()
+    var
+        Local: Integer;
+    begin
+        Counter := 1;
+    end;
+#else
+    [Test]
+    procedure OpensInElse()
+    begin
+        Helper();
+    end;
+#endif
+
+    local procedure Helper()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenEdit();
+    end;`);
+
+  test("every branch's procedures are found, and each test is classified", () => {
+    const got = analyze(text, [
+      ref(50100, "OpensInRegion"),
+      ref(50100, "SafeInRegion"),
+      ref(50100, "OpensInElse"),
+    ]);
+    expect(got.errors).toEqual([]);
+    expect([...got.refused.keys()].sort()).toEqual(["50100::OpensInElse", "50100::OpensInRegion"]);
+  });
+
+  test("a hoisted procedure's locals do not become globals", () => {
+    // `Card` is declared only inside OpensInRegion. Read from another procedure it must NOT resolve
+    // as a global TestPage; it must stay the loud "cannot place in scope" error it is for any other
+    // local of that name.
+    const got = analyze(
+      text.replace(
+        "local procedure Helper()",
+        `[Test]
+    procedure UsesLeak()
+    begin
+        Card.OpenView();
+    end;
+
+    local procedure Helper()`,
+      ),
+      [ref(50100, "UsesLeak")],
+    );
+    expect(got.refused.size).toBe(0);
+    expect(got.errors).toEqual([
+      "T.UsesLeak: T.UsesLeak uses Card, which matches a TestPage declaration the scanner cannot place in scope",
+    ]);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
