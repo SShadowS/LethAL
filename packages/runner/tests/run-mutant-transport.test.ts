@@ -933,3 +933,216 @@ describe("RunMutantTransport.run — the budget covers the BODY phase too (R191)
     expect(v.outcome).toBe("pass"); // nothing fired after the fact
   });
 });
+
+describe("RunMutantTransport: a lost reply is read back from the committed answer (R236b)", () => {
+  const FENCE = { attemptId: "a1", opSeq: 7 };
+  const CLR =
+    "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+  const FAILED = echo({
+    codeunitResults: JSON.stringify({
+      testResults: [{ method: "OverBudgetDetected", result: 1, message: CLR }],
+    }),
+  });
+  const wrap = (inner: Record<string, unknown>) => JSON.stringify({ value: JSON.stringify(inner) });
+  /** The live shape: everything but the envelope's final `}`. */
+  const TRUNCATED = wrap(FAILED).slice(0, -1);
+  const KEY = { attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1" };
+  type Kept = { readonly status: number; readonly body: string } | "throw" | "hang";
+  const found = (answer: string, key: Record<string, unknown> = KEY): Kept => ({
+    status: 200,
+    body: wrap({ found: true, ...key, answer }),
+  });
+
+  function routed(
+    run: "truncated" | "stall" | "ok",
+    kept: Kept,
+    calls: string[],
+    bodies: unknown[] = [],
+  ): typeof fetch {
+    return (async (url: unknown, init?: RequestInit) => {
+      const action = /ODataV4\/LethALControl_(\w+)/.exec(String(url))?.[1] ?? String(url);
+      calls.push(action);
+      if (action === "GetOpAnswer") {
+        bodies.push(JSON.parse(String(init?.body)));
+        if (kept === "throw") throw new Error("ECONNRESET");
+        if (kept === "hang") {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          });
+        }
+        return new Response(kept.body, { status: kept.status });
+      }
+      if (run === "ok") return new Response(wrap(FAILED), { status: 200 });
+      const signal = init?.signal;
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(TRUNCATED));
+          if (run === "truncated")
+            c.error(new Error("The socket connection was closed unexpectedly."));
+          else
+            signal?.addEventListener(
+              "abort",
+              () => c.error(new Error("The operation was aborted.")),
+              { once: true },
+            );
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }) as typeof fetch;
+  }
+  const keptUnknown = (v: {
+    operation?: unknown;
+    fencedOp?: unknown;
+    replyRecovered?: unknown;
+  }) => {
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.fencedOp).toEqual(FENCE);
+    expect(v.replyRecovered).toBeUndefined();
+  };
+
+  test("1. body lost, kept answer is a completed fail: it is the verdict, no second RunMutant is sent", async () => {
+    const calls: string[] = [];
+    const bodies: unknown[] = [];
+    const v = await transport(
+      routed("truncated", found(JSON.stringify(FAILED)), calls, bodies),
+    ).run(REQ);
+    expect(v.outcome).toBe("fail");
+    expect(v.operation).toBeUndefined();
+    expect(v.fencedOp).toBeUndefined();
+    expect(v.failureMessage).toContain("CreateNavTestService");
+    expect(v.replyRecovered).toContain("2xx body could not be read");
+    expect(calls).toEqual(["RunMutant", "GetOpAnswer"]);
+    expect(bodies).toEqual([{ epoch: 3, generation: "gen-1", attemptId: "a1", opSeq: 7 }]);
+  });
+
+  test("2. body stalls until the budget: the kept completed pass is the verdict", async () => {
+    const calls: string[] = [];
+    const v = await transport(routed("stall", found(JSON.stringify(echo())), calls)).run({
+      ...REQ,
+      timeoutMs: 30,
+    });
+    expect(v.outcome).toBe("pass");
+    expect(v.replyRecovered).toContain("timed out after headers");
+    expect(calls).toEqual(["RunMutant", "GetOpAnswer"]);
+  });
+
+  test("3. no committed answer for this op: in-flight-unknown stays and says what the server holds", async () => {
+    const kept: Kept = {
+      status: 200,
+      body: wrap({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }),
+    };
+    const v = await transport(routed("truncated", kept, [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("2xx body could not be read");
+    expect(v.failureMessage).toContain(
+      "answer readback: the server holds no committed answer for a1/7 (it holds a0/6)",
+    );
+  });
+
+  test("4. the readback throws: in-flight-unknown stays", async () => {
+    const v = await transport(routed("truncated", "throw", [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback failed");
+  });
+
+  test("5. the readback hangs: bounded by the call's budget, then in-flight-unknown", async () => {
+    const started = Date.now();
+    const v = await transport(routed("truncated", "hang", [])).run({ ...REQ, timeoutMs: 30 });
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback failed");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  test("6. a kept answer that is not JSON is never accepted", async () => {
+    const v = await transport(routed("truncated", found("{{{"), [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback not accepted");
+  });
+
+  test("7. a kept answer naming another attempt is never accepted", async () => {
+    const v = await transport(
+      routed("truncated", found(JSON.stringify(echo({ attemptId: "a9" }))), []),
+    ).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("identity mismatch");
+  });
+
+  test("8. a kept REFUSAL for the same key (a same-key duplicate) is never accepted", async () => {
+    const refusal = echo({ status: "lease-invalid", reason: "op-in-flight", codeunitResults: "" });
+    const v = await transport(routed("truncated", found(JSON.stringify(refusal)), [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback not accepted");
+  });
+
+  test("9. a kept lease-lost answer is never accepted", async () => {
+    const lost = echo({ status: "lease-invalid", codeunitResults: "" });
+    const v = await transport(routed("truncated", found(JSON.stringify(lost)), [])).run(REQ);
+    keptUnknown(v);
+  });
+
+  test("10. a well-formed ran answer with a malformed RESULT (zero test lines) is never accepted", async () => {
+    const empty = echo({ codeunitResults: JSON.stringify({ testResults: [] }) });
+    const v = await transport(routed("truncated", found(JSON.stringify(empty)), [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback not accepted");
+  });
+
+  test("11. a kept answer under another lease (echoed epoch or generation differs) is never accepted", async () => {
+    for (const key of [
+      { ...KEY, epoch: 4 },
+      { ...KEY, generation: "gen-2" },
+      { ...KEY, opSeq: 8 },
+    ]) {
+      const v = await transport(routed("truncated", found(JSON.stringify(FAILED), key), [])).run(
+        REQ,
+      );
+      keptUnknown(v);
+      expect(v.failureMessage).toContain("answer readback failed");
+    }
+  });
+
+  test("12. a PARTIAL readback body is never accepted", async () => {
+    const partial: Kept = {
+      status: 200,
+      body: wrap({ found: true, ...KEY, answer: JSON.stringify(FAILED) }).slice(0, -1),
+    };
+    const v = await transport(routed("truncated", partial, [])).run(REQ);
+    keptUnknown(v);
+    expect(v.failureMessage).toContain("answer readback failed");
+  });
+
+  test("13. a reply that arrives whole never reads back", async () => {
+    const calls: string[] = [];
+    const v = await transport(routed("ok", "throw", calls)).run(REQ);
+    expect(v.outcome).toBe("fail");
+    expect(v.replyRecovered).toBeUndefined();
+    expect(calls).toEqual(["RunMutant"]);
+  });
+
+  test("14. runWithCoverage: the kept answer's coverage rows come back", async () => {
+    const withCov = {
+      ...FAILED,
+      coverage: [{ objectType: 5, objectId: 79300, lineNo: 10, hits: 1 }],
+      coverageRunMs: 1,
+      coverageSerializeMs: 1,
+      coverageScannedRows: 1,
+      coverageEmittedRows: 1,
+    };
+    const r = await transport(
+      routed("truncated", found(JSON.stringify(withCov)), []),
+    ).runWithCoverage(REQ);
+    expect(r.verdict.outcome).toBe("fail");
+    expect(r.coverageRows).toHaveLength(1);
+  });
+
+  test("15. runWithCoverage: a malformed kept coverage array is never accepted, and leaves no rows", async () => {
+    const bad = { ...FAILED, coverage: "not-an-array" };
+    const r = await transport(routed("truncated", found(JSON.stringify(bad)), [])).runWithCoverage(
+      REQ,
+    );
+    keptUnknown(r.verdict);
+    expect(r.coverageRows).toBeUndefined();
+  });
+});
