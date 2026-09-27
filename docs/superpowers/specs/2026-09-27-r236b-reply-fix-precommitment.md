@@ -143,3 +143,41 @@ narrowed.
     uncaught. Fixed in `8706a34` and `3f83605` (a failed readback now counts as bad, exit 1, and every
     call is traced from its original action).
   - Doctor right after: all ok, no lease held. No wedge.
+
+### Second C1b run, after owner recovery (2026-09-27, Cronus284, control app 1.0.0.20)
+
+- Lease: `coord lease Cronus284 bugs`, attempt `008`, token `e70f6ade-7eab-400a-a0bc-fea2f5c4e682`,
+  heartbeated, released; `coord holder Cronus284` returned `null` afterward.
+- Precheck (13:35Z): doctor all ok, `HarnessInfo` semver `1.0.0.20`, no lease held, generation
+  `c78d51e7...`. `Get-NAVServerSession` showed one session only (the check's own, 13:35:35): no leftover
+  from the invalid attempt.
+- c1-prep session (`probe.ts --arm c1-prep --sessions 1`): exit 0, no hit, 0 broken call(s).
+- C1b (`size-arm.ts --kept-check 10`), exit 0, summary `{"calls":10,"bad":0,"lostBodies":1,"notWhole":10}`:
+  - Call 1: `whole` false, `deadline-exceeded`, `in-flight-unknown`, `replyRecovered` null,
+    `recoveryReadback` true, `headersMs` 681, `bytesReceived` 6539, `errorPhase` `body`. A REAL lost body:
+    200 headers at 681 ms, 6 539 bytes, then the body broke. The client's readback of the kept answer was
+    attempted and did NOT recover it (`replyRecovered` null).
+  - Calls 2 to 10: `whole` false, `deadline-exceeded`, `in-flight-unknown`, `replyRecovered` null,
+    `recoveryReadback` true, `errorPhase` `fetch` (no headers).
+  - Exit 0 was VACUOUS under the pre-fix rule: zero calls arrived whole, so the byte-equality check never
+    ran once. Under the rule added for Task 9 Step 2 (`keptCheckVerdict`, `scripts/r236-baseline-probe/size-arm.ts`,
+    commit `d635c3f`), this run reads NOT MEASURED, not a pass.
+- Wedge: Cronus284 wedged after C1b. Doctor right after (16:00 local) exit 1, `HarnessInfo unreachable:
+  AbortError` on environment, company, control-version and lease; a direct `HarnessInfo` read also
+  aborted. `Get-NAVServerSession` then listed one session (Windows, 13:38:36Z). No restart was done.
+- C1 (the 32-session probe): NOT run. Stopped on the wedge.
+- Counts: recovered lost bodies 0; unrecovered lost bodies 1 (call 1); quarantines 0 (no probe session
+  after c1-prep); wedges 1. C1, P1/P2/P3 and the write cost: not measured.
+- Lease `008` released. Decision passed to the owner (`coord ask q-20260927T140209-2989a695`).
+
+### Owner direction (2026-09-27)
+
+R-236b lands the readback as **MEASURED-PARTIAL**. C1 (the 32-session probe) is NOT run: every TestPage
+hit on Cronus284 today wedged the server (the a2-prep session's hit, and this second C1b run's call 1),
+so the readback was never tested against a live hit it could recover. State plainly: both live TestPage
+hits wedged the server, so there was no server left to read the kept answer back from. R236 stays OPEN;
+this task neither closes nor narrows it.
+
+C2 skips `itest:tables`: it cannot pass until R-236c lands (LethAL refuses TestPage tests up front, as a
+named "TestPage refused, not run" result). C2 runs `itest:bcdev`, `itest:hang` and `itest:chunked` on
+Cronus28.
