@@ -3263,6 +3263,18 @@ async function runLeaseHook(a: {
 }
 
 /**
+ * R-236c: the synthetic `skip` for a test with a reachable call that may open a TestPage, or
+ * `undefined` when the test is not refused. Shared by a fresh baseline and a reused one, so a
+ * `--resume` cannot bring back as green a test this session refuses.
+ */
+function testPageRefusedVerdict(scope: BatchScope, ref: TestMethodRef): TestVerdict | undefined {
+  const reason = scope.testPageRefused?.get(testKeyOf(ref));
+  return reason === undefined
+    ? undefined
+    : { ref, outcome: "skip", durationMs: 0, failureMessage: testPageNotRunMessage(reason) };
+}
+
+/**
  * One unmutated run of `ref` (no mutant active), recorded as a baseline row, with the lease and
  * in-flight rules a baseline run needs. `stop: true` means the session can do nothing more: the
  * lease answer was handled or the run was quarantined in flight, and `verdict` is not a result.
@@ -3286,11 +3298,10 @@ async function dispatchUnmutated(
   // R-236c: a test with a reachable call that may open a TestPage is never sent. Its verdict is a
   // synthetic `skip` carrying the reason, recorded like any baseline row, so the report names it and
   // nothing downstream mistakes it for an answer from BC.
-  const refusedFor = scope.testPageRefused?.get(testKeyOf(ref));
-  if (refusedFor !== undefined) {
-    const failureMessage = testPageNotRunMessage(refusedFor);
-    store.recordTestResult(runId, null, null, ref, "skip", 0, failureMessage);
-    return { verdict: { ref, outcome: "skip", durationMs: 0, failureMessage }, stop: false };
+  const refused = testPageRefusedVerdict(scope, ref);
+  if (refused !== undefined) {
+    store.recordTestResult(runId, null, null, ref, "skip", 0, refused.failureMessage);
+    return { verdict: refused, stop: false };
   }
   const v = await runOnce(
     backend,
@@ -3425,7 +3436,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         code: "resume-baseline-reused",
         message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here.`,
       });
-      for (const b of reused.baseline) {
+      for (const saved of reused.baseline) {
+        // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
+        // hub-mode run before R-236c, or BC's own refusal) is replaced by the refused skip, and
+        // its stored coverage is dropped with it, so it can never enter a covering set.
+        const refused = testPageRefusedVerdict(scope, saved.ref);
+        const b = refused !== undefined ? { ref: saved.ref, verdict: refused } : saved;
         baseline.push(b);
         store.recordTestResult(
           runId,

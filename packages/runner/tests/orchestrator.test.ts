@@ -1746,6 +1746,77 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     );
   });
 
+  // A `--resume` that reuses a saved baseline skips `dispatchUnmutated`. A snapshot recorded before
+  // R-236c on a hub-mode run can hold the TestPage test as GREEN with coverage, which would put it
+  // in a covering set and send it fenced. The scan still runs on resume and overrides that row.
+  test("resume: a saved baseline recording the refused test green is overridden, never sent", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
+    // Make run 1 look like a pre-R-236c hub run: its snapshot holds UnsupportedTest as a pass
+    // covering IsUnderBudget, and it left every mutant to score (so the batch deploys and reuses).
+    const snap = store.db.query("SELECT id, payload FROM baseline_snapshots").all() as {
+      id: number;
+      payload: string;
+    }[];
+    expect(snap.length).toBe(1);
+    const [row] = snap;
+    if (row === undefined) throw new Error("no snapshot");
+    const payload = (JSON.parse(row.payload) as { ref: TestMethodRef; verdict: TestVerdict }[]).map(
+      (b) =>
+        b.ref.method === "UnsupportedTest"
+          ? {
+              ref: b.ref,
+              verdict: {
+                ref: b.ref,
+                outcome: "pass",
+                durationMs: 5,
+                coverage: {
+                  granularity: "procedure",
+                  entries: [
+                    { objectType: "Codeunit", objectId: 79000, procedure: "IsUnderBudget" },
+                  ],
+                },
+              },
+            }
+          : b,
+    );
+    store.db.run("UPDATE baseline_snapshots SET payload = ? WHERE id = ?", [
+      JSON.stringify(payload),
+      row.id,
+    ]);
+    store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+    store.db.run("DELETE FROM mutants");
+    store.db.run("UPDATE runs SET finished_at = NULL");
+
+    const backend = new RecordingBackend(CAPS_NST);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+      true,
+    );
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.unsupportedTests).toEqual([]);
+    const rows = store.db
+      .query(
+        "SELECT outcome, failure_message AS msg FROM test_results WHERE run_id = 2 AND method = 'UnsupportedTest'",
+      )
+      .all() as { outcome: string; msg: string }[];
+    expect(rows.map((r) => r.outcome)).toEqual(["skip"]);
+    expect(rows[0]?.msg).toContain("OpenView");
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
+  });
+
   // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
   // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
   // LethAL's own not-run message is filed as refused. A non-authoritative backend does no scan, so
