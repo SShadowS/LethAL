@@ -5,10 +5,13 @@
  * (docs/measurements/2026-09-27-nst-wedge-incidents.md). The reply cannot be recovered (R-236b).
  *
  * A static, safety-first policy: conditions are not evaluated, so an opening behind
- * `if GuiAllowed then` is refused too, and same-arity overloads are all walked.
+ * `if GuiAllowed then` is refused too, and same-arity overloads are all walked. A receiver the
+ * scanner cannot resolve to a plain declared name (parenthesised, subscripted, a with-statement's
+ * implicit receiver, or a same-codeunit call with no matching procedure) refuses too when the
+ * called name is itself opening-shaped, since the scanner cannot prove it is safe.
  * Documented limits, sent as before: handler-driven pages, helpers outside the test app or in
  * non-codeunit objects, Codeunit.Run, event subscribers, interfaces, and a bare zero-argument call
- * without parentheses in expression position.
+ * without parentheses in expression position (`B := Helper;`).
  *
  * Scope is read from the AST here, NOT through the engine: `collectVarDeclarations` keeps only the
  * first name of `A, B: TestPage X`, and `resolveVarRef` never resolves a member receiver. Either
@@ -29,9 +32,38 @@ import { testKeyOf } from "./selection";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
 const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);
-const PAGE_TYPE = /^\s*test(request)?page\b/i;
+/** Anchored at the start, but `array[...] of TestPage X` is a TestPage-typed declaration too. */
+const PAGE_TYPE = /^\s*(?:array\s*\[[^\]]*\]\s*of\s+)?test(request)?page\b/i;
 const CODEUNIT_TYPE = /^\s*codeunit\s+(.+?)\s*$/i;
 const NAME_KINDS = new Set(["identifier", "quoted_identifier"]);
+/** `#if`/`#elif`/`#else`/`#endif` branch markers inside a `preproc_conditional*` wrapper: not real
+ *  content, dropped before recursing into the wrapper's branches. */
+const PREPROC_BRANCH_MARKER = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+]);
+
+/**
+ * Unwraps every `preproc_conditional`/`preproc_conditional_var`/`preproc_conditional_object` node,
+ * keeping EVERY branch: the scanner is static and safety-first, so a procedure, object or
+ * declaration inside any `#if`/`#elif`/`#else` arm must be visible, not only the arm that would be
+ * active at compile time for one particular build.
+ */
+function flattenPreproc(nodes: readonly ALSyntaxNode[]): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const n of nodes) {
+    if (n.rawKind.startsWith("preproc_conditional")) {
+      out.push(
+        ...flattenPreproc(n.namedChildren.filter((c) => !PREPROC_BRANCH_MARKER.has(c.rawKind))),
+      );
+    } else {
+      out.push(n);
+    }
+  }
+  return out;
+}
 
 /** Thrown before anything is sent: a test whose reachable source could not be read is not sent. */
 export class TestPageScanError extends Error {
@@ -50,17 +82,27 @@ export interface TestPageAnalysis {
 
 type TsNode = ReturnType<typeof parseAL>["rootNode"];
 
-/** Start offsets of every ERROR and MISSING node (MISSING carries the missing token's type). */
-function errorOffsets(root: TsNode): number[] {
+interface ErrorSite {
+  readonly startIndex: number;
+  /** The ERROR/MISSING node's own text: an unclosed object can swallow the next one whole, so its
+   *  ERROR span can literally contain a later object's keyword (`docs/...`, review round 1 #5). */
+  readonly text: string;
+}
+
+/** Every ERROR and MISSING node (MISSING carries the missing token's type, and its text is empty). */
+function errorOffsets(root: TsNode): ErrorSite[] {
   if (!root.hasError) return [];
-  const out: number[] = [];
+  const out: ErrorSite[] = [];
   const walk = (n: TsNode): void => {
-    if (n.type === "ERROR" || n.isMissing) out.push(n.startIndex);
+    if (n.type === "ERROR" || n.isMissing) out.push({ startIndex: n.startIndex, text: n.text });
     for (const c of n.children) if (c !== null) walk(c);
   };
   walk(root);
   return out;
 }
+
+/** An ERROR node's span can name an object kind it swallowed whole, not just the one it sits in. */
+const SWALLOWS_CODEUNIT = /\bcodeunit\b/i;
 
 const within = (off: number, n: ALSyntaxNode) => off >= n.startIndex && off <= n.endIndex;
 
@@ -108,7 +150,7 @@ function addDeclarations(
   });
 }
 
-function buildUnit(file: string, node: ALSyntaxNode, errors: readonly number[]): Unit {
+function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[]): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
   const body = node.namedChildren.find((c) => c.rawKind === "declaration_body");
@@ -121,21 +163,22 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly number[]):
     id,
     name: normalizeAlName(display),
     display,
-    damaged: errors.some((e) => within(e, node)),
+    damaged: errors.some((e) => within(e.startIndex, node)),
     globals,
     pageNamesAnywhere,
     problems,
     procs: [] as Proc[],
   };
   if (body !== undefined) {
-    for (const c of body.namedChildren) {
+    const members = flattenPreproc(body.namedChildren);
+    for (const c of members) {
       if (c.rawKind.endsWith("var_section"))
         addDeclarations(c, globals, `${display} globals`, problems);
     }
     const all = new Map<string, string>();
     addDeclarations(body, all, `${display}`, []);
     for (const [n, t] of all) if (PAGE_TYPE.test(t)) pageNamesAnywhere.add(n);
-    for (const p of body.namedChildren) {
+    for (const p of members) {
       if (p.rawKind !== "procedure") continue;
       const id2 = nameNode(p);
       if (id2 === undefined) continue;
@@ -176,7 +219,11 @@ class Scanner {
   unitFor(typeText: string): Unit | undefined {
     const raw = CODEUNIT_TYPE.exec(typeText)?.[1];
     if (raw === undefined) return undefined;
-    const want = normalizeAlName(raw);
+    // A namespace-qualified reference (`Codeunit My.Tests."Lib"`) carries the namespace as leading
+    // dotted segments; the object itself is always the LAST one (review round 1, #3).
+    const segments = raw.split(".");
+    const last = segments[segments.length - 1] ?? raw;
+    const want = normalizeAlName(last);
     return this.units.find((u) => String(u.id) === want || u.name === want);
   }
 
@@ -190,16 +237,42 @@ class Scanner {
     visit(block, (n) => this.visitNode(p, n, here, st));
   }
 
+  /** Returns whether at least one procedure of `owner` matched (and was walked). */
   private calls(
     owner: Unit,
     rawName: string,
     args: number,
     path: readonly string[],
     st: TestState,
-  ) {
+  ): boolean {
     const name = normalizeAlName(rawName);
+    let matched = false;
     for (const c of owner.procs) {
-      if (c.name === name && c.params === args) this.walk(c, path, st);
+      if (c.name === name && c.params === args) {
+        matched = true;
+        this.walk(c, path, st);
+      }
+    }
+    return matched;
+  }
+
+  /**
+   * A call into the CALLING procedure's own codeunit (a bare name, `this.Name`, or a
+   * with-statement's implicit receiver, which parses as a bare name too). When no procedure of
+   * that name and arity exists, an ordinary call could not have compiled, so this is either a
+   * with-statement's implicit receiver method or a shape the scanner does not otherwise resolve.
+   * Refused only when the name itself is opening-shaped (safety-first; review round 1, #6).
+   */
+  private sameCodeunitCall(
+    unit: Unit,
+    rawName: string,
+    args: number,
+    path: readonly string[],
+    st: TestState,
+  ): void {
+    const matched = this.calls(unit, rawName, args, path, st);
+    if (!matched && OPENING_METHODS.has(normalizeAlName(rawName))) {
+      st.reason ??= `${path.join(" -> ")} calls ${rawName} (unresolved same-codeunit call, safety-first)`;
     }
   }
 
@@ -209,7 +282,7 @@ class Scanner {
       const args =
         n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
       if (fn === null) return;
-      if (NAME_KINDS.has(fn.rawKind)) this.calls(p.unit, fn.text, args, path, st);
+      if (NAME_KINDS.has(fn.rawKind)) this.sameCodeunitCall(p.unit, fn.text, args, path, st);
       else if (fn.rawKind === "member_expression") this.member(p, fn, args, path, st);
       return;
     }
@@ -224,7 +297,7 @@ class Scanner {
     }
     if (n.rawKind === "call_statement") {
       const id = nameNode(n);
-      if (id !== undefined) this.calls(p.unit, id.text, 0, path, st);
+      if (id !== undefined) this.sameCodeunitCall(p.unit, id.text, 0, path, st);
     }
   }
 
@@ -236,8 +309,23 @@ class Scanner {
     st: TestState,
   ): void {
     const [receiver, member] = m.namedChildren;
-    if (receiver === undefined || member === undefined || !NAME_KINDS.has(receiver.rawKind)) return;
+    if (receiver === undefined || member === undefined) return;
+    if (!NAME_KINDS.has(receiver.rawKind)) {
+      // A non-plain receiver (parenthesised, subscripted, chained, ...) cannot be resolved to a
+      // declared name, so scope cannot be checked. Refuse only when the member itself is
+      // opening-shaped: safety-first, never silently "not an edge" (review round 1, #4).
+      if (OPENING_METHODS.has(normalizeAlName(member.text))) {
+        st.reason ??= `${path.join(" -> ")} calls ${receiver.text}.${member.text} on an unresolved receiver`;
+      }
+      return;
+    }
     const key = normalizeAlName(receiver.text);
+    if (key === "this") {
+      // `this` refers to the codeunit instance itself (review round 1, #1): not a declared name,
+      // so it is never in scope/globals, and must not silently fall through as "not a TestPage".
+      this.sameCodeunitCall(p.unit, member.text, args, path, st);
+      return;
+    }
     const type = p.scope.get(key) ?? p.unit.globals.get(key);
     if (type === undefined) {
       if (p.unit.pageNamesAnywhere.has(key)) {
@@ -273,16 +361,24 @@ export function analyzeTestPageSources(
     const tree = parseAL(f.text);
     const errors = errorOffsets(tree.rootNode);
     const root = wrapRoot(tree);
-    const objects = root.namedChildren.filter(
+    const objects = flattenPreproc(root.namedChildren).filter(
       (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
     );
     for (const o of objects) {
       if (o.rawKind === "codeunit_declaration") units.push(buildUnit(f.path, o, errors));
     }
     for (const e of errors) {
-      const owner = objects.find((o) => within(e, o));
-      if (owner === undefined || owner.rawKind === "codeunit_declaration") {
-        suspect.push(`${f.path} at offset ${e}`);
+      const owner = objects.find((o) => within(e.startIndex, o));
+      // Suspect exactly as before (inside a codeunit, or outside every object) PLUS an ERROR span
+      // that itself names a `codeunit` keyword: an unclosed object can swallow the next one whole,
+      // so the swallowed codeunit never becomes a `Unit` and a call into it reads as "not found"
+      // rather than as the parse damage it actually is (review round 1, #5).
+      if (
+        owner === undefined ||
+        owner.rawKind === "codeunit_declaration" ||
+        SWALLOWS_CODEUNIT.test(e.text)
+      ) {
+        suspect.push(`${f.path} at offset ${e.startIndex}`);
       }
     }
   }

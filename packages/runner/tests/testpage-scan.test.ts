@@ -538,6 +538,211 @@ describe("loud errors, scoped to what a test can reach (review r2, I1)", () => {
   });
 });
 
+describe("review round 1: fail-closed fixes (was silently NOT refused)", () => {
+  test("this.Helper() calls the same codeunit's own procedure (#1)", () => {
+    const got = scan(
+      `codeunit 50100 "T"
+{
+    Subtype = Test;
+    [Test]
+    procedure A()
+    begin
+        this.Helper();
+    end;
+    local procedure Helper()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+}
+`,
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a helper procedure wrapped in #if ... #endif is still reachable (#2)", () => {
+    const got = scan(
+      `codeunit 50100 "T"
+{
+    Subtype = Test;
+    [Test]
+    procedure A()
+    begin
+        Helper();
+    end;
+#if not CLEAN24
+    local procedure Helper()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+#endif
+}
+`,
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a codeunit wrapped in #if ... #endif is still a resolvable call target (#2)", () => {
+    const lib = `#if not CLEAN24
+codeunit 50200 "Lib"
+{
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+}
+#endif
+`;
+    const got = scan(
+      unit(`
+    var
+        L: Codeunit Lib;
+
+    [Test]
+    procedure A()
+    begin
+        L.Open();
+    end;`),
+      [ref(50100, "A")],
+      [{ path: "lib.al", text: lib }],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("a namespace-qualified Codeunit type resolves on the last dotted segment (#3)", () => {
+    const got = scan(
+      `namespace My.Tests;
+codeunit 50100 "T"
+{
+    Subtype = Test;
+    [Test]
+    procedure A()
+    var
+        Lib: Codeunit My.Tests."Lib";
+    begin
+        Lib.Open();
+    end;
+}
+codeunit 50101 "Lib"
+{
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+}
+`,
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("an array of TestPage, opened through a subscript receiver (#4)", () => {
+    const got = scan(
+      unit(`
+    [Test]
+    procedure A()
+    var
+        Cards: array[2] of TestPage "X";
+    begin
+        Cards[1].OpenView();
+    end;`),
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("array[...] of TestPage is TestPage-typed for the out-of-scope loud rule too (#4)", () => {
+    const src = unit(`
+    trigger OnRun()
+    var
+        Hidden: array[2] of TestPage "X";
+    begin
+    end;
+
+    [Test]
+    procedure UsesHidden()
+    begin
+        Hidden.OpenView();
+    end;`);
+    const got = analyze(src, [ref(50100, "UsesHidden")]);
+    expect(got.errors.join("\n")).toContain("Hidden");
+  });
+
+  test("a parenthesised receiver refuses when the member is opening-shaped (#4)", () => {
+    const got = scan(
+      unit(`
+    [Test]
+    procedure A()
+    var
+        Card: TestPage "X";
+    begin
+        (Card).OpenView();
+    end;`),
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+
+  test("an unclosed page that swallows the next codeunit is suspect for an unresolved call (#5)", () => {
+    const testSrc = unit(`
+    var
+        Lib: Codeunit "Lib";
+
+    [Test]
+    procedure Fine()
+    begin
+        Lib.Open();
+    end;`);
+    const page = `page 50300 "Broken"
+{
+    layout { area(content) { field(X; X) { } }
+    trigger OnOpenPage()
+    begin
+    end;
+
+codeunit 50101 "Lib"
+{
+    procedure Open()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+}
+`;
+    const got = analyze(testSrc, [ref(50100, "Fine")], [{ path: "page.al", text: page }]);
+    expect(got.errors.join("\n")).toContain("Lib");
+    expect(() => scan(testSrc, [ref(50100, "Fine")], [{ path: "page.al", text: page }])).toThrow(
+      TestPageScanError,
+    );
+  });
+
+  test("a with-statement's implicit receiver call refuses when opening-shaped (#6)", () => {
+    const got = scan(
+      unit(`
+    [Test]
+    procedure A()
+    var
+        Card: TestPage "X";
+    begin
+        with Card do
+            OpenView();
+    end;`),
+      [ref(50100, "A")],
+    );
+    expect(got.size).toBe(1);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
