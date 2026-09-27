@@ -127,3 +127,27 @@ Copied from the plan's Task 6 Step 1.
 | P2 decisive: locked wedges, plain does not (2 matching pairs) | holding a lock across `StopSession` is what wedges (analogue scope) | as the H2 row |
 | HB: Bun offline timeout measured AND live elapsed/error match | supports: the call ended at Bun's timeout, not our 330 s cap | a separate client fix, independent of the above |
 | H4, t0 undecided where it matters, only ambiguous samples, or no row fits | not decided | owner via `coord ask`; no fix built on a guess |
+
+## ADDENDUM (appended after the P1 dry runs, before any live P1 run; nothing above this line changes)
+
+The orchestrator ruled a P1 redesign after the 2026-09-27/28 dry runs below. This section is the
+record of that ruling. It is still written before any live P1 run counts.
+
+- **`$metadata` is dropped from the sidecar entirely.** `GET $metadata` answers headers fast, then
+  its body stalls short of complete and never finishes: measured at 65,262 bytes, twice, on a plain
+  `curl` call outside the sidecar. A held `$metadata` call can occupy one of the BC user's own OData
+  V4 slots for as long as it is open, so a probe meant to watch for throttling must not risk causing
+  it.
+- **The sidecar authenticates as a separate BC user**, never the gate config's. That user is to be
+  created by the owner and is not yet available; until it exists, no live P1 run may proceed.
+- **The sidecar's own concurrent requests never exceed 2**, enforced in code
+  (`scripts/r289-probe/sidecar.ts`'s `pickProbesToRun`, unit-tested in `sidecar.test.ts`), not left to
+  chance.
+- **Why:** Business Central throttles OData V4 at 5 concurrent requests per user. The container's
+  Application event log recorded Id 705, "Request was throttled", at 5 requests running and 6
+  waiting on `ODataV4`, while the sidecar and the gate shared one user. A probe that shares the
+  gate's user and holds slots open can throttle the gate it is trying to observe.
+- **Every earlier live step is void.** All live activity from 23:5x on 2026-09-27 through 00:15 on
+  2026-09-28 (local time) is superseded by this ruling and does not count toward any P1 reading. No
+  P1 gate run was started in that window. See
+  `docs/measurements/2026-09-27-nst-wedge-incidents.md` for the measured incident.
