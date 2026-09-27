@@ -81,7 +81,10 @@
         "properties": {
           "test": { "type": "string", "description": "Qualified Codeunit.Method." },
           "codeunitId": { "type": "integer" },
-          "state": { "type": "string", "enum": ["stable", "flaky", "red", "flaky-unknown"] },
+          "state": {
+            "type": "string",
+            "enum": ["stable", "flaky", "red", "flaky-unknown", "infra-error"]
+          },
           "runs": {
             "type": "array",
             "description": "[baseline, rerun], both unmutated.",
@@ -90,7 +93,18 @@
               "additionalProperties": false,
               "required": ["outcome", "fresh"],
               "properties": {
-                "outcome": { "type": "string", "enum": ["pass", "fail", "not-run"] },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "skip",
+                    "timeout",
+                    "deadline-exceeded",
+                    "error",
+                    "not-run"
+                  ]
+                },
                 "fresh": { "type": "boolean" },
                 "sessionId": { "type": "integer" },
                 "testRunsBefore": { "type": "integer" }

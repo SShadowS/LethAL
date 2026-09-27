@@ -398,7 +398,8 @@ nothing.
 | field | values |
 |---|---|
 | `results[].verdict` | `killed`, `survived`, `error`, `skipped` |
-| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
+| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error` |
+| `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
@@ -413,6 +414,11 @@ A kill by a runtime error is still a kill, and says only that no assertion caugh
 lists the requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
 run verify again.
+
+`infra-error` means a call to the server failed during one of the new test's two unmutated runs
+(`runs[].outcome` is `error` or `deadline-exceeded`), so nothing is known about the test. Do not
+edit the test for it: run verify again, and run `lethal doctor` if it repeats. It blocks exit `0`
+like every state other than `stable`.
 
 ### Verify exit codes (checked)
 
@@ -493,7 +499,7 @@ Start from the row's `coveringTests` and the mutated span. Prefer a row with
 `executionProven: true`; a `false` one may be no finding at all. `reach: "covered-but-unreached"`
 means a test enters the procedure and never reaches the statement, so it needs a new case rather
 than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
-`flaky` or `red`. Verify runs the covering tests the run recorded plus the tests your edit added,
+`flaky` or `red` (`infra-error` is the server's failure, not the test's). Verify runs the covering tests the run recorded plus the tests your edit added,
 so an edit to an existing test that did NOT cover the mutant is never run against it: that is a
 blind spot, not a survival.
 

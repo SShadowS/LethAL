@@ -783,6 +783,7 @@ describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
     expect(verifyExitCode({ results: [error, killed], newTests: [stable] })).toBe(5);
     expect(verifyExitCode({ results: [survived, killed], newTests: [stable] })).toBe(5);
     expect(verifyExitCode({ results: [killed, skipped], newTests: [flaky] })).toBe(5);
+    expect(verifyExitCode({ results: [killed], newTests: [{ state: "infra-error" }] })).toBe(5);
     expect(verifyExitCode({ results: [killed, skipped], newTests: [stable] })).toBe(0);
     // Every survivor skipped: nothing measured, and nothing wrong either.
     expect(verifyExitCode({ results: [skipped], newTests: [] })).toBe(0);
