@@ -339,6 +339,12 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
         const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
         if (n !== undefined) scope.set(normalizeAlName(n.text), t);
       }
+      // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
+      // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
+      const returnType = p.childForFieldName("return_type")?.text;
+      const returnValue = p.childForFieldName("return_value");
+      if (returnValue !== null && returnType !== undefined)
+        scope.set(normalizeAlName(returnValue.text), returnType);
       const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
       if (vars !== undefined) addDeclarations(vars, scope, `${display}.${id2.text}`, problems);
       const block = p.namedChildren.find((c) => c.rawKind === "code_block");
@@ -348,7 +354,7 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
         name: normalizeAlName(id2.text),
         display: `${display}.${id2.text}`,
         params: params.length,
-        returnType: p.childForFieldName("return_type")?.text,
+        returnType,
         scope,
       });
     }

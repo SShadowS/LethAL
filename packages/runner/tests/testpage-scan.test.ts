@@ -1413,3 +1413,45 @@ ${more}
     ).toThrow(TestPageScanError);
   });
 });
+
+describe("run 002 re-review: a named return value is a variable in its procedure", () => {
+  const lib = unit(
+    `
+    procedure OpenIt()
+    var
+        C: TestPage "Z";
+    begin
+        C.OpenView();
+    end;`,
+    50200,
+    "Lib",
+    false,
+  );
+  const run = (body: string) =>
+    analyze(
+      unit(`
+    procedure H() R: Codeunit Lib
+    begin
+        ${body}
+    end;
+
+    [Test]
+    procedure T()
+    begin
+        H();
+    end;`),
+      [ref(50100, "T")],
+      [{ path: "lib.al", text: lib }],
+    );
+
+  test("called plainly", () => {
+    const got = run("R.OpenIt();");
+    expect(got.errors).toEqual([]);
+    expect(got.refused.get("50100::T") ?? "").toContain("OpenIt");
+  });
+  test("parenthesised", () => {
+    const got = run("(R).OpenIt();");
+    expect(got.errors).toEqual([]);
+    expect(got.refused.get("50100::T") ?? "").toContain("OpenIt");
+  });
+});
