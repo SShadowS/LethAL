@@ -200,8 +200,8 @@ function addDeclarations(
 /**
  * tree-sitter-al 4.4.1 parses an `#if` region that directly follows the global `var` section INSIDE
  * that section (`var_section > var_body > preproc_conditional_var > procedure`), where the AL
- * compiler places the same procedures at codeunit level (measured with the compiler's own parser,
- * R-236c round 2). Every branch's procedures are returned, in source order.
+ * compiler places the same procedures at codeunit level (upstream tree-sitter-al #29). Kept until
+ * the grammar is fixed. Every branch's procedures are returned, in source order.
  */
 function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
