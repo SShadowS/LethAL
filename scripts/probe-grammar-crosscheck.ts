@@ -126,6 +126,7 @@ async function treeSitterSites(
   );
   const guardedSpans = new Map<string, Span[]>();
   const unhealthy: Array<{ file: string; errorNodes: number; missingNodes: number }> = [];
+  let parsedCount = 0;
   for (const file of files) {
     // BOM stripped so BOTH sides index the same string. .NET's `ReadAllText` strips a UTF-8 BOM
     // and reports offsets into the stripped text; without this the tree-sitter offsets are 3
@@ -176,13 +177,14 @@ async function treeSitterSites(
       for (const c of n.children) walk(c);
     };
     walk(root);
+    parsedCount++;
     // Free the wasm-side tree. web-tree-sitter allocates each tree in the emscripten heap and does
     // NOT reclaim it on GC, so a corpus walk that keeps parsing without deleting exhausts it.
     // Everything retained above is a primitive copied out of the tree, so nothing here outlives the
     // delete.
     (tree as { delete?: () => void }).delete?.();
   }
-  return { sites, context, explainedByProbe, guardedSpans, unhealthy, parsedCount: files.length };
+  return { sites, context, explainedByProbe, guardedSpans, unhealthy, parsedCount };
 }
 
 interface CompilerResult {
@@ -191,7 +193,10 @@ interface CompilerResult {
   readonly parserVersion: string;
   readonly fileCount: number;
   readonly parseErrorFiles: string[];
-  readonly unmappedKinds: string[];
+  // Per-occurrence, with the FILE it came from, not pre-aggregated: an unmapped kind that exists
+  // only inside a file either parser could not read cleanly must not flip the verdict (comparable
+  // files decide it), so the file has to survive until the caller knows which files are comparable.
+  readonly unmappedKindSites: Array<{ file: string; kind: string }>;
 }
 
 /** Audited sites and context-probe sites as the AL compiler's own parser sees them. */
@@ -213,7 +218,7 @@ function compilerSites(alcBin: string, listFile: string): CompilerResult {
   };
   const sites: Site[] = [];
   const context: Site[] = [];
-  const unmapped = new Set<string>();
+  const unmappedKindSites: Array<{ file: string; kind: string }> = [];
   for (const n of parsed.nodes) {
     const mapped = COMPILER_TO_TREE_SITTER.get(n.kind);
     if (mapped === undefined) {
@@ -221,9 +226,10 @@ function compilerSites(alcBin: string, listFile: string): CompilerResult {
       // dropping it is how the mapping's incompleteness would stay invisible, and the mapping is
       // the part of this audit that can lie. The `Expression` suffix is a heuristic and is named as
       // one: it over-reports (the compiler has many expression kinds this audit does not want) and
-      // is meant to be read, not gated on.
+      // is meant to be read, not gated on. Recorded per-occurrence WITH its file: the caller decides
+      // whether it counts (comparable file) or is only a warning (unhealthy file), never here.
       if (n.kind.endsWith("Expression") && !DELIBERATELY_UNMAPPED.has(n.kind)) {
-        unmapped.add(n.kind);
+        unmappedKindSites.push({ file: resolve(n.file), kind: n.kind });
       }
     } else {
       sites.push({ file: resolve(n.file), kind: mapped, start: n.start, end: n.end });
@@ -244,7 +250,7 @@ function compilerSites(alcBin: string, listFile: string): CompilerResult {
     parserVersion: parsed.parserVersion,
     fileCount: parsed.fileCount,
     parseErrorFiles: parsed.parseErrorFiles,
-    unmappedKinds: [...unmapped].sort(),
+    unmappedKindSites,
   };
 }
 
@@ -272,6 +278,18 @@ const bad = new Set([...tsUnhealthyByFile.keys(), ...ccErrorFiles]);
 const comparable = new Set(files.filter((f) => !bad.has(f)));
 const tsKinds = restrictToComparable(tsResult.sites, comparable);
 const ccKinds = restrictToComparable(compiled.sites, comparable);
+
+// An unhealthy file never changes the verdict: an unmapped kind that occurs ONLY inside a file
+// either parser could not read cleanly is not evidence about the mapping, it is noise from a file
+// already excluded. Split by whether the kind also occurs in at least one comparable file.
+const unmappedInComparable = new Set(
+  compiled.unmappedKindSites.filter((u) => comparable.has(u.file)).map((u) => u.kind),
+);
+const unmappedAnywhere = new Set(compiled.unmappedKindSites.map((u) => u.kind));
+const unmappedKinds = [...unmappedInComparable].sort();
+const unmappedUnhealthyOnly = [...unmappedAnywhere]
+  .filter((k) => !unmappedInComparable.has(k))
+  .sort();
 
 const both = [...tsUnhealthyByFile.keys()].filter((f) => ccErrorFiles.has(f)).length;
 console.log(
@@ -352,13 +370,15 @@ for (const probe of CONTEXT_PROBES) {
   printSplit("only tree-sitter", diff.onlyTreeSitter, contextKey);
 }
 
-// Fail CLOSED on a compiler kind nobody mapped. A silently dropped kind is an invisible hole in the
-// mapping, and the mapping is the part of this audit that can lie.
-if (compiled.unmappedKinds.length > 0) {
+// Fail CLOSED on a compiler kind nobody mapped, in a COMPARABLE file: a silently dropped kind is
+// an invisible hole in the mapping, and the mapping is the part of this audit that can lie. A kind
+// seen only inside an already-excluded file is reported below as a warning instead, never here,
+// so an unhealthy file cannot flip the verdict.
+if (unmappedKinds.length > 0) {
   console.log(
-    `\nUNRULED compiler expression kinds (neither mapped nor deliberately unmapped): ${compiled.unmappedKinds.length}`,
+    `\nUNRULED compiler expression kinds (neither mapped nor deliberately unmapped): ${unmappedKinds.length}`,
   );
-  for (const k of compiled.unmappedKinds.slice(0, 10)) console.log(`   ${k}`);
+  for (const k of unmappedKinds.slice(0, 10)) console.log(`   ${k}`);
 }
 
 // tree-sitter's own parse health plus the compiler's, on the same footing: a grammar that REJECTS
@@ -374,6 +394,11 @@ for (const file of files) {
   if (ccBad) reasons.push("compiler parse error");
   warnings.push(`WARNING: ${file} excluded (${reasons.join(" | ")})`);
 }
+for (const kind of unmappedUnhealthyOnly) {
+  warnings.push(
+    `WARNING: unmapped compiler kind ${kind} seen only in unhealthy file(s), excluded from the verdict`,
+  );
+}
 if (warnings.length > 0) {
   console.log("");
   for (const w of warnings) console.log(w);
@@ -383,7 +408,7 @@ if (warnings.length > 0) {
 const v = verdict({
   comparableFiles: comparable.size,
   diffs: [kindsDiff, ...Object.values(context).map((c) => c.diff)],
-  unruledKinds: compiled.unmappedKinds.length,
+  unruledKinds: unmappedKinds.length,
 });
 
 const report = {
@@ -406,7 +431,7 @@ const report = {
   context,
   treeSitterUnhealthy: tsResult.unhealthy,
   compilerParseErrorFiles: compiled.parseErrorFiles,
-  unmappedKinds: compiled.unmappedKinds,
+  unmappedKinds,
 };
 
 if (jsonOut !== undefined) await Bun.write(jsonOut, JSON.stringify(report, null, 2));
@@ -423,7 +448,7 @@ switch (v) {
     break;
   case "unruled-mapping":
     console.log(
-      `UNRULED MAPPING: ${compiled.unmappedKinds.length} compiler kind(s) neither mapped nor ruled; the audit is not complete.`,
+      `UNRULED MAPPING: ${unmappedKinds.length} compiler kind(s) neither mapped nor ruled; the audit is not complete.`,
     );
     break;
   case "inconclusive":
