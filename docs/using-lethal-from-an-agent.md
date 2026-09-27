@@ -398,7 +398,8 @@ nothing.
 | field | values |
 |---|---|
 | `results[].verdict` | `killed`, `survived`, `error`, `skipped` |
-| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown` |
+| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error` |
+| `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
@@ -412,7 +413,13 @@ A kill by a runtime error is still a kill, and says only that no assertion caugh
 `killedByNewTest` says whether the killing test is one your edit added. A row's `invalidBaseline`
 lists the requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
-run verify again.
+run verify again. If the test's state is `infra-error`, read both runs before editing it (below).
+
+`infra-error` means at least one of the new test's two unmutated runs failed for infrastructure
+reasons (its `runs[].outcome` is `error` or `deadline-exceeded`: the call failed, not the test).
+Read both runs' `outcome` and `fresh` before concluding anything about the test: the other run may
+still be evidence, for example a fresh `fail`. Then run verify again, and run `lethal doctor` if it
+repeats. It blocks exit `0` like every state other than `stable`.
 
 ### Verify exit codes (checked)
 
@@ -493,7 +500,7 @@ Start from the row's `coveringTests` and the mutated span. Prefer a row with
 `executionProven: true`; a `false` one may be no finding at all. `reach: "covered-but-unreached"`
 means a test enters the procedure and never reaches the statement, so it needs a new case rather
 than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
-`flaky` or `red`. Verify runs the covering tests the run recorded plus the tests your edit added,
+`flaky` or `red` (for `infra-error`, read both runs first: at least one call failed). Verify runs the covering tests the run recorded plus the tests your edit added,
 so an edit to an existing test that did NOT cover the mutant is never run against it: that is a
 blind spot, not a survival.
 

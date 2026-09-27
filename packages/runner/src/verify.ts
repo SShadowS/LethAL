@@ -687,13 +687,24 @@ export async function planVerify(a: {
 export const VERIFY_SCHEMA_VERSION = 2;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
-export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown"] as const;
+export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
+/** R262: an unmutated run's outcome exactly as the backend answered it, plus `not-run`. */
+export const UNMUTATED_OUTCOMES = [
+  "pass",
+  "fail",
+  "skip",
+  "timeout",
+  "deadline-exceeded",
+  "error",
+  "not-run",
+] as const;
 // Named, not inline, like KilledBy and NewTestState below it: schemas.test.ts's typeLeafPaths walk
 // (C02-06 Task 6) resolves a field's domain by the NAME at that property, and an inline
 // `(typeof X)[number]` there has no name to resolve.
 export type VerifyVerdict = (typeof VERIFY_VERDICTS)[number];
 export type KilledBy = (typeof KILLED_BY)[number];
 export type NewTestState = (typeof NEW_TEST_STATES)[number];
+export type UnmutatedOutcome = (typeof UNMUTATED_OUTCOMES)[number];
 
 /**
  * Decision 7's exit codes. 3 and 4 mean what `run`'s `QUARANTINED_EXIT_CODE` and
@@ -707,9 +718,9 @@ export const VERIFY_EXIT = {
   refused: 6,
 } as const;
 
-/** One unmutated run of one new test (decision 11). Any non-pass outcome that ran is `fail`. */
+/** One unmutated run of one new test (decision 11). The outcome is the backend's own (R262). */
 export interface UnmutatedRun {
-  readonly outcome: "pass" | "fail" | "not-run";
+  readonly outcome: UnmutatedOutcome;
   readonly fresh: boolean;
   readonly sessionId?: number;
   readonly testRunsBefore?: number;
@@ -847,15 +858,29 @@ export function verifyExitCode(o: {
 }
 
 function unmutatedRunOf(r: NamedUnmutatedRun): UnmutatedRun {
+  // Fails loudly if the backend's outcome union grows without this list (R262).
+  if (!(UNMUTATED_OUTCOMES as readonly string[]).includes(r.outcome)) {
+    throw new Error(
+      `verify.ts: unmutated run of ${testKeyOf(r.ref)} has unknown outcome ${r.outcome}`,
+    );
+  }
   return {
-    outcome: r.outcome === "pass" || r.outcome === "not-run" ? r.outcome : "fail",
+    outcome: r.outcome,
     fresh: r.fresh,
     ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
     ...(r.testRunsBefore !== undefined ? { testRunsBefore: r.testRunsBefore } : {}),
   };
 }
 
-/** Decision 11: red, stable, flaky, or flaky-unknown for anything not attributable. */
+/** The test's own failure on the unmutated build. `timeout` is runner-confirmed (backend.ts). */
+const TEST_FAILED: ReadonlySet<UnmutatedOutcome> = new Set(["fail", "timeout", "skip"]);
+/** R262: the CALL failed; nothing is known about the test. */
+const INFRA_FAILED: ReadonlySet<UnmutatedOutcome> = new Set(["error", "deadline-exceeded"]);
+
+/**
+ * Decision 11 plus R262, first match wins: red, stable, flaky, infra-error when either run's
+ * call failed (fresh or not), and flaky-unknown for anything else not attributable.
+ */
 function newTestResultOf(
   ref: TestMethodRef,
   baseline: NamedUnmutatedRun,
@@ -864,13 +889,15 @@ function newTestResultOf(
   const b = unmutatedRunOf(baseline);
   const r = unmutatedRunOf(rerun);
   const state: NewTestState =
-    b.fresh && b.outcome === "fail"
+    b.fresh && TEST_FAILED.has(b.outcome)
       ? "red"
       : b.fresh && b.outcome === "pass" && r.fresh && r.outcome === "pass"
         ? "stable"
-        : b.fresh && b.outcome === "pass" && r.fresh && r.outcome === "fail"
+        : b.fresh && b.outcome === "pass" && r.fresh && TEST_FAILED.has(r.outcome)
           ? "flaky"
-          : "flaky-unknown";
+          : INFRA_FAILED.has(b.outcome) || INFRA_FAILED.has(r.outcome)
+            ? "infra-error"
+            : "flaky-unknown";
   const failed = [baseline, rerun].find((x) => x.outcome !== "pass" && x.outcome !== "not-run");
   return {
     test: qualifiedTestName(ref),

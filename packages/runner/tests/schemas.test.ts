@@ -35,6 +35,7 @@ import { ResultsStore } from "../src/store";
 import {
   KILLED_BY,
   NEW_TEST_STATES,
+  UNMUTATED_OUTCOMES,
   VERIFY_REFUSALS,
   VERIFY_SCHEMA_VERSION,
   VERIFY_VERDICTS,
@@ -592,7 +593,13 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     const fromType = typeLeafPaths({
       files: [join(SRC, "verify.ts")],
       root: "VerifyOutput",
-      expectedLeafTypeNames: ["VerifyVerdict", "KilledBy", "NewTestState", "VerifyRefusal"],
+      expectedLeafTypeNames: [
+        "VerifyVerdict",
+        "KilledBy",
+        "NewTestState",
+        "UnmutatedOutcome",
+        "VerifyRefusal",
+      ],
     });
     expect([...schemaLeafPaths(verifySchema)].sort()).toEqual([...fromType].sort());
   });
@@ -602,12 +609,24 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(verifySchema, "$.refused.reason")).toEqual([...VERIFY_REFUSALS]);
     expect(enumAt(verifySchema, "$.results[].killedBy")).toEqual([...KILLED_BY]);
     expect(enumAt(verifySchema, "$.newTests[].state")).toEqual([...NEW_TEST_STATES]);
-    // UnmutatedRun.outcome is an inline literal union in verify.ts, not a named runtime array, so
-    // it is pinned against that literal list directly rather than against an imported constant.
-    expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([
+    expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([...UNMUTATED_OUTCOMES]);
+    // Independent of the constants: a coordinated change to a constant AND the schema moves the
+    // published value domain, which needs a deliberate edit here too (R262 review).
+    expect([...UNMUTATED_OUTCOMES]).toEqual([
       "pass",
       "fail",
+      "skip",
+      "timeout",
+      "deadline-exceeded",
+      "error",
       "not-run",
+    ]);
+    expect([...NEW_TEST_STATES]).toEqual([
+      "stable",
+      "flaky",
+      "red",
+      "flaky-unknown",
+      "infra-error",
     ]);
   });
 
