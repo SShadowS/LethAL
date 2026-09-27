@@ -211,6 +211,11 @@ async function main(): Promise<void> {
     throw new Error("could not locate alc.exe/altool.exe under the AL Language extension install");
   }
   const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-verify-scale-"));
+  /** ONE quarantine dir for A, B1, B2, the library runVerify and the restore, so the product's own
+   *  consult refuses the restore when an earlier leg stranded the server, instead of publishing into
+   *  it. A scratch dir, never the real ~/.lethal store (see bcdev.itest.ts). `verifyFromCli` takes
+   *  no quarantine dir and always consults ~/.lethal. */
+  const quarantineDir = join(scratch, "quarantine");
   const tempConfig = join(scratch, "lethal.config.verify-scale.json");
   await writeFile(
     tempConfig,
@@ -298,8 +303,7 @@ async function main(): Promise<void> {
         lease,
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,
-        // A SCRATCH quarantine dir, never the real ~/.lethal store (see bcdev.itest.ts).
-        quarantineDir: join(scratch, `quarantine-${leg}`),
+        quarantineDir,
       });
     } finally {
       store.close();
@@ -412,7 +416,7 @@ async function main(): Promise<void> {
             resourceServer: bcdev.server,
             resourceServerInstance: bcdev.serverInstance,
             preprocessorSymbols: validatePreprocessorSymbols(configFile.preprocessorSymbols),
-            quarantineDir: join(scratch, "quarantine-library"),
+            quarantineDir,
             emit: [(e) => events.push({ at: Date.now(), event: e })],
           },
         );
@@ -604,7 +608,7 @@ async function main(): Promise<void> {
         lease,
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,
-        quarantineDir: join(scratch, "quarantine-restore"),
+        quarantineDir,
         inLease: async (fence) => {
           published = await backend.publishTestApp(fence, compiled);
         },
