@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**64 of 277 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**65 of 279 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -107,6 +107,7 @@ that ordering is the priority.
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 - **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
 - **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
+- **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · open
 
 ## Product gaps a real project hits
 
@@ -189,6 +190,7 @@ that ordering is the priority.
 - **R276** · gap ids change when a block is moved, and differ between a CRLF and an LF checkout of the same commit · [R276.md](docs/roadmap/R276.md) · open
 - **R277** · `unobservedBlock` is withheld on operator- and line-narrowed runs and on quarantined runs, so a `--changed-since` PR run never gets the mark · [R277.md](docs/roadmap/R277.md) · open
 - **R278** · lethal verify selects an edited COVERING test as an old test, so it never gets the new-test double run or a new-test state · [R278.md](docs/roadmap/R278.md) · open
+- **R282** · `swap-modify-flag` for `DeleteAll(true)` and `ModifyAll(..., true)` (GH-04): refused on R013 ground 1, 6 sites and 0 marginal · [R282.md](docs/roadmap/R282.md) · closed 2026-09-27: refused on R013 ground 1: 6 sites (DeleteAll 6, ModifyAll 0) on do-rel2/Cloud sha256…
 
 ## Backends and tooling
 
