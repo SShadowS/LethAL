@@ -129,6 +129,8 @@ export interface FoldedReport {
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   readonly permissionsRefusedTests?: readonly string[];
   readonly testPageUnsupportedTests?: readonly string[];
+  /** R-236c: baseline verdicts classified `tests-testpage-refused`; see `SessionReport.testPageRefused`. */
+  readonly testPageRefusedTests?: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
   readonly stopHungSessions?: boolean;
   readonly resumedFrom?: {
@@ -222,6 +224,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const staleTestApp = new Set<string>();
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
+  const testPageRefusedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
@@ -319,6 +322,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           }
           if (v.classification.includes("tests-testpage-unsupported")) {
             testPageUnsupportedTests.add(v.name);
+          }
+          if (v.classification.includes("tests-testpage-refused")) {
+            testPageRefusedTests.add(v.name);
           }
         }
         break;
@@ -594,6 +600,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(testPageUnsupportedTests.size > 0
       ? { testPageUnsupportedTests: [...testPageUnsupportedTests].sort() }
+      : {}),
+    ...(testPageRefusedTests.size > 0
+      ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
       : {}),
     ...(runnerDisagreementTests.size > 0
       ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }

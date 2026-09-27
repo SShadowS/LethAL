@@ -77,3 +77,34 @@ export const TESTPAGE_DIAGNOSIS =
   "EXECUTION PATH, not of your test: no change to the test or its declarations makes it run here. " +
   "The affected tests are dropped from the green set, so mutants covered only by them are excluded " +
   "from the score rather than scored against tests that never ran.";
+
+/**
+ * R-236c: the failure text of a test LethAL refused BEFORE sending, because it has a reachable call
+ * that may open a TestPage. An exact prefix, like the stale-test-app sentinel, so classification
+ * reads the VERDICT: a resumed baseline recorded before this existed keeps BC's own refusal. It
+ * must never contain the text `describeTestPageUnsupported` or the permission regexes match.
+ */
+export const TESTPAGE_NOT_RUN_PREFIX =
+  "not run: LethAL refused this test before sending it, because it has a reachable call that may open a TestPage";
+
+export function testPageNotRunMessage(reason: string): string {
+  return `${TESTPAGE_NOT_RUN_PREFIX} (${reason}).`;
+}
+
+export function isTestPageNotRunMessage(text: string | undefined): boolean {
+  return text?.startsWith(TESTPAGE_NOT_RUN_PREFIX) ?? false;
+}
+
+export const TESTPAGE_REFUSED_DIAGNOSIS =
+  "LethAL did not send these tests. Each one has a reachable call that may open a TestPage: the " +
+  "test, or a procedure it can call in the test app, calls OpenView, OpenEdit, OpenNew or Trap on a " +
+  "TestPage, found by reading the test source before the run. This is a safety-first static policy: " +
+  "conditions are not evaluated, so a call behind `if GuiAllowed then`, which would not run here, " +
+  "is refused too. The session LethAL runs tests in (GuiAllowed=No, ClientType=ODataV4) cannot run " +
+  "a TestPage, and sending one got at best BC's refusal and at worst a lost reply that left the BC " +
+  "server unable to answer until restarted (R236). These tests are not in the green set, so a " +
+  "mutant only they would reach is reported no-coverage: no test LethAL RAN reaches it, which is " +
+  "not the same as no test in your suite, and a guarded test may have lost a kill. Each test's " +
+  "failure text names the call path it was refused for. Not detected, and sent as before: a page " +
+  "opened by the code under test and handled through a handler function, and helpers outside the " +
+  "test app.";

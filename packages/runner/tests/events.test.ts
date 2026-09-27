@@ -401,7 +401,7 @@ describe("BASELINE_CLASSIFICATIONS (R113)", () => {
   test("guards the guard: the array is non-empty and the registry is reachable", () => {
     // Without this, the check above passes trivially the day either side becomes empty — an
     // empty-vs-empty match is this project's signature bug.
-    expect(BASELINE_CLASSIFICATIONS.length).toBe(3);
-    expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBeGreaterThan(3);
+    expect(BASELINE_CLASSIFICATIONS.length).toBe(4);
+    expect(Object.keys(CAVEAT_INTERPRETATIONS).length).toBeGreaterThan(4);
   });
 });

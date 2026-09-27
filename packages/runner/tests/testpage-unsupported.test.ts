@@ -3,7 +3,12 @@ import type { MutantManifestEntry } from "@lethal/schemata";
 import { unsupportedCoverageNote } from "../src/orchestrator";
 import { renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
-import { describeTestPageUnsupported } from "../src/testpage-unsupported";
+import {
+  TESTPAGE_REFUSED_DIAGNOSIS,
+  describeTestPageUnsupported,
+  isTestPageNotRunMessage,
+  testPageNotRunMessage,
+} from "../src/testpage-unsupported";
 import { legacyBuildReport } from "./helpers/legacy-report";
 
 /**
@@ -126,6 +131,19 @@ describe("describeTestPageUnsupported (R69)", () => {
       "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
       "supported. at Microsoft.Dynamics.Nav.Runtime.NavStream.Seek()";
     expect(describeTestPageUnsupported(unrelated)).toBeUndefined();
+  });
+
+  test("R-236c: the not-run message is recognised by prefix and trips neither older diagnosis", () => {
+    const m = testPageNotRunMessage('T.X calls Card.OpenView on TestPage "X"');
+    expect(isTestPageNotRunMessage(m)).toBe(true);
+    expect(isTestPageNotRunMessage("some other failure")).toBe(false);
+    expect(isTestPageNotRunMessage(undefined)).toBe(false);
+    expect(describeTestPageUnsupported(m)).toBeUndefined();
+  });
+
+  test("R-236c: the diagnosis states the static policy, not a runtime claim", () => {
+    expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("reachable call that may open a TestPage");
+    expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("GuiAllowed");
   });
 });
 

@@ -51,10 +51,14 @@ export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardow
  * `bun run typecheck` here, so a purely type-level coupling is invisible to the test runner
  * (R115). The array below is the runtime half: `events.test.ts` walks it against
  * `CAVEAT_INTERPRETATIONS`'s own keys, so a drift reddens `bun test` too, not only `tsc`.
+ *
+ * `tests-testpage-refused` (R-236c) is keyed on the exact `TESTPAGE_NOT_RUN_PREFIX`, not on
+ * outcome, because its verdict is a synthetic `skip`.
  */
 export const BASELINE_CLASSIFICATIONS = [
   "tests-permission-refused",
   "tests-testpage-unsupported",
+  "tests-testpage-refused",
   "stale-test-app",
 ] as const satisfies readonly Caveat[];
 

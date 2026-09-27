@@ -554,6 +554,7 @@
                   "enum": [
                     "tests-permission-refused",
                     "tests-testpage-unsupported",
+                    "tests-testpage-refused",
                     "stale-test-app"
                   ]
                 }

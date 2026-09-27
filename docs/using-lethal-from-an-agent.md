@@ -197,7 +197,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v2.schema.json](../schemas/report-v2.schema.json)
-- `lethal explain`: [../schemas/explain-v5.schema.json](../schemas/explain-v5.schema.json)
+- `lethal explain`: [../schemas/explain-v6.schema.json](../schemas/explain-v6.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -237,7 +237,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 5`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
+`explainSchemaVersion: 6`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
 and `survivorSelection`. Each `survivors` row carries `executionProven` and `reach`.
 
 A report from another schema version, or carrying a value this build cannot interpret, is REFUSED

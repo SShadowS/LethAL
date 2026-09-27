@@ -262,6 +262,7 @@ describe("Caveat union", () => {
       "stale-test-app": true,
       "tests-permission-refused": true,
       "tests-testpage-unsupported": true,
+      "tests-testpage-refused": true,
       "runner-disagreement": true,
       "stop-hung-sessions": true,
       resumed: true,
@@ -273,7 +274,7 @@ describe("Caveat union", () => {
       "all-errors": true,
       "session-warm": true,
     };
-    expect(Object.keys(all).length).toBe(19);
+    expect(Object.keys(all).length).toBe(20);
   });
 });
 
