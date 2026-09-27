@@ -58,7 +58,7 @@ export function compileSchemataForFile(
   // to declare first — see `injectMutationSelectorVar`'s doc comment.
   if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
 
-  return printWithRewrites(source, root, rewrites);
+  return printWithRewrites(source, root, rewrites, filePath ?? "<file>");
 }
 
 /**
