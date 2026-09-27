@@ -243,8 +243,8 @@ interface LegResult {
   /**
    * Diagnostics only, never asserted on: this run's `{ type: "warning" }` events (events.ts),
    * collected via `emit` since `runSession` otherwise reports them only to a subscriber this gate
-   * did not use to pass — see the 2026-09-27 hang investigation
-   * (`.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`, point 8).
+   * did not use to pass, see the 2026-09-27 hang investigation
+   * (`docs/measurements/2026-09-27-r289-hang-rootcause.md`, point 8).
    */
   readonly warnings: readonly WarningDiagnostic[];
 }
@@ -353,7 +353,7 @@ async function runLeg(scratchRoot: string, stopHungSessions: boolean): Promise<L
 
 /**
  * Best-effort: lists every record under a `QuarantineStore`'s dir and parses it, without needing
- * the `resourceKey` a `.read()` call would require. Diagnostics only — a file that fails to parse
+ * the `resourceKey` a `.read()` call would require. Diagnostics only: a file that fails to parse
  * is reported as such rather than thrown, since a broken quarantine record must not hide whatever
  * the test assertion above already found.
  */
@@ -384,9 +384,9 @@ async function readQuarantineRecords(dir: string): Promise<readonly QuarantineDi
 
 /**
  * R-236b/2026-09-27 hang investigation: on a failed assertion, print what the scratch store and
- * quarantine dir hold before `main()`'s `finally` deletes them — otherwise the ONLY record of why
+ * quarantine dir hold before `main()`'s `finally` deletes them, otherwise the ONLY record of why
  * a leg failed is gone by the time anyone reads the gate's output (see
- * `.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`).
+ * `docs/measurements/2026-09-27-r289-hang-rootcause.md`).
  */
 async function printLegFailureDiagnostics(label: string, leg: LegResult): Promise<void> {
   const errorMutants = leg.report.mutants

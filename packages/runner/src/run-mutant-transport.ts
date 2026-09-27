@@ -661,7 +661,9 @@ export class RunMutantTransport {
       verdict: { ...lost, failureMessage: `${lostText}; ${why}` },
     });
     const [firstMethod] = req.methods;
-    if (firstMethod === undefined) throw new Error("unreachable: runManyOnce refused an empty methods list");
+    if (firstMethod === undefined) {
+      throw new Error("unreachable: runManyOnce refused an empty methods list");
+    }
     let kept: KeptAnswer;
     try {
       // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.

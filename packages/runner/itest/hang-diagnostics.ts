@@ -2,10 +2,10 @@
  * Pure formatting for the diagnostics `hang.itest.ts` prints when a leg's assertions fail, before
  * its `finally` deletes the scratch store and quarantine dir that hold the only record of why
  * (2026-09-27 hang investigation:
- * `.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`). That report's
- * root cause for the M0004 failure was never found because the one record that would have said so
- * — the stranded verdict's `failureMessage`, carrying the watchdog's `stopDetail` (last stop
- * refusal, last progress row, stop hook error) — lived only in the scratch SQLite store and the
+ * `docs/measurements/2026-09-27-r289-hang-rootcause.md`). That report's
+ * root cause for the M0004 failure was never found because the one record that would have said so,
+ * the stranded verdict's `failureMessage`, carrying the watchdog's `stopDetail` (last stop
+ * refusal, last progress row, stop hook error), lived only in the scratch SQLite store and the
  * quarantine record, both gone by the time the gate printed its failure.
  *
  * No fs/DB access here on purpose: the itest gathers the data (it already has `LegResult`'s
@@ -13,7 +13,7 @@
  * be unit-tested without a live container and without duplicating `hang.itest.ts`'s env gate.
  */
 
-/** One `verdict === "error"` mutant's raw `test_results.failure_message` rows, verbatim — not
+/** One `verdict === "error"` mutant's raw `test_results.failure_message` rows, verbatim: not
  *  `SessionReport.mutants[].failureNote`, which is a synthesized summary built for the console
  *  table, not the server's own words. */
 export interface ErrorMutantDiagnostic {
@@ -44,7 +44,7 @@ export interface HangLegFailureDiagnostics {
   readonly warnings: readonly WarningDiagnostic[];
 }
 
-/** Never changes a pass/fail condition — this is print-only, called after an assertion has
+/** Never changes a pass/fail condition: this is print-only, called after an assertion has
  *  already thrown. Always emits something for each section, "none" included, so an empty section
  *  reads as measured-empty rather than as a formatting bug that dropped it. */
 export function formatHangLegFailureDiagnostics(input: HangLegFailureDiagnostics): string {

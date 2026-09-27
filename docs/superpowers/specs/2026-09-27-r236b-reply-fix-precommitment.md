@@ -212,7 +212,7 @@ Cronus28.
     mutant's (`a10/35210`), so `GetOpAnswer` found nothing to accept and the verdict correctly stayed
     `in-flight-unknown` rather than a false accept.
   - Judged: the pre-existing M0004 `StopHungRunAt` flake (R289), not shown to be caused by R-236b.
-    Offline analysis (`.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`):
+    Offline analysis (`docs/measurements/2026-09-27-r289-hang-rootcause.md`):
     the readback only appends text to an `in-flight-unknown` result that `runManyOnce` already
     classified, and it is never reached before a confirmed 408; the stop path, client and server, is
     textually unchanged by R-236b. State plainly, and do not read past it: this is 2 of 2 same-shape
