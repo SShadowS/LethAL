@@ -10,7 +10,14 @@
  * implicit receiver, or a same-codeunit call with no matching procedure) refuses too when the
  * called name is itself opening-shaped, since the scanner cannot prove it is safe. Any other call
  * on a non-plain receiver (`Libs[1].Helper()`, `GetLib().Helper()`) is walked into every codeunit
- * the receiver's value can be; a receiver whose type the scanner cannot work out is a loud error.
+ * the receiver's value can be; a receiver EXPRESSION of a kind the scanner does not model is a
+ * loud error.
+ * The undeclared-root rule: a receiver whose root NAME has no declaration the scanner collects is
+ * read as a type name, a system object or a built-in function, never a codeunit instance, so no
+ * call edge is followed from it. That is safe only because every form of declaration that can
+ * hold a codeunit IS collected (parameters, var parameters, locals, globals, protected vars, named
+ * return values, declarations inside `#if` regions); the test "declaration-form completeness:
+ * every form that can hold a codeunit is in scope" in tests/testpage-scan.test.ts pins each form.
  * Documented limits, sent as before: handler-driven pages, helpers outside the test app or in
  * non-codeunit objects, Codeunit.Run, event subscribers, interfaces, and a bare zero-argument call
  * without parentheses in expression position (`B := Helper;`).

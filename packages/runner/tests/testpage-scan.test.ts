@@ -1455,3 +1455,165 @@ describe("run 002 re-review: a named return value is a variable in its procedure
     expect(got.refused.get("50100::T") ?? "").toContain("OpenIt");
   });
 });
+
+// The undeclared-root rule (an undeclared receiver root is read as a type name, a system object or
+// a function, never a codeunit instance) is only safe if EVERY form of declaration that can hold a
+// test-app codeunit is collected. Run 002 ruling: each form here must be REFUSED.
+describe("declaration-form completeness: every form that can hold a codeunit is in scope", () => {
+  const opener = unit(
+    `
+    procedure OpenIt()
+    var
+        C: TestPage "Z";
+    begin
+        C.OpenView();
+    end;`,
+    50200,
+    "Opener",
+    false,
+  );
+  const holder = unit(
+    `
+    var
+        Held: Codeunit Opener;
+
+    procedure Go()
+    begin
+        Held.OpenIt();
+    end;`,
+    50201,
+    "Holder",
+    false,
+  );
+  const forms: Record<string, string> = {
+    "parameter by value": `
+    local procedure Use(O: Codeunit Opener)
+    begin
+        O.OpenIt();
+    end;
+
+    [Test]
+    procedure T()
+    var
+        X: Codeunit Opener;
+    begin
+        Use(X);
+    end;`,
+    "var parameter": `
+    local procedure Use(var O: Codeunit Opener)
+    begin
+        O.OpenIt();
+    end;
+
+    [Test]
+    procedure T()
+    var
+        X: Codeunit Opener;
+    begin
+        Use(X);
+    end;`,
+    local: `
+    [Test]
+    procedure T()
+    var
+        O: Codeunit Opener;
+    begin
+        O.OpenIt();
+    end;`,
+    global: `
+    var
+        O: Codeunit Opener;
+
+    [Test]
+    procedure T()
+    begin
+        O.OpenIt();
+    end;`,
+    "protected var": `
+    protected var
+        O: Codeunit Opener;
+
+    [Test]
+    procedure T()
+    begin
+        O.OpenIt();
+    end;`,
+    "named return value": `
+    local procedure Get() O: Codeunit Opener
+    begin
+        O.OpenIt();
+    end;
+
+    [Test]
+    procedure T()
+    begin
+        Get();
+    end;`,
+    "a global inside a #if region of the var section (#29 shape)": `
+    var
+        Other: Integer;
+#if not CLEAN99
+        O: Codeunit Opener;
+#endif
+
+    [Test]
+    procedure T()
+    begin
+        O.OpenIt();
+    end;`,
+    "a local inside a #if region of a procedure's var section": `
+    [Test]
+    procedure T()
+    var
+#if not CLEAN99
+        O: Codeunit Opener;
+#else
+        O: Codeunit Opener;
+#endif
+    begin
+        O.OpenIt();
+    end;`,
+    "a global of another codeunit, reached through a helper": `
+    var
+        H: Codeunit Holder;
+
+    [Test]
+    procedure T()
+    begin
+        H.Go();
+    end;`,
+  };
+  for (const [form, body] of Object.entries(forms)) {
+    test(`${form} is refused`, () => {
+      const got = analyze(
+        unit(body),
+        [ref(50100, "T")],
+        [
+          { path: "opener.al", text: opener },
+          { path: "holder.al", text: holder },
+        ],
+      );
+      expect({ form, errors: got.errors }).toEqual({ form, errors: [] });
+      expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
+    });
+  }
+
+  test("a TestPage declared in a trigger's var section and used by a test stays a loud error (rule 4)", () => {
+    const got = analyze(
+      unit(`
+    trigger OnRun()
+    var
+        Hidden: TestPage "X";
+    begin
+    end;
+
+    [Test]
+    procedure T()
+    begin
+        Hidden.OpenView();
+    end;`),
+      [ref(50100, "T")],
+    );
+    expect(got.errors.join("\n")).toContain("Hidden");
+  });
+});
