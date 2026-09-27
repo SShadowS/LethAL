@@ -325,7 +325,19 @@ interface TestState {
 }
 
 class Scanner {
-  constructor(private readonly units: readonly Unit[]) {}
+  /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
+   *  349 of BaseApp's 415 s (CPU profile, R-236c round 2). */
+  private readonly byKey = new Map<string, Unit[]>();
+
+  constructor(units: readonly Unit[]) {
+    for (const u of units) {
+      for (const k of new Set([String(u.id), u.name])) {
+        const list = this.byKey.get(k);
+        if (list === undefined) this.byKey.set(k, [u]);
+        else list.push(u);
+      }
+    }
+  }
 
   /**
    * Every codeunit a `Codeunit <type text>` reference could plausibly name — ALL candidates, not
@@ -357,7 +369,7 @@ class Scanner {
 
   /** By id (numeric) or by declared name; both checked for every candidate string above. */
   private byNameAll(want: string): Unit[] {
-    return this.units.filter((u) => String(u.id) === want || u.name === want);
+    return this.byKey.get(want) ?? [];
   }
 
   walk(p: Proc, path: readonly string[], st: TestState): void {

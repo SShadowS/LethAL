@@ -1002,6 +1002,116 @@ describe("procedures the grammar places inside the global var section (R-236c ro
   });
 });
 
+describe("codeunit lookup index (R-236c round 2)", () => {
+  // Many tests share library procedures. Each test's walk must not depend on which tests ran
+  // before it: same refusals, same reasons, same errors in either order.
+  const lib = unit(
+    `
+    procedure Opens()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+
+    procedure Safe()
+    begin
+    end;
+
+    procedure Both()
+    begin
+        Safe();
+        Opens();
+    end;`,
+    50200,
+    "Lib",
+    false,
+  );
+  const tests = unit(`
+    var
+        L: Codeunit "Lib";
+        ById: Codeunit 50200;
+
+    [Test]
+    procedure A()
+    begin
+        L.Both();
+    end;
+
+    [Test]
+    procedure B()
+    begin
+        ById.Opens();
+    end;
+
+    [Test]
+    procedure C()
+    begin
+        L.Safe();
+    end;
+
+    [Test]
+    procedure D()
+    begin
+        L.Missing();
+        ById.Both();
+    end;`);
+  const refs = ["A", "B", "C", "D"].map((m) => ref(50100, m));
+  const run = (order: TestMethodRef[]) => {
+    const got = analyze(tests, order, [{ path: "lib.al", text: lib }]);
+    return { refused: [...got.refused].sort(), errors: [...got.errors].sort() };
+  };
+
+  test("same verdicts and reasons in either test order", () => {
+    const forward = run(refs);
+    expect(forward.refused.map(([k]) => k)).toEqual(["50100::A", "50100::B", "50100::D"]);
+    expect(forward.refused[0]?.[1]).toBe(
+      'T.A -> Lib.Both -> Lib.Opens calls Card.OpenView on TestPage "X"',
+    );
+    expect(run([...refs].reverse())).toEqual(forward);
+  });
+
+  test("a key naming two codeunits (one by id, one by name) returns both", () => {
+    const safe = unit(
+      `
+    procedure Run()
+    begin
+    end;`,
+      50300,
+      "Plain",
+      false,
+    );
+    const opens = unit(
+      `
+    procedure Run()
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;`,
+      50301,
+      "50300",
+      false,
+    );
+    const got = analyze(
+      unit(`
+    [Test]
+    procedure A()
+    var
+        X: Codeunit 50300;
+    begin
+        X.Run();
+    end;`),
+      [ref(50100, "A")],
+      [
+        { path: "a.al", text: safe },
+        { path: "b.al", text: opens },
+      ],
+    );
+    expect([...got.refused.keys()]).toEqual(["50100::A"]);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
