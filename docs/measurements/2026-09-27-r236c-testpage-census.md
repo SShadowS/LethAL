@@ -162,3 +162,39 @@ Loud errors stay 0 on every corpus. The only delta is BaseApp, +6 refused: six t
 an opening call runs through a call with a comment inside its argument list or between receiver and
 member, which the old scanner dropped and so sent. The fixture pin still holds: in
 `sandbox-data-tests` exactly `Data Tests.PageActionComputesNonZero` is refused.
+
+## 9. Run 002: calls on non-plain receivers (fifth run)
+
+Review r1 of run 001 found a second fail-open shape. A call on a receiver that is not a plain
+declared name (an array element `Libs[1].Helper()`, a parenthesised `(L).Helper()`, a member chain
+or a function's return value `GetLib().Helper()`) was dropped as safe unless its member was itself
+`OpenView`, `OpenEdit`, `OpenNew` or `Trap`. The scanner now works out which type the receiver's
+value can have (array element types, return types of test-app procedures, ternaries, `this`) and
+walks the call into every test-app codeunit it can be. A literal, an operator's result, a built-in's
+return, or a member of a record, a TestPage or a codeunit outside the test app is not a test-app
+codeunit. Any other receiver shape is a loud error, never safe (`e484aa3`).
+
+Same command, same corpora, run at `c87e7d3`:
+
+| corpus | files | tests | refused before (section 8) | refused after | loud errors before | loud errors after | ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 68 | 1 | 1 | 0 | 0 | 84 |
+| `fixtures/sandbox-tests` | 1 | 2 | 0 | 0 | 0 | 0 | 13 |
+| `fixtures/sandbox-hang-tests` | 1 | 5 | 0 | 0 | 0 | 0 | 4 |
+| `fixtures/sandbox-harden-tests` | 1 | 6 | 0 | 0 | 0 | 0 | 7 |
+| `U:/Git/do-rel2/Cloud` | 554 | 0 (no tests) | 0 | 0 | 0 | 0 | 1016 |
+| `U:/Git/DC/Cloud` | 1135 | 0 (no tests) | 0 | 0 | 0 | 0 | 2786 |
+| `U:/Git/BusinessCentral.Sentinel` | 67 | 54 | 0 | 0 | 0 | 0 | 58 |
+| `U:/Git/BC.History/BusinessFoundation` | 104 | 89 | 19 | 19 | 0 | 0 | 179 |
+| `U:/Git/BC.History/System Application` | 1718 | 1889 | 209 | 209 | 0 | 0 | 3121 |
+| `U:/Git/BC.History/BaseApp` | 9620 | 40291 | 11179 | 11179 | 0 | 0 | 56623 |
+
+No count moved, and the new loud error fired nowhere: every non-plain receiver any test reaches in
+these corpora is a shape the scanner now models, and none of them adds a path to an opening call
+that another path had not already found. The fixture pin still holds.
+
+**The post-live fix `0e5a017` was not outcome-neutral in general.** It landed after the run 001 live
+gates, and section 8 records that it added six BaseApp refusals (11,173 to 11,179). The fixture
+`sandbox-data-tests` was unchanged by it (exactly `Data Tests.PageActionComputesNonZero` refused
+before and after), so the live gate outcomes still hold for the fixture; they do not prove outcomes
+for other test apps.
