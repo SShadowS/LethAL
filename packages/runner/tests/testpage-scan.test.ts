@@ -1285,3 +1285,131 @@ describe("memory: every parse tree is released once its facts are read", () => {
     }
   });
 });
+
+describe("run 002 review r1 #1: a non-plain receiver whose member is not opening-shaped", () => {
+  const lib = (extra = "") =>
+    unit(
+      `
+    procedure OpenIt()
+    var
+        C: TestPage "Z";
+    begin
+        C.OpenView();
+    end;
+
+    procedure Self(): Codeunit Lib
+    begin
+    end;
+
+    procedure Safe()
+    begin
+    end;${extra}`,
+      50200,
+      "Lib",
+      false,
+    );
+  const run = (decls: string, call: string, more = "") =>
+    analyze(
+      unit(`
+    var
+        L: Codeunit Lib;
+        Libs: array[2] of Codeunit Lib;
+${decls}
+    procedure GetLib(): Codeunit Lib
+    begin
+    end;
+
+    procedure GetLibNamed() Result: Codeunit Lib
+    begin
+    end;
+${more}
+    [Test]
+    procedure T()
+    begin
+        ${call}
+    end;`),
+      [ref(50100, "T")],
+      [{ path: "lib.al", text: lib() }],
+    );
+  const refusedBy = (call: string, decls = "") => {
+    const got = run(decls, call);
+    expect(got.errors).toEqual([]);
+    return got.refused.get("50100::T") ?? "";
+  };
+
+  test("an array element", () => {
+    expect(refusedBy("Libs[1].OpenIt();")).toContain("OpenIt");
+  });
+  test("a parenthesised receiver", () => {
+    expect(refusedBy("(L).OpenIt();")).toContain("OpenIt");
+  });
+  test("a same-codeunit function's return value", () => {
+    expect(refusedBy("GetLib().OpenIt();")).toContain("OpenIt");
+  });
+  test("a named return value", () => {
+    expect(refusedBy("GetLibNamed().OpenIt();")).toContain("OpenIt");
+  });
+  test("a member chain through a helper's return value", () => {
+    expect(refusedBy("L.Self().OpenIt();")).toContain("OpenIt");
+  });
+  test("a longer chain: array element, return value, paren-less call", () => {
+    expect(refusedBy("Libs[2].Self().Self().OpenIt;")).toContain("OpenIt");
+  });
+  test("this.GetLib() as the receiver", () => {
+    expect(refusedBy("this.GetLib().OpenIt();")).toContain("OpenIt");
+  });
+  test("a ternary of two codeunit variables", () => {
+    expect(refusedBy("(true ? L : Libs[1]).OpenIt();")).toContain("OpenIt");
+  });
+  test("control: the same shapes calling a safe helper are not refused", () => {
+    for (const call of ["Libs[1].Safe();", "(L).Safe();", "GetLib().Safe();", "L.Self().Safe();"]) {
+      const got = run("", call);
+      expect(got.errors).toEqual([]);
+      expect(got.refused.size).toBe(0);
+    }
+  });
+  test("control: harmless chains on records, TestPage fields, text and enums raise nothing", () => {
+    const decls = `        Rec: Record Customer;
+        Page: TestPage "Customer Card";
+        Txt: Text;
+        Arr: array[3] of Text;`;
+    for (const call of [
+      "Rec.Name.ToUpper();",
+      "Page.Lines.Amount.SetValue(1);",
+      "Txt.Substring(1).ToUpper();",
+      "Arr[1].ToUpper();",
+      "Format(1).Contains('x');",
+      "(Txt + Txt).ToUpper();",
+      "'abc'.ToUpper();",
+      '"Sales Document Type"::Order.AsInteger();',
+      "Undeclared.Thing.Do();",
+    ]) {
+      const got = run(decls, call);
+      expect({ call, errors: got.errors, refused: got.refused.size }).toEqual({
+        call,
+        errors: [],
+        refused: 0,
+      });
+    }
+  });
+  test("an unresolvable receiver fails LOUDLY, never safe", () => {
+    const got = run("        Rec: Record Customer;", "with Rec do\n            FromWith().Safe();");
+    expect(got.errors.join("\n")).toContain("FromWith().Safe");
+    expect(() =>
+      scan(
+        unit(`
+    var
+        Rec: Record Customer;
+
+    [Test]
+    procedure T()
+    begin
+        with Rec do
+            FromWith().Safe();
+    end;`),
+        [ref(50100, "T")],
+        [{ path: "lib.al", text: lib() }],
+      ),
+    ).toThrow(TestPageScanError);
+  });
+});
