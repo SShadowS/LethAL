@@ -81,6 +81,7 @@
     "r236-baseline-probe/probe.test.ts",
     "r236-baseline-probe/size-arm.ts",
     "r236-baseline-probe/size-arm.test.ts",
+    "r236c-testpage-census.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts"
   ]
