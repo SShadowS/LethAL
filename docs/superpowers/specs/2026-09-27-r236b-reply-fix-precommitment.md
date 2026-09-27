@@ -181,3 +181,51 @@ this task neither closes nor narrows it.
 C2 skips `itest:tables`: it cannot pass until R-236c lands (LethAL refuses TestPage tests up front, as a
 named "TestPage refused, not run" result). C2 runs `itest:bcdev`, `itest:hang` and `itest:chunked` on
 Cronus28.
+
+### C2 (2026-09-27, Cronus28, control app 1.0.0.20)
+
+- Lease: `coord lease Cronus28 bugs`, attempt `047`, released after Task 11. `itest:hang`'s rerun ran
+  under a second lease, attempt `048`, released after.
+- Publish: before, `LethAL Control` 1.0.0.19 was installed Global (1.0.0.16 and 1.0.0.18 published, not
+  installed). `Publish-BcContainerApp ... -sync -upgrade` for `LethAL_LethAL Control_1.0.0.20.app`
+  printed `Synchronizing`, `Upgrading`, `successfully published`, no refusal. After, 1.0.0.20 is
+  installed Global, Synced. No doctor run on any of the three fixture configs reported an orphaned
+  server-side lease, so no `force-reset-lease` was needed.
+- `itest:bcdev`: PASS. `killed=3 survived=12 noCoverage=4 baselineGreen=true`. All four R-236b
+  kept-answer pins passed inside `protocol-invariant probes PASS`, including the discrimination pin:
+  `GetOpAnswer` for `opSeq - 1` returns `found: false`.
+- `itest:chunked`: PASS, both legs. Unbounded leg killed 17 / survived 7 / noCoverage 2, `warmKills` 9,
+  `groupedCalls` 33. Chunked-2 leg the same 17 / 7 / 2, `warmKills` 5, `groupedCalls` 57. Verdict and
+  `killingTest` identity across legs held.
+- `itest:hang`: **FAIL, twice.**
+  - Run 1 (lease `047`): `every mutant must be scored`, `4 !== 40`, wall 640 s. M0004
+    (`lethal.void-method-call`, `src\HangLogic.Codeunit.al:37`, expected `timeout-killed`) came back
+    `error`, a stranded-container quarantine. The run stopped at 4 of 40 mutants; the OFF leg never ran.
+  - Rerun (lease `048`, same code, with this session's diagnostic print `7bee6a5` and permanent test
+    `18c6ae5`): **FAIL the same way**, `4 !== 40`, wall 640 s. New diagnostics, printed before teardown
+    deleted the scratch store: M0004's `failureMessage` is `RunMutantMany connection failed after
+    dispatch: TimeoutError: The operation timed out.; answer readback: the server holds no committed
+    answer for a10/35210 (it holds a9/35209)`. Four `lease-renew-unanswered` warnings fired during the
+    hang (`RenewLease` `AbortError` twice in a row, four separate times): the server stopped answering
+    lease renewal too, not only M0004's own call, for the whole hard-cap window. The readback (R-236b)
+    behaved correctly: the server's kept-answer row still named the PREVIOUS op (`a9/35209`), not this
+    mutant's (`a10/35210`), so `GetOpAnswer` found nothing to accept and the verdict correctly stayed
+    `in-flight-unknown` rather than a false accept.
+  - Judged: the pre-existing M0004 `StopHungRunAt` flake (R289), not shown to be caused by R-236b.
+    Offline analysis (`.superpowers/sdd/2026-09-27-R-236b-testpage-reply-fix/hang-rootcause-report.md`):
+    the readback only appends text to an `in-flight-unknown` result that `runManyOnce` already
+    classified, and it is never reached before a confirmed 408; the stop path, client and server, is
+    textually unchanged by R-236b. State plainly, and do not read past it: this is 2 of 2 same-shape
+    failures on `lethal/lane-bugs` today (lease `047` and the rerun, lease `048`) against 1 of 3
+    same-shape runs on `master` on 2026-09-26 (`docs/measurements/2026-09-27-nst-wedge-incidents.md`
+    §3). The sample is too small either way to rule R-236b out; the offline mechanism analysis, not the
+    rate, is what the "not shown to be caused by" judgement rests on.
+- `itest:tables`: **SKIPPED** per owner direction. It cannot pass until R-236c lands.
+- Write cost: only `itest:chunked` has a recorded pre-fix wall time to compare against, ~95 s (R208,
+  2026-09-04) versus 96 s today. No pre-fix wall time is recorded for `itest:hang` or `itest:bcdev`.
+
+**Acceptance verdict, per owner direction: MEASURED-PARTIAL. R236 stays OPEN.** C1 was not run (both
+live TestPage hits that day wedged Cronus284 before it could start). C1b never produced a measured
+pass (the first attempt was invalid, no prep session; the second exited 0 but was VACUOUS, zero calls
+arrived whole). C2's `itest:hang` fails on a judged-unrelated pre-existing flake, and `itest:tables` is
+skipped by design pending R-236c. No mechanism label closes or narrows R236 from this OUTCOME.
