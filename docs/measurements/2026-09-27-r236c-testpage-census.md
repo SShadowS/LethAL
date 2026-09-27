@@ -172,7 +172,9 @@ or a function's return value `GetLib().Helper()`) was dropped as safe unless its
 value can have (array element types, return types of test-app procedures, ternaries, `this`) and
 walks the call into every test-app codeunit it can be. A literal, an operator's result, a built-in's
 return, or a member of a record, a TestPage or a codeunit outside the test app is not a test-app
-codeunit. Any other receiver shape is a loud error, never safe (`e484aa3`).
+codeunit. A receiver EXPRESSION of a kind the scanner does not model is a loud error (`e484aa3`).
+A receiver whose root is a NAME the scanner finds no declaration for (plain `X.Y()` or inside a
+chain) is still treated as not a test-app codeunit, as the plain path always did; see section 10.
 
 Same command, same corpora, run at `c87e7d3`:
 
@@ -198,3 +200,42 @@ gates, and section 8 records that it added six BaseApp refusals (11,173 to 11,17
 `sandbox-data-tests` was unchanged by it (exactly `Data Tests.PageActionComputesNonZero` refused
 before and after), so the live gate outcomes still hold for the fixture; they do not prove outcomes
 for other test apps.
+
+## 10. Run 002 re-review: named return values and undeclared roots (sixth run)
+
+The re-review found that a named return value (`procedure H() R: Codeunit Lib`) was not in its
+procedure's scope, so `R.Helper()` and `(R).Helper()` read as an undeclared name and were dropped.
+It is now a variable of its procedure with the declared return type (this section's commit).
+
+The re-review also asked that an undeclared root name stop being silently safe, except for names
+that can legally be undeclared. That rule was built and measured with this allowlist: object types
+with static methods (`Page`, `Report`, `Codeunit`, `Xmlport`, `Query`), system objects (`Database`,
+`Session`, `SessionInformation`, `CompanyProperty`, `ProductName`, `NavApp`, `TaskScheduler`,
+`NumberSequence`, `IsolatedStorage`, `ErrorInfo`, `Version`, `SecretText`, `Debugger`, `File`,
+`System`), implicit variables (`Rec`, `xRec`, `CurrPage`, `CurrReport`, `CurrXMLport`,
+`CurrFieldNo`, `RequestOptionsPage`), paren-less built-in functions (`Today`, `Time`, `WorkDate`,
+`CurrentDateTime`, `UserId`, `UserSecurityId`, `CompanyName`, `TenantId`, `SerialNumber`,
+`GuiAllowed`, `ServiceInstanceId`, `SessionId`, `CreateGuid`, `ApplicationPath`, the four
+`GetLastError*`, `GlobalLanguage`, `WindowsLanguage`), and a paren-less call to a procedure of the
+same codeunit. With it, System Application had 287 loud errors over 104 tests and BaseApp 6,087 over
+2,944 tests. The shapes fall in three groups the list does not cover:
+
+- data types with static methods: `XmlDocument` (ReadFrom), `XmlElement` and `XMLElement` (Create),
+  `XmlText`, `XmlAttribute`, `Media`, `MediaSet`, `Text`, `Dialog` and `DIALOG`;
+- enum type names used as receivers (`"Sales Document Type".FromInteger(...)`, `.Ordinals()`,
+  `.Names()`): 60 distinct enum names across the two corpora, for example `"FA Ledger Entry FA
+  Posting Type"` (1,336 errors), `"Gen. Journal Document Type"` (425), `"Excel Filter Node Type"`;
+- a namespace-qualified path as the root: `Microsoft.Manufacturing.ProductionBOM...` (52).
+
+Per the ruling for this case the loud rule is NOT committed: the allowlist is not widened by guess.
+Everything else in this section is committed, and with it the census is unchanged from section 9:
+
+| corpus | refused | loud errors |
+| --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 0 |
+| `fixtures/sandbox-tests`, `sandbox-hang-tests`, `sandbox-harden-tests` | 0 | 0 |
+| `U:/Git/do-rel2/Cloud`, `U:/Git/DC/Cloud` (no tests) | 0 | 0 |
+| `U:/Git/BusinessCentral.Sentinel` | 0 | 0 |
+| `U:/Git/BC.History/BusinessFoundation` | 19 | 0 |
+| `U:/Git/BC.History/System Application` | 209 | 0 |
+| `U:/Git/BC.History/BaseApp` | 11179 | 0 |
