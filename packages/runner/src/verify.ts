@@ -644,6 +644,8 @@ export async function planVerify(a: {
   );
   // R-236c: verify runs fenced, so a test with a reachable call that may open a TestPage is never
   // planned. Throws TestPageScanError on unreadable reachable source, before anything is published.
+  // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
+  // VERIFY_REFUSALS keeps its value set.
   const refusedWhy = await scanTestPageTests(testDir, discovered);
   const testPageRefused = new Map(
     discovered.flatMap((ref) => {

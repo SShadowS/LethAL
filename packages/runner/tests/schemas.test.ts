@@ -727,7 +727,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
 
 /**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
- * `SessionReport` has 130 leaves and the stream is a union of 20 event shapes, and at that size a
+ * `SessionReport` has 130 leaves and the stream is a union of 22 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
  * freshness against the generator replaces the leaf-path pin, and both are checked against real
  * committed data.

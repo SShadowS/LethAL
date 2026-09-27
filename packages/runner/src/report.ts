@@ -2476,9 +2476,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     testPageRefusedTests.length > 0
       ? ` and ${testPageRefusedTests.length} refused before sending (TestPage), not run`
       : "";
+  // R-236c: a resume whose every batch carries runs no baseline, so it is not degraded, yet the
+  // scan still refused tests; the sentence says so rather than reading as nothing refused.
   const baselineText = degraded
     ? `, with ${input.unsupportedTests.length} of ${input.baselineTests.length} baseline tests failing${refusedText}`
-    : "";
+    : testPageRefusedTests.length > 0
+      ? `, with ${testPageRefusedTests.length} test(s) refused before sending (TestPage), not run`
+      : "";
   const executionContexts = buildExecutionContexts(
     input.outcomes,
     input.caps,

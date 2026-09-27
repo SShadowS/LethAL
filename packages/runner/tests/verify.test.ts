@@ -14,6 +14,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
+import { TestPageScanError } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
   INSTALLED_ARTIFACT_REFUSALS,
@@ -711,6 +712,49 @@ describe("planVerify", () => {
     expect(plan.notRun.get("M0001")).toEqual(["Old.P", "New.NP"]);
     expect([...plan.testPageRefused.keys()].sort()).toEqual(["50100::P", "50101::NP"]);
     expect(plan.allRefused.size).toBe(0);
+  });
+
+  test("R-236c: a reachable parse error is rethrown as TestPageScanError, never a verify refusal", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tp-err-"));
+    writeFileSync(
+      join(dir, "50100.Codeunit.al"),
+      `codeunit 50100 "T"
+{
+    Subtype = Test;
+
+    var
+        H: Codeunit Helper;
+
+    [Test]
+    procedure M()
+    begin
+        H.Run1();
+    end;
+}
+`,
+    );
+    writeFileSync(
+      join(dir, "50200.Codeunit.al"),
+      `codeunit 50200 "Helper"
+{
+    procedure Run1()
+    begin
+        if then;
+    end;
+}
+`,
+    );
+    const e = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M")],
+      testDir: dir,
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(TestPageScanError);
+    expect(verifyRefusalOf(e)).toBeUndefined();
   });
 
   test("R-236c: a survivor whose every test is refused is planned as all-refused, never as an empty refusal", async () => {

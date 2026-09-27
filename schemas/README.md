@@ -19,7 +19,7 @@ rather than principle.** `explain` (a few dozen leaves; v6 and the kept v5 and v
 `verify` (small, like `doctor`; v2 and the kept v1) are hand-written; explain v6, `doctor` and
 verify v2 are pinned against their declarations, and explain v5, explain v4 and verify v1 are
 frozen as they were published. `report` and `stream` are generated.
-`SessionReport` walks out to 130 leaves and the stream is a union of 20 event shapes; at that size a
+`SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
 forgets, so `bun scripts/generate-schemas.ts` emits both, and `--check` fails when a committed file
 no longer matches the type.

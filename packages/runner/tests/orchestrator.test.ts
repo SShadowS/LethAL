@@ -1973,6 +1973,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
       "tests-testpage-refused",
     ]);
+    expect(report.baselineGreen).toBe(true);
+    expect(report.validity.scoreDescribes).toEndWith(
+      ", with 1 test(s) refused before sending (TestPage), not run",
+    );
   });
   // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
   // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
