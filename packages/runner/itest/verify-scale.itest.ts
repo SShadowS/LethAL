@@ -44,9 +44,11 @@ import { discoverTests } from "../src/discovery";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { loadInstalledArtifact } from "../src/named-mutants";
-import { runNamedMutants, runSession } from "../src/orchestrator";
+import { defaultQuarantineDir, runNamedMutants, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
+import { QuarantineStore } from "../src/quarantine-store";
 import type { SessionReport } from "../src/report";
+import { quarantineResourceKey } from "../src/resource-key";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import type { PublishedTestApp } from "../src/test-app-publish";
@@ -214,8 +216,21 @@ async function main(): Promise<void> {
   /** ONE quarantine dir for A, B1, B2, the library runVerify and the restore, so the product's own
    *  consult refuses the restore when an earlier leg stranded the server, instead of publishing into
    *  it. A scratch dir, never the real ~/.lethal store (see bcdev.itest.ts). `verifyFromCli` takes
-   *  no quarantine dir and always consults ~/.lethal. */
+   *  no quarantine dir and always consults ~/.lethal, so step 7 and the restore ALSO read ~/.lethal
+   *  (read-only) through `refuseRealQuarantine`. */
   const quarantineDir = join(scratch, "quarantine");
+  /** Read-only on ~/.lethal: throws naming the record when `verifyFromCli` (steps 4 and 5) recorded a
+   *  strand there, which the shared scratch dir above cannot see. Never writes or clears it. */
+  const refuseRealQuarantine = async (where: string): Promise<void> => {
+    const rec = await new QuarantineStore(defaultQuarantineDir()).read(
+      quarantineResourceKey({ server: bcdev.server, serverInstance: bcdev.serverInstance }),
+    );
+    if (rec !== null) {
+      throw new Error(
+        `${where}: ${defaultQuarantineDir()} records this server quarantined (${rec.opKind}: ${rec.detail}, recorded ${rec.recordedAtIso}); not continuing`,
+      );
+    }
+  };
   const tempConfig = join(scratch, "lethal.config.verify-scale.json");
   await writeFile(
     tempConfig,
@@ -431,6 +446,7 @@ async function main(): Promise<void> {
       // ---- 7. B1, B2: the denominators, the scratch suite, each a fresh store.
       const aByKey = new Map(a.mutants.map((m) => [`${m.batchIndex}/${m.mutantCode}`, keyOf(m)]));
       const bs = [];
+      await refuseRealQuarantine("step 7");
       for (const [leg, db] of [
         ["B1", b1Db],
         ["B2", b2Db],
@@ -546,9 +562,11 @@ async function main(): Promise<void> {
   /**
    * Publishes the committed tests app against whichever artifact is RESIDENT, decided by the
    * server's own read-back (`DeploymentVerifier.verify`), never by `artifacts[]`. Refuses to publish
-   * when a run began but recorded no artifact, or when not exactly one candidate is accepted.
+   * when a run began but recorded no artifact, when not exactly one candidate is accepted, or when
+   * ~/.lethal (read-only) or the shared scratch quarantine dir records this server quarantined.
    */
   async function restore(): Promise<void> {
+    await refuseRealQuarantine("step 9");
     const candidates: { leg: string; path: string; artifactId: string; appId: string }[] = [];
     for (const r of began) {
       const rec = lastRecorded(r.path);

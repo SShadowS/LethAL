@@ -150,6 +150,13 @@ describe("verdictDiffs", () => {
     );
   });
 
+  test("a quarantined report that still HAS mutants (a partial run) throws naming the reason", () => {
+    const q = report([K, S], { quarantined: { reason: "mutant test in-flight-unknown M0002" } });
+    expect(() => verdictDiffs([norm(K), norm(S)], q)).toThrow(
+      /quarantined: mutant test in-flight-unknown M0002/,
+    );
+  });
+
   test("a report with no mutants against a non-empty baseline throws", () => {
     expect(() => verdictDiffs([norm(K)], report([]))).toThrow(/no mutants/);
   });
