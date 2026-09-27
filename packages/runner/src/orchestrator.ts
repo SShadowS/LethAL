@@ -1957,6 +1957,7 @@ async function runFencedMany(
       methods: chunk.methods.length,
       ...(r.kind === "verdicts" ? { ranCount: r.ranCount, endedBy: r.endedBy } : {}),
     });
+    if (r.kind === "verdicts") for (const v of r.verdicts) announceRecovered(v, emit);
     return r;
   };
   const first = await once();

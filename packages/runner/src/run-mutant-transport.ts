@@ -518,6 +518,31 @@ export class RunMutantTransport {
   }
 
   /**
+   * R236b: `readKeptAnswer` held to `bound`. The abort inside `postAction` ends the request; the
+   * race holds the bound even for a fetch that ignores its abort signal.
+   */
+  private async readKeptAnswerBounded(
+    lease: LeaseTuple,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+    bound: number,
+  ): Promise<KeptAnswer> {
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.readKeptAnswer(lease, fencedOp.attemptId, fencedOp.opSeq, bound),
+        new Promise<never>((_resolve, reject) => {
+          guard = setTimeout(
+            () => reject(new Error(`GetOpAnswer gave no answer within ${bound} ms`)),
+            bound,
+          );
+        }),
+      ]);
+    } finally {
+      if (guard !== undefined) clearTimeout(guard);
+    }
+  }
+
+  /**
    * R198: the per-METHOD stop. Refused server-side unless the op's progress row reads exactly
    * (`methodIndex`, `methodToken`) in state `running`, read locked under the lease lock, so a
    * decision taken from a poll up to one interval stale cannot land on the next method. Its answer
@@ -616,6 +641,72 @@ export class RunMutantTransport {
    * `in-flight-unknown`; a 2xx is parsed and scored as if no stop had fired.
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
+    const first = await this.runManyOnce(req);
+    // Review r2 ruling C2: a call that must abort the session is never replaced, whatever the
+    // kept answer says.
+    if (
+      first.kind !== "call" ||
+      first.abortSession !== undefined ||
+      first.verdict.operation !== "in-flight-unknown" ||
+      first.verdict.fencedOp === undefined
+    ) {
+      return first;
+    }
+    const lost = first.verdict;
+    const fencedOp = first.verdict.fencedOp;
+    const lostText = lost.failureMessage ?? "no detail";
+    // Not accepted: the call goes on exactly as today, only the reason is appended.
+    const keep = (why: string): RunMutantManyResult => ({
+      ...first,
+      verdict: { ...lost, failureMessage: `${lostText}; ${why}` },
+    });
+    const [firstMethod] = req.methods;
+    if (firstMethod === undefined) {
+      throw new Error("RunMutantMany: a call with no methods is a caller-contract violation");
+    }
+    let kept: KeptAnswer;
+    try {
+      // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.
+      kept = await this.readKeptAnswerBounded(req.lease, fencedOp, KEPT_ANSWER_READ_MS);
+    } catch (err) {
+      return keep(`answer readback failed: ${describeThrown(err)}`);
+    }
+    if (!kept.found) {
+      const holds =
+        kept.keptAttemptId !== undefined && kept.keptOpSeq !== undefined
+          ? ` (it holds ${kept.keptAttemptId}/${kept.keptOpSeq})`
+          : "";
+      return keep(
+        `answer readback: the server holds no committed answer for ${fencedOp.attemptId}/${fencedOp.opSeq}${holds}`,
+      );
+    }
+    let r: RunMutantManyResult;
+    try {
+      r = this.scoreManyAnswer(kept.answer, {
+        req,
+        firstMethod,
+        watchedRef: firstMethod.ref,
+        call: this.callOf(req.methods),
+        durationMs: lost.durationMs,
+        fencedOp,
+      });
+    } catch (err) {
+      return keep(`answer readback not accepted: ${describeThrown(err)}`);
+    }
+    // Ruling C1, grouped form: only a verdict set of completed, identity-checked passes and fails.
+    if (
+      r.kind !== "verdicts" ||
+      r.verdicts.some(
+        (v) => (v.outcome !== "pass" && v.outcome !== "fail") || v.operation !== undefined,
+      )
+    ) {
+      return keep("answer readback not accepted: not a verdict set of completed passes and fails");
+    }
+    return { ...r, verdicts: r.verdicts.map((v) => ({ ...v, replyRecovered: lostText })) };
+  }
+
+  /** One `RunMutantMany` dispatch and its scoring; `runMany` adds R236b's readback. */
+  private async runManyOnce(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const { mutantId, attemptId, lease, methods } = req;
     assertAttemptId(attemptId);
     if (methods.length === 0) {
@@ -1235,25 +1326,15 @@ export class RunMutantTransport {
     const scratch: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
     // ponytail: one read, bounded by the call's own budget (15 s at most); a throttled server
     // fails closed. A second read is the upgrade if C1 shows closed-on-timeout readbacks.
-    const bound = Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs);
-    let guard: ReturnType<typeof setTimeout> | undefined;
     let kept: KeptAnswer;
     try {
-      // The abort inside `postAction` ends the request; this race holds the bound even for a
-      // fetch that ignores its abort signal.
-      kept = await Promise.race([
-        this.readKeptAnswer(req.lease, fencedOp.attemptId, fencedOp.opSeq, bound),
-        new Promise<never>((_resolve, reject) => {
-          guard = setTimeout(
-            () => reject(new Error(`GetOpAnswer gave no answer within ${bound} ms`)),
-            bound,
-          );
-        }),
-      ]);
+      kept = await this.readKeptAnswerBounded(
+        req.lease,
+        fencedOp,
+        Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
+      );
     } catch (err) {
       return keep(`answer readback failed: ${describeThrown(err)}`);
-    } finally {
-      if (guard !== undefined) clearTimeout(guard);
     }
     if (!kept.found) {
       const holds =

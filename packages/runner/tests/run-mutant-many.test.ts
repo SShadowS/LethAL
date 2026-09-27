@@ -125,12 +125,22 @@ function fakes(opts: {
   many: Response | "hold";
   status?: () => Record<string, unknown> | Error;
   stopAt?: (body: Record<string, unknown>) => Record<string, unknown>;
+  /** R236b: answers `GetOpAnswer`; absent, that action is rejected like any unexpected one. */
+  kept?: () => Response | Error;
 }) {
   const stops: Record<string, unknown>[] = [];
+  /** Every action called, in order, except the watchdog's `GetOperationStatus` polls. */
+  const calls: string[] = [];
   let polls = 0;
   let release: ((r: Response) => void) | undefined;
   const fetchFn = ((url: unknown, init?: RequestInit) => {
     const u = String(url);
+    const action = /LethALControl_(\w+)/.exec(u)?.[1] ?? u;
+    if (action !== "GetOperationStatus") calls.push(action);
+    if (action === "GetOpAnswer" && opts.kept !== undefined) {
+      const k = opts.kept();
+      return k instanceof Error ? Promise.reject(k) : Promise.resolve(k);
+    }
     if (u.includes("_RunMutantMany")) {
       if (opts.many !== "hold") return Promise.resolve(opts.many);
       return new Promise<Response>((resolve, reject) => {
@@ -159,6 +169,7 @@ function fakes(opts: {
   return {
     fetchFn,
     stops,
+    calls,
     polls: () => polls,
     release: (r: Response) => release?.(r),
   };
@@ -761,5 +772,111 @@ describe("runMany — GH-24: observedActive is per-test reach", () => {
     if (r.kind !== "call") return;
     expect(r.cause).toBe("group-answer-malformed");
     expect(r.verdict.failureMessage).toMatch(/observedActive/);
+  });
+});
+
+describe("RunMutantTransport.runMany: a lost reply is read back (R236b)", () => {
+  const TWO = req({ methods: M.slice(0, 2).map((r) => ({ ref: r, budgetMs: 1000 })) });
+  const RAN_TWO = answer({
+    ranCount: 2,
+    methods: [entry(1, "Alpha", 2), entry(2, "Beta", 2)],
+  });
+  const KEY = { attemptId: "a1", opSeq: 7, epoch: 3, generation: "gen-1" };
+  const found =
+    (inner: Record<string, unknown>, key: Record<string, unknown> = KEY) =>
+    () =>
+      odata({ found: true, ...key, answer: JSON.stringify(inner) });
+  /** The live shape: a 200 whose body breaks off before its envelope closes. */
+  const truncated = () => {
+    const text = JSON.stringify({ value: JSON.stringify(RAN_TWO) }).slice(0, -1);
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(text));
+          c.error(new Error("The socket connection was closed unexpectedly."));
+        },
+      }),
+      { status: 200 },
+    );
+  };
+  const keptUnknown = (r: Awaited<ReturnType<RunMutantTransport["runMany"]>>) => {
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.verdict.fencedOp).toEqual({ attemptId: "a1", opSeq: 7 });
+    expect(r.verdict.replyRecovered).toBeUndefined();
+    expect(r.verdict.failureMessage).toContain("2xx body could not be read");
+    return r.verdict.failureMessage ?? "";
+  };
+
+  test("1. body lost, kept answer is two completed passes: they are the verdicts, nothing is re-sent", async () => {
+    const f = fakes({ many: truncated(), kept: found(RAN_TWO) });
+    const r = await transport(f.fetchFn).runMany(TWO);
+    if (r.kind !== "verdicts") throw new Error(`expected verdicts, got ${JSON.stringify(r)}`);
+    expect(r.verdicts.map((v) => v.outcome)).toEqual(["pass", "pass"]);
+    for (const v of r.verdicts) {
+      expect(v.operation).toBeUndefined();
+      expect(v.replyRecovered).toContain("2xx body could not be read");
+    }
+    expect(f.calls).toEqual(["RunMutantMany", "GetOpAnswer"]);
+  });
+
+  test("2. a kept answer carrying runError is not accepted", async () => {
+    const f = fakes({ many: truncated(), kept: found(answer({ runError: "boom" })) });
+    const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));
+    expect(msg).toContain("answer readback not accepted");
+  });
+
+  test("3. a kept lease-invalid refusal is not accepted", async () => {
+    const refusal = answer({ status: "lease-invalid", reason: "op-stopped" });
+    const f = fakes({ many: truncated(), kept: found(refusal) });
+    const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));
+    expect(msg).toContain("answer readback not accepted");
+  });
+
+  test("4. found: false keeps the unknown and names what the server holds", async () => {
+    const f = fakes({
+      many: truncated(),
+      kept: () => odata({ found: false, keptAttemptId: "a0", keptOpSeq: 6 }),
+    });
+    const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));
+    expect(msg).toContain(
+      "answer readback: the server holds no committed answer for a1/7 (it holds a0/6)",
+    );
+  });
+
+  test("5. a kept answer echoing a different epoch is refused client-side", async () => {
+    const f = fakes({ many: truncated(), kept: found(RAN_TWO, { ...KEY, epoch: 4 }) });
+    const msg = keptUnknown(await transport(f.fetchFn).runMany(TWO));
+    expect(msg).toContain("answer readback failed");
+  });
+
+  test("6. a whole reply is scored as it arrives and never reads back", async () => {
+    const f = fakes({ many: odata(RAN_TWO), kept: found(RAN_TWO) });
+    const r = await transport(f.fetchFn).runMany(TWO);
+    if (r.kind !== "verdicts") throw new Error("expected verdicts");
+    expect(r.verdicts.every((v) => v.replyRecovered === undefined)).toBe(true);
+    expect(f.calls).toEqual(["RunMutantMany"]);
+  });
+
+  test("7. an identity disagreement still aborts the session, whatever the kept answer says", async () => {
+    const f = fakes({
+      many: "hold",
+      status: () =>
+        statusOf({ opProgress: { ...(statusOf().opProgress as object), method: "Delta" } }),
+      kept: found(RAN_TWO),
+    });
+    const r = await transport(f.fetchFn).runMany({ ...TWO, stopHungSessions: true });
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.verdict.operation).toBe("in-flight-unknown");
+    expect(r.abortSession).toContain("identity disagreement");
+    expect(f.calls).not.toContain("GetOpAnswer");
+  });
+
+  test("8. an unexpected 404 still aborts the session, whatever the kept answer says", async () => {
+    const f = fakes({ many: new Response("", { status: 404 }), kept: found(RAN_TWO) });
+    const r = await transport(f.fetchFn).runMany(TWO);
+    if (r.kind !== "call") throw new Error("expected a call-level answer");
+    expect(r.abortSession?.startsWith("control-app-route-missing")).toBe(true);
+    expect(f.calls).not.toContain("GetOpAnswer");
   });
 });
