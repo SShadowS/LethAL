@@ -8,23 +8,32 @@ package loads this file at runtime via `web-tree-sitter` to parse AL source.
 
 - Repository: <https://github.com/SShadowS/tree-sitter-al>
 - License: MIT
-- Version: `4.3.0`
-- Commit: `f7af22a` — "chore: regenerate parser.c and rebuild tree-sitter-al.wasm
-  for v4.3.0", tag `v4.3.0`
-- Provenance: **built locally from source at that tag**, NOT downloaded from a
-  release. `tree-sitter build --wasm`, tree-sitter CLI 0.27.0, from a detached
+- Version: `4.4.1`
+- Commit: `7819df5` "chore: regenerate parser.c and rebuild tree-sitter-al.wasm
+  for v4.4.1", tag `v4.4.1`
+- Provenance: the RELEASED `tree-sitter-al.wasm` asset of GitHub release v4.4.1,
+  downloaded with `gh release download`, SHA-256 verified. It equals the wasm
+  checked in at the tag. A local build (tree-sitter CLI 0.27.0, detached
+  worktree at the tag) was made only to compare: identical.
+- Artifact: 11,496,302 bytes,
+  `sha256:cd6e347e8bf4171c4bd4302543bdb543451be307a34fd0c7f95ca56a085ed099`
+
+Previously `4.3.0` at commit `f7af22a` (10,428,350 bytes,
+`sha256:c6e7fedb0002f0ca902bd0fc36a10ef492f543aa4bdd2e4f465b1e258bf9f4d4`), built
+locally at the tag. What that entry recorded, kept because a bump's evidence is
+only readable against what it replaced:
+
+- **Provenance was built locally from source at that tag**, NOT downloaded from
+  a release. `tree-sitter build --wasm`, tree-sitter CLI 0.27.0, from a detached
   worktree at the tag so the grammar checkout's own state could not leak in.
-- Artifact: 10,428,350 bytes,
-  `sha256:c6e7fedb0002f0ca902bd0fc36a10ef492f543aa4bdd2e4f465b1e258bf9f4d4`
-- **The build is now byte-reproducible, and the warning below about it no longer
-  applying is the reason to read this line.** tree-sitter 0.27.0 does not use
-  Emscripten: it compiles `parser.c` + `scanner.c` with a bundled wasi-sdk clang
-  and then `binaryen`'s `wasm-opt`. THREE independent local builds and the
-  artifact upstream checked in at the tag all produce ONE hash, the one above.
-  So under this toolchain, matching upstream's committed wasm is EVIDENCE of a
-  correct build rather than a sign of having copied it — which is the opposite
-  of what the caveat below said under Emscripten, and the caveat is kept because
-  it is still true of every build recorded before this one.
+- **The build is byte-reproducible under this toolchain.** tree-sitter 0.27.0
+  does not use Emscripten: it compiles `parser.c` + `scanner.c` with a bundled
+  wasi-sdk clang and then `binaryen`'s `wasm-opt`. THREE independent local
+  builds and the artifact upstream checked in at the tag all produced ONE hash,
+  the one above. So under this toolchain, matching upstream's committed wasm is
+  EVIDENCE of a correct build rather than a sign of having copied it, which is
+  the opposite of what the caveat below said under Emscripten, and the caveat
+  is kept because it is still true of every build recorded before this one.
 
 Previously `4.0.1` at commit `58c236f` (10,323,560 bytes,
 `sha256:d2584663e92a84197530f4627dc5444830c588499f1bd3d93d7b9c2b37075af6`), built
@@ -92,7 +101,21 @@ files v2.5.0 could not parse cleanly now parse), with `blocks`,
 
 ## How to reproduce / update
 
-### Build locally from source (what the current binary was made with)
+### Download the released asset (current practice, from v4.4.1 on)
+
+```bash
+gh release download v4.4.1 -R SShadowS/tree-sitter-al -p tree-sitter-al.wasm -D /tmp/tsal-release
+# verify sha256 against the value recorded in this README, then:
+cp /tmp/tsal-release/tree-sitter-al.wasm /path/to/LethAL/packages/engine/vendor/tree-sitter-al.wasm
+```
+
+The vendored file is the RELEASED asset (SHA-256 verified), not a local build
+(orchestrator ruling 2026-09-27). A local build is made only as a comparison,
+never as the source of the vendored file: under tree-sitter 0.27.0 the two have
+been byte-identical every time this was checked, and the release is the artifact
+upstream itself verified.
+
+### Build locally from source (historical: 4.3.0 and earlier practice)
 
 ```bash
 cd /path/to/tree-sitter-al
@@ -102,9 +125,10 @@ cp /tmp/tree-sitter-al.wasm /path/to/LethAL/packages/engine/vendor/tree-sitter-a
 ```
 
 `tree-sitter build --wasm` falls back to a Docker image when Emscripten is not
-installed locally. Downloading a release asset also works when the release
-matches the commit you want, but prefer building: a release artifact can lag the
-grammar's HEAD, and the repo's checked-in root wasm demonstrably does.
+installed locally. This is how every version through 4.3.0 was vendored, back
+when a release artifact could lag the grammar's HEAD, and the repo's checked-in
+root wasm demonstrably did. From v4.4.1 on, use the download method above
+instead; keep this method only for building a local comparison copy.
 
 ## The 3.0.1 -> 3.2.1 bump (2026-08-08), and what it cost: nothing
 
@@ -387,6 +411,96 @@ Fixed and red-checked in R218; the pipeline was never affected, since
 "BYTE-IDENTICAL" census claim in this document.** Those bumps predate
 `swap-enum-member` or used corpora without the shape, so they stand, but they
 were not guaranteed to.
+
+## The 4.3.0 -> 4.4.1 bump (2026-09-27): three named fixes, 34 phantom sites drop, 8 real ones land
+
+Twelve upstream commits, of which three steps change parse trees:
+
+| step | range | commits | issues | effect |
+| --- | --- | --- | --- | --- |
+| A | 4.3.0 -> v4.4.0 (`70f4239`) | `0791253`, `bc72141`, `028cbdd`, `e0ab7a4` | #24, #25 | directive code only: an operator dangling before `#if`, a `begin`/`end` (or a `case`, or a report's braces) split across a `#if` branch boundary, and a binary operator opening a `#if` continuation. Six new `preproc_*` named kinds. Upstream's own measurement: BC.History's 15,358 trees byte-identical after each commit; BC 28.1 Base Application (8,073 files) goes 5 files with an ERROR node to 0. |
+| B | v4.4.0 -> `209d038` | `42d0848`, `0c4b5c4` (perf, tree-neutral), `209d038` | #26, #28 | `asserterror`'s body node changes shape: an assignment under `asserterror` is now `assignment_statement` (was `assignment_expression`); `if`/`exit`/`case`/`repeat` attach as the body instead of as a sibling; a call on an indexed array element is one call node (was a stray identifier plus a `list_literal`-receiver call). Upstream: BC.History 44 files, 87 assignment bodies plus 36 indexed receivers, 0 errors. |
+| C | `209d038` -> v4.4.1 (`7819df5`) | `551829e` | #27 | six value-start heads stop offering `keyword_as_identifier`, so a contextual keyword at the start of a property value now lexes as a name: a bare value (`ApplicationArea = All;`, `Image = Filter;`) moves from `table_relation_value` to `identifier`, and a comparison like `Visible = Type = Type::Alpha;` parses as `comparison_expression` instead of erroring. Upstream: BC.History 185 files, one class, 812 bare values. |
+
+**Grammar-caused code changes needed: none.**
+
+**Fixture results, five targets (sandbox-app, sandbox-data, sandbox-hang, sandbox-harden,
+sandbox-coverage-probe).** A per-file positioned-node tree diff (with ancestry) found 0 changed
+nodes anywhere across all 40 fixture files under both grammars, and parse health (ERROR nodes,
+MISSING nodes) is 0/0 in every fixture file under both grammars. The diff instrument was proven
+live first, on a hand-written probe file outside the fixtures: it reported 22 changed nodes inside
+a property and 8 outside, so a real difference does move it. `census-operator-sites.ts` moved 0
+rows on all five targets, and both the `astSubtreeHash` listing and the full identity-key listing
+are byte-identical on every target under both grammars. `sandbox-data`: 407 raw specs, 387
+deployed, unchanged.
+
+**Per-corpus census, end to end (do, dc, sentinel, bcf, sysapp, BaseApp, plus an exploratory BC
+28.1 copy).** `do`, `sentinel`, `bcf` and `sysapp` moved 0 rows. `dc` gained 7
+`lethal.negate-conditional` rows, all step C (#27): a value-start comparison
+(`Type = Type::<member>`) inside a page control's `Visible` or `Enabled` property, across three
+files (one of them under `.dependencies/`, which the earlier prediction's file list had missed).
+All 7 are declarative and dropped by `isMutableSite`: copying just the affected pages into an
+isolated directory and re-running the mutant census under both grammars gives a byte-identical
+deployed-mutant listing, so no run changes. BaseApp/Test lost 34 `lethal.void-method-call` rows
+(step B, #26): every one of them was a phantom fragment from the old array-index misparse (its
+before-text began with a stray `[`), not a real mutant, so this is 34 dead sites leaving the
+census, not a coverage loss. BaseApp/Test also gained 8 `lethal.toggle-blank-string` rows (step B,
+#28), across four files, at an `asserterror` body that assigns a string literal to a page field's
+`Value` (now an `assignment_statement`, which it was not before): these ARE real new mutants a run
+would plant. No intermediate grammar was built for any of this: no moved row anywhere sits in
+directive code, and each cluster's construct settles which single issue it belongs to on its own.
+
+**bc281 (exploratory, build `28.1.49838.50244`, not upstream's own `28.1.49838.50268` snapshot):**
+0 files with an ERROR or MISSING node under either grammar, including the five files upstream
+names as fixed by step A, which are already present and clean under g430 on this build; the 5 -> 0
+result does not reproduce here. 0 census rows moved. First measurement only; it gates nothing.
+
+**`bun test`: 3,775 pass / 7 skip / 0 fail, identical under g430 and g441.**
+
+**Census-stability deviation, filed as R292.** The single-pass census over BaseApp's 9,620 files
+cannot run: it aborts under g430 after about 20 seconds with a wasm heap exhaustion
+(`RuntimeError: Aborted()` inside web-tree-sitter) and writes nothing, because the census keeps
+every parsed tree alive for its one semantic context. Measured instead as two halves,
+BaseApp/Source (8,020 files) and BaseApp/Test (1,600 files), each run twice under g430: both
+stable at 0 only-in-A / 0 only-in-B both times. The blind spot this leaves: a Tier-2 operator's
+claim in a Test file that resolves a symbol declared in Source is judged without Source's
+declarations in scope. Every moved row found end to end in this bump comes from a Tier-1 operator,
+so this run does not exercise that blind spot, but the split instrument cannot rule it out either.
+
+The released v4.4.1 asset equals the tag's checked-in wasm, and a local build (tree-sitter CLI
+0.27.0, detached worktree at the tag) is byte-identical to both, so no artifact discrepancy needed
+chasing.
+
+**What this bump does NOT prove.** None of the fixtures, and none of the `do` corpus, hold any of
+the #24, #25, #26 or #28 shapes: only `dc`, `BaseApp/Test` and `sysapp` do (`dc` for #27,
+`BaseApp/Test` for #26 and #28, and `sysapp` for #28 on its own: 8 generic `asserterror` assignment
+bodies, the TSAL-441 spec's P4 and run 003's cluster C4 sysapp count). Unlike BaseApp/Test's 8,
+none of sysapp's assign a string literal to a page field's `Value`, so no operator claims them and
+the census there stays at 0 rows moved. Only the exploratory `bc281` copy speaks to #24/#25's
+directive fixes at all, and it already parsed those five files clean under the OLD grammar, so it
+adds no local confirmation of upstream's own 5 -> 0 measurement. The directive gain (step A) is
+proven only by upstream's BC.History and BC 28.1 figures; this repository has no corpus that
+witnesses it happening here.
+
+### Landing gates
+
+| gate | frozen figures | result |
+| --- | --- | --- |
+| `itest:bcdev` | killed 3 / survived 12 / no-coverage 4, `baselineGreen=true`, protocol-invariant probes PASS | PASS |
+| `itest:chunked` | both legs 17 / 7 / 2, errors 0; control `warmKills` 9 / `groupedCalls` 33, chunked leg `warmKills` 5 / `groupedCalls` 57 | PASS |
+| `itest:alrunner` | 3 / 12 / 4 on all four legs, `--server` and resource-selector legs identical to one-shot; build `al-runner v2.11.0` | PASS |
+
+Measured by the controller on the merged tree `b995f89` (includes master `bc62877`; Cronus28,
+lease attempt 053, released). `lethal doctor` all ok; control app 1.0.0.20 (>=
+`MIN_CONTROL_VERSION` 1.0.0.20); alc 18.0.41.45789. Unit suite on the merged tree: typecheck clean,
+`bun test` 0 fail / 7 skip over 3851 tests. No baseline was deleted, regenerated or edited.
+
+`itest:tables`, `itest:lease` and `itest:stale-publish` were NOT run for this bump, by ruling
+(only `itest:bcdev`, `itest:chunked` and `itest:alrunner` are the landing set). `itest:tables` is
+owed by the combined check after the GH-24 re-record and R-236c, which must show 0
+grammar-attributable differences (P3 predicts `sandbox-data` unchanged: 407 raw / 387 deployed,
+identity keys byte-identical). `itest:lease` and `itest:stale-publish` pin no per-mutant baseline,
+so this bump does not owe them a re-run.
 
 ## Bumping the vendored WASM
 
