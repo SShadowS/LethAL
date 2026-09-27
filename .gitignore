@@ -14,6 +14,7 @@ lethal.sqlite
 lethal.config.local.json
 lethal.config.envtool.json
 lethal.config.agent.json
+lethal.config.cronus*.json
 *.app
 
 # Local MCP server config — contains credentials
