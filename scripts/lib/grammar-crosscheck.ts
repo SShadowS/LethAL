@@ -167,3 +167,74 @@ export function parseHealth(root: TsNode): ParseHealth {
   walk(root);
   return { errorNodes, missingNodes };
 }
+
+/** One syntax node from `dump-compiler-kinds.ps1`, attributed to the `file` record before it. */
+export interface DumpNode {
+  readonly kind: string;
+  readonly start: number;
+  readonly end: number;
+  readonly parent: string;
+}
+/** The dump's LAST record. Its absence means the dump was cut short. */
+export interface DumpSummary {
+  readonly parserVersion: string;
+  readonly fileCount: number;
+  readonly parseErrorFiles: string[];
+}
+
+/**
+ * Reads the NDJSON that `dump-compiler-kinds.ps1` writes (record shape in its header), one line at
+ * a time so memory does not grow with the corpus. Calls `onNode` per node, in file order, and
+ * returns the summary. Throws on a missing summary: a truncated dump must never read as a smaller
+ * corpus. Also throws on a node before any file record, a record after the summary, or an unknown
+ * record type.
+ */
+export async function readCompilerDump(
+  lines: AsyncIterable<string> | Iterable<string>,
+  onNode: (file: string, node: DumpNode) => void,
+): Promise<DumpSummary> {
+  let file: string | undefined;
+  let summary: DumpSummary | undefined;
+  let lineNo = 0;
+  const bad = (what: string): Error => new Error(`compiler dump line ${lineNo}: ${what}`);
+  for await (const line of lines) {
+    lineNo++;
+    if (line === "") continue;
+    if (summary !== undefined) throw bad("record after the summary");
+    const r = JSON.parse(line) as Record<string, unknown>;
+    if (r.t === "file" && typeof r.path === "string") {
+      file = r.path;
+    } else if (r.t === "node") {
+      if (file === undefined) throw bad("node before any file record");
+      const { kind, start, end, parent } = r;
+      if (
+        typeof kind !== "string" ||
+        typeof start !== "number" ||
+        typeof end !== "number" ||
+        typeof parent !== "string"
+      ) {
+        throw bad("malformed node record");
+      }
+      onNode(file, { kind, start, end, parent });
+    } else if (r.t === "summary") {
+      const { parserVersion, fileCount, parseErrorFiles } = r;
+      if (
+        typeof parserVersion !== "string" ||
+        typeof fileCount !== "number" ||
+        !Array.isArray(parseErrorFiles) ||
+        !parseErrorFiles.every((f) => typeof f === "string")
+      ) {
+        throw bad("malformed summary record");
+      }
+      summary = { parserVersion, fileCount, parseErrorFiles };
+    } else {
+      throw bad(`unknown record ${line.slice(0, 80)}`);
+    }
+  }
+  if (summary === undefined) {
+    throw new Error(
+      `compiler dump has no summary record after ${lineNo} line(s): truncated, refusing to read it as a complete corpus`,
+    );
+  }
+  return summary;
+}

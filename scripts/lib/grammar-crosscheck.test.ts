@@ -1,4 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initParser, parseAL } from "../../packages/engine/src/ast/parser";
 import {
   EXIT_CODE,
@@ -8,6 +12,7 @@ import {
   contextKey,
   diffSites,
   parseHealth,
+  readCompilerDump,
   restrictToComparable,
   siteKey,
   splitArgs,
@@ -231,4 +236,104 @@ describe("parseHealth and offsets, on the real vendored grammar", () => {
     expect(start).toBe(src.indexOf("1 + 2"));
     expect(start).not.toBe(Buffer.byteLength(src.slice(0, src.indexOf("1 + 2"))));
   });
+});
+
+describe("readCompilerDump: the NDJSON the compiler side streams", () => {
+  const collect = async (lines: string[]) => {
+    const nodes: Array<[string, string, number, number, string]> = [];
+    const summary = await readCompilerDump(lines, (f, n) =>
+      nodes.push([f, n.kind, n.start, n.end, n.parent]),
+    );
+    return { nodes, summary };
+  };
+  const SUMMARY =
+    '{"t":"summary","parserVersion":"1.2","fileCount":1,"parseErrors":0,"parseErrorFiles":[]}';
+
+  test("a path with a backslash, a quote and a non-ASCII letter round-trips", async () => {
+    // The exact bytes the ps1 writes: backslash, quote and control char escaped, `ø` left raw.
+    const { nodes, summary } = await collect([
+      '{"t":"file","path":"C:\\\\dir\\\\a\\"b\\u0007ø.al"}',
+      '{"t":"node","kind":"CodeunitSyntax","start":0,"end":5,"parent":""}',
+      SUMMARY,
+    ]);
+    expect(nodes).toEqual([['C:\\dir\\a"b\u0007ø.al', "CodeunitSyntax", 0, 5, ""]]);
+    expect(summary).toEqual({ parserVersion: "1.2", fileCount: 1, parseErrorFiles: [] });
+  });
+
+  test("nodes belong to the most recent file record, in order", async () => {
+    const { nodes } = await collect([
+      '{"t":"file","path":"a"}',
+      '{"t":"node","kind":"K","start":1,"end":2,"parent":"P"}',
+      '{"t":"file","path":"b"}',
+      '{"t":"node","kind":"K","start":3,"end":4,"parent":"P"}',
+      SUMMARY,
+    ]);
+    expect(nodes.map((n) => n[0])).toEqual(["a", "b"]);
+  });
+
+  test("a missing summary throws: a truncated dump is not an empty corpus", async () => {
+    await expect(collect([])).rejects.toThrow("no summary record");
+    await expect(
+      collect(['{"t":"file","path":"a"}', '{"t":"node","kind":"K","start":1,"end":2,"parent":""}']),
+    ).rejects.toThrow("no summary record");
+  });
+
+  test("a record after the summary, or a node before any file, throws", async () => {
+    await expect(collect([SUMMARY, '{"t":"file","path":"a"}'])).rejects.toThrow(
+      "after the summary",
+    );
+    await expect(
+      collect(['{"t":"node","kind":"K","start":1,"end":2,"parent":""}', SUMMARY]),
+    ).rejects.toThrow("before any file record");
+  });
+});
+
+// Opt-in: the pwsh round trip below needs the AL compiler's own DLL, and R264 keeps unit tests out
+// of the real home where the AL extension lives. Set it to the extension's `bin` directory.
+const alcBinForDump = process.env.LETHAL_ALC_BIN;
+
+describe("dump-compiler-kinds.ps1 writes a real path back intact (opt-in: LETHAL_ALC_BIN)", () => {
+  test.skipIf(alcBinForDump === undefined)(
+    "backslashes, an apostrophe, a space, non-ASCII and an astral character round-trip, no BOM",
+    () => {
+      if (alcBinForDump === undefined) return;
+      const root = mkdtempSync(join(tmpdir(), "gh06-esc-"));
+      try {
+        // `"` is not legal in a Windows file name, so the quote is exercised by the unit test above;
+        // the backslashes are the ones every Windows FullName carries.
+        const dir = join(root, "q'd æøå 😀");
+        const al = join(dir, "x.al");
+        const list = join(root, "files.txt");
+        const out = join(root, "dump.ndjson");
+        mkdirSync(dir);
+        writeFileSync(al, "codeunit 50000 X\n{\n}\n");
+        writeFileSync(list, al);
+        const script = join(import.meta.dir, "dump-compiler-kinds.ps1");
+        const run = spawnSync(
+          "pwsh",
+          [
+            "-NoProfile",
+            "-File",
+            script,
+            "-AlcBin",
+            alcBinForDump,
+            "-ListFile",
+            list,
+            "-OutFile",
+            out,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(run.stderr).toBe("");
+        expect(run.status).toBe(0);
+        const bytes = readFileSync(out);
+        expect([...bytes.subarray(0, 3)]).not.toEqual([0xef, 0xbb, 0xbf]);
+        const lines = bytes.toString("utf8").split("\n");
+        expect(JSON.parse(lines[0] ?? "")).toEqual({ t: "file", path: al });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });

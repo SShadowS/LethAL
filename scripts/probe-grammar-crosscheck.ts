@@ -24,10 +24,11 @@
  * a duplicate context key throws.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { createReadStream, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 // Reached through the engine package, which owns this dependency; scripts/ has no direct one.
 import { Language, Parser } from "../packages/engine/node_modules/web-tree-sitter/tree-sitter.js";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
@@ -51,6 +52,7 @@ import {
   contextKey,
   diffSites,
   parseHealth,
+  readCompilerDump,
   restrictToComparable,
   siteKey,
   splitArgs,
@@ -199,63 +201,85 @@ interface CompilerResult {
   readonly unmappedKindSites: Array<{ file: string; kind: string }>;
 }
 
-/** Audited sites and context-probe sites as the AL compiler's own parser sees them. */
-function compilerSites(alcBin: string, listFile: string): CompilerResult {
+/**
+ * Audited sites and context-probe sites as the AL compiler's own parser sees them. The dump is
+ * streamed to an NDJSON file next to the list file (under the OS temp dir, never the repo) and read
+ * back one line at a time, so neither process holds the whole corpus's nodes (Task 6b). The file is
+ * deleted after reading, on a thrown error too.
+ */
+async function compilerSites(alcBin: string, listFile: string): Promise<CompilerResult> {
   const script = join(import.meta.dir, "lib", "dump-compiler-kinds.ps1");
-  const run = spawnSync(
-    "pwsh",
-    ["-NoProfile", "-File", script, "-AlcBin", alcBin, "-ListFile", listFile],
-    { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
-  );
-  if (run.status !== 0) {
-    throw new Error(`compiler dump failed (exit ${run.status}): ${run.stderr || run.stdout}`);
-  }
-  const parsed = JSON.parse(run.stdout) as {
-    parserVersion: string;
-    fileCount: number;
-    parseErrorFiles: string[];
-    nodes: Array<{ file: string; kind: string; start: number; end: number; parent: string }>;
-  };
-  const sites: Site[] = [];
-  const context: Site[] = [];
-  const unmappedKindSites: Array<{ file: string; kind: string }> = [];
-  for (const n of parsed.nodes) {
-    const mapped = COMPILER_TO_TREE_SITTER.get(n.kind);
-    if (mapped === undefined) {
-      // Fail CLOSED on an unmapped kind that LOOKS like one of the families audited here. Silently
-      // dropping it is how the mapping's incompleteness would stay invisible, and the mapping is
-      // the part of this audit that can lie. The `Expression` suffix is a heuristic and is named as
-      // one: it over-reports (the compiler has many expression kinds this audit does not want) and
-      // is meant to be read, not gated on. Recorded per-occurrence WITH its file: the caller decides
-      // whether it counts (comparable file) or is only a warning (unhealthy file), never here.
-      if (n.kind.endsWith("Expression") && !DELIBERATELY_UNMAPPED.has(n.kind)) {
-        unmappedKindSites.push({ file: resolve(n.file), kind: n.kind });
-      }
-    } else {
-      sites.push({ file: resolve(n.file), kind: mapped, start: n.start, end: n.end });
+  const dumpFile = join(dirname(listFile), "compiler-dump.ndjson");
+  let input: ReturnType<typeof createReadStream> | undefined;
+  try {
+    const run = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-File",
+        script,
+        "-AlcBin",
+        alcBin,
+        "-ListFile",
+        listFile,
+        "-OutFile",
+        dumpFile,
+      ],
+      { encoding: "utf8" },
+    );
+    if (run.status !== 0) {
+      throw new Error(`compiler dump failed (exit ${run.status}): ${run.stderr || run.stdout}`);
     }
-    for (const probe of CONTEXT_PROBES) {
-      // An absent `compilerParentKind` means the kind alone answers the question; see the field's
-      // doc comment for why calls need a parent test and assignments do not.
-      const parentMatches =
-        probe.compilerParentKind === undefined || n.parent === probe.compilerParentKind;
-      if (probe.compilerKinds.includes(n.kind) && parentMatches) {
-        context.push({ file: resolve(n.file), kind: probe.name, start: n.start, end: n.end });
+    const sites: Site[] = [];
+    const context: Site[] = [];
+    const unmappedKindSites: Array<{ file: string; kind: string }> = [];
+    input = createReadStream(dumpFile, { encoding: "utf8" });
+    const lines = createInterface({
+      input,
+      crlfDelay: Number.POSITIVE_INFINITY,
+    });
+    const summary = await readCompilerDump(lines, (rawFile, n) => {
+      const file = resolve(rawFile);
+      const mapped = COMPILER_TO_TREE_SITTER.get(n.kind);
+      if (mapped === undefined) {
+        // Fail CLOSED on an unmapped kind that LOOKS like one of the families audited here. Silently
+        // dropping it is how the mapping's incompleteness would stay invisible, and the mapping is
+        // the part of this audit that can lie. The `Expression` suffix is a heuristic and is named as
+        // one: it over-reports (the compiler has many expression kinds this audit does not want) and
+        // is meant to be read, not gated on. Recorded per-occurrence WITH its file: the caller decides
+        // whether it counts (comparable file) or is only a warning (unhealthy file), never here.
+        if (n.kind.endsWith("Expression") && !DELIBERATELY_UNMAPPED.has(n.kind)) {
+          unmappedKindSites.push({ file, kind: n.kind });
+        }
+      } else {
+        sites.push({ file, kind: mapped, start: n.start, end: n.end });
       }
-    }
+      for (const probe of CONTEXT_PROBES) {
+        // An absent `compilerParentKind` means the kind alone answers the question; see the field's
+        // doc comment for why calls need a parent test and assignments do not.
+        const parentMatches =
+          probe.compilerParentKind === undefined || n.parent === probe.compilerParentKind;
+        if (probe.compilerKinds.includes(n.kind) && parentMatches) {
+          context.push({ file, kind: probe.name, start: n.start, end: n.end });
+        }
+      }
+    });
+    return {
+      sites,
+      context,
+      parserVersion: summary.parserVersion,
+      fileCount: summary.fileCount,
+      parseErrorFiles: summary.parseErrorFiles,
+      unmappedKindSites,
+    };
+  } finally {
+    input?.destroy();
+    rmSync(dumpFile, { force: true });
   }
-  return {
-    sites,
-    context,
-    parserVersion: parsed.parserVersion,
-    fileCount: parsed.fileCount,
-    parseErrorFiles: parsed.parseErrorFiles,
-    unmappedKindSites,
-  };
 }
 
 const tsResult = await treeSitterSites(files, grammarWasm);
-const compiled = compilerSites(alcBin, listFile);
+const compiled = await compilerSites(alcBin, listFile);
 
 console.log(`grammar: ${grammarWasm ?? "vendored (engine default)"}`);
 console.log(`alc bin: ${alcBin}   compiler parser: v${compiled.parserVersion}`);
