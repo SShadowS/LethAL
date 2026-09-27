@@ -9,8 +9,9 @@ Branch `lethal/lane-bugs` at `43f8e01`. No commits, no edits left behind. No liv
 
 ## Verdict
 
-The evidence supports **hypothesis 2, the pre-existing stop flake**, and rules out R-236b as the
-cause. What is NOT proven is why the stop did not land on M0004: the one record that says so (the
+The evidence supports **hypothesis 2, the pre-existing stop flake**: it is judged not caused by
+R-236b, on the offline mechanism analysis below. What is NOT proven is why the stop did not land on
+M0004: the one record that says so (the
 verdict's `failureMessage`, which carries the watchdog's `stopDetail`) was in the quarantine record
 and store the gate deletes, and the gate prints only the note.
 
@@ -84,7 +85,13 @@ is called only after the abort.
 
 ## Live runs
 
-None. The offline evidence decides client versus server for R-236b: its client change sits
-downstream of the classification, and its server change is outside the hung path. A master-versus-
-branch A/B would not decide the flake either, since it did not recur in three later runs on
-2026-09-26. The next live `itest:hang` should run with the diagnostic print above.
+This analysis itself used no live runs: the offline evidence decides client versus server for
+R-236b, since its client change sits downstream of the classification and its server change is
+outside the hung path.
+
+The orchestrator's A/B afterwards did use a live run: master's client (`03e276c`) on Cronus28 with
+control 1.0.0.20 failed identically (M0004 quarantined, `4 !== 40`). So the A/B did decide client
+versus flake for the client side: master's own client reproduces the same failure, which this
+branch's client diff cannot explain. The server version remains unseparated: 1.0.0.19 was not
+re-tested in that A/B, and the only other data point is master failing 1 of 3 on 1.0.0.19 on
+2026-09-26. Full detail: `docs/roadmap/R289.md`, "Fourth check".

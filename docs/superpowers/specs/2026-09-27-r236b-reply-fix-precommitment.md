@@ -211,7 +211,7 @@ Cronus28.
     behaved correctly: the server's kept-answer row still named the PREVIOUS op (`a9/35209`), not this
     mutant's (`a10/35210`), so `GetOpAnswer` found nothing to accept and the verdict correctly stayed
     `in-flight-unknown` rather than a false accept.
-  - Judged: the pre-existing M0004 `StopHungRunAt` flake (R289), not shown to be caused by R-236b.
+  - Judged: the pre-existing M0004 `StopHungRunAt` flake (R289), judged not caused by R-236b.
     Offline analysis (`docs/measurements/2026-09-27-r289-hang-rootcause.md`):
     the readback only appends text to an `in-flight-unknown` result that `runManyOnce` already
     classified, and it is never reached before a confirmed 408; the stop path, client and server, is
@@ -219,7 +219,7 @@ Cronus28.
     failures on `lethal/lane-bugs` today (lease `047` and the rerun, lease `048`) against 1 of 3
     same-shape runs on `master` on 2026-09-26 (`docs/measurements/2026-09-27-nst-wedge-incidents.md`
     §3). The sample is too small either way to rule R-236b out; the offline mechanism analysis, not the
-    rate, is what the "not shown to be caused by" judgement rests on.
+    rate, is what the "judged not caused by R-236b" judgement rests on.
 - `itest:tables`: **SKIPPED** per owner direction. It cannot pass until R-236c lands.
 - Write cost: only `itest:chunked` has a recorded pre-fix wall time to compare against, ~95 s (R208,
   2026-09-04) versus 96 s today. No pre-fix wall time is recorded for `itest:hang` or `itest:bcdev`.
