@@ -11706,6 +11706,27 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.exitCode).toBe(4);
   });
 
+  test("a NON-fresh baseline that answers error is infra-error, not flaky-unknown: the rule ignores freshness (R262)", async () => {
+    let id = 0;
+    const fx = await verifyFixture({
+      withNewTest: true,
+      session: ({ kind, ref }) => {
+        id += 1;
+        return kind === "unmutated" && ref.codeunitId === NEWT.codeunitId
+          ? { sessionId: 1000 + id, testRunsBefore: 2 }
+          : { sessionId: 1000 + id, testRunsBefore: 0 };
+      },
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "error", durationMs: 5, failureMessage: "tool answered isError" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome, t.runs[0]?.fresh])).toEqual([
+      ["infra-error", "error", false],
+    ]);
+  });
+
   test("a fresh rerun that answers deadline-exceeded is infra-error, not flaky, and forces exit 5 (R262)", async () => {
     const fx = await verifyFixture({
       withNewTest: true,

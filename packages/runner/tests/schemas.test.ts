@@ -610,6 +610,24 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(verifySchema, "$.results[].killedBy")).toEqual([...KILLED_BY]);
     expect(enumAt(verifySchema, "$.newTests[].state")).toEqual([...NEW_TEST_STATES]);
     expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([...UNMUTATED_OUTCOMES]);
+    // Independent of the constants: a coordinated change to a constant AND the schema moves the
+    // published value domain, which needs a deliberate edit here too (R262 review).
+    expect([...UNMUTATED_OUTCOMES]).toEqual([
+      "pass",
+      "fail",
+      "skip",
+      "timeout",
+      "deadline-exceeded",
+      "error",
+      "not-run",
+    ]);
+    expect([...NEW_TEST_STATES]).toEqual([
+      "stable",
+      "flaky",
+      "red",
+      "flaky-unknown",
+      "infra-error",
+    ]);
   });
 
   test("the verify schema's version const and $id match VERIFY_SCHEMA_VERSION", () => {
