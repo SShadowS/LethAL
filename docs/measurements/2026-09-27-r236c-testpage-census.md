@@ -133,3 +133,32 @@ with a full `bun test` for part of its time, so its small-corpus figures are noi
 not. BaseApp's 127 loud errors are gone, and its refused count moves from 11,098 to 11,173 (27.7%):
 the 127 recovered tests are now classified, and 75 more tests are refused than before. Every other
 corpus is unchanged from the second run. The stop condition of section 5 no longer holds.
+
+## 8. Final review: comments are trivia (fourth run)
+
+The final whole-branch review found a fail-open shape. The grammar makes `comment`,
+`multiline_comment`, `pragma`, `preproc_region` and `preproc_endregion` NAMED children wherever
+they sit, so `Helper(1 /* c */)` counted two arguments, no overload matched, and the call was
+silently dropped; in `P . /*z*/ OpenView()` the comment was read as the member name. The scanner
+now drops those kinds before counting arguments and before reading a member call's receiver and
+member (`0e5a017`). No other read in the scanner indexes named children by position.
+
+Same command, same corpora, run after `0e5a017`:
+
+| corpus | files | tests | refused before (section 7) | refused after | loud errors | ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fixtures/sandbox-data-tests` | 1 | 68 | 1 | 1 | 0 | 43 |
+| `fixtures/sandbox-tests` | 1 | 2 | 0 | 0 | 0 | 4 |
+| `fixtures/sandbox-hang-tests` | 1 | 5 | 0 | 0 | 0 | 2 |
+| `fixtures/sandbox-harden-tests` | 1 | 6 | 0 | 0 | 0 | 3 |
+| `U:/Git/do-rel2/Cloud` | 554 | 0 (no tests) | 0 | 0 | 0 | 743 |
+| `U:/Git/DC/Cloud` | 1135 | 0 (no tests) | 0 | 0 | 0 | 2266 |
+| `U:/Git/BusinessCentral.Sentinel` | 67 | 54 | 0 | 0 | 0 | 50 |
+| `U:/Git/BC.History/BusinessFoundation` | 104 | 89 | 19 | 19 | 0 | 155 |
+| `U:/Git/BC.History/System Application` | 1718 | 1889 | 209 | 209 | 0 | 2863 |
+| `U:/Git/BC.History/BaseApp` | 9620 | 40291 | 11173 | **11179** | 0 | 57577 |
+
+Loud errors stay 0 on every corpus. The only delta is BaseApp, +6 refused: six tests whose path to
+an opening call runs through a call with a comment inside its argument list or between receiver and
+member, which the old scanner dropped and so sent. The fixture pin still holds: in
+`sandbox-data-tests` exactly `Data Tests.PageActionComputesNonZero` is refused.
