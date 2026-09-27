@@ -691,10 +691,15 @@ No record fits none, so there is no new finding and no new reproduction.
   is now a statement, so `asserterror Buckets[1].Delete(true);` is one call on an indexed receiver.
   The compiler-only call becomes explained-asserterror (rule R3), and the tree-sitter-only fragment no
   longer exists.
-- **C4 is now explained, not claimed**, through the same commit `209d038`. The body of
-  `asserterror X := 1` is now an `assignment_statement`, the kind rule R3 matches. The records did
-  not disappear. They moved to the explained column, because LethAL still has no statement slot for
-  `asserterror_statement.body` (R216), so no operator claims them yet.
+- **C4 is now explained**, through the same commit `209d038`. The body of `asserterror X := 1` is
+  now an `assignment_statement`, the kind rule R3 matches. The records did not disappear. They
+  moved to the explained column. The statement-slot-gated operators, `remove-assignment` and
+  `void-method-call`, still do not claim these bodies, because LethAL still has no statement slot
+  for `asserterror_statement.body` (R216). `toggle-blank-string` does not gate on the statement
+  slot, and does claim a subset: eight of the 72 baseapp records are real new mutants from it, at
+  bodies that assign a blank string literal to a page field's `Value` (the pre-commitment's
+  AMENDMENT 1). The rest of the baseapp records, and all eight sysapp records, do not match that
+  shape and stay unclaimed.
 - **P1 is gone** through upstream `551829e` (issue #27). A contextual keyword at the start of a
   property value lexes as a name, so `Visible = Type = Type::Alpha;` is a `comparison_expression` with
   no ERROR node.
@@ -721,6 +726,8 @@ is 0 everywhere.
   "guarded" column is understated for the same reason as in section 6, now for more containers.
   Recorded, not fixed: widening R2 needs its own pre-commitment. The roadmap item for it is filed by
   this plan's Task 8.
-- C4's 80 records are explained, not claimed. R216's statement slot is still missing, so no
-  mutation operator plants a mutant at an `asserterror` assignment body yet.
+- C4's 80 records are explained, not claimed by the statement-slot-gated operators:
+  `remove-assignment` and `void-method-call` still miss an `asserterror` assignment body, because
+  R216's statement slot is still missing. `toggle-blank-string` does not gate on that slot, and
+  does plant there: eight of the 72 baseapp records are real new mutants from it. See section 10.4.
 - Everything in section 9 still holds, apart from the two DC pages, which are now compared.

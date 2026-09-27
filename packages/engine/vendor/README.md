@@ -101,7 +101,21 @@ files v2.5.0 could not parse cleanly now parse), with `blocks`,
 
 ## How to reproduce / update
 
-### Build locally from source (what the current binary was made with)
+### Download the released asset (current practice, from v4.4.1 on)
+
+```bash
+gh release download v4.4.1 -R SShadowS/tree-sitter-al -p tree-sitter-al.wasm -D /tmp/tsal-release
+# verify sha256 against the value recorded in this README, then:
+cp /tmp/tsal-release/tree-sitter-al.wasm /path/to/LethAL/packages/engine/vendor/tree-sitter-al.wasm
+```
+
+The vendored file is the RELEASED asset (SHA-256 verified), not a local build
+(orchestrator ruling 2026-09-27). A local build is made only as a comparison,
+never as the source of the vendored file: under tree-sitter 0.27.0 the two have
+been byte-identical every time this was checked, and the release is the artifact
+upstream itself verified.
+
+### Build locally from source (historical: 4.3.0 and earlier practice)
 
 ```bash
 cd /path/to/tree-sitter-al
@@ -111,16 +125,10 @@ cp /tmp/tree-sitter-al.wasm /path/to/LethAL/packages/engine/vendor/tree-sitter-a
 ```
 
 `tree-sitter build --wasm` falls back to a Docker image when Emscripten is not
-installed locally. Downloading a release asset also works when the release
-matches the commit you want, but prefer building: a release artifact can lag the
-grammar's HEAD, and the repo's checked-in root wasm demonstrably does.
-
-From v4.4.1 on, the vendored file is the RELEASED asset (`gh release download`,
-SHA-256 verified), not a local build, and a local build is made only as a
-comparison (orchestrator ruling 2026-09-27). Under tree-sitter 0.27.0 the two
-have been byte-identical every time this was checked, and the release is the
-artifact upstream itself verified, so downloading it is no longer a step down
-from building it.
+installed locally. This is how every version through 4.3.0 was vendored, back
+when a release artifact could lag the grammar's HEAD, and the repo's checked-in
+root wasm demonstrably did. From v4.4.1 on, use the download method above
+instead; keep this method only for building a local comparison copy.
 
 ## The 3.0.1 -> 3.2.1 bump (2026-08-08), and what it cost: nothing
 
