@@ -4,17 +4,21 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type MutantManifest, type MutantManifestEntry, gapIdOf } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
+import type { TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
 import { NamedMutantError } from "../src/named-mutants";
+import type { NamedMutantsConfig } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
-import { identityKeyOf, serializeKey } from "../src/selection";
+import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
+import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
   INSTALLED_ARTIFACT_REFUSALS,
   TEST_APP_REFUSALS,
+  VERIFY_EXIT,
   VERIFY_REFUSALS,
   type VerifyDeps,
   VerifyError,
@@ -415,6 +419,22 @@ describe("assertSourceUnchanged", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+/** R-236c: `Old.A` (green, only when asked), `Old.P` and `New.NP`, both with a reachable call that
+ *  may open a TestPage. */
+function pageTestDir(withGreenA = true): string {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tp-"));
+  const a = withGreenA ? "    [Test]\n    procedure A()\n    begin\n    end;\n\n" : "";
+  writeFileSync(
+    join(dir, "50100.Codeunit.al"),
+    `codeunit 50100 "Old"\n{\n    Subtype = Test;\n\n${a}    [Test]\n    procedure P()\n    var\n        Card: TestPage "X";\n    begin\n        Card.OpenView();\n    end;\n}\n`,
+  );
+  writeFileSync(
+    join(dir, "50101.Codeunit.al"),
+    `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure NP()\n    var\n        Card: TestPage "X";\n    begin\n        Card.Trap();\n    end;\n}\n`,
+  );
+  return dir;
+}
+
 describe("planVerify", () => {
   type Codeunit = { id: number; name: string; methods: readonly string[]; body?: string };
 
@@ -678,6 +698,32 @@ describe("planVerify", () => {
     );
     expect(e).toBeInstanceOf(EquivalenceMarksError);
   });
+
+  test("R-236c: refused covering and new tests are never planned, and are named as not run", async () => {
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A", "Old.P"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "Old", "A"), row(50100, "Old", "P")],
+      testDir: pageTestDir(),
+    });
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A"]);
+    expect(keys(plan.newTests)).toEqual([]);
+    expect(plan.notRun.get("M0001")).toEqual(["Old.P", "New.NP"]);
+    expect([...plan.testPageRefused.keys()].sort()).toEqual(["50100::P", "50101::NP"]);
+    expect(plan.allRefused.size).toBe(0);
+  });
+
+  test("R-236c: a survivor whose every test is refused is planned as all-refused, never as an empty refusal", async () => {
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.P"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "Old", "P")],
+      testDir: pageTestDir(false),
+    });
+    expect(plan.requests).toEqual([]);
+    expect([...plan.allRefused]).toEqual(["M0001"]);
+    expect(plan.notRun.get("M0001")).toEqual(["Old.P", "New.NP"]);
+  });
 });
 
 describe("verifyRefusalOf (carried item 2)", () => {
@@ -832,6 +878,7 @@ function installedRun(
   seeds: readonly Seed[],
   projectPath = "P",
   sourceSha256 = "5".repeat(64),
+  coveringTests: readonly string[] = ["T.M"],
 ): number {
   const dir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-"));
   const manifest: MutantManifest = {
@@ -867,7 +914,7 @@ function installedRun(
         file: s.entry.file,
         line: s.entry.startLine,
         carried: s.carried ?? false,
-        coveringTests: ["T.M"],
+        coveringTests: [...coveringTests],
       }),
     );
   }
@@ -1123,7 +1170,17 @@ describe("C02-09: gap ids", () => {
 
   /** A real project, test project, baseline and installed artifact: `runVerify` end to end, with
    *  the `runNamed` seam standing in for the server (every requested mutant survives). */
-  async function verifyWorld(seeds: readonly Seed[], markCodes: readonly string[] = []) {
+  async function verifyWorld(
+    seeds: readonly Seed[],
+    markCodes: readonly string[] = [],
+    /** R-236c: another test project, its source baseline, the covering names, a `runNamed`. */
+    over: {
+      readonly testDir?: string;
+      readonly baseline?: readonly TestMethodRef[];
+      readonly coveringTests?: readonly string[];
+      readonly runNamed?: VerifyDeps["runNamed"];
+    } = {},
+  ) {
     const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-proj-"));
     writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
     mkdirSync(join(projectDir, "src"));
@@ -1134,11 +1191,13 @@ describe("C02-09: gap ids", () => {
     if (marks.length > 0) {
       writeFileSync(join(projectDir, "lethal.equivalent.json"), JSON.stringify({ marks }));
     }
-    const testDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
-    writeFileSync(
-      join(testDir, "50100.Codeunit.al"),
-      'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
-    );
+    const testDir = over.testDir ?? mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
+    if (over.testDir === undefined) {
+      writeFileSync(
+        join(testDir, "50100.Codeunit.al"),
+        'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
+      );
+    }
     const store = new ResultsStore(":memory:");
     const runId = installedRun(
       store,
@@ -1146,15 +1205,11 @@ describe("C02-09: gap ids", () => {
       seeds,
       projectDir,
       await hashTargetSource(projectDir, []),
+      over.coveringTests,
     );
-    store.recordTestResult(
-      runId,
-      null,
-      null,
-      { codeunitId: 50100, codeunitName: "T", method: "M" },
-      "pass",
-      1,
-    );
+    for (const ref of over.baseline ?? [{ codeunitId: 50100, codeunitName: "T", method: "M" }]) {
+      store.recordTestResult(runId, null, null, ref, "pass", 1);
+    }
     const boom = (): never => {
       throw new Error("verify.test.ts gap fixture: not used on this path");
     };
@@ -1194,20 +1249,78 @@ describe("C02-09: gap ids", () => {
       resourceServer: "http://gap-fixture",
       resourceServerInstance: "BC",
       preprocessorSymbols: [],
-      runNamed: async (cfg) => ({
-        outcomes: cfg.requests.map((r) => {
-          const mutant = byId.get(r.mutantId);
-          if (mutant === undefined) throw new Error(`no seed ${r.mutantId}`);
-          return { mutant, verdict: "survived" as const, batchIndex: 0 };
-        }),
-        baseline: [],
-        rerun: [],
-      }),
+      runNamed:
+        over.runNamed ??
+        (async (cfg) => ({
+          outcomes: cfg.requests.map((r) => {
+            const mutant = byId.get(r.mutantId);
+            if (mutant === undefined) throw new Error(`no seed ${r.mutantId}`);
+            return { mutant, verdict: "survived" as const, batchIndex: 0 };
+          }),
+          baseline: [],
+          rerun: [],
+        })),
     };
     const verify = (survivors: readonly string[]) =>
       runVerify({ artifact: A1, survivors, testDir }, deps);
     return { store, verify };
   }
+
+  const OLD_A = { codeunitId: 50100, codeunitName: "Old", method: "A" };
+  const OLD_P = { codeunitId: 50100, codeunitName: "Old", method: "P" };
+
+  test("R-236c: verify of a survivor whose every test is refused sends nothing and says so", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      testDir: pageTestDir(false),
+      baseline: [OLD_P],
+      coveringTests: ["Old.P"],
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when every test is refused");
+      },
+    });
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused).toBeUndefined();
+    expect(out.newTests).toEqual([]);
+    const [r] = out.results;
+    expect(r?.verdict).toBe("error");
+    expect(r?.notRun).toEqual(["Old.P", "New.NP"]);
+    expect(r?.testsRun).toEqual([]);
+    expect(r?.failureNote).toContain("TestPage refused, not run");
+    expect(out.testPageRefused?.tests).toEqual(["New.NP", "Old.P"]);
+    expect(out.testPageRefused?.diagnosis).toBe(TESTPAGE_REFUSED_DIAGNOSIS);
+    expect(out.exitCode).toBe(VERIFY_EXIT.nothingMeasured);
+    w.store.close();
+  });
+
+  test("R-236c: verify of a survivor with one runnable test sends only that one, and hands runNamed the refusal as a guard", async () => {
+    const seen: NamedMutantsConfig[] = [];
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      testDir: pageTestDir(),
+      baseline: [OLD_A, OLD_P],
+      coveringTests: ["Old.A", "Old.P"],
+      runNamed: async (cfg) => {
+        seen.push(cfg);
+        return {
+          outcomes: [{ mutant: entry("M0001"), verdict: "survived", batchIndex: 0 }],
+          baseline: [],
+          rerun: [],
+        };
+      },
+    });
+    const out = await w.verify(["0/M0001"]);
+    expect(seen.map((c) => c.requests.map((r) => r.methods.map(testKeyOf)))).toEqual([
+      [["50100::A"]],
+    ]);
+    expect([...(seen[0]?.testPageRefused?.keys() ?? [])].sort()).toEqual(["50100::P", "50101::NP"]);
+    expect(seen[0]?.rerunOnUnmutated).toEqual([]);
+    const [r] = out.results;
+    expect(r?.verdict).toBe("survived");
+    expect(r?.testsRun).toEqual(["Old.A"]);
+    expect(r?.notRun).toEqual(["Old.P", "New.NP"]);
+    expect(out.newTests).toEqual([]);
+    expect(out.testPageRefused?.tests).toEqual(["New.NP", "Old.P"]);
+    w.store.close();
+  });
 
   test("every result carries its entry's gapId, named directly or through a gap", async () => {
     const w = await verifyWorld([

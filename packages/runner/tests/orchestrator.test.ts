@@ -11188,6 +11188,29 @@ describe("C02-04b: runNamedMutants", () => {
     expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0001" });
   });
 
+  test("R-236c: runNamedMutants never sends a TestPage-refused method, at baseline, against a mutant or on rerun", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    const reason = "Sandbox Tests.OverBudgetDetected calls Card.OpenView";
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+      requireEveryMethodGreen: true,
+      testPageRefused: new Map([[`${OVER.codeunitId}::${OVER.method}`, reason]]),
+    });
+    const sent = (calls(fx.trace) as Array<{ call: string; method?: string }>).filter(
+      (c) => c.call === "run" || c.call === "runMany",
+    );
+    expect(sent).toEqual([]);
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["error"]);
+    expect(res.baseline.map((b) => [b.ref.method, b.outcome, b.failureMessage])).toEqual([
+      ["OverBudgetDetected", "skip", testPageNotRunMessage(reason)],
+    ]);
+    expect(res.rerun.map((r) => [r.ref.method, r.outcome])).toEqual([
+      ["OverBudgetDetected", "skip"],
+    ]);
+  });
+
   test("runNamedMutants: inLease without a lease is refused, never run unfenced", async () => {
     // A non-lease-bindable fake, so no lease is required and the session would otherwise proceed.
     const fx = await installedFixture({ lease: false });

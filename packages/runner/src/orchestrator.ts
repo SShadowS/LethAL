@@ -5351,6 +5351,12 @@ export interface NamedMutantsConfig {
    * which drops a red method and scores the mutant on the rest.
    */
   readonly requireEveryMethodGreen?: boolean;
+  /**
+   * R-236c: tests with a reachable call that may open a TestPage, by `testKeyOf`, each with its
+   * reason. Never sent: their baseline and rerun are the synthetic refused `skip`, so they are
+   * never green and never run against a mutant. `lethal verify` never plans one; this is the guard.
+   */
+  readonly testPageRefused?: ReadonlyMap<string, string>;
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -5556,6 +5562,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       groupRuns,
       minMutantBudgetMs,
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
+      ...(cfg.testPageRefused !== undefined ? { testPageRefused: cfg.testPageRefused } : {}),
     };
     // Scored or not, `safety.isUnsafe` is read below: "scored" is returned even when the covering
     // loop latched, and every request the latch stopped is answered there.
