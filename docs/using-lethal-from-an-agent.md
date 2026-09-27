@@ -413,7 +413,7 @@ A kill by a runtime error is still a kill, and says only that no assertion caugh
 `killedByNewTest` says whether the killing test is one your edit added. A row's `invalidBaseline`
 lists the requested tests that had no fresh green unmutated run. Verify then does not run the mutant at all:
 that survivor's row is `error`. Fix those tests (they must pass unmutated, in a fresh session) and
-run verify again.
+run verify again, unless the test's state is `infra-error`: then the server failed, not the test.
 
 `infra-error` means a call to the server failed during one of the new test's two unmutated runs
 (`runs[].outcome` is `error` or `deadline-exceeded`), so nothing is known about the test. Do not

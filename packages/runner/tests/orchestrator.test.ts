@@ -11771,6 +11771,18 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome])).toEqual([["red", "timeout"]]);
   });
 
+  test("a skipped new test at baseline stays red, and its run says skip (R262, ruling Q3)", async () => {
+    const fx = await verifyFixture({
+      withNewTest: true,
+      unmutated: ({ ref }) =>
+        ref.codeunitId === NEWT.codeunitId
+          ? { ref, outcome: "skip", durationMs: 5, failureMessage: "skipped" }
+          : ALL_GREEN({ ref }),
+    });
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.newTests.map((t) => [t.state, t.runs[0]?.outcome])).toEqual([["red", "skip"]]);
+  });
+
   test("verify passes every new test, and only new tests, as rerunOnUnmutated, and always requireEveryMethodGreen", async () => {
     const fx = await verifyFixture({ withNewTest: true });
     const seen: NamedMutantsConfig[] = [];
