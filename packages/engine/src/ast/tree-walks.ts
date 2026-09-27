@@ -77,6 +77,36 @@ export function isStatementSlot(node: ALSyntaxNode): boolean {
   return SINGLE_STATEMENT_SLOTS.has(`${parent.rawKind}.${node.fieldName}`);
 }
 
+/** C02-09: bodies that are not SINGLE_STATEMENT_SLOTS because they wrap a statement_block. The
+ *  pairs are read off the parser (a `repeat`'s and a `case ... else`'s `statement_block`, both in
+ *  their parent's `body` field), not guessed; tree-walks.test.ts pins both. */
+const WRAPPED_BRANCH_BODIES: ReadonlySet<string> = new Set([
+  `${ALNodeKind.repeat_statement}.body`,
+  "case_else_branch.body",
+]);
+
+/**
+ * C02-09: the innermost branch body holding `node` (itself included): a branch or loop slot, a
+ * wrapped repeat/case-else body, or a procedure's or trigger's body block. The file root when none
+ * does. A gap groups the survivors of one such block. Never null.
+ */
+export function gapBlockOf(node: ALSyntaxNode): ALSyntaxNode {
+  let n: ALSyntaxNode = node;
+  for (;;) {
+    const parent = n.parent;
+    if (parent === null) return n;
+    const slot = n.fieldName === null ? null : `${parent.rawKind}.${n.fieldName}`;
+    if (slot !== null && (SINGLE_STATEMENT_SLOTS.has(slot) || WRAPPED_BRANCH_BODIES.has(slot)))
+      return n;
+    if (
+      n.kind === ALNodeKind.block &&
+      (parent.kind === ALNodeKind.procedure || parent.kind === ALNodeKind.trigger)
+    )
+      return n;
+    n = parent;
+  }
+}
+
 /**
  * Narrowest ancestor that the grammar treats as a statement.
  *

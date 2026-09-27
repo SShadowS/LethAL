@@ -6,6 +6,7 @@ import {
   findEnclosingProcedure,
   findEnclosingStatement,
   findFirst,
+  gapBlockOf,
   initParser,
   isStatementPosition,
   isStatementSlot,
@@ -157,4 +158,100 @@ describe("tree-walks", () => {
       expect(isStatementSlot(call)).toBe(false);
     });
   }
+});
+
+describe("gapBlockOf (C02-09)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const span = (n: ALSyntaxNode) => [n.startIndex, n.endIndex];
+  /** The span of `text` in `src`, located by hand; `nth` picks a later occurrence. */
+  const at = (src: string, text: string, nth = 0): number[] => {
+    let i = -1;
+    for (let k = 0; k <= nth; k++) {
+      i = src.indexOf(text, i + 1);
+      if (i < 0) throw new Error(`no ${text} in source`);
+    }
+    return [i, i + text.length];
+  };
+  /** The first node (pre-order) whose text is `text` and, when given, which starts at `start`. */
+  const nodeAt = (root: ALSyntaxNode, text: string, start?: number): ALSyntaxNode => {
+    let hit: ALSyntaxNode | null = null;
+    visit(root, (n) => {
+      if (hit === null && n.text === text && (start === undefined || n.startIndex === start))
+        hit = n;
+    });
+    if (hit === null) throw new Error(`no node with text ${text}`);
+    return hit;
+  };
+  const proc = (body: string) => `codeunit 51200 "T" { procedure P() begin ${body} end; }`;
+  const LOG_AUDIT = `codeunit 51200 "T" { local procedure LogAudit(Amount: Decimal) begin if Amount <> 0 then begin Amount := Amount; end; end; }`;
+
+  it("an assignment inside a braced then-branch belongs to that begin..end", () => {
+    const root = wrapRoot(parseAL(LOG_AUDIT));
+    expect(gapBlockOf(nodeAt(root, "Amount := Amount")).text).toBe("begin Amount := Amount; end");
+  });
+  it("the if condition belongs to the procedure body, not to the branch it guards", () => {
+    const root = wrapRoot(parseAL(LOG_AUDIT));
+    expect(gapBlockOf(nodeAt(root, "Amount <> 0")).text.startsWith("begin if Amount <> 0")).toBe(
+      true,
+    );
+  });
+  it("a block is its own gap block (empty-block on the then-branch)", () => {
+    const root = wrapRoot(parseAL(LOG_AUDIT));
+    const then = nodeAt(root, "begin Amount := Amount; end");
+    expect(span(gapBlockOf(then))).toEqual(span(then));
+  });
+  it("un-braced then: the single statement is the gap block", () => {
+    const src = proc("if A then exit(0);");
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "0")))).toEqual(at(src, "exit(0)"));
+  });
+  it("un-braced else: the else statement is the gap block", () => {
+    const src = proc("if A then X := 1 else X := 2;");
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "2")))).toEqual(at(src, "X := 2"));
+    expect(span(gapBlockOf(nodeAt(root, "1")))).toEqual(at(src, "X := 1"));
+  });
+  it("else-if chain: the inner condition belongs to the else slot, its branch to itself", () => {
+    const src = proc("if A then X := 1 else if B then X := 2;");
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "B")))).toEqual(at(src, "if B then X := 2"));
+    expect(span(gapBlockOf(nodeAt(root, "X := 2")))).toEqual(at(src, "X := 2"));
+  });
+  it("case arms: a single-statement arm and a braced arm", () => {
+    const src = proc("case A of 1: X := 1; 2: begin X := 2; end; end;");
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "X := 1")))).toEqual(at(src, "X := 1"));
+    expect(span(gapBlockOf(nodeAt(root, "X := 2")))).toEqual(at(src, "begin X := 2; end"));
+  });
+  it("case else: the else body (case_else_branch.body) is the gap block", () => {
+    const src = proc("case A of 1: X := 1; else X := 3; end;");
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "3")))).toEqual(at(src, "X := 3;"));
+  });
+  it("loop bodies: while, for, foreach and repeat", () => {
+    const w = proc("while A do X := 1;");
+    expect(span(gapBlockOf(nodeAt(wrapRoot(parseAL(w)), "1", w.indexOf("1;"))))).toEqual(
+      at(w, "X := 1"),
+    );
+    const f = proc("for I := 1 to 5 do X := 2;");
+    expect(span(gapBlockOf(nodeAt(wrapRoot(parseAL(f)), "2")))).toEqual(at(f, "X := 2"));
+    const fe = proc("foreach I in L do X := 3;");
+    expect(span(gapBlockOf(nodeAt(wrapRoot(parseAL(fe)), "3")))).toEqual(at(fe, "X := 3"));
+    const r = proc("repeat X := 4; until X = 4;");
+    expect(span(gapBlockOf(nodeAt(wrapRoot(parseAL(r)), "X := 4")))).toEqual(at(r, "X := 4;"));
+  });
+  it("a trigger body is a gap block", () => {
+    const src = `table 51201 "T" { fields { field(1; F; Integer) { trigger OnValidate() begin F := 1; end; } } }`;
+    const root = wrapRoot(parseAL(src));
+    expect(span(gapBlockOf(nodeAt(root, "F := 1")))).toEqual(at(src, "begin F := 1; end"));
+  });
+  it("the fallback: a node with no body ancestor returns the root, never null", () => {
+    const src = `table 51201 "T" { fields { field(1; F; Integer) { } } }`;
+    const root = wrapRoot(parseAL(src));
+    const got = gapBlockOf(nodeAt(root, "F"));
+    expect(got.parent).toBeNull();
+    expect(span(got)).toEqual(span(root));
+  });
 });

@@ -2,24 +2,30 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { type MutantManifest, type MutantManifestEntry, gapIdOf } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
+import { explain } from "../src/explain";
 import { NamedMutantError } from "../src/named-mutants";
+import type { MutantOutcome, SessionReport } from "../src/report";
+import { identityKeyOf, serializeKey } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
 import {
   INSTALLED_ARTIFACT_REFUSALS,
   TEST_APP_REFUSALS,
   VERIFY_REFUSALS,
+  type VerifyDeps,
   VerifyError,
   type VerifySource,
   assertSourceUnchanged,
+  expandGapIds,
   killedByOf,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
+  runVerify,
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
@@ -75,6 +81,26 @@ function oneBatchRun(
   return runId;
 }
 
+function entry(mutantId: string, over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
+  return {
+    mutantId,
+    file: "Logic.Codeunit.al",
+    startIndex: 10,
+    endIndex: 20,
+    startLine: 3,
+    operatorName: "lethal.negate-conditional",
+    operatorVersion: "1.0.0",
+    astHash: `hash-${mutantId}`,
+    objectType: "codeunit",
+    codeunitId: 50000,
+    codeunitName: "Logic",
+    procedureName: "Post",
+    originalText: "a",
+    mutatedText: "b",
+    ...over,
+  };
+}
+
 function refusal(fn: () => unknown): VerifyError {
   try {
     fn();
@@ -95,6 +121,7 @@ describe("parseVerifyRequest", () => {
         { batchIndex: 0, mutantCode: "M0005" },
         { batchIndex: 1, mutantCode: "M0001" },
       ],
+      gapIds: [],
     });
     for (const art of ["A".repeat(32), "a".repeat(31), `${"a".repeat(31)}g`, ""]) {
       expect(refusal(() => parseVerifyRequest(art, ["0/M0004"])).reason).toBe("malformed-request");
@@ -114,7 +141,7 @@ describe("resolveVerifySource", () => {
   test("an empty id list is refused as malformed-request, never resolved to no targets", () => {
     const store = new ResultsStore(":memory:");
     oneBatchRun(store, A1, [mutantRow("M0001", "survived")]);
-    const e = refusal(() => resolveVerifySource(store, { artifactId: A1, ids: [] }));
+    const e = refusal(() => resolveVerifySource(store, { artifactId: A1, ids: [], gapIds: [] }));
     expect(e.reason).toBe("malformed-request");
     store.close();
   });
@@ -404,26 +431,6 @@ describe("planVerify", () => {
       );
     }
     return dir;
-  }
-
-  function entry(mutantId: string, over: Partial<MutantManifestEntry> = {}): MutantManifestEntry {
-    return {
-      mutantId,
-      file: "Logic.Codeunit.al",
-      startIndex: 10,
-      endIndex: 20,
-      startLine: 3,
-      operatorName: "lethal.negate-conditional",
-      operatorVersion: "1.0.0",
-      astHash: `hash-${mutantId}`,
-      objectType: "codeunit",
-      codeunitId: 50000,
-      codeunitName: "Logic",
-      procedureName: "Post",
-      originalText: "a",
-      mutatedText: "b",
-      ...over,
-    };
   }
 
   function manifest(mutants: readonly MutantManifestEntry[]): MutantManifest {
@@ -779,5 +786,512 @@ describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
     expect(verifyExitCode({ results: [killed, skipped], newTests: [stable] })).toBe(0);
     // Every survivor skipped: nothing measured, and nothing wrong either.
     expect(verifyExitCode({ results: [skipped], newTests: [] })).toBe(0);
+  });
+});
+// C02-09 Task 6: gap ids in --survivors.
+const GA = "Gaaaaaaaaaaaa";
+const GB = "Gbbbbbbbbbbbb";
+const GC = "Gcccccccccccc";
+const GD = "Gdddddddddddd";
+
+type Seed = {
+  readonly entry: MutantManifestEntry;
+  readonly verdict: MutantVerdict;
+  readonly carried?: boolean;
+  /** No store row: the source run stopped before scoring it. */
+  readonly unrecorded?: boolean;
+};
+
+function seed(
+  mutantId: string,
+  gapId: string | undefined,
+  verdict: MutantVerdict,
+  over: Partial<MutantManifestEntry> & {
+    readonly carried?: boolean;
+    readonly unrecorded?: boolean;
+  } = {},
+): Seed {
+  const { carried, unrecorded, ...rest } = over;
+  return {
+    entry: entry(mutantId, {
+      startLine: Number(mutantId.slice(1)),
+      ...(gapId !== undefined ? { gapId } : {}),
+      ...rest,
+    }),
+    verdict,
+    ...(carried !== undefined ? { carried } : {}),
+    ...(unrecorded !== undefined ? { unrecorded } : {}),
+  };
+}
+
+/** A one-batch run whose installed files are on disk, so `loadInstalledArtifact` runs for real. */
+function installedRun(
+  store: ResultsStore,
+  artifactId: string,
+  seeds: readonly Seed[],
+  projectPath = "P",
+  sourceSha256 = "5".repeat(64),
+): number {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-"));
+  const manifest: MutantManifest = {
+    selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+    artifactId,
+    mutants: seeds.map((s) => s.entry),
+  };
+  const manifestText = JSON.stringify(manifest);
+  writeFileSync(join(dir, "mutant-manifest.json"), manifestText);
+  writeFileSync(join(dir, "app.json"), "{}");
+  const appBytes = new TextEncoder().encode(`app-${artifactId}`);
+  writeFileSync(join(dir, "x.app"), appBytes);
+  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.0" });
+  store.recordArtifact(
+    runId,
+    artifact(0, artifactId, {
+      sha256: Bun.SHA256.hash(appBytes, "hex"),
+      manifestSha256: Bun.SHA256.hash(manifestText, "hex"),
+      appPath: join(dir, "x.app"),
+      instrumentedDir: dir,
+    }),
+  );
+  store.recordSourceHash(runId, sourceSha256);
+  for (const s of seeds) {
+    if (s.unrecorded === true) continue;
+    store.recordMutant(
+      runId,
+      mutantRow(s.entry.mutantId, s.verdict, {
+        astHash: s.entry.astHash,
+        codeunitName: s.entry.codeunitName,
+        procedureName: s.entry.procedureName,
+        operatorName: s.entry.operatorName,
+        file: s.entry.file,
+        line: s.entry.startLine,
+        carried: s.carried ?? false,
+        coveringTests: ["T.M"],
+      }),
+    );
+  }
+  return runId;
+}
+
+async function asyncRefusal(p: Promise<unknown>): Promise<VerifyError> {
+  const e = await p.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  if (e instanceof VerifyError) return e;
+  throw new Error(`expected a VerifyError, got ${String(e)}`);
+}
+
+/** What the user reads: the refusal's detail with its advice, as verify prints it. */
+function printedDetail(e: VerifyError): string {
+  const r = verifyRefusalOf(e);
+  if (r?.kind !== "refused") throw new Error("not a refusal");
+  return r.detail;
+}
+
+const idsOf = (req: {
+  readonly ids: ReadonlyArray<{ readonly batchIndex: number; readonly mutantCode: string }>;
+}) => req.ids.map((i) => `${i.batchIndex}/${i.mutantCode}`);
+
+describe("C02-09: gap ids", () => {
+  test("G0123456789ab is a gap id; g0123..., G012 and 0/G0123456789ab are malformed-request", () => {
+    expect(parseVerifyRequest(A1, ["G0123456789ab"])).toEqual({
+      artifactId: A1,
+      ids: [],
+      gapIds: ["G0123456789ab"],
+    });
+    for (const bad of ["g0123456789ab", "G012", "0/G0123456789ab", "G0123456789AB"]) {
+      const e = refusal(() => parseVerifyRequest(A1, [bad]));
+      expect(e.reason).toBe("malformed-request");
+      // The message names both accepted forms.
+      expect(e.detail).toContain("0/M0004");
+      expect(e.detail).toContain("G0123456789ab");
+    }
+  });
+
+  test("a mix of a gap id and a mutant id parses into both lists", () => {
+    expect(parseVerifyRequest(A1, ["G0123456789ab,0/M0004", "1/M0002"])).toEqual({
+      artifactId: A1,
+      ids: [
+        { batchIndex: 0, mutantCode: "M0004" },
+        { batchIndex: 1, mutantCode: "M0002" },
+      ],
+      gapIds: ["G0123456789ab"],
+    });
+  });
+
+  test("the same gap id twice is malformed-request", () => {
+    const e = refusal(() => parseVerifyRequest(A1, ["G0123456789ab", "G0123456789ab"]));
+    expect(e.reason).toBe("malformed-request");
+    expect(e.detail).toContain("G0123456789ab");
+  });
+
+  test("a gap id expands to its survived members, in the named artifact", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived"),
+      seed("M0003", GA, "killed"),
+    ]);
+    const req = await expandGapIds(store, parseVerifyRequest(A1, [GA]));
+    expect(idsOf(req)).toEqual(["0/M0001", "0/M0002"]);
+    expect(req.gapIds).toEqual([]);
+    store.close();
+  });
+
+  test("an unknown gap id is refused as unknown-gap, and the detail names an edited block, a moved block and the last-batch rule", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", GA, "survived")]);
+    const e = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GB])));
+    expect(e.reason).toBe("unknown-gap");
+    const detail = printedDetail(e);
+    expect(detail).toContain(GB);
+    expect(detail).toContain("an edited or moved block");
+    expect(detail).toContain("only the run's last batch stays installed");
+    store.close();
+  });
+
+  test("a stale id fails: the id of a block's old text is unknown-gap against a manifest built from its new text", async () => {
+    const now = gapIdOf("Logic.Codeunit.al", 40, 60, "begin X := 2; end");
+    const old = gapIdOf("Logic.Codeunit.al", 40, 60, "begin X := 1; end");
+    expect(old).not.toBe(now);
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", now, "survived")]);
+    const err = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [old])));
+    expect(err.reason).toBe("unknown-gap");
+    expect(err.detail).toContain(old);
+    // The current id still expands.
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [now])))).toEqual(["0/M0001"]);
+    store.close();
+  });
+
+  test("a block with no survived row is refused as gap-has-no-survivor, with its counts", async () => {
+    const killed = new ResultsStore(":memory:");
+    installedRun(killed, A1, [
+      seed("M0001", GA, "killed"),
+      seed("M0002", GA, "timeout-killed"),
+      seed("M0003", GA, "error"),
+    ]);
+    const k = await asyncRefusal(expandGapIds(killed, parseVerifyRequest(A1, [GA])));
+    expect(k.reason).toBe("gap-has-no-survivor");
+    expect(k.detail).toContain(GA);
+    expect(k.detail).toContain("survived 0, killed 2, no-coverage 0, other 1");
+    expect(k.detail).not.toContain("noCoverageBlocks");
+    killed.close();
+
+    const noCov = new ResultsStore(":memory:");
+    installedRun(noCov, A1, [seed("M0001", GA, "no-coverage"), seed("M0002", GA, "no-coverage")]);
+    const n = await asyncRefusal(expandGapIds(noCov, parseVerifyRequest(A1, [GA])));
+    expect(n.reason).toBe("gap-has-no-survivor");
+    expect(n.detail).toContain("no-coverage 2");
+    expect(n.detail).toContain("noCoverageBlocks");
+    expect(n.detail).toContain("0/M0001, 0/M0002");
+    noCov.close();
+  });
+
+  // Review fix round 1: a run that quarantined or threw partway through its last batch records its
+  // artifact, but its unscored manifest entries have no row. Those are not measured, not corruption.
+  // `installedRun` never calls `finishRun`, so these runs are UNFINISHED, which is what allows it.
+  test("a gap with one recorded survivor and one unrecorded entry expands to the survivor", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+    ]);
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+    store.close();
+  });
+
+  test("a gap whose recorded rows hold no survivor refuses gap-has-no-survivor, unrecorded entries or not", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "killed"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+      seed("M0003", GB, "survived", { unrecorded: true }),
+    ]);
+    const a = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GA])));
+    expect(a.reason).toBe("gap-has-no-survivor");
+    expect(a.detail).toContain("survived 0, killed 1, no-coverage 0, other 0, not measured 1");
+    // No recorded row at all: the manifest still carries the id, so it is not unknown.
+    const b = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GB])));
+    expect(b.reason).toBe("gap-has-no-survivor");
+    expect(b.detail).toContain("not measured 1");
+    store.close();
+  });
+
+  // Review r1 finding 1: "not measured" is allowed ONLY on a run that did not finish. A finished
+  // run scored every manifest entry, so a missing row is a lost row, and reading it as "not
+  // measured" would silently drop a survivor (or turn a gap into gap-has-no-survivor).
+  test("on a FINISHED run, a manifest entry with no row throws as a corrupt store, never a refusal or a smaller expansion", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived", { unrecorded: true }),
+      seed("M0003", GB, "survived", { unrecorded: true }),
+    ]);
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    for (const g of [GA, GB]) {
+      const e = await expandGapIds(store, parseVerifyRequest(A1, [g])).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(Error);
+      expect(e).not.toBeInstanceOf(VerifyError);
+      expect((e as Error).message).toContain("run 1 finished");
+      expect((e as Error).message).toContain("M0002, M0003");
+      expect((e as Error).message).toContain("(a corrupt store)");
+    }
+    store.close();
+  });
+
+  test("on a FINISHED run with every row recorded, a gap still expands", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "killed"),
+    ]);
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+    store.close();
+  });
+
+  test("two rows for one mutant still throw as a corrupt store, never a refusal", async () => {
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(store, A1, [seed("M0001", GA, "survived")]);
+    store.recordMutant(runId, mutantRow("M0001", "survived", { line: 1 }));
+    const e = await expandGapIds(store, parseVerifyRequest(A1, [GA])).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(Error);
+    expect(e).not.toBeInstanceOf(VerifyError);
+    expect((e as Error).message).toContain("a mutant twice (a corrupt store)");
+    store.close();
+  });
+
+  test("every offending gap id is named", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", GA, "killed"), seed("M0002", GB, "survived")]);
+    const e = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GA, GC, GB])));
+    // Unknown before empty; both named, the good one not.
+    expect(e.reason).toBe("unknown-gap");
+    expect(e.detail).toContain(`${GC} (unknown-gap`);
+    expect(e.detail).toContain(`${GA} (gap-has-no-survivor`);
+    expect(e.detail).not.toContain(GB);
+    store.close();
+  });
+
+  test("a gap id against a manifest with no gap ids is source-predates-verify, and a mutant id against the same artifact still resolves", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", undefined, "survived")]);
+    const e = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [GA])));
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain(GA);
+    const ids = await expandGapIds(store, parseVerifyRequest(A1, ["0/M0001"]));
+    expect(resolveVerifySource(store, ids).targets.map((t) => t.mutantCode)).toEqual(["M0001"]);
+    store.close();
+  });
+
+  test("a mutant named directly and through its gap is malformed-request, naming both spellings", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", GA, "survived"), seed("M0002", GA, "survived")]);
+    const e = await asyncRefusal(expandGapIds(store, parseVerifyRequest(A1, [`${GA},0/M0002`])));
+    expect(e.reason).toBe("malformed-request");
+    expect(e.detail).toContain(`0/M0002 and ${GA}`);
+    expect(e.detail).not.toContain("0/M0001");
+    store.close();
+  });
+
+  test("a carried member refuses the whole request as carried, naming the member", async () => {
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived", { carried: true }),
+    ]);
+    const req = await expandGapIds(store, parseVerifyRequest(A1, [GA]));
+    const e = refusal(() => resolveVerifySource(store, req));
+    expect(e.reason).toBe("carried");
+    expect(e.detail).toContain("0/M0002");
+    expect(e.detail).not.toContain("0/M0001");
+    store.close();
+  });
+
+  test("expansion reads the named artifact, not the id's origin", async () => {
+    // Two runs of the same, unchanged source: the same gap id, different verdicts per run.
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, [seed("M0001", GA, "survived"), seed("M0002", GA, "killed")]);
+    installedRun(store, A2, [seed("M0001", GA, "killed"), seed("M0002", GA, "survived")]);
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A1, [GA])))).toEqual(["0/M0001"]);
+    expect(idsOf(await expandGapIds(store, parseVerifyRequest(A2, [GA])))).toEqual(["0/M0002"]);
+    store.close();
+  });
+
+  /** A real project, test project, baseline and installed artifact: `runVerify` end to end, with
+   *  the `runNamed` seam standing in for the server (every requested mutant survives). */
+  async function verifyWorld(seeds: readonly Seed[], markCodes: readonly string[] = []) {
+    const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-proj-"));
+    writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
+    mkdirSync(join(projectDir, "src"));
+    writeFileSync(join(projectDir, "src", "Logic.Codeunit.al"), 'codeunit 50000 "Logic" { }');
+    const marks = seeds
+      .filter((s) => markCodes.includes(s.entry.mutantId))
+      .map((s) => ({ key: serializeKey(identityKeyOf(s.entry)), reason: "same either way" }));
+    if (marks.length > 0) {
+      writeFileSync(join(projectDir, "lethal.equivalent.json"), JSON.stringify({ marks }));
+    }
+    const testDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
+    writeFileSync(
+      join(testDir, "50100.Codeunit.al"),
+      'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
+    );
+    const store = new ResultsStore(":memory:");
+    const runId = installedRun(
+      store,
+      A1,
+      seeds,
+      projectDir,
+      await hashTargetSource(projectDir, []),
+    );
+    store.recordTestResult(
+      runId,
+      null,
+      null,
+      { codeunitId: 50100, codeunitName: "T", method: "M" },
+      "pass",
+      1,
+    );
+    const boom = (): never => {
+      throw new Error("verify.test.ts gap fixture: not used on this path");
+    };
+    const byId = new Map(seeds.map((s) => [s.entry.mutantId, s.entry] as const));
+    const deps: VerifyDeps = {
+      store,
+      backend: {
+        capabilities: boom,
+        status: async () => boom(),
+        deploy: async () => boom(),
+        compileCheck: async () => boom(),
+        activate: async () => boom(),
+        run: async () => boom(),
+        compileTestApp: async (_dir, target) => ({
+          appPath: "t.app",
+          sha256: "e".repeat(64),
+          appId: APP,
+          name: "T",
+          publisher: "p",
+          version: "1.0.0.0",
+          compiledAgainst: { artifactId: target.artifactId, sha256: target.sha256 },
+        }),
+        publishTestApp: async () => boom(),
+      },
+      lease: {
+        client: {
+          acquire: async () => boom(),
+          renew: async () => boom(),
+          release: async () => boom(),
+          beginPublish: async () => boom(),
+          endPublish: async () => boom(),
+          getOperationStatus: async () => boom(),
+          recoverOp: async () => boom(),
+        },
+        serverGeneration: async () => boom(),
+      },
+      resourceServer: "http://gap-fixture",
+      resourceServerInstance: "BC",
+      preprocessorSymbols: [],
+      runNamed: async (cfg) => ({
+        outcomes: cfg.requests.map((r) => {
+          const mutant = byId.get(r.mutantId);
+          if (mutant === undefined) throw new Error(`no seed ${r.mutantId}`);
+          return { mutant, verdict: "survived" as const, batchIndex: 0 };
+        }),
+        baseline: [],
+        rerun: [],
+      }),
+    };
+    const verify = (survivors: readonly string[]) =>
+      runVerify({ artifact: A1, survivors, testDir }, deps);
+    return { store, verify };
+  }
+
+  test("every result carries its entry's gapId, named directly or through a gap", async () => {
+    const w = await verifyWorld([
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "survived"),
+      seed("M0003", GB, "survived"),
+    ]);
+    const out = await w.verify([`0/M0003,${GA}`]);
+    expect(out.refused).toBeUndefined();
+    expect(out.results.map((r) => [r.id, r.gapId, r.verdict])).toEqual([
+      ["0/M0003", GB, "survived"],
+      ["0/M0001", GA, "survived"],
+      ["0/M0002", GA, "survived"],
+    ]);
+    w.store.close();
+  });
+
+  test("a gap of reader-marked survivors reads exactly like naming them one by one", async () => {
+    const w = await verifyWorld(
+      [seed("M0001", GA, "survived"), seed("M0002", GA, "survived"), seed("M0003", GA, "killed")],
+      ["M0001", "M0002"],
+    );
+    const byGap = await w.verify([GA]);
+    const byIds = await w.verify(["0/M0001,0/M0002"]);
+    expect(byGap.exitCode).toBe(0);
+    expect(byGap.results.map((r) => r.verdict)).toEqual(["skipped", "skipped"]);
+    const sorted = (rs: typeof byGap.results) => [...rs].sort((a, b) => a.id.localeCompare(b.id));
+    expect(sorted(byGap.results)).toEqual(sorted(byIds.results));
+    expect(byGap.counts).toEqual(byIds.counts);
+    w.store.close();
+  });
+
+  test("explain and verify agree on a gap's members", async () => {
+    // ONE set of rows, read by both commands. GA holds a no-coverage row between two survivors,
+    // GB a killed row beside its survivor; GC is no-coverage only and GD killed only.
+    const seeds = [
+      seed("M0001", GA, "survived"),
+      seed("M0002", GA, "no-coverage"),
+      seed("M0003", GA, "survived"),
+      seed("M0004", GB, "killed"),
+      seed("M0005", GB, "survived"),
+      seed("M0006", GC, "no-coverage"),
+      seed("M0007", GD, "killed"),
+    ];
+    const store = new ResultsStore(":memory:");
+    installedRun(store, A1, seeds);
+    const blockOf: Record<string, number> = { [GA]: 1, [GB]: 4, [GC]: 6, [GD]: 7 };
+    const demo = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "..", "examples", "credit-limit", "demo.report.json"),
+        "utf8",
+      ),
+    ) as SessionReport;
+    const template = demo.mutants.find((m) => m.verdict === "survived");
+    if (template === undefined) throw new Error("demo.report.json has no survivor");
+    const { triggerName: _trigger, ...base } = template;
+    const mutants: MutantOutcome[] = seeds.map((s) => {
+      const gapId = s.entry.gapId ?? "";
+      const start = blockOf[gapId] ?? 0;
+      return {
+        ...base,
+        mutantCode: s.entry.mutantId,
+        file: s.entry.file,
+        line: s.entry.startLine,
+        procedureName: s.entry.procedureName,
+        verdict: s.verdict,
+        batchIndex: 0,
+        gapId,
+        blockStartLine: start,
+        blockEndLine: start + 2,
+      };
+    });
+    const report: SessionReport = {
+      ...demo,
+      mutants,
+      artifacts: [{ batchIndex: 0, artifactId: A1, sha256: "0".repeat(64), appVersion: "1.0.1.0" }],
+    };
+    const { gaps } = explain(report);
+    if (gaps === undefined) throw new Error("explain emitted no gaps");
+    expect(gaps.map((g) => g.gapId).sort()).toEqual([GA, GB]);
+    for (const g of gaps) {
+      if (g.artifactId === undefined) throw new Error(`gap ${g.gapId} has no artifact`);
+      const req = await expandGapIds(store, parseVerifyRequest(g.artifactId, [g.gapId]));
+      expect(req.ids.map((i) => i.mutantCode)).toEqual([...g.members]);
+    }
+    store.close();
   });
 });

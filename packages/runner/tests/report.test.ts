@@ -429,6 +429,59 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     expect("procedureEndLine" in bare).toBe(false);
   });
 
+  test("the gap fields ride the same site path, and are absent when the entry lacks them (C02-09)", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 2,
+        deployedCount: 2,
+        hangCapableCount: 0,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0001", {
+          gapId: "G0123456789ab",
+          blockStartLine: 7,
+          blockEndLine: 9,
+        }),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 500,
+        coveringTests: [],
+      },
+      {
+        type: "mutant-scored",
+        mutant: mutant("M0002"),
+        verdict: "survived",
+        batchIndex: 0,
+        durationMs: 500,
+        coveringTests: [],
+      },
+      { type: "session-finished", elapsedMs: 1_000 },
+    ]);
+    const report = buildReport(STATICS, events);
+    const byId = new Map(report.mutants.map((m) => [m.mutantCode, m]));
+    const gapped = byId.get("M0001");
+    const bare = byId.get("M0002");
+    if (gapped === undefined || bare === undefined) throw new Error("buildReport dropped a mutant");
+    expect({
+      gapId: gapped.gapId,
+      blockStartLine: gapped.blockStartLine,
+      blockEndLine: gapped.blockEndLine,
+    }).toEqual({ gapId: "G0123456789ab", blockStartLine: 7, blockEndLine: 9 });
+    expect("gapId" in bare).toBe(false);
+    expect("blockStartLine" in bare).toBe(false);
+    expect("blockEndLine" in bare).toBe(false);
+  });
+
   // ----------------------------------------------------------------------
   // C02-01 Task 2: `equivalenceRisk` and `readerMark` are decided per ROW. Mutant ids restart per
   // batch, so two batches can both hold an `M0001`, and the run-level lists keyed by bare

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
@@ -6,6 +7,7 @@ import {
   type MutationSpec,
   astSubtreeHash,
   findEnclosingProcedure,
+  gapBlockOf,
   maskAlNonCode,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
@@ -46,6 +48,20 @@ export interface WriteInput {
    *  the same site under two names (see `dedupeSpecs`). `MutationSpec` itself carries no tier
    *  (that's a property of `MutationOperator`), so the caller supplies this map. */
   readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
+  /** C02-09: a test seam for the gap id function; production passes nothing and gets `gapIdOf`. */
+  readonly gapIdOf?: typeof gapIdOf;
+}
+
+/** C02-09: a gap's id. Reads the file (separators normalised), the block's offsets and its raw
+ *  source text (owner, Q1), so any edit to the block, or a move, gives a new id. */
+export function gapIdOf(
+  file: string,
+  startIndex: number,
+  endIndex: number,
+  blockText: string,
+): string {
+  const text = `${file.replaceAll("\\", "/")}\n${startIndex}\n${endIndex}\n${blockText}`;
+  return `G${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
 }
 
 /**
@@ -153,6 +169,19 @@ export interface MutantManifestEntry {
    */
   readonly procedureStartLine?: number;
   readonly procedureEndLine?: number;
+  /**
+   * C02-09: the id of this mutant's gap, `gapIdOf` over its gap block (`gapBlockOf`, the innermost
+   * branch body holding the mutated node). Mutants that share a block share an id. Always written
+   * by `writeInstrumentedProject`; optional only so manifests and streams written before C02-09
+   * still validate. Absent means "not recorded", never "no gap".
+   */
+  readonly gapId?: string;
+  /**
+   * C02-09: the 1-based first and last line of the gap block, from the same `lineOfIndex` as
+   * `startLine`. Optional for the same reason as `gapId`. Line numbers only, never source text.
+   */
+  readonly blockStartLine?: number;
+  readonly blockEndLine?: number;
   /**
    * R193: this mutant's position, in SOURCE order, among the mutants of this artifact that share
    * its semantic identity tuple (`identityTupleOf`): 0 for the first or only one, 1 for the next
@@ -479,6 +508,10 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   const idedByFile = assignMutantIds(specsByFile);
 
   const unnumbered: MutantManifestEntry[] = [];
+  // C02-09: gap id -> "<file>\n<start>\n<end>" of the block it names. Offsets decide: two blocks
+  // on one line are two blocks. A second, different block under one id is refused, never merged.
+  const blockOfGap = new Map<string, string>();
+  const idOf = input.gapIdOf ?? gapIdOf;
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
@@ -504,6 +537,21 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       const header = attributeHeader(headers, spec, f.path);
       const procedureScope = procedureScopeOf(spec);
       const member = enclosingMemberOf(spec);
+      const block = gapBlockOf(spec.before);
+      const gapId = idOf(
+        f.path,
+        block.startIndex,
+        block.endIndex,
+        f.source.slice(block.startIndex, block.endIndex),
+      );
+      const blockKey = `${f.path}\n${block.startIndex}\n${block.endIndex}`;
+      const firstBlock = blockOfGap.get(gapId);
+      if (firstBlock === undefined) blockOfGap.set(gapId, blockKey);
+      else if (firstBlock !== blockKey) {
+        throw new Error(
+          `writeInstrumentedProject: two blocks share gap id ${gapId}: ${JSON.stringify(firstBlock)} and ${JSON.stringify(blockKey)}`,
+        );
+      }
       const reachGrain = grainOf.get(mutantId);
       if (reachGrain === undefined) {
         throw new Error(`writeInstrumentedProject: no reach grain for ${mutantId} in ${f.path}`);
@@ -517,6 +565,9 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
         astHash: astSubtreeHash(spec.before),
+        gapId,
+        blockStartLine: lineOfIndex(f.source, block.startIndex),
+        blockEndLine: lineOfIndex(f.source, block.endIndex),
         reachGrain,
         objectType: header.type,
         codeunitId: header.id,

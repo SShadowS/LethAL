@@ -368,6 +368,15 @@
           "procedureEndLine": {
             "type": "number"
           },
+          "gapId": {
+            "type": "string"
+          },
+          "blockStartLine": {
+            "type": "number"
+          },
+          "blockEndLine": {
+            "type": "number"
+          },
           "equivalenceRisk": {
             "type": "string"
           },

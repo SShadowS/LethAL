@@ -1,4 +1,5 @@
 import type { ReachGrain } from "@lethal/schemata";
+import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
@@ -176,6 +177,8 @@ import type { MutantVerdict } from "./store";
  * that v4 drifted: five commits grew its `caveat` and `cause` domains without this bump, v4 is
  * left as it was published, and `schemas.test.ts` now pins every value domain so the next one
  * cannot ship silently.
+ * C02-09 added `gaps`, `noCoverageBlocks` and `survivors[].gapId`, fields only;
+ * `gaps[].artifactIdAbsent` reuses the survivor's domain; no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 5;
 
@@ -325,6 +328,52 @@ export interface ExplainSurvivor {
   readonly artifactId?: string;
   /** C02-01: why `artifactId` is absent. See `ARTIFACT_ID_ABSENCES`. */
   readonly artifactIdAbsent?: ArtifactIdAbsence;
+  /** C02-09: verbatim from the report row, the gap this survivor belongs to. Absent on a row from
+   *  a report written before C02-09. */
+  readonly gapId?: string;
+}
+
+/**
+ * C02-09: the survivors of one gap block (the innermost branch body holding them), with the counts
+ * of every RECORDED row of that block. One entry per gap id with at least one `survived` row.
+ */
+export interface ExplainGap {
+  readonly gapId: string;
+  readonly batchIndex: number;
+  readonly file: string;
+  readonly blockStartLine: number;
+  readonly blockEndLine: number;
+  readonly codeunitName: string;
+  readonly procedureName: string;
+  readonly triggerName?: string;
+  /** mutantCodes of the gap's `survived` rows, ordered by line then mutantCode. */
+  readonly members: readonly string[];
+  readonly survived: number;
+  readonly killed: number;
+  readonly noCoverage: number;
+  readonly other: number;
+  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, and
+   *  on a quarantined run. */
+  readonly unobservedBlock?: boolean;
+  /** The artifact to pass to `lethal verify --artifact` for this gap. Exactly one of this and
+   *  `artifactIdAbsent` is present. */
+  readonly artifactId?: string;
+  /** Why there is no artifact to verify this gap against. Same values as on a survivor. */
+  readonly artifactIdAbsent?: ArtifactIdAbsence;
+}
+
+/** C02-09: a block with at least one `no-coverage` row. A location list, not a verify input, so it
+ *  carries no gap id and no counts. */
+export interface ExplainNoCoverageBlock {
+  readonly batchIndex: number;
+  readonly file: string;
+  readonly blockStartLine: number;
+  readonly blockEndLine: number;
+  readonly codeunitName: string;
+  readonly procedureName: string;
+  readonly triggerName?: string;
+  /** mutantCodes of the block's `no-coverage` rows, ordered by line then mutantCode. */
+  readonly members: readonly string[];
 }
 
 /** Why a survivor has no `artifactId`. Tokens; consumers branch on the exact value.
@@ -444,6 +493,11 @@ export interface ExplainOutput {
   readonly survivors: readonly ExplainSurvivor[];
   readonly notMeasured: readonly ExplainNotMeasured[];
   readonly toolConditions: readonly ExplainToolCondition[];
+  /** C02-09: present exactly when the report's rows carry gap ids, `[]` when none survived.
+   *  Absent, never `[]`, on an older report. Never capped by `--top`. */
+  readonly gaps?: readonly ExplainGap[];
+  /** C02-09: present exactly when `gaps` is. */
+  readonly noCoverageBlocks?: readonly ExplainNoCoverageBlock[];
 }
 
 /**
@@ -580,6 +634,8 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
  *                                            read as `not-published`
  *   - every mutant's `readerMark` (an object with string `key` and `reason`) : C02-01, read field
  *                                            by field; a bad one would throw or project as `{}`
+ *   - every mutant's `gapId` (a string), with positive integer `blockStartLine`/`blockEndLine` and
+ *     a `batchIndex`, on all rows or none : C02-09, groups rows; a bad one would merge or split a gap
  *   - `quarantined` / `resumedFrom.skippedStranded` — presence and a `> 0` test emit tool conditions
  *
  * `verdict` is the one that shows why the rule has to be mechanical rather than intuitive.
@@ -832,6 +888,42 @@ export function assertExplainableReport(value: unknown): SessionReport {
       );
     }
   }
+  // C02-09: `gapId`, its block lines and its batch group rows into gaps; a bad one would merge or
+  // split a gap. Rows carry gap ids all or none: a mix would drop the unmarked rows from every
+  // gap's counts, so a block could read as unobserved while its killed neighbour went uncounted.
+  let gapped = 0;
+  for (const m of mutants) {
+    const mutant = m as Record<string, unknown>;
+    const { gapId } = mutant;
+    const where = `mutant ${JSON.stringify(mutant.mutantCode)}`;
+    // Only a row with NONE of the three keys is a pre-C02-09 row. Block lines without a gapId are
+    // a damaged new row, which would otherwise read as an old report and omit both gap lists.
+    if (gapId === undefined) {
+      const stray = (["blockStartLine", "blockEndLine"] as const).filter(
+        (k) => mutant[k] !== undefined,
+      );
+      if (stray.length === 0) continue;
+      refuse(`${where} has ${stray.join(" and ")} but no gapId`, stray);
+    }
+    if (typeof gapId !== "string") refuse(`${where} has a gapId that is not a string`, gapId);
+    for (const k of ["blockStartLine", "blockEndLine"] as const) {
+      const v = mutant[k];
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+        refuse(`${where} has a gapId with a ${k} that is not a positive integer`, v);
+      }
+    }
+    const bi = mutant.batchIndex;
+    if (typeof bi !== "number" || !Number.isInteger(bi) || bi < 0) {
+      refuse(`${where} has a gapId with a batchIndex that is not a non-negative integer`, bi);
+    }
+    gapped++;
+  }
+  if (gapped !== 0 && gapped !== mutants.length) {
+    refuse(
+      `${gapped} of ${mutants.length} mutants carry a gapId; a report carries gap ids on all or none of its rows`,
+      gapped,
+    );
+  }
   // The two session-level branches. `quarantined: null` would pass a bare `!== undefined` test and
   // then emit a tool condition whose `detail` read off a null — and `skippedStranded: "2"` compares
   // `> 0` as true, putting a string where the output declares a count.
@@ -934,6 +1026,145 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
       ? { readerMark: { key: m.readerMark.key, reason: m.readerMark.reason } }
       : {}),
     ...artifactOf(m, artifacts),
+    ...(m.gapId !== undefined ? { gapId: m.gapId } : {}),
+  };
+}
+
+/**
+ * C02-09: the report's rows grouped by gap id through `tallyGaps`, the one grouping rule `explain`
+ * and `verify` share. `undefined` when no row carries a gap id (a report written before C02-09),
+ * so the caller omits both lists rather than emitting `[]`.
+ *
+ * Rows sharing a gap id must agree on `file`, `blockStartLine`, `blockEndLine` (checked here) and
+ * `batchIndex` (checked by `tallyGaps`). The limit, stated: two different blocks on the SAME lines
+ * of one file that share an id cannot be told apart here, because the report carries block lines,
+ * not offsets. Only the manifest writer, which produced the report, catches that case.
+ */
+function blocksOf(
+  report: SessionReport,
+):
+  | { readonly gaps: ExplainGap[]; readonly noCoverageBlocks: ExplainNoCoverageBlock[] }
+  | undefined {
+  if (!report.mutants.some((m) => m.gapId !== undefined)) return undefined;
+  const firstRow = new Map<string, MutantOutcome>();
+  const firstMember = new Map<string, MutantOutcome>();
+  const carriedGaps = new Set<string>();
+  const rows: GapRow[] = [];
+  for (const m of report.mutants) {
+    const { gapId } = m;
+    // Unreachable: `assertExplainableReport` refuses a report with gap ids on some rows only.
+    if (gapId === undefined) refuse(`mutant ${JSON.stringify(m.mutantCode)} has no gapId`, m.gapId);
+    const first = firstRow.get(gapId);
+    if (first === undefined) firstRow.set(gapId, m);
+    else if (
+      first.file !== m.file ||
+      first.blockStartLine !== m.blockStartLine ||
+      first.blockEndLine !== m.blockEndLine
+    ) {
+      refuse(`gap id ${gapId} names two blocks`, [
+        {
+          mutantCode: first.mutantCode,
+          file: first.file,
+          blockStartLine: first.blockStartLine,
+          blockEndLine: first.blockEndLine,
+        },
+        {
+          mutantCode: m.mutantCode,
+          file: m.file,
+          blockStartLine: m.blockStartLine,
+          blockEndLine: m.blockEndLine,
+        },
+      ]);
+    }
+    if (m.verdict === "survived") {
+      if (!firstMember.has(gapId)) firstMember.set(gapId, m);
+      if (m.carried === true) carriedGaps.add(gapId);
+    }
+    rows.push({
+      mutantCode: m.mutantCode,
+      verdict: m.verdict,
+      gapId,
+      batchIndex: m.batchIndex,
+      line: m.line,
+    });
+  }
+  let tallies: ReadonlyMap<string, GapTally>;
+  try {
+    tallies = tallyGaps(rows);
+  } catch (e) {
+    if (e instanceof GapGroupingError) refuse(e.message, undefined);
+    throw e;
+  }
+  // An operator- or line-narrowed run drops mutants INSIDE a block, and a quarantined run stops
+  // scheduling mutants mid-run, so "every recorded row survived" says nothing about the block's
+  // unrecorded neighbours.
+  const withhold =
+    report.quarantined !== undefined ||
+    report.validity.caveats.some((c) => c === "operator-narrowed" || c === "line-narrowed");
+  const gaps: { readonly key: string; readonly gap: ExplainGap }[] = [];
+  const noCoverageBlocks: { readonly key: string; readonly block: ExplainNoCoverageBlock }[] = [];
+  for (const [gapId, t] of tallies) {
+    const r = firstRow.get(gapId);
+    if (r === undefined) refuse(`gap id ${gapId} has no row`, gapId);
+    const { blockStartLine, blockEndLine } = r;
+    if (blockStartLine === undefined || blockEndLine === undefined) {
+      refuse(`gap id ${gapId} has no block lines`, r.mutantCode);
+    }
+    // Field by field, never a spread, so an extra property on the row cannot ride through.
+    const location = {
+      batchIndex: t.batchIndex,
+      file: r.file,
+      blockStartLine,
+      blockEndLine,
+      codeunitName: r.codeunitName,
+      procedureName: r.procedureName,
+      ...(r.triggerName !== undefined ? { triggerName: r.triggerName } : {}),
+    };
+    if (t.survived > 0) {
+      const member = firstMember.get(gapId);
+      if (member === undefined) refuse(`gap id ${gapId} has survivors but no member row`, gapId);
+      gaps.push({
+        key: gapId,
+        gap: {
+          gapId,
+          ...location,
+          members: [...t.members],
+          survived: t.survived,
+          killed: t.killed,
+          noCoverage: t.noCoverage,
+          other: t.other,
+          ...(withhold ? {} : { unobservedBlock: t.unobservedBlock }),
+          // `carried` when ANY member is: the gap was not measured by one artifact, and verify
+          // refuses a carried member anyway.
+          ...(carriedGaps.has(gapId)
+            ? { artifactIdAbsent: "carried" as const }
+            : artifactOf(member, report.artifacts)),
+        },
+      });
+    }
+    if (t.noCoverage > 0) {
+      noCoverageBlocks.push({
+        key: gapId,
+        block: { ...location, members: [...t.noCoverageMembers] },
+      });
+    }
+  }
+  const byBlock = (
+    a: { readonly key: string; readonly file: string; readonly blockStartLine: number },
+    b: { readonly key: string; readonly file: string; readonly blockStartLine: number },
+  ): number =>
+    a.file !== b.file
+      ? a.file < b.file
+        ? -1
+        : 1
+      : a.blockStartLine - b.blockStartLine || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  return {
+    gaps: gaps
+      .sort((a, b) => byBlock({ key: a.key, ...a.gap }, { key: b.key, ...b.gap }))
+      .map((g) => g.gap),
+    noCoverageBlocks: noCoverageBlocks
+      .sort((a, b) => byBlock({ key: a.key, ...a.block }, { key: b.key, ...b.block }))
+      .map((b) => b.block),
   };
 }
 
@@ -1052,6 +1283,8 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     .map((m) => survivorOf(m, validated.artifacts));
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
+  // C02-09: from ALL rows, before the cap. `--top` bounds survivors only (Q6).
+  const blocks = blocksOf(validated);
   return {
     explainSchemaVersion: EXPLAIN_SCHEMA_VERSION,
     derivedFromReportSchemaVersion: validated.schemaVersion,
@@ -1081,5 +1314,8 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     survivors,
     notMeasured: validated.mutants.filter((m) => m.verdict === "error").map(notMeasuredOf),
     toolConditions: toolConditionsOf(validated),
+    ...(blocks !== undefined
+      ? { gaps: blocks.gaps, noCoverageBlocks: blocks.noCoverageBlocks }
+      : {}),
   };
 }

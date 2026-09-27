@@ -12,6 +12,7 @@ import {
   EquivalenceMarksError,
   loadEquivalenceMarks,
 } from "./equivalence-marks";
+import { type GapRow, tallyGaps } from "./gaps";
 import {
   type InstalledArtifactRef,
   type NamedMutantRequest,
@@ -42,6 +43,9 @@ export const VERIFY_REFUSALS = [
   "wrong-batch",
   "unknown-mutant",
   "not-a-survivor",
+  // C02-09: a gap id the installed artifact has no block for, and a block with no survivor.
+  "unknown-gap",
+  "gap-has-no-survivor",
   "carried",
   "source-predates-verify",
   "source-changed",
@@ -115,6 +119,10 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
     "the server holds another build now; run lethal run again, then verify with its artifact id",
   "artifact-files-unusable":
     "the run's local .app or instrumented files are gone or changed; run lethal run again, then verify",
+  "unknown-gap":
+    "copy the gap id and its artifactId from one lethal explain gap of the run that published this artifact; an edited or moved block, or other line endings, give a new id, and only the run's last batch stays installed",
+  "gap-has-no-survivor":
+    "every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap",
 };
 
 /**
@@ -135,8 +143,7 @@ export function verifyRefusalOf(
       detail: hint === undefined ? detail : `${detail}; ${hint}`,
     };
   };
-  if (err instanceof VerifyError)
-    return { kind: "refused", reason: err.reason, detail: err.detail };
+  if (err instanceof VerifyError) return refused(err.reason, err.detail);
   // NOT NamedMutantError: verify refuses every user-reachable cause of one upstream, so one that
   // reaches here means verify built a bad call. A bug, rethrown (exit 1), never a refusal.
   if (err instanceof EquivalenceMarksError) {
@@ -157,15 +164,18 @@ export function verifyRefusalOf(
 export interface VerifyRequest {
   readonly artifactId: string;
   readonly ids: ReadonlyArray<{ readonly batchIndex: number; readonly mutantCode: string }>;
+  /** C02-09: gap ids, each replaced by its survivors by `expandGapIds` before anything resolves. */
+  readonly gapIds: readonly string[];
 }
 
 const ARTIFACT_ID = /^[0-9a-f]{32}$/;
 const SURVIVOR_ID = /^(0|[1-9]\d*)\/(M\d{4,})$/;
+const GAP_ID = /^G[0-9a-f]{12}$/;
 
 /**
  * Decisions 1 and 2. The artifact is 32 lowercase hex. Each `--survivors` value is a comma list of
- * `<batchIndex>/<mutantCode>` ids, and repeated flags add to one list. An empty list, a malformed
- * id or the same id twice is refused, never dropped or merged.
+ * `<batchIndex>/<mutantCode>` ids or gap ids (C02-09), and repeated flags add to one list. An empty
+ * list, a malformed id or the same id twice is refused, never dropped or merged.
  */
 export function parseVerifyRequest(artifact: string, survivors: readonly string[]): VerifyRequest {
   if (!ARTIFACT_ID.test(artifact)) {
@@ -176,25 +186,27 @@ export function parseVerifyRequest(artifact: string, survivors: readonly string[
   }
   const raw = survivors.flatMap((v) => v.split(",")).map((s) => s.trim());
   if (raw.length === 0) {
-    throw new VerifyError("malformed-request", "--survivors names no mutant");
+    throw new VerifyError("malformed-request", "--survivors names no mutant and no gap");
   }
-  const bad = raw.filter((s) => !SURVIVOR_ID.test(s));
+  const bad = raw.filter((s) => !SURVIVOR_ID.test(s) && !GAP_ID.test(s));
   if (bad.length > 0) {
     throw new VerifyError(
       "malformed-request",
-      `not a <batchIndex>/<mutantCode> id (for example 0/M0004): ${bad.map((s) => `"${s}"`).join(", ")}`,
+      `not a <batchIndex>/<mutantCode> id (for example 0/M0004) or a gap id (for example G0123456789ab): ${bad.map((s) => `"${s}"`).join(", ")}`,
     );
   }
   const repeated = [...new Set(raw.filter((s, i) => raw.indexOf(s) !== i))];
   if (repeated.length > 0) {
     throw new VerifyError("malformed-request", `named more than once: ${repeated.join(", ")}`);
   }
-  const ids = raw.map((s) => {
-    const [batch, code] = s.split("/");
-    if (batch === undefined || code === undefined) throw new Error(`verify.ts: unparsed id ${s}`);
-    return { batchIndex: Number(batch), mutantCode: code };
-  });
-  return { artifactId: artifact, ids };
+  const ids = raw
+    .filter((s) => SURVIVOR_ID.test(s))
+    .map((s) => {
+      const [batch, code] = s.split("/");
+      if (batch === undefined || code === undefined) throw new Error(`verify.ts: unparsed id ${s}`);
+      return { batchIndex: Number(batch), mutantCode: code };
+    });
+  return { artifactId: artifact, ids, gapIds: raw.filter((s) => GAP_ID.test(s)) };
 }
 
 export interface VerifySource {
@@ -252,17 +264,16 @@ export function artifactRecordOf(
   return rec;
 }
 
-export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
-  // parseVerifyRequest refuses this too; a caller building the request directly must not get a
-  // source with no targets, which planVerify could only answer as "every target was skipped".
-  if (req.ids.length === 0) {
-    throw new VerifyError("malformed-request", "the request names no mutant");
-  }
-  const rec = artifactRecordOf(store, req.artifactId);
+/**
+ * The artifact's record, refused unless it is still the installed batch and the run recorded its
+ * installed files and source hash. Store only. Shared by `expandGapIds` and `resolveVerifySource`.
+ */
+function installedOf(store: ResultsStore, artifactId: string) {
+  const rec = artifactRecordOf(store, artifactId);
   if (rec.batchIndex !== rec.highestBatchIndex) {
     throw new VerifyError(
       "batch-not-installed",
-      `artifact ${req.artifactId} is batch ${rec.batchIndex} of run ${rec.runId}, but batch ${rec.highestBatchIndex} was published after it and replaced it on the server`,
+      `artifact ${artifactId} is batch ${rec.batchIndex} of run ${rec.runId}, but batch ${rec.highestBatchIndex} was published after it and replaced it on the server`,
     );
   }
   // Checked BEFORE reading any mutant row: a store from before C02-06 must get this typed
@@ -274,6 +285,150 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
       `run ${rec.runId} did not record its installed files or its source hash. That happens when the run was recorded before lethal verify existed, its source changed during the run, the run stopped before the last batch, or its source tree was unreadable; run lethal run again, then verify`,
     );
   }
+  const installed: InstalledArtifactRef = {
+    fromRunId: rec.runId,
+    batchIndex: rec.batchIndex,
+    appPath,
+    instrumentedDir,
+  };
+  return { rec, sourceSha256, installed };
+}
+
+/**
+ * C02-09. Replaces each gap id by its survivors, `<batchIndex>/<mutantCode>` in `tallyGaps` order,
+ * appended after the request's own ids. Reads the NAMED artifact's hash-checked manifest and this
+ * run's store rows, never another run and never a server. Refuses every offending gap id at once.
+ */
+export async function expandGapIds(
+  store: ResultsStore,
+  req: VerifyRequest,
+): Promise<VerifyRequest> {
+  // Nothing to expand: no manifest read, so mutant ids keep working against any artifact.
+  if (req.gapIds.length === 0) return req;
+  const { rec, installed } = installedOf(store, req.artifactId);
+  // ponytail: runVerify loads the manifest again later; one extra local hash of the .app. Pass it
+  // through if it ever shows in timings.
+  const { manifest } = await loadInstalledArtifact(store, installed);
+  if (manifest.mutants.some((m) => m.gapId === undefined)) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `artifact ${req.artifactId}'s manifest was written before gap ids existed, so ${req.gapIds.join(", ")} cannot be expanded against it; name its mutants as <batchIndex>/<mutantCode> ids, or run lethal run again`,
+    );
+  }
+  const entries = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
+  const rows = store.batchMutantRows(rec.runId, rec.batchIndex);
+  const gapRows: GapRow[] = rows.map((r) => {
+    const entry = entries.get(r.mutantCode);
+    const gapId = entry?.gapId;
+    if (entry === undefined || gapId === undefined) {
+      throw new Error(
+        `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${r.mutantCode}, which artifact ${req.artifactId}'s manifest does not hold (a corrupt store)`,
+      );
+    }
+    return {
+      mutantCode: r.mutantCode,
+      verdict: r.verdict,
+      gapId,
+      batchIndex: rec.batchIndex,
+      // The report row's `line` is the same `startLine`, so explain orders members the same way.
+      line: entry.startLine,
+    };
+  });
+  // Two rows for one mutant is corruption. A manifest entry with NO row is "not measured" only
+  // when the run did not finish: a run that quarantined or threw partway through its last batch
+  // still records the artifact but never reaches `finishRun`, so `finished_at` stays NULL. On a
+  // FINISHED run every manifest entry was scored, so a missing row is a lost row (a corrupt store),
+  // and treating it as not measured would silently drop a survivor.
+  const recorded = new Set(rows.map((r) => r.mutantCode));
+  if (recorded.size !== rows.length) {
+    throw new Error(
+      `verify.ts: run ${rec.runId} batch ${rec.batchIndex} records ${rows.length} row(s) for ${recorded.size} mutant(s): a mutant twice (a corrupt store)`,
+    );
+  }
+  const run = store.getRun(rec.runId);
+  if (run === null) {
+    throw new Error(
+      `verify.ts: artifact ${req.artifactId} names run ${rec.runId}, which the store does not hold (a corrupt store)`,
+    );
+  }
+  if (run.finished) {
+    const missing = manifest.mutants.filter((m) => !recorded.has(m.mutantId));
+    if (missing.length > 0) {
+      throw new Error(
+        `verify.ts: run ${rec.runId} finished, but batch ${rec.batchIndex} records no row for ${missing.map((m) => m.mutantId).join(", ")} of artifact ${req.artifactId}'s manifest (a corrupt store)`,
+      );
+    }
+  }
+  const tallies = tallyGaps(gapRows);
+  const known = new Set(manifest.mutants.map((m) => m.gapId));
+
+  const unknown = req.gapIds.filter((g) => !known.has(g));
+  if (unknown.length > 0 || req.gapIds.some((g) => (tallies.get(g)?.members.length ?? 0) === 0)) {
+    const empty = req.gapIds.flatMap((g) => {
+      if (!known.has(g)) return [];
+      const t = tallies.get(g) ?? {
+        members: [],
+        noCoverageMembers: [],
+        killed: 0,
+        noCoverage: 0,
+        other: 0,
+      };
+      if (t.members.length > 0) return [];
+      const unmeasured = manifest.mutants.filter(
+        (m) => m.gapId === g && !recorded.has(m.mutantId),
+      ).length;
+      const noCov =
+        t.noCoverage > 0
+          ? `; its no-coverage mutants (${t.noCoverageMembers.map((c) => `${rec.batchIndex}/${c}`).join(", ")}) are in lethal explain's noCoverageBlocks and can be named one by one`
+          : "";
+      return [
+        `${g} (gap-has-no-survivor: survived 0, killed ${t.killed}, no-coverage ${t.noCoverage}, other ${t.other}${unmeasured > 0 ? `, not measured ${unmeasured}` : ""}${noCov})`,
+      ];
+    });
+    const parts = [
+      ...unknown.map(
+        (g) => `${g} (unknown-gap: no block of artifact ${req.artifactId} has this gap id)`,
+      ),
+      ...empty,
+    ];
+    throw new VerifyError(
+      unknown.length > 0 ? "unknown-gap" : "gap-has-no-survivor",
+      parts.join("; "),
+    );
+  }
+
+  const direct = new Set(req.ids.map((i) => `${i.batchIndex}/${i.mutantCode}`));
+  const expanded = req.gapIds.flatMap((g) =>
+    (tallies.get(g)?.members ?? []).map((mutantCode) => ({
+      gapId: g,
+      batchIndex: rec.batchIndex,
+      mutantCode,
+    })),
+  );
+  const twice = expanded.filter((e) => direct.has(`${e.batchIndex}/${e.mutantCode}`));
+  if (twice.length > 0) {
+    throw new VerifyError(
+      "malformed-request",
+      `named both directly and through its gap: ${twice.map((e) => `${e.batchIndex}/${e.mutantCode} and ${e.gapId}`).join(", ")}`,
+    );
+  }
+  return {
+    artifactId: req.artifactId,
+    ids: [
+      ...req.ids,
+      ...expanded.map(({ batchIndex, mutantCode }) => ({ batchIndex, mutantCode })),
+    ],
+    gapIds: [],
+  };
+}
+
+export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): VerifySource {
+  // parseVerifyRequest refuses this too; a caller building the request directly must not get a
+  // source with no targets, which planVerify could only answer as "every target was skipped".
+  if (req.ids.length === 0) {
+    throw new VerifyError("malformed-request", "the request names no mutant");
+  }
+  const { rec, sourceSha256, installed } = installedOf(store, req.artifactId);
 
   const rows = new Map<string, ReturnType<ResultsStore["batchMutantRows"]>[number]>();
   for (const r of store.batchMutantRows(rec.runId, rec.batchIndex)) {
@@ -331,7 +486,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     projectPath: resolve(rec.projectPath),
     artifactSha256: rec.artifactSha256,
     sourceSha256,
-    installed: { fromRunId: rec.runId, batchIndex: rec.batchIndex, appPath, instrumentedDir },
+    installed,
     targets,
   };
 }
@@ -528,8 +683,8 @@ export async function planVerify(a: {
   return { requests, newTests, skipped, entries };
 }
 
-/** C02-06 decision 7: the JSON `lethal verify` prints. */
-export const VERIFY_SCHEMA_VERSION = 1;
+/** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons. */
+export const VERIFY_SCHEMA_VERSION = 2;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown"] as const;
@@ -580,6 +735,9 @@ export interface VerifyResult {
   readonly line: number;
   readonly operatorName: string;
   readonly procedureName: string;
+  /** C02-09: the manifest entry's gap id, named directly or through a gap. Absent only when the
+   *  installed manifest predates gap ids. */
+  readonly gapId?: string;
   readonly verdict: VerifyVerdict;
   /** Qualified names sent to `runNamedMutants`. */
   readonly testsRun?: readonly string[];
@@ -800,7 +958,7 @@ export async function runVerify(
   try {
     const req = parseVerifyRequest(args.artifact, args.survivors);
     artifactId = req.artifactId;
-    source = resolveVerifySource(store, req);
+    source = resolveVerifySource(store, await expandGapIds(store, req));
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
     const plan = await planVerify({
@@ -872,6 +1030,7 @@ export async function runVerify(
         line: entry.startLine,
         operatorName: entry.operatorName,
         procedureName: entry.procedureName,
+        ...(entry.gapId !== undefined ? { gapId: entry.gapId } : {}),
       };
       const skip = skippedBy.get(t.mutantCode);
       if (skip !== undefined) {
@@ -948,7 +1107,7 @@ export function refusalOutput(
 
 type MeasuredPart = Omit<
   VerifyResult,
-  "id" | "batchIndex" | "mutantCode" | "file" | "line" | "operatorName" | "procedureName"
+  "id" | "batchIndex" | "mutantCode" | "file" | "line" | "operatorName" | "procedureName" | "gapId"
 >;
 
 /** One measured mutant's verdict and its kill proof (decisions 13 and 14). */
