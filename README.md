@@ -716,8 +716,10 @@ a LethAL feature or a mode.
   stops before anything is sent, with the file that failed to parse named.
 
   **Not detected, and sent as before:** a page opened by the code under test and handled through a
-  handler function, and a helper outside the test app. For those, LethAL still runs tests in a
-  locked-down session with no GUI and a web-service client (`GuiAllowed=No`, `ClientType=ODataV4`),
+  handler function, a helper outside the test app or in a non-codeunit object, a call through
+  `Codeunit.Run`, an event subscriber or interface dispatch, and a bare zero-argument call written
+  without parentheses in expression position (for example `B := Helper;`). For those, LethAL still
+  runs tests in a locked-down session with no GUI and a web-service client (`GuiAllowed=No`, `ClientType=ODataV4`),
   and that session cannot create the test service a `TestPage` needs. What can happen to a
   TestPage test LethAL cannot see:
 
