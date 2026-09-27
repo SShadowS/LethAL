@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 286 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 287 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -198,6 +198,7 @@ that ordering is the priority.
 - **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#26 (U1)
 - **R286** · `isStatementSlot` omits `with_statement.body`, so a call that is the whole body of `with ... do` is not a statement site (DC: 8 sites in app code) · [R286.md](docs/roadmap/R286.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
 - **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
+- **R292** · The operator-site census (`scripts/census-operator-sites.ts`) exhausts wasm memory on BC.History/BaseApp's 9,620 files, so a grammar bump can only census it in halves · [R292.md](docs/roadmap/R292.md) · open, filed 2026-09-27
 
 ## Backends and tooling
 
