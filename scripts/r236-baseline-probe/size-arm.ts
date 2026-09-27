@@ -12,7 +12,10 @@
  * `--kept-check <n>` (R236b Task 8, C1b) skips calibration and the pairs: it makes n direct T calls and,
  * for each whose body arrived whole, reads the kept answer back with `GetOpAnswer` and compares it byte
  * for byte with the body the client received. It exits 1 if any whole call's answer was not found, was
- * not byte-equal, did not score `fail`, or did not carry the `CreateNavTestService` refusal.
+ * not byte-equal, did not score `fail`, did not carry the `CreateNavTestService` refusal, or if the
+ * readback itself failed (recorded as `readError`; a failed readback never aborts the run with exit 2,
+ * and does not stop the loop unless the server itself becomes unreachable). Every call line, whole or
+ * not, carries the T call's own trace fields so a lost body can be classified per §C1's definition.
  *
  * This script issues no network call itself when the env var is unset (prints `skipped`, exit 0), and
  * refuses (exit 2) before any network call if the required flags are missing, the config's `bcdev.server`
@@ -30,7 +33,7 @@ import {
   odataReadRegisteredArtifact,
 } from "../../packages/runner/itest/probe-lease";
 import type { ActivationConfig } from "../../packages/runner/src/activation";
-import type { TestMethodRef } from "../../packages/runner/src/backend";
+import type { TestMethodRef, TestOutcome } from "../../packages/runner/src/backend";
 import { bcFetch } from "../../packages/runner/src/bc-fetch";
 import type { LethalConfigFile } from "../../packages/runner/src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../../packages/runner/src/cli";
@@ -118,6 +121,111 @@ function writeRecord(out: string, record: unknown): void {
 function headersMsOf(trace: CallTrace | undefined): number | null {
   if (trace?.headersAt === undefined) return null;
   return trace.headersAt - trace.dispatchedAt;
+}
+
+/** R236b kept-check (C1b): the trace fields §C1's lost-body definition needs, read off the T call's
+ *  own `CallTrace` (never the `GetOpAnswer` readback's, which is a separate fetch). */
+export interface KeptCheckTraceFields {
+  readonly headersMs: number | null;
+  readonly bytesReceived: number | null;
+  readonly errorPhase: "fetch" | "body" | null;
+  readonly bodyEndSeen: boolean;
+  readonly status: number | null;
+}
+
+function traceFieldsOf(trace: CallTrace | undefined): KeptCheckTraceFields {
+  return {
+    headersMs: headersMsOf(trace),
+    bytesReceived: trace?.bytesReceived ?? null,
+    errorPhase: trace?.errorPhase ?? null,
+    bodyEndSeen: trace?.bodyEndAt !== undefined,
+    status: trace?.status ?? null,
+  };
+}
+
+/** §C1's lost-body definition: headers arrived, then the body broke before it finished. A call that
+ *  failed before headers even started (`errorPhase` `"fetch"`) is a different failure, not this one. */
+export function isLostBody(trace: CallTrace | undefined): boolean {
+  return trace?.errorPhase === "body" && trace?.bodyEndAt === undefined;
+}
+
+/** One `--kept-check` call's outcome, as `keptCheckRecord` classifies it. */
+export type KeptCheckCall =
+  | {
+      readonly whole: false;
+      readonly outcome: TestOutcome;
+      readonly operation: string | null;
+      readonly replyRecovered: string | null;
+    }
+  | {
+      readonly whole: true;
+      readonly outcome: TestOutcome;
+      readonly clr: boolean;
+      readonly read:
+        | { readonly ok: true; readonly found: boolean; readonly byteEqual: boolean }
+        | { readonly ok: false; readonly readError: string };
+    };
+
+/**
+ * Pure (Task 8 Step 2 / C1b fix): builds one kept-check NDJSON line from the T call's own trace and
+ * its outcome, and classifies it. A whole call whose readback failed (abort, timeout, network error,
+ * bad response) is `bad` — §C1b already exits 1 on any mismatch, a failed readback is one — but it is
+ * NEVER a lost body: the body already arrived whole, `GetOpAnswer` is what failed. `lostBody` (§C1's
+ * definition) applies only to a `whole: false` call.
+ */
+export function keptCheckRecord(
+  i: number,
+  trace: CallTrace | undefined,
+  call: KeptCheckCall,
+): { readonly record: Record<string, unknown>; readonly bad: boolean; readonly lostBody: boolean } {
+  const fields = traceFieldsOf(trace);
+  if (!call.whole) {
+    return {
+      record: {
+        kind: "kept-check",
+        i,
+        whole: false,
+        outcome: call.outcome,
+        operation: call.operation,
+        replyRecovered: call.replyRecovered,
+        ...fields,
+      },
+      bad: false,
+      lostBody: isLostBody(trace),
+    };
+  }
+  if (!call.read.ok) {
+    return {
+      record: {
+        kind: "kept-check",
+        i,
+        whole: true,
+        found: false,
+        readError: call.read.readError,
+        outcome: call.outcome,
+        clr: call.clr,
+        ...fields,
+      },
+      bad: true,
+      lostBody: false,
+    };
+  }
+  const { found, byteEqual } = call.read;
+  const bad = !found || !byteEqual || call.outcome !== "fail" || !call.clr;
+  return {
+    record: {
+      kind: "kept-check",
+      i,
+      whole: true,
+      found,
+      byteEqual,
+      outcome: call.outcome,
+      clr: call.clr,
+      ...fields,
+    },
+    bad,
+    lostBody: false,
+  };
 }
 
 async function main(): Promise<void> {
@@ -214,6 +322,8 @@ async function main(): Promise<void> {
 
   if (keptArg !== undefined) {
     let bad = 0;
+    let lostBodies = 0;
+    let notWhole = 0;
     try {
       for (let i = 1; i <= pairsPlanned; i++) {
         const attemptId = `r236s-k-${i}`;
@@ -226,35 +336,69 @@ async function main(): Promise<void> {
           lease,
           coverageObjectIdFilter: T_FILTER,
         });
+        const trace = calls.at(-1);
         const body = bodies.get(attemptId);
+        let call: KeptCheckCall;
+        let readFailed = false;
         if (body === undefined) {
-          writeRecord(out, {
-            kind: "kept-check",
-            i,
+          notWhole++;
+          call = {
             whole: false,
             outcome: verdict.outcome,
             operation: verdict.operation ?? null,
             replyRecovered: verdict.replyRecovered ?? null,
-          });
-          continue;
+          };
+        } else {
+          const clr = verdict.failureMessage?.includes("CreateNavTestService") === true;
+          try {
+            const kept = await tx.readKeptAnswer(lease, attemptId, lease.opSeq, 15_000);
+            call = {
+              whole: true,
+              outcome: verdict.outcome,
+              clr,
+              read: {
+                ok: true,
+                found: kept.found,
+                byteEqual:
+                  kept.found && kept.answer === (JSON.parse(body) as { value?: unknown }).value,
+              },
+            };
+          } catch (err) {
+            // R236b: readKeptAnswer can throw (abort, timeout, network error, bad response). Recorded
+            // as a bad call, never left to escape as an uncaught harness fault (exit 2).
+            readFailed = true;
+            call = {
+              whole: true,
+              outcome: verdict.outcome,
+              clr,
+              read: { ok: false, readError: String(err) },
+            };
+          }
         }
-        const kept = await tx.readKeptAnswer(lease, attemptId, lease.opSeq, 15_000);
-        const record = {
-          kind: "kept-check",
-          i,
-          whole: true,
-          found: kept.found,
-          byteEqual: kept.found && kept.answer === (JSON.parse(body) as { value?: unknown }).value,
-          outcome: verdict.outcome,
-          clr: verdict.failureMessage?.includes("CreateNavTestService") === true,
-        };
-        writeRecord(out, record);
-        if (!record.found || !record.byteEqual || record.outcome !== "fail" || !record.clr) bad++;
+        const result = keptCheckRecord(i, trace, call);
+        writeRecord(out, result.record);
+        if (result.bad) bad++;
+        if (result.lostBody) lostBodies++;
+        if (readFailed) {
+          // Continue past a readback failure by default; stop only if the server itself is now
+          // unreachable, so the run still ends with exit 1 (a real fault), never exit 2.
+          try {
+            await harnessVerifier.checkReachable();
+          } catch {
+            break;
+          }
+        }
       }
     } finally {
       await probe.stop();
     }
-    writeRecord(out, { kind: "kept-check-summary", calls: pairsPlanned, bad });
+    writeRecord(out, {
+      kind: "kept-check-summary",
+      calls: pairsPlanned,
+      bad,
+      lostBodies,
+      notWhole,
+    });
     process.exit(bad > 0 ? 1 : 0);
   }
 

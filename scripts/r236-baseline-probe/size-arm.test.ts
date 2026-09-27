@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { keepOriginalBody, readA2 } from "./size-arm";
+import type { CallTrace } from "./fetch-trace";
+import { keepOriginalBody, keptCheckRecord, readA2 } from "./size-arm";
+
+function trace(partial: Partial<CallTrace> = {}): CallTrace {
+  return { action: "LethALControl_RunMutantWithCoverage", dispatchedAt: 0, ...partial };
+}
 
 describe("readA2", () => {
   const full = { pairsDone: 60, pairsPlanned: 60, sBreaks: 0, sRunnable: true };
@@ -31,5 +36,73 @@ describe("keepOriginalBody", () => {
       "readback",
     );
     expect(bodies.get("r236s-k-1")).toBe("original");
+  });
+});
+
+describe("keptCheckRecord", () => {
+  test("a whole call with a matching readback is not bad", () => {
+    const t = trace({ headersAt: 750, bodyEndAt: 820, status: 200, bytesReceived: 6616 });
+    const { record, bad, lostBody } = keptCheckRecord(1, t, {
+      whole: true,
+      outcome: "fail",
+      clr: true,
+      read: { ok: true, found: true, byteEqual: true },
+    });
+    expect(bad).toBe(false);
+    expect(lostBody).toBe(false);
+    expect(record).toMatchObject({
+      kind: "kept-check",
+      whole: true,
+      found: true,
+      byteEqual: true,
+      outcome: "fail",
+      clr: true,
+      headersMs: 750,
+      bytesReceived: 6616,
+      status: 200,
+      bodyEndSeen: true,
+      errorPhase: null,
+    });
+  });
+
+  test("a whole call whose readback itself failed is bad, and is NOT a lost body", () => {
+    // R236b: this is the C1b defect — readKeptAnswer threw (its 15s abort) after a whole body.
+    const t = trace({ headersAt: 750, bodyEndAt: 820 });
+    const { record, bad, lostBody } = keptCheckRecord(2, t, {
+      whole: true,
+      outcome: "fail",
+      clr: true,
+      read: { ok: false, readError: "AbortError: The operation was aborted" },
+    });
+    expect(bad).toBe(true);
+    expect(lostBody).toBe(false);
+    expect(record).toMatchObject({
+      whole: true,
+      found: false,
+      readError: "AbortError: The operation was aborted",
+    });
+  });
+
+  test("lost body classification: headers arrived, the body broke, no bodyEndAt", () => {
+    const t = trace({ headersAt: 700, errorPhase: "body", bytesReceived: 6540 });
+    const { bad, lostBody } = keptCheckRecord(3, t, {
+      whole: false,
+      outcome: "deadline-exceeded",
+      operation: "in-flight-unknown",
+      replyRecovered: null,
+    });
+    expect(lostBody).toBe(true);
+    expect(bad).toBe(false);
+  });
+
+  test("a fetch failure before headers arrived is NOT a lost body", () => {
+    const t = trace({ errorPhase: "fetch" });
+    const { lostBody } = keptCheckRecord(4, t, {
+      whole: false,
+      outcome: "deadline-exceeded",
+      operation: "in-flight-unknown",
+      replyRecovered: null,
+    });
+    expect(lostBody).toBe(false);
   });
 });
