@@ -96,3 +96,33 @@ its report carries:
   baseline tests failing and 1 refused before sending (TestPage), not run`
 
 No wedge on either container. No baseline was re-recorded and no test or figure was edited.
+
+### Run 002 re-run (2026-09-27, HEAD 8cefab3)
+Re-run of `itest:tables` RUN 1 after the R-236c follow-up fixes (scanner: non-plain receivers
+resolved or loud, named return values in scope, comments treated as trivia; `runNamedMutants`
+requires the refusal map; a refused test makes `baselineGreen` false, resumed or not). Same
+protocol: Cronus284 under coord lease attempt 011, released after the run. Doctor before:
+`lease: no lease held (no live token, op kind none; last held by SShadowS-PC:74584:1)`, every check
+passed, so no orphan and no reset. Same EXPECTED patch, reverted with `git apply -R` right after;
+`git diff packages/runner/itest/tables.itest.ts` was empty. Raw output:
+`%TEMP%/r236c/gate-tables-run002.txt`.
+
+**Prediction 1: HELD.** Printed: `verdicts: killed=301 survived=68 noCoverage=18
+baselineGreen=false score=0.8157181571815718 untargetedTriggers=0 declarativeSites=1`. No
+`quarantined:` line, no `TestPageScanError`. It passed every assertion before
+`assertMatchesBaseline` and stopped there (tables.itest.ts:1677), again with a bare `Error` and no
+message. The per-mutant check, re-derived from store run 10 (387 mutants) through the gate's own
+`normalizeForComparison` and `diffMutants` against `tables.baseline.json` (377): `10 diff(s)`, all
+`present in "after" but missing from "before"`, all `Data Reach Ops`, the same ten keys as run 9
+(Classify: empty-block x2, return-value, conditional-boundary x2, void-method-call,
+remove-assignment; Touch: empty-block, shift-integer, remove-assignment). Zero differences on the
+377 existing mutants. M0384 to M0387 (`Data Value Card` / `Data Value Source`) are `no-coverage`.
+Store `runs.baseline_green` for run 10 is 0.
+
+**Prediction 2: HELD.** Store run 10 has one row for the test: codeunit 79310,
+`PageActionComputesNonZero`, outcome `skip`, duration 0, `session_id` null, message `not run: LethAL
+refused this test before sending it, because it has a reachable call that may open a TestPage (Data
+Tests.PageActionComputesNonZero calls ValueCard.OpenView on TestPage "Data Value Card").` The other
+67 baseline rows are `pass`.
+
+No wedge. No baseline was re-recorded and no test or figure was edited.
