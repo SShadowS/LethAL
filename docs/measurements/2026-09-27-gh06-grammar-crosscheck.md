@@ -26,6 +26,9 @@ exactly; "over-claims only under R2" held for BusinessFoundation and System Appl
 BaseApp (C1); "no reference corpus produces an over-claim that survives the filtered pipeline" did
 NOT hold (C1 in BaseApp, C2 in do-rel2).
 
+Run 003 (section 10) repeats this under tree-sitter-al 4.4.1: C1a, C1b and P1 are gone, C4's 80
+records are now explained rather than unexplained, and the unexplained total falls from 261 to 45.
+
 ## 2. Instrument
 
 | item | value |
@@ -583,3 +586,140 @@ sites were compared, in any family or probe. No other file in any corpus was exc
 - The compile of C1b's planted mutant (`asserterror Buckets;`) was not measured.
 - Every "zero" and "agree" on this page is scoped to the six audited families and two context probes,
   on comparable files. It is never "zero operator losses".
+
+## 10. Run 003: tree-sitter-al 4.4.1 (2026-09-27)
+
+Pre-commitment: `docs/superpowers/specs/2026-09-27-tsal441-grammar-bump-precommitment.md`, P6 and P7
+(its AMENDMENT 1 leaves P6 unchanged). Plan: `docs/superpowers/plans/2026-09-27-TSAL-441-grammar-bump.md`,
+Task 6.
+
+| item | value |
+| --- | --- |
+| grammar | tree-sitter-al 4.4.1, vendored, upstream commit `7819df5` (tag `v4.4.1`), release asset sha256 `cd6e347e8bf4171c4bd4302543bdb543451be307a34fd0c7f95ca56a085ed099` |
+| harness | unchanged since run 002: last touched at `3e6ce66` (run 002's review changes), mapping as at `b645a9b` |
+| compiler parser | unchanged: `Microsoft.Dynamics.Nav.CodeAnalysis` v18.0.41.45789, alc bin `ms-dynamics-smb.al-18.0.2732683` |
+| command | run 002's (section 2), outputs named `gh06r3-<corpus>`, vendored grammar, no grammar argument |
+
+### 10.1 Controls (run and read before any corpus output)
+
+Each control passes an explicit grammar path. The 4.3.0 rows are what make an empty 4.4.1 row mean
+"fixed" and not "the harness cannot see it".
+
+| grammar | file | predicted (P7) | measured |
+| --- | --- | --- | --- |
+| v3.2.1 (tag's wasm) | `al-kind-mapping-linkprobe.al` | as run 002: tree-sitter-only UNEXPLAINED `comparison_expression` [218,247], `call_expression` [235,247] | exactly that, exit 1 |
+| v4.0.1 (tag's wasm) | `al-kind-mapping-continue.al` | as run 002: compiler-only UNEXPLAINED `call_expression` [89,104]; call probe compiler-only at 89 | exactly that, exit 1 |
+| 4.3.0 | `al-kind-mapping-asserterror-index.al` | compiler-only `call_expression` [147,170], [192,238]; tree-sitter-only [154,170], [199,238] | exactly that (kinds and call probe), exit 1 |
+| 4.3.0 | `al-kind-mapping-asserterror-assign.al` | assignment probe compiler-only UNEXPLAINED at 125 | exactly that, exit 1 |
+| 4.3.0 | `al-kind-mapping-type-property.al` | comparable 0, tree-sitter unhealthy 1, exit 2 | exactly that (ERROR 1, MISSING 0), exit 2 |
+| 4.4.1 | `al-kind-mapping-asserterror-index.al` | no kind delta; call probe compiler-only at 147 and 192 explained-asserterror; 0 unexplained | exactly that (offsets read from `--json`), exit 1 |
+| 4.4.1 | `al-kind-mapping-asserterror-assign.al` | assignment compiler-only at 125 explained-asserterror; 0 unexplained | exactly that, exit 1 |
+| 4.4.1 | `al-kind-mapping-type-property.al` | comparable 1, agree, exit 0 | comparable 1, `comparison_expression` 2 / 2, AGREE, exit 0 |
+
+R284 pipeline check: `census-fixture-mutants.ts` on a directory holding only
+`al-kind-mapping-asserterror-index.al`, under 4.4.1, plants 4 mutants (`empty-block` on the body,
+`flip-boolean-literal` on lines 7 and 9, `void-method-call` on line 9's un-asserted
+`Buckets[3].Delete(true)`). No row's before-text starts with `[`. Under 4.3.0 it planted the two
+`[...]` fragments (section 7, C1b).
+
+### 10.2 Corpus table (section 4 layout)
+
+Every fingerprint equals the pre-commitment's table and run 002's. Every verdict is DISAGREE (exit 1).
+
+| corpus | files | sha256 (first 16) | comparable | tree-sitter unhealthy files | compiler parse-error files | unexplained records (run 002 -> run 003) |
+| --- | ---: | --- | ---: | --- | ---: | ---: |
+| `fixtures/` | 68 | 7641ce5c9470c8d4 | 68 | 0 | 0 | 0 -> 0 |
+| `U:/Git/do-rel2/Cloud` | 417 | 9a8e8831449208cc | 417 | 0 | 0 | 5 -> 5 |
+| `U:/Git/DC/Cloud` | 475 | dcad155c4ecdb38e | **475** (was 473) | **0** (was 2, 6 ERROR) | 0 | 8 -> 8 |
+| `U:/Git/BusinessCentral.Sentinel` | 67 | 9363656ed52020e0 | 67 | 0 | 0 | 0 -> 0 |
+| `U:/Git/BC.History/BusinessFoundation` | 104 | a56a8435136fc21f | 104 | 0 | 0 | 0 -> 0 |
+| `U:/Git/BC.History/System Application` | 1,718 | 7fae1831fda03a89 | 1,718 | 0 | 0 | 8 -> **0** |
+| `U:/Git/BC.History/BaseApp` | 9,620 | 2afad2aa60b13958 | 9,620 | 0 | 0 | 240 -> **32** |
+| **total** | **12,469** | | **12,469** | **0** | **0** | **261 -> 45** |
+
+BaseApp ran whole, in one call (625 s). The census's wasm-memory limit (R292) did not apply to the
+cross-check.
+
+Per-kind totals (section 5) moved in two places only. DC, because its two re-admitted pages are now
+compared: additive 507 / 507, call 13589 / 13510, comparison 2249 / 2239, logical 711 / 700,
+multiplicative 90 / 90, unary 1413 / 1403, call probe 7574 / 7553, assignment probe 5040 / 5036.
+BaseApp's call probe, tree-sitter side, 801918 -> 801884 (the 34 fragment calls of C1b are gone).
+Every other BaseApp total is unchanged.
+
+### 10.3 Deltas per corpus (section 6 layout)
+
+Each cell is guarded / explained / UNEXPLAINED, run 003. A cell that moved shows run 002's value in
+brackets.
+
+| corpus | kinds, compiler only | kinds, tree-sitter only | call probe, compiler only | call probe, tree-sitter only | assignment probe, compiler only | assignment probe, tree-sitter only |
+| --- | --- | --- | --- | --- | --- | --- |
+| fixtures | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 9 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| do | 0 / 0 / 0 | 0 / 0 / **3** | 0 / 0 / 0 | 0 / 0 / **2** | 0 / 0 / 0 | 0 / 0 / 0 |
+| dc | 0 / 0 / 0 | 110 / 0 / 0 | 3 / 0 / **8** | 32 / 0 / 0 | 1 / 0 / 0 | 5 / 0 / 0 |
+| sentinel | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 1 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| bcf | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 35 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| sysapp | 0 / 0 / 0 | 1 / 0 / 0 | 9 / 291 / 0 | 0 / 0 / 0 | 0 / 8 / 0 [0 / 0 / 8] | 0 / 0 / 0 |
+| baseapp | 0 / 0 / 0 [0 / 0 / 34] | 86 / 0 / 0 [86 / 0 / 34] | 394 / 6112 / **22** [394 / 6078 / 56] | 34 / 0 / 0 [34 / 0 / 34] | 17 / 72 / **10** [17 / 0 / 82] | 2 / 0 / 0 |
+
+The comparison against run 002 was made on the records, not on these counts. For every corpus and
+every bucket, the set of `file|kind|start|end` records was diffed against run 002's `--json`. No
+record was added to any bucket in any corpus. The only records that left a bucket are the ones in
+brackets above, and each one that left UNEXPLAINED for EXPLAINED is the same record (sysapp 8
+assignment; baseapp 34 call and 72 assignment, set-equal). DC's two re-admitted pages added no
+record to any bucket.
+
+### 10.4 Clusters, 4.3.0 -> 4.4.1
+
+The remaining 45 records were re-assigned with run 002's mechanical rule (the tree-sitter node at the
+site offset, its field name, its parent's kind, parsed under 4.4.1). All 45 fit an existing cluster.
+No record fits none, so there is no new finding and no new reproduction.
+
+| cluster | records, 4.3.0 -> 4.4.1 | cause | item |
+| --- | --- | --- | --- |
+| C1a | 34 + 34 -> **0** | grammar, fixed upstream | R283 |
+| C1b | 34 + 34 -> **0** | grammar, fixed upstream | R284 |
+| C2 | 3 + 2 -> 3 + 2 | LethAL directive framing | R285 |
+| C3 | 8 -> 8 | LethAL slot list | R286 |
+| C4 | 80 unexplained -> **80 explained** (sysapp 8, baseapp 72) | grammar kind fixed upstream; LethAL slot still missing | R216 |
+| C5 | 20 + 8 -> 20 + 8 | LethAL slot list | R287 |
+| C6 | 2 -> 2 | LethAL slot list | R287 |
+| C7 | 2 -> 2 | LethAL slot list | R287 |
+| P1 | 2 files, 6 ERROR -> **0** | grammar, fixed upstream | R288 |
+
+- **C1a and C1b are gone** through upstream `209d038` (issues #26 and #28). `asserterror_statement.body`
+  is now a statement, so `asserterror Buckets[1].Delete(true);` is one call on an indexed receiver.
+  The compiler-only call becomes explained-asserterror (rule R3), and the tree-sitter-only fragment no
+  longer exists.
+- **C4 is now explained, not claimed**, through the same commit `209d038`. The body of
+  `asserterror X := 1` is now an `assignment_statement`, the kind rule R3 matches. The records did
+  not disappear. They moved to the explained column, because LethAL still has no statement slot for
+  `asserterror_statement.body` (R216), so no operator claims them yet.
+- **P1 is gone** through upstream `551829e` (issue #27). A contextual keyword at the start of a
+  property value lexes as a name, so `Visible = Type = Type::Alpha;` is a `comparison_expression` with
+  no ERROR node.
+
+### 10.5 bc281, a first measurement (exploratory, gates nothing)
+
+The W1 Base Application source of BC build `28.1.49838.50244` (not upstream's `28.1.49838.50268`),
+extracted to the session scratchpad: 8,024 files, sha256 `b019f94027818d93`, equal to the
+pre-commitment's table. It has no run 002 row, so it is not part of the comparison above.
+
+Comparable 8,024 of 8,024, tree-sitter unhealthy 0, compiler parse errors 0. Kinds: compiler-only
+0 / 0 / 0, tree-sitter-only 80 / 0 / 0. Call probe: compiler-only 364 / 0 / 22, tree-sitter-only
+34 / 0 / 0. Assignment probe: compiler-only 17 / 0 / 10, tree-sitter-only 2 / 0 / 0. The 32
+unexplained records are C5 (20 call + 8 assignment), C6 (2) and C7 (2) by the same mechanical rule,
+in the same file names as BaseApp's. The corpus holds no tests, so the explained-asserterror column
+is 0 everywhere.
+
+### 10.6 What this does not cover
+
+- The R2 guard still recognises only `preproc_conditional*` spans. 4.4.1 adds six more `preproc_*`
+  kinds (`preproc_operand_prefix`, `preproc_split_case_end_branch`,
+  `preproc_split_case_statement_end`, `preproc_split_report_brace_close`,
+  `preproc_split_report_dataitem_header`, `preproc_split_report_dataitem_open_over_endif`), so the
+  "guarded" column is understated for the same reason as in section 6, now for more containers.
+  Recorded, not fixed: widening R2 needs its own pre-commitment. The roadmap item for it is filed by
+  this plan's Task 8.
+- C4's 80 records are explained, not claimed. R216's statement slot is still missing, so no
+  mutation operator plants a mutant at an `asserterror` assignment body yet.
+- Everything in section 9 still holds, apart from the two DC pages, which are now compared.
