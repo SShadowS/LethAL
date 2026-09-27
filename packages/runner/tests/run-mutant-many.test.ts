@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { RunMutantTransport } from "../src/run-mutant-transport";
@@ -178,6 +181,86 @@ function fakes(opts: {
 function transport(fetchFn: typeof fetch): RunMutantTransport {
   return new RunMutantTransport(CFG, TA, AR, fetchFn);
 }
+/**
+ * R289: a fake whose `RunMutantMany` and `StopHungRunAt` are BOTH held until the test releases
+ * them by hand, so a test can reject the main fetch while the watchdog is still waiting on its
+ * stop. `fakes` answers the stop synchronously and cannot reject its held fetch, so it cannot
+ * build that order. Every call is recorded by action name as it arrives, polls included.
+ * `GetOpAnswer` (R236b's readback) is rejected, which `runMany` reports and appends.
+ */
+function heldFakes() {
+  const calls: string[] = [];
+  let rejectRun: ((err: unknown) => void) | undefined;
+  let answerStop: ((body: Record<string, unknown>) => void) | undefined;
+  const fetchFn = ((url: unknown) => {
+    const u = String(url);
+    const action = /LethALControl_(\w+)/.exec(u)?.[1] ?? u;
+    calls.push(action);
+    if (action === "RunMutantMany") {
+      return new Promise<Response>((_resolve, reject) => {
+        rejectRun = reject;
+      });
+    }
+    if (action === "GetOperationStatus") return Promise.resolve(odata(statusOf()));
+    if (action === "StopHungRunAt") {
+      return new Promise<Response>((resolve) => {
+        answerStop = (body) => resolve(odata(body));
+      });
+    }
+    return Promise.reject(new Error(`unexpected action ${u}`));
+  }) as typeof fetch;
+  return {
+    fetchFn,
+    calls,
+    rejectRun: (err: unknown) => {
+      if (rejectRun === undefined) throw new Error("heldFakes: RunMutantMany was never called");
+      rejectRun(err);
+    },
+    answerStop: (body: Record<string, unknown>) => {
+      if (answerStop === undefined) throw new Error("heldFakes: StopHungRunAt was never called");
+      answerStop(body);
+    },
+  };
+}
+
+/** Fails on its own timer, so a regression that hangs the watchdog fails instead of hanging. */
+function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_r, reject) => {
+    t = setTimeout(() => reject(new Error(`timed out after ${ms} ms waiting for ${what}`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
+
+async function until(cond: () => boolean, ms: number, what: string): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${ms} ms waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
+function readTrace(path: string): Record<string, unknown>[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
+/** Runs `body` with `LETHAL_R289_TRACE` set to `path` (or unset), restoring the old value. */
+async function withTraceEnv<T>(path: string | undefined, body: () => Promise<T>): Promise<T> {
+  const old = process.env.LETHAL_R289_TRACE;
+  if (path === undefined) Reflect.deleteProperty(process.env, "LETHAL_R289_TRACE");
+  else process.env.LETHAL_R289_TRACE = path;
+  try {
+    return await body();
+  } finally {
+    if (old === undefined) Reflect.deleteProperty(process.env, "LETHAL_R289_TRACE");
+    else process.env.LETHAL_R289_TRACE = old;
+  }
+}
+
+const traceDir = () => mkdtempSync(join(tmpdir(), "lethal-r289-"));
 
 describe("runMany — a well-formed answer becomes per-method verdicts (R198 §3.3)", () => {
   test("complete: one pass per method, in order, with the server's durations", async () => {
@@ -916,5 +999,123 @@ describe("runMany, a confirmed stop with no 408 (2026-09-27 hang investigation, 
     // Call order is the assertion that matters: StopHungRunAt before the abort, GetOpAnswer only
     // after runManyOnce has already settled via that abort.
     expect(f.calls).toEqual(["RunMutantMany", "StopHungRunAt", "GetOpAnswer"]);
+  });
+});
+describe("runMany, a connection failure keeps the watchdog's story (R289)", () => {
+  test("R289: the fetch rejects while the stop is still pending; the message names every watchdog step and the trace pins the order", async () => {
+    const tracePath = join(traceDir(), "trace.ndjson");
+    const f = heldFakes();
+    const v = await withTraceEnv(tracePath, async () => {
+      const pending = transport(f.fetchFn).runMany(req({ stopHungSessions: true }));
+      await until(() => f.calls.includes("StopHungRunAt"), 2_000, "StopHungRunAt");
+      f.rejectRun(new DOMException("The operation timed out.", "TimeoutError"));
+      // Let the fetch catch run (and block on the held stop) before the stop answers.
+      await new Promise((r) => setTimeout(r, 20));
+      f.answerStop({ stopped: false, reason: "not-active" });
+      const r = await within(pending, 2_000, "runMany to settle");
+      if (r.kind !== "call") throw new Error("expected a call-level answer");
+      return r.verdict;
+    });
+    expect(v.operation).toBe("in-flight-unknown");
+    expect(v.failureMessage).toContain("RunMutantMany connection failed after dispatch");
+    expect(v.failureMessage).toMatch(/stop sent at \+\d+ms, answered at \+\d+ms/);
+    expect(v.failureMessage).toMatch(/failed at \+\d+ms/);
+    expect(v.failureMessage).toMatch(/polls ok \d+/);
+    // ORDER is pinned by trace events, not by elapsed milliseconds (review r2).
+    const events = readTrace(tracePath).map((e) => e.event);
+    const at = (name: string) => events.indexOf(name);
+    expect(at("stop-sent")).toBeGreaterThan(-1);
+    expect(at("stop-sent")).toBeLessThan(at("settled"));
+    expect(at("settled")).toBeLessThan(at("stop-answered"));
+    expect(readTrace(tracePath).find((e) => e.event === "settled")?.how).toBe("connection-failed");
+  });
+
+  test("R289 trace: every line names the request; every poll-ok carries its send time, the row's identity and both server clocks", async () => {
+    const tracePath = join(traceDir(), "trace.ndjson");
+    const f = fakes({
+      many: "hold",
+      // Running, but inside its budget: the watchdog polls and never stops.
+      status: () => statusOf({ serverNow: "2026-09-03T10:00:00Z" }),
+    });
+    await withTraceEnv(tracePath, async () => {
+      const pending = transport(f.fetchFn).runMany(req());
+      await until(() => f.polls() >= 3, 2_000, "three polls");
+      f.release(odata(answer()));
+      const r = await within(pending, 2_000, "runMany to settle");
+      expect(r.kind).toBe("verdicts");
+    });
+    const lines = readTrace(tracePath);
+    expect(lines[0]?.event).toBe("dispatch");
+    expect(lines.at(-1)).toMatchObject({ event: "settled", how: "answer" });
+    for (const l of lines) {
+      expect(l).toMatchObject({ mutantId: "M0003", attemptId: "a1", opSeq: 7 });
+      expect(typeof l.at).toBe("number");
+    }
+    const oks = lines.filter((l) => l.event === "poll-ok");
+    expect(oks.length).toBeGreaterThanOrEqual(1);
+    for (const ok of oks) {
+      expect(typeof ok.seq).toBe("number");
+      expect(ok.sentAt as number).toBeLessThanOrEqual(ok.at as number);
+      expect(ok).toMatchObject({
+        state: "running",
+        methodIndex: 1,
+        rowAttemptId: "a1",
+        rowOpSeq: 7,
+        startedAt: "2026-09-03T10:00:00Z",
+        serverNow: "2026-09-03T10:00:00Z",
+      });
+      const sentBefore = lines.findIndex((l) => l.event === "poll-sent" && l.seq === ok.seq);
+      expect(sentBefore).toBeGreaterThan(-1);
+      expect(sentBefore).toBeLessThan(lines.indexOf(ok));
+    }
+  });
+
+  test("R289 trace: unset, no file is created", async () => {
+    const tracePath = join(traceDir(), "trace.ndjson");
+    await withTraceEnv(undefined, async () => {
+      const r = await within(
+        transport(fakes({ many: odata(answer()) }).fetchFn).runMany(req()),
+        2_000,
+        "runMany",
+      );
+      expect(r.kind).toBe("verdicts");
+    });
+    expect(existsSync(tracePath)).toBe(false);
+  });
+
+  test("R289 trace: an unwritable path is refused before dispatch, naming the variable and the path", async () => {
+    const tracePath = join(traceDir(), "no-such-dir", "trace.ndjson");
+    const f = fakes({ many: odata(answer()) });
+    await withTraceEnv(tracePath, async () => {
+      const run = transport(f.fetchFn).runMany(req());
+      await expect(run).rejects.toThrow(`LETHAL_R289_TRACE=${tracePath} is not writable`);
+    });
+    expect(f.calls).not.toContain("RunMutantMany");
+  });
+
+  test("R289 trace: a write that fails inside the watchdog stops tracing, never rejects the watchdog, and is named in the verdict", async () => {
+    const tracePath = join(traceDir(), "trace.ndjson");
+    const f = fakes({
+      many: "hold",
+      status: () => statusOf({ serverNow: "2026-09-03T10:00:00Z" }),
+    });
+    const writes: string[] = [];
+    const traceWrite = (_path: string, line: string) => {
+      writes.push(line);
+      if (line.includes('"poll-sent"')) throw new Error("disk full");
+    };
+    const r = await withTraceEnv(tracePath, async () => {
+      const pending = new RunMutantTransport(CFG, TA, AR, f.fetchFn, { traceWrite }).runMany(req());
+      await until(() => f.polls() >= 3, 2_000, "three polls after the failed write");
+      f.release(odata(answer()));
+      return within(pending, 2_000, "runMany to settle");
+    });
+    if (r.kind !== "verdicts") throw new Error("expected verdicts");
+    expect(r.verdicts.map((v) => v.outcome)).toEqual(["pass", "pass", "pass"]);
+    for (const v of r.verdicts) {
+      expect(v.failureMessage?.endsWith(" trace: write failed 1 times;")).toBe(true);
+    }
+    // Bounded: `dispatch`, then the first `poll-sent` that threw, and nothing after it.
+    expect(writes.length).toBe(2);
   });
 });

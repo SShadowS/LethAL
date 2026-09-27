@@ -1834,3 +1834,34 @@ local hash of the package just published, so on Cronus28 the read-back is byte-f
 published test app, and a same-name, same-version republish with other bytes is accepted (exit 0)
 and replaces what the server holds. Decisions 2 and 3 of the C02-05 plan stand. The container was
 left holding build A, which is compiled from the committed source.
+
+## `LETHAL_R289_TRACE`: a shared-clock trace of one `RunMutantMany` call (R289)
+
+A diagnostic, kept on purpose after R289. Set `LETHAL_R289_TRACE=<path>` and every
+`RunMutantMany` call (`RunMutantTransport.runMany`, the grouped path) appends one NDJSON line per
+event to that file. Unset or empty, nothing is written and no file is created.
+
+Every line carries `at` (the local `Date.now()`, in epoch milliseconds, so it lines up with any
+other process on the same host), `event`, and the request's `mutantId`, `attemptId` and `opSeq`.
+The events, in the order a call can produce them:
+
+- `dispatch`: the `RunMutantMany` POST is about to be sent.
+- `poll-sent` (`seq`): the watchdog sends a `GetOperationStatus` poll.
+- `poll-ok` (`seq`, `sentAt`, `state`, `methodIndex`, `rowAttemptId`, `rowOpSeq`, `startedAt`,
+  `serverNow`): that poll answered. `sentAt` and `at` bracket it on the local clock; `startedAt`
+  and `serverNow` are the SERVER's clock, so the two are never subtracted from each other.
+- `poll-failed` (`seq`, `sentAt`, `error`): that poll threw.
+- `stop-sent` (`methodIndex`): the watchdog sends `StopHungRunAt`. This says only that the CLIENT
+  sent it, not that the server began to act on it.
+- `stop-answered` (`stopped`, `reason`) or `stop-threw` (`error`): what came back.
+- `settled` (`how`: `answer`, `aborted`, `connection-failed` or `body-failed`): the main request
+  ended, written BEFORE the call waits for its watchdog, so a stop still pending shows up after it.
+
+An unwritable path (a missing directory, say) is refused BEFORE anything is dispatched, with an
+error naming the variable and the path. A write that fails later stops the trace for the rest of
+that call (no retry, no second attempt), never rejects the watchdog, and is named at the end of
+every verdict the call returns: ` trace: write failed <n> times;`.
+
+The same R289 change made the connection-failure and body-read-failure messages carry the
+watchdog's story too: ` watchdog: polls ok <n>, polls failed <n>[, last poll ok at +<ms>][; stop
+sent at +<ms>, answered at +<ms> | unanswered][; failed at +<ms>];`, relative to the call's start.
