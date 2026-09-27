@@ -7174,6 +7174,16 @@ export async function activateOnce(
   }
 }
 
+/** R236b: a verdict read back after a lost reply is a real incident even though it scores. */
+export function announceRecovered(v: TestVerdict, emit: RunEmitter | undefined): void {
+  if (v.replyRecovered === undefined) return;
+  emit?.({
+    type: "warning",
+    code: "lost-reply-recovered",
+    message: `[lethal] ${v.ref.codeunitName}.${v.ref.method}: the HTTP reply was lost (${v.replyRecovered}); the verdict was read back from the answer the server committed as the action's last step, and the test was not dispatched again (R236b)`,
+  });
+}
+
 /**
  * One test run. Retries ONLY a `pre-dispatch-rejected` run (the connect never dispatched a test).
  * An `in-flight-unknown` run is never retried — the first run may still be executing server-side.
@@ -7189,16 +7199,6 @@ export async function activateOnce(
  * send a too-high `opSeq` and be refused as `lease-invalid` — a FALSE lease loss (see
  * `LeaseSession.resyncOpSeq`).
  */
-/** R236b: a verdict read back after a lost reply is a real incident even though it scores. */
-export function announceRecovered(v: TestVerdict, emit: RunEmitter | undefined): void {
-  if (v.replyRecovered === undefined) return;
-  emit?.({
-    type: "warning",
-    code: "lost-reply-recovered",
-    message: `[lethal] ${v.ref.codeunitName}.${v.ref.method}: the HTTP reply was lost (${v.replyRecovered}); the verdict was read back from the answer the server committed as the action's last step, and the test was not dispatched again (R236b)`,
-  });
-}
-
 export async function runOnce(
   backend: ExecutionBackend,
   safety: SessionSafety,
