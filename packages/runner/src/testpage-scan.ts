@@ -36,6 +36,20 @@ const OPENING_METHODS = new Set(["openview", "openedit", "opennew", "trap"]);
 const PAGE_TYPE = /^\s*(?:array\s*\[[^\]]*\]\s*of\s+)?test(request)?page\b/i;
 const CODEUNIT_TYPE = /^\s*codeunit\s+(.+?)\s*$/i;
 const NAME_KINDS = new Set(["identifier", "quoted_identifier"]);
+/** The grammar's `extras` that can sit between any two tokens and so show up as NAMED children:
+ *  counted as an argument or read as a member name they silently drop a call (final review #1). */
+const TRIVIA = new Set([
+  "comment",
+  "multiline_comment",
+  "pragma",
+  "preproc_region",
+  "preproc_endregion",
+  "preproc_define",
+  "preproc_undef",
+]);
+/** Named children minus trivia: every POSITIONAL or counted read goes through this. */
+const realChildren = (n: ALSyntaxNode): ALSyntaxNode[] =>
+  n.namedChildren.filter((c) => !TRIVIA.has(c.rawKind));
 /** `#if`/`#elif`/`#else`/`#endif` branch markers inside a `preproc_conditional*` wrapper: not real
  *  content, dropped before recursing into the wrapper's branches. */
 const PREPROC_BRANCH_MARKER = new Set([
@@ -277,7 +291,7 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
 function callSites(block: ALSyntaxNode): Site[] {
   const out: Site[] = [];
   const member = (m: ALSyntaxNode, args: number): void => {
-    const [receiver, name] = m.namedChildren;
+    const [receiver, name] = realChildren(m);
     if (receiver === undefined || name === undefined) return;
     out.push({
       kind: "member",
@@ -290,8 +304,8 @@ function callSites(block: ALSyntaxNode): Site[] {
   visit(block, (n) => {
     if (n.rawKind === "call_expression") {
       const fn = n.childForFieldName("function");
-      const args =
-        n.namedChildren.find((c) => c.rawKind === "argument_list")?.namedChildren.length ?? 0;
+      const list = n.namedChildren.find((c) => c.rawKind === "argument_list");
+      const args = list === undefined ? 0 : realChildren(list).length;
       if (fn === null) return;
       if (NAME_KINDS.has(fn.rawKind))
         out.push({ kind: "bare", name: fn.text, args, inWith: insideWithStatement(n) });

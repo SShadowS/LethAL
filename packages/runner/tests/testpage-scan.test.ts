@@ -1112,6 +1112,93 @@ describe("codeunit lookup index (R-236c round 2)", () => {
   });
 });
 
+describe("final review: comments are trivia, never an argument or a member name", () => {
+  const sameCodeunit = (call: string) =>
+    scan(
+      unit(`
+    local procedure Helper(N: Integer)
+    var
+        Card: TestPage "X";
+    begin
+        Card.OpenView();
+    end;
+
+    [Test]
+    procedure T()
+    begin
+        ${call}
+    end;`),
+      [ref(50100, "T")],
+    );
+  const viaLibrary = (call: string) =>
+    scan(
+      unit(`
+    var
+        L: Codeunit Lib;
+
+    [Test]
+    procedure T()
+    begin
+        ${call}
+    end;`),
+      [ref(50100, "T")],
+      [
+        {
+          path: "lib.al",
+          text: unit(
+            `
+    procedure Open(N: Integer)
+    var
+        C: TestPage "Z";
+    begin
+        C.OpenView();
+    end;`,
+            50200,
+            "Lib",
+            false,
+          ),
+        },
+      ],
+    );
+
+  test("an inline block comment in a same-codeunit call's arguments", () => {
+    expect(sameCodeunit("Helper(1 /* c */);").size).toBe(1);
+  });
+  test("a trailing line comment before the closing paren on the next line", () => {
+    expect(sameCodeunit("Helper(1 // c\n        );").size).toBe(1);
+  });
+  test("a #pragma and a #region inside the arguments", () => {
+    expect(
+      sameCodeunit(
+        "Helper(\n#pragma warning disable AA0001\n            1\n#region r\n#endregion\n        );",
+      ).size,
+    ).toBe(1);
+  });
+  test("a block comment through a codeunit variable", () => {
+    expect(viaLibrary("L.Open(1 /* c */);").size).toBe(1);
+  });
+  test("a line comment through a codeunit variable", () => {
+    expect(viaLibrary("L.Open(1 // c\n        );").size).toBe(1);
+  });
+  test("a comment between receiver and member, on a TestPage", () => {
+    const got = scan(
+      unit(`
+    [Test]
+    procedure T()
+    var
+        P: TestPage "X";
+    begin
+        P . /*z*/ OpenView();
+    end;`),
+      [ref(50100, "T")],
+    );
+    expect(got.get("50100::T")).toContain("P.OpenView");
+  });
+  test("a comment between receiver and member, through a codeunit variable", () => {
+    expect(viaLibrary("L // q\n            .Open(1);").size).toBe(1);
+  });
+});
+
 describe("scanTestPageTests on the real fixtures (offline pin of the live gates)", () => {
   test("sandbox-data-tests: exactly PageActionComputesNonZero", async () => {
     const dir = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
