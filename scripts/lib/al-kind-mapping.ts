@@ -173,6 +173,11 @@ export const DELIBERATELY_UNMAPPED: ReadonlySet<string> = new Set([
   //   `IsExpression`          — the interface type test, `Instance is "My Interface"`.
   "IsExpression",
   "ConditionalExpression",
+  // `UnaryPlusExpression` — unary plus, `+X`. Same family as `UnaryMinusExpression`/
+  // `UnaryNotExpression` above, both mapped to `unary_expression`, but extending the mapping to
+  // this one is an audit-scope call this ruling does not make mid-run. Real executable AL, so a
+  // deferral, not a refusal. Surfaced by the fail-closed channel on BC.History/BaseApp.
+  "UnaryPlusExpression",
 ]);
 
 /**
