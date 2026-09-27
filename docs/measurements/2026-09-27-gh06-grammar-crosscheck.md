@@ -370,7 +370,7 @@ defines `asserterror_statement.body` as `choice($._expression, $.code_block)`; `
 lists no statement kind for that field. Elsewhere an assignment is `assignment_statement` (through
 `_statement_inner`); `assignment_expression` exists in `_expression` "for asserterror and other
 contexts". The AL compiler's `AssertErrorStatement` holds a statement. A hand-written repro shows
-the second symptom of the same rule: `asserterror if X = 2 then Error('two');` and
+the second symptom of the same rule: `asserterror if Outcome = 2 then Error('two');` and
 `asserterror exit;` each parse as an `asserterror_statement` with NO body followed by a sibling
 `if_statement` / `exit_statement`, with no ERROR node, where the compiler's parser builds
 `AssertErrorStatement > IfStatement` / `> ExitStatement` with no error. That symptom was not seen
