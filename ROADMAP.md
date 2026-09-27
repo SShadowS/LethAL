@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**74 of 291 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**73 of 291 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -167,7 +167,7 @@ that ordering is the priority.
 - **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
-- **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · open, LOW; the grammar half (U3, tree-sitter-al #28) is fixed in 4.4.1 (50e98d1): an assignment under…
+- **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · closed 2026-09-27: not admitted: measured 0 deployable product sites on seven fixture targets…
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
 - **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
 - **R220** · al-runner grew `--coverage` and `--server`, and LethAL uses neither: the two facts behind `authoritative: false` and behind 65 s per test are both addressable now · [R220.md](docs/roadmap/R220.md) · done 2026-09-09 (9425a2b), all four items: coverage wired, R183 residual re-measured, the --server daemon…
