@@ -96,15 +96,18 @@ export function isTestPageNotRunMessage(text: string | undefined): boolean {
 }
 
 export const TESTPAGE_REFUSED_DIAGNOSIS =
-  "LethAL did not send these tests. Each one has a reachable call that may open a TestPage: the " +
-  "test, or a procedure it can call in the test app, calls OpenView, OpenEdit, OpenNew or Trap on a " +
-  "TestPage, found by reading the test source before the run. This is a safety-first static policy: " +
-  "conditions are not evaluated, so a call behind `if GuiAllowed then`, which would not run here, " +
-  "is refused too. The session LethAL runs tests in (GuiAllowed=No, ClientType=ODataV4) cannot run " +
-  "a TestPage, and sending one got at best BC's refusal and at worst a lost reply that left the BC " +
+  "LethAL did not send these tests. Each one has a reachable call that may open a TestPage, found " +
+  "by reading the test source before the run: the test, or a procedure it can call in the test app, " +
+  "calls OpenView, OpenEdit, OpenNew or Trap on a TestPage, or calls one of those names on a " +
+  "receiver the scanner cannot resolve, or makes a call inside a `with` statement it cannot resolve. " +
+  "This is a safety-first static policy: conditions are not evaluated, so a call behind " +
+  "`if GuiAllowed then`, which would not run here, is refused too. The session LethAL runs tests " +
+  "in (GuiAllowed=No, ClientType=ODataV4) cannot run a TestPage, and sending one got at best BC's refusal and at worst a lost reply that left the BC " +
   "server unable to answer until restarted (R236). These tests are not in the green set, so a " +
   "mutant only they would reach is reported no-coverage: no test LethAL RAN reaches it, which is " +
   "not the same as no test in your suite, and a guarded test may have lost a kill. Each test's " +
   "failure text names the call path it was refused for. Not detected, and sent as before: a page " +
-  "opened by the code under test and handled through a handler function, and helpers outside the " +
-  "test app.";
+  "opened by the code under test and handled through a handler function, a helper outside the " +
+  "test app or in a non-codeunit object, a call through Codeunit.Run, an event subscriber or " +
+  "interface dispatch, and a bare zero-argument call written without parentheses in expression " +
+  "position (for example `B := Helper;`).";

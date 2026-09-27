@@ -149,6 +149,21 @@ describe("describeTestPageUnsupported (R69)", () => {
     expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("reachable call that may open a TestPage");
     expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain("GuiAllowed");
   });
+
+  test("R-236c: the diagnosis names the scanner's documented limits and its safety-first refusals", () => {
+    for (const limit of [
+      "handler function",
+      "outside the test app or in a non-codeunit object",
+      "Codeunit.Run",
+      "event subscriber",
+      "interface dispatch",
+      "`B := Helper;`",
+      "receiver the scanner cannot resolve",
+      "`with` statement",
+    ]) {
+      expect(TESTPAGE_REFUSED_DIAGNOSIS).toContain(limit);
+    }
+  });
 });
 
 describe("SessionReport.testPageUnsupported (R69)", () => {
