@@ -338,18 +338,69 @@ async function runProtocolInvariantProbes(run: RunOnceResult): Promise<void> {
 
     // Failure round-trip (spec §11): the exact error text survives the identity-validated mapping
     // (result enum 1 -> fail, message carried through).
+    const failFence = fence();
     const fail = await tx.run({
       ref: { codeunitId: FAIL_PROBE_ID, codeunitName: "Fail Probe", method: "AlwaysFails" },
       mutantId: "",
       attemptId: "probe-fail",
       timeoutMs: PROBE_TIMEOUT_MS,
-      lease: fence(),
+      lease: failFence,
     });
     assert.equal(fail.outcome, "fail", `fail probe must map to fail, got ${JSON.stringify(fail)}`);
     assert.ok(
       fail.failureMessage?.includes("LETHAL-PROBE-FAIL: exact-error-round-trip"),
       `fail probe must round-trip its exact error, got ${JSON.stringify(fail.failureMessage)}`,
     );
+
+    // R236b: the committed answer is the one sent, keyed on the op, and a same-key duplicate the
+    // fence refuses does not overwrite it. It must sit HERE: the next RunMutant replaces the kept
+    // answer. The refused duplicate reuses `failFence`, so it consumes no op seq on either side.
+    const assertKept = async (when: string) => {
+      const kept = await tx.readKeptAnswer(
+        failFence,
+        "probe-fail",
+        failFence.opSeq,
+        PROBE_TIMEOUT_MS,
+      );
+      assert.ok(
+        kept.found,
+        `${when}: GetOpAnswer must hold probe-fail's answer, got ${JSON.stringify(kept)}`,
+      );
+      if (kept.found) {
+        const k = JSON.parse(kept.answer) as {
+          attemptId?: unknown;
+          status?: unknown;
+          codeunitResults?: unknown;
+        };
+        assert.equal(k.attemptId, "probe-fail", when);
+        assert.equal(k.status, "ran", when);
+        assert.ok(
+          String(k.codeunitResults).includes("LETHAL-PROBE-FAIL: exact-error-round-trip"),
+          when,
+        );
+      }
+    };
+    await assertKept("after the run");
+    const dup = await tx.run({
+      ref: { codeunitId: FAIL_PROBE_ID, codeunitName: "Fail Probe", method: "AlwaysFails" },
+      mutantId: "",
+      attemptId: "probe-fail",
+      timeoutMs: PROBE_TIMEOUT_MS,
+      lease: failFence,
+    });
+    assert.equal(
+      dup.operation,
+      "lease-lost",
+      `a same-key duplicate must be refused, got ${JSON.stringify(dup)}`,
+    );
+    await assertKept("after a refused same-key duplicate");
+    const other = await tx.readKeptAnswer(
+      failFence,
+      "probe-fail",
+      failFence.opSeq - 1,
+      PROBE_TIMEOUT_MS,
+    );
+    assert.equal(other.found, false, "GetOpAnswer must refuse an opSeq that is not the kept one");
 
     // Invariant 2 — run-scoped clear (spec §5 step 6, §C2). A killer mutant from the frozen table:
     // RunMutant activating it must make OverBudgetDetected fail (proof it was active during the run),

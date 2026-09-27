@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readA2 } from "./size-arm";
+import { keepOriginalBody, readA2 } from "./size-arm";
 
 describe("readA2", () => {
   const full = { pairsDone: 60, pairsPlanned: 60, sBreaks: 0, sRunnable: true };
@@ -14,5 +14,22 @@ describe("readA2", () => {
   });
   test("an unrunnable S arm cannot clear it", () => {
     expect(readA2({ ...full, sRunnable: false })).toBe("grouped fix required");
+  });
+});
+
+describe("keepOriginalBody", () => {
+  test("keeps the RunMutantWithCoverage body and ignores the GetOpAnswer body of the same attempt", () => {
+    const bodies = new Map<string, string>();
+    keepOriginalBody(
+      bodies,
+      { action: "LethALControl_RunMutantWithCoverage", attemptId: "r236s-k-1" },
+      "original",
+    );
+    keepOriginalBody(
+      bodies,
+      { action: "LethALControl_GetOpAnswer", attemptId: "r236s-k-1" },
+      "readback",
+    );
+    expect(bodies.get("r236s-k-1")).toBe("original");
   });
 });

@@ -7,13 +7,18 @@
  * to make its answer comparably large.
  *
  * LETHAL_R236_SIZE_ARM=1 bun scripts/r236-baseline-probe/size-arm.ts --config <lethal.config.local.json>
- *   --expect-container <name> --out <file.ndjson> --pairs <n>
+ *   --expect-container <name> --out <file.ndjson> (--pairs <n> | --kept-check <n>)
+ *
+ * `--kept-check <n>` (R236b Task 8, C1b) skips calibration and the pairs: it makes n direct T calls and,
+ * for each whose body arrived whole, reads the kept answer back with `GetOpAnswer` and compares it byte
+ * for byte with the body the client received. It exits 1 if any whole call's answer was not found, was
+ * not byte-equal, did not score `fail`, or did not carry the `CreateNavTestService` refusal.
  *
  * This script issues no network call itself when the env var is unset (prints `skipped`, exit 0), and
  * refuses (exit 2) before any network call if the required flags are missing, the config's `bcdev.server`
  * host does not match `--expect-container`, or `--out`'s directory does not exist.
  *
- * Exit codes: 0 the arm ran to completion (or S was not runnable); 2 a harness/config fault, before any
+ * Exit codes: 0 the arm ran to completion (or S was not runnable); 1 a `--kept-check` mismatch; 2 a harness/config fault, before any
  * network call; 3 a wedge (a failed preflight after a break).
  */
 import { appendFileSync, existsSync } from "node:fs";
@@ -42,6 +47,25 @@ export function readA2(r: {
 }): "grouped fix required" | "grouped fix not required" {
   if (!r.sRunnable || r.sBreaks > 0 || r.pairsDone < r.pairsPlanned) return "grouped fix required";
   return "grouped fix not required";
+}
+
+/**
+ * R236b C1b: keep a response body ONLY for the original action. The transport's own `GetOpAnswer`
+ * readback carries the SAME attempt id, and an unfiltered map would replace the original body with
+ * the readback's before the comparison (plan review r2, I5).
+ */
+export function keepOriginalBody(
+  bodies: Map<string, string>,
+  trace: { readonly action: string; readonly attemptId?: string },
+  text: string,
+): void {
+  if (
+    trace.action !== "LethALControl_RunMutant" &&
+    trace.action !== "LethALControl_RunMutantWithCoverage"
+  )
+    return;
+  if (trace.attemptId === undefined) return;
+  bodies.set(trace.attemptId, text);
 }
 
 /** §A2's calibration ladder, tried in order; the first candidate that qualifies is used for S. */
@@ -109,21 +133,29 @@ async function main(): Promise<void> {
       "expect-container": { type: "string" },
       out: { type: "string" },
       pairs: { type: "string" },
+      "kept-check": { type: "string" },
     },
   });
-  const { config, out: outArg, pairs: pairsArg } = values;
+  const { config, out: outArg } = values;
   const expectContainer = values["expect-container"];
+  const keptArg = values["kept-check"];
+  const countArg = values.pairs ?? keptArg;
   if (
     config === undefined ||
     expectContainer === undefined ||
     outArg === undefined ||
-    pairsArg === undefined
+    countArg === undefined ||
+    (values.pairs !== undefined && keptArg !== undefined)
   ) {
-    throw new HarnessFault("--config, --expect-container, --out and --pairs are all required");
+    throw new HarnessFault(
+      "--config, --expect-container, --out and exactly one of --pairs or --kept-check are required",
+    );
   }
-  const pairsPlanned = Number(pairsArg);
+  const pairsPlanned = Number(countArg);
   if (!Number.isInteger(pairsPlanned) || pairsPlanned < 1) {
-    throw new HarnessFault(`--pairs must be a positive integer, got ${JSON.stringify(pairsArg)}`);
+    throw new HarnessFault(
+      `--pairs/--kept-check must be a positive integer, got ${JSON.stringify(countArg)}`,
+    );
   }
   const out = resolve(outArg);
   if (!existsSync(dirname(out))) {
@@ -172,7 +204,59 @@ async function main(): Promise<void> {
   const fence = () => ({ ...leaseTuple(), opSeq: probe.nextOpSeq() });
   const harnessVerifier = new HarnessVerifier(odataCfg);
   const calls: CallTrace[] = [];
-  const tx = new RunMutantTransport(odataCfg, targetAppId, artifactId, traceFetch(bcFetch, calls));
+  const bodies = new Map<string, string>();
+  const tx = new RunMutantTransport(
+    odataCfg,
+    targetAppId,
+    artifactId,
+    traceFetch(bcFetch, calls, { onBody: (trace, text) => keepOriginalBody(bodies, trace, text) }),
+  );
+
+  if (keptArg !== undefined) {
+    let bad = 0;
+    try {
+      for (let i = 1; i <= pairsPlanned; i++) {
+        const attemptId = `r236s-k-${i}`;
+        const lease = fence();
+        const { verdict } = await tx.runWithCoverage({
+          ref: T_REF,
+          mutantId: "",
+          attemptId,
+          timeoutMs: PAIR_TIMEOUT_MS,
+          lease,
+          coverageObjectIdFilter: T_FILTER,
+        });
+        const body = bodies.get(attemptId);
+        if (body === undefined) {
+          writeRecord(out, {
+            kind: "kept-check",
+            i,
+            whole: false,
+            outcome: verdict.outcome,
+            operation: verdict.operation ?? null,
+            replyRecovered: verdict.replyRecovered ?? null,
+          });
+          continue;
+        }
+        const kept = await tx.readKeptAnswer(lease, attemptId, lease.opSeq, 15_000);
+        const record = {
+          kind: "kept-check",
+          i,
+          whole: true,
+          found: kept.found,
+          byteEqual: kept.found && kept.answer === (JSON.parse(body) as { value?: unknown }).value,
+          outcome: verdict.outcome,
+          clr: verdict.failureMessage?.includes("CreateNavTestService") === true,
+        };
+        writeRecord(out, record);
+        if (!record.found || !record.byteEqual || record.outcome !== "fail" || !record.clr) bad++;
+      }
+    } finally {
+      await probe.stop();
+    }
+    writeRecord(out, { kind: "kept-check-summary", calls: pairsPlanned, bad });
+    process.exit(bad > 0 ? 1 : 0);
+  }
 
   let tBreaks = 0;
   let sBreaks = 0;
