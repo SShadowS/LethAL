@@ -1323,6 +1323,22 @@ export class RunMutantTransport {
         fencedOp,
       );
     }
+    return this.scoreAnswer(value, req, collectCoverage, sink, durationMs, fencedOp);
+  }
+
+  /**
+   * R236b: the answer parser, from the `value` string onward. Shared by the live reply and by a
+   * readback of the answer the control app kept, so both are scored by the same unchanged rules.
+   */
+  private scoreAnswer(
+    value: string,
+    req: RunMutantRequest,
+    collectCoverage: boolean,
+    sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
+    durationMs: number,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+  ): TestVerdict {
+    const ref = req.ref;
     let result: RunMutantResult;
     try {
       result = JSON.parse(value) as RunMutantResult;
