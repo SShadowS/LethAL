@@ -401,6 +401,7 @@ jobs:
       # be a second account of the same release, free to disagree with the first; the script refuses
       # a missing or empty section rather than shipping a release with no notes.
       - name: Release notes from the changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           bun scripts/changelog-section.ts "${GITHUB_REF_NAME}" > release-notes.md
@@ -435,6 +436,7 @@ jobs:
       - name: Publish the release
         # v2.6.2 (the v2 tag), pinned by commit: this is the step with contents: write.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
           generate_release_notes: true
