@@ -1,0 +1,97 @@
+import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
+import {
+  GRAMMAR_PIN,
+  type NativeBinding,
+  type NativeInfo,
+  NativeParserMissingError,
+  NativeParserPinError,
+  NativeParserStaleError,
+  checkBinding,
+  initNativeParser,
+  liveParseResults,
+  loadBindingFor,
+  localBindingSourceSha256,
+  nativeInfo,
+  parseALNative,
+  parsesSinceStart,
+} from "../../src/ast/native-parser";
+
+const CRATE = join(import.meta.dir, "..", "..", "native");
+
+describe("native parser binding", () => {
+  it("was built from the crate sources in this working tree (rebuild: bun scripts/build-native-parser.ts)", () => {
+    expect(nativeInfo().bindingSourceSha256).toBe(localBindingSourceSha256(CRATE));
+  });
+
+  it("matches the grammar pin, grammar input hashes included", () => {
+    const info = nativeInfo();
+    expect({
+      grammarVersion: info.grammarVersion,
+      treeSitterVersion: info.treeSitterVersion,
+      languageAbi: info.languageAbi,
+      kindTableSha256: info.kindTableSha256,
+      grammarInputs: info.grammarInputs,
+    }).toEqual(GRAMMAR_PIN);
+  });
+
+  it("names the platform and the fix when there is no binary", () => {
+    expect(() => loadBindingFor("linux-riscv64")).toThrow(NativeParserMissingError);
+    expect(() => loadBindingFor("linux-riscv64")).toThrow(/linux-riscv64.*build-native-parser/s);
+  });
+
+  it("parses after init", async () => {
+    await initNativeParser();
+    const parsed = parseALNative("codeunit 50100 X { }");
+    expect(parsed.flat.kindNames[parsed.flat.kind[0] ?? -1]).toBe("source_file");
+  });
+
+  const real = () => nativeInfo();
+  const fake = (over: Partial<NativeInfo>): NativeBinding => ({
+    parseFlat: () => {
+      throw new Error("not called");
+    },
+    nativeInfo: () => ({ ...real(), ...over }),
+  });
+  const crate = CRATE;
+  const key = `${process.platform}-${process.arch}`;
+
+  it("source mode refuses an addon built from other crate sources", () => {
+    expect(() => checkBinding(fake({ bindingSourceSha256: "0".repeat(64) }), key, crate)).toThrow(
+      NativeParserStaleError,
+    );
+  });
+  it("compiled mode does not read the crate", () => {
+    expect(() =>
+      checkBinding(fake({ bindingSourceSha256: "0".repeat(64) }), key, null),
+    ).not.toThrow();
+  });
+  it("refuses an addon built for another platform or arch", () => {
+    expect(() =>
+      checkBinding(fake({ target: "aarch64-unknown-linux-gnu" }), "win32-x64", crate),
+    ).toThrow(NativeParserPinError);
+  });
+  it("the real addon passes every check", () => {
+    expect(() => checkBinding(loadBindingFor(key), key, crate)).not.toThrow();
+  });
+
+  it("was built by clang (release rule)", () => {
+    expect(nativeInfo().cCompiler).toMatch(/clang version/);
+  });
+
+  it("counts live parse results and releases them after GC", async () => {
+    await initNativeParser();
+    const before = liveParseResults();
+    const t0 = parsesSinceStart();
+    (() => {
+      for (let i = 0; i < 200; i++) parseALNative("codeunit 50100 X { }");
+    })();
+    expect(parsesSinceStart() - t0).toBe(200); // monotonic: a GC during the loop cannot lower it
+    expect(liveParseResults()).toBeGreaterThanOrEqual(before + 1);
+    for (let k = 0; k < 20 && liveParseResults() > before + 5; k++) {
+      Bun.gc(true);
+      await new Promise((r) => setImmediate(r));
+    }
+    expect(liveParseResults()).toBeLessThanOrEqual(before + 5);
+  });
+});

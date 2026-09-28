@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initParser, parseAL } from "../../packages/engine/src/ast/parser";
+import {
+  initWasmParser as initParser,
+  parseALWasm as parseAL,
+} from "../../packages/engine/src/ast/parser-wasm";
 import {
   EXIT_CODE,
   type Site,

@@ -1,5 +1,7 @@
-import type { Node as TSSyntaxNode, Tree } from "web-tree-sitter";
-import { type ALNodeKind, isALNodeKind } from "./node-kinds";
+import type { ALNodeKind } from "./node-kinds";
+
+// Backed by the WASM reference until the RUST-03 switch (S3.4).
+export { wrapWasmRoot as wrapRoot } from "./parser-wasm";
 
 export interface ALSyntaxNode {
   readonly kind: ALNodeKind;
@@ -13,92 +15,36 @@ export interface ALSyntaxNode {
   readonly children: readonly ALSyntaxNode[];
   readonly namedChildren: readonly ALSyntaxNode[];
   readonly fieldName: string | null;
+  /** A node the parser inserted for a missing token (web-tree-sitter `isMissing`). */
+  readonly isMissing: boolean;
+  /** This node or a descendant is ERROR or MISSING (web-tree-sitter `hasError`). */
+  readonly hasError: boolean;
   childForFieldName(name: string): ALSyntaxNode | null;
 }
 
-class WrappedNode implements ALSyntaxNode {
-  constructor(
-    private readonly ts: TSSyntaxNode,
-    private readonly parentNode: ALSyntaxNode | null,
-    readonly fieldName: string | null,
-  ) {}
-
-  get kind(): ALNodeKind {
-    if (!isALNodeKind(this.ts.type)) {
-      // Unknown raw kinds (e.g. anonymous tokens) are surfaced via `rawKind`.
-      // We still cast for the interface contract; consumers should branch on
-      // `isALNodeKind(node.rawKind)` when working with arbitrary nodes.
-      return this.ts.type as ALNodeKind;
-    }
-    return this.ts.type;
-  }
-
-  get rawKind(): string {
-    return this.ts.type;
-  }
-  get text(): string {
-    return this.ts.text;
-  }
-  get startIndex(): number {
-    return this.ts.startIndex;
-  }
-  get endIndex(): number {
-    return this.ts.endIndex;
-  }
-  get startPosition(): { readonly row: number; readonly column: number } {
-    return this.ts.startPosition;
-  }
-  get endPosition(): { readonly row: number; readonly column: number } {
-    return this.ts.endPosition;
-  }
-  get parent(): ALSyntaxNode | null {
-    return this.parentNode;
-  }
-
-  get children(): readonly ALSyntaxNode[] {
-    // web-tree-sitter 0.25.x types `children` as `(Node | null)[]`. In practice
-    // entries are non-null for rootNode's descendants, but we defensively
-    // filter and preserve the original index so `fieldNameForChild` is correct.
-    const raw = this.ts.children;
-    const out: ALSyntaxNode[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const c = raw[i];
-      if (c === null || c === undefined) continue;
-      out.push(new WrappedNode(c, this, this.ts.fieldNameForChild(i) ?? null));
-    }
-    return out;
-  }
-  // No-op setter so that ill-typed runtime assignments to this readonly
-  // accessor are silently ignored rather than throwing TypeError in strict
-  // mode. TypeScript still enforces `readonly` at compile time via the
-  // `ALSyntaxNode` interface.
-  set children(_: readonly ALSyntaxNode[]) {
-    /* readonly — ignored */
-  }
-
-  get namedChildren(): readonly ALSyntaxNode[] {
-    const raw = this.ts.namedChildren;
-    const out: ALSyntaxNode[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const c = raw[i];
-      if (c === null || c === undefined) continue;
-      out.push(new WrappedNode(c, this, this.ts.fieldNameForNamedChild(i) ?? null));
-    }
-    return out;
-  }
-  set namedChildren(_: readonly ALSyntaxNode[]) {
-    /* readonly — ignored */
-  }
-
-  childForFieldName(name: string): ALSyntaxNode | null {
-    const child = this.ts.childForFieldName(name);
-    return child === null ? null : new WrappedNode(child, this, name);
-  }
+/** One file's tree as the native addon returns it. Preorder; the first child is at index + 1. */
+export interface FlatTree {
+  readonly kindNames: readonly string[];
+  readonly kind: Uint16Array;
+  readonly fieldNames: readonly string[];
+  readonly field: Uint16Array;
+  readonly flags: Uint8Array;
+  readonly childCount: Uint32Array;
+  readonly nextSibling: Int32Array;
+  readonly startIndex: Uint32Array;
+  readonly endIndex: Uint32Array;
+  readonly points: Uint32Array;
 }
 
-export function wrapRoot(tree: Tree): ALSyntaxNode {
-  return new WrappedNode(tree.rootNode, null, null);
+export interface ParsedAL {
+  readonly source: string;
+  readonly flat: FlatTree;
 }
+
+export const FLAG_NAMED = 1;
+export const FLAG_MISSING = 2;
+export const FLAG_HAS_ERROR = 4;
+export const FLAG_EXTRA = 8;
 
 export function findFirst(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode | null {
   if (root.kind === kind) return root;

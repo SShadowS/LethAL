@@ -5,7 +5,7 @@
  * Scope, stated so no output overstates it: agreement here means agreement on the six audited
  * families and the two context probes, on files BOTH parsers read cleanly. Nothing more.
  */
-import type { parseAL } from "../../packages/engine/src/ast/parser";
+import type { parseALWasm as parseAL } from "../../packages/engine/src/ast/parser-wasm";
 
 export interface Site {
   readonly file: string;

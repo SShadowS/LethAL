@@ -2895,6 +2895,8 @@ describe("R-303 run 002: a directive around a member's var section never carries
       children,
       namedChildren: children,
       fieldName: null,
+      isMissing: n.isMissing,
+      hasError: n.hasError,
       childForFieldName: () => null,
     });
     const moved = fake(vars, [keyword, fake(body, [...body.children, pragma])]);
@@ -3158,6 +3160,8 @@ describe("The injector's guard: a statement marker with no owning member still t
       children: [],
       namedChildren: [],
       fieldName: null,
+      isMissing: false,
+      hasError: false,
       childForFieldName: () => null,
     };
   }

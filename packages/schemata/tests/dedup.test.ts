@@ -22,6 +22,8 @@ function node(
     children: [],
     namedChildren: [],
     fieldName: null,
+    isMissing: false,
+    hasError: false,
     childForFieldName: () => null,
   };
 }
