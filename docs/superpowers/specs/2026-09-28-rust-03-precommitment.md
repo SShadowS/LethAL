@@ -195,3 +195,25 @@ context only.
 Not proposed, because each is under 15% of both peaks: C (8%), B (7%) and D (1.5%). B's second copy
 is a cheap follow-up, and the W9 manifest write is S4.1's streamed writer. The unexplained remainder
 is never a target by itself.
+
+## AMENDMENT 2 (S1.4 transfer decision)
+
+Measured 2026-09-28 at `e6562c72` with `scripts/measure-peak.ts`, runs interleaved (external,
+owned, external, ...), one at a time. "external" is today's `parseFlat` (napi-rs typed arrays,
+external buffers). "owned" is a scratch copy of the crate whose `parseFlatOwned` copies each of the
+eight numeric arrays into an ArrayBuffer made by `napi_create_arraybuffer`. clang-cl 23.1.2 on
+both.
+
+| workload | variant | peak MB (3 runs) | median | wall s (3 runs) | nodes / rows |
+| --- | --- | --- | ---: | --- | --- |
+| W1, gate2 base shape, no event-loop turn | external | 1,917 / 1,925 / 1,921 | 1,921 | 14.62 / 16.01 / 13.84 | 31,135,464 |
+| W1, gate2 base shape, no event-loop turn | owned | 1,252 / 1,255 / 1,255 | 1,255 | 14.24 / 13.81 / 13.88 | 31,135,464 |
+| W2, census over BaseApp, scratch `parser.ts` | external | 9,674 / 10,102 / 9,901 | 9,901 | 79.09 / 84.58 / 190.46 | 1,784,261 rows, sha256 153bac07... |
+| W2, census over BaseApp, scratch `parser.ts` | owned | 9,980 / 9,987 / 9,627 | 9,980 | 78.99 / 82.36 / 149.91 | 1,784,261 rows, sha256 153bac07... |
+
+The rule, applied: W1 peak median is 34.7% lower (1,255 against 1,921; the bar is at least 20%);
+W2 peak median is 0.8% higher (9,980 against 9,901; the bar is not more than 5%); nodes are equal
+on W1 (31,135,464 both) and W2's output is byte-identical (sha256
+`153bac07df02e98fac91905171f954ae6201a881251909fa416b56172fb9fb9f` on all six runs). All three
+hold, so **"owned" replaces "external"** as the only `parseFlat`. The third W2 pair's wall times
+are slow on both sides (machine noise); wall is recorded, never gating.
