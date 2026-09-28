@@ -113,6 +113,11 @@ export function refusedCoverageReason(objectType: string, objectId: number, file
   return `coverage refused for ${objectType}:${objectId} (${file}): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.`;
 }
 
+/** R298: the sentence for a bare object refused only because its FILE holds an object wrapper. */
+export function refusedWholeFileReason(objectType: string, objectId: number, file: string): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.`;
+}
+
 export class LineMap {
   private readonly byObject = new Map<string, ObjectLines>();
   /** R298: declared objects whose coverage is refused, key -> reason. Read before `byObject`. */
@@ -408,14 +413,25 @@ export function coverageRefusedObjects(
 ): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   for (const f of files) {
-    const file = normalizeSlashes(f.path);
-    const wholeFile = fileHoldsWrappedObject(f.root);
-    for (const e of fileLineMapEntries(f.root, objectIdentityOf, file)) {
-      const reason =
-        e.refused ??
-        (wholeFile ? refusedCoverageReason(e.objectType, e.objectId, file) : undefined);
-      if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
+    for (const [key, reason] of refusedObjectsOfFile(f.root, normalizeSlashes(f.path))) {
+      out.set(key, reason);
     }
+  }
+  return out;
+}
+
+/**
+ * R298: one file's refused objects, by the union rule `coverageRefusedObjects` documents. A bare
+ * object BEFORE the wrapper gets its own sentence (`refusedWholeFileReason`), since "inside, or
+ * after" would be false for it. al-runner's index prints exactly these sentences.
+ */
+export function refusedObjectsOfFile(root: ALSyntaxNode, file: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const wholeFile = fileHoldsWrappedObject(root);
+  for (const e of fileLineMapEntries(root, objectIdentityOf, file)) {
+    const reason =
+      e.refused ?? (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined);
+    if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
   }
   return out;
 }

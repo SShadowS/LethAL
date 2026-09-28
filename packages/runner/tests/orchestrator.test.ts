@@ -589,7 +589,7 @@ interface "I Probe"
         for (const m of tableMutants) {
           expect(m.verdict).toBe("no-coverage");
           expect(m.failureNote).toContain(
-            "coverage refused for Table:79001 (SandboxTable.Table.al)",
+            "coverage refused for Table:79001 (SandboxTable.Table.al): its file also holds",
           );
         }
       } finally {

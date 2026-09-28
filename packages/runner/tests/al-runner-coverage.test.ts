@@ -496,9 +496,11 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       const refused = coverageRefusedObjects(
         Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
       );
-      expect(refused.get("table:50110")).toContain(
-        "coverage refused for Table:50110 (src/T.Table.al)",
-      );
+      const sentence =
+        "coverage refused for Table:50110 (src/T.Table.al): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.";
+      expect(refused.get("table:50110")).toBe(sentence);
+      // al-runner names the table with the SAME sentence selection uses, not "inside, or after".
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContain(`[lethal] ${sentence}`);
       const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
       const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
       const coverage = alRunnerCoverageFrom(

@@ -55,7 +55,7 @@ import {
   fileHoldsWrappedObject,
   fileLineMapEntries,
   objectIdentityOf,
-  refusedCoverageReason,
+  refusedObjectsOfFile,
 } from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
@@ -192,8 +192,9 @@ export async function buildAlRunnerCoverageIndex(
     if (fileHoldsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
-      for (const o of objectsOf(root))
-        console.warn(`[lethal] ${refusedCoverageReason(o.objectType, o.objectId, file)}`);
+      for (const reason of refusedObjectsOfFile(root, file).values()) {
+        console.warn(`[lethal] ${reason}`);
+      }
       continue;
     }
     const objects = objectsOf(root);
