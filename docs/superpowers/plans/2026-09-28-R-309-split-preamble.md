@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r3 (2026-09-28), final.** Approved in review r2 (`H:/lethal-coord/reviews/R-309-plan/review-r2.md`) with three fixes folded in; there is no further review round. What changed: `check-probe.ts` now requires exactly one baseline summary and one `SUBSET PASS` line per subset, rejects a duplicate mutant id, and compares the complete map of mutant id to member, grain and verdict across subsets, and its red-checks (a missing id, a duplicated id with a matching verdict, and three more) were run against the plan-time logs and are recorded in Task 3; every fail-fast block sources one shared setup file (`$S/setup.sh`, Task 0 Step 1), so `set -u` in a fresh shell cannot stop it before it runs; Task 5 Step 3's "expect nothing" greps use `if grep ...; then exit 1; fi`, and every other fail-fast block was checked for the same trap.
+
 **Revision r2 (2026-09-28).** Revised per review r1 (`H:/lethal-coord/reviews/R-309-plan/review-r1.md`) and the orchestrator's rulings. What changed: master is merged in and R316 is the orchestrator's item (`75c36ae`), so Task 0 no longer files it and the plan cites it by id; Task 2 asserts only what R309 owns (grain, no latch, the warning), not R316's `procedureName ""` or absent scope; Task 5 no longer edits R316 (R309 only cross-links it); per-arm placement waits on R316 (ruling, kept); the trigger grammar defect is filed upstream as SShadowS/tree-sitter-al #32 and cited; the injector's throw stays as a guard for unexpected trees (the review found the predicate sound); Task 2 bounds EVERY member through its closing `end;` and asserts a non-empty unplaced set for each refused member and statement grain for every admitted one; Tasks 3 and 4 fail fast (`set -euo pipefail`, no `grep -v` masking, raw logs kept), and a checker script verifies every expected symbol subset and, per member, the counts, grains and verdicts; the plan states that the refusal's cause shows only in the warning and event, never in the manifest or `SessionReport` (consistent with R310); the uninstrumented alc subset count is 24. The revised Task 2 runner test was re-run against the prototype refusal (2 pass).
 
 **Revision r1 (2026-09-28), draft for the orchestrator's review.**
@@ -142,7 +144,7 @@ Per-arm placement waits on R316 (orchestrator ruling): it is the latch step to t
 - No `!` non-null assertions; destructure and check `undefined`. Fail loudly on a contract violation: the injector's throw stays, as a guard no known shape reaches.
 - Every fix is red-checked: revert the specific line, confirm the specific test goes red, restore, report both outputs.
 - This plan files no new roadmap item. Every id it names (R301, R302, R303, R309, R310, R311, R312, R313, R316) was checked against `git ls-tree master docs/roadmap/` at r2. Regenerate with `bun scripts/roadmap-index.ts`; never hand-edit `ROADMAP.md`.
-- Every scratch shell block runs under `set -euo pipefail`, never filters a command's output through `grep -v` (stderr goes to a file of its own instead), and keeps its raw logs under `$S/logs/`.
+- Every scratch shell block runs under `set -euo pipefail` and sources `$S/setup.sh` (Task 0 Step 1), never filters a command's output through `grep -v` (stderr goes to a file of its own instead), writes an "expect nothing" grep as `if grep ...; then exit 1; fi`, and keeps its raw logs under `$S/logs/`.
 - `reachLatchRefusedOwner` and `reachLatchRefusals` keep their names. `reachLatchRefusals`'s `unparsed: boolean` becomes `cause: "preamble" | "unparsed" | "split-var"`; its only caller is `generateMutationSet` (grep at plan time, no test or script reads the field). The warning code stays `reach-latch-refused`, and every message keeps the `[lethal] <file>: <member>'s var section` prefix the runner tests split on.
 - Any al-runner probe failure is a STOP (the R-303 rule): report to the coordinator, the fix becomes its own designed task.
 
@@ -175,7 +177,20 @@ Per-arm placement waits on R316 (orchestrator ruling): it is the latch step to t
 
 **Files:** scratch only. R316 is already on master (`75c36ae`); this task does not file it.
 
-- [ ] **Step 1: Tools.** The plan-time tools are in `$S`. Confirm each imports from `U:/Git/LethAL-wt/r309` (not `r303`, not `$S/proto`): `grep -n "U:/Git" $S/*.ts`. `alrunner-probe.ts` carries two plan-time additions: `COV=1` in the environment passes `coverage: "al-runner"` to `AlRunnerBackend`, and each mutant line prints `attr=<coverageAttribution> cov=<covering test count>`. `extensions/lethal-control/lethal-control.app` must be 1.0.0.20 or newer (it is at plan time).
+- [ ] **Step 1: Tools and the shared setup file.** Every fail-fast block in this plan starts with `set -euo pipefail` and then sources `$S/setup.sh`, which exists at plan time with exactly this content:
+
+```bash
+# R-309 scratch setup. Sourced by every fail-fast block after `set -euo pipefail`, so no block
+# depends on variables left over from an earlier shell. Scratch, never committed.
+S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309
+F="sandbox-app sandbox-data sandbox-hang sandbox-harden sandbox-coverage-probe"
+declare -A C=([dc]="U:/Git/DC/Cloud" [sysapp]="U:/Git/BC.History/System Application" [bcf]="U:/Git/BC.History/BusinessFoundation")
+export LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe"
+cd /u/Git/LethAL-wt/r309
+mkdir -p "$S/logs"
+```
+
+The plan-time tools are in `$S`. Confirm each imports from `U:/Git/LethAL-wt/r309` (not `r303`, not `$S/proto`): `grep -n "U:/Git" $S/*.ts`. `alrunner-probe.ts` carries two plan-time additions: `COV=1` in the environment passes `coverage: "al-runner"` to `AlRunnerBackend`, and each mutant line prints `attr=<coverageAttribution> cov=<covering test count>`. `extensions/lethal-control/lethal-control.app` must be 1.0.0.20 or newer (it is at plan time).
 
 - [ ] **Step 2: Repros.** `$S/repro/p1-if-else` to `p10-renamed` and `q1-twin-body`, and the test apps `$S/repro-tests-<name>/` for every preamble repro except `p5-trigger` (one test codeunit 50150, `Subtype = Test`, calling each member with `X = 5` and `X = 0` and raising `Error(...)` on a wrong result; `p9-all` and `p10-renamed` call the renamed member under `#if CLEAN27` / `#else`). They exist at plan time. Re-run `bun $S/shape.ts $S/repro/*/Repro.Codeunit.al` and `bun $S/alc-plain.ts $S/repro/<name> <symbols>` for each: expected the parse table and the all-PASS result in "What was measured".
 
@@ -184,16 +199,12 @@ Per-arm placement waits on R316 (orchestrator ruling): it is the latch step to t
 - [ ] **Step 4: BEFORE captures.**
 
 ```bash
-S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309
 set -euo pipefail
-cd /u/Git/LethAL-wt/r309
-mkdir -p "$S/logs"
-F="sandbox-app sandbox-data sandbox-hang sandbox-harden sandbox-coverage-probe"
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309/setup.sh
 for f in $F; do
   bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-before-$f.txt"
   rm -rf "$S/target-before-$f"; bun "$S/identity-keys.ts" "fixtures/$f" "$S/target-before-$f" > "$S/ids-before-$f.txt"
 done
-declare -A C=([dc]="U:/Git/DC/Cloud" [sysapp]="U:/Git/BC.History/System Application" [bcf]="U:/Git/BC.History/BusinessFoundation")
 for k in "${!C[@]}"; do
   bun scripts/corpus-fingerprint.ts "${C[$k]}" > "$S/fp-before-$k.txt"
   bun "$S/preamble-census.ts" "${C[$k]}" > "$S/census-$k.txt"
@@ -767,15 +778,15 @@ Every member is bounded through its end; and classified by grain."
 
 ```bash
 set -euo pipefail
-S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309
-cd /u/Git/LethAL-wt/r309
-mkdir -p "$S/logs"
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309/setup.sh
 declare -A SUBSETS=([p1-if-else]=2 [p2-elif-else]=4 [p3-elif-noelse]=2 [p4-one-arm-novar]=2 [p5-trigger]=2 \
   [p6-crlf]=2 [p7-mixed]=2 [p8-nested-condvar]=4 [p9-all]=2 [p10-renamed]=2)
 for r in p1-if-else:CLEAN27 p2-elif-else:A,B p3-elif-noelse:A p4-one-arm-novar:CLEAN27 p5-trigger:CLEAN27 \
          p6-crlf:CLEAN27 p7-mixed:CLEAN27 p8-nested-condvar:A,B p9-all:CLEAN27 p10-renamed:CLEAN27; do
   n="${r%%:*}"
   bun "$S/alc-all.ts" "$S/repro/$n" "${r#*:}" > "$S/logs/alc-$n.log" 2>&1
+  # `grep -c` prints 0 and exits 1 on no match; inside `$(...)` as an argument to `test`, that exit
+  # status does not trip `set -e`, and `test` then fails on the count, which is the check wanted.
   test "$(grep -c "^$n sym=\[.*\] exit=0 app=true" "$S/logs/alc-$n.log")" -eq "${SUBSETS[$n]}"
   test "$(tail -n 1 "$S/logs/alc-$n.log")" = "$n PASS"
 done
@@ -785,7 +796,7 @@ echo "alc: every repro, every subset PASS"
 
 Expected: the final line (24 subsets over 10 repros); a missing subset, a non-zero exit, a missing `.app` or a missing `PASS` line stops the block. In `$S/emit-p9-all/Repro.Codeunit.al`: exactly 3 `LethALReachLatch: Boolean;` (`Plain`, `Hoist`, `Split`); checked by hand, none between either preamble's `#if` and its `end;`.
 
-- [ ] **Step 2: al-runner, every preamble repro, every subset, coverage ON and OFF, checked per member.** The checker `$S/check-probe.ts <raw-log> <expect.json> <cov>` (written at plan time) exits non-zero unless the log holds EXACTLY the expected subsets, each with `baselineGreen=true` and `errors=0`; every mutant falls in one expected member; each member's verdict counts and `reachGrain` match; each mutant's verdict is the same in every subset; and the `<name> PASS` line is present. The expectation files `$S/expect/<name>.json` hold, per member, its line range (through its closing `end;`), its grain and its verdict counts in each coverage mode, from the plan-time run:
+- [ ] **Step 2: al-runner, every preamble repro, every subset, coverage ON and OFF, checked per member.** The checker `$S/check-probe.ts <raw-log> <expect.json> <cov>` (written at plan time) exits non-zero unless: the log holds EXACTLY the expected subsets, none twice; each subset has exactly ONE baseline summary (`baselineGreen=true`, `errors=0`) and exactly ONE `SUBSET PASS [<subset>]` line; no mutant id appears twice within a subset; every mutant falls in one expected member and carries that member's `reachGrain`; each member's verdict counts match; the COMPLETE map of mutant id to member, grain and verdict is identical in every subset (not only the per-member totals); and the `<name> PASS` line is present. The expectation files `$S/expect/<name>.json` hold, per member, its line range (through its closing `end;`), its grain and its verdict counts in each coverage mode, from the plan-time run:
 
 | repro | member | lines | grain | coverage ON | coverage OFF |
 | --- | --- | --- | --- | --- | --- |
@@ -796,11 +807,21 @@ Expected: the final line (24 subsets over 10 repros); a missing subset, a non-ze
 | `p9-all` | `Pick2` / `Choose` | 46 to 56 | unplaced | 1 no-coverage | 1 killed |
 | `p9-all` | `Split` | 58 to 69 | statement | 1 killed | 1 killed |
 
-At plan time the checker passed all 18 plan-time logs (kept in `$S/logs-plan/`), and it was red-checked: changing one `Pick` verdict in `p7-mixed`'s coverage-ON log makes it print `BAD` for both subsets and exit 1.
+At plan time (r3 checker) it passed all 18 plan-time logs (kept in `$S/logs-plan/`), and was red-checked by editing a copy of `p7-mixed`'s coverage-OFF log (`$S/redcheck/<case>.log`), each case in the `[CLEAN27]` subset. Every case exits 1:
+
+| case | edit | checker output |
+| --- | --- | --- |
+| `missing-id` | delete `M0012`'s line | `Hoist: want {"killed":3,"survived":1} got {"killed":2,"survived":1}` and `mutant map differs from subset []` |
+| `dup-id-same-verdict` | repeat `M0012`'s line, same verdict | `M0012 appears twice` |
+| `swap-verdicts-same-totals` | `M0005` and `M0006` (both `Pick`) swap verdicts, totals unchanged | `mutant map differs from subset []` (the per-member totals alone would pass) |
+| `dup-baseline` | repeat the baseline summary line | `2 baseline summaries, want 1` |
+| `dup-subset-pass` | repeat `SUBSET PASS [CLEAN27]` | `2 SUBSET PASS lines, want 1` |
+
+An earlier r2 version of the checker was also red for a changed `Pick` verdict in `p7-mixed`'s coverage-ON log; the r3 checker keeps that.
 
 ```bash
 set -euo pipefail
-export LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe"
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309/setup.sh
 "$LETHAL_ALRUNNER_PATH" --version > "$S/logs/alrunner-version.txt"
 cat "$S/logs/alrunner-version.txt"
 for cov in 1 0; do
@@ -828,6 +849,7 @@ Expected: 18 `CHECK PASS` lines (9 repros, 2 modes, 44 sessions) and the final l
 
 ```bash
 set -euo pipefail
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309/setup.sh
 for f in $F; do
   bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-after-$f.txt"
   cmp "$S/hashes-before-$f.txt" "$S/hashes-after-$f.txt"
@@ -840,7 +862,7 @@ echo "fixtures: byte-identical, identity keys unchanged"
 
 `cmp` and `diff` exit 1 on any difference, which stops the block; `sed` drops only the memory line, which varies per run. Expected: only the final line. (Measured at plan time between HEAD and the prototype: no output for all five.) Any difference is a STOP.
 
-- [ ] **Step 2: Corpora**, under `set -euo pipefail`, each `cmp` and `diff` a command of its own (no `|| true`), stderr to `$S/logs/`. For dc, sysapp and bcf: `corpus-fingerprint.ts` into `fp-after-$k.txt` and `cmp` with BEFORE (a mismatch voids that corpus's comparison: recapture BEFORE in a scratch worktree at `656646b`); then `locate.ts` and `identity-keys.ts` into `*-after-$k.txt` / `$S/target-after-$k`. Expected: `locate` outputs identical; identity keys identical except `maxRSS_KB`; `diff -r --exclude=app.json` of the targets empty. The census said 0 preamble sites, so nothing may move. BaseApp is covered by the parse-only census (0 sites) and is not instrumented (R311).
+- [ ] **Step 2: Corpora**, in a block that starts `set -euo pipefail` and sources `$S/setup.sh` like the one above, each `cmp` and `diff` a command of its own (no `|| true`), stderr to `$S/logs/`. For dc, sysapp and bcf: `corpus-fingerprint.ts` into `fp-after-$k.txt` and `cmp` with BEFORE (a mismatch voids that corpus's comparison: recapture BEFORE in a scratch worktree at `656646b`); then `locate.ts` and `identity-keys.ts` into `*-after-$k.txt` / `$S/target-after-$k`. Expected: `locate` outputs identical; identity keys identical except `maxRSS_KB`; `diff -r --exclude=app.json` of the targets empty. The census said 0 preamble sites, so nothing may move. BaseApp is covered by the parse-only census (0 sites) and is not instrumented (R311).
 
 - [ ] **Step 3: Record** the figures for Task 5 as MEASURED results, only after both blocks above finished: the al-runner version and the checker's pass list, the fixture and corpus results, the census.
 
@@ -862,11 +884,21 @@ echo "fixtures: byte-identical, identity keys unchanged"
 - [ ] **Step 3: The prose grep.**
 
 ```bash
-grep -rn --include=*.ts --exclude-dir=dist "R309" packages | grep -in "throw\|open)"
-grep -rn "R309" docs/roadmap/*.md | grep -i "throw"
+set -euo pipefail
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309/setup.sh
+# Each grep is EXPECTED to find nothing. Under pipefail a grep that finds nothing exits 1, so the
+# check is written as "fail if it finds something", never as a bare grep.
+if grep -rn --include=*.ts --exclude-dir=dist "R309" packages | grep -i "throw\|open)"; then
+  echo "stale R309 prose in code"; exit 1
+fi
+if grep -n "R309\|preamble" docs/roadmap/R301.md docs/roadmap/R303.md docs/roadmap/R310.md \
+    docs/roadmap/R312.md docs/roadmap/R313.md | grep -i "throws\|still throw"; then
+  echo "stale R309 prose in the roadmap"; exit 1
+fi
+echo "no stale R309 prose"
 ```
 
-Expected: no line says the preamble throws. The injector's guard message says "No known shape reaches here", which is correct. R309.md's own history may say it USED to throw; that is fine if it is past tense.
+Expected: only the final line. The injector's guard message says "No known shape reaches here", which the first check does not match. R309.md is left out of the second check on purpose: its own history may say the shape USED to throw, in the past tense; read it by hand.
 
 - [ ] **Step 4: Regenerate and commit.**
 
