@@ -142,3 +142,5 @@ Policy, fixed before the rerun:
 5. Session 1 (lease 044) is recorded here as no measurement. It also failed for a second reason:
    GH-24 added 10 sites and `tables.baseline.json` had not been re-recorded, so the rerun waits for
    that re-record and then uses the re-recorded baseline's survivor count in place of 63.
+
+2026-09-28: SURVIVORS set to 68 from the re-recorded tables.baseline.json (f25d647), per the b246d01 note; timing ranges stay model estimates.
