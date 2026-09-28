@@ -320,3 +320,12 @@ sha256 `19f5d477...` on both. BC.History `4d61fc58...`, unchanged. One heavy run
   `astSubtreeHash` replaced by an empty string had a p5 phase peak of 12,287 MB over a post-GC RSS
   of 9,068 MB, a transient of 3,219 MB. So the per-mutant subtree hash accounts for about 2.6 GB of
   the remaining E, and about 3.2 GB is still unattributed. The prediction is not revised.
+
+## Clarification to AMENDMENT 5 (2026-09-29)
+
+AMENDMENT 4's fourth item, "no child arrays built in the loop's parent walks", was a measured
+no-op, and `167f540c` changed nothing for it. On the native wrapper (`FlatNode`), `parent` is a
+stored field, so the loop's parent walks (`enclosingProcedureLike`, `triggerNameOf`,
+`enclosingMemberOf`, `gapBlockOf`) build no arrays. The only child-array reads left in the loop
+are the split-header procedure paths (`splitIsLocal`, `procedureLikeNameNode`), which are rare.
+AMENDMENT 5's figures are unchanged by this note.
