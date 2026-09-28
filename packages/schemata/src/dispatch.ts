@@ -111,7 +111,10 @@ function headerEndOf(owner: ALSyntaxNode): ALSyntaxNode | null {
  * arm's declarations become conditional declarations in that one section, which is valid in every
  * build. `null` when the member has no such block, or when the token before the block (comments
  * skipped) is anything but the header's actual end: a pragma-only `#if` block, a split header's
- * `#endif`, or any kind not yet seen. Those members stay refused by name.
+ * `#endif`, or any kind not yet seen. Those members stay refused by name. Not every unproven shape
+ * reaches here: a `preproc_split_procedure_preamble` (each header arm with its own `var` section)
+ * is not procedure-like, so it has no owner to refuse, and `injectReachLatches` throws for the
+ * whole run instead (R309, open).
  */
 export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
   const kids = owner.children;
@@ -155,7 +158,9 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
  * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if` in a
  * shape `splitVarHoistAnchor` does not cover, or did not parse cleanly (`varSectionUnparsed`),
  * else `null`. Such a member gets no latch and no marker: its mutants are `unplaced`, their reach
- * is `not-decided`, never unreached. The member is still instrumented and scored.
+ * is `not-decided`, never unreached. The member is still instrumented and scored. A
+ * `preproc_split_procedure_preamble` is never returned: it is not procedure-like, so the walk finds
+ * no owner and `injectReachLatches` throws for the whole run (R309, open).
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
@@ -193,6 +198,7 @@ function placeReach(
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
   // R303, R313: a split var section in an unproven shape, or one that did not parse cleanly, gets no latch, so no marker.
+  // Not R309's preamble shape: that one has no owner here and throws in `injectReachLatches`.
   if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any

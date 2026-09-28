@@ -554,6 +554,9 @@ export function resolveOperatorNames(
  * `varSectionUnparsed`), so the writer declares no reach latch there
  * (`reachLatchRefusedOwner`), each with its site count, in source order. Named
  * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
+ * Not every unproven shape is listed: a `preproc_split_procedure_preamble` has no owner for
+ * `reachLatchRefusedOwner` to return, so it is absent here and the writer throws for the whole run
+ * instead (R309, open).
  */
 export function reachLatchRefusals(
   specs: readonly MutationSpec[],
