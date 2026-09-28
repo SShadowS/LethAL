@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   ALNodeKind,
@@ -657,9 +657,77 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     artifactId: input.artifactId,
     mutants: manifest,
   };
-  await writeFile(
-    join(input.targetDir, "mutant-manifest.json"),
-    `${JSON.stringify(manifestJson, null, 2)}\n`,
-    "utf8",
-  );
+  await writeManifestJson(join(input.targetDir, "mutant-manifest.json"), manifestJson);
+}
+
+/** R311: the manifest, written one row at a time, byte-identical to
+ *  `${JSON.stringify(manifest, null, 2)}\n`. One string for a whole-BaseApp manifest exhausts
+ *  memory; each row's own stringify is small. JSON strings contain no raw newline, so indenting
+ *  every line after the first reproduces the nesting JSON.stringify would produce. `io` exists
+ *  only so tests can inject a short-writing handle and a failing rename; product code never passes it. */
+export interface ManifestIo {
+  readonly open: typeof open;
+  readonly rename: typeof rename;
+}
+
+// If MutantManifest gains a field, writeManifestJson must write it too: this fails typecheck first.
+type _ManifestKeys = Exclude<keyof MutantManifest, "selectorIds" | "artifactId" | "mutants">;
+const _manifestKeysCovered: [_ManifestKeys] extends [never] ? true : never = true;
+void _manifestKeysCovered;
+
+export async function writeManifestJson(
+  path: string,
+  manifest: MutantManifest,
+  io: ManifestIo = { open, rename },
+): Promise<void> {
+  const nest = (v: unknown, pad: string): string =>
+    JSON.stringify(v, null, 2).replaceAll("\n", `\n${pad}`);
+  // Written to a .partial file and renamed only when whole, so a crash, a throw or a short write
+  // never leaves a truncated mutant-manifest.json that a later reader could take for a whole one.
+  const partial = `${path}.partial`;
+  const fh = await io.open(partial, "w");
+  // A write may accept fewer bytes than asked without throwing, so loop until all are written.
+  const writeAll = async (text: string): Promise<void> => {
+    const buf = Buffer.from(text, "utf8");
+    let off = 0;
+    while (off < buf.length) {
+      const { bytesWritten } = await fh.write(buf, off, buf.length - off);
+      if (bytesWritten <= 0)
+        throw new Error(
+          `writeManifestJson: no progress writing ${partial} at byte ${off} of ${buf.length}`,
+        );
+      off += bytesWritten;
+    }
+  };
+  let ok = false;
+  try {
+    await writeAll(
+      `{\n  "selectorIds": ${nest(manifest.selectorIds, "  ")},\n  "artifactId": ${JSON.stringify(manifest.artifactId)},\n  "mutants": `,
+    );
+    if (manifest.mutants.length === 0) {
+      await writeAll("[]");
+    } else {
+      await writeAll("[\n");
+      let chunk = "";
+      for (let i = 0; i < manifest.mutants.length; i++) {
+        chunk += `${i === 0 ? "" : ",\n"}    ${nest(manifest.mutants[i], "    ")}`;
+        if (chunk.length > 1 << 20) {
+          await writeAll(chunk);
+          chunk = "";
+        }
+      }
+      await writeAll(`${chunk}\n  ]`);
+    }
+    await writeAll("\n}\n");
+    ok = true;
+  } finally {
+    await fh.close();
+    if (!ok) await rm(partial, { force: true });
+  }
+  try {
+    await io.rename(partial, path);
+  } catch (e) {
+    await rm(partial, { force: true });
+    throw e;
+  }
 }
