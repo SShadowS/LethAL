@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r1, second commit (2026-09-29).** Adds "Prototype check" (measured after the pre-commitment commit `d0e094ac`: 22 of 23 checks matched on the second round, DC/Cloud and BaseApp exactly; one pre-committed row was wrong, `d4`, and one place was missing, `findEnclosingStatement`), then Global Constraints, Review Focus, File structure, Tasks 0 to 6, Self-review, Notes and Open questions. Nothing above "Prototype check" was edited.
+
 **Revision r1 (2026-09-29), draft for the orchestrator's review.** Written in two commits on purpose. The first commit holds the measurements, the decisions and the PRE-COMMITMENT (the expected mutants per repro and per corpus, by member, operator and line). The prototype check and the tasks are added by a second commit, so git history shows the pre-commitment was written before any prototype fix existed.
 
 **Goal:** Inside a `preproc_split_procedure` (R301: one header per `#if` arm, one shared `var` section and body) and a `preproc_split_procedure_preamble` (R316: one header and one `var` section per arm, one shared body), every walk that today stops only at `procedure` treats the split member as a procedure. So locals, parameters and the return type resolve, the member is a member of its object in the symbol table, and every operator finds the same sites it finds in the member's de-preprocessed twin, except where the arms disagree about a name, which then resolves to nothing.
@@ -263,3 +265,297 @@ Expected: deployed 1509 to **1540** (+31), raw 1537 to **1568** (+31): 31 `+` ro
 - The three plain twins (`t5-*-twin`): unchanged.
 
 **Prototype check:** added by the second commit, after this one. The rows above are not edited to match it.
+
+---
+
+## Prototype check (written AFTER the pre-commitment commit `d0e094ac`)
+
+The prototype is a scratch worktree, `$S/proto`, detached at `d0e094ac`, with the native addon copied in and `$S/proto-patch.py` applied (the plan's design, places 1 to 11), then one more line (place 12, below). Its diff is `$S/proto-r2.patch`; its tools are `$S/pt/` (the same tools, pointed at `$S/proto`). It is compared with the pre-commitment by `check-all.sh`, which runs `check-sites.ts` for every expectation file against `$S/cap/head/`. The committed rows above are NOT edited. Where the prototype disagreed, the disagreement is recorded here, explained, and judged.
+
+### Round 1: the design as committed (`$S/cap/proto-v1/`, `$S/logs/check-proto-v1.txt`)
+
+**6 of 23 checks passed; 17 failed.** Every failure had the same shape: a pre-committed `empty-block` on a split member's body never appeared (every repro with a non-empty split body, DC's 4, BaseApp's 10), and BaseApp's `swap-call-arguments` at L279 and L288 and `k2`'s at L14 (all three inside an in-body `#if` in a split body) never appeared. The runner's warning said why: each was generated and then dropped as "not inside executable AL" (`isMutableSite`, `packages/schemata/src/enclosing.ts`), because `findEnclosingStatement` (`packages/engine/src/ast/tree-walks.ts`) treats a `code_block` as a statement only when its parent is in `BRANCH_PARENT_KINDS`, which lists `procedure` and not the split shapes. A plain procedure's body is its own statement; so is an in-body `#if`'s content, which climbs to the body. **That is a 12th place**, in neither R302's list nor this plan's table at `d0e094ac`. It is on the EMISSION path (`resolveSite` uses the same walk), so Decision 5's "no emission code changes" was wrong; see the corrections below.
+
+The pre-commitment was right and the design was incomplete.
+
+### Round 2: plus place 12 (`$S/cap/proto-v2/`, `$S/logs/check-proto-v2.txt`)
+
+Place 12: `findEnclosingStatement`'s block case also admits a procedure-like parent. One line.
+
+**22 of 23 checks pass.** Every repro but one matches its pre-committed rows exactly, and so do both corpora:
+
+| scope | pre-committed | prototype |
+| --- | --- | --- |
+| DC/Cloud | 97144 deployed, 102603 raw; 19 `+`, 7 `-`, no other key moved | 97144, 102603; the same 19 and 7, no other key moved |
+| BaseApp scratch | 1540 deployed, 1568 raw; 31 `+`, no other key moved | 1540, 1568; the same 31, no other key moved |
+| every repro except `d4` | the rows above | the same rows |
+| `d4-receiver-differs` | 4 deployed (`+` `empty-block` L12) | 5 deployed: also `flip-boolean-literal` L15 |
+
+Every `.err` file (the runner's warnings, including the dropped non-executable-site count) is byte-identical to HEAD's on every repro and both corpora, so no generated site is now dropped.
+
+**The one disagreement, `d4` L15, and the ruling: the pre-commitment was wrong.** The row is `flip-boolean-literal` on the `true` in `R.Modify(true)`. `flip-boolean-literal` cedes a `Modify(true)` argument to `swap-modify-flag` only when the receiver resolves to a record the project does not shadow (`claimsRecordMethod`). In `d4`, `R` is ambiguous by design, so `swap-modify-flag` does not claim and `flip-boolean-literal` keeps the site, exactly as it does for any unresolvable receiver in a plain procedure. The pre-commitment's reasoning for `d4` listed the Tier-2 claims that the ambiguous receiver loses and forgot this cession. The mutant (`R.Modify(false)`) compiles in both builds (alc below). So the implementation's expectation for `d4` is 5, and the correction is kept in a separate expectation set, `$S/expect-final/` (the committed rows plus this one row), which Task 4 checks against.
+
+### Controls: each decision is load-bearing (measured on the prototype, then restored)
+
+- **Decision 2's hiding off** (the `ambiguous` check removed from `resolveIdentifierType`): `d1` gains `swap-call-arguments` at L11, and the instrumented `d1` FAILS `alc` without `CLEAN27`: `AL0133: Argument 1: cannot convert from 'Text' to 'Integer'` (`$S/logs/n2-alc-d1.log`). That is the false site, through the real pipeline.
+- **Decision 3 off** (`inMemberBody` answering yes for any procedure-like ancestor): `a1` gets 4 claimed sites (the four booleans in the two `[IntegrationEvent(...)]` attributes inside arms) that `isMutableSite` then drops as non-executable, so the runner's dropped-site warning and count move (`$S/cap/n1/`). BaseApp: 0. The plan's statement at `d0e094ac` that the 16 `Obsolete` strings in `OAuth20Setup` would be claimed was wrong: `toggle-blank-string` already refuses a string whose parent is not an expression it knows (`BEHAVIOURAL_PARENTS`), so attribute arguments never reach its body test. The hazard is `flip-boolean-literal` on a boolean attribute argument inside an arm, and its effect is a wrong dropped-site count, not a false mutant or a crash (the downstream guard holds). Decision 3 stays: a walk that means "executable body" should say so, not rely on a later filter.
+
+### The whole suite on the prototype
+
+`bun run typecheck` clean; `bun test` from the root: **4268 pass, 2 fail, 7 skip**. Both failures are tests that pin HEAD's blindness, and both are R302's to change:
+
+- `packages/runner/tests/preproc-instrumentation.test.ts`, "c-split: the site set is unchanged by the manifest fixes (operator multiset)" (`SPLIT_SITES`, R301's snapshot of the blind site set);
+- `packages/engine/tests/ast/tree-walks.test.ts`, "findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)".
+
+### alc, every repro, every subset, through the prototype's pipeline
+
+**37 of 37 subsets PASS** (`$S/alc-proto.sh`, logs `$S/logs/alc-<name>.log`). Two harness gaps were found and fixed in scratch on the way: `alc-all.ts` now copies a repro file that has no mutant (a table), because `writeInstrumentedProject` writes only instrumented files; and `t5-lit-split` declares `Record Customer`, which cannot compile without BaseApp symbols, so alc runs a copy with a project table instead (`$S/repro-alc/t5-lit-split-local`), whose prototype sites are identical to `t5-lit-split`'s line for line.
+
+### The manifest STOP rule (Decision 5), on the prototype
+
+For every mutant inside a split member, `grain-vs-twin.ts` compared `reachGrain`, gap block, member end line and name with the twin's mutant at the same span: every compared mutant EQUAL in all 15 repros that have split-member mutants (128 mutants: 125 `statement`, 3 `enclosing`, the three in in-body `#if` blocks, as in the twin). The STOP rule did not fire.
+
+### al-runner, local, serial (v2.11.0)
+
+`$S/run-ar.sh proto $S/pt q1-twin-body q2-split-twin k1-dc-shape k2-baseapp-shape a1-attribute-in-arm d1-arg-type-differs`, one session at a time, coverage on then off, every subset (logs `$S/logs/ar-proto-<name>-cov<1|0>.log`, summary `$S/logs/ar-proto-summary.txt`): **12 sessions, 24 subsets, every one `SUBSET PASS`**, every baseline green, 0 `error` verdicts, no throw.
+
+| repro | coverage on (killed / survived / no-coverage) | coverage off |
+| --- | --- | --- |
+| `q1-twin-body`, both subsets | 12 / 2 / 0 | 12 / 2 / 0 |
+| `q2-split-twin`, both subsets | 12 / 2 / 0 | 12 / 2 / 0 |
+| `k1-dc-shape`, `[]` | 6 / 5 / 6 | 6 / 11 / 0 |
+| `k2-baseapp-shape`, 4 subsets | 6 / 1 / 9 each | 6 / 10 / 0 each |
+| `a1-attribute-in-arm`, both subsets | 2 / 3 / 0 | 2 / 3 / 0 |
+| `d1-arg-type-differs`, both subsets | 4 / 5 / 0 | 4 / 5 / 0 |
+
+In `q1` and `q2`, each of `Pick`'s 7 mutants (the 3 new ones included) has the same verdict as `Twin`'s mutant of the same operator on the same relative line, with `exact` attribution to the one covering test, in both subsets and both coverage modes. The `no-coverage` rows in `k1` and `k2` are the members no test calls (`Guard`, `Mark`, `Calc`, all `local`); with coverage off they are scored, as expected.
+
+### Corrections to the text at `d0e094ac` (the counts are not touched)
+
+1. The places are 12, not 11: `findEnclosingStatement`'s block case (place 12). Tasks below include it.
+2. Decision 5: the change DOES touch the emission path, through place 12, which decides the statement a split member's body mutant is wrapped as. The decision stands, for the reasons measured above: the wrapped statement is the one a plain procedure's body gets (alc 37/37, grain and gap equal to the twin's), and nothing else on that path changes. Review may overrule this; if it does, a Cronus28 gate on `q2`-shaped and `k1`-shaped members is the natural scope.
+3. Decision 3's example was overstated (see Controls).
+4. `d4` expects 5, not 4 (see Round 2).
+5. `t5-lit-split` (R-297's repro) does NOT compile un-instrumented offline: it declares `Record Customer`, which needs BaseApp symbols. The sentence at `d0e094ac` that every split repro compiles except `k1` missed it. Its site rows stand (the pipeline does not need symbols); alc runs its local-table copy, `$S/repro-alc/t5-lit-split-local`.
+
+---
+
+## Global Constraints
+
+- Plain English, short sentences, no em dashes, in code comments, commits and roadmap text.
+- No corpus source text in any committed file. File names, member names, operators, lines and counts are fine. Every repro is hand-written.
+- No `!` non-null assertions; destructure and check `undefined`. Fail loudly on a contract violation.
+- Fixtures stay byte-identical: hashes, identity keys, manifests and emitted targets, proven by diff in Task 5, not by argument. No frozen itest figure can move. A split node in a fixture is a STOP (Task 0).
+- Identity keys move only as Decision 4 says. The checker's full id map enforces it on every repro, on DC/Cloud and on the BaseApp scratch project.
+- The pre-committed rows above are not edited. Where the prototype showed a pre-commitment row wrong, the task's own expectation is the corrected row, and the correction is listed under "Prototype check" with its reason.
+- Build loop per CLAUDE.md: `bun run typecheck`, then `rm -rf packages/*/dist`, then `bun test` from the repo root. Biome only on touched files: `bunx biome check <paths>`.
+- Every fix is red-checked: revert the specific line, confirm the specific test goes red, restore, report both outputs (or use the `mutation-red-checker` subagent).
+- Every scratch shell block runs under `set -euo pipefail`, sources `$S/setup.sh`, never filters a command's output through `grep -v`, writes an "expect nothing" grep as `if grep ...; then exit 1; fi`, and keeps raw logs under `$S/logs/`.
+- Probes run SERIALLY, one at a time, never beside another probe or a live gate. Any al-runner probe failure is a STOP (the R-303 rule): report it; the fix is its own designed task. A repeat of R-316's `exit 82` wire-contract throw on a serial run is filed as its own roadmap item.
+- No container is used. If Task 4's STOP rule fires (Decision 5), the orchestrator decides on a Cronus28 gate under `coord lease Cronus28 bugs`, never Cronus281 to 283.
+- Tests assert only what their task owns: Task 1's engine tests assert symbol-table and type answers, never operator sites; Task 2's operator tests assert sites, never identity keys; Task 3 owns the runner-level site sets, the ordinals and the hang tag.
+
+## Review Focus
+
+1. **No false site where arms disagree.** Expected: `d1`'s swap is absent (its first-arm version fails `alc`, measured), and no ambiguous name falls through to a global. Pinned by Task 1's symbol-table and type tests and Task 3's `d1`; red-checked by removing the hiding.
+2. **No site from a split member's header region.** Expected: no site claimed from an attribute or pragma inside an arm, so no dropped-site warning either (`a1`'s four attribute booleans; see the Decision 3 control). Pinned by Task 2's `inMemberBody` test and Task 3's `a1`; red-checked by widening the walk to the whole split node.
+3. **Every place a test.** R302's closing criterion. Each of the 12 places has a test that a site inside a split member is generated with the same operator and text as in its twin, red-checked by reverting that place alone.
+4. **Refusal guards read any arm, resolution reads every arm.** `d5`, `d6` (any) and `d1` to `d4`, `d7` (every).
+5. **A renamed member stays unnamed.** `c1`, `c2`: its new mutants carry `procedureName` `""`; no call by name resolves to it.
+6. **Keys.** Only the rows in the pre-commitment (and the corrections) move; fixtures, System Application and BusinessFoundation 0.
+7. **Emission.** Place 12 changes which node is the statement for a split member's body, so it is on the emission path. Every new mutant's emission compiles under every subset (Task 4), and its `reachGrain`, member lines and gap block equal its twin's.
+
+## File structure
+
+- Modify `packages/engine/src/ast/tree-walks.ts`: `findEnclosingProcedure`, `findEnclosingStatement`'s block case; new `memberArms`, `procedureLikeReturnType`, `inMemberBody` (Task 1).
+- Modify `packages/engine/src/index.ts`: export the three new helpers (Task 1).
+- Modify `packages/engine/src/semantic/symbol-table.ts`: `ProcedureSymbol.ambiguous`, `indexMembers`, a new `parseSplitProcedure`, `resolveProcedure`'s empty-name guard (Task 1).
+- Modify `packages/engine/src/semantic/types.ts`: `resolveIdentifierType` and its private walk (Task 1).
+- Modify `packages/engine/src/semantic/receiver.ts`: `lookupVar`, `declaresProcedure`, `nameOf` (Task 1).
+- Modify `packages/engine/src/semantic/callers.ts`: `enclosingProcedureName` (Task 1).
+- Modify `packages/builtin-tier1/src/`: `empty-block.ts`, `return-value.ts`, `flip-boolean-literal.ts`, `toggle-blank-string.ts`, `toggle-blank-temporal.ts`, `shift-integer.ts`, `loop-skip.ts`, `loop-truncate.ts`, `loop-hazard.ts` (Task 2).
+- Modify `packages/builtin-tier2/src/write-txn-codeunit-run.ts` (Task 2).
+- Tests: `packages/engine/tests/ast/tree-walks.test.ts`, `packages/engine/tests/semantic/symbol-table.test.ts`, `types.test.ts`, `resolve-var-ref.test.ts`, `packages/builtin-tier2/tests/receiver.test.ts` (Task 1); `packages/builtin-tier1/tests/split-member.test.ts` (new) and `packages/builtin-tier2/tests/write-txn-codeunit-run.test.ts` (Task 2); `packages/runner/tests/preproc-instrumentation.test.ts` (Task 3).
+- Roadmap: `docs/roadmap/R302.md` closed, one-line cross-links in `R301.md` and `R316.md`, regenerated `ROADMAP.md` (Task 6).
+- Scratch, never committed: everything under `$S`.
+
+---
+
+### Task 0: Scratch setup, the census STOP, and BEFORE captures (no product change)
+
+**Files:** scratch only.
+
+- [ ] **Step 1: The setup file.** `$S/setup.sh` holds exactly:
+
+```bash
+# R-302 scratch setup. Sourced by every fail-fast block after `set -euo pipefail`. Never committed.
+S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r302
+F="sandbox-app sandbox-data sandbox-hang sandbox-harden sandbox-coverage-probe"
+corpus() { case "$1" in sysapp) echo "U:/Git/BC.History/System Application";; bcf) echo "U:/Git/BC.History/BusinessFoundation";; esac; }
+export LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe"
+cd /u/Git/LethAL-wt/r302
+mkdir -p "$S/logs"
+```
+
+Confirm every tool imports from this worktree: `if grep -ln "LethAL-wt/r3[01][0-9]\|LethAL-wt/r297" "$S"/*.ts; then exit 1; fi`. The prototype's copies under `$S/pt/` point at `$S/proto` and are used by no task.
+
+- [ ] **Step 2: Census and repros.**
+
+```bash
+set -euo pipefail
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r302/setup.sh
+for f in fixtures/*/; do
+  n=$(basename "$f"); bun "$S/split-census.ts" "$f" > "$S/logs/census-fixture-$n.txt"
+  test "$(tail -n 1 "$S/logs/census-fixture-$n.txt" | sed -n 's/.*nodes=\([0-9]*\)$/\1/p')" -eq 0
+done
+if grep -rlE "^\s*#(if|else|elif|endif)" fixtures --include=*.al; then echo "a fixture has #if: STOP"; exit 1; fi
+bun "$S/split-census.ts" U:/Git/DC/Cloud > "$S/logs/census-dc.txt"
+test "$(tail -n 1 "$S/logs/census-dc.txt")" = "files 1135/1135 nodes=11"
+bun "$S/split-census.ts" U:/Git/BC.History/BaseApp > "$S/logs/census-baseapp.txt"
+test "$(tail -n 1 "$S/logs/census-baseapp.txt")" = "files 9620/9620 nodes=11"
+for k in sysapp bcf; do
+  bun "$S/split-census.ts" "$(corpus "$k")" > "$S/logs/census-$k.txt"
+  test "$(tail -n 1 "$S/logs/census-$k.txt" | sed -n 's/.*nodes=\([0-9]*\)$/\1/p')" -eq 0
+done
+for e in q1-twin-body:CLEAN27 q2-split-twin:CLEAN27 t5-loss-split:CLEAN27 t5-hang-split:CLEAN27 \
+  k2-baseapp-shape:CLEAN27,CLEAN26 a1-attribute-in-arm:CLEAN27 c1-preamble-then-renamed-split:CLEAN27 \
+  c2-renamed-split-then-preamble:CLEAN27 c3-preamble-then-overload:CLEAN27 d1-arg-type-differs:CLEAN27 \
+  d2-return-differs:CLEAN27 d3-arm-only-local:CLEAN27 d4-receiver-differs:CLEAN27 \
+  d5-split-shadows-setrange:CLEAN27 d6-renamed-shadows-setrange:CLEAN27 d7-caller-return:CLEAN27; do
+  n=${e%%:*}
+  bun "$S/alc-plain.ts" "$S/repro/$n" "${e#*:}" > "$S/logs/plain-$n.log" 2>&1
+  test "$(tail -n 1 "$S/logs/plain-$n.log")" = "$n PASS"
+done
+bun "$S/alc-plain.ts" "$S/repro-alc/t5-lit-split-local" CLEAN27 > "$S/logs/plain-t5-lit-local.log" 2>&1
+test "$(tail -n 1 "$S/logs/plain-t5-lit-local.log")" = "t5-lit-split-local PASS"
+bun "$S/alc-plain.ts" "$S/repro/k1-dc-shape" "" > "$S/logs/plain-k1-dc-shape.log" 2>&1
+test "$(tail -n 1 "$S/logs/plain-k1-dc-shape.log")" = "k1-dc-shape PASS"
+bun "$S/alc-plain.ts" "$S/neg/neg-d1-swap-first-arm" CLEAN27 > "$S/logs/plain-neg-d1.log" 2>&1 || true
+grep -q "sym=\[\] exit=1 app=false error AL0133" "$S/logs/plain-neg-d1.log"
+grep -q "sym=\[CLEAN27\] exit=0 app=true" "$S/logs/plain-neg-d1.log"
+echo "census and repros OK"
+```
+
+Expected: the last line. A fixture with a split node or an `#if` line is a STOP (the orchestrator decides). A changed corpus census is a STOP too: the pre-commitment is per member and would be stale.
+
+- [ ] **Step 3: BEFORE captures.**
+
+```bash
+set -euo pipefail
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r302/setup.sh
+test -z "$(git status --porcelain -- packages)"
+"$S/capture.sh" before "$S/sites.ts"
+for f in $F; do
+  bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-before-$f.txt"
+  rm -rf "$S/target-before-$f"; bun "$S/identity-keys.ts" "fixtures/$f" "$S/target-before-$f" > "$S/ids-before-$f.txt"
+done
+for k in sysapp bcf; do
+  rm -rf "$S/target-before-$k"; bun "$S/identity-keys.ts" "$(corpus "$k")" "$S/target-before-$k" > "$S/ids-before-$k.txt"
+done
+for n in $(ls "$S/cap/head"); do cmp "$S/cap/head/$n" "$S/cap/before/$n"; done
+echo "BEFORE captured, identical to plan time"
+```
+
+Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) proves HEAD has not moved under the pre-commitment. A difference is a STOP: rebase decisions go to the orchestrator before any code.
+
+---
+
+### Task 1: The engine resolves inside a split member, and `return-value` reads the agreed return type (places 1 to 4, 9 to 12)
+
+**Files:**
+- Modify: `packages/engine/src/ast/tree-walks.ts`, `packages/engine/src/index.ts`, `packages/engine/src/semantic/symbol-table.ts`, `packages/engine/src/semantic/types.ts`, `packages/engine/src/semantic/receiver.ts`, `packages/engine/src/semantic/callers.ts`, `packages/builtin-tier1/src/return-value.ts`
+- Test: `packages/engine/tests/ast/tree-walks.test.ts`, `packages/engine/tests/semantic/symbol-table.test.ts`, `types.test.ts`, `resolve-var-ref.test.ts`, `callers.test.ts`, `packages/builtin-tier2/tests/receiver.test.ts`, `packages/builtin-tier1/tests/return-value.test.ts`
+
+`return-value.ts` is in this task, not Task 2, on purpose: it reads `findEnclosingProcedure`, which this task widens. Left for Task 2, the Task 1 commit would give a split member a `return-value` typed by its FIRST arm's return type, which is `d2`'s wrong site.
+
+- [ ] **Step 1: Write the failing tests, and flip the engine pin.** The test "findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)" in `tree-walks.test.ts` pins HEAD's blindness and is R302's to change: it becomes "returns the split node". Then, each on hand-written inline AL, one per place, asserting only an engine answer (and, for `return-value`, its sites):
+  - `tree-walks.test.ts`: `findEnclosingProcedure` from a body statement returns the split node for both shapes (place 3); `memberArms` gives one arm per `#if`/`#elif`/`#else` with the arm's own children; `procedureLikeReturnType` is the agreed text, `null` when arms disagree or one arm has none; `inMemberBody` is true for a body literal and FALSE for a string inside an `[Obsolete(...)]` attribute inside an arm; `findEnclosingStatement` of a split member's body block is that block (place 12).
+  - `symbol-table.test.ts`: a split member is found by `resolveProcedureAt` at its own start (place 1); agreeing parameters and a shared var section's locals are listed; a parameter with different types per arm, and an arm-only local, are in `ambiguous` and in neither list; `returnType` agrees or is `null`; a renamed member has name `""` and `resolveProcedure(scope, "")` is `null`.
+  - `types.test.ts`: an identifier that is an agreeing parameter types; an ambiguous one is `null` even when a global of the same name exists (place 2); a call to an agreeing split member types by its return type, a call to a disagreeing one is `null`.
+  - `resolve-var-ref.test.ts`: `resolveVarRef` finds an agreeing split-member local; an ambiguous name returns `null`, not the global (place 3).
+  - `receiver.test.ts`: `claimsRecordMethod` refuses `R.SetRange(...)` on a table that declares `SetRange` as a split member, and on one where only ONE arm has that name (place 10); a receiver declared differently per arm is not claimed; a renamed member is not a name fallback (place 11).
+  - `callers.test.ts`: a call inside an agreeing split member names it as the caller (place 9).
+  - `return-value.test.ts`: `exit(<expr>)` in a split member whose arms agree on `Integer` is mutated as in its twin; nothing when the arms disagree (place 4).
+- [ ] **Step 2: Run them, expect red.** `bun test packages/engine packages/builtin-tier2/tests/receiver.test.ts`: each new test fails at HEAD for the reason named, and nothing else fails.
+- [ ] **Step 3: Implement.** The prototype's engine hunks are the reference (`$S/proto-r2.patch`, the `packages/engine` files): `findEnclosingProcedure` walks `isProcedureLike`; `memberArms`, `procedureLikeReturnType`, `inMemberBody` next to `isProcedureLike`, each with an R302 doc comment; `findEnclosingStatement`'s block case also admits a procedure-like parent; `parseSplitProcedure` with Decision 2's rule; `ProcedureSymbol.ambiguous` (lowercase names; absent on a plain procedure); `types.ts` deletes its private walk and imports the engine's; `lookupVar` and `resolveIdentifierType` return `null` for an ambiguous name before the global fall-through; `declaresProcedure` reads every `name`-field child; `nameOf` and `callers.ts` use `procedureLikeNameNode`. Update the doc comment on `isProcedureLike` (it no longer says the semantic walks skip it).
+- [ ] **Step 4: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test packages/engine packages/builtin-tier1/tests/return-value.test.ts packages/builtin-tier2`.
+- [ ] **Step 5: Red-check each place.** Revert one hunk at a time, run only its test, confirm red, restore, confirm green. Record the nine outputs (places 1 to 4, 9 to 12, and the hiding) in `$S/logs/t1-redcheck.txt`. The hiding (place 2 and 3) is reverted by deleting the `ambiguous` check alone, so the red test is the one with the global.
+- [ ] **Step 6: Commit.** `bunx biome check <touched files>`, then `git commit -m "fix(R302): the engine resolves locals, parameters and the return type inside a split member, by the every-arm rule"`.
+
+### Task 2: The body walks find their sites inside a split member (places 5 to 8)
+
+**Files:**
+- Modify: `packages/builtin-tier1/src/empty-block.ts`, `flip-boolean-literal.ts`, `toggle-blank-string.ts`, `toggle-blank-temporal.ts`, `shift-integer.ts`, `loop-skip.ts`, `loop-truncate.ts`, `loop-hazard.ts`; `packages/builtin-tier2/src/write-txn-codeunit-run.ts`
+- Test: `packages/builtin-tier1/tests/split-member.test.ts` (new), `packages/builtin-tier2/tests/write-txn-codeunit-run.test.ts`
+
+- [ ] **Step 1: Write the failing tests.** One `describe` per operator. Each builds the semantic context for a split source and for its hand-written twin (the same text with the markers and the other arm replaced by blank lines, so lines match), runs the one operator over every node, and asserts the two `(startLine, before text, after text)` multisets are EQUAL. Both shapes (`preproc_split_procedure` and the preamble) for each operator. Plus the negative case of Decision 3: `flip-boolean-literal` finds NOTHING in an `[IntegrationEvent(false, false)]` attribute inside an arm, and `inMemberBody` is false there (measured: without it, 4 such sites in `a1` are claimed and then dropped as non-executable). For `loop-hazard`, the twin comparison includes `hangCapable`. `write-txn-codeunit-run`: a consumed `Codeunit.Run` inside a split member is claimed as in the twin.
+- [ ] **Step 2: Red.** Every twin test fails at the Task 1 commit, except `swap-additive`'s and `swap-call-arguments`' (they need types only; Task 1 fixed them, and they stay as regression pins); the attribute case PASSES already (it is the guard the change must keep).
+- [ ] **Step 3: Implement.** The prototype's operator hunks: `empty-block` admits a block whose parent `isProcedureLike`; the five executable-body tests and `flip-boolean-literal` call `inMemberBody`; `shift-integer`'s loop-condition walk and `loop-hazard`'s `SCOPE_KINDS` walks stop at a procedure-like node; `write-txn-codeunit-run`'s `enclosingBody` admits one. Update `BODY_ANCESTORS`' doc comment (it now names `inMemberBody`, and why the whole split node is not an allow-listed ancestor).
+- [ ] **Step 4: Green, then red-check.** As Task 1, one operator at a time; for Decision 3, widen `inMemberBody` to "any procedure-like ancestor" and confirm the attribute cases go red. Record in `$S/logs/t2-redcheck.txt`.
+- [ ] **Step 5: Flip the R301 pin.** `c-split: the site set is unchanged by the manifest fixes (operator multiset)` (`packages/runner/tests/preproc-instrumentation.test.ts`) pins HEAD's blindness (`SPLIT_SITES`, a literal list). This task's change is what turns it red (the split body gains its `empty-block`), and every commit must leave the suite green, so it is flipped HERE: it becomes "the split body's site set equals its twin's", with the twin computed from `C_SPLIT_OF` (the markers and the other arm replaced by blank lines), never a literal list. Run the whole suite: green.
+- [ ] **Step 6: Commit.** `fix(R302): every body walk treats a split member's body as a procedure body, never its header region`.
+
+### Task 3: Runner-level pins (the repros that matter, through the real pipeline)
+
+**Files:** Test: `packages/runner/tests/preproc-instrumentation.test.ts`
+
+- [ ] **Step 1: New tests,** each with inline AL copied from the named scratch repro (hand-written, invented names):
+  - `q2`-shaped: the split member's `(line, operator)` multiset equals its plain twin's, and every one of its mutants names it;
+  - `d1`: no `swap-call-arguments` at the `Show(X, Y)` line; `d3`: no `swap-additive` inside the in-body `#if`; `d7`: `swap-additive` on the agreeing call, not on the disagreeing one;
+  - `d6`: `void-method-call`, not `remove-setrange`, at the plain caller;
+  - `a1`: no mutant on an attribute line inside an arm, AND no dropped-site warning for the file (without Decision 3 the attribute booleans are claimed and then dropped as non-executable, which leaves the mutants right and the warning and its count wrong);
+  - `t5-hang`-shaped: both `remove-assignment` mutants carry `hangCapable: "loop-condition-target"`;
+  - `c3`-shaped: the overload's `empty-block` and `return-value` keys carry ordinal 1, the preamble's none; `c1`-shaped: the renamed member's new mutants have `procedureName` `""`.
+- [ ] **Step 2: Red-check** the `d1`, `d6` and `a1` tests against the Task 1 and 2 hunks they pin (hiding, any-arm guard, `inMemberBody`).
+- [ ] **Step 3: Commit.** `test(R302): runner-level pins for split-member sites, the per-arm rule, the hang tag and the ordinals`.
+
+### Task 4: Offline proof: the checker, alc on every subset, the manifest STOP rule, and al-runner (serial)
+
+**Files:** scratch only. On the r302 worktree with Tasks 1 to 3 committed.
+
+- [ ] **Step 1: Every capture against the pre-commitment.**
+
+```bash
+set -euo pipefail
+source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r302/setup.sh
+"$S/capture.sh" after "$S/sites.ts"
+EXPECT="$S/expect-final" "$S/check-all.sh" after | tee "$S/logs/check-after.txt"
+for n in $(ls "$S/cap/before" | grep '\.err$'); do cmp "$S/cap/before/$n" "$S/cap/after/$n"; done
+echo "sites match the pre-commitment (with the listed corrections)"
+```
+
+Run it as `EXPECT=$S/expect-final "$S/check-all.sh" after`: the pre-commitment plus the one correction under "Prototype check" (`d4` L15), kept as a separate file set so the committed rows stay as they were. Expected: `checks: 23 pass, 0 fail`, and every `.err` identical, which says no site was dropped as non-executable.
+
+- [ ] **Step 2: alc, every repro, every subset:** `"$S/alc-proto.sh" "$S"` (the same script with the r302 tools instead of `$S/pt`). 18 repros, `t5-lit-split` as its local-table copy: 37 subsets. Expected: `alc: 37 of 37 subsets PASS`. Any FAIL is a STOP.
+- [ ] **Step 3: The manifest STOP rule (Decision 5).** `bun "$S/pt/grain-vs-twin.ts" U:/Git/LethAL-wt/r302/packages "$S/repro/<name>" "$S/twin/<name>-a1"` for the 15 repros with split-member mutants (all but `d5`, `d6`, `d7`, whose split members have empty bodies). Expected: every line `same`, each run ending `PASS`, 128 mutants in all. Any `DIFF` is a STOP.
+- [ ] **Step 4: al-runner, local, serial.** `"$S/run-ar.sh" after "$S" q1-twin-body q2-split-twin k1-dc-shape k2-baseapp-shape a1-attribute-in-arm d1-arg-type-differs` (each with its `$S/repro-tests-<name>` app, coverage on then off, every subset, one session at a time). Expected, as on the prototype ("Prototype check"): every session ends `<name> PASS`, and in `q1` and `q2` each `Pick` mutant has the same verdict as the `Twin` mutant of the same operator on the same relative line. Any failure is a STOP.
+
+### Task 5: Prove nothing else moved
+
+- [ ] **Step 1: Fixtures, System Application, BusinessFoundation.** The AFTER hashes, identity keys and emitted targets (Task 0 Step 3's loop into `*-after-*`) are byte-identical to BEFORE (`diff -r --exclude=app.json`, `maxRSS_KB` dropped).
+- [ ] **Step 2: DC/Cloud and BaseApp** already pass the checker in Task 4 Step 1 (19 `+`, 7 `-` on DC; 31 `+` on BaseApp; every other key unchanged).
+- [ ] **Step 3: Whole suite.** `bun run typecheck`, `rm -rf packages/*/dist`, `bun test` from the root. Expected: green. `bun run compile:fixtures` is not needed (no fixture AL changes) and is not run.
+
+### Task 6: Roadmap
+
+- [ ] Mark `docs/roadmap/R302.md` `done (<first>..<last>)`, with a closing section: the 12 places, the per-arm rule (and its strict reading), the pre-committed counts and the measured result for each repro, DC/Cloud (+12 deployed) and BaseApp scratch (+31), the prototype's corrections, and that the hang tag is back. Add one line to `R301.md` and `R316.md` pointing at the closing. Re-check the next free id across every worktree before filing anything new (R-316's Task 0 Step 5 loop). Then `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, and commit: `roadmap(R302): done`.
+
+---
+
+## Self-review
+
+- **Spec coverage.** R302's places 1 to 4 (Task 1), its "other walks" (Task 2 for the operator walks, Task 1 for `callers.ts`), R316's per-arm rule (Decision 2, Task 1), the hang tag (Task 2, pinned in Task 3), the operator swap at one call (DC's 7, pinned by the checker), and the closing criterion "a test per place" (Tasks 1 and 2, one twin test per place, each red-checked). Two places beyond R302's list: the Tier-2 rule-3 guard (place 10, the unsafe direction) and `findEnclosingStatement` (place 12, found by the prototype).
+- **Pre-commitment order.** `d0e094ac` holds the rows; this section and the tasks came after, and the rows were not edited. The one wrong row (`d4`) and the three wrong sentences are listed as corrections, with their evidence.
+- **Assert only what you own.** Task 1: engine answers and `return-value`'s sites; Task 2: body-walk sites; Task 3: the runner-level repros, ordinals and the hang tag; the checker: every key.
+- **No `!`, no em dashes, no corpus source text.** Checked by grep before each commit.
+
+## Notes: upstream grammar observations
+
+None found. Everything this plan relies on is the grammar as R301 and R316 measured it: a split node's arms (header tokens, a preamble's var sections, and any attribute or `#pragma` inside an arm) are its direct children, separated by the `preproc_*` markers, with the shared body a direct `code_block` child. An attribute inside an arm being a child of the split node, where a plain procedure's attribute is its sibling, follows from the shape (the attribute is part of the arm), so it is not filed. Nothing to draft.
+
+## Open questions for the orchestrator
+
+1. **The per-arm rule's reading.** This plan reads R316's "every arm that declares it agrees" strictly: a name some arms do not declare is ambiguous (`d3`). The looser reading would resolve `d3`'s site, which compiles because its only use is inside an in-body `#if` of the declaring arm. No corpus site differs between the two readings. Keep strict?
+2. **No live gate.** Place 12 is on the emission path (it picks the statement a split member's body mutant is wrapped as), which this plan did not expect at `d0e094ac`. The evidence that it is safe is offline: alc 37 of 37 subsets, `reachGrain` and gap block equal to the twin's for all 128 split-member mutants, and al-runner verdicts equal to the plain twin's. Is that enough, or is a Cronus28 gate on a `q2`-shaped and a `k1`-shaped member wanted?
+3. **Named return values** are not resolved in a plain procedure either (HEAD's `parseProcedure` ignores them), so a named return that shares its name with a global resolves to the global's type. This is HEAD's behaviour, unchanged here; the split rule copies it. File it as its own roadmap item, or leave it?
+4. **The task text's "3 and 4 split procedures"** are file counts; the members are 11 and 11, and the pre-commitment covers all 22.
