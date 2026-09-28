@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r2 (2026-09-28).** Revised per review r1 (`H:/lethal-coord/reviews/R-309-plan/review-r1.md`) and the orchestrator's rulings. What changed: master is merged in and R316 is the orchestrator's item (`75c36ae`), so Task 0 no longer files it and the plan cites it by id; Task 2 asserts only what R309 owns (grain, no latch, the warning), not R316's `procedureName ""` or absent scope; Task 5 no longer edits R316 (R309 only cross-links it); per-arm placement waits on R316 (ruling, kept); the trigger grammar defect is filed upstream as SShadowS/tree-sitter-al #32 and cited; the injector's throw stays as a guard for unexpected trees (the review found the predicate sound); Task 2 bounds EVERY member through its closing `end;` and asserts a non-empty unplaced set for each refused member and statement grain for every admitted one; Tasks 3 and 4 fail fast (`set -euo pipefail`, no `grep -v` masking, raw logs kept), and a checker script verifies every expected symbol subset and, per member, the counts, grains and verdicts; the plan states that the refusal's cause shows only in the warning and event, never in the manifest or `SessionReport` (consistent with R310); the uninstrumented alc subset count is 24. The revised Task 2 runner test was re-run against the prototype refusal (2 pass).
+
 **Revision r1 (2026-09-28), draft for the orchestrator's review.**
 
 **Goal:** A `preproc_split_procedure_preamble` (a procedure whose header AND var section are both split by `#if`, one pair per arm, with one shared body after `#endif`) no longer stops the whole run. The writer declares no reach latch there and names the member in a `reach-latch-refused` warning, exactly as it already does for R303's and R313's shapes. The rest of the file, and the rest of the run, is instrumented as before.
@@ -43,7 +45,7 @@ Every repro is hand-written with invented names. No corpus source is quoted. The
 | `p9-all` | `p7-mixed` plus a renamed preamble (`#if CLEAN27` `Pick2` with var, `#else` `Choose` with no var, body `Glob := X + 7; exit(Glob);`) and an R301 split header `Split` (shared var `S`) | CLEAN27 | procedure, preamble, hoist procedure, preamble, `preproc_split_procedure`; 0 |
 | `p10-renamed` | `#if CLEAN27`: `Pick` var `K`; `#else`: `Choose` var `M` | CLEAN27 | preamble, 0 |
 
-Every repro, UN-instrumented, compiles under every subset of its symbols (`alc-plain.ts`: exit 0 and an `.app`, all 23 subsets). So any later failure is LethAL's, not the repro's.
+Every repro, UN-instrumented, compiles under every subset of its symbols (`alc-plain.ts`: exit 0 and an `.app`, all 24 subsets: 22 for the preamble repros plus 2 for `p5-trigger`). So any later failure is LethAL's, not the repro's.
 
 ### HEAD behaviour (`656646b`, through the real pipeline, `alc-all.ts`)
 
@@ -96,7 +98,7 @@ Every session: `baselineGreen=true`, `errors=0`. Every preamble mutant `reachGra
 | identity key | never reached | serializes, with an empty procedure part; unique within `p9-all` |
 | coverage (`coverageFilter`) with al-runner coverage ON | never reached | every preamble mutant `no-coverage`, although the tests execute it (see the table above) |
 
-The last four rows are one defect, and it is NOT R309's: this member has no procedure name, scope or span anywhere in the pipeline. With coverage on, its mutants read `no-coverage` while the tests run them: a false no-coverage, which drops live sites from the score (it never manufactures a kill or a survivor). There is also a SITE loss: the same body in a plain procedure gets 7 mutants, in a preamble 4 (`empty-block`, `return-value` and one `swap-additive` are missing, measured on a twin-body repro `q1-twin-body`), the same semantic blindness R302 names for `preproc_split_procedure`. Task 0 files both as R316. They are pinned in Task 2's runner test as they are today, so R316's fix flips the pin on purpose.
+The last four rows are one defect, and it is NOT R309's: this member has no procedure name, scope or span anywhere in the pipeline. With coverage on, its mutants read `no-coverage` while the tests run them: a false no-coverage, which drops live sites from the score (it never manufactures a kill or a survivor). There is also a SITE loss: the same body in a plain procedure gets 7 mutants, in a preamble 4 (`empty-block`, `return-value` and one `swap-additive` are missing, measured on a twin-body repro `q1-twin-body`), the same semantic blindness R302 names for `preproc_split_procedure`. Both are [[R316]], filed by the orchestrator on master (`75c36ae`). This plan does not fix them and does not pin them in a test.
 
 ### Per-arm placement, measured on hand-written text
 
@@ -123,7 +125,9 @@ So per-arm placement is valid AL. It was not built into the prototype and not pr
 2. **It is not cheap.** It is a second header-end anchor rule, per arm (the preamble's children interleave every arm's header, so `headerEndOf` cannot be reused as is), plus its own negative controls, red-checks and an al-runner probe of every repro, for a shape with 0 corpus sites.
 3. **The refusal is small, proven and truthful.** One predicate, one warning sentence; alc PASS on every repro and subset; the member is still instrumented and scored, exactly like R303's and R313's refused members.
 
-Per-arm placement is recorded in R316 as the latch step to take AFTER R316 gives the member a name and a span, with the alc evidence above as its starting point.
+Per-arm placement waits on R316 (orchestrator ruling): it is the latch step to take AFTER R316 gives the member a name and a span, with the alc evidence above as its starting point.
+
+**What the refusal makes visible, and what it does not.** The three-way `cause` distinguishes R309 from R303 and R313 in the `reach-latch-refused` WARNING and its event (console and the `--progress-out` NDJSON) only. The manifest and the `SessionReport` still show each refused mutant as a generic `reachGrain: "unplaced"`, with nothing naming the cause. That is the visibility R310's ruling accepts; this plan adds no report field.
 
 ---
 
@@ -137,7 +141,8 @@ Per-arm placement is recorded in R316 as the latch step to take AFTER R316 gives
 - Build loop per CLAUDE.md: `bun run typecheck`, then `rm -rf packages/*/dist`, then `bun test` from the repo root. Biome only on touched files: `bunx biome check <paths>`.
 - No `!` non-null assertions; destructure and check `undefined`. Fail loudly on a contract violation: the injector's throw stays, as a guard no known shape reaches.
 - Every fix is red-checked: revert the specific line, confirm the specific test goes red, restore, report both outputs.
-- Re-check the next free roadmap id with `ls docs/roadmap/` immediately before writing one (R316 at plan time). Regenerate with `bun scripts/roadmap-index.ts`; never hand-edit `ROADMAP.md`.
+- This plan files no new roadmap item. Every id it names (R301, R302, R303, R309, R310, R311, R312, R313, R316) was checked against `git ls-tree master docs/roadmap/` at r2. Regenerate with `bun scripts/roadmap-index.ts`; never hand-edit `ROADMAP.md`.
+- Every scratch shell block runs under `set -euo pipefail`, never filters a command's output through `grep -v` (stderr goes to a file of its own instead), and keeps its raw logs under `$S/logs/`.
 - `reachLatchRefusedOwner` and `reachLatchRefusals` keep their names. `reachLatchRefusals`'s `unparsed: boolean` becomes `cause: "preamble" | "unparsed" | "split-var"`; its only caller is `generateMutationSet` (grep at plan time, no test or script reads the field). The warning code stays `reach-latch-refused`, and every message keeps the `[lethal] <file>: <member>'s var section` prefix the runner tests split on.
 - Any al-runner probe failure is a STOP (the R-303 rule): report to the coordinator, the fix becomes its own designed task.
 
@@ -147,8 +152,9 @@ Per-arm placement is recorded in R316 as the latch step to take AFTER R316 gives
 2. **The warning is true for every preamble.** An arm may have no var section (`p4`, and `Choose` in `p9-all`). Expected: the sentence says "its own var section, if any", and the member name is `procedure <unnamed>` when the arms rename the procedure (R301's naming rule). Pinned by Task 2's runner test.
 3. **CRLF.** Expected: identical behaviour; no text is written into the member at all. Pinned by Task 1's `P6` case.
 4. **The throw is not moved elsewhere.** Every later stage that sees the member (manifest, gap blocks, line map, identity keys, coverage) runs without throwing. Pinned by Task 2's runner test (manifest and identity keys) and Task 3 (the whole al-runner session, coverage on and off).
-5. **The known gap is pinned, not hidden.** A preamble member's `procedureName` is `""` and its coverage is lost (R316). Expected: Task 2 pins that state with a comment naming R316, so R316's fix must change the test deliberately.
-6. **Stale prose.** Every place that says R309 throws (code comments in `dispatch.ts`, `compile.ts`, `orchestrator.ts`, `tree-walks.ts`; roadmap items R301, R303, R310, R312, R313, R309 itself). Expected: none says "throws" for this shape after Task 5. Pinned by the grep in Task 5 Step 3.
+5. **R309 asserts only what R309 owns.** A preamble member's missing name, scope and coverage are [[R316]]'s. Expected: no test in this plan asserts `procedureName`, `procedureScope` or coverage for a preamble mutant, so R316's fix needs no change here. The refusal's cause is visible in the warning and event only, not in the manifest or `SessionReport` (R310's ruling).
+6. **Every member is classified.** Expected: Task 2 bounds each member from its first line through its closing `end;`, asserts every mutant falls in exactly one member, and asserts per member a non-empty set with one grain (`unplaced` for `Pick` and `Pick2`, `statement` for `Plain` and `Hoist`). Task 3's checker does the same per member for the al-runner verdicts.
+7. **Stale prose.** Every place that says R309 throws (code comments in `dispatch.ts`, `compile.ts`, `orchestrator.ts`, `tree-walks.ts`; roadmap items R301, R303, R310, R312, R313, R309 itself). Expected: none says "throws" for this shape after Task 5. Pinned by the grep in Task 5 Step 3.
 
 ---
 
@@ -160,26 +166,28 @@ Per-arm placement is recorded in R316 as the latch step to take AFTER R316 gives
 - Modify `packages/runner/src/orchestrator.ts`: `reachLatchRefusals` (`cause`) and the `reach-latch-refused` message.
 - Modify `packages/schemata/tests/compile.test.ts`: replace the `a-preamble ... still throws` test; add the R309 describe at the end.
 - Modify `packages/runner/tests/preproc-instrumentation.test.ts`: add the R309 describe at the end.
-- Roadmap: new `docs/roadmap/R316.md` (or the next free id), `R309.md`, `R301.md`, `R303.md`, `R310.md`, `R312.md`, `R313.md`, regenerated `ROADMAP.md`.
+- Roadmap: `docs/roadmap/R309.md`, `R301.md`, `R303.md`, `R310.md`, `R312.md`, `R313.md`, regenerated `ROADMAP.md`.
 - Scratch, never committed (`$S` = `C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309`): the tools and repros listed above, already present at plan time.
 
 ---
 
-### Task 0: Scratch tools, repros, BEFORE captures, and filing R316 (no product change)
+### Task 0: Scratch tools, repros and BEFORE captures (no product change)
 
-**Files:** scratch only, plus `docs/roadmap/R316.md` and `ROADMAP.md`.
+**Files:** scratch only. R316 is already on master (`75c36ae`); this task does not file it.
 
 - [ ] **Step 1: Tools.** The plan-time tools are in `$S`. Confirm each imports from `U:/Git/LethAL-wt/r309` (not `r303`, not `$S/proto`): `grep -n "U:/Git" $S/*.ts`. `alrunner-probe.ts` carries two plan-time additions: `COV=1` in the environment passes `coverage: "al-runner"` to `AlRunnerBackend`, and each mutant line prints `attr=<coverageAttribution> cov=<covering test count>`. `extensions/lethal-control/lethal-control.app` must be 1.0.0.20 or newer (it is at plan time).
 
 - [ ] **Step 2: Repros.** `$S/repro/p1-if-else` to `p10-renamed` and `q1-twin-body`, and the test apps `$S/repro-tests-<name>/` for every preamble repro except `p5-trigger` (one test codeunit 50150, `Subtype = Test`, calling each member with `X = 5` and `X = 0` and raising `Error(...)` on a wrong result; `p9-all` and `p10-renamed` call the renamed member under `#if CLEAN27` / `#else`). They exist at plan time. Re-run `bun $S/shape.ts $S/repro/*/Repro.Codeunit.al` and `bun $S/alc-plain.ts $S/repro/<name> <symbols>` for each: expected the parse table and the all-PASS result in "What was measured".
 
-- [ ] **Step 3: HEAD's result, the negative control.** At `656646b` (before any Task 1 change), `bun $S/alc-all.ts $S/repro/<name> <symbols>` for `p1-if-else`, `p7-mixed` and `p5-trigger`. Expected: `p1` and `p7` throw the R309 message; `p5` prints the R313 warning and PASSes.
+- [ ] **Step 3: HEAD's result, the negative control.** At the r2 merge commit (before any Task 1 change), `bun $S/alc-all.ts $S/repro/<name> <symbols>` for `p1-if-else`, `p7-mixed` and `p5-trigger`. Expected: `p1` and `p7` throw the R309 message; `p5` prints the R313 warning and PASSes.
 
 - [ ] **Step 4: BEFORE captures.**
 
 ```bash
 S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309
+set -euo pipefail
 cd /u/Git/LethAL-wt/r309
+mkdir -p "$S/logs"
 F="sandbox-app sandbox-data sandbox-hang sandbox-harden sandbox-coverage-probe"
 for f in $F; do
   bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-before-$f.txt"
@@ -189,21 +197,13 @@ declare -A C=([dc]="U:/Git/DC/Cloud" [sysapp]="U:/Git/BC.History/System Applicat
 for k in "${!C[@]}"; do
   bun scripts/corpus-fingerprint.ts "${C[$k]}" > "$S/fp-before-$k.txt"
   bun "$S/preamble-census.ts" "${C[$k]}" > "$S/census-$k.txt"
-  bun "$S/locate.ts" "${C[$k]}" 2>&1 | grep -v '^\[lethal\]' > "$S/locate-before-$k.txt"
+  bun "$S/locate.ts" "${C[$k]}" > "$S/locate-before-$k.txt" 2> "$S/logs/locate-before-$k.err"
   rm -rf "$S/target-before-$k"; bun "$S/identity-keys.ts" "${C[$k]}" "$S/target-before-$k" > "$S/ids-before-$k.txt"
 done
 for h in 0 1; do bun "$S/preamble-census.ts" U:/Git/BC.History/BaseApp $h/2 > "$S/census-baseapp-$h.txt"; done
 ```
 
-Expected: every census line says `preamble=0`. A non-zero count is a STOP: record the files, since the "0 corpus sites" premise no longer holds and the orchestrator decides whether per-arm placement moves up.
-
-- [ ] **Step 5: File R316.** `ls docs/roadmap/` for the next free id (R316 at plan time; use whatever is free and replace `R316` everywhere in this plan). Copy `docs/roadmap/_template.md`'s frontmatter shape. Title: "A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it". Section `correctness-risks`, status `open, filed <date>`, `order` after R315's. Body, in plain English, with the plan-time figures from "What else touches this node": `procedureName ""`, no scope, no member span, the gap block climbing to the file root; the al-runner result (coverage ON: every preamble mutant `no-coverage` although its tests run it; coverage OFF: scored normally); the site loss on `q1-twin-body` (7 sites in a plain procedure, 4 in the preamble); 0 corpus sites (the census). What would close it: make the preamble a member in the walks R301 extended (`isProcedureLike` or a sibling predicate for the manifest, scope, line map and gap block), then consider a per-arm latch, whose alc evidence is in this plan ("Per-arm placement, measured on hand-written text"). Link [[R309]], [[R301]], [[R302]]. Then:
-
-```bash
-bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts
-git add docs/roadmap/R316.md ROADMAP.md
-git commit -m "roadmap: file R316, a preamble split procedure has no name or span, so coverage cannot attribute its mutants"
-```
+Expected: every command exits 0 (the block stops at the first that does not), and every census line says `preamble=0`. A non-zero count is a STOP: record the files, since the "0 corpus sites" premise no longer holds and the orchestrator decides whether per-arm placement moves up.
 
 ---
 
@@ -616,15 +616,22 @@ describe("R309: a split-header procedure whose arms each have their own var sect
 }
 `;
   const lines = SRC.split("\n");
-  const lineOf = (needle: string): number => {
-    const i = lines.findIndex((l) => l.includes(needle));
-    if (i < 0) throw new Error(`fixture drift: no line holding ${JSON.stringify(needle)}`);
+  /** 1-based number of the first line at or after line `from` that starts with `prefix`. */
+  const lineOf = (prefix: string, from = 1): number => {
+    const i = lines.findIndex((l, k) => k + 1 >= from && l.startsWith(prefix));
+    if (i < 0) throw new Error(`fixture drift: no line starting ${JSON.stringify(prefix)}`);
     return i + 1;
   };
-  /** Lines of the two preamble members, from the first arm's header to the body's end. */
-  const inPreamble = (line: number): boolean =>
-    (line >= lineOf("    procedure Pick(X") && line <= lineOf("exit(Glob);")) ||
-    (line >= lineOf("procedure Pick2(X") && line <= lineOf("Glob := X + 7"));
+  /** A member from its first line (the `#if` for a preamble) through its closing `end;`. */
+  const member = (name: string, prefix: string, from: number, grain: "statement" | "unplaced") => {
+    const first = lineOf(prefix, from);
+    return { name, first, last: lineOf("    end;", first), grain };
+  };
+  const plain = member("Plain", "    procedure Plain(", 1, "statement");
+  const pick = member("Pick", "#if CLEAN27", plain.last, "unplaced");
+  const hoist = member("Hoist", "    procedure Hoist(", pick.last, "statement");
+  const pick2 = member("Pick2", "#if CLEAN27", hoist.last, "unplaced");
+  const members = [plain, pick, hoist, pick2];
 
   test("the run completes; both preamble members are named in a reach-latch-refused warning", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r309-"));
@@ -655,19 +662,19 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     }
   });
 
-  test("the preamble sites are unplaced and carry no latch; every other member keeps its latch", async () => {
+  test("each refused member's sites are unplaced, each admitted member's are statement, and only admitted members get a latch", async () => {
     const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
-    const pre = manifest.mutants.filter((m) => inPreamble(m.startLine));
-    const rest = manifest.mutants.filter((m) => !inPreamble(m.startLine));
-    expect(pre.length).toBeGreaterThan(0);
-    for (const m of pre) expect(m.reachGrain).toBe("unplaced");
-    expect(rest.some((m) => m.procedureName === "Plain" && m.reachGrain === "statement")).toBe(true);
-    expect(rest.some((m) => m.procedureName === "Hoist" && m.reachGrain === "statement")).toBe(true);
-    // R316, pinned as it is today: a preamble member has no procedure name, scope or member span,
-    // so coverage cannot attribute its mutants. Fixing R316 flips this on purpose.
-    for (const m of pre) {
-      expect(m.procedureName).toBe("");
-      expect(m.procedureScope).toBeUndefined();
+    // Every mutant sits in exactly one member, each bounded through its closing `end;`.
+    for (const m of manifest.mutants) {
+      const owners = members.filter((x) => m.startLine >= x.first && m.startLine <= x.last);
+      expect(owners).toHaveLength(1);
+    }
+    for (const x of members) {
+      const grains = manifest.mutants
+        .filter((m) => m.startLine >= x.first && m.startLine <= x.last)
+        .map((m) => m.reachGrain);
+      expect(grains.length).toBeGreaterThan(0);
+      expect([...new Set(grains)]).toEqual([x.grain]);
     }
     // Identity keys still serialize, and no two mutants share one.
     const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
@@ -684,9 +691,9 @@ describe("R309: a split-header procedure whose arms each have their own var sect
 });
 ```
 
-(`APP_JSON`, `instrument`, `SELECTOR`, `identityKeyOf`, `serializeKey`, `generateMutationSet`, `mkdtemp`, `tmpdir`, `writeFile`, `rm` are already imported or defined in the file at `656646b`.)
+This test asserts nothing about `procedureName`, `procedureScope` or coverage for a preamble mutant: those are [[R316]]'s. (`APP_JSON`, `instrument`, `SELECTOR`, `identityKeyOf`, `serializeKey`, `generateMutationSet`, `mkdtemp`, `tmpdir`, `writeFile`, `rm` are already imported or defined in the file at `656646b`.)
 
-- [ ] **Step 2: Run, expect FAIL.** `bun test packages/runner/tests/preproc-instrumentation.test.ts -t R309`. Expected with Task 1 landed: the warning test FAILs (the message is R303's sentence, since `unparsed` is false); the manifest test PASSes already (Task 1 made the run complete).
+- [ ] **Step 2: Run, expect FAIL.** `bun test packages/runner/tests/preproc-instrumentation.test.ts -t R309`. Expected with Task 1 landed: the warning test FAILs (the message is R303's sentence, since `unparsed` is false); the grain test PASSes already (Task 1 made the run complete).
 
 - [ ] **Step 3: Implement.** In `orchestrator.ts`, replace `reachLatchRefusals`'s doc comment, return type and the `unparsed` field:
 
@@ -745,7 +752,7 @@ git add packages/runner/src/orchestrator.ts packages/runner/tests/preproc-instru
 git commit -m "fix(runner): the reach-latch-refused warning names a preamble split procedure as R309, with its own sentence
 
 reachLatchRefusals' unparsed flag becomes a three-way cause (preamble, unparsed, split-var).
-The manifest test pins R316 as it is today: a preamble member has no procedure name."
+Every member is bounded through its end; and classified by grain."
 ```
 
 ---
@@ -759,33 +766,57 @@ The manifest test pins R316 as it is today: a preamble member has no procedure n
 - [ ] **Step 1: alc, every repro, every subset.**
 
 ```bash
+set -euo pipefail
 S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r309
 cd /u/Git/LethAL-wt/r309
+mkdir -p "$S/logs"
+declare -A SUBSETS=([p1-if-else]=2 [p2-elif-else]=4 [p3-elif-noelse]=2 [p4-one-arm-novar]=2 [p5-trigger]=2 \
+  [p6-crlf]=2 [p7-mixed]=2 [p8-nested-condvar]=4 [p9-all]=2 [p10-renamed]=2)
 for r in p1-if-else:CLEAN27 p2-elif-else:A,B p3-elif-noelse:A p4-one-arm-novar:CLEAN27 p5-trigger:CLEAN27 \
          p6-crlf:CLEAN27 p7-mixed:CLEAN27 p8-nested-condvar:A,B p9-all:CLEAN27 p10-renamed:CLEAN27; do
-  bun "$S/alc-all.ts" "$S/repro/${r%%:*}" "${r#*:}" 2>&1 | grep -v '^\[lethal\]'
+  n="${r%%:*}"
+  bun "$S/alc-all.ts" "$S/repro/$n" "${r#*:}" > "$S/logs/alc-$n.log" 2>&1
+  test "$(grep -c "^$n sym=\[.*\] exit=0 app=true" "$S/logs/alc-$n.log")" -eq "${SUBSETS[$n]}"
+  test "$(tail -n 1 "$S/logs/alc-$n.log")" = "$n PASS"
 done
+test "$(grep -c "LethALReachLatch: Boolean;" "$S/emit-p9-all/Repro.Codeunit.al")" -eq 3
+echo "alc: every repro, every subset PASS"
 ```
 
-Expected: every repro `PASS`, as in the prototype table. In `$S/emit-p9-all/Repro.Codeunit.al`: exactly 3 `LethALReachLatch: Boolean;` (`Plain`, `Hoist`, `Split`), none between either preamble's `#if` and its `end;`.
+Expected: the final line (24 subsets over 10 repros); a missing subset, a non-zero exit, a missing `.app` or a missing `PASS` line stops the block. In `$S/emit-p9-all/Repro.Codeunit.al`: exactly 3 `LethALReachLatch: Boolean;` (`Plain`, `Hoist`, `Split`); checked by hand, none between either preamble's `#if` and its `end;`.
 
-- [ ] **Step 2: al-runner, every preamble repro, every subset, coverage ON and OFF.**
+- [ ] **Step 2: al-runner, every preamble repro, every subset, coverage ON and OFF, checked per member.** The checker `$S/check-probe.ts <raw-log> <expect.json> <cov>` (written at plan time) exits non-zero unless the log holds EXACTLY the expected subsets, each with `baselineGreen=true` and `errors=0`; every mutant falls in one expected member; each member's verdict counts and `reachGrain` match; each mutant's verdict is the same in every subset; and the `<name> PASS` line is present. The expectation files `$S/expect/<name>.json` hold, per member, its line range (through its closing `end;`), its grain and its verdict counts in each coverage mode, from the plan-time run:
+
+| repro | member | lines | grain | coverage ON | coverage OFF |
+| --- | --- | --- | --- | --- | --- |
+| every single-preamble repro | `Pick` (or the renamed member) | the whole file | unplaced | 4 no-coverage | 3 killed, 1 survived |
+| `p7-mixed`, `p9-all` | `Plain` | 9 to 15 | statement | 4 killed | 4 killed |
+| `p7-mixed`, `p9-all` | `Pick` | 17 to 33 | unplaced | 4 no-coverage | 3 killed, 1 survived |
+| `p7-mixed`, `p9-all` | `Hoist` | 35 to 44 | statement | 3 killed, 1 survived | 3 killed, 1 survived |
+| `p9-all` | `Pick2` / `Choose` | 46 to 56 | unplaced | 1 no-coverage | 1 killed |
+| `p9-all` | `Split` | 58 to 69 | statement | 1 killed | 1 killed |
+
+At plan time the checker passed all 18 plan-time logs (kept in `$S/logs-plan/`), and it was red-checked: changing one `Pick` verdict in `p7-mixed`'s coverage-ON log makes it print `BAD` for both subsets and exit 1.
 
 ```bash
+set -euo pipefail
 export LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe"
-"$LETHAL_ALRUNNER_PATH" --version
+"$LETHAL_ALRUNNER_PATH" --version > "$S/logs/alrunner-version.txt"
+cat "$S/logs/alrunner-version.txt"
 for cov in 1 0; do
   for r in p1-if-else:CLEAN27 p2-elif-else:A,B p3-elif-noelse:A p4-one-arm-novar:CLEAN27 p6-crlf:CLEAN27 \
            p7-mixed:CLEAN27 p8-nested-condvar:A,B p9-all:CLEAN27 p10-renamed:CLEAN27; do
-    n="${r%%:*}"; echo "== $n COV=$cov"
-    COV=$cov bun "$S/alrunner-probe.ts" "$S/repro/$n" "$S/repro-tests-$n" "${r#*:}" 2>&1 | grep -v '^\[lethal\] \(baseline\|mutant\)'
+    n="${r%%:*}"
+    COV=$cov bun "$S/alrunner-probe.ts" "$S/repro/$n" "$S/repro-tests-$n" "${r#*:}" > "$S/logs/alrunner-$n-cov$cov.log" 2>&1
+    bun "$S/check-probe.ts" "$S/logs/alrunner-$n-cov$cov.log" "$S/expect/$n.json" "$cov"
   done
-done > "$S/alrunner-task3.log"
+done
+echo "al-runner: every repro, every subset, both coverage modes CHECK PASS"
 ```
 
-Expected, per repro and subset (the plan-time figures, al-runner v2.11.0): `baselineGreen=true`, `errors=0`, `SUBSET PASS`, and `<name> PASS`. Every preamble mutant has `reachGrain=unplaced`. With coverage ON they read `no-coverage` (R316, expected, not a failure of this task); with coverage OFF they are scored. The non-preamble members in `p7-mixed` and `p9-all` have `reachGrain=statement` and the same verdicts in both modes. Record the version line.
+Expected: 18 `CHECK PASS` lines (9 repros, 2 modes, 44 sessions) and the final line. The raw logs stay in `$S/logs/`. The coverage-ON `no-coverage` of the preamble mutants is [[R316]]: expected here, not a failure of this task.
 
-- [ ] **Step 3: Any FAIL is a STOP.** A red baseline, an `error` verdict, or a thrown session, on any repro and subset: report the version, the repro, the subset and the probe lines to the coordinator. Do not work around it here, and do not run Task 5.
+- [ ] **Step 3: Any FAIL is a STOP.** A non-zero exit from either block (a missing subset, a red baseline, an `error` verdict, a changed count, grain or verdict, a thrown session): report the al-runner version, the repro, the subset and the checker's `BAD` lines, with the raw log path, to the coordinator. Do not work around it here, and do not run Task 5.
 
 ---
 
@@ -796,40 +827,42 @@ Expected, per repro and subset (the plan-time figures, al-runner v2.11.0): `base
 - [ ] **Step 1: Fixtures byte-identical, identity keys unchanged.**
 
 ```bash
+set -euo pipefail
 for f in $F; do
-  bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-after-$f.txt"; cmp "$S/hashes-before-$f.txt" "$S/hashes-after-$f.txt"
+  bun scripts/probe-fixture-hashes.ts "fixtures/$f/src" > "$S/hashes-after-$f.txt"
+  cmp "$S/hashes-before-$f.txt" "$S/hashes-after-$f.txt"
   rm -rf "$S/target-after-$f"; bun "$S/identity-keys.ts" "fixtures/$f" "$S/target-after-$f" > "$S/ids-after-$f.txt"
-  diff <(grep -v maxRSS_KB "$S/ids-before-$f.txt") <(grep -v maxRSS_KB "$S/ids-after-$f.txt")
+  diff <(sed '/^maxRSS_KB /d' "$S/ids-before-$f.txt") <(sed '/^maxRSS_KB /d' "$S/ids-after-$f.txt")
   diff -r --exclude=app.json "$S/target-before-$f" "$S/target-after-$f"
 done
+echo "fixtures: byte-identical, identity keys unchanged"
 ```
 
-Expected: no output. (Measured at plan time between HEAD and the prototype: no output for all five.) Any difference is a STOP.
+`cmp` and `diff` exit 1 on any difference, which stops the block; `sed` drops only the memory line, which varies per run. Expected: only the final line. (Measured at plan time between HEAD and the prototype: no output for all five.) Any difference is a STOP.
 
-- [ ] **Step 2: Corpora.** For dc, sysapp and bcf: `corpus-fingerprint.ts` into `fp-after-$k.txt` and `cmp` with BEFORE (a mismatch voids that corpus's comparison: recapture BEFORE in a scratch worktree at `656646b`); then `locate.ts` and `identity-keys.ts` into `*-after-$k.txt` / `$S/target-after-$k`. Expected: `locate` outputs identical; identity keys identical except `maxRSS_KB`; `diff -r --exclude=app.json` of the targets empty. The census said 0 preamble sites, so nothing may move. BaseApp is covered by the parse-only census (0 sites) and is not instrumented (R311).
+- [ ] **Step 2: Corpora**, under `set -euo pipefail`, each `cmp` and `diff` a command of its own (no `|| true`), stderr to `$S/logs/`. For dc, sysapp and bcf: `corpus-fingerprint.ts` into `fp-after-$k.txt` and `cmp` with BEFORE (a mismatch voids that corpus's comparison: recapture BEFORE in a scratch worktree at `656646b`); then `locate.ts` and `identity-keys.ts` into `*-after-$k.txt` / `$S/target-after-$k`. Expected: `locate` outputs identical; identity keys identical except `maxRSS_KB`; `diff -r --exclude=app.json` of the targets empty. The census said 0 preamble sites, so nothing may move. BaseApp is covered by the parse-only census (0 sites) and is not instrumented (R311).
 
-- [ ] **Step 3: Record** the figures for Task 5: the al-runner version and pass list, the fixture and corpus results, the census.
+- [ ] **Step 3: Record** the figures for Task 5 as MEASURED results, only after both blocks above finished: the al-runner version and the checker's pass list, the fixture and corpus results, the census.
 
 ---
 
 ### Task 5: Roadmap
 
-**Files:** `docs/roadmap/R309.md`, `R301.md`, `R303.md`, `R310.md`, `R312.md`, `R313.md`, `R316.md`, `ROADMAP.md`.
+**Files:** `docs/roadmap/R309.md`, `R301.md`, `R303.md`, `R310.md`, `R312.md`, `R313.md`, `ROADMAP.md`. R316 is not edited.
 
-- [ ] **Step 1: R309.** Only if Task 3 was fully green. Status `done (<Task 1 commit>..<Task 2 commit>)`. Title unchanged. Append a dated section "**Closed <date> (R-309), a named refusal.**": the predicate (`reachLatchRefusedOwner` stops at a preamble); the warning's R309 sentence; the repro list with alc and al-runner results (version, subsets); why per-arm placement was not built (the "Decision" section, three points, short), with a pointer to R316 for the alc evidence; that the trigger form does not parse as a preamble and is already refused as R313; 0 corpus sites; fixtures byte-identical. Also fix the item's own last paragraph, which says "Until then the injector still throws for this shape": make it past tense.
+- [ ] **Step 1: R309.** Only if Task 3 was fully green. Status `done (<Task 1 commit>..<Task 2 commit>)`. Title unchanged. Append a dated section "**Closed <date> (R-309), a named refusal.**": the predicate (`reachLatchRefusedOwner` stops at a preamble); the warning's R309 sentence; the repro list with alc and al-runner results (version, subsets); why per-arm placement was not built (the "Decision" section, three points, short), with a cross-link to [[R316]] (per-arm placement waits on it) and a pointer to this plan for the per-arm alc evidence; that the refusal's cause is visible in the warning and event only, while the manifest and `SessionReport` show a generic `unplaced` (consistent with [[R310]]); that the trigger form does not parse as a preamble and is already refused as R313 (upstream: SShadowS/tree-sitter-al #32); 0 corpus sites; fixtures byte-identical. Also fix the item's own last paragraph, which says "Until then the injector still throws for this shape": make it past tense.
 
 - [ ] **Step 2: The other items.** Each is a text correction, not a status change (except R310's status line):
   - **R301** (last paragraph): "which still throws because R301's fix has nowhere to anchor a per-arm latch, is filed as [[R309]]" becomes "is filed as [[R309]], which now refuses it by name instead of throwing (<date>); its missing name and span are [[R316]]". The status line's "remaining gaps moved to R302 and R309" stays true; leave it.
   - **R303** (the paragraph starting "**Not every unproven shape is refused by name.**"): rewrite to say that a `preproc_split_procedure_preamble` is now the third member shape refused by name (R309, `<date>`), with the R309 sentence in the warning, and drop "throws for the whole run" and "still open".
   - **R310**: the status line's tail "; R309's preamble shape is not refused but throws" becomes "; R309's preamble shape is now refused by name too, by its own predicate (a split-header procedure whose arms each hold their own var section), which no measured corpus has either (0 in dc, sysapp, bcf and BaseApp, parse-only)". In the body, the sentence starting "[[R309]]'s `preproc_split_procedure_preamble` is outside both predicates" becomes a statement that R309 is now a third refusal, also with zero measured members, so the ruling's premise (zero measured mutants) still holds. Keep the closed form and the reopen trigger unchanged.
   - **R312** (the run 002 paragraph): "and [[R309]]'s preamble shape still throws rather than being refused" becomes "and [[R309]]'s preamble shape is refused by name".
-  - **R313** (the paragraph ending "the writer throws for the whole run"): the preamble "parses cleanly but has no procedure-like owner, so R313 does not catch it; [[R309]] refuses it by name with its own sentence". Add one line: the TRIGGER form of that shape (per-arm trigger header and var) does not parse as a preamble in 4.4.1, leaves an ERROR, and is caught by this item's refusal (measured on `p5-trigger` in the R-309 plan).
-  - **R316**: add the Task 3 al-runner figures if they differ from the plan-time ones.
+  - **R313** (the paragraph ending "the writer throws for the whole run"): the preamble "parses cleanly but has no procedure-like owner, so R313 does not catch it; [[R309]] refuses it by name with its own sentence". Add one line: the TRIGGER form of that shape (per-arm trigger header and var) does not parse as a preamble in 4.4.1, leaves an ERROR, and is caught by this item's refusal (measured on `p5-trigger` in the R-309 plan; filed upstream as SShadowS/tree-sitter-al #32).
 
 - [ ] **Step 3: The prose grep.**
 
 ```bash
-grep -rn "R309" packages --include=*.ts | grep -v /dist/ | grep -in "throw\|open)"
+grep -rn --include=*.ts --exclude-dir=dist "R309" packages | grep -in "throw\|open)"
 grep -rn "R309" docs/roadmap/*.md | grep -i "throw"
 ```
 
@@ -838,9 +871,9 @@ Expected: no line says the preamble throws. The injector's guard message says "N
 - [ ] **Step 4: Regenerate and commit.**
 
 ```bash
-ls docs/roadmap/   # confirm no one else took R316 meanwhile
+git ls-tree --name-only master docs/roadmap/   # nothing to allocate; the items this commit edits still exist
 bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts
-git add docs/roadmap/R309.md docs/roadmap/R301.md docs/roadmap/R303.md docs/roadmap/R310.md docs/roadmap/R312.md docs/roadmap/R313.md docs/roadmap/R316.md ROADMAP.md
+git add docs/roadmap/R309.md docs/roadmap/R301.md docs/roadmap/R303.md docs/roadmap/R310.md docs/roadmap/R312.md docs/roadmap/R313.md ROADMAP.md
 git commit -m "roadmap: R309 closed by a named refusal; R301, R303, R310, R312 and R313 no longer say the preamble shape throws"
 ```
 
@@ -848,46 +881,18 @@ git commit -m "roadmap: R309 closed by a named refusal; R301, R303, R310, R312 a
 
 ## Self-review
 
-- The task's points: the refusal and the R309 closure (Tasks 1, 2, 5); the predicate kept truthful (Task 1 Step 3's doc comment and the M1 owner map; Review Focus 1); the warning text keeps the `<file>: <member>'s var section` prefix (Task 2); tests through the real pipeline (schemata unit tests in Task 1, the runner test in Task 2); red-checks (Task 1 Step 7, Task 2 Step 5, both measured in the prototype); alc-all and a local al-runner probe of every repro, refused and admitted members together (Task 3, with `p7-mixed` and `p9-all` holding admitted members beside refused ones); fixtures byte-identical and corpora unchanged (Task 0 Step 4, Task 4); every R309 mention fixed (Task 5 Steps 2 and 3, and the code comments in Tasks 1 and 2); the upstream grammar defect drafted, not filed (Notes).
+- The task's points: the refusal and the R309 closure (Tasks 1, 2, 5); the predicate kept truthful (Task 1 Step 3's doc comment and the M1 owner map; Review Focus 1); the warning text keeps the `<file>: <member>'s var section` prefix (Task 2); tests through the real pipeline (schemata unit tests in Task 1, the runner test in Task 2); red-checks (Task 1 Step 7, Task 2 Step 5, both measured in the prototype); alc-all and a local al-runner probe of every repro, refused and admitted members together (Task 3, with `p7-mixed` and `p9-all` holding admitted members beside refused ones); fixtures byte-identical and corpora unchanged (Task 0 Step 4, Task 4); every R309 mention fixed (Task 5 Steps 2 and 3, and the code comments in Tasks 1 and 2); the upstream grammar defect, filed as SShadowS/tree-sitter-al #32 (Notes).
 - The census: 0 preamble sites in every corpus; the repros are the evidence.
-- The pipeline check: the table in "What else touches this node", which found R316 (filed in Task 0).
+- The pipeline check: the table in "What else touches this node", which found R316 (filed by the orchestrator, `75c36ae`).
 - Types: `reachLatchRefusals`'s `cause` is the only signature change; no new export.
 
-## Notes: upstream grammar defect, DRAFTED, not filed
+## Notes: upstream grammar defect
 
-For `SShadowS/tree-sitter-al` (per the tree-sitter-al memory: a hand-written repro, filed by the owner's decision):
+The trigger form of this shape (each `#if` arm holding a `trigger OnRun()` header and its own var section, one shared body after `#endif`) is valid AL but does not parse in tree-sitter-al 4.4.1 or at upstream HEAD `d4d38e4`: it leaves a `preproc_conditional` with ERROR nodes (`p5-trigger`, 4 ERROR nodes). It is filed upstream as **SShadowS/tree-sitter-al #32**. LethAL is not blocked by it: R313 refuses the ERROR shape by name, and alc passes it in both builds. When a release parses it, check whether it becomes a preamble-like node that R309's predicate must also stop at.
 
-> **A trigger whose header and var section are both split by `#if` does not parse.**
->
-> tree-sitter-al 4.4.1 has `preproc_split_procedure_preamble` for a PROCEDURE whose `#if` arms each hold a header and a var section before one shared body. There is no trigger form. This compiles with alc under both symbol sets:
->
-> ```al
-> codeunit 50100 "Repro P"
-> {
-> #if CLEAN27
->     trigger OnRun()
->     var
->         K: Integer;
-> #else
->     trigger OnRun()
->     var
->         M: Integer;
-> #endif
->     begin
->         Glob := Glob + 2;
->     end;
->
->     var
->         Glob: Integer;
-> }
-> ```
->
-> Expected: one node covering both arms and the shared body (a trigger sibling of `preproc_split_procedure_preamble`). Actual: a `preproc_conditional` holding an `ERROR` for the first arm and a `trigger_declaration` for the second, with a further `ERROR` inside it (4 ERROR nodes). Checked on the v4.4.1 grammar and at HEAD `d4d38e4`: no trigger rule in either.
+## Rulings (r2)
 
-Before filing, check it still reproduces on the latest release and that no open issue covers it (`gh issue list -R SShadowS/tree-sitter-al --search trigger`). LethAL is not blocked by it: R313 refuses the ERROR shape by name.
-
-## Open questions
-
-1. **R316 is filed in Task 0, not now.** It is a separate defect (a false `no-coverage` and lost sites for a shape with 0 corpus members), found by this plan's pipeline check. Filing it with the plan follows R-303's precedent. Should it instead be filed by the orchestrator right away, so another session does not re-find it?
-2. **R316 is pinned in Task 2's runner test** (`procedureName ""`). That makes R316's fix change a test on purpose. Is pinning a known-wrong value acceptable here, or should the test assert only what R309 owns (grain, latch, warning)?
-3. **Per-arm placement** is recorded as R316's second step, with alc evidence only. Agreed that it waits for R316?
+1. R316 is the orchestrator's item (`75c36ae`); this plan cites it and neither files nor edits it.
+2. Task 2 asserts only what R309 owns: grain, no latch, and the warning. No `procedureName` or scope assertion.
+3. Per-arm placement waits on R316.
+4. The injector's throw stays as a guard for unexpected trees.
