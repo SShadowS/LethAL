@@ -217,3 +217,21 @@ on W1 (31,135,464 both) and W2's output is byte-identical (sha256
 `153bac07df02e98fac91905171f954ae6201a881251909fa416b56172fb9fb9f` on all six runs). All three
 hold, so **"owned" replaces "external"** as the only `parseFlat`. The third W2 pair's wall times
 are slow on both sides (machine noise); wall is recorded, never gating.
+
+## Clarification to AMENDMENT 2 (2026-09-28)
+
+AMENDMENT 2 names `scripts/measure-peak.ts`; the S1.4 brief and report name RUST-02's `gate2.ts`.
+Both were used, one wrapping the other: `measure-peak.ts` spawned the workload and reported its peak
+RSS and wall time. The commands, from the worktree root at `e6562c72`:
+
+- W1, external: `bun scripts/measure-peak.ts bun $S/gate2.ts U:/Git/BC.History/BaseApp <vendor lethal-parser.win32-x64.node> base`
+- W1, owned: `bun scripts/measure-peak.ts bun $S/gate2.ts U:/Git/BC.History/BaseApp $S/owned.node owned`
+- W2, both: `bun scripts/measure-peak.ts bun scripts/census-operator-sites.ts U:/Git/BC.History/BaseApp <out.json>`,
+  run inside a scratch worktree whose `parser.ts` loaded `LETHAL_NATIVE_NODE` and called
+  `LETHAL_NATIVE_FN` (`parseFlat` from the vendor .node for external, `parseFlatOwned` from
+  `$S/owned.node` for owned), with `wrapRoot = wrapFlatRoot`.
+
+`$S/gate2.ts` is RUST-02's `$R2/gate2.ts` with one change: the variant `owned` calls
+`b.parseFlatOwned(s)` where `base` calls `b.parseFlat(s)`. Everything else, including the base
+shape (all sources read first, no `Bun.gc`, no event-loop turn), is unchanged. `$S/owned.node` is
+the scratch crate `$S/crate-owned` (this crate plus `parseFlatOwned`), built with clang-cl 23.1.2.
