@@ -29,8 +29,10 @@
   // A composite project cannot reach across a project boundary that way (TS6059/TS6307), so the
   // reference below is what redirects that import to runner's built declarations. It also means
   // this project builds AFTER runner, which is what we want: a script is checked against the
-  // types the package actually ships, not against a stale copy.
-  "references": [{ "path": "../packages/runner" }],
+  // types the package actually ships, not against a stale copy. `r289-probe/sidecar.ts` imports
+  // `repro/nst-wedges/common.ts` the same cross-boundary way (R289 review r1 I4), so it gets its
+  // own tiny composite project (`repro/nst-wedges/tsconfig.json`, `common.ts` only) referenced here.
+  "references": [{ "path": "../packages/runner" }, { "path": "../repro/nst-wedges" }],
   "files": [
     "agentflow/artifact-freshness.ts",
     "agentflow/artifact-freshness.test.ts",
@@ -82,6 +84,8 @@
     "r236-baseline-probe/size-arm.ts",
     "r236-baseline-probe/size-arm.test.ts",
     "r236c-testpage-census.ts",
+    "r289-probe/sidecar.ts",
+    "r289-probe/sidecar.test.ts",
     "roadmap-index.ts",
     "roadmap-index.test.ts"
   ]

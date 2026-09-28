@@ -1,0 +1,12 @@
+{
+  // R289 (sidecar typecheck gap, review r1 I4): `scripts/r289-probe/sidecar.ts` imports
+  // `common.ts` for its Settings/call/actionUrl helpers, and a composite project
+  // (scripts/tsconfig.json) cannot reach across a project boundary by relative path
+  // (TS6059/TS6307), the same rule documented in scripts/tsconfig.json for its `packages/runner`
+  // reference. This project exists only so `common.ts` has a project boundary
+  // scripts/tsconfig.json can reference; the four repro clients under nst-wedges/0*/ are not
+  // admitted here and stay outside `bun run typecheck`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist" },
+  "files": ["common.ts"]
+}

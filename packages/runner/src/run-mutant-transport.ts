@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch } from "./bc-fetch";
@@ -377,12 +378,21 @@ function parseCoverageStats(result: RunMutantResult): FencedCoverageStats | unde
 }
 
 export class RunMutantTransport {
+  /** R289: `LETHAL_R289_TRACE`, read once here; an empty string counts as unset. */
+  private readonly tracePath: string | undefined;
+  private readonly traceWrite: (path: string, line: string) => void;
+
   constructor(
     private readonly cfg: ActivationConfig,
     private readonly targetAppId: string,
     private readonly artifactId: string,
     private readonly fetchFn: FetchFn = bcFetch,
-  ) {}
+    opts: { readonly traceWrite?: (path: string, line: string) => void } = {},
+  ) {
+    const p = process.env.LETHAL_R289_TRACE;
+    this.tracePath = p === undefined || p === "" ? undefined : p;
+    this.traceWrite = opts.traceWrite ?? appendFileSync;
+  }
 
   /** One fenced mutant/baseline execution, no coverage collected — the unchanged Layer 5C-A path. */
   /**
@@ -641,7 +651,25 @@ export class RunMutantTransport {
    * `in-flight-unknown`; a 2xx is parsed and scored as if no stop had fired.
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
-    const first = await this.runManyOnce(req);
+    const trace = { failures: 0 };
+    const r = await this.runManyScored(req, trace);
+    // R289: a trace that stopped writing is named once per call on stderr, never in a verdict:
+    // a verdict's `failureMessage` feeds `killingTestFailure`, the store and verify.ts's
+    // callstack match, so a diagnostic suffix there would change what a kill is classified as.
+    if (trace.failures > 0) {
+      console.warn(
+        `LETHAL_R289_TRACE=${this.tracePath ?? ""}: trace write failed ${trace.failures} times during ${req.mutantId} (attempt ${req.attemptId}, opSeq ${req.lease.opSeq}); tracing stopped for this call`,
+      );
+    }
+    return r;
+  }
+
+  /** `runMany` before R289's trace warning: one dispatch plus R236b's readback. */
+  private async runManyScored(
+    req: RunMutantManyRequest,
+    trace: { failures: number },
+  ): Promise<RunMutantManyResult> {
+    const first = await this.runManyOnce(req, trace);
     // Review r2 ruling C2: a call that must abort the session is never replaced, whatever the
     // kept answer says.
     if (
@@ -706,12 +734,40 @@ export class RunMutantTransport {
   }
 
   /** One `RunMutantMany` dispatch and its scoring; `runMany` adds R236b's readback. */
-  private async runManyOnce(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
+  private async runManyOnce(
+    req: RunMutantManyRequest,
+    traceState: { failures: number },
+  ): Promise<RunMutantManyResult> {
     const { mutantId, attemptId, lease, methods } = req;
     assertAttemptId(attemptId);
     if (methods.length === 0) {
       throw new Error("RunMutantMany: a call with no methods is a caller-contract violation");
     }
+    const tracePath = this.tracePath;
+    if (tracePath !== undefined) {
+      // R289: refuse an unwritable trace before anything is dispatched, not halfway through.
+      // Calls the real `appendFileSync`, not the injected writer: the writer is a test seam for
+      // LATER failures, and the preflight must check the actual file whatever the seam does.
+      try {
+        appendFileSync(tracePath, "");
+      } catch (err) {
+        throw new Error(`LETHAL_R289_TRACE=${tracePath} is not writable: ${String(err)}`);
+      }
+    }
+    // R289: a diagnostic trace, kept on purpose (orchestrator ruling), documented in
+    // docs/measurements/README.md. One failed write stops it; `runMany` warns once on stderr.
+    // It never throws, so it cannot reject the watchdog and leave the main request open.
+    const trace = (event: string, extra: Record<string, unknown> = {}) => {
+      if (tracePath === undefined || traceState.failures > 0) return;
+      try {
+        this.traceWrite(
+          tracePath,
+          `${JSON.stringify({ at: Date.now(), event, mutantId, attemptId, opSeq: lease.opSeq, ...extra })}\n`,
+        );
+      } catch {
+        traceState.failures++;
+      }
+    };
     const firstMethod = methods[0];
     if (firstMethod === undefined) throw new Error("unreachable: methods is non-empty");
     const started = Date.now();
@@ -769,6 +825,14 @@ export class RunMutantTransport {
     let lastRow: string | undefined;
     let abortReason: "budget" | "identity" | "hard-cap" | undefined;
     let identityDetail: string | undefined;
+    // R289: the watchdog's own steps, relative to `started`, so a failure message tells them.
+    let pollsOk = 0;
+    let pollsFailed = 0;
+    let pollSeq = 0;
+    let lastPollOkAt: number | undefined;
+    let stopSentAt: number | undefined;
+    let stopAnsweredAt: number | undefined;
+    let failedAt: number | undefined;
     const hardCapMs = req.requestCeilingMs + req.stopGraceMs;
     const hardTimer = setTimeout(() => {
       abortReason ??= "hard-cap";
@@ -795,11 +859,28 @@ export class RunMutantTransport {
         await sleep(pollMs);
         if (settled) return;
         let status: OperationStatus;
+        const seq = ++pollSeq;
+        const sentAt = Date.now();
+        trace("poll-sent", { seq });
         try {
           status = await this.getOperationStatus(lease, attemptId, lease.opSeq);
-        } catch {
+        } catch (err) {
+          pollsFailed++;
+          trace("poll-failed", { seq, sentAt, error: describeThrown(err) });
           continue; // a failed poll is "nothing yet"
         }
+        pollsOk++;
+        lastPollOkAt = Date.now() - started;
+        trace("poll-ok", {
+          seq,
+          sentAt,
+          state: status.opProgress?.state,
+          methodIndex: status.opProgress?.methodIndex,
+          rowAttemptId: status.opProgress?.attemptId,
+          rowOpSeq: status.opProgress?.opSeq,
+          startedAt: status.opProgress?.startedAt,
+          serverNow: status.serverNow,
+        });
         if (settled) return;
         const row = status.opProgress;
         const ours =
@@ -840,6 +921,8 @@ export class RunMutantTransport {
         stopFired = true;
         stopDecision = { methodIndex: row.methodIndex, token: row.token, ref: entry.ref };
         let answer: StopAtAnswer;
+        stopSentAt = Date.now() - started;
+        trace("stop-sent", { methodIndex: row.methodIndex });
         try {
           answer = await this.stopHungRunAt({
             attemptId,
@@ -848,9 +931,13 @@ export class RunMutantTransport {
             methodToken: row.token,
           });
         } catch (err) {
+          stopAnsweredAt = Date.now() - started;
+          trace("stop-threw", { error: describeThrown(err) });
           stopHookError = err;
           continue;
         }
+        stopAnsweredAt = Date.now() - started;
+        trace("stop-answered", { stopped: answer.stopped, reason: answer.reason });
         if (answer.stopped) {
           stopConfirmed = true;
           continue;
@@ -877,7 +964,7 @@ export class RunMutantTransport {
       wake?.();
     };
     const stopDetail = () =>
-      `${lastRefusal !== undefined ? ` last stop refusal: ${lastRefusal};` : ""}${lastRow !== undefined ? ` progress row: ${lastRow};` : ""}${stopHookError !== undefined ? ` stop hook: ${describeThrown(stopHookError)};` : ""}`;
+      `${lastRefusal !== undefined ? ` last stop refusal: ${lastRefusal};` : ""}${lastRow !== undefined ? ` progress row: ${lastRow};` : ""}${stopHookError !== undefined ? ` stop hook: ${describeThrown(stopHookError)};` : ""} watchdog: polls ok ${pollsOk}, polls failed ${pollsFailed}${lastPollOkAt !== undefined ? `, last poll ok at +${lastPollOkAt}ms` : ""}${stopSentAt !== undefined ? `; stop sent at +${stopSentAt}ms, ${stopAnsweredAt !== undefined ? `answered at +${stopAnsweredAt}ms` : "unanswered"}` : ""}${failedAt !== undefined ? `; failed at +${failedAt}ms` : ""};`;
     const abortedVerdict = (err: unknown, phase: string): RunMutantManyResult => {
       const why =
         abortReason === "identity"
@@ -901,6 +988,7 @@ export class RunMutantTransport {
     };
 
     let res: Response;
+    trace("dispatch");
     try {
       res = await this.fetchFn(url, {
         method: "POST",
@@ -909,14 +997,16 @@ export class RunMutantTransport {
         signal: controller.signal,
       });
     } catch (err) {
+      failedAt = Date.now() - started;
       settle();
+      trace("settled", { how: controller.signal.aborted ? "aborted" : "connection-failed" });
       await watchdog;
       if (controller.signal.aborted) return abortedVerdict(err, "before headers");
       return call({
         ref: watchedRef,
         outcome: "error",
         durationMs: Date.now() - started,
-        failureMessage: `RunMutantMany connection failed after dispatch: ${String(err)}`,
+        failureMessage: `RunMutantMany connection failed after dispatch: ${String(err)}.${stopDetail()}`,
         operation: "in-flight-unknown",
         fencedOp,
       });
@@ -925,19 +1015,22 @@ export class RunMutantTransport {
     try {
       rawBody = await res.text();
     } catch (err) {
+      failedAt = Date.now() - started;
       settle();
+      trace("settled", { how: controller.signal.aborted ? "aborted" : "body-failed" });
       await watchdog;
       if (controller.signal.aborted) return abortedVerdict(err, "after headers");
       return call(
         this.inFlightUnknown(
           watchedRef,
           Date.now() - started,
-          `RunMutantMany 2xx body could not be read: ${String(err)}`,
+          `RunMutantMany 2xx body could not be read: ${String(err)}.${stopDetail()}`,
           fencedOp,
         ),
       );
     }
     settle();
+    trace("settled", { how: "answer" });
     await watchdog;
     const durationMs = Date.now() - started;
 
