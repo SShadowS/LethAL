@@ -1,5 +1,7 @@
-import type { Node as TSSyntaxNode, Tree } from "web-tree-sitter";
-import { type ALNodeKind, isALNodeKind } from "./node-kinds";
+import type { ALNodeKind } from "./node-kinds";
+
+// Backed by the WASM reference until the RUST-03 switch (S3.4).
+export { wrapWasmRoot as wrapRoot } from "./parser-wasm";
 
 export interface ALSyntaxNode {
   readonly kind: ALNodeKind;
@@ -13,91 +15,123 @@ export interface ALSyntaxNode {
   readonly children: readonly ALSyntaxNode[];
   readonly namedChildren: readonly ALSyntaxNode[];
   readonly fieldName: string | null;
+  /** A node the parser inserted for a missing token (web-tree-sitter `isMissing`). */
+  readonly isMissing: boolean;
+  /** This node or a descendant is ERROR or MISSING (web-tree-sitter `hasError`). */
+  readonly hasError: boolean;
   childForFieldName(name: string): ALSyntaxNode | null;
 }
 
-class WrappedNode implements ALSyntaxNode {
+/** One file's tree as the native addon returns it. Preorder; the first child is at index + 1. */
+export interface FlatTree {
+  readonly kindNames: readonly string[];
+  readonly kind: Uint16Array;
+  readonly fieldNames: readonly string[];
+  readonly field: Uint16Array;
+  readonly flags: Uint8Array;
+  readonly childCount: Uint32Array;
+  readonly nextSibling: Int32Array;
+  readonly startIndex: Uint32Array;
+  readonly endIndex: Uint32Array;
+  readonly points: Uint32Array;
+}
+
+export interface ParsedAL {
+  readonly source: string;
+  readonly flat: FlatTree;
+}
+
+export const FLAG_NAMED = 1;
+export const FLAG_MISSING = 2;
+export const FLAG_HAS_ERROR = 4;
+export const FLAG_EXTRA = 8;
+
+function at<T>(arr: ArrayLike<T>, i: number, what: string): T {
+  const v = arr[i];
+  if (v === undefined) throw new Error(`flat tree: ${what}[${i}] is out of range`);
+  return v;
+}
+
+/** An ALSyntaxNode over a native flat tree. Same semantics as the WASM WrappedNode: fresh wrappers
+ *  on every children read, no caching. */
+class FlatNode implements ALSyntaxNode {
   constructor(
-    private readonly ts: TSSyntaxNode,
-    private readonly parentNode: ALSyntaxNode | null,
+    private readonly p: ParsedAL,
+    private readonly i: number,
+    readonly parent: ALSyntaxNode | null,
     readonly fieldName: string | null,
   ) {}
 
-  get kind(): ALNodeKind {
-    if (!isALNodeKind(this.ts.type)) {
-      // Unknown raw kinds (e.g. anonymous tokens) are surfaced via `rawKind`.
-      // We still cast for the interface contract; consumers should branch on
-      // `isALNodeKind(node.rawKind)` when working with arbitrary nodes.
-      return this.ts.type as ALNodeKind;
-    }
-    return this.ts.type;
-  }
-
   get rawKind(): string {
-    return this.ts.type;
+    return at(this.p.flat.kindNames, at(this.p.flat.kind, this.i, "kind"), "kindNames");
+  }
+  // Unknown raw kinds (anonymous tokens) are surfaced as-is, exactly as WrappedNode did.
+  get kind(): ALNodeKind {
+    return this.rawKind as ALNodeKind;
   }
   get text(): string {
-    return this.ts.text;
+    return this.p.source.slice(this.startIndex, this.endIndex);
   }
   get startIndex(): number {
-    return this.ts.startIndex;
+    return at(this.p.flat.startIndex, this.i, "startIndex");
   }
   get endIndex(): number {
-    return this.ts.endIndex;
+    return at(this.p.flat.endIndex, this.i, "endIndex");
   }
   get startPosition(): { readonly row: number; readonly column: number } {
-    return this.ts.startPosition;
+    const pt = this.p.flat.points;
+    return { row: at(pt, 4 * this.i, "points"), column: at(pt, 4 * this.i + 1, "points") };
   }
   get endPosition(): { readonly row: number; readonly column: number } {
-    return this.ts.endPosition;
+    const pt = this.p.flat.points;
+    return { row: at(pt, 4 * this.i + 2, "points"), column: at(pt, 4 * this.i + 3, "points") };
   }
-  get parent(): ALSyntaxNode | null {
-    return this.parentNode;
+  get isMissing(): boolean {
+    return (at(this.p.flat.flags, this.i, "flags") & FLAG_MISSING) !== 0;
   }
-
+  get hasError(): boolean {
+    return (at(this.p.flat.flags, this.i, "flags") & FLAG_HAS_ERROR) !== 0;
+  }
   get children(): readonly ALSyntaxNode[] {
-    // web-tree-sitter 0.25.x types `children` as `(Node | null)[]`. In practice
-    // entries are non-null for rootNode's descendants, but we defensively
-    // filter and preserve the original index so `fieldNameForChild` is correct.
-    const raw = this.ts.children;
-    const out: ALSyntaxNode[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const c = raw[i];
-      if (c === null || c === undefined) continue;
-      out.push(new WrappedNode(c, this, this.ts.fieldNameForChild(i) ?? null));
-    }
-    return out;
+    return this.childNodes(false);
   }
-  // No-op setter so that ill-typed runtime assignments to this readonly
-  // accessor are silently ignored rather than throwing TypeError in strict
-  // mode. TypeScript still enforces `readonly` at compile time via the
-  // `ALSyntaxNode` interface.
+  // No-op setters, as on WrappedNode: a runtime assignment is ignored rather than throwing.
   set children(_: readonly ALSyntaxNode[]) {
-    /* readonly — ignored */
+    /* readonly, ignored */
   }
-
   get namedChildren(): readonly ALSyntaxNode[] {
-    const raw = this.ts.namedChildren;
-    const out: ALSyntaxNode[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const c = raw[i];
-      if (c === null || c === undefined) continue;
-      out.push(new WrappedNode(c, this, this.ts.fieldNameForNamedChild(i) ?? null));
-    }
-    return out;
+    return this.childNodes(true);
   }
   set namedChildren(_: readonly ALSyntaxNode[]) {
-    /* readonly — ignored */
+    /* readonly, ignored */
   }
-
   childForFieldName(name: string): ALSyntaxNode | null {
-    const child = this.ts.childForFieldName(name);
-    return child === null ? null : new WrappedNode(child, this, name);
+    const f = this.p.flat;
+    for (let c = this.firstChild(); c !== -1; c = at(f.nextSibling, c, "nextSibling")) {
+      if (this.fieldOf(c) === name) return new FlatNode(this.p, c, this, name);
+    }
+    return null;
+  }
+  private firstChild(): number {
+    return at(this.p.flat.childCount, this.i, "childCount") > 0 ? this.i + 1 : -1;
+  }
+  private fieldOf(c: number): string | null {
+    const id = at(this.p.flat.field, c, "field");
+    return id === 0 ? null : at(this.p.flat.fieldNames, id, "fieldNames");
+  }
+  private childNodes(namedOnly: boolean): ALSyntaxNode[] {
+    const f = this.p.flat;
+    const out: ALSyntaxNode[] = [];
+    for (let c = this.firstChild(); c !== -1; c = at(f.nextSibling, c, "nextSibling")) {
+      if (namedOnly && (at(f.flags, c, "flags") & FLAG_NAMED) === 0) continue;
+      out.push(new FlatNode(this.p, c, this, this.fieldOf(c)));
+    }
+    return out;
   }
 }
 
-export function wrapRoot(tree: Tree): ALSyntaxNode {
-  return new WrappedNode(tree.rootNode, null, null);
+export function wrapFlatRoot(parsed: ParsedAL): ALSyntaxNode {
+  return new FlatNode(parsed, 0, null, null);
 }
 
 export function findFirst(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode | null {

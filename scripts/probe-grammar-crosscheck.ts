@@ -32,8 +32,12 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 // Reached through the engine package, which owns this dependency; scripts/ has no direct one.
 import { Language, Parser } from "../packages/engine/node_modules/web-tree-sitter/tree-sitter.js";
-import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import {
+  initWasmParser as initParser,
+  parseALWasm as parseAL,
+  wrapWasmRoot as wrapRoot,
+} from "../packages/engine/src/ast/parser-wasm";
+import type { ALSyntaxNode } from "../packages/engine/src/ast/syntax-node";
 import { isStatementSlot } from "../packages/engine/src/ast/tree-walks";
 import { defaultAlToolPaths } from "../packages/runner/src/publisher";
 import { corpusEntries, describeFingerprint, fingerprintCorpus } from "./corpus-fingerprint";

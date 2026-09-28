@@ -80,6 +80,8 @@ export function synthesizeAfter(before: ALSyntaxNode, text: string): ALSyntaxNod
     children: before.children,
     namedChildren: before.namedChildren,
     fieldName: before.fieldName,
+    isMissing: before.isMissing,
+    hasError: before.hasError,
     childForFieldName: before.childForFieldName.bind(before),
   };
 }

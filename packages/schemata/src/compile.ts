@@ -255,6 +255,8 @@ function insertionNodeAt(anchor: ALSyntaxNode, index: number): ALSyntaxNode {
     children: [],
     namedChildren: [],
     fieldName: null,
+    isMissing: false,
+    hasError: false,
     childForFieldName: () => null,
   };
 }

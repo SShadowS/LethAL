@@ -89,9 +89,29 @@ git tag v0.1.0-alpha.3     # must equal the root package.json version
 git push origin v0.1.0-alpha.3
 ```
 
-The workflow refuses a tag that disagrees with `package.json`, runs typecheck and the unit suite,
-builds all five targets, smoke-tests the Windows binary with `--version`, and opens a **draft**
-release with the binaries attached and generated notes.
+The workflow refuses a tag that disagrees with `package.json`, builds and checks the native parser
+on every target (see [The native parser](#the-native-parser-rust-03) below), runs typecheck and the
+unit suite, builds all five targets, signs and verifies the Windows binary, runs every compiled
+binary on its own platform, and only then opens a **draft** release. Its attachments are the five
+binaries, each addon's `lethal-parser.<key>.provenance.json`, and
+`packages/engine/native/THIRD-PARTY-NOTICES.md` (every crate compiled into the addon, with its full
+license and copyright text).
+
+**No release ships unless all five targets pass.** `publish` needs `smoke`, and through it `build`,
+`native-darwin-x64` and all five `native-parser` jobs. A failing target blocks the release; there is
+no per-target opt-out.
+
+**Both `build` and `publish` run in the `release` GitHub environment.** `build` needs it for the
+signing login: the Entra federated credential's subject is `repo:SShadowS/LethAL:environment:release`.
+`publish` is there because it creates the release: before S2 that step lived inside `build`, so it
+was gated by the environment, and moving it to its own job must not drop that gate. The environment
+has no protection rules today, so this costs nothing; any it gains later (a reviewer, a tag policy)
+then gate the release itself, not only the signing.
+
+The workflow also has a `workflow_dispatch` trigger, for a trial run. On a dispatch the tag check is
+replaced by a version-stamp check, and `publish` is skipped (it runs only on a pushed `v*` tag), so
+a trial can never create a release or a draft. GitHub dispatches a workflow only if the trigger
+exists on the default branch, so the trigger and the two guards land on `master` first.
 
 Draft, not published, because two things still need a human:
 
@@ -111,6 +131,88 @@ Its first run cost a fix worth knowing about: the trigger was `push: branches: [
 `pull_request`, so pushing a feature branch ran nothing at all, and a workflow that only fires
 after a merge reports a problem that has already shipped. Corrected in `af0b056`.
 
+## The native parser (RUST-03)
+
+Each binary embeds a native tree-sitter-al addon (`packages/engine/native`, a Rust crate) built for
+its own platform. Until the RUST-03 switch (S3) the product still parses with WASM, but the addon is
+built, checked and embedded from S2 on, so no release can carry an addon that was not built and
+parse-tested on every target.
+
+**Only CI-built addons ship, and no `.node` file is ever committed.** Release CI builds each addon,
+uploads it, and `build` downloads all five into `packages/engine/vendor/native/` before it typechecks,
+tests and compiles. `scripts/build-binary.ts` embeds one per target through a `require` whose path is
+a template over the build-time define `__LETHAL_NATIVE_KEY__` (the target's platform key), which is
+the only form `bun build --compile` embeds.
+
+### The compiler for each target
+
+Every addon's C code (the grammar and the tree-sitter runtime) is compiled by clang from **LLVM
+23.1.2**, macOS included. `scripts/install-llvm.sh <key>` downloads the pinned official asset,
+checks its sha256, and refuses any clang whose `--version` line is not exactly `clang version
+23.1.2`. `build-native-parser.ts` and `build.rs` refuse the same way, and the version line is baked
+into the addon (`nativeInfo().cCompiler`), where CI checks it again after the build.
+
+| target | built on | runner arch | `nativeInfo().target` | C compiler | LLVM asset |
+| --- | --- | --- | --- | --- | --- |
+| win32-x64 | windows-latest | x64 | `x86_64-pc-windows-msvc` | clang-cl 23.1.2 | `LLVM-23.1.2-win64.msi` (administrative install, leaves the runner's own LLVM alone) |
+| linux-x64 | ubuntu-22.04 | x64 | `x86_64-unknown-linux-gnu` | clang 23.1.2 | `LLVM-23.1.2-Linux-X64.tar.xz` |
+| linux-arm64 | ubuntu-22.04-arm | arm64 | `aarch64-unknown-linux-gnu` | clang 23.1.2 | `LLVM-23.1.2-Linux-ARM64.tar.xz` |
+| darwin-x64 | macos-14, CROSS-built | arm64 | `x86_64-apple-darwin` | clang 23.1.2 | `LLVM-23.1.2-macOS-ARM64.tar.xz` |
+| darwin-arm64 | macos-14 | arm64 | `aarch64-apple-darwin` | clang 23.1.2 | `LLVM-23.1.2-macOS-ARM64.tar.xz` |
+
+On macOS, `SDKROOT="$(xcrun --show-sdk-path)"` is exported for cc-rs. Each native job asserts the
+runner's `process.arch` before building and `nativeInfo().target` and the compiler after.
+
+**darwin-x64 is cross-built** (owner ruling): LLVM 23.1.2 publishes no macOS x64 build, and every
+release addon must come from the same clang. So the arm64 Mac runs `bun scripts/build-native-parser.ts
+--target darwin-x64` with the arm64 LLVM, and the `native-darwin-x64` job then checks that addon on
+an Intel Mac (`macos-15-intel`, GitHub's last Intel macOS image, available until August 2027;
+`macos-13` was retired 2025-12-04): compiler and target, `lethal native-check`, the fixture parse,
+and it writes the addon's provenance there, since a cross-built addon cannot be loaded where it was
+built. The native Rust tests (`--test`) run on the four native targets only: a cross-built test
+binary cannot run on the arm64 runner.
+
+The clang 23.1.2 guarantee covers COMPILATION on darwin-x64, not linking. The grammar and the
+tree-sitter runtime (all the C) are compiled by the pinned clang with `--target=x86_64-apple-darwin`,
+which is what `nativeInfo().cCompiler` records. rustc then LINKS the addon through the runner's
+Apple `cc -arch x86_64`, as it does on every macOS build; no LLVM 23.1.2 linker is involved.
+
+`KyleMayes/install-llvm-action` is not used: its asset list stops at 21.1.8 (CI run 36443811955).
+
+### Checks per target
+
+- `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32
+  nodes 7382 errors 0"` parses every fixture file through the addon directly. `--expect` is
+  required, and all five targets expect the same line (the parse does not depend on the platform).
+  Before S3 the product `--dry-run` never calls the addon, so this is the addon's own parse check.
+- `smoke`: runs each compiled binary from a directory with no `packages/` tree, so it cannot load a
+  `.node` from disk. `--version` must not say DIRTY; the hidden `lethal native-check` must print
+  `native <triple> clang version 23.1.2 ... nodes 56` (a missing embedded addon exits non-zero with
+  `NativeParserMissingError`); and `run --project fixtures/sandbox-data --dry-run` must print the
+  two count lines `dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)` and
+  `batch 0 (407 mutant site(s), 387 deployed):`.
+
+### Building from source
+
+Building the addon locally needs **Rust 1.96** and **LLVM 23.1.2**:
+
+```bash
+bash scripts/install-llvm.sh win32-x64          # or install LLVM 23.1.2 yourself and set LLVM_BIN
+bun scripts/build-native-parser.ts              # writes packages/engine/vendor/native/lethal-parser.<key>.node
+bun scripts/build-native-parser.ts --test       # the Rust tests
+```
+
+A local `build:binary` needs only the host's addon; `build:binaries` needs all five, so it is a CI
+job.
+
+### Reproducibility
+
+Measured 2026-09-28 on Windows (win32-x64, at `bc43a05`'s crate sources): two builds, each into a
+fresh, empty `CARGO_TARGET_DIR` (two different directories), gave the same `.node` sha256
+(`196686bbab708d358dab26583a09291b8b380b93c4df9d26384a4468784d3259`). So it is byte-reproducible on
+one machine, whatever the target directory. Across machines and platforms it was not measured, so
+the claim there is "reproducible in behaviour, not bytes" until someone measures it.
+
 ## What the build produces
 
 `bun run build:binary` builds for the machine you are on. `bun run build:binaries` builds all five
@@ -126,6 +228,10 @@ Measured for `0.1.0-alpha.1`:
 | `bun-linux-arm64` | `lethal-0.1.0-alpha.1-linux-arm64` | 98.1 MiB |
 | `bun-darwin-x64` | `lethal-0.1.0-alpha.1-darwin-x64` | 74.8 MiB |
 | `bun-darwin-arm64` | `lethal-0.1.0-alpha.1-darwin-arm64` | 69.4 MiB |
+
+With the native parser embedded (RUST-03 S2, `0.1.0-alpha.3`), the Windows binary is **118.1 MiB**
+(123,790,848 bytes, built at `2ec3884`'s tree). The other four were not built locally:
+`build:binaries` needs all five addons, which only release CI has.
 
 Each was confirmed to be a genuine executable for its platform (`file`: PE32+, ELF x86-64, ELF
 aarch64, Mach-O x86_64, Mach-O arm64). Most of the size is the embedded Bun runtime; roughly 8 MB
@@ -241,6 +347,7 @@ lethal run --project <dir> --dry-run
 > releases — which is the same rot the citations rule (R117) is about, one level up.
 - **Binaries are unsigned.** SmartScreen will warn on Windows, and macOS Gatekeeper will refuse the
   Darwin builds until they are notarised or the quarantine attribute is cleared.
-- **The macOS and Linux builds have never been executed**, only built and format-checked, because
-  this is a Windows machine. Verify each on its own platform before publishing.
+- **The macOS and Linux builds have never been executed** on this machine, only built and
+  format-checked. Since RUST-03 S2 the release workflow's `smoke` job runs each one on its own
+  platform before anything is published, but that workflow has not yet run.
 - **No release has been cut.** `origin` exists (`https://github.com/SShadowS/LethAL.git`, public) as of 2026-08-08, so there IS somewhere to upload to — but step 7 has never been run, so the upload half of this document is still unexercised.

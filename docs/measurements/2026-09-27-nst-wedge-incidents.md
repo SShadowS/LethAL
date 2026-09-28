@@ -39,6 +39,7 @@ Scratch evidence paths are under `C:/Users/SShadowS/AppData/Local/Temp/` and are
 | 3 | Non-terminating AL loop inside a fenced call (deliberate, a mutant) | every `itest:hang` OFF leg by design; 1 stop failure | 1 (2026-09-26, stop did not take) | 2026-07-31 onward |
 | 4 | Client-aborted OData calls, then the whole OData endpoint stops answering | 1 | 1 | 2026-07-18 |
 | 5 | Related, not wedges: stranded operations and a stalled body with a healthy server | 4 | 0 proven | 2026-07-25 to 2026-09-02 |
+| 6 | `$metadata`'s stalled body (no TestPage), then OData throttling (event 705); a separate 401 credentials problem overlapped | 1 incident window | not recorded (recovery not confirmed in the observed window) | 2026-09-27 to 2026-09-28 |
 
 ---
 
@@ -265,6 +266,51 @@ few times, then call `$metadata`. Observed: `$metadata` hangs while the dev endp
 The 2026-09-02 case has the same outward shape as section 1 (headers, then a stalled body) on a
 different test. R191 guesses an outbound HTTP call from Continia Core waiting on a network the
 container lacks; not measured.
+
+---
+
+## 6. `$metadata`'s stalled body, then OData throttling, with an unrelated 401 overlapping (2026-09-27/28)
+
+### What we sent
+
+R289's P1 sidecar tooling, before its redesign (see the pre-commitment spec's ADDENDUM,
+`docs/superpowers/specs/2026-09-27-r289-probe-precommitment.md`), polled `GET ODataV4/$metadata`
+among other calls against Cronus284, and separately a plain `curl` on the same endpoint. No
+TestPage is involved anywhere in this incident: `$metadata` touches no table and opens no page.
+
+### What the server did (MEASURED)
+
+- `GET ODataV4/$metadata` returned headers within 0.5 s, then the body stopped at 65,262 bytes and
+  never finished: curl timed out at 60 s, twice, on Cronus284. This is the same shape as section 1's
+  truncated TestPage reply (headers arrive, the body does not), but here with no TestPage anywhere in
+  the call.
+- Afterwards the container's Application event log recorded Id 705, "Request was throttled. It
+  either timed-out or was cancelled.", with `"Requests running": "5"`, `"Requests waiting": "6"`,
+  `"Operation": "ODataV4"`.
+- `Company` requests then timed out from about 22:04:59 UTC (00:04:59 local) through about 22:15:34
+  UTC (00:15 local): every poll in that window returned curl exit code `000` (no response), never a
+  401 and never a 200.
+- **Correlation, not a proven cause:** the throttling may have been partly caused by our own stalled
+  `$metadata` requests holding the sidecar's user's OData V4 slots open. This is not measured; the
+  sidecar at the time used the SAME BC user as the gate it was observing, so if it did hold slots,
+  it was taking them from the gate.
+- **A separate problem overlapped the same window:** the orchestrator saw HTTP 401 on the fixture's
+  gate credentials on Cronus28 and Cronus284 from about 23:14 local, before the throttling above.
+  Whether the 401s and the throttling share a cause is not known; they are recorded together only
+  because they fall in the same window.
+
+### Recovery
+
+Recovery was not completed within the observed window: the last recorded poll (00:15:34 local) was
+still a timeout. Polling stopped on the coordinator's order rather than on a confirmed recovery.
+
+### Evidence
+
+`.superpowers/sdd/2026-09-27-R-289-hang-stop/task-4-report.md`, and scratch files under
+`C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r289/`:
+`metadata-curl.txt` (the two 60 s / 65,262-byte curl hits), `dry2-sidecar.ndjson` (the sidecar's own
+four probes all timing out from the first sample once throttling set in), and `recovery-poll.txt`
+(the `Company` polls from 00:04:59 to 00:15:34 local, all `000`).
 
 ## What is not in this record
 

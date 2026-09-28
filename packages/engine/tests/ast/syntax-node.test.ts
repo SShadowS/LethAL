@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { ALNodeKind } from "../../src/ast/node-kinds";
 import { initParser, parseAL } from "../../src/ast/parser";
-import { findAll, findFirst, wrapRoot } from "../../src/ast/syntax-node";
+import { findAll, findFirst, visit, wrapRoot } from "../../src/ast/syntax-node";
 
 describe("syntax-node", () => {
   beforeAll(async () => {
@@ -41,5 +41,24 @@ describe("syntax-node", () => {
     // readonly compile-time check (no runtime assertion possible)
     // @ts-expect-error children is readonly
     proc.children = [];
+  });
+
+  it("reports parse health: hasError on a broken header, isMissing on an inserted token", () => {
+    const clean = wrapRoot(
+      parseAL("codeunit 50100 X { procedure P() var i: Integer; begin i := 1 end; }"),
+    );
+    expect(clean.hasError).toBe(false);
+    expect(clean.isMissing).toBe(false);
+    expect(wrapRoot(parseAL("codeunit 50100 X { procedure P( begin end; }")).hasError).toBe(true);
+    // The missing ';' after the variable declaration is inserted by the parser as a MISSING node.
+    const broken = wrapRoot(
+      parseAL("codeunit 50100 X { procedure P() var i: Integer begin i := 1; end; }"),
+    );
+    const missing: string[] = [];
+    visit(broken, (n) => {
+      if (n.isMissing) missing.push(`${n.rawKind}@${n.startIndex}`);
+    });
+    expect(broken.hasError).toBe(true);
+    expect(missing).toEqual([";@47"]);
   });
 });

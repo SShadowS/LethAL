@@ -22,8 +22,12 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ALNodeKind } from "../packages/engine/src/ast/node-kinds";
-import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import {
+  initWasmParser as initParser,
+  parseALWasm as parseAL,
+  wrapWasmRoot as wrapRoot,
+} from "../packages/engine/src/ast/parser-wasm";
+import type { ALSyntaxNode } from "../packages/engine/src/ast/syntax-node";
 import { isStatementPosition } from "../packages/engine/src/ast/tree-walks";
 import { parseHealth } from "./lib/grammar-crosscheck";
 

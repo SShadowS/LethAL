@@ -293,6 +293,56 @@ describe("parseCliConfig", () => {
   });
 });
 
+/** RUST-03 S2.2: the hidden `lethal native-check`, which release CI runs on every compiled binary. */
+describe("native-check", () => {
+  const REPO = join(import.meta.dir, "..", "..", "..");
+  const CLI = join(REPO, "packages", "runner", "src", "cli.ts");
+
+  test("parses to its own mode", () => {
+    expect(parseCliConfig(["native-check"])).toEqual({ mode: "native-check" });
+  });
+
+  test("takes no flags and no positionals, so it can never fall through to a run", () => {
+    expect(() => parseCliConfig(["native-check", "--project", "x"])).toThrow(/--project/);
+    expect(() => parseCliConfig(["native-check", "extra"])).toThrow(/unexpected argument/);
+  });
+
+  test("is not advertised", () => {
+    expect(helpText("0.0.0")).not.toContain("native-check");
+    let message = "";
+    try {
+      parseCliConfig(["frobnicate"]);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).toContain("expected one of: run");
+    expect(message).not.toContain("native-check");
+  });
+
+  test("source mode parses the snippet through the addon", () => {
+    const r = Bun.spawnSync(["bun", CLI, "native-check"], { cwd: REPO });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString().trim()).toMatch(
+      /^native \S+ clang version 23\.1\.2.* nodes [1-9]\d*$/,
+    );
+  });
+
+  test("a missing embedded addon fails with NativeParserMissingError, never a parse", () => {
+    // The compiled binary requires the key its build defined; defining one with no .node on disk
+    // is exactly a release binary that shipped without its addon.
+    const r = Bun.spawnSync(
+      ["bun", "--define", '__LETHAL_NATIVE_KEY__="linux-riscv64"', CLI, "native-check"],
+      { cwd: REPO },
+    );
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stdout.toString()).toBe("");
+    const err = r.stderr.toString();
+    expect(err).toContain("NativeParserMissingError");
+    expect(err).toContain("linux-riscv64");
+    expect(err).toContain("bun scripts/build-native-parser.ts");
+  });
+});
+
 /**
  * `lethal campaign freeze | anchors | compare` — argument marshaling only. The gates themselves,
  * and the git wiring they rest on, are exercised against a REAL repository in
