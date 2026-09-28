@@ -1455,3 +1455,343 @@ describe("GH-24: reach grain and marker placement", () => {
     }
   });
 });
+/**
+ * R297. The grammar lets a `#if` block holding a procedure, an attribute or a split procedure sit
+ * inside the object's `var_body`. The injector used to REPLACE the whole var section and append the
+ * selector at its end, so an edit inside the swallowed procedure overlapped the replace, and when
+ * nothing overlapped the selector landed after a procedure or between an attribute and its
+ * procedure. Each test first pins the parse shape it relies on, so a grammar change cannot make it
+ * vacuous. The byte-identity of ordinary var sections is pinned through the full pipeline in
+ * `packages/runner/tests/preproc-instrumentation.test.ts`.
+ */
+describe("R297: the selector var is inserted after the leading declarations", () => {
+  const SELECTOR = 'MutationSelector: Codeunit "Mutation Selector";';
+
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  /** The object's own var_body children. */
+  function objectVarBody(root: ALSyntaxNode): readonly ALSyntaxNode[] {
+    const section = findFirst(root, ALNodeKind.var_section);
+    const body = section?.children.find((c) => c.rawKind === "var_body");
+    if (body === undefined) throw new Error("fixture drift: no object var_body");
+    return body.namedChildren;
+  }
+
+  function holds(n: ALSyntaxNode, rawKind: string): boolean {
+    return n.namedChildren.some((c) => c.rawKind === rawKind);
+  }
+
+  function assignment(root: ALSyntaxNode, text: string): ALSyntaxNode {
+    const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
+    if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+    return a;
+  }
+
+  function selectorAt(out: string): number {
+    expect(out.split(SELECTOR).length - 1).toBe(1);
+    return out.indexOf(SELECTOR);
+  }
+
+  it("a-swallow: a #if holding a procedure after the declarations is not replaced", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const body = objectVarBody(root);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
+    const [, cond] = body;
+    if (cond === undefined) throw new Error("fixture drift");
+    expect(holds(cond, "procedure")).toBe(true);
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(at).toBeGreaterThan(out.indexOf("G: Integer;"));
+    expect(at).toBeLessThan(out.indexOf("#if"));
+  });
+
+  it("a-only-swallow: a var section holding only a swallowed procedure gets the selector right after `var`", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    var
+        G: Integer;
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const body = objectVarBody(root);
+    expect(body.map((c) => c.rawKind)).toEqual(["preproc_conditional_var"]);
+    const [cond] = body;
+    if (cond === undefined) throw new Error("fixture drift");
+    expect(holds(cond, "procedure")).toBe(true);
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(out.slice(0, at)).toMatch(/\{\s*var\s*$/);
+  });
+
+  it("a-mixed: a #if holding a declaration AND a procedure ends the run, so the selector precedes it", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        H: Integer;
+
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        H := L;
+        Message('%1', H);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const body = objectVarBody(root);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
+    const [, cond] = body;
+    if (cond === undefined) throw new Error("fixture drift");
+    expect(holds(cond, "variable_declaration") && holds(cond, "procedure")).toBe(true);
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(at).toBeGreaterThan(out.indexOf("G: Integer;"));
+    expect(at).toBeLessThan(out.indexOf("#if"));
+    expect(at).toBeLessThan(out.indexOf("H: Integer;"));
+  });
+
+  it("a-attr: a #if holding only an attribute belongs to the next procedure, so the selector precedes it", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+    [Obsolete('x', '27.0')]
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const body = objectVarBody(root);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
+    const [, cond] = body;
+    if (cond === undefined) throw new Error("fixture drift");
+    expect(holds(cond, "attribute_item")).toBe(true);
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(at).toBeGreaterThan(out.indexOf("G: Integer;"));
+    expect(at).toBeLessThan(out.indexOf("#if"));
+  });
+
+  it("an attribute plus an empty procedure in a #if (ContactSyncProcessor's shape) is not followed by the selector", () => {
+    // No spec sits inside the swallowed procedure, so nothing overlapped at HEAD: the selector was
+    // appended after `#endif`, after a procedure, which alc rejects in the `#if`'s active arm.
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+    [Obsolete('x', '27.0')]
+    procedure A(X: Integer)
+    begin
+    end;
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const body = objectVarBody(root);
+    expect(body.map((c) => c.rawKind)).toEqual(["variable_declaration", "preproc_conditional_var"]);
+    const [, cond] = body;
+    if (cond === undefined) throw new Error("fixture drift");
+    expect(holds(cond, "attribute_item") && holds(cond, "procedure")).toBe(true);
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(at).toBeGreaterThan(out.indexOf("G: Integer;"));
+    expect(at).toBeLessThan(out.indexOf("#if"));
+  });
+
+  it("a-bare-split: a split procedure directly under var_body ends the run", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+    procedure A(X: Integer)
+#else
+    procedure A(X: Integer; Y: Integer)
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    expect(objectVarBody(root).map((c) => c.rawKind)).toEqual([
+      "variable_declaration",
+      "preproc_split_procedure",
+    ]);
+    // The spec sits in B: a spec inside the split procedure has no latch owner yet (class C).
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "G := 2"), "G := 3", "lethal.op"),
+    ]);
+    const at = selectorAt(out);
+    expect(at).toBeGreaterThan(out.indexOf("G: Integer;"));
+    expect(at).toBeLessThan(out.indexOf("#if"));
+  });
+
+  const PREAMBLE = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+    procedure A()
+    var
+        L: Integer;
+#else
+    procedure A()
+    var
+        L: Integer;
+        M: Integer;
+#endif
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+
+  it("a-preamble, in isolation: a spec outside the preamble puts the selector before the #if (position only)", () => {
+    // The preamble parses as a SIBLING of the var section, not inside var_body, so this shape never
+    // reaches the allowlist and this test is green at HEAD too; only the position is claimed.
+    const root = wrapRoot(parseAL(PREAMBLE));
+    expect(objectVarBody(root).map((c) => c.rawKind)).toEqual(["variable_declaration"]);
+    const out = compileSchemataForFile(PREAMBLE, root, [
+      spec(assignment(root, "G := 2"), "G := 3", "lethal.op"),
+    ]);
+    expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
+  });
+
+  it("a-preamble: a spec inside the preamble procedure still throws (no latch owner; filed)", () => {
+    const root = wrapRoot(parseAL(PREAMBLE));
+    expect(() =>
+      compileSchemataForFile(PREAMBLE, root, [
+        spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
+      ]),
+    ).toThrow("a reach marker sits outside any procedure or trigger body");
+  });
+
+  it("R251: specs for one object from two separate tree walks yield exactly one selector", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+
+    procedure A()
+    begin
+        G := 1;
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+    end;
+}
+`;
+    const first = wrapRoot(parseAL(src));
+    const second = wrapRoot(parseAL(src));
+    const out = compileSchemataForFile(src, first, [
+      spec(assignment(first, "G := 1"), "G := 5", "lethal.op"),
+      spec(assignment(second, "G := 2"), "G := 6", "lethal.op"),
+    ]);
+    selectorAt(out);
+  });
+});
