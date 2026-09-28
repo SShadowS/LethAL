@@ -259,3 +259,24 @@ already predicted.
 
 The five new tests measured here are no-ops on one fixture (`fixtures/sandbox-data`). This result
 says nothing about verify's wall time with real answer tests, or on a real project.
+
+## Clarifications to Results (2026-09-28)
+
+Appended after review r1 (`H:/lethal-coord/reviews/R-270-001/review-r1.md`). Nothing above is edited.
+
+- **The BLOCK condition "exactly the one expected baseline failure" changed before either session
+  ran, and the Results above did not say so.** R-236c (`49d0458`) made LethAL refuse a test that may
+  open a TestPage BEFORE sending it, so `Data Tests.PageActionComputesNonZero` no longer fails at
+  baseline: it is never sent. The condition the driver actually checked, and which both sessions
+  met, is `assertOnlyExpectedTestPageRefusal`: `unsupportedTests` is EMPTY (zero baseline failures),
+  `testPageRefused.tests` is exactly `["Data Tests.PageActionComputesNonZero"]`, the caveat
+  `tests-testpage-refused` is present, and `tests-testpage-unsupported` (BC refusing a TestPage test
+  that WAS sent) is absent. That is stricter than the written line: it pins the same test by name,
+  and also proves the refusal happened on LethAL's side rather than as a BC failure. "All MET" above
+  means this condition, not the literal one.
+- **The finding-only prediction "`killingTest` of B equals the baseline's" is UNSCORED.** The driver
+  does not print or compare `killingTest` (`verdictDiffs` compares verdicts only), so neither session
+  produced evidence for or against it. It is neither MATCHED nor MISSED.
+- **Session 1's failed restore could not be traced to its stores afterwards** because the driver's
+  outer `finally` deleted the scratch dir unconditionally. Fixed in `49684c8`:
+  a restore that fails or is refused now KEEPS the scratch dir and prints what it holds.
