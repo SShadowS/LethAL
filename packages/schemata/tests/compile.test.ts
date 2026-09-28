@@ -1771,13 +1771,14 @@ describe("R297: the selector var is inserted after the leading declarations", ()
     expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
-  it("a-preamble: a spec inside the preamble procedure still throws (no latch owner; filed)", () => {
+  it("a-preamble: a spec inside the preamble procedure is refused by name, not thrown (R309)", () => {
     const root = wrapRoot(parseAL(PREAMBLE));
-    expect(() =>
-      compileSchemataForFile(PREAMBLE, root, [
-        spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
-      ]),
-    ).toThrow("a reach marker sits outside any procedure or trigger body");
+    const s = spec(assignment(root, "L := 1"), "L := 2", "lethal.op");
+    expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+    const out = compileSchemataForFile(PREAMBLE, root, [s]);
+    expect(out).not.toContain(REACH_LATCH);
+    expect(out).not.toContain("MutationSelector.Reached(");
+    expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
   it("R251: specs for one object from two separate tree walks yield exactly one selector", () => {
@@ -2900,5 +2901,240 @@ describe("R-303 run 002: a directive around a member's var section never carries
     expect(latchAnchorInVarSection(moved)?.rawKind).toBe("var_keyword");
     // Control: the real, unmoved section anchors on its declaration.
     expect(latchAnchorInVarSection(vars)?.rawKind).toBe("variable_declaration");
+  });
+});
+
+/** R309: split-header procedures whose #if arms each hold their own header and var section. Hand-written. */
+const PREAMBLE_BODY = `    begin
+        Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+const PREAMBLE_CASES: { name: string; src: string }[] = [
+  {
+    name: "P1 #if and #else arms, an attribute in the #else arm",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P2 #if, #elif and #else arms",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#elif B
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        N: Text;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P3 #if and #elif, no #else",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#elif not A
+    [Scope('OnPrem')]
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P4 one arm with no var section",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P8 an arm whose own var section is itself inside #if",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+#if B
+    var
+        K: Integer;
+#endif
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P10 arms that rename the procedure",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Choose(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+];
+
+describe("R309: a split-header procedure whose arms each have their own var section is refused by name", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const instrumentAll = (src: string) => {
+    const root = wrapRoot(parseAL(src));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+      spec(n, "Glob := 0", "lethal.op"),
+    );
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const grains = buildComponents(ided).flatMap((c) =>
+      c.members.map((m) => reachGrainOf(m, c.root)),
+    );
+    return { specs, grains, out: compileSchemataForFile(src, root, specs, ided) };
+  };
+
+  const [first] = PREAMBLE_CASES;
+  if (first === undefined) throw new Error("fixture drift: no preamble case");
+  const cases = [
+    ...PREAMBLE_CASES,
+    { name: "P6 P1 saved with CRLF", src: first.src.replace(/\n/g, "\r\n") },
+  ];
+  for (const c of cases) {
+    it(`${c.name}: a preamble owns every site, all unplaced, no latch, no marker, no line moved`, () => {
+      const { specs, grains, out } = instrumentAll(c.src);
+      expect(specs).toHaveLength(2);
+      for (const s of specs)
+        expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+      expect(grains).toEqual(["unplaced", "unplaced"]);
+      expect(out).not.toContain(REACH_LATCH);
+      expect(out).not.toContain("MutationSelector.Reached(");
+      expect(out.split(SELECTOR_DECL).length - 1).toBe(1);
+      expect(directiveLinesClean(out)).toBe(true);
+      const lf = (t: string): string => t.replace(/\r\n/g, "\n");
+      expect(linesWithoutInstrumentation(lf(out))).toBe(lf(c.src).split("\n").length);
+    });
+  }
+
+  it("M1: a plain member, a preamble, an R303 hoist, an R301 split header and R-297's selector anchor in one file", () => {
+    const src = `codeunit 50100 "Repro P"
+{
+    var
+        Glob: Integer;
+#if not CLEAN27
+        Old: Integer;
+#endif
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        P := X + 3;
+        exit(P);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+    begin
+        Glob := X + 1;
+        exit(Glob);
+    end;
+
+    procedure Hoist(X: Integer): Integer
+#if not CLEAN27
+    var
+        H: Integer;
+#endif
+    begin
+        Glob := X + 4;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure Split(X: Integer): Integer
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Split(X: Integer): Integer
+#endif
+    var
+        S: Integer;
+    begin
+        S := X + 5;
+        exit(S);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    expect(
+      assignments.map((n) => `${n.text} -> ${reachLatchRefusedOwner(n)?.rawKind ?? "latch"}`),
+    ).toEqual([
+      "P := X + 3 -> latch",
+      "Glob := X + 1 -> preproc_split_procedure_preamble",
+      "Glob := X + 4 -> latch",
+      "S := X + 5 -> latch",
+    ]);
+    const specs = assignments.map((n) => spec(n, "Glob := 0", "lethal.op"));
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(src, root, specs, ided);
+    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`    procedure Hoist(X: Integer): Integer var ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`S: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(3);
+    expect(out.split("MutationSelector.Reached(").length - 1).toBe(3);
+    // R-297: the selector goes after a declaration-only #if block's #endif, on a line of its own.
+    expect(out).toContain(
+      `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR_DECL}\n`,
+    );
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(src.split("\n").length);
   });
 });

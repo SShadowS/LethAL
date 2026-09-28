@@ -89,7 +89,7 @@ function injectReachLatches(
     const begin = body?.children[0];
     if (owner === null || begin === undefined) {
       throw new Error(
-        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. A split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble) lands here: it is not refused by name, it stops the run (R309).`,
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: a split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble) is refused by \`placeReach\` before any marker is placed (R309).`,
       );
     }
     const known = byOwner.get(owner.startIndex);
