@@ -1077,7 +1077,7 @@ Expected: every census diff is 0/0 and every hash listing is identical, native a
 cmp "$S/ids-wasm-baseapp.txt" "$S/ids-native-baseapp.txt" && echo "BaseApp identity listing identical"
 head -1 "$S/ids-native-baseapp.txt"   # header: raw <n> deployed <n> skippedFiles <n>, raw and deployed > 0
 wc -l < "$S/ids-native-baseapp.txt"   # > 1,000,000 (RUST-02: 1,687,697)
-sha256sum "$S/ids-native-baseapp.txt" # expected a66a270e1530907e2b6c2b468b29f409fcd822b2ee92e02e6827bd083c59621b
+sha256sum "$S/ids-native-baseapp.txt" # context: eeb5e3e2... at e5bed71 (S0), a66a270e... at 71b8df1; the gate is native == WASM at the S3 base
 ```
 
 Every listing, on both sides, must pass the same non-empty checks: a header line with `raw`, `deployed` and `skippedFiles` all present and `raw` and `deployed` above 0, and a line count equal to `deployed` plus the header. Two empty listings "matching" is this project's signature bug. Any same-revision difference is a BLOCK. Save the working tree with `git stash push -m "RUST-03 switch, blocked by <Q>"` (keep the stash as evidence), write an AMENDMENT, and stop for the owner.
@@ -1292,7 +1292,7 @@ const _manifestKeysCovered: [_ManifestKeys] extends [never] ? true : never = tru
 
 **This task is a TEMPLATE.** No S4.2 sub-task is opened until AMENDMENT 1 has been reviewed and committed (S0.3 Step 2). For every reconciled lead that the reviewed AMENDMENT 1 lists at 15% or more of the W8 or W4 peak, create a task shaped like this (S4.2a, S4.2b, and so on). The exact code is written when the task is opened, not now. A lead is a lead: each sub-task's Step 4 measurement, not the attribution, decides whether the fix worked. Do not grow S4 into a two-pass redesign from these leads; that is its own plan (open question 1).
 
-- [ ] **Step 1: Pre-commit the prediction.** Append to the pre-commitment `## AMENDMENT <n> (S4.2x prediction)`: the item, the predicted W8 and W4 peaks after the fix, and "identity listing a66a270e unchanged". Commit it alone.
+- [ ] **Step 1: Pre-commit the prediction.** Append to the pre-commitment `## AMENDMENT <n> (S4.2x prediction)`: the item, the predicted W8 and W4 peaks after the fix, and "identity listing eeb5e3e2 unchanged" (the same-revision listing at e5bed71 on both parsers, AMENDMENT 1; a66a270e is RUST-02's at 71b8df1, context only). Commit it alone.
 - [ ] **Step 2: Write the failing test.** Use a unit-scale memory assertion of the same kind as S3.3: for example, `liveParseResults()` falls after spec generation if the item is "retained ParsedAL after context build", or a heap-count bound from `bun:jsc` `heapStats().objectTypeCounts` on a 2,000-file synthetic project. Red-check it against the unfixed code.
 - [ ] **Step 3: Implement the smallest change that releases the item.** The expected shapes, depending on attribution:
   - drop references to `parsed[]` sources and roots once specs are generated and ordinals are assigned;
@@ -1300,7 +1300,7 @@ const _manifestKeysCovered: [_ManifestKeys] extends [never] ? true : never = tru
   - write NDJSON-free id listings.
 
   Keep every consumer's input identical.
-- [ ] **Step 4: Prove it.** `fixture-emission.test.ts` passes unchanged. The S0.2 harness listing on whole BaseApp still has sha256 `a66a270e...`. Re-measure W8 and W4, 3 runs each.
+- [ ] **Step 4: Prove it.** `fixture-emission.test.ts` passes unchanged. The S0.2 harness listing on whole BaseApp still has sha256 `eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832` (1,687,723 lines) unless a commit since e5bed71 explains the change. Re-measure W8 and W4, 3 runs each.
 - [ ] **Step 5:** Commit the fix. Then commit the measured result as an AMENDMENT, alone.
 
 ### Task S4.3: Measure the ceilings, then file honestly
