@@ -52,6 +52,7 @@ import { quarantineResourceKey } from "../src/resource-key";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import type { PublishedTestApp } from "../src/test-app-publish";
+import { scanTestPageTests } from "../src/testpage-scan";
 import { runVerify } from "../src/verify";
 import type { VerifyOutput } from "../src/verify";
 import { itestConfigName, itestConfigPath } from "./config-path";
@@ -61,7 +62,7 @@ import { assertFreshFullRun } from "./verify-agreement";
 import {
   type StampedEvent,
   allSurvivorIds,
-  assertOnlyExpectedBaselineFailure,
+  assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
   firstSurvivorIds,
   foldLibraryTimeline,
@@ -358,7 +359,7 @@ async function main(): Promise<void> {
         [],
         `step 3: A differs from tables.baseline.json:\n${aDiffs.join("\n")}`,
       );
-      assertOnlyExpectedBaselineFailure(a);
+      assertOnlyExpectedTestPageRefusal(a);
       const ids = allSurvivorIds(a, SURVIVORS);
       const aArtifact = a.artifacts?.at(-1)?.artifactId;
       if (aArtifact === undefined) throw new Error("step 3: A carries no artifacts[]");
@@ -461,7 +462,7 @@ async function main(): Promise<void> {
           [],
           `step 7: ${leg} differs from tables.baseline.json:\n${d.join("\n")}`,
         );
-        assertOnlyExpectedBaselineFailure(b);
+        assertOnlyExpectedTestPageRefusal(b);
         assert.equal(b.staleTestApp, undefined, `step 7: ${leg} has no staleTestApp`);
         assert.equal(
           b.validity.baselineTests.total,
@@ -627,6 +628,8 @@ async function main(): Promise<void> {
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,
         quarantineDir,
+        // R-236c: the product's own scan, so a carrier that may open a TestPage is never sent.
+        testPageRefused: await scanTestPageTests(TEST_DIR, [RESTORE_METHOD]),
         inLease: async (fence) => {
           published = await backend.publishTestApp(fence, compiled);
         },

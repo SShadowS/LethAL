@@ -7,7 +7,7 @@ import {
   type StampedEvent,
   VerifyScaleError,
   allSurvivorIds,
-  assertOnlyExpectedBaselineFailure,
+  assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
   firstSurvivorIds,
   foldLibraryTimeline,
@@ -48,6 +48,8 @@ function mutant(overrides: Overrides & { mutantCode: string }): MutantOutcome {
 interface Extra {
   readonly batches?: number;
   readonly unsupportedTests?: readonly string[];
+  readonly testPageRefused?: readonly string[];
+  readonly caveats?: readonly string[];
   readonly quarantined?: { readonly reason: string };
 }
 
@@ -56,7 +58,10 @@ function report(mutants: readonly MutantOutcome[], extra: Extra = {}): SessionRe
     mutants,
     batches: extra.batches ?? 1,
     unsupportedTests: extra.unsupportedTests ?? [],
-    validity: { caveats: [] },
+    validity: { caveats: extra.caveats ?? [] },
+    ...(extra.testPageRefused !== undefined
+      ? { testPageRefused: { tests: extra.testPageRefused, diagnosis: "d" } }
+      : {}),
     ...(extra.quarantined !== undefined ? { quarantined: extra.quarantined } : {}),
   } as unknown as SessionReport;
 }
@@ -164,16 +169,31 @@ describe("verdictDiffs", () => {
 
 const PAGE_TEST = "Data Tests.PageActionComputesNonZero";
 
-describe("assertOnlyExpectedBaselineFailure", () => {
-  test("accepts exactly the TestPage test", () => {
-    expect(() =>
-      assertOnlyExpectedBaselineFailure(report([], { unsupportedTests: [PAGE_TEST] })),
-    ).not.toThrow();
+describe("assertOnlyExpectedTestPageRefusal", () => {
+  const OK = { testPageRefused: [PAGE_TEST], caveats: ["tests-testpage-refused"] };
+
+  test("accepts exactly the TestPage test refused, named, and no baseline failure", () => {
+    expect(() => assertOnlyExpectedTestPageRefusal(report([], OK))).not.toThrow();
   });
 
-  test("refuses none, a different one, and that one plus another", () => {
-    for (const u of [[], ["Data Tests.Other"], [PAGE_TEST, "Data Tests.Other"]]) {
-      expect(() => assertOnlyExpectedBaselineFailure(report([], { unsupportedTests: u }))).toThrow(
+  test("refuses a baseline failure, even the TestPage test itself (it was sent)", () => {
+    for (const u of [[PAGE_TEST], ["Data Tests.Other"]]) {
+      expect(() =>
+        assertOnlyExpectedTestPageRefusal(report([], { ...OK, unsupportedTests: u })),
+      ).toThrow(VerifyScaleError);
+    }
+  });
+
+  test("refuses no refusal, a different one, and that one plus another", () => {
+    for (const r of [undefined, [], ["Data Tests.Other"], [PAGE_TEST, "Data Tests.Other"]]) {
+      const extra = r === undefined ? { caveats: OK.caveats } : { ...OK, testPageRefused: r };
+      expect(() => assertOnlyExpectedTestPageRefusal(report([], extra))).toThrow(VerifyScaleError);
+    }
+  });
+
+  test("refuses an unnamed refusal and BC's own TestPage refusal", () => {
+    for (const caveats of [[], ["tests-testpage-refused", "tests-testpage-unsupported"]]) {
+      expect(() => assertOnlyExpectedTestPageRefusal(report([], { ...OK, caveats }))).toThrow(
         VerifyScaleError,
       );
     }

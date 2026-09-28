@@ -101,14 +101,29 @@ export function verdictDiffs(
   return diffs;
 }
 
-const EXPECTED_BASELINE_FAILURE = "Data Tests.PageActionComputesNonZero";
+const EXPECTED_TESTPAGE_REFUSAL = "Data Tests.PageActionComputesNonZero";
 
-/** Throws unless unsupportedTests is exactly ["Data Tests.PageActionComputesNonZero"]. */
-export function assertOnlyExpectedBaselineFailure(report: SessionReport): void {
+/** R-236c, as tables.itest.ts pins it: no test failed at baseline, exactly that TestPage test was
+ *  refused before sending, the refusal is named as a caveat, and BC's own TestPage refusal (which
+ *  would mean one was SENT) is absent. Throws otherwise. */
+export function assertOnlyExpectedTestPageRefusal(report: SessionReport): void {
   const u = report.unsupportedTests;
-  if (u.length !== 1 || u[0] !== EXPECTED_BASELINE_FAILURE) {
+  if (u.length !== 0) {
+    throw new VerifyScaleError(`baseline failures ${JSON.stringify(u)}, expected none`);
+  }
+  const refused = report.testPageRefused?.tests ?? [];
+  if (refused.length !== 1 || refused[0] !== EXPECTED_TESTPAGE_REFUSAL) {
     throw new VerifyScaleError(
-      `baseline failures ${JSON.stringify(u)}, expected exactly [${JSON.stringify(EXPECTED_BASELINE_FAILURE)}]`,
+      `TestPage refusals ${JSON.stringify(refused)}, expected exactly [${JSON.stringify(EXPECTED_TESTPAGE_REFUSAL)}]`,
+    );
+  }
+  const caveats = report.validity.caveats;
+  if (!caveats.includes("tests-testpage-refused")) {
+    throw new VerifyScaleError("the report does not name the refusal (no tests-testpage-refused)");
+  }
+  if (caveats.includes("tests-testpage-unsupported")) {
+    throw new VerifyScaleError(
+      "BC refused a TestPage test, so one was SENT: the pre-refusal did not engage",
     );
   }
 }
