@@ -4,6 +4,7 @@ import {
   declarationMembers,
   findFirst,
   isObjectContainer,
+  isProcedureLike,
   isStatementPosition,
   printWithRewrites,
 } from "@lethal/engine";
@@ -81,11 +82,8 @@ function injectReachLatches(
   for (const c of components) {
     if (!c.members.some((m) => reachGrainOf(m, c.root) === "statement")) continue;
     let owner: ALSyntaxNode | null = c.root;
-    while (
-      owner !== null &&
-      owner.kind !== ALNodeKind.procedure &&
-      owner.kind !== ALNodeKind.trigger
-    )
+    // R301: a split-header procedure's shared var section and body are its own direct children.
+    while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
       owner = owner.parent;
     const body = owner?.children.find((n) => n.kind === ALNodeKind.block);
     const begin = body?.children[0];
@@ -138,7 +136,7 @@ function latchNameFor(owner: ALSyntaxNode): string {
   const walk = (n: ALSyntaxNode): void => {
     // Span, not identity: the engine's wrapper nodes are created per traversal.
     const isOwner = n.startIndex === owner.startIndex && n.endIndex === owner.endIndex;
-    if (!isOwner && (n.kind === ALNodeKind.procedure || n.kind === ALNodeKind.trigger)) return;
+    if (!isOwner && (isProcedureLike(n) || n.kind === ALNodeKind.trigger)) return;
     if (n.rawKind === ALNodeKind.identifier || n.rawKind === "quoted_identifier") {
       used.add(n.text.replace(/^"|"$/g, "").toLowerCase());
     }

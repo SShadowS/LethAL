@@ -17,6 +17,7 @@ export {
   isStatementPosition,
   isStatementSlot,
   gapBlockOf,
+  isProcedureLike,
   declarationMembers,
   isObjectContainer,
   objectDeclarationsOf,

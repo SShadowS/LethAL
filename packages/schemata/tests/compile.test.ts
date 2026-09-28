@@ -1712,7 +1712,7 @@ describe("R297: the selector var is inserted after the leading declarations", ()
       "variable_declaration",
       "preproc_split_procedure",
     ]);
-    // The spec sits in B: a spec inside the split procedure has no latch owner yet (class C).
+    // The spec sits in B; a spec inside the split procedure is R301's test below.
     const out = compileSchemataForFile(src, root, [
       spec(assignment(root, "G := 2"), "G := 3", "lethal.op"),
     ]);
@@ -1872,5 +1872,102 @@ describe("R298: #if-wrapped objects are instrumented (one object-container rule)
     ]);
     expect(out).toContain(`${REACH_LATCH}: Boolean;`);
     expect(count(out, SELECTOR)).toBe(1);
+  });
+});
+
+/** R301 (class C) repros, hand-written: a procedure whose HEADER is split by `#if`. */
+const C_SPLIT_HEADER = (ifArm: string, elseArm: string): string => `codeunit 50100 "Repro C"
+{
+    procedure First()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+
+#if CLEAN27
+    ${ifArm}
+#else
+    ${elseArm}
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        Message('%1', L);
+    end;
+}
+`;
+const C_SPLIT = C_SPLIT_HEADER("procedure A(X: Integer)", "internal procedure A(X: Integer)");
+
+describe("R301: a split-header procedure owns its reach latch", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  function assignment(root: ALSyntaxNode, text: string): ALSyntaxNode {
+    const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
+    if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+    return a;
+  }
+
+  it("c-split: a spec in the split body does not throw and declares the latch in the shared var section", () => {
+    const root = wrapRoot(parseAL(C_SPLIT));
+    const out = compileSchemataForFile(C_SPLIT, root, [
+      spec(assignment(root, "L := X"), "L := 0", "lethal.op"),
+    ]);
+    expect(out).toContain(`L: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+    // Declared in the split procedure (after its #endif), not in First.
+    expect(out.indexOf(`${REACH_LATCH}: Boolean;`)).toBeGreaterThan(out.indexOf("#endif"));
+  });
+
+  it("a-bare-split: a spec inside a split procedure directly under var_body instruments", () => {
+    const src = `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+    procedure A(X: Integer)
+#else
+    procedure A(X: Integer; Y: Integer)
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := X"), "L := 0", "lethal.op"),
+    ]);
+    expect(out).toContain(`L: Integer; ${REACH_LATCH}: Boolean;`);
+  });
+
+  it("latchNameFor: a split procedure's locals are not in another procedure's scope", () => {
+    // The split procedure declares a local named like the latch; First cannot see it, so First's
+    // latch keeps the plain name. Walking into the split procedure would suffix it to `...2`.
+    const src = C_SPLIT.replace(
+      "        L: Integer;\n    begin\n        L := X;",
+      `        L: Integer;\n        ${REACH_LATCH}: Integer;\n    begin\n        L := X;`,
+    );
+    expect(src).not.toBe(C_SPLIT);
+    const root = wrapRoot(parseAL(src));
+    const out = compileSchemataForFile(src, root, [
+      spec(assignment(root, "L := 1"), "L := 0", "lethal.op"),
+    ]);
+    expect(out).toContain(`L: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out).not.toContain(`${REACH_LATCH}2`);
   });
 });

@@ -138,6 +138,17 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
   return null;
 }
 
+/**
+ * R301: a `procedure`, or a split-header procedure (`preproc_split_procedure`: one header per `#if`
+ * arm, then ONE shared `var` section and body as direct children). The manifest, latch and
+ * line-map walks own a split procedure through this. `findEnclosingProcedure` and the semantic
+ * walks deliberately do NOT use it yet (R302). A `preproc_split_procedure_preamble` is not
+ * procedure-like: each arm has its own `var` section, so one latch cannot serve both (R301).
+ */
+export function isProcedureLike(n: ALSyntaxNode): boolean {
+  return n.kind === ALNodeKind.procedure || n.rawKind === "preproc_split_procedure";
+}
+
 /** Narrowest `procedure` ancestor, or `null` if the node is outside any procedure. */
 export function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;

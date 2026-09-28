@@ -9,6 +9,7 @@ import {
   gapBlockOf,
   initParser,
   isObjectContainer,
+  isProcedureLike,
   isStatementPosition,
   isStatementSlot,
   objectDeclarationsOf,
@@ -327,5 +328,74 @@ ${body}`;
       (d) => d.childForFieldName("object_id")?.text,
     );
     expect(ids).toEqual(["50104", "50105", "50106"]);
+  });
+});
+
+/** R301 (class C): a procedure whose HEADER is split by `#if` shares one var section and one body. */
+const SPLIT = `codeunit 50100 "Repro C"
+{
+#if CLEAN27
+    procedure A(X: Integer)
+#else
+    internal procedure A(X: Integer)
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        Message('%1', L);
+    end;
+
+    trigger OnRun()
+    begin
+    end;
+}
+`;
+
+describe("R301: split-header procedures", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const first = (root: ALSyntaxNode, rawKind: string): ALSyntaxNode => {
+    let hit: ALSyntaxNode | null = null;
+    visit(root, (n) => {
+      if (hit === null && n.rawKind === rawKind) hit = n;
+    });
+    if (hit === null) throw new Error(`no ${rawKind}`);
+    return hit;
+  };
+
+  it("isProcedureLike: a procedure and a split procedure, never a trigger or a preamble", () => {
+    const root = wrapRoot(parseAL(SPLIT));
+    expect(isProcedureLike(first(root, "preproc_split_procedure"))).toBe(true);
+    expect(
+      isProcedureLike(
+        first(wrapRoot(parseAL("codeunit 1 C { procedure P() begin end; }")), "procedure"),
+      ),
+    ).toBe(true);
+    expect(isProcedureLike(first(root, "trigger_declaration"))).toBe(false);
+    const preamble = `codeunit 1 C
+{
+#if CLEAN27
+    procedure A()
+    var
+        L: Integer;
+#else
+    procedure A()
+    var
+        M: Integer;
+#endif
+    begin
+    end;
+}
+`;
+    expect(
+      isProcedureLike(first(wrapRoot(parseAL(preamble)), "preproc_split_procedure_preamble")),
+    ).toBe(false);
+  });
+
+  it("findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)", () => {
+    const root = wrapRoot(parseAL(SPLIT));
+    expect(findEnclosingProcedure(first(root, "assignment_statement"))).toBeNull();
   });
 });

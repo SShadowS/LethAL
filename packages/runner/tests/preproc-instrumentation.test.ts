@@ -160,6 +160,30 @@ const REPRO: Record<string, string> = {
     end;
 }
 `,
+  "a-bare-split": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+    procedure A(X: Integer)
+#else
+    procedure A(X: Integer; Y: Integer)
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
   "a-mixed": `codeunit 50100 "Repro A"
 {
     var
