@@ -6,7 +6,6 @@ import {
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
-  findEnclosingProcedure,
   gapBlockOf,
   isProcedureLike,
   maskAlNonCode,
@@ -474,9 +473,22 @@ const LOCAL_SCOPE_PREFIX = /^\s*(?:\[[^\]]*\]\s*)*local\b/;
 
 /** `local`/`public` for the enclosing procedure, or `undefined` outside one (a trigger body). */
 function procedureScopeOf(spec: MutationSpec): "local" | "public" | undefined {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return undefined;
+  if (proc.rawKind === "preproc_split_procedure") return splitIsLocal(proc) ? "local" : "public";
   return LOCAL_SCOPE_PREFIX.test(proc.text) ? "local" : "public";
+}
+
+/** R301: a split procedure is `local` only when EVERY arm is: `local` widens coverage to object
+ *  grain (selection.ts, R63), so a public arm read as local could manufacture a vacuous `survived`.
+ *  Each arm is one `procedure_keyword`, with its `local` in a `procedure_modifier` before it. */
+function splitIsLocal(proc: ALSyntaxNode): boolean {
+  const arms = proc.children.filter((c) => c.rawKind === "procedure_keyword").length;
+  const localArms = proc.children.filter(
+    (c) =>
+      c.rawKind === "procedure_modifier" && c.children.some((k) => k.rawKind === "local_keyword"),
+  ).length;
+  return arms > 0 && localArms === arms;
 }
 
 /**

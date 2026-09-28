@@ -1439,6 +1439,8 @@ const C_SPLIT_OF = (ifArm: string, elseArm: string): string => `codeunit 50100 "
 }
 `;
 const C_SPLIT = C_SPLIT_OF("procedure A(X: Integer)", "internal procedure A(X: Integer)");
+const C_SPLIT_LOCAL = C_SPLIT_OF("local procedure A(X: Integer)", "local procedure A(X: Integer)");
+const C_SPLIT_MIXED = C_SPLIT_OF("local procedure A(X: Integer)", "procedure A(X: Integer)");
 /** The rename case R301 leaves open: which arm is live depends on symbols the writer does not see. */
 const C_SPLIT_RENAMED = C_SPLIT_OF("procedure AIf(X: Integer)", "procedure AElse(X: Integer)");
 
@@ -1460,6 +1462,20 @@ describe("R301: split-header procedures get their manifest fields", () => {
     const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
     for (const m of manifest.mutants) {
       expect([m.procedureStartLine, m.procedureEndLine]).toEqual(inSplit(m) ? [11, 21] : [3, 9]);
+    }
+  });
+
+  test("scope: public for c-split, local for c-split-local, public when arms disagree", async () => {
+    const cases: [string, "local" | "public"][] = [
+      [C_SPLIT, "public"],
+      [C_SPLIT_LOCAL, "local"],
+      [C_SPLIT_MIXED, "public"],
+    ];
+    for (const [src, scope] of cases) {
+      const { manifest } = await instrument({ "Split.Codeunit.al": src });
+      const split = manifest.mutants.filter(inSplit);
+      expect(split.length).toBeGreaterThan(0);
+      for (const m of split) expect(m.procedureScope).toBe(scope);
     }
   });
 
