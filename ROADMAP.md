@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**81 of 300 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**84 of 303 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -120,6 +120,7 @@ that ordering is the priority.
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · open, filed 2026-09-28
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · open, filed 2026-09-28
+- **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · open, filed 2026-09-28
 
 ## Product gaps a real project hits
 
@@ -206,10 +207,12 @@ that ordering is the priority.
 - **R282** · `swap-modify-flag` for `DeleteAll(true)` and `ModifyAll(..., true)` (GH-04): refused on R013 ground 1, 6 sites and 0 marginal · [R282.md](docs/roadmap/R282.md) · closed 2026-09-27: refused on R013 ground 1: 6 sites (DeleteAll 6, ModifyAll 0) on do-rel2/Cloud sha256…
 - **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · closed 2026-09-27: superseded by R216
 - **R286** · `isStatementSlot` omits `with_statement.body`, so a call that is the whole body of `with ... do` is not a statement site (DC: 8 sites in app code) · [R286.md](docs/roadmap/R286.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
-- **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
+- **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; C5 and C6 fixed 2026-09-28 (7867245, 7d968ca)…
 - **R292** · The operator-site census (`scripts/census-operator-sites.ts`) exhausts wasm memory on BC.History/BaseApp's 9,620 files, so a grammar bump can only census it in halves · [R292.md](docs/roadmap/R292.md) · open, filed 2026-09-27
 - **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
 - **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
+- **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · open, filed 2026-09-28
+- **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · open, filed 2026-09-28
 
 ## Backends and tooling
 
