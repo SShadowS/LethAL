@@ -557,6 +557,39 @@ describe("runSession", () => {
         store.close();
       }
     });
+
+    // R298, end to end through runSession: the SAME table wrapped in `#if`. Its trigger mutants
+    // must read no-coverage, named, and must NOT take fallback 2, though coverage names the table
+    // nowhere exactly as above.
+    test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
+      const dirs = await makeProject();
+      await Bun.write(
+        join(dirs.projectDir, "SandboxTable.Table.al"),
+        `#if not CLEAN27
+${TRIGGER_TABLE_AL}#endif
+`,
+      );
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const triggerMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+        expect(triggerMutants.length).toBeGreaterThan(0);
+        expect(report.untargetedTriggerCount).toBe(0);
+        for (const m of triggerMutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain(
+            "coverage refused for Table:79001 (SandboxTable.Table.al)",
+          );
+        }
+        // The plain codeunit is untouched: it still runs.
+        expect(report.counts.survived).toBeGreaterThan(0);
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    });
   });
 
   // R140, end to end. The bug: a table whose ONLY covering test is red at baseline. That test is

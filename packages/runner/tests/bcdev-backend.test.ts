@@ -2,6 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,11 +24,13 @@ import { DeploymentVerifier } from "../src/deployment-verifier";
 import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
+import { coverageRefusedObjects } from "../src/line-map";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
+import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -2883,7 +2886,11 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       );
   }
 
-  async function deployed(coverage: unknown): Promise<{
+  async function deployed(
+    coverage: unknown,
+    extraFiles: Record<string, string> = {},
+    tables: readonly { Id: number; Name: string }[] = [],
+  ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
   }> {
@@ -2897,6 +2904,8 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     );
     await Bun.write(join(outputDir, "B2.Codeunit.al"), TWO_ARM);
     await Bun.write(join(outputDir, "Other.Codeunit.al"), PLAIN);
+    for (const [rel, text] of Object.entries(extraFiles))
+      await Bun.write(join(outputDir, rel), text);
     const backend = new BcDevMcpBackend(
       {
         mcpCommand: ["unused"],
@@ -2914,6 +2923,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
           { Id: 50103, Name: "Repro B2" },
           { Id: 50107, Name: "Other" },
         ],
+        Tables: tables,
       }),
       factory(coverage),
     );
@@ -2952,6 +2962,77 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
       const said = warn.mock.calls.map((c) => String(c[0]));
       expect(said.filter((s) => s === REFUSED)).toHaveLength(1);
       expect(said.filter((s) => s.includes("coverage refused"))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  const WRAPPED_TABLE = `#if not CLEAN27
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Message('x');
+    end;
+}
+#endif
+`;
+
+  test("end to end: a wrapped TABLE trigger reads no-coverage in selection, not all-green", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const files = { "W.Table.al": WRAPPED_TABLE };
+    const { backend, cleanup } = await deployed(
+      [
+        { objectType: 1, objectId: 50110, lineNo: 0, hits: 1 },
+        { objectType: 1, objectId: 50110, lineNo: 11, hits: 1 },
+        { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+      ],
+      files,
+      [{ Id: 50110, Name: "Wrapped T" }],
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      await initParser();
+      const refused = coverageRefusedObjects(
+        Object.entries({ ...files, "B2.Codeunit.al": TWO_ARM, "Other.Codeunit.al": PLAIN }).map(
+          ([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }),
+        ),
+      );
+      const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
+      const index = buildCoverageIndex([
+        { ref, ...(v.coverage !== undefined ? { coverage: v.coverage } : {}) },
+        { ref: other, coverage: { granularity: "procedure", entries: [] } },
+      ]);
+      const trigger = {
+        mutantId: "M1",
+        file: "W.Table.al",
+        startIndex: 10,
+        endIndex: 20,
+        startLine: 11,
+        operatorName: "empty-block",
+        operatorVersion: "1.0.0",
+        astHash: "h",
+        objectType: "table",
+        codeunitId: 50110,
+        codeunitName: "Wrapped T",
+        procedureName: "",
+        triggerName: "OnInsert",
+        originalText: "x",
+        mutatedText: "",
+      };
+      const split = coverageFilter([trigger], index, [ref, other], undefined, false, refused);
+      expect(split.covered.has("M1")).toBe(false);
+      expect(split.untargetedTriggerCount).toBe(0);
+      expect(split.refused.get("M1")).toContain("coverage refused for Table:50110 (W.Table.al)");
     } finally {
       warn.mockRestore();
       await cleanup();

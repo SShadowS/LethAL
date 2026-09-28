@@ -2,6 +2,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import {
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
@@ -9,6 +10,8 @@ import {
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "../src/al-runner-coverage";
+import { coverageRefusedObjects } from "../src/line-map";
+import { buildCoverageIndex, coverageFilter } from "../src/selection";
 
 /**
  * Verbatim al-runner 2.11.0 output, captured by running
@@ -334,6 +337,112 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
       const index = await buildAlRunnerCoverageIndex(dir);
       expect(index.refusedFiles).toEqual(["src/E.Codeunit.al"]);
       expect(index.byFile.size).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/** R298 end to end: a wrapped TABLE's trigger, through the al-runner conversion into selection. */
+const R298_WRAPPED_TABLE = `#if not CLEAN27
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Message('x');
+    end;
+}
+#endif
+`;
+
+describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage, not all-green", () => {
+  test("Cobertura and --server coverage, then selection: the trigger mutant is refused by name", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const files = { "src/W.Table.al": R298_WRAPPED_TABLE, "src/Other.Codeunit.al": R298_PLAIN };
+      const dir = await bundle(files);
+      const index = await buildAlRunnerCoverageIndex(dir);
+      await initParser();
+      const refused = coverageRefusedObjects(
+        Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
+      );
+      expect([...refused.keys()]).toEqual(["table:50110"]);
+      const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+      const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
+      const coverages = [
+        alRunnerCoverageFrom(
+          [
+            { file: "src/W.Table.al", line: 11, hits: 1 },
+            { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
+          ],
+          index,
+        ),
+        alRunnerCoverageFromServer(
+          {
+            test: "Codeunit50140.T",
+            coverage: [
+              { file: "src/W.Table.al", statements: [{ line: 11, hits: 1, scope: "OnInsert" }] },
+              { file: "src/Other.Codeunit.al", statements: [{ line: 6, hits: 1, scope: "R" }] },
+            ],
+          },
+          index,
+        ),
+      ];
+      for (const coverage of coverages) {
+        const cov = buildCoverageIndex([
+          { ref, coverage },
+          { ref: other, coverage: { granularity: "procedure", entries: [] } },
+        ]);
+        const base = {
+          startIndex: 10,
+          endIndex: 20,
+          startLine: 11,
+          operatorName: "empty-block",
+          operatorVersion: "1.0.0",
+          astHash: "h",
+          originalText: "x",
+          mutatedText: "",
+        };
+        const trigger = {
+          ...base,
+          mutantId: "M1",
+          file: "src/W.Table.al",
+          objectType: "table",
+          codeunitId: 50110,
+          codeunitName: "Wrapped T",
+          procedureName: "",
+          triggerName: "OnInsert",
+        };
+        const plain = {
+          ...base,
+          mutantId: "M2",
+          file: "src/Other.Codeunit.al",
+          objectType: "codeunit",
+          codeunitId: 50107,
+          codeunitName: "Other",
+          procedureName: "R",
+        };
+        const split = coverageFilter(
+          [trigger, plain],
+          cov,
+          [ref, other],
+          undefined,
+          false,
+          refused,
+        );
+        expect(split.covered.has("M1")).toBe(false);
+        expect(split.untargetedTriggerCount).toBe(0);
+        expect(split.uncovered.map((m) => m.mutantId)).toEqual(["M1"]);
+        expect(split.refused.get("M1")).toContain(
+          "coverage refused for Table:50110 (src/W.Table.al)",
+        );
+        expect(split.covered.get("M2")).toEqual([ref]);
+      }
     } finally {
       warn.mockRestore();
     }

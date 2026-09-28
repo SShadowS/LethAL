@@ -219,6 +219,12 @@ export interface CoverageSplit {
    * tests. See docs/roadmap/R175.md.
    */
   readonly unplaceable: ReadonlySet<string>;
+  /**
+   * R298. Mutant ids in `uncovered` because their object is declared inside, or after, a
+   * `#if ... #endif` object wrapper, mapped to the refusal sentence that names the object. Decided
+   * BEFORE every lookup and fallback, so no coverage mode and no fallback can score one.
+   */
+  readonly refused: ReadonlyMap<string, string>;
 }
 
 /** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
@@ -369,6 +375,14 @@ export function coverageFilter(
    * changing attribution for a caller that has not been updated.
    */
   localsAreUnnameable = true,
+  /**
+   * R298. Refused objects, `type:id` (the `objectKeyOf` key) -> the refusal sentence, from
+   * `line-map.ts`'s `coverageRefusedObjects` over the project's parsed files. Every mutant in one
+   * reads no-coverage before any lookup: the fenced and al-runner conversions already drop such
+   * an object's entries, but an absent entry is exactly what sends a TABLE trigger to fallback 2
+   * (all green tests), and a hub-mode entry would reach the member and object lookups directly.
+   */
+  refusedObjects: ReadonlyMap<string, string> = new Map(),
 ): CoverageSplit {
   const byKey = new Map(allTests.map((t) => [testKeyOf(t), t]));
   const covered = new Map<string, TestMethodRef[]>();
@@ -381,8 +395,15 @@ export function coverageFilter(
   const attribution = new Map<string, CoverageAttribution>();
   /** R175 — see `CoverageSplit.unplaceable`. A subset of `uncovered`, scored identically. */
   const unplaceable = new Set<string>();
+  const refused = new Map<string, string>();
   for (const m of mutants) {
     const context = `mutant ${m.mutantId} (${m.file})`;
+    const refusal = refusedObjects.get(objectKeyOf(m.objectType, m.codeunitId, context));
+    if (refusal !== undefined) {
+      refused.set(m.mutantId, refusal);
+      uncovered.push(m);
+      continue;
+    }
     // Member-level first: precise, and correct for every ordinary procedure.
     let testKeys = index.byMember.get(
       memberKeyOf(m.objectType, m.codeunitId, m.procedureName, context),
@@ -543,5 +564,11 @@ export function coverageFilter(
       `[lethal] ${unplaceable.size} mutant(s) are reported no-coverage because coverage saw their object execute a member it could not NAME, not because nothing executed them (R175). That is a limit of LethAL's attribution, NOT a statement that your tests miss this code. Re-run with coverageMode "none" to score them: it runs every mutant against every green test and uses no attribution at all.`,
     );
   }
-  return { covered, uncovered, untargetedTriggerCount, attribution, unplaceable };
+  if (refused.size > 0) {
+    const reasons = [...new Set(refused.values())].map((r) => `  ${r}`);
+    console.warn(
+      `[lethal] ${refused.size} mutant(s) read no-coverage because coverage is refused for their object (R298):\n${reasons.join("\n")}`,
+    );
+  }
+  return { covered, uncovered, untargetedTriggerCount, attribution, unplaceable, refused };
 }

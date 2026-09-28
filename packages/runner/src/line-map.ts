@@ -167,6 +167,14 @@ export class LineMap {
     return this.refused.get(keyOf(objectType, objectId));
   }
 
+  /**
+   * R298: every refused DECLARED object, `type:id` (lower-cased) -> reason. Read at index time so
+   * a wrapped object is named even when no coverage row ever arrives for it.
+   */
+  refusedByKey(): ReadonlyMap<string, string> {
+    return this.refused;
+  }
+
   /** Whether the compiled artifact declares this object at all. */
   declares(objectType: string, objectId: number): boolean {
     return this.declared.has(keyOf(objectType, objectId));
@@ -369,6 +377,24 @@ export function fileLineMapEntries(
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
+}
+
+/**
+ * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
+ * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence. The SAME object-container rule
+ * as the line map (`fileLineMapEntries`), so selection refuses exactly what the fenced path
+ * refuses, whatever coverage mode produced the entries.
+ */
+export function coverageRefusedObjects(
+  files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
+): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    for (const e of fileLineMapEntries(f.root, objectIdentityOf, normalizeSlashes(f.path))) {
+      if (e.refused !== undefined) out.set(keyOf(e.objectType, e.objectId), e.refused);
+    }
+  }
+  return out;
 }
 
 /**

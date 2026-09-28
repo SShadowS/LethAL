@@ -78,6 +78,7 @@ import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from ".
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -4088,6 +4089,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
+  // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
+  const coverageRefused = coverageRefusedObjects(allFiles);
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -4802,6 +4806,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         let uncovered: readonly MutantManifestEntry[] = [];
         // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
         let unplaceableIds: ReadonlySet<string> = new Set();
+        // R298: which of `uncovered` are refused (wrapped objects), with the sentence naming why.
+        let refusedIds: ReadonlyMap<string, string> = new Map();
         // R197: how narrow each test is, for the covering-test order. Empty under "none", where
         // there is no attribution to be narrow about and the order falls through to duration.
         let memberCounts: ReadonlyMap<string, number> = new Map();
@@ -4828,8 +4834,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // get the same answer. Spelling it as a comparison against one mode's NAME meant every
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
+            coverageRefused,
           );
           perMutantTests = split.covered;
+          refusedIds = split.refused;
           coverageAttribution = split.attribution;
           uncovered = split.uncovered;
           unplaceableIds = split.unplaceable;
@@ -4869,6 +4877,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 uncovered,
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
+                undefined,
+                true,
+                coverageRefused,
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
@@ -4892,7 +4903,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               batchIdx,
               emit,
               undefined,
-              undefined,
+              // R298: a refused object's mutant says WHY it reads no-coverage, per row.
+              refusedIds.get(m.mutantId),
               undefined,
               0,
               [],
