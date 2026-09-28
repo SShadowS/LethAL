@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
-import type { RunEvent, RunEventInput } from "../src/events";
+import type { TestOutcome } from "../src/backend";
+import type { BaselineClassification, RunEvent, RunEventInput } from "../src/events";
 import { buildReport } from "../src/report";
+import type { SessionReport } from "../src/report";
 import { foldEvents } from "../src/report-fold";
 import type { FoldStatics } from "../src/report-fold";
+import { TESTPAGE_REFUSED_DIAGNOSIS, testPageNotRunMessage } from "../src/testpage-unsupported";
 
 /**
  * `foldEvents` (report-fold.ts) — the presence-asserting fold, event-stream refactor (spec
@@ -78,6 +81,64 @@ function baseEvents(): RunEventInput[] {
       unplaceableMutants: [],
     },
   ];
+}
+
+/**
+ * A minimal, complete baseline-only stream: `mutation-set-generated`, `tests-discovered` (one
+ * entry per verdict, so `validity.baselineTests.total` is the verdict count, not a fixture
+ * constant), the given `baseline-batch-finished` verdicts, a `coverage-split` when the batch owes
+ * one (R106: any `pass` verdict reaches the coverage filter), and `session-finished`. Returns the
+ * built `SessionReport` directly, since R-236c's fields (`testPageRefused`, `validity.caveats`,
+ * `validity.scoreDescribes`) live there, not on `FoldedReport`.
+ */
+function buildWithBaseline(
+  verdicts: ReadonlyArray<{
+    readonly name: string;
+    readonly outcome: TestOutcome;
+    readonly classification: readonly BaselineClassification[];
+    readonly failureMessage?: string;
+  }>,
+): SessionReport {
+  const events: RunEventInput[] = [
+    {
+      type: "mutation-set-generated",
+      siteCount: 1,
+      deployedCount: 1,
+      hangCapableCount: 0,
+      totalFiles: 1,
+      instrumentableFiles: 1,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    },
+    {
+      type: "tests-discovered",
+      tests: verdicts.map((v, i) => {
+        const dot = v.name.indexOf(".");
+        return {
+          codeunitId: i,
+          codeunitName: dot >= 0 ? v.name.slice(0, dot) : v.name,
+          method: dot >= 0 ? v.name.slice(dot + 1) : v.name,
+        };
+      }),
+    },
+    { type: "baseline-batch-finished", batchIndex: 0, verdicts },
+  ];
+  if (verdicts.some((v) => v.outcome === "pass")) {
+    events.push({
+      type: "coverage-split",
+      batchIndex: 0,
+      untargetedTriggerCount: 0,
+      coveredCount: 1,
+      noCoverageCount: 0,
+      unplaceableCount: 0,
+      unplaceableMutants: [],
+    });
+  }
+  events.push({ type: "session-finished", elapsedMs: 10 });
+  return buildReport(STATICS, seq(events));
 }
 
 describe("foldEvents — mandatory events, throwing rather than defaulting", () => {
@@ -885,5 +946,57 @@ describe("foldEvents: GH-24, per-mutant reach round-trips", () => {
     expect(row?.reachGrain).toBe("enclosing");
     expect(row !== undefined && "guardReached" in row).toBe(false);
     expect(row !== undefined && "reachedBy" in row).toBe(false);
+  });
+});
+
+describe("R-236c: tests refused before sending, as their own category", () => {
+  test("a test refused before sending is named on its own list, never as a failure", () => {
+    const report = buildWithBaseline([
+      { name: "Data Tests.Green", outcome: "pass", classification: [] },
+      {
+        name: "Data Tests.OpensPage",
+        outcome: "skip",
+        classification: ["tests-testpage-refused"],
+        failureMessage: testPageNotRunMessage(
+          'Data Tests.OpensPage calls Card.OpenView on TestPage "X"',
+        ),
+      },
+    ]);
+    expect(report.testPageRefused?.tests).toEqual(["Data Tests.OpensPage"]);
+    expect(report.testPageRefused?.diagnosis).toBe(TESTPAGE_REFUSED_DIAGNOSIS);
+    expect(report.validity.caveats).toContain("tests-testpage-refused");
+    expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
+    expect(report.unsupportedTests).toEqual([]);
+    expect(report.validity.baselineTests).toEqual({ total: 2, failing: 0 });
+    expect(report.baselineGreen).toBe(false);
+    expect(report.validity.scoreDescribes).toContain("0 of 2 baseline tests failing");
+    expect(report.validity.scoreDescribes).toContain(
+      "1 refused before sending (TestPage), not run",
+    );
+  });
+
+  test("nothing refused leaves the score sentence exactly as before", () => {
+    const report = buildWithBaseline([
+      { name: "Data Tests.Green", outcome: "pass", classification: [] },
+      { name: "Data Tests.Red", outcome: "fail", classification: [] },
+    ]);
+    expect(report.validity.scoreDescribes).toBe(
+      "0 scored mutant(s) in 1 .al file(s), with 1 of 2 baseline tests failing",
+    );
+  });
+
+  test("BC's own TestPage refusal stays BC's, never relabelled 'not run' (resume)", () => {
+    const report = buildWithBaseline([
+      {
+        name: "Data Tests.OpensPage",
+        outcome: "error",
+        classification: ["tests-testpage-unsupported"],
+        failureMessage:
+          "System.NotSupportedException: Specified method is not supported. at " +
+          "Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()",
+      },
+    ]);
+    expect(report.testPageRefused).toBeUndefined();
+    expect(report.testPageUnsupported?.tests).toEqual(["Data Tests.OpensPage"]);
   });
 });

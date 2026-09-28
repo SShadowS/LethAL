@@ -358,3 +358,32 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
+
+/**
+ * R-236c: drops every carried verdict that a test this session refuses (a reachable call that may
+ * open a TestPage) took part in, so the resumed run scores that mutant again without it. A verdict
+ * is dropped when its covering tests name a refused test, or, on a row that predates the covering
+ * columns, when its killing test's method name is a refused test's (the only name that row keeps,
+ * so a same-named method in another codeunit is dropped too: re-scoring is the cheap direction).
+ * Re-scoring, not flagging: a dropped key simply executes, exactly as a non-carryable row does.
+ */
+export function withoutRefusedTests(
+  index: ResumeIndex,
+  refused: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }>,
+): { readonly index: ResumeIndex; readonly dropped: number } {
+  if (refused.length === 0) return { index, dropped: 0 };
+  const names = new Set(refused.map((r) => r.qualifiedName));
+  const methods = new Set(refused.map((r) => r.method));
+  const carryable = new Map<string, CarriedVerdict>();
+  for (const [key, v] of index.carryable) {
+    const tookPart =
+      v.coveringTests !== undefined
+        ? v.coveringTests.some((t) => names.has(t))
+        : v.killingTest !== undefined && methods.has(v.killingTest);
+    if (!tookPart) carryable.set(key, v);
+  }
+  return {
+    index: { ...index, carryable },
+    dropped: index.carryable.size - carryable.size,
+  };
+}

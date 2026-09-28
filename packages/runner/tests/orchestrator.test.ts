@@ -87,6 +87,8 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
+import { TestPageScanError } from "../src/testpage-scan";
+import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import { type VerifyDeps, VerifyError, runVerify } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
@@ -552,6 +554,79 @@ describe("runSession", () => {
         const report = await runSession({ backend, store, ...dirs, selectorIds });
         expect(report.untargetedTriggerCount).toBe(0);
       } finally {
+        store.close();
+      }
+    });
+
+    // R298, end to end through runSession: the SAME table wrapped in `#if`. Its trigger mutants
+    // must read no-coverage, named, and must NOT take fallback 2, though coverage names the table
+    // nowhere exactly as above.
+    // R298, run 002 re-review I1: a BARE table, then a wrapped interface. al-runner refuses such a
+    // file whole while its multi-object guard (which cannot count an interface) leaves coverage on,
+    // so selection refuses every object of the file too. Every mutant of the table reads
+    // no-coverage. (An interface, not an enum: the writer refuses a table and an enum in one file
+    // outright, `assertNoUnsupportedObjectMix`, but its header scan does not see an interface.)
+    test("a bare table before a #if-wrapped interface: every table mutant reads no-coverage, named (R298)", async () => {
+      const dirs = await makeProject();
+      await Bun.write(
+        join(dirs.projectDir, "SandboxTable.Table.al"),
+        `${TRIGGER_TABLE_AL}#if not CLEAN27
+interface "I Probe"
+{
+    procedure P();
+}
+#endif
+`,
+      );
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const tableMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+        expect(tableMutants.length).toBeGreaterThan(0);
+        expect(report.untargetedTriggerCount).toBe(0);
+        for (const m of tableMutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain(
+            "coverage refused for Table:79001 (SandboxTable.Table.al): its file also holds",
+          );
+        }
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    });
+
+    test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
+      const dirs = await makeProject();
+      await Bun.write(
+        join(dirs.projectDir, "SandboxTable.Table.al"),
+        `#if not CLEAN27
+${TRIGGER_TABLE_AL}#endif
+`,
+      );
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const triggerMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+        expect(triggerMutants.length).toBeGreaterThan(0);
+        expect(report.untargetedTriggerCount).toBe(0);
+        for (const m of triggerMutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain(
+            "coverage refused for Table:79001 (SandboxTable.Table.al)",
+          );
+        }
+        // The plain codeunit is untouched: it still runs.
+        expect(report.counts.survived).toBeGreaterThan(0);
+        // Selection's refusal warning prints ONCE per batch, not again from the second split.
+        const said = warnSpy.mock.calls.map((c) => String(c[0]));
+        expect(said.filter((x) => x.includes("because coverage is refused"))).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
         store.close();
       }
     });
@@ -1605,6 +1680,422 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   });
 });
 
+describe("R-236c: a test with a reachable call that may open a TestPage is refused before sending", () => {
+  const PAGE_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    var
+        Card: TestPage "Some Card";
+    begin
+        Card.OpenView();
+    end;
+}
+`;
+
+  class RecordingBackend extends QualificationBackend {
+    /** Unmutated runs with coverage asked for: the baseline. A kill's confirm rerun asks for none. */
+    baselineSent: string[] = [];
+    /** Every method sent, baseline, covering or confirm. */
+    sent: string[] = [];
+    constructor(
+      private readonly caps: BackendCapabilities,
+      failureMessage?: string,
+      /** What UnsupportedTest would answer at baseline if it were sent. */
+      unsupportedOutcome: "error" | "pass" = "error",
+    ) {
+      super((method: string) =>
+        method === "UnsupportedTest"
+          ? {
+              outcome: unsupportedOutcome,
+              procedure: "IsUnderBudget",
+              ...(failureMessage !== undefined ? { failureMessage } : {}),
+            }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      );
+    }
+    override capabilities() {
+      return this.caps;
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      this.sent.push(ref.method);
+      if ((this.activations.at(-1) ?? null) === null && opts.coverage !== "none")
+        this.baselineSent.push(ref.method);
+      return super.run(ref, opts);
+    }
+  }
+
+  async function project(testAl = PAGE_TEST_AL) {
+    const dirs = await makeProject(testAl);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    return dirs;
+  }
+  const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
+
+  test("fenced: never sent, named, recorded as skip with the reason", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    expect(backend.baselineSent).toEqual(["GreenTest"]);
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.unsupportedTests).toEqual([]);
+    expect(report.validity.baselineTests.failing).toBe(0);
+    expect(report.validity.caveats).toContain("tests-testpage-refused");
+    expect(report.validity.caveats).not.toContain("tests-testpage-unsupported");
+    expect(report.baselineGreen).toBe(false);
+    const rows = store.db
+      .query(
+        "SELECT outcome, failure_message AS msg FROM test_results WHERE method = 'UnsupportedTest'",
+      )
+      .all() as { outcome: string; msg: string }[];
+    expect(rows.map((r) => r.outcome)).toEqual(["skip"]);
+    expect(rows[0]?.msg).toContain("OpenView");
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
+  });
+
+  // D2: on the hub a TestPage opens, so a baseline there would PASS and put the test in the
+  // covering set of IsUnderBudget's mutants, whose runs are fenced. The stub answers green to say so.
+  test("hub coverage mode refuses too: its mutant runs are fenced", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend(CAPS_NST, undefined, "pass"); // coverage "procedure"
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.baselineSent).toEqual(["GreenTest"]);
+    // Never sent at baseline AND never in a covering run.
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    for (const m of report.mutants.filter((m) => m.procedureName === "IsUnderBudget"))
+      expect(m.verdict).toBe("no-coverage");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+  });
+
+  test("a non-authoritative backend is unchanged: no scan, the test is sent", async () => {
+    const dirs = await project();
+    const backend = new RecordingBackend({ ...FENCED, authoritative: false });
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.baselineSent).toContain("UnsupportedTest");
+    expect(report.testPageRefused).toBeUndefined();
+  });
+
+  test("a reachable parse error stops the run before anything is sent and before a run row", async () => {
+    const broken = PAGE_TEST_AL.replace(
+      "procedure GreenTest()\n    begin",
+      "procedure GreenTest()\n    begin\n        if then;",
+    );
+    const dirs = await project(broken);
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({ backend, store, ...dirs, selectorIds }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TestPageScanError);
+    expect(backend.sent).toEqual([]);
+    expect(backend.deploys).toEqual([]);
+    const runs = store.db.query("SELECT COUNT(*) AS n FROM runs").get() as { n: number };
+    expect(runs.n).toBe(0);
+  });
+
+  test("every test refused: nothing sent, every mutant error, the sentence names the refusals", async () => {
+    const allPages = PAGE_TEST_AL.replace(
+      "procedure GreenTest()\n    begin",
+      'procedure GreenTest()\n    var\n        P: TestPage "X";\n    begin\n        P.OpenView();',
+    );
+    const dirs = await project(allPages);
+    const backend = new RecordingBackend(FENCED);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+    expect(backend.sent).toEqual([]);
+    expect(report.testPageRefused?.tests.length).toBe(2);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) expect(m.verdict).toBe("error");
+    expect(report.validity.scoreDescribes).toContain(
+      "2 refused before sending (TestPage), not run",
+    );
+  });
+
+  // A `--resume` that reuses a saved baseline skips `dispatchUnmutated`. A snapshot recorded before
+  // R-236c on a hub-mode run can hold the TestPage test as GREEN with coverage, which would put it
+  // in a covering set and send it fenced. The scan still runs on resume and overrides that row.
+  /**
+   * Rewrites the store's only baseline snapshot so UnsupportedTest reads as a PASS covering
+   * IsUnderBudget (the hub-mode shape a run before R-236c could save), deletes every mutant verdict
+   * so a resumed batch must deploy and reuse that snapshot, and marks the runs unfinished.
+   */
+  function plantGreenSnapshot(store: ResultsStore): void {
+    const snap = store.db.query("SELECT id, payload FROM baseline_snapshots").all() as {
+      id: number;
+      payload: string;
+    }[];
+    expect(snap.length).toBe(1);
+    const [row] = snap;
+    if (row === undefined) throw new Error("no snapshot");
+    const payload = (JSON.parse(row.payload) as { ref: TestMethodRef; verdict: TestVerdict }[]).map(
+      (b) =>
+        b.ref.method === "UnsupportedTest"
+          ? {
+              ref: b.ref,
+              verdict: {
+                ref: b.ref,
+                outcome: "pass",
+                durationMs: 5,
+                coverage: {
+                  granularity: "procedure",
+                  entries: [
+                    { objectType: "Codeunit", objectId: 79000, procedure: "IsUnderBudget" },
+                  ],
+                },
+              },
+            }
+          : b,
+    );
+    store.db.run("UPDATE baseline_snapshots SET payload = ? WHERE id = ?", [
+      JSON.stringify(payload),
+      row.id,
+    ]);
+    store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+    store.db.run("DELETE FROM mutants");
+    store.db.run("UPDATE runs SET finished_at = NULL");
+  }
+
+  test("resume: a saved baseline recording the refused test green is overridden, never sent", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
+    // Make run 1 look like a pre-R-236c hub run: its snapshot holds UnsupportedTest as a pass
+    // covering IsUnderBudget, and it left every mutant to score (so the batch deploys and reuses).
+    plantGreenSnapshot(store);
+
+    const backend = new RecordingBackend(CAPS_NST);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+      true,
+    );
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.unsupportedTests).toEqual([]);
+    const rows = store.db
+      .query(
+        "SELECT outcome, failure_message AS msg FROM test_results WHERE run_id = 2 AND method = 'UnsupportedTest'",
+      )
+      .all() as { outcome: string; msg: string }[];
+    expect(rows.map((r) => r.outcome)).toEqual(["skip"]);
+    expect(rows[0]?.msg).toContain("OpenView");
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) expect(m.verdict).toBe("no-coverage");
+  });
+
+  // A snapshot is found by its two hashes from ANY run, so a `--tests-only` resume can reuse one
+  // saved by a run with a wider test list. The scan reads only this session's tests, so a saved row
+  // for a test outside them must not come back: here it is the TestPage test, saved green.
+  // `--tests-only` selects FILES, so the TestPage test gets a file of its own.
+  for (const [label, testsOnly] of [
+    ["excluding", ["SandboxTests.Codeunit.al"]],
+    ["including", ["*.al"]],
+  ] as const) {
+    test(`resume with --tests-only ${label} the refused test: never sent`, async () => {
+      const [greenPart, pagePart] = PAGE_TEST_AL.split(
+        "    [Test]\n    procedure UnsupportedTest()",
+      );
+      if (greenPart === undefined || pagePart === undefined) throw new Error("fixture shape");
+      const dirs = await project(`${greenPart}}\n`);
+      await Bun.write(
+        join(dirs.testDir, "PageTests.Codeunit.al"),
+        `codeunit 79101 "Page Tests"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure UnsupportedTest()${pagePart}`,
+      );
+      const store = new ResultsStore(":memory:");
+      // Run 1: the whole suite. Its snapshot is the one a later resume finds.
+      await runSession({ backend: new RecordingBackend(CAPS_NST), store, ...dirs, selectorIds });
+      plantGreenSnapshot(store);
+      // Run 2: narrowed. Its own snapshot is removed, so the resume of run 2 reuses run 1's.
+      await runSession({
+        backend: new RecordingBackend(CAPS_NST),
+        store,
+        ...dirs,
+        selectorIds,
+        testsOnly: [...testsOnly],
+      });
+      store.db.run("DELETE FROM baseline_snapshots WHERE run_id = 2");
+      store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+      store.db.run("DELETE FROM mutants");
+      store.db.run("UPDATE runs SET finished_at = NULL");
+
+      const backend = new RecordingBackend(CAPS_NST);
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        testsOnly: [...testsOnly],
+        resume: 2,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
+        true,
+      );
+      expect(backend.sent).not.toContain("UnsupportedTest");
+    });
+  }
+  // A resume also carries per-mutant verdicts. One the refused test took part in (here, killed it)
+  // was measured with a test this session will not send, so it is re-scored, never carried.
+  test("resume: a saved kill by the refused test is re-scored without it, not carried", async () => {
+    const PLAIN_TEST_AL = PAGE_TEST_AL.replace(
+      '    var\n        Card: TestPage "Some Card";\n    begin\n        Card.OpenView();',
+      "    begin",
+    );
+    const dirs = await project(PLAIN_TEST_AL);
+    const store = new ResultsStore(":memory:");
+    // Run 1: the test opens no TestPage yet, passes, covers IsUnderBudget and kills its 3 mutants.
+    const first = await runSession({
+      backend: new QualificationBackend((method: string) =>
+        method === "UnsupportedTest"
+          ? { outcome: "pass" as const, procedure: "IsUnderBudget" }
+          : { outcome: "pass" as const, procedure: "IsOverBudget" },
+      ),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    const killedBefore = first.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(killedBefore.map((m) => m.verdict)).toEqual(["killed", "killed", "killed"]);
+    expect(killedBefore.every((m) => m.killingTest === "UnsupportedTest")).toBe(true);
+    store.db.run("UPDATE runs SET finished_at = NULL");
+
+    // Run 2: the test now has a reachable call that may open a TestPage.
+    await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
+    const backend = new RecordingBackend(CAPS_NST);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(backend.sent).not.toContain("UnsupportedTest");
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    const rescored = events.find(
+      (e) => e.type === "warning" && e.code === "resume-testpage-rescored",
+    );
+    expect(rescored?.type === "warning" ? rescored.message : "").toContain(
+      "3 prior verdict(s) from run 1",
+    );
+    const underBudget = report.mutants.filter((m) => m.procedureName === "IsUnderBudget");
+    expect(underBudget.length).toBe(3);
+    for (const m of underBudget) {
+      expect(m.verdict).toBe("no-coverage");
+      expect(m.carried === true).toBe(false);
+    }
+    // The verdicts the refused test took no part in still carry.
+    const overBudget = report.mutants.filter((m) => m.procedureName === "IsOverBudget");
+    expect(overBudget.length).toBe(3);
+    for (const m of overBudget) expect(m.carried).toBe(true);
+  });
+  // A resume whose every batch carries runs no baseline at all, so no baseline row can name the
+  // refused test. The report still names it, from the session's own scan, and only once.
+  // Run 002, review r1 #3: this test used to pin `baselineGreen` TRUE here, a wrong reading. A
+  // refused test is a test of the suite that does not pass, resumed or not, so the resumed report
+  // must say what the first run said: baseline not green, `baseline-red`, degraded.
+  test("resume: an all-carried resume still names the refused test and the caveat", async () => {
+    const dirs = await project();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new RecordingBackend(FENCED),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    store.db.run("UPDATE runs SET finished_at = NULL");
+
+    const backend = new RecordingBackend(FENCED);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: 1,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    // Nothing was sent at all: every verdict carried, so no baseline ran.
+    expect(backend.sent).toEqual([]);
+    expect(events.some((e) => e.type === "baseline-batch-finished")).toBe(false);
+    expect(report.mutants.every((m) => m.carried === true)).toBe(true);
+    expect(report.testPageRefused?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+    expect(report.validity.caveats.filter((c) => c === "tests-testpage-refused")).toEqual([
+      "tests-testpage-refused",
+    ]);
+    expect(first.baselineGreen).toBe(false);
+    expect(report.baselineGreen).toBe(false);
+    expect(report.validity.caveats).toContain("baseline-red");
+    expect(report.validity.caveats).toEqual([...first.validity.caveats, "resumed"]);
+    expect(report.validity.reliability).toBe(first.validity.reliability);
+    const rows = store.db.query("SELECT baseline_green AS g FROM runs ORDER BY id").all() as Array<{
+      g: number;
+    }>;
+    expect(rows.map((r) => r.g)).toEqual(rows.map(() => 0));
+    // The same sentence as the first run, which ran the baseline.
+    expect(report.validity.scoreDescribes).toBe(first.validity.scoreDescribes);
+    expect(report.validity.scoreDescribes).toEndWith(
+      "with 0 of 2 baseline tests failing and 1 refused before sending (TestPage), not run",
+    );
+  });
+  // The classifier keys on the message, not on who produced it, so a `--resume` that reuses a
+  // baseline recorded before this change (BC's R69 words) still reports BC's refusal, and only
+  // LethAL's own not-run message is filed as refused. A non-authoritative backend does no scan, so
+  // each message reaches the orchestrator's classifier exactly as a reused snapshot row does.
+  test("the classifier keeps BC's old refusal as BC's and files only the not-run message as refused", async () => {
+    const R69_TEXT =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not " +
+      "supported. at Microsoft.Dynamics.Nav.Runtime.NavSession.CreateNavTestService()";
+    const classify = async (failureMessage: string) => {
+      const dirs = await project();
+      const backend = new RecordingBackend({ ...FENCED, authoritative: false }, failureMessage);
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const finished = events.find((e) => e.type === "baseline-batch-finished");
+      if (finished === undefined || finished.type !== "baseline-batch-finished")
+        throw new Error("no baseline-batch-finished event");
+      return finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+        ?.classification;
+    };
+    expect(await classify(R69_TEXT)).toEqual(["tests-testpage-unsupported"]);
+    expect(
+      await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
+    ).toEqual(["tests-testpage-refused"]);
+  });
+});
 describe("runSession — C3 batch app.json + full source copy", () => {
   test("batch dir gets app.json with bumped version + no-mutant files copied verbatim", async () => {
     const dirs = await makeProject();
@@ -5456,6 +5947,45 @@ describe("runSession — latch+quarantine on in-flight-unknown at baseline and k
   });
 });
 
+describe("runSession: R236b, a verdict read back after a lost reply", () => {
+  test("is the test's verdict, is announced by a lost-reply-recovered warning, and quarantines nothing", async () => {
+    const dir = freshTmpDir();
+    const events: RunEvent[] = [];
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      run: async (ref) => ({
+        ref,
+        outcome: "pass",
+        durationMs: 1,
+        // A read-back verdict is scored by the same parser, so it carries the attestation an
+        // authoritative backend needs (design §G); without it the session quarantines for that.
+        attestation: { observedAny: true, identityMismatch: false },
+        replyRecovered:
+          "RunMutant 2xx body could not be read: The socket connection was closed unexpectedly.",
+      }),
+    });
+    const report = await runSessionForTest(backend, {
+      quarantineDir: dir,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.quarantined).toBeUndefined();
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    const warnings = events.filter(
+      (e) => e.type === "warning" && e.code === "lost-reply-recovered",
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+    const [first] = warnings;
+    expect(first?.type === "warning" ? first.message : "").toContain(
+      "socket connection was closed",
+    );
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————
 // Layer 5C-A Task 8, Task 10 (design §G): two orchestrator-side safety properties for the
 // AUTHORITATIVE (bcdev) backend only.
@@ -7406,6 +7936,173 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(await new QuarantineStore(dir).read(TIER)).toBeNull();
     expect(report.quarantined).toBeUndefined();
     expect(client.recoverArgs).toHaveLength(0);
+  });
+
+  test("R236b 2. an ACCEPTED readback short-circuits the reconcile: one dispatch, no lost-ack warning", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const recovered: Partial<TestVerdict> = {
+      outcome: "pass",
+      attestation: ATTESTED,
+      replyRecovered: "RunMutant 2xx body could not be read: socket closed",
+    };
+    const report = await runSessionForTest(m2Answers([recovered], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(1);
+    expect(codes.filter((c) => c.startsWith("lost-ack"))).toEqual([]);
+    expect(codes).toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R236b 3. a FAILED readback reaches the unchanged reconcile and its one existing fresh attempt", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const failedReadback: Partial<TestVerdict> = {
+      ...LOST_ANSWER,
+      failureMessage: `${LOST_ANSWER.failureMessage}; answer readback failed: ECONNRESET`,
+    };
+    const report = await runSessionForTest(
+      m2Answers([failedReadback, { outcome: "pass", attestation: ATTESTED }], dispatches),
+      { quarantineDir: dir, lease, emit: [(e) => events.push(e)] },
+    );
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(2);
+    expect(codes).toContain("lost-ack-unreadable");
+    expect(codes).toContain("lost-ack-retry");
+    expect(codes).not.toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  /** `m2Answers`' grouped twin: M0002's covering CALLS are answered from `answers` in order
+   *  (last repeating), every other call passes every method. `dispatches` counts M0002's calls. */
+  function m2ManyAnswers(
+    answers: readonly ((opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]) => RunManyResult)[],
+    dispatches: { count: number },
+  ): ExecutionBackend {
+    let activeMutant: string | null = null;
+    let issued = 0;
+    const passAll = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    return leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => ({ ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED }),
+      runMany: async (opts) => {
+        issued++;
+        const fencedOp = { attemptId: `g${issued}`, opSeq: 300 + issued };
+        if (activeMutant !== "M0002") return passAll(opts, fencedOp);
+        const answer = answers[Math.min(dispatches.count, answers.length - 1)] ?? passAll;
+        dispatches.count++;
+        return answer(opts, fencedOp);
+      },
+    });
+  }
+
+  test("R236b 6b(a). a grouped call read back as completed passes: one dispatch, no lost-ack warning, announced", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const recovered = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+        replyRecovered: "RunMutantMany 2xx body could not be read: socket closed",
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    const report = await runSessionForTest(m2ManyAnswers([recovered], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(1);
+    expect(codes.filter((c) => c.startsWith("lost-ack"))).toEqual([]);
+    expect(codes).toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
+  });
+
+  test("R236b 6b(b). a grouped FAILED readback reaches the unchanged reconcile and its one fresh attempt of the chunk", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const events: RunEvent[] = [];
+    const lostCall = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => {
+      const [m] = opts.methods;
+      if (m === undefined) throw new Error("a chunk with no methods");
+      return {
+        kind: "call",
+        verdict: {
+          ref: m.ref,
+          outcome: "error",
+          durationMs: 1,
+          operation: "in-flight-unknown",
+          failureMessage: `${LOST_ANSWER.failureMessage}; answer readback failed: ECONNRESET`,
+          fencedOp,
+        },
+        methodIndex: 1,
+        fencedOp,
+      };
+    };
+    const passAll = (opts: RunManyOpts, fencedOp: RunManyResult["fencedOp"]): RunManyResult => ({
+      kind: "verdicts",
+      endedBy: "complete",
+      ranCount: opts.methods.length,
+      verdicts: opts.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 1,
+        attestation: ATTESTED,
+      })),
+      durationMs: 1,
+      fencedOp,
+    });
+    const report = await runSessionForTest(m2ManyAnswers([lostCall, passAll], dispatches), {
+      quarantineDir: dir,
+      lease,
+      emit: [(e) => events.push(e)],
+    });
+    const codes = events.flatMap((e) => (e.type === "warning" ? [e.code] : []));
+    expect(dispatches.count).toBe(2);
+    expect(codes).toContain("lost-ack-unreadable");
+    expect(codes).toContain("lost-ack-retry");
+    expect(codes).not.toContain("lost-reply-recovered");
+    expect(report.mutants.find((m) => m.mutantCode === "M0002")?.verdict).toBe("survived");
   });
 });
 
@@ -10370,6 +11067,7 @@ async function installedFixture(
     runId,
     installed,
     requests: [{ mutantId: "M0001", methods: [OVER] }],
+    testPageRefused: new Map(),
     emit: [traceEvents(trace)],
     ...(withLease ? { lease: leaseCfg(client).lease } : {}),
   };
@@ -10418,6 +11116,19 @@ describe("C02-04b: runNamedMutants", () => {
     expect(err).toBeInstanceOf(NamedMutantError);
     expect((err as Error).message).toMatch(/run 9999 does not exist/);
     expect(calls(fx.trace)).toEqual([]);
+  });
+
+  // R-236c run 002, review r1 #2: an optional map let a direct caller send a TestPage test.
+  test("runNamedMutants refuses a call with no testPageRefused map before any backend call", async () => {
+    const fx = await installedFixture();
+    const { testPageRefused: _omitted, ...rest } = fx.cfg;
+    const err = await runNamedMutants(rest as unknown as NamedMutantsConfig).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect((err as Error).message).toMatch(/testPageRefused/);
+    expect(calls(fx.trace)).toEqual([]);
+    expect(rowCount(fx.store, "mutants", fx.cfg.runId)).toBe(0);
   });
 
   test("runNamedMutants refuses a finished run before any backend call", async () => {
@@ -10612,6 +11323,29 @@ describe("C02-04b: runNamedMutants", () => {
       .some((c) => c.call === "run" && c.method === "RedAtBaseline");
     expect(ranAtBaseline).toBe(true);
     expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0001" });
+  });
+
+  test("R-236c: runNamedMutants never sends a TestPage-refused method, at baseline, against a mutant or on rerun", async () => {
+    const fx = await installedFixture({ session: freshSessions() });
+    const reason = "Sandbox Tests.OverBudgetDetected calls Card.OpenView";
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      rerunOnUnmutated: [OVER],
+      requireEveryMethodGreen: true,
+      testPageRefused: new Map([[`${OVER.codeunitId}::${OVER.method}`, reason]]),
+    });
+    const sent = (calls(fx.trace) as Array<{ call: string; method?: string }>).filter(
+      (c) => c.call === "run" || c.call === "runMany",
+    );
+    expect(sent).toEqual([]);
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["error"]);
+    expect(res.baseline.map((b) => [b.ref.method, b.outcome, b.failureMessage])).toEqual([
+      ["OverBudgetDetected", "skip", testPageNotRunMessage(reason)],
+    ]);
+    expect(res.rerun.map((r) => [r.ref.method, r.outcome])).toEqual([
+      ["OverBudgetDetected", "skip"],
+    ]);
   });
 
   test("runNamedMutants: inLease without a lease is refused, never run unfenced", async () => {

@@ -86,6 +86,14 @@ export function isAlStopResponse(status: number, body: string): boolean {
 /** R198: how often `runMany`'s watchdog reads the op's progress while its request is open. */
 export const WATCHDOG_POLL_MS = 5_000;
 
+/** R236b: the upper bound on one `GetOpAnswer` readback; a call's own smaller budget wins. */
+export const KEPT_ANSWER_READ_MS = 15_000;
+
+/** R236b: what `GetOpAnswer` holds for one op. `found: false` names the op the server holds, if any. */
+export type KeptAnswer =
+  | { readonly found: true; readonly answer: string }
+  | { readonly found: false; readonly keptAttemptId?: string; readonly keptOpSeq?: number };
+
 /**
  * R206 §2.1: the two session keys a `ran` answer must carry (control app 1.0.0.18), or the reason
  * it is malformed. `testRunsBefore` is the guard's predicate (0 = a fresh session); `sessionId`
@@ -460,6 +468,81 @@ export class RunMutantTransport {
   }
 
   /**
+   * R236b: the answer the control app committed as the last statement of an action that RAN, only if
+   * it names exactly this op under this lease. The server's echo of all four key values is checked
+   * here; any disagreement, transport fault or shape fault throws, and every caller fails closed on
+   * a throw.
+   */
+  async readKeptAnswer(
+    lease: LeaseTuple,
+    attemptId: string,
+    opSeq: number,
+    timeoutMs: number,
+  ): Promise<KeptAnswer> {
+    assertAttemptId(attemptId);
+    const parsed = await this.postAction(
+      "GetOpAnswer",
+      { epoch: lease.epoch, generation: lease.serverGeneration, attemptId, opSeq },
+      timeoutMs,
+    );
+    if (parsed.found === false) {
+      const { keptAttemptId, keptOpSeq } = parsed;
+      return {
+        found: false,
+        ...(typeof keptAttemptId === "string" ? { keptAttemptId } : {}),
+        ...(typeof keptOpSeq === "number" ? { keptOpSeq } : {}),
+      };
+    }
+    if (parsed.found !== true) {
+      throw new Error(
+        `GetOpAnswer returned no boolean found: ${JSON.stringify(parsed).slice(0, 300)}`,
+      );
+    }
+    const mismatches: string[] = [];
+    if (parsed.attemptId !== attemptId)
+      mismatches.push(`attemptId ${JSON.stringify(parsed.attemptId)}`);
+    if (parsed.opSeq !== opSeq) mismatches.push(`opSeq ${JSON.stringify(parsed.opSeq)}`);
+    if (parsed.epoch !== lease.epoch) mismatches.push(`epoch ${JSON.stringify(parsed.epoch)}`);
+    if (parsed.generation !== lease.serverGeneration) {
+      mismatches.push(`generation ${JSON.stringify(parsed.generation)}`);
+    }
+    if (mismatches.length > 0) {
+      throw new Error(
+        `GetOpAnswer echoed a different key (${mismatches.join(", ")}) for ${attemptId}/${opSeq}`,
+      );
+    }
+    if (typeof parsed.answer !== "string") {
+      throw new Error("GetOpAnswer said found but carried no string answer");
+    }
+    return { found: true, answer: parsed.answer };
+  }
+
+  /**
+   * R236b: `readKeptAnswer` held to `bound`. The abort inside `postAction` ends the request; the
+   * race holds the bound even for a fetch that ignores its abort signal.
+   */
+  private async readKeptAnswerBounded(
+    lease: LeaseTuple,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+    bound: number,
+  ): Promise<KeptAnswer> {
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.readKeptAnswer(lease, fencedOp.attemptId, fencedOp.opSeq, bound),
+        new Promise<never>((_resolve, reject) => {
+          guard = setTimeout(
+            () => reject(new Error(`GetOpAnswer gave no answer within ${bound} ms`)),
+            bound,
+          );
+        }),
+      ]);
+    } finally {
+      if (guard !== undefined) clearTimeout(guard);
+    }
+  }
+
+  /**
    * R198: the per-METHOD stop. Refused server-side unless the op's progress row reads exactly
    * (`methodIndex`, `methodToken`) in state `running`, read locked under the lease lock, so a
    * decision taken from a poll up to one interval stale cannot land on the next method. Its answer
@@ -500,31 +583,42 @@ export class RunMutantTransport {
   private async postAction(
     action: string,
     body: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<Record<string, unknown>> {
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_${action}?${params.toString()}`;
-    const res = await this.fetchFn(url, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      throw new Error(`${action} failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
+    // Manual controller, not AbortSignal.timeout(): see the note in `dispatch`. When bounded, the
+    // bound covers the body read too (R236b).
+    const controller = new AbortController();
+    const timer =
+      timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await this.fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+        ...(timeoutMs !== undefined ? { signal: controller.signal } : {}),
+      });
+      if (!res.ok) {
+        throw new Error(`${action} failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
+      }
+      const outer: unknown = await res.json();
+      const value = (outer as { value?: unknown }).value;
+      if (typeof value !== "string") {
+        throw new Error(`${action} returned no string \`value\`: ${JSON.stringify(outer)}`);
+      }
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error(`${action} \`value\` is not a JSON object: ${value}`);
+      }
+      return parsed as Record<string, unknown>;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-    const outer: unknown = await res.json();
-    const value = (outer as { value?: unknown }).value;
-    if (typeof value !== "string") {
-      throw new Error(`${action} returned no string \`value\`: ${JSON.stringify(outer)}`);
-    }
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`${action} \`value\` is not a JSON object: ${value}`);
-    }
-    return parsed as Record<string, unknown>;
   }
 
   async run(req: RunMutantRequest): Promise<TestVerdict> {
@@ -547,6 +641,72 @@ export class RunMutantTransport {
    * `in-flight-unknown`; a 2xx is parsed and scored as if no stop had fired.
    */
   async runMany(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
+    const first = await this.runManyOnce(req);
+    // Review r2 ruling C2: a call that must abort the session is never replaced, whatever the
+    // kept answer says.
+    if (
+      first.kind !== "call" ||
+      first.abortSession !== undefined ||
+      first.verdict.operation !== "in-flight-unknown" ||
+      first.verdict.fencedOp === undefined
+    ) {
+      return first;
+    }
+    const lost = first.verdict;
+    const fencedOp = first.verdict.fencedOp;
+    const lostText = lost.failureMessage ?? "no detail";
+    // Not accepted: the call goes on exactly as today, only the reason is appended.
+    const keep = (why: string): RunMutantManyResult => ({
+      ...first,
+      verdict: { ...lost, failureMessage: `${lostText}; ${why}` },
+    });
+    const [firstMethod] = req.methods;
+    if (firstMethod === undefined) {
+      throw new Error("unreachable: runManyOnce refused an empty methods list");
+    }
+    let kept: KeptAnswer;
+    try {
+      // `KEPT_ANSWER_READ_MS` alone bounds this read: a group's budget is minutes.
+      kept = await this.readKeptAnswerBounded(req.lease, fencedOp, KEPT_ANSWER_READ_MS);
+    } catch (err) {
+      return keep(`answer readback failed: ${describeThrown(err)}`);
+    }
+    if (!kept.found) {
+      const holds =
+        kept.keptAttemptId !== undefined && kept.keptOpSeq !== undefined
+          ? ` (it holds ${kept.keptAttemptId}/${kept.keptOpSeq})`
+          : "";
+      return keep(
+        `answer readback: the server holds no committed answer for ${fencedOp.attemptId}/${fencedOp.opSeq}${holds}`,
+      );
+    }
+    let r: RunMutantManyResult;
+    try {
+      r = this.scoreManyAnswer(kept.answer, {
+        req,
+        firstMethod,
+        watchedRef: firstMethod.ref,
+        call: this.callOf(req.methods),
+        durationMs: lost.durationMs,
+        fencedOp,
+      });
+    } catch (err) {
+      return keep(`answer readback not accepted: ${describeThrown(err)}`);
+    }
+    // Ruling C1, grouped form: only a verdict set of completed, identity-checked passes and fails.
+    if (
+      r.kind !== "verdicts" ||
+      r.verdicts.some(
+        (v) => (v.outcome !== "pass" && v.outcome !== "fail") || v.operation !== undefined,
+      )
+    ) {
+      return keep("answer readback not accepted: not a verdict set of completed passes and fails");
+    }
+    return { ...r, verdicts: r.verdicts.map((v) => ({ ...v, replyRecovered: lostText })) };
+  }
+
+  /** One `RunMutantMany` dispatch and its scoring; `runMany` adds R236b's readback. */
+  private async runManyOnce(req: RunMutantManyRequest): Promise<RunMutantManyResult> {
     const { mutantId, attemptId, lease, methods } = req;
     assertAttemptId(attemptId);
     if (methods.length === 0) {
@@ -557,22 +717,7 @@ export class RunMutantTransport {
     const started = Date.now();
     const fencedOp = { attemptId, opSeq: lease.opSeq } as const;
     const pollMs = req.watchdogPollMs ?? WATCHDOG_POLL_MS;
-    // R206: a `call` result names the request position of the method it is about, so the
-    // orchestrator's warm confirmation can take the chunk's prefix without re-deriving it.
-    const methodIndexOf = (ref: TestMethodRef): number => {
-      const at = methods.findIndex(
-        (m) => m.ref.codeunitId === ref.codeunitId && m.ref.method === ref.method,
-      );
-      return at < 0 ? 1 : at + 1;
-    };
-    const call = (verdict: TestVerdict, extra?: { cause?: GroupCause; abortSession?: string }) =>
-      ({
-        kind: "call",
-        verdict,
-        methodIndex: methodIndexOf(verdict.ref),
-        ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
-        ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
-      }) as const;
+    const call = this.callOf(methods);
 
     const params = new URLSearchParams({ company: this.cfg.company });
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
@@ -882,6 +1027,63 @@ export class RunMutantTransport {
         ),
       );
     }
+    return this.scoreManyAnswer(value, {
+      req,
+      firstMethod,
+      watchedRef,
+      call,
+      durationMs,
+      fencedOp,
+    });
+  }
+
+  /**
+   * R206: a `call` result names the request position of the method it is about, so the
+   * orchestrator's warm confirmation can take the chunk's prefix without re-deriving it.
+   */
+  private callOf(
+    methods: readonly GroupMethod[],
+  ): (
+    verdict: TestVerdict,
+    extra?: { cause?: GroupCause; abortSession?: string },
+  ) => RunMutantManyResult {
+    const methodIndexOf = (ref: TestMethodRef): number => {
+      const at = methods.findIndex(
+        (m) => m.ref.codeunitId === ref.codeunitId && m.ref.method === ref.method,
+      );
+      return at < 0 ? 1 : at + 1;
+    };
+    return (verdict, extra) =>
+      ({
+        kind: "call",
+        verdict,
+        methodIndex: methodIndexOf(verdict.ref),
+        ...(extra?.cause !== undefined ? { cause: extra.cause } : {}),
+        ...(extra?.abortSession !== undefined ? { abortSession: extra.abortSession } : {}),
+      }) as const;
+  }
+
+  /**
+   * `RunMutantMany`'s answer `value`, scored. Everything it needs arrives in `ctx`, so a caller
+   * other than the live reply (R236b's readback) scores by exactly the same rules.
+   */
+  private scoreManyAnswer(
+    value: string,
+    ctx: {
+      readonly req: RunMutantManyRequest;
+      readonly firstMethod: GroupMethod;
+      /** The method the watchdog last saw running; names an unparseable `value`'s verdict. */
+      readonly watchedRef: TestMethodRef;
+      readonly call: (
+        verdict: TestVerdict,
+        extra?: { cause?: GroupCause; abortSession?: string },
+      ) => RunMutantManyResult;
+      readonly durationMs: number;
+      readonly fencedOp: { readonly attemptId: string; readonly opSeq: number };
+    },
+  ): RunMutantManyResult {
+    const { methods, attemptId, mutantId } = ctx.req;
+    const { firstMethod, watchedRef, call, durationMs, fencedOp } = ctx;
     let result: RunMutantManyAnswer;
     try {
       result = JSON.parse(value) as RunMutantManyAnswer;
@@ -1089,12 +1291,77 @@ export class RunMutantTransport {
     collectCoverage: boolean,
   ): Promise<RunMutantWithCoverageResult> {
     const sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
-    const verdict = await this.dispatch(req, collectCoverage, sink);
+    const first = await this.dispatch(req, collectCoverage, sink);
+    // R236b: every exit that could not read the server's answer asks for the answer the server
+    // committed. One place, so no exit is forgotten.
+    const verdict =
+      first.operation === "in-flight-unknown" && first.fencedOp !== undefined
+        ? await this.recoverKeptAnswer(req, collectCoverage, sink, first, first.fencedOp)
+        : first;
     return {
       verdict,
       ...(sink.rows !== undefined ? { coverageRows: sink.rows } : {}),
       ...(sink.stats !== undefined ? { coverageStats: sink.stats } : {}),
     };
+  }
+
+  /**
+   * R236b. Replaces a lost reply ONLY with an identity-checked `pass` or `fail` scored from the
+   * server's committed answer for exactly this op and lease. Anything else keeps `lost`, with the
+   * reason appended, and the caller handles it exactly as before (a baseline quarantines; a mutant
+   * call goes to the unchanged lost-ack reconcile). Dispatches nothing itself.
+   */
+  private async recoverKeptAnswer(
+    req: RunMutantRequest,
+    collectCoverage: boolean,
+    sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
+    lost: TestVerdict,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+  ): Promise<TestVerdict> {
+    const lostText = lost.failureMessage ?? "no detail";
+    // A readback that is not accepted changes nothing but the message: the verdict and whatever
+    // `dispatch` put in `sink` go on exactly as today. The kept answer is scored into `scratch`,
+    // which reaches `sink` only on acceptance.
+    const keep = (why: string): TestVerdict => ({ ...lost, failureMessage: `${lostText}; ${why}` });
+    const scratch: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats } = {};
+    // ponytail: one read, bounded by the call's own budget (15 s at most); a throttled server
+    // fails closed. A second read is the upgrade if C1 shows closed-on-timeout readbacks.
+    let kept: KeptAnswer;
+    try {
+      kept = await this.readKeptAnswerBounded(
+        req.lease,
+        fencedOp,
+        Math.min(KEPT_ANSWER_READ_MS, req.timeoutMs),
+      );
+    } catch (err) {
+      return keep(`answer readback failed: ${describeThrown(err)}`);
+    }
+    if (!kept.found) {
+      const holds =
+        kept.keptAttemptId !== undefined && kept.keptOpSeq !== undefined
+          ? ` (it holds ${kept.keptAttemptId}/${kept.keptOpSeq})`
+          : "";
+      return keep(
+        `answer readback: the server holds no committed answer for ${fencedOp.attemptId}/${fencedOp.opSeq}${holds}`,
+      );
+    }
+    let v: TestVerdict;
+    try {
+      // `parseCoverageRows` throws `FencedCoverageError` on a malformed coverage array; from a
+      // readback that is one more answer not accepted, never a thrown session.
+      v = this.scoreAnswer(kept.answer, req, collectCoverage, scratch, lost.durationMs, fencedOp);
+    } catch (err) {
+      return keep(`answer readback not accepted: ${describeThrown(err)}`);
+    }
+    // Ruling C1: only a completed, identity-checked pass or fail replaces an unknown.
+    if ((v.outcome !== "pass" && v.outcome !== "fail") || v.operation !== undefined) {
+      const op = v.operation !== undefined ? `, ${v.operation}` : "";
+      return keep(
+        `answer readback not accepted (${v.outcome}${op}): ${v.failureMessage ?? "no detail"}`,
+      );
+    }
+    Object.assign(sink, scratch);
+    return { ...v, replyRecovered: lostText };
   }
 
   private async dispatch(
@@ -1323,6 +1590,22 @@ export class RunMutantTransport {
         fencedOp,
       );
     }
+    return this.scoreAnswer(value, req, collectCoverage, sink, durationMs, fencedOp);
+  }
+
+  /**
+   * R236b: the answer parser, from the `value` string onward. Shared by the live reply and by a
+   * readback of the answer the control app kept, so both are scored by the same unchanged rules.
+   */
+  private scoreAnswer(
+    value: string,
+    req: RunMutantRequest,
+    collectCoverage: boolean,
+    sink: { rows?: readonly FencedCoverageRow[]; stats?: FencedCoverageStats },
+    durationMs: number,
+    fencedOp: { readonly attemptId: string; readonly opSeq: number },
+  ): TestVerdict {
+    const ref = req.ref;
     let result: RunMutantResult;
     try {
       result = JSON.parse(value) as RunMutantResult;

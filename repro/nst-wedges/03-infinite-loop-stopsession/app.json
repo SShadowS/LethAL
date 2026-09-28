@@ -1,0 +1,21 @@
+{
+  "id": "4f1c9a20-0b6e-4d3a-9c01-5e2a7b1d0603",
+  "name": "NST Repro 03 Loop StopSession",
+  "publisher": "nst-repro",
+  "version": "1.0.0.0",
+  "brief": "Repro: an OData action runs a test that loops; a second call ends it with StopSession.",
+  "description": "Throwaway repro. Not for production.",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 91630, "to": 91639 }],
+  "dependencies": [
+    {
+      "id": "23de40a6-dfe8-4f80-80db-d70f83ce8caf",
+      "name": "Test Runner",
+      "publisher": "Microsoft",
+      "version": "28.0.0.0"
+    }
+  ],
+  "features": ["NoImplicitWith"]
+}

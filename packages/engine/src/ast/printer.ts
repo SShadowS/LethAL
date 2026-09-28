@@ -9,21 +9,23 @@ export function printWithRewrites(
   source: string,
   root: ALSyntaxNode,
   rewrites: ReadonlyMap<ALSyntaxNode, string>,
+  where?: string,
 ): string {
   if (rewrites.size === 0) return source;
 
-  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  const edits: Array<{ start: number; end: number; replacement: string; kind: string }> = [];
   for (const [node, replacement] of rewrites) {
     assertNodeInTree(node, root);
     edits.push({
       start: node.startIndex,
       end: node.endIndex,
       replacement,
+      kind: node.rawKind,
     });
   }
 
   edits.sort((a, b) => a.start - b.start);
-  assertNoOverlap(edits);
+  assertNoOverlap(edits, where);
 
   const parts: string[] = [];
   let cursor = 0;
@@ -44,14 +46,18 @@ function assertNodeInTree(node: ALSyntaxNode, root: ALSyntaxNode): void {
   }
 }
 
-function assertNoOverlap(edits: ReadonlyArray<{ start: number; end: number }>): void {
+function assertNoOverlap(
+  edits: ReadonlyArray<{ start: number; end: number; kind: string }>,
+  where: string | undefined,
+): void {
   for (let i = 1; i < edits.length; i++) {
     const prev = edits[i - 1];
     const curr = edits[i];
     if (prev === undefined || curr === undefined) continue;
     if (curr.start < prev.end) {
+      const location = where !== undefined ? ` in ${where}` : "";
       throw new Error(
-        `overlapping rewrites at ${prev.start}..${prev.end} and ${curr.start}..${curr.end}`,
+        `overlapping rewrites${location} at ${prev.start}..${prev.end} (${prev.kind}) and ${curr.start}..${curr.end} (${curr.kind})`,
       );
     }
   }

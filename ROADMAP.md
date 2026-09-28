@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**72 of 286 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 310 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -102,15 +102,26 @@ that ordering is the priority.
 - **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · open
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
-- **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · open
+- **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · done (0185b3a)
 - **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
 - **R246** · GH-24's reach marker runs on every loop iteration and slows the mutant: a kill that raced the time budget (Int32 overflow) now scores timeout-killed on itest:hang · [R246.md](docs/roadmap/R246.md) · done (0a9cc84)
 - **R268** · `lethal verify` refuses a test app whose symbol cache holds a Ready-to-Run Microsoft package (no root NavxManifest.xml) · [R268.md](docs/roadmap/R268.md) · done (63d381e)
 - **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
 - **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · open
-- **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#26 (U1)
+- **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#26, upstream 209d038)
 - **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
-- **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#27 (U2)
+- **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#27, upstream 551829e)
+- **R289** · itest:hang M0004 is sometimes not stopped (StopHungRunAt flake), second recurrence · [R289.md](docs/roadmap/R289.md) · open
+- **R294** · `resolveVarRef` returns null for every member-expression receiver: `isMemberName` compares rebuilt wrapper nodes by reference · [R294.md](docs/roadmap/R294.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
+- **R295** · `collectVarDeclarations` keeps only the first name of `A, B: T`: every later name is invisible to scope resolution · [R295.md](docs/roadmap/R295.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
+- **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · open
+- **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · done (0185b3a); whole BaseApp UNMET (parser and manifest-serialization limits, see [[R292]] and [[R311]])
+- **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open; writer fixed 2026-09-28 (dd14626), coverage refused pending R300
+- **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
+- **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
+- **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · open, filed 2026-09-28
+- **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · open, filed 2026-09-28; minimal refusal landed 2026-09-28 (3c58bbb), per-arm placement rule pending
+- **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
 
 ## Product gaps a real project hits
 
@@ -166,7 +177,7 @@ that ordering is the priority.
 - **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
 - **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · open, filed 2026-09-08, measured
-- **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · open, filed 2026-09-09, measured, LOW: costs nothing on app code; WIDENED 2026-09-27 by the issue #6…
+- **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · closed 2026-09-27: not admitted: measured 0 deployable product sites on seven fixture targets…
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · open, filed 2026-09-09, measured; option 3 DONE (b3c441a), the probe was widened and found more
 - **R219** · A real project with two control add-ins cannot be instrumented at all: the flat write refuses on colliding resource basenames, and un-flattening is blocked by an al-runner source-root convention · [R219.md](docs/roadmap/R219.md) · open, filed 2026-09-09, measured on Continia Document Output and against al-runner 2.11.0
 - **R220** · al-runner grew `--coverage` and `--server`, and LethAL uses neither: the two facts behind `authoritative: false` and behind 65 s per test are both addressable now · [R220.md](docs/roadmap/R220.md) · done 2026-09-09 (9425a2b), all four items: coverage wired, R183 residual re-measured, the --server daemon…
@@ -195,9 +206,19 @@ that ordering is the priority.
 - **R278** · lethal verify selects an edited COVERING test as an old test, so it never gets the new-test double run or a new-test state · [R278.md](docs/roadmap/R278.md) · open
 - **R280** · `scripts/probe-grammar-crosscheck.ts` is not type-checked: a breaking change to `grammar-crosscheck.ts` passes `bun run typecheck` · [R280.md](docs/roadmap/R280.md) · open
 - **R282** · `swap-modify-flag` for `DeleteAll(true)` and `ModifyAll(..., true)` (GH-04): refused on R013 ground 1, 6 sites and 0 marginal · [R282.md](docs/roadmap/R282.md) · closed 2026-09-27: refused on R013 ground 1: 6 sites (DeleteAll 6, ModifyAll 0) on do-rel2/Cloud sha256…
-- **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; upstream issue: SShadowS/tree-sitter-al#26 (U1)
+- **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · closed 2026-09-27: superseded by R216
 - **R286** · `isStatementSlot` omits `with_statement.body`, so a call that is the whole body of `with ... do` is not a statement site (DC: 8 sites in app code) · [R286.md](docs/roadmap/R286.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
-- **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
+- **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; C5 and C6 fixed 2026-09-28…
+- **R292** · Retaining every parse tree exhausts wasm memory on BC.History/BaseApp's 9,620 files: the census script needs it split into halves, and the PRODUCT path (`locate`/`identity-keys`) aborts the same way on a whole-BaseApp run · [R292.md](docs/roadmap/R292.md) · open, filed 2026-09-27; widened to the product path 2026-09-28
+- **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
+- **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
+- **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · open, filed 2026-09-28
+- **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · open, filed 2026-09-28
+- **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · open, filed 2026-09-28
+- **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · open, filed 2026-09-28
+- **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and the injector still throws · [R309.md](docs/roadmap/R309.md) · open, filed 2026-09-28; 0 corpus files measured so far
+- **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · open, filed 2026-09-28; needs a live sample-report regeneration
+- **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · open, filed 2026-09-28
 
 ## Backends and tooling
 
@@ -319,7 +340,7 @@ that ordering is the priority.
 - **R225** · A freshly bootstrapped container's FIRST `itest:tables` run quarantines on the TestPage baseline test and scores nothing; the immediately following run passes · [R225.md](docs/roadmap/R225.md) · open, filed 2026-09-18, measured on Cronus285 while qualifying the orchestrator's containers
 - **R233** · `EXPLAIN_SCHEMA_VERSION` 4 drifted: five commits grew its value domains without the bump its own rule requires; from GH-24b on, every added value bumps, and a test enforces it · [R233.md](docs/roadmap/R233.md) · done (83c5839)
 - **R235** · `itest:alrunner` fails on al-runner v2.11.0: no execution context carries a `platformAppsDir`, so R147's platform-app pin never engages · [R235.md](docs/roadmap/R235.md) · done (f2420e0)
-- **R236** · `itest:tables` once quarantined its whole run on a fresh Cronus28: the TestPage baseline test came back in-flight-unknown instead of failing · [R236.md](docs/roadmap/R236.md) · open
+- **R236** · `itest:tables` once quarantined its whole run on a fresh Cronus28: the TestPage baseline test came back in-flight-unknown instead of failing · [R236.md](docs/roadmap/R236.md) · done (b068f01)
 - **R237** · An env-tool command that fails to START is read as an uncertain publish, so a missing tool quarantines the tier · [R237.md](docs/roadmap/R237.md) · open
 - **R241** · al-runner v2.11.0 fails on an EMPTY cache before any platform app is provisioned: the CDN's latest 28.x has no shipped engine variant, so every mutant would score `error` · [R241.md](docs/roadmap/R241.md) · open
 - **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · open
@@ -331,6 +352,9 @@ that ordering is the priority.
 - **R267** · Two stale al-runner claims outside the agent docs: the run-time warning still describes the v1 `asserterror` bug, and `fixtures/README.md` still quotes `itest:alrunner` at 3 / 16 / 0 · [R267.md](docs/roadmap/R267.md) · open
 - **R269** · `itest:testapp` hard-codes the sandbox-tests version 1.0.0.2, so it fails since GH-09 bumped the fixture to 1.0.0.3 · [R269.md](docs/roadmap/R269.md) · done (61f1f80)
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
+- **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
+- **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
+- **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · open, filed 2026-09-28
 
 ---
 

@@ -129,6 +129,9 @@ export interface FoldedReport {
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   readonly permissionsRefusedTests?: readonly string[];
   readonly testPageUnsupportedTests?: readonly string[];
+  /** R-236c: baseline verdicts classified `tests-testpage-refused`, plus the session scan's
+   *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
+  readonly testPageRefusedTests?: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
   readonly stopHungSessions?: boolean;
   readonly resumedFrom?: {
@@ -222,6 +225,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const staleTestApp = new Set<string>();
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
+  const testPageRefusedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
@@ -320,6 +324,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           if (v.classification.includes("tests-testpage-unsupported")) {
             testPageUnsupportedTests.add(v.name);
           }
+          if (v.classification.includes("tests-testpage-refused")) {
+            testPageRefusedTests.add(v.name);
+          }
         }
         break;
       case "quarantined":
@@ -329,6 +336,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "session-finished":
         sawSessionFinished = true;
         totalMs = e.elapsedMs;
+        break;
+      case "tests-testpage-refused":
+        // R-236c: the session's scan. The Set means a baseline row naming the same test adds
+        // nothing, so a test is counted once whether or not a baseline ran.
+        for (const t of e.tests) testPageRefusedTests.add(t);
+        // A refused test does not pass, so the baseline is not green, also on a resume whose
+        // every batch carries and so runs no baseline (run 002, review r1 #3).
+        if (e.tests.length > 0) baselineGreen = false;
         break;
       case "tests-discovered":
         baselineTests = e.tests.map((t) => ({
@@ -594,6 +609,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(testPageUnsupportedTests.size > 0
       ? { testPageUnsupportedTests: [...testPageUnsupportedTests].sort() }
+      : {}),
+    ...(testPageRefusedTests.size > 0
+      ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
       : {}),
     ...(runnerDisagreementTests.size > 0
       ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }

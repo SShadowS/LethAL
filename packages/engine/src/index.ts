@@ -17,7 +17,11 @@ export {
   isStatementPosition,
   isStatementSlot,
   gapBlockOf,
+  isProcedureLike,
+  procedureLikeNameNode,
   declarationMembers,
+  isObjectContainer,
+  objectDeclarationsOf,
 } from "./ast/tree-walks";
 
 // Semantic

@@ -229,7 +229,7 @@ function enumAt(root: Schema, path: string): unknown[] {
 }
 
 describe("published JSON Schemas (R152)", () => {
-  const explainSchema = loadSchema("explain-v5.schema.json");
+  const explainSchema = loadSchema("explain-v6.schema.json");
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
@@ -727,7 +727,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
 
 /**
  * The two BIG surfaces are GENERATED (`scripts/generate-schemas.ts`) rather than hand-written:
- * `SessionReport` has 130 leaves and the stream is a union of 20 event shapes, and at that size a
+ * `SessionReport` has 130 leaves and the stream is a union of 22 event shapes, and at that size a
  * hand-written file is a second copy of the type rather than a guarantee. So the tests differ too —
  * freshness against the generator replaces the leaf-path pin, and both are checked against real
  * committed data.
@@ -840,6 +840,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v6.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -932,6 +943,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "stale-test-app",
         "tests-permission-refused",
         "tests-testpage-unsupported",
+        "tests-testpage-refused",
         "runner-disagreement",
         "stop-hung-sessions",
         "resumed",
@@ -993,8 +1005,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
 
   test("the explain survivor row's required set is pinned (C02-01)", () => {
     // Nested required lists are not covered by the R157 root pin. A new survivor field added to
-    // this list would make the edited v5 schema reject an explain output stored before it.
-    const explainSchema = loadSchema("explain-v5.schema.json");
+    // this list would make the edited v6 schema reject an explain output stored before it.
+    const explainSchema = loadSchema("explain-v6.schema.json");
     const items = ((explainSchema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
       required?: string[];
     };

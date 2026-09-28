@@ -3,6 +3,8 @@ import {
   ALNodeKind,
   declarationMembers,
   findFirst,
+  isObjectContainer,
+  isProcedureLike,
   isStatementPosition,
   printWithRewrites,
 } from "@lethal/engine";
@@ -58,7 +60,7 @@ export function compileSchemataForFile(
   // to declare first — see `injectMutationSelectorVar`'s doc comment.
   if (specs.length > 0) injectMutationSelectorVar(specs, rewrites, filePath ?? "<file>");
 
-  return printWithRewrites(source, root, rewrites);
+  return printWithRewrites(source, root, rewrites, filePath ?? "<file>");
 }
 
 /**
@@ -80,11 +82,8 @@ function injectReachLatches(
   for (const c of components) {
     if (!c.members.some((m) => reachGrainOf(m, c.root) === "statement")) continue;
     let owner: ALSyntaxNode | null = c.root;
-    while (
-      owner !== null &&
-      owner.kind !== ALNodeKind.procedure &&
-      owner.kind !== ALNodeKind.trigger
-    )
+    // R301: a split-header procedure's shared var section and body are its own direct children.
+    while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
       owner = owner.parent;
     const body = owner?.children.find((n) => n.kind === ALNodeKind.block);
     const begin = body?.children[0];
@@ -132,13 +131,12 @@ function injectReachLatches(
  * costs nothing but a suffix.
  */
 function latchNameFor(owner: ALSyntaxNode): string {
-  let object = owner;
-  while (object.parent !== null && object.parent.rawKind !== "source_file") object = object.parent;
+  const object = enclosingObjectDeclaration(owner) ?? owner;
   const used = new Set<string>();
   const walk = (n: ALSyntaxNode): void => {
     // Span, not identity: the engine's wrapper nodes are created per traversal.
     const isOwner = n.startIndex === owner.startIndex && n.endIndex === owner.endIndex;
-    if (!isOwner && (n.kind === ALNodeKind.procedure || n.kind === ALNodeKind.trigger)) return;
+    if (!isOwner && (isProcedureLike(n) || n.kind === ALNodeKind.trigger)) return;
     if (n.rawKind === ALNodeKind.identifier || n.rawKind === "quoted_identifier") {
       used.add(n.text.replace(/^"|"$/g, "").toLowerCase());
     }
@@ -330,6 +328,35 @@ export function describeObjectKinds(root: ALSyntaxNode): string {
  * filter — a caller-contract violation, and refusing it loudly beats emitting AL that cannot
  * compile.
  */
+const DECLARATION_ONLY: ReadonlySet<string> = new Set([
+  "variable_declaration",
+  "var_attribute_item",
+  "comment",
+  "multiline_comment",
+  "pragma",
+  "preproc_region",
+  "preproc_endregion",
+]);
+const PREPROC_MARKERS: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+]);
+
+/**
+ * R297: true when `n` can only hold declarations, so a `var` line may follow it. An allowlist: the
+ * grammar lets any body element (procedures, split procedures, attributes) into a
+ * `preproc_conditional_var`, and a denylist of member kinds is always one kind short. An attribute
+ * in a `#if` at the end of the section belongs to the procedure AFTER the section, so it ends the
+ * run too: appending after it binds the attribute to the selector variable instead.
+ */
+function isDeclarationOnly(n: ALSyntaxNode): boolean {
+  if (DECLARATION_ONLY.has(n.rawKind)) return true;
+  if (n.rawKind !== "preproc_conditional_var") return false;
+  return n.namedChildren.every((c) => PREPROC_MARKERS.has(c.rawKind) || isDeclarationOnly(c));
+}
+
 function injectSelectorVarIntoObject(
   object: ALSyntaxNode,
   rewrites: Map<ALSyntaxNode, string>,
@@ -355,14 +382,22 @@ function injectSelectorVarIntoObject(
 
   const existingVar = members.find((c) => c.kind === ALNodeKind.var_section);
   if (existingVar !== undefined) {
-    if (rewrites.has(existingVar)) {
+    // R297: insert, never replace; see `isDeclarationOnly`. For an ordinary section the leading
+    // declaration-only run is the whole section, so the emitted text is unchanged.
+    const body = existingVar.children.find((c) => c.rawKind === "var_body");
+    let anchor = existingVar.children.find((c) => c.rawKind === "var_keyword");
+    for (const c of body?.namedChildren ?? []) {
+      if (!isDeclarationOnly(c)) break;
+      anchor = c;
+    }
+    if (anchor === undefined) {
       throw new Error(
-        "compileSchemataForFile: object's var_section already targeted by another rewrite",
+        `compileSchemataForFile: cannot instrument ${filePath}: its var section has no \`var\` keyword to anchor the selector var after.`,
       );
     }
     rewrites.set(
-      existingVar,
-      `${existingVar.text.replace(/\s+$/, "")}\n        MutationSelector: Codeunit "Mutation Selector";`,
+      insertionNodeAt(anchor, anchor.endIndex),
+      `\n        MutationSelector: Codeunit "Mutation Selector";`,
     );
     return;
   }
@@ -415,9 +450,11 @@ function injectSelectorVarIntoObject(
 
 /**
  * Nearest ancestor AL object declaration containing `node` (`codeunit_declaration`,
- * `table_declaration`, `page_declaration`, ...) — the ancestor whose OWN parent is the
- * `source_file` root. AL object declarations are always direct top-level children of the file
- * (never nested inside another declaration), so this is exact regardless of which grammar kind
+ * `table_declaration`, `page_declaration`, ...): the ancestor whose OWN parent is an object
+ * container (`isObjectContainer`): the `source_file` root, or, for a `#if`-wrapped object, the
+ * `preproc_conditional_object` holding it (R298; each arm's declaration is its own object, so a
+ * two-arm wrapper gets one selector var per arm). AL object declarations are never nested inside
+ * another declaration, so this is exact regardless of which grammar kind
  * the object is, unlike matching on a `_declaration`-suffixed rawKind: a TABLE's field-level
  * trigger sits inside `field_declaration` (itself `_declaration`-suffixed, several levels below
  * the table), so a "first `_declaration` ancestor" walk stops there instead of at the table —
@@ -432,7 +469,7 @@ function injectSelectorVarIntoObject(
 function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
-    if (current.parent !== null && current.parent.kind === ALNodeKind.source_file) {
+    if (current.parent !== null && isObjectContainer(current.parent)) {
       return current;
     }
     current = current.parent;
@@ -450,7 +487,7 @@ function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
  *
  * Per-object attribution here is the AST-accurate half of R6's fix: each spec's OWN enclosing
  * object is found by walking up from `spec.before` (`enclosingObjectDeclaration`), objects are
- * deduped by node identity (two specs in the same object must not double-inject), and each
+ * deduped by start offset (R209; two specs in the same object must not double-inject), and each
  * distinct object gets exactly one declaration. The companion half — labelling each manifest
  * entry with ITS OWN object's `(objectType, objectId)` instead of the file's first header — is
  * `project.ts`'s `attributeHeader`.
@@ -469,7 +506,9 @@ function injectMutationSelectorVar(
   rewrites: Map<ALSyntaxNode, string>,
   filePath: string,
 ): void {
-  const objects = new Set<ALSyntaxNode>();
+  // Keyed by start offset, not node identity (R209, R251): specs from two separate tree walks over
+  // one object carry distinct node objects, and each would otherwise inject its own selector.
+  const objects = new Map<number, ALSyntaxNode>();
   for (const spec of specs) {
     const object = enclosingObjectDeclaration(spec.before);
     if (object === null || !CARRIER_KINDS.includes(object.kind)) {
@@ -486,9 +525,9 @@ function injectMutationSelectorVar(
         `compileSchemataForFile: cannot instrument ${filePath} — a mutation guard sits inside ${kindText}, and ${why}`,
       );
     }
-    objects.add(object);
+    objects.set(object.startIndex, object);
   }
-  for (const object of objects) {
+  for (const object of objects.values()) {
     injectSelectorVarIntoObject(object, rewrites, filePath);
   }
 }
