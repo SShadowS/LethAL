@@ -289,3 +289,34 @@ Recorded before any S4.2a code. It changes nothing above OUTCOME.
   `fixture-emission.test.ts` unchanged.
 - Recorded, not gating: the loop is 90% of W8's wall time today; the W8 wall medians before and
   after are reported next to the peaks.
+
+## AMENDMENT 5 (S4.2a result)
+
+The fix is `167f540c` (AMENDMENT 4's item, and B's second row copy). Before is `d945e6f`, after is
+`167f540c`, each with the S0.2 capture harness (`cap-project.diff`, ported by hand onto the fixed
+tree: the same 18 changed lines, checked with `diff`) and the unmarked `spec-keys.ts`. Native addon
+sha256 `19f5d477...` on both. BC.History `4d61fc58...`, unchanged. One heavy run at a time.
+
+| workload | before, `d945e6f` (peak MB / wall s) | median | after, `167f540c` | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 19,532 / 17,539 / 18,780; 1,573 / 1,571 / 1,704 s | **18,780** (1,573 s) | 16,865 / 16,799 / 15,731; 176 / 189 / 186 s | **16,799** (186 s) | at or below 13,000 | **MISSED** |
+| W4 | 5,316 / 5,302 / 5,386; 465 / 463 / 452 s | **5,316** (463 s) | 5,383 / 5,384 / 5,298; 463 / 481 / 458 s | **5,383** (463 s) | at or below 5,779 | **MET** |
+
+- Lead E, on one marked W8 run at `167f540c` (S0.2 phase markers): p5 phase peak 14,768 MB, p5
+  post-GC RSS 8,933 MB, so E = **5,835 MB** against a predicted 1,000 or less: **MISSED**. It did
+  not shrink (AMENDMENT 1: 5,120). p5 now takes 38 s instead of about 1,350 s, so the loop's
+  CPU cost went, but its transient memory did not.
+- B: from p4 to p5 the `Object` count rises by 1,687,722, one per manifest row (AMENDMENT 1: twice
+  that). The second copy is gone.
+- W8 wall (recorded, not gating): 1,573 s to 186 s median, 8.5 times faster.
+- W4 is unchanged, as predicted: the dry-run does not run the loop. All six W4 outputs are
+  byte-identical (788,619 lines, sha256 `f31530b0...`).
+- Identity listing: all seven W8 listings (3 before, 3 after, 1 marked) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. `fixture-emission.test.ts` passes
+  unchanged, and the fixed tree's listings for the five fixtures, do, sysapp, dc, sentinel and bcf
+  are byte-identical to S3's.
+- A lead, not a measured share (one probe run, not a fix): the same marked W8 run with
+  `astSubtreeHash` replaced by an empty string had a p5 phase peak of 12,287 MB over a post-GC RSS
+  of 9,068 MB, a transient of 3,219 MB. So the per-mutant subtree hash accounts for about 2.6 GB of
+  the remaining E, and about 3.2 GB is still unattributed. The prediction is not revised.
