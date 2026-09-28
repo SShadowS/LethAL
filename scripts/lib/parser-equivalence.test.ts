@@ -1,4 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   GRAMMAR_PIN,
   initNativeParser,
@@ -90,5 +93,22 @@ describe("native vs wasm, lockstep through ALSyntaxNode", () => {
     tree.delete();
     expect(r.diffs.length).toBeGreaterThan(0);
     expect(flatLinksConsistent(bent.flat)).toBe(false);
+  });
+});
+
+describe("probe-parser-equivalence CLI", () => {
+  it("refuses an empty corpus instead of reporting a clean Q1", () => {
+    const dir = mkdtempSync(join(tmpdir(), "q1-empty-"));
+    try {
+      const r = Bun.spawnSync([
+        "bun",
+        join(import.meta.dir, "..", "probe-parser-equivalence.ts"),
+        dir,
+      ]);
+      expect(r.stderr.toString()).toContain("no .al files");
+      expect(r.exitCode).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

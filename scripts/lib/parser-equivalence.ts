@@ -9,7 +9,10 @@ import type { Language } from "web-tree-sitter";
 import type { ALSyntaxNode, FlatTree } from "../../packages/engine/src/ast/syntax-node";
 
 /** Every field name product code passes to childForFieldName (grep 2026-09-27, refreshed
- *  2026-09-28: adds else_value and then_value). */
+ *  2026-09-28: adds else_value and then_value). The literal grep cannot see queries made through a
+ *  constant, so these are added by hand and a future refresh must not drop them: "arguments"
+ *  (ARGUMENTS_FIELD, builtin-tier2 mutate-helpers.ts) and "base_object" (BASE_OBJECT_FIELD,
+ *  engine semantic/symbol-table.ts). */
 export const ENGINE_FIELD_QUERIES: readonly string[] = [
   "arguments",
   "base_object",

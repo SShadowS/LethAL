@@ -58,4 +58,7 @@ console.log(
   JSON.stringify({ dir, files: files.length, nodes, differingFiles, tablesEqual, seconds }),
 );
 for (const s of sample) console.log(s);
-process.exit(differingFiles === 0 && tablesEqual ? 0 : 1);
+// An empty corpus proves nothing: refuse it rather than report a clean Q1.
+if (files.length === 0)
+  console.error(`probe-parser-equivalence: no .al files under ${dir}, refusing`);
+process.exit(files.length > 0 && differingFiles === 0 && tablesEqual ? 0 : 1);
