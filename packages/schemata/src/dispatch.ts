@@ -127,16 +127,42 @@ export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
 }
 
 /**
+ * R303 fix round 1. True when the member's region from the header's end (or the member's start,
+ * for a header with no owner-level `)`) to its `begin` holds an ERROR node or a missing node:
+ * its var section did not parse cleanly. tree-sitter-al parses two `#if` var blocks in a row, or
+ * a nested `#if` wrapping the whole section, that way, so no `preproc_conditional_var_block` is
+ * left for `splitVarHoistAnchor` to see, and a latch written by the plain rules lands in one
+ * arm (alc AL0118) or beside a `var` that is already there (AL0104). Fail safe: refuse.
+ */
+export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
+  const from = headerEndOf(owner)?.endIndex ?? owner.startIndex;
+  const to = owner.children.find((c) => c.kind === ALNodeKind.block)?.startIndex ?? owner.endIndex;
+  let bad = false;
+  const walk = (n: ALSyntaxNode): void => {
+    if (bad || n.endIndex <= from || n.startIndex >= to) return;
+    // A missing node is the zero-width token the parser invented; the wrapper has no isMissing.
+    if (n.rawKind === "ERROR" || (n.children.length === 0 && n.startIndex === n.endIndex)) {
+      bad = true;
+      return;
+    }
+    for (const c of n.children) walk(c);
+  };
+  for (const c of owner.children) walk(c);
+  return bad;
+}
+
+/**
  * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if` in a
- * shape `splitVarHoistAnchor` does not cover, else `null`. Such a member gets no latch and no
- * marker: its mutants are `unplaced`, their reach is `not-decided`, never unreached. The member
- * is still instrumented and scored.
+ * shape `splitVarHoistAnchor` does not cover, or did not parse cleanly (`varSectionUnparsed`),
+ * else `null`. Such a member gets no latch and no marker: its mutants are `unplaced`, their reach
+ * is `not-decided`, never unreached. The member is still instrumented and scored.
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
   while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
     owner = owner.parent;
   if (owner === null) return null;
+  if (varSectionUnparsed(owner)) return owner;
   const split = owner.children.some((c) => c.rawKind === "preproc_conditional_var_block");
   return split && splitVarHoistAnchor(owner) === null ? owner : null;
 }

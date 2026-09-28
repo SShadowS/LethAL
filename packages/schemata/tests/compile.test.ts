@@ -19,6 +19,7 @@ import {
   reachGrainOf,
   reachLatchRefusedOwner,
   splitVarHoistAnchor,
+  varSectionUnparsed,
 } from "../src/dispatch";
 import { assignMutantIds } from "../src/ids";
 
@@ -2016,7 +2017,8 @@ const R303_SRC = `codeunit 50100 "Repro D"
 }
 `;
 
-/** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`. */
+/** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`: a
+ *  grammar gap, filed upstream as SShadowS/tree-sitter-al #30. */
 const NESTED_IF_IN_VAR_ERRORS = 3;
 
 /** Re-parsed emitted text: declarations named `latch` directly in a var section, those nested
@@ -2181,6 +2183,29 @@ const HOIST_CASES: { name: string; src: string; header: string; parseErrors?: nu
 #if not CLEAN27
     var
         K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S11 #elif chain where every arm declares",
+    header: "    procedure E(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure E(X: Integer)
+#if A
+    var K: Integer;
+#elif B
+    var N: Integer;
+#else
+    var
+        M: Text;
 #endif
     begin
         Glob := X + 1;
@@ -2395,6 +2420,102 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
     if (owner === undefined || owner === null) throw new Error("fixture drift: no block owner");
     expect(owner.children.map((k) => k.rawKind).slice(4, 7)).toEqual([")", "ERROR", ";"]);
     expect(splitVarHoistAnchor(owner)).toBeNull();
+  });
+
+  // tree-sitter-al puts both of these under ERROR nodes, so the owner has no
+  // `preproc_conditional_var_block` child for the hoist to see. Before the refusal, two-blocks
+  // got its latch in the second block's section (alc AL0118 under [A]) and nested-wrap got a new
+  // `var` before `begin` (alc AL0104 under [A,B]).
+  const UNPARSED: { name: string; member: string }[] = [
+    {
+      name: "two #if var blocks in a row",
+      member: `    procedure E(X: Integer)
+#if A
+    var K: Integer;
+#endif
+#if not A
+    var N: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+`,
+    },
+    {
+      name: "a nested #if wrapping the whole var section",
+      member: `    procedure E(X: Integer)
+#if A
+#if B
+    var K: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+`,
+    },
+  ];
+  for (const u of UNPARSED) {
+    it(`${u.name}: the var section does not parse, so the member is refused and gets no latch`, () => {
+      const src = `codeunit 50100 "Repro U"
+{
+${u.member}
+    procedure Plain(X: Integer)
+    var
+        P: Integer;
+    begin
+        Glob := X + 3;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+      const root = wrapRoot(parseAL(src));
+      const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+        spec(n, "Glob := 0", "lethal.op"),
+      );
+      const [e, plain] = specs;
+      if (e === undefined || plain === undefined) throw new Error("fixture drift: two assignments");
+      const owner = reachLatchRefusedOwner(e.before);
+      if (owner === null) throw new Error("expected the member to be refused");
+      expect(owner.text.startsWith("procedure E(")).toBe(true);
+      expect(owner.children.some((c) => c.rawKind === "preproc_conditional_var_block")).toBe(false);
+      expect(varSectionUnparsed(owner)).toBe(true);
+      expect(reachLatchRefusedOwner(plain.before)).toBeNull();
+      const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+      const grains = buildComponents(ided).flatMap((c) =>
+        c.members.map((m) => reachGrainOf(m, c.root)),
+      );
+      expect(grains).toEqual(["unplaced", "statement"]);
+      const out = compileSchemataForFile(src, root, specs, ided);
+      expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+      expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    });
+  }
+
+  it("a missing node (no ERROR) in the var section also counts as unparsed; a clean one does not", () => {
+    const member = (decl: string) => {
+      const src = `codeunit 50100 "Repro M"
+{
+    procedure P(X: Integer)
+    var
+        ${decl}
+    begin
+        K := X;
+    end;
+}
+`;
+      const root = wrapRoot(parseAL(src));
+      const p = findAll(root, ALNodeKind.procedure)[0];
+      if (p === undefined) throw new Error("fixture drift: no procedure");
+      return { p, errors: countErrorNodes(src) };
+    };
+    // `K: Integer` without its `;`: tree-sitter-al inserts a zero-width missing `;`, no ERROR.
+    const missing = member("K: Integer");
+    expect(missing.errors).toBe(0);
+    expect(varSectionUnparsed(missing.p)).toBe(true);
+    expect(varSectionUnparsed(member("K: Integer;").p)).toBe(false);
   });
 
   it("a pragma-only #if before the block, and a split header, stay refused", () => {

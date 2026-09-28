@@ -28,6 +28,7 @@ import {
   describeObjectKinds,
   isMutableSite,
   reachLatchRefusedOwner,
+  varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
@@ -549,14 +550,18 @@ export function resolveOperatorNames(
 
 /**
  * R303: the members of one file whose `var` section is split by `#if` in a shape
- * `splitVarHoistAnchor` does not cover, so the writer declares no reach latch there
+ * `splitVarHoistAnchor` does not cover, or did not parse cleanly (`unparsed`,
+ * `varSectionUnparsed`), so the writer declares no reach latch there
  * (`reachLatchRefusedOwner`), each with its site count, in source order. Named
  * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
  */
 export function reachLatchRefusals(
   specs: readonly MutationSpec[],
-): { member: string; start: number; sites: number }[] {
-  const byStart = new Map<number, { member: string; start: number; sites: number }>();
+): { member: string; start: number; sites: number; unparsed: boolean }[] {
+  const byStart = new Map<
+    number,
+    { member: string; start: number; sites: number; unparsed: boolean }
+  >();
   for (const spec of specs) {
     const owner = reachLatchRefusedOwner(spec.before);
     if (owner === null) continue;
@@ -570,7 +575,12 @@ export function reachLatchRefusals(
         ? owner.childForFieldName("name")
         : procedureLikeNameNode(owner);
     const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? "<unnamed>"}`;
-    byStart.set(owner.startIndex, { member, start: owner.startIndex, sites: 1 });
+    byStart.set(owner.startIndex, {
+      member,
+      start: owner.startIndex,
+      sites: 1,
+      unparsed: varSectionUnparsed(owner),
+    });
   }
   return [...byStart.values()].sort((x, y) => x.start - y.start);
 }
@@ -775,7 +785,9 @@ export async function generateMutationSet(
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
-        `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
+        r.unparsed
+          ? `[lethal] ${rel}: ${r.member}'s var section did not parse cleanly (tree-sitter-al left an ERROR or missing node between the header and begin), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R313.`
+          : `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
       );
     }
   }

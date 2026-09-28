@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
+import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { lineMapFromSources } from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
@@ -1568,6 +1570,19 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
         exit(0);
     end;
 
+    procedure Twin(X: Integer): Integer
+#if A
+    var K: Integer;
+#endif
+#if not A
+    var N: Integer;
+#endif
+    begin
+        if X > 4 then
+            exit(X + 4);
+        exit(0);
+    end;
+
     var
         Glob: Integer;
 #if not CLEAN27
@@ -1576,7 +1591,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
 }
 `;
 
-  test("header-anchored members get one latch on the header line; the pragma-first member is refused by name", async () => {
+  test("header-anchored members get one latch on the header line; the pragma-first and the unparsed members are refused by name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r303-"));
     try {
       await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
@@ -1590,11 +1605,16 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       const refused = warnings.filter((w) => w.code === "reach-latch-refused");
       expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
         "[lethal] Repro.Codeunit.al: procedure Prag",
+        "[lethal] Repro.Codeunit.al: procedure Twin",
       ]);
-      for (const w of refused) {
-        expect(w.message).toContain("R303");
-        expect(w.message).toContain("is not the end of its header");
-      }
+      const [prag, twin] = refused;
+      expect(prag?.message).toContain("R303");
+      expect(prag?.message).toContain("is not the end of its header");
+      expect(prag?.message).not.toContain("did not parse cleanly");
+      // Two #if var blocks in a row: tree-sitter-al leaves ERROR nodes, so the sentence names that.
+      expect(twin?.message).toContain("R313");
+      expect(twin?.message).toContain("var section did not parse cleanly");
+      expect(twin?.message).not.toContain("is not the end of its header");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1607,6 +1627,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     expect(grains.get("OnRun")?.has("statement")).toBe(true);
     expect(grains.get("Pick")?.has("statement")).toBe(true);
     expect([...(grains.get("Prag") ?? [])]).toEqual(["unplaced"]);
+    expect([...(grains.get("Twin") ?? [])]).toEqual(["unplaced"]);
     expect(grains.get("Plain")?.has("statement")).toBe(true);
     const text = emitted.get("Repro.Codeunit.al") ?? "";
     expect(text).toContain("trigger OnRun() var LethALReachLatch: Boolean;");
@@ -1618,5 +1639,98 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     expect(text).toContain(
       `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR}`,
     );
+  });
+
+  test("S3's emission re-parses with ERROR nodes, yet both line maps give every line to its own member", async () => {
+    // The hoist turns S3's nested #if into a nested #if inside an ordinary var section, which
+    // tree-sitter-al cannot parse (SShadowS/tree-sitter-al #30). The bcdev line map and the
+    // al-runner coverage index both re-parse the instrumented bundle, so pin that the ERRORs stay
+    // inside Pick and the member boundaries survive.
+    const S3 = `codeunit 50100 "Repro S"
+{
+    procedure Pick(X: Integer); // header note
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    procedure After(X: Integer)
+    begin
+        Glob := X + 7;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    const src = await mkdtemp(join(tmpdir(), "lethal-r303-s3-src-"));
+    const out = await mkdtemp(join(tmpdir(), "lethal-r303-s3-out-"));
+    try {
+      await writeFile(join(src, "app.json"), JSON.stringify(APP_JSON));
+      await writeFile(join(src, "Repro.Codeunit.al"), S3);
+      const set = await generateMutationSet(src);
+      await writeInstrumentedProject({
+        targetDir: out,
+        files: set.files,
+        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: APP_JSON.id,
+        operatorTiers,
+      });
+      const text = await readFile(join(out, "Repro.Codeunit.al"), "utf8");
+      expect(text).toContain("procedure Pick(X: Integer); var LethALReachLatch: Boolean;");
+      let errors = 0;
+      visit(wrapRoot(parseAL(text)), (n) => {
+        if (n.rawKind === "ERROR") errors++;
+      });
+      expect(errors).toBeGreaterThan(0);
+      const lines = text.split("\n");
+      const lineOf = (needle: string, from = 0): number => {
+        const i = lines.findIndex((l, k) => k >= from && l.startsWith(needle));
+        if (i < 0) throw new Error(`fixture drift: no line starting ${JSON.stringify(needle)}`);
+        return i + 1;
+      };
+      // A whole-body mutant rewrites the member's own `end;` to column 0, so a member ends at the
+      // last non-blank line before the next header.
+      const lastBefore = (line: number): number => {
+        let n = line - 1;
+        while (n > 1 && (lines[n - 1] ?? "").trim() === "") n--;
+        return n;
+      };
+      const pick = lineOf("    procedure Pick(");
+      const after = lineOf("    procedure After(");
+      const pickEnd = lastBefore(after);
+      // The object's own var section; After's latch line also starts with "    var".
+      const objectVar = lines.findIndex((l, k) => k >= after && l.trimEnd() === "    var") + 1;
+      expect(objectVar).toBeGreaterThan(after);
+      const afterEnd = lastBefore(objectVar);
+      const expected = new Map<number, string | undefined>();
+      for (let n = 1; n <= lines.length; n++) {
+        expected.set(
+          n,
+          n >= pick && n <= pickEnd ? "Pick" : n >= after && n <= afterEnd ? "After" : undefined,
+        );
+      }
+      const bcdev = await lineMapFromSources(
+        [{ path: "Repro.Codeunit.al", text }],
+        new Set(["codeunit:50100"]),
+      );
+      const alr = await buildAlRunnerCoverageIndex(out);
+      expect(alr.refusedFiles).toEqual([]);
+      expect(alr.multiObjectFiles).toEqual([]);
+      for (const [n, who] of expected) {
+        expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([n, who]);
+        expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([n, who]);
+      }
+    } finally {
+      await rm(src, { recursive: true, force: true });
+      await rm(out, { recursive: true, force: true });
+    }
   });
 });
