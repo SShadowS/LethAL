@@ -3,8 +3,10 @@ export { initParser, parseAL } from "./ast/parser";
 export {
   NativeParserMissingError,
   initNativeParser,
+  liveParseResults,
   nativeInfo,
   parseALNative,
+  parsesSinceStart,
 } from "./ast/native-parser";
 export { ALNodeKind, isALNodeKind } from "./ast/node-kinds";
 export { BINARY_EXPRESSION_KINDS, isBinaryExpressionKind } from "./ast/node-kinds";

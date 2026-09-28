@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { initParser, parseAL } from "@lethal/engine";
+import { initParser, liveParseResults, parsesSinceStart } from "@lethal/engine";
 import type { TestMethodRef } from "../src/backend";
 import { discoverTests } from "../src/discovery";
 import {
@@ -1219,14 +1219,19 @@ describe("scanTestPageTests on the real fixtures (offline pin of the live gates)
   }
 });
 
-describe("memory: every parse tree is released once its facts are read", () => {
+describe("memory: every parse result is released once its facts are read", () => {
   // BC.History/BaseApp (9,620 files) aborted inside web-tree-sitter when every tree was kept:
   // the wasm heap grew linearly to its 2,048 MB ceiling at file 9,007. Parsing that corpus here
-  // would take far too long for a unit test, so this pins the mechanism instead: one
-  // `Tree.delete()` per file, observed on web-tree-sitter's own `Tree` prototype with no
-  // production hook, and a correct verdict for a call that crosses into the LAST file after every
-  // tree is gone (so the traversal reads only extracted facts).
-  test("3,000 files: every tree deleted, and a cross-file opening call still refused", () => {
+  // would take far too long for a unit test, so this pins the mechanism instead, with no
+  // production hook in the scanner, and a correct verdict for a call that crosses into the LAST
+  // file after the scan (so the traversal reads only extracted facts).
+  // RUST-03: native form of R-236c's leak test. The native tree is freed inside each parse call
+  // (proven in packages/engine/native/tests/tree_freed.rs); what can still leak is the JS parse
+  // result, if a fact extracted from a file keeps its ParsedAL or a FlatNode reachable. So: after
+  // the scan, garbage collection must be able to reclaim every parse result. The bound (<= 16 of
+  // 3,000) allows for JSC's conservative stack scanning, which can pin a handful; retaining the
+  // results, the failure this pins, leaves about 3,000.
+  test("3,000 files: every parse result released, and a cross-file opening call still refused", async () => {
     const files: Src[] = [];
     const n = 3000;
     for (let i = 1; i < n; i++) {
@@ -1247,18 +1252,15 @@ describe("memory: every parse tree is released once its facts are read", () => {
         ),
       });
     }
-    const tree = parseAL("");
-    const proto = Object.getPrototypeOf(tree) as { delete: () => void };
-    tree.delete();
-    const original = proto.delete;
-    let deletes = 0;
-    proto.delete = function (this: unknown) {
-      deletes++;
-      original.call(this);
-    };
-    try {
-      const got = analyze(
-        unit(`
+    await initParser();
+    // Force a collection before reading the baseline: leftovers from earlier tests in this file
+    // must not sit in `before` and mask partial retention from THIS scan.
+    Bun.gc(true);
+    await Bun.sleep(0);
+    const before = liveParseResults();
+    const parsedBefore = parsesSinceStart();
+    const got = analyze(
+      unit(`
     [Test]
     procedure Opens()
     var
@@ -1274,15 +1276,18 @@ describe("memory: every parse tree is released once its facts are read", () => {
     begin
         L.Run();
     end;`),
-        [ref(50100, "Opens"), ref(50100, "Safe")],
-        files,
-      );
-      expect(got.errors).toEqual([]);
-      expect([...got.refused.keys()]).toEqual(["50100::Opens"]);
-      expect(deletes).toBe(n);
-    } finally {
-      proto.delete = original;
+      [ref(50100, "Opens"), ref(50100, "Safe")],
+      files,
+    );
+    expect(got.errors).toEqual([]);
+    expect([...got.refused.keys()]).toEqual(["50100::Opens"]);
+    // The scan really parsed n files. Monotonic, so a GC during the scan cannot make this flake.
+    expect(parsesSinceStart() - parsedBefore).toBeGreaterThanOrEqual(n);
+    for (let k = 0; k < 50 && liveParseResults() - before > 16; k++) {
+      Bun.gc(true);
+      await new Promise((r) => setImmediate(r));
     }
+    expect(liveParseResults() - before).toBeLessThanOrEqual(16);
   });
 });
 

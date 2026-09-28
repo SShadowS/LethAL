@@ -1,8 +1,5 @@
 import type { ALNodeKind } from "./node-kinds";
 
-// Backed by the WASM reference until the RUST-03 switch (S3.4).
-export { wrapWasmRoot as wrapRoot } from "./parser-wasm";
-
 export interface ALSyntaxNode {
   readonly kind: ALNodeKind;
   readonly rawKind: string;
@@ -45,6 +42,9 @@ export const FLAG_NAMED = 1;
 export const FLAG_MISSING = 2;
 export const FLAG_HAS_ERROR = 4;
 export const FLAG_EXTRA = 8;
+/** This child is what tree-sitter's `child_by_field_id` on its parent returns for its field. The
+ *  lookup is not a scan of field names: on an ERROR node it misses fields a hidden child supplies. */
+export const FLAG_FIELD_TARGET = 16;
 
 function at<T>(arr: ArrayLike<T>, i: number, what: string): T {
   const v = arr[i];
@@ -108,7 +108,8 @@ class FlatNode implements ALSyntaxNode {
   childForFieldName(name: string): ALSyntaxNode | null {
     const f = this.p.flat;
     for (let c = this.firstChild(); c !== -1; c = at(f.nextSibling, c, "nextSibling")) {
-      if (this.fieldOf(c) === name) return new FlatNode(this.p, c, this, name);
+      if (this.fieldOf(c) === name && (at(f.flags, c, "flags") & FLAG_FIELD_TARGET) !== 0)
+        return new FlatNode(this.p, c, this, name);
     }
     return null;
   }
@@ -133,6 +134,9 @@ class FlatNode implements ALSyntaxNode {
 export function wrapFlatRoot(parsed: ParsedAL): ALSyntaxNode {
   return new FlatNode(parsed, 0, null, null);
 }
+
+// The engine's wrapper since RUST-03: the native flat tree (wrapWasmRoot is reference only).
+export const wrapRoot = wrapFlatRoot;
 
 export function findFirst(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode | null {
   if (root.kind === kind) return root;
