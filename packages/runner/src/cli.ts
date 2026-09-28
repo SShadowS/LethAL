@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { initNativeParser, nativeInfo, parseALNative } from "@lethal/engine";
 import {
   type AppIdRange,
   CONTROL_REGISTER_FILENAME,
@@ -682,7 +683,15 @@ export interface VersionCliConfig {
   readonly mode: "version";
 }
 
+/** RUST-03 S2.2: hidden `lethal native-check`. Parses a fixed snippet through the embedded native
+ *  addon and prints its target, C compiler and node count, so release CI can prove each compiled
+ *  binary carries a working addon. Until S3 `--dry-run` parses with WASM and never touches it. */
+export interface NativeCheckCliConfig {
+  readonly mode: "native-check";
+}
+
 export type CliConfig =
+  | NativeCheckCliConfig
   | DryRunCliConfig
   | RunCliConfig
   | ClearQuarantineCliConfig
@@ -708,7 +717,11 @@ export const VALID_SUBCOMMANDS = [
   "export",
   "campaign",
   "verify",
+  "native-check",
 ] as const;
+
+/** Accepted but never advertised: not in `--help`, not in the unknown-subcommand message. */
+export const HIDDEN_SUBCOMMANDS: ReadonlySet<string> = new Set(["native-check"]);
 
 /** The three `lethal campaign` verbs — see `CampaignCliConfig`. */
 const CAMPAIGN_ACTIONS = ["freeze", "anchors", "compare"] as const;
@@ -751,7 +764,7 @@ function requireKnownSubcommand(positionals: readonly string[]): string {
   }
   const got = subcommand === undefined ? "none" : `"${subcommand}"`;
   throw new Error(
-    `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.join(", ")}. Run \`lethal --help\` for usage.`,
+    `unknown subcommand: got ${got}, expected one of: ${VALID_SUBCOMMANDS.filter((s) => !HIDDEN_SUBCOMMANDS.has(s)).join(", ")}. Run \`lethal --help\` for usage.`,
   );
 }
 
@@ -1411,6 +1424,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const subcommand = requireKnownSubcommand(positionals);
 
   refuseFlagsThisSubcommandDoesNotOwn(subcommand, values);
+
+  // No FLAG_OWNERS row names native-check, so the line above refused every flag already.
+  if (subcommand === "native-check") return { mode: "native-check" };
 
   if (subcommand === "verify") {
     for (const [flag, given] of Object.entries(values)) {
@@ -5015,6 +5031,17 @@ export function exitCodeForReport(
   return 0;
 }
 
+const NATIVE_CHECK_SNIPPET = `codeunit 50100 "Native Check"
+{
+    procedure Twice(Value: Integer): Integer
+    begin
+        if Value > 0 then
+            exit(Value * 2);
+        exit(0);
+    end;
+}
+`;
+
 async function main(): Promise<number> {
   const parsed = parseCliConfig(process.argv.slice(2));
   if (parsed.mode === "help") {
@@ -5026,6 +5053,13 @@ async function main(): Promise<number> {
     // the commit — or the operator set the run could actually apply — is unanswerable, and a
     // 56-commit-stale binary silently measured a smaller operator set than its source would.
     console.log(renderVersion(LETHAL_VERSION, [...operatorTiers.keys()]));
+    return 0;
+  }
+  if (parsed.mode === "native-check") {
+    await initNativeParser();
+    const p = parseALNative(NATIVE_CHECK_SNIPPET);
+    const i = nativeInfo();
+    console.log(`native ${i.target} ${i.cCompiler} nodes ${p.flat.kind.length}`);
     return 0;
   }
   if (parsed.mode === "dry-run") {

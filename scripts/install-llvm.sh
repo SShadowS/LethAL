@@ -4,12 +4,12 @@
 # is set). One place for release.yml and ci.yml. Never floats to a newer LLVM: every asset is pinned
 # by URL and hash, and the banner must say exactly "clang version 23.1.2".
 #
-#   bash scripts/install-llvm.sh <win32-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64>
+#   bash scripts/install-llvm.sh <win32-x64|linux-x64|linux-arm64|darwin-arm64>
 #
 # Why not KyleMayes/install-llvm-action: its asset list stops at 21.1.x, so it refuses 23.1.2 on
-# every platform (CI run 36443811955 on Windows). Why conda-forge for darwin-x64: LLVM 23.1.2 has
-# no official macOS x64 build (the release ships macOS-ARM64 only), and Homebrew no longer bottles
-# llvm for Intel macOS. conda-forge's clang 23.1.2 osx-64 build is the pinned 23.1.2 there.
+# every platform (CI run 36443811955 on Windows). darwin-x64 has no key here: LLVM 23.1.2 ships no
+# macOS x64 build, so release CI cross-builds that addon on darwin-arm64 with this same clang
+# (owner ruling, RUST-03 S2) and smoke-tests it on an Intel runner.
 set -euo pipefail
 
 VERSION=23.1.2
@@ -53,13 +53,8 @@ case "$key" in
     exe=clang
     ;;
   darwin-x64)
-    mm="$dest.micromamba"
-    fetch https://github.com/mamba-org/micromamba-releases/releases/download/2.9.0-0/micromamba-osx-64 \
-      1e71054bb3ac9a076e21f7ec48acfef536f9b3f1408f371a942784bf5ef83d8a "$mm"
-    chmod +x "$mm"
-    "$mm" create --yes --root-prefix "$dest.mamba" --prefix "$dest" \
-      --channel conda-forge --override-channels "clang==$VERSION"
-    exe=clang
+    echo "install-llvm: LLVM $VERSION ships no macOS x64 build. darwin-x64 is cross-built on darwin-arm64: bash scripts/install-llvm.sh darwin-arm64, then bun scripts/build-native-parser.ts --target darwin-x64" >&2
+    exit 1
     ;;
   *)
     echo "install-llvm: no LethAL target $key" >&2
