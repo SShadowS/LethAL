@@ -167,3 +167,12 @@ Committed alone. It changes no prediction and no ceiling.
 - The capture patch scripts are kept beside the session ledger for Task 6, and the whole-BaseApp WASM
   listing (sha256 a66a270e1530907e2b6c2b468b29f409fcd822b2ee92e02e6827bd083c59621b) is kept in scratch
   until Task 6 is done.
+
+## AMENDMENT 1 (2026-09-28, owner decision, before any native timing or memory figure was read)
+Committed alone. The D3 keep ceiling for W2 (the whole-BaseApp census, 9,620 files, one pass) is
+16,384 MB, replacing 8,192 MB. Owner decision relayed by the coordinator, made after seeing that WASM
+already peaks at 16,151 MB on W3a (BaseApp/Source, a subset of W2) and 16,810 MB on W4. The keep rule
+is otherwise unchanged: native is kept only if W2 completes in one pass at or under 16,384 MB. The W4
+ceiling stays 8,192 MB (not a keep gate: over it means no revert, no product memory win claimed,
+filed). The W6 ceiling stays pending the service-tier restart on Cronus28. This ceiling is never raised
+after a native result.
