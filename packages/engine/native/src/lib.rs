@@ -228,6 +228,16 @@ mod tests {
         let src = "codeunit 50100 \"Blåbær😀\" { }";
         let f = parse_units(&units(src));
         assert_eq!(f.end_index[0] as usize, src.encode_utf16().count());
+        // RUST-03: the quoted name ends after the emoji (2 code units) at unit 25, and `{` starts at
+        // 26. Pins start_index and the column halving, not only the root's end.
+        let name = (0..f.kind.len()).find(|&i| f.start_index[i] == 15 && f.end_index[i] == 25);
+        let name = name.expect("a node spans the quoted name, units 15..25");
+        assert_eq!(f.points[4 * name + 1], 15, "start column of the name");
+        assert_eq!(f.points[4 * name + 3], 25, "end column after the emoji");
+        let brace = (0..f.kind.len()).find(|&i| f.kind_names[f.kind[i] as usize] == "{");
+        let brace = brace.expect("the `{` token is a node");
+        assert_eq!(f.start_index[brace], 26);
+        assert_eq!(f.points[4 * brace + 1], 26, "start column of `{{`");
     }
 
     #[test]

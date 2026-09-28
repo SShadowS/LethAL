@@ -18,9 +18,27 @@ const LIB: Readonly<Record<string, string>> = {
   "darwin-x64": "liblethal_parser.dylib",
   "darwin-arm64": "liblethal_parser.dylib",
 };
-const key = `${process.platform}-${process.arch}`;
-const lib = LIB[key];
-if (lib === undefined) throw new Error(`build-native-parser: no LethAL target for ${key}`);
+/** RUST-03: cc-rs picks `CC_<target>`, then `TARGET_CC`, then `CC` (and flags the same way), so a
+ *  stray variable in the shell could build the grammar with another compiler while provenance says
+ *  clang. Every compiler and C-flag override is REMOVED from the child env; CC is then set to the
+ *  checked clang, and the only C flags are `.cargo/config.toml`'s. Matched case-insensitively,
+ *  because Windows env names are. */
+const STRIPPED = /^(?:(?:CC|CFLAGS)_.+|(?:TARGET|HOST)_(?:CC|CFLAGS)|CFLAGS)$/i;
+
+export function cargoEnv(
+  base: Readonly<Record<string, string | undefined>>,
+  cc: string,
+  grammar: string,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (v !== undefined && !STRIPPED.test(k) && k.toUpperCase() !== "CC") env[k] = v;
+  }
+  env.CC = cc;
+  env.LETHAL_GRAMMAR_INPUTS = grammar;
+  return env;
+}
+
 /** RUST-03: clang on every target. clang-cl on Windows (MSVC ABI), clang elsewhere. LLVM_BIN may
  *  point at a specific install; otherwise PATH. The build refuses a compiler that is not clang. */
 function clangCc(): string {
@@ -35,40 +53,47 @@ function clangCc(): string {
   }
   return cc;
 }
-const cc = clangCc();
-const env = { ...process.env, CC: cc, LETHAL_GRAMMAR_INPUTS: grammarInputs() };
-const test = process.argv.includes("--test");
-const run = Bun.spawnSync(["cargo", test ? "test" : "build", "--release", "--locked"], {
-  cwd: CRATE,
-  env,
-  stdout: "inherit",
-  stderr: "inherit",
-});
-if (run.exitCode !== 0)
-  throw new Error(`build-native-parser: cargo failed with exit ${run.exitCode}`);
-if (test) process.exit(0);
 
-const targetDir = process.env.CARGO_TARGET_DIR ?? join(CRATE, "target");
-const outDir = join(import.meta.dir, "..", "packages", "engine", "vendor", "native");
-const out = join(outDir, `lethal-parser.${key}.node`);
-await mkdir(outDir, { recursive: true });
-await copyFile(join(targetDir, "release", lib), out);
+async function main(): Promise<void> {
+  const key = `${process.platform}-${process.arch}`;
+  const lib = LIB[key];
+  if (lib === undefined) throw new Error(`build-native-parser: no LethAL target for ${key}`);
+  const env = cargoEnv(process.env, clangCc(), grammarInputs());
+  const test = process.argv.includes("--test");
+  const run = Bun.spawnSync(["cargo", test ? "test" : "build", "--release", "--locked"], {
+    cwd: CRATE,
+    env,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if (run.exitCode !== 0)
+    throw new Error(`build-native-parser: cargo failed with exit ${run.exitCode}`);
+  if (test) return;
 
-const bytes = await readFile(out);
-const binding = require(out) as { nativeInfo(): unknown };
-const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
-const provenance = {
-  file: `lethal-parser.${key}.node`,
-  sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
-  bytes: bytes.length,
-  nativeInfo: binding.nativeInfo(),
-  cargoLockSha256: new Bun.CryptoHasher("sha256")
-    .update(await readFile(join(CRATE, "Cargo.lock")))
-    .digest("hex"),
-  commit,
-};
-await writeFile(
-  `${out.slice(0, -".node".length)}.provenance.json`,
-  `${JSON.stringify(provenance, null, 2)}\n`,
-);
-console.log(`build-native-parser: wrote ${out} (${provenance.sha256})`);
+  const targetDir = process.env.CARGO_TARGET_DIR ?? join(CRATE, "target");
+  const outDir = join(import.meta.dir, "..", "packages", "engine", "vendor", "native");
+  const out = join(outDir, `lethal-parser.${key}.node`);
+  await mkdir(outDir, { recursive: true });
+  await copyFile(join(targetDir, "release", lib), out);
+
+  const bytes = await readFile(out);
+  const binding = require(out) as { nativeInfo(): unknown };
+  const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
+  const provenance = {
+    file: `lethal-parser.${key}.node`,
+    sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"),
+    bytes: bytes.length,
+    nativeInfo: binding.nativeInfo(),
+    cargoLockSha256: new Bun.CryptoHasher("sha256")
+      .update(await readFile(join(CRATE, "Cargo.lock")))
+      .digest("hex"),
+    commit,
+  };
+  await writeFile(
+    `${out.slice(0, -".node".length)}.provenance.json`,
+    `${JSON.stringify(provenance, null, 2)}\n`,
+  );
+  console.log(`build-native-parser: wrote ${out} (${provenance.sha256})`);
+}
+
+if (import.meta.main) await main();
