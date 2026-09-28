@@ -176,3 +176,22 @@ is otherwise unchanged: native is kept only if W2 completes in one pass at or un
 ceiling stays 8,192 MB (not a keep gate: over it means no revert, no product memory win claimed,
 filed). The W6 ceiling stays pending the service-tier restart on Cronus28. This ceiling is never raised
 after a native result.
+
+## AMENDMENT 2 (2026-09-28, spike result: STOP)
+Committed alone. Task 1's spike fails the pre-committed bar in "Spike STOP (I4)"; nothing above
+OUTCOME changes. Per that section, the native route stops and R292 takes the TypeScript route.
+- Probe D (the failed probe), same corpus and command shape as W1 (`U:/Git/BC.History/BaseApp`,
+  9,620 files, via `scripts/measure-peak.ts`), native parse plus flatten plus transfer: parseMs
+  34,515 / 34,541 / 29,122, median **34,515 ms** against the bar of <= 9,547 ms (50% of 19,094).
+  Native is about 1.8x SLOWER than WASM, not 2x faster. nodes 31,135,464 on every run, equal to W1.
+  Peak 1,900 to 1,906 MB, wall 30.29 to 35.70 s.
+- Machine check, same session: one WASM W1 run gave parseMs 19,207, nodes 31,135,464, so conditions
+  matched the baseline.
+- Attribution (Rust only, no Node-API layer, `examples/split.rs`, same corpus): tree-sitter parse
+  alone 21,867 ms, flatten 5,584 ms. The parse alone already exceeds WASM's 19,094 ms, so no binding
+  or transfer work could meet the bar with this build (MSVC `cl`, `/O2` via the `cc` crate; clang
+  was not available to compare).
+- Probes A (dev load), B (UTF-16 columns, 0 of 38 nodes differ) and C (variant B builds and parses
+  with the file hidden; variant A does not build) passed. Details in
+  `.superpowers/sdd/2026-09-27-RUST-01-native-parser/task-1-steps1-8-report.md`.
+- `packages/engine/native/` is deleted uncommitted.
