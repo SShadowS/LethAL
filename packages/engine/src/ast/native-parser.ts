@@ -47,6 +47,22 @@ export class NativeParserMissingError extends Error {
   }
 }
 
+/** The .node file is there but the platform refused to load it (corrupt, truncated, another
+ *  platform's binary, a missing system library). Carries the loader's own error as `cause`. */
+export class NativeParserLoadError extends Error {
+  constructor(
+    readonly platformKey: string,
+    cause: unknown,
+  ) {
+    const why = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `LethAL's native AL parser for ${platformKey} (packages/engine/vendor/native/lethal-parser.${platformKey}.node) exists but could not be loaded: ${why}. Rebuild it with \`bun scripts/build-native-parser.ts\`, or use a release binary.`,
+      { cause },
+    );
+    this.name = "NativeParserLoadError";
+  }
+}
+
 export class NativeParserPinError extends Error {
   constructor(field: string, expected: string, actual: string) {
     super(
@@ -87,16 +103,23 @@ export function localBindingSourceSha256(crateDir: string): string {
 declare const __LETHAL_NATIVE_KEY__: string;
 
 export function loadBindingFor(key: string): NativeBinding {
+  // A compiled binary requires its embedded key, not `key`: name the one that was actually missing.
+  const wanted = typeof __LETHAL_NATIVE_KEY__ !== "undefined" ? __LETHAL_NATIVE_KEY__ : key;
   try {
     const loaded: unknown =
       typeof __LETHAL_NATIVE_KEY__ !== "undefined"
         ? require(`../../vendor/native/lethal-parser.${__LETHAL_NATIVE_KEY__}.node`)
         : require(`../../vendor/native/lethal-parser.${key}.node`);
-    if (loaded === undefined || loaded === null) throw new NativeParserMissingError(key, undefined);
+    if (loaded === undefined || loaded === null)
+      throw new NativeParserMissingError(wanted, undefined);
     return loaded as NativeBinding;
   } catch (cause) {
     if (cause instanceof NativeParserMissingError) throw cause;
-    throw new NativeParserMissingError(key, cause);
+    // Only "no such module" means missing. Anything else (a dlopen failure) is a present file that
+    // did not load, and saying "no binary" there would send the reader looking for the wrong thing.
+    if ((cause as { code?: unknown } | null)?.code === "MODULE_NOT_FOUND")
+      throw new NativeParserMissingError(wanted, cause);
+    throw new NativeParserLoadError(wanted, cause);
   }
 }
 

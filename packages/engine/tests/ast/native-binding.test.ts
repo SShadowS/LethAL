@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   GRAMMAR_PIN,
   type NativeBinding,
   type NativeInfo,
+  NativeParserLoadError,
   NativeParserMissingError,
   NativeParserPinError,
   NativeParserStaleError,
@@ -38,6 +40,43 @@ describe("native parser binding", () => {
   it("names the platform and the fix when there is no binary", () => {
     expect(() => loadBindingFor("linux-riscv64")).toThrow(NativeParserMissingError);
     expect(() => loadBindingFor("linux-riscv64")).toThrow(/linux-riscv64.*build-native-parser/s);
+  });
+
+  it("reports a present but unloadable binary as a load failure, with the loader's error", () => {
+    // A text file named like an addon: it resolves, then dlopen refuses it.
+    const key = "test-unloadable";
+    const file = join(import.meta.dir, "..", "..", "vendor", "native", `lethal-parser.${key}.node`);
+    writeFileSync(file, "not a shared library");
+    try {
+      let err: unknown;
+      try {
+        loadBindingFor(key);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(NativeParserLoadError);
+      expect(err).not.toBeInstanceOf(NativeParserMissingError);
+      expect(String((err as Error).message)).toMatch(/test-unloadable.*could not be loaded/s);
+      expect((err as Error).cause).toBeInstanceOf(Error);
+      expect(((err as Error).cause as { code?: unknown }).code).toBe("ERR_DLOPEN_FAILED");
+    } finally {
+      rmSync(file, { force: true });
+    }
+  });
+
+  it("a compiled binary without its embedded addon names the key it embeds, not the host's", () => {
+    // `bun build --compile` defines __LETHAL_NATIVE_KEY__; defining one with no .node on disk is a
+    // release binary that shipped without its addon.
+    const loader = join(import.meta.dir, "..", "..", "src", "ast", "native-parser.ts");
+    const r = Bun.spawnSync([
+      "bun",
+      "--define",
+      '__LETHAL_NATIVE_KEY__="linux-riscv64"',
+      "-e",
+      `const { loadBindingFor } = require(${JSON.stringify(loader)});
+       try { loadBindingFor("win32-x64"); } catch (e) { console.log(e.name, e.platformKey); }`,
+    ]);
+    expect(r.stdout.toString().trim()).toBe("NativeParserMissingError linux-riscv64");
   });
 
   it("parses after init", async () => {
