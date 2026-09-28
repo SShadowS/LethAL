@@ -9,7 +9,7 @@ import {
   printWithRewrites,
 } from "@lethal/engine";
 import { type Component, buildComponents } from "./components";
-import { REACH_LATCH, emitDispatch, reachGrainOf } from "./dispatch";
+import { REACH_LATCH, emitDispatch, reachGrainOf, splitVarHoistAnchor } from "./dispatch";
 import { type IdedSpec, assignMutantIds } from "./ids";
 
 export function compileSchemataForFile(
@@ -100,6 +100,26 @@ function injectReachLatches(
     const latch = latchNameFor(owner);
     byOwner.set(owner.startIndex, latch);
     latches.set(c, latch);
+    // R303: the var section sits inside `#if`. One unconditional `var` on the header line, and
+    // each arm's own `var` keyword blanked to spaces, so the arms' declarations join that one
+    // section in every build. No newline, so no LINE moves (offsets and later columns do).
+    const split = owner.children.find((n) => n.rawKind === "preproc_conditional_var_block");
+    if (split !== undefined) {
+      const anchor = splitVarHoistAnchor(owner);
+      if (anchor === null) {
+        // `placeReach` refuses these members, so no statement-grain marker can reach here.
+        throw new Error(
+          `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a member whose var section is split by #if in a shape with no latch placement (R303).`,
+        );
+      }
+      rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` var ${latch}: Boolean;`);
+      for (const arm of split.children.filter((n) => n.kind === ALNodeKind.var_section)) {
+        const keyword = arm.children.find((n) => n.rawKind === "var_keyword");
+        if (keyword !== undefined)
+          rewrites.set(keyword, " ".repeat(keyword.endIndex - keyword.startIndex));
+      }
+      continue;
+    }
     // Fix round 1: a comment is a node of its own, so neither anchor may be "the node before
     // begin". After a `//` comment the declaration would be commented out (AL0118), and a comment
     // between the var section and begin used to hide the section and emit a second one.

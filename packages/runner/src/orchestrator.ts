@@ -548,8 +548,9 @@ export function resolveOperatorNames(
 }
 
 /**
- * R303: the members of one file whose `var` section is split by `#if`, so the writer declares no
- * reach latch there (`reachLatchRefusedOwner`), each with its site count, in source order. Named
+ * R303: the members of one file whose `var` section is split by `#if` in a shape
+ * `splitVarHoistAnchor` does not cover, so the writer declares no reach latch there
+ * (`reachLatchRefusedOwner`), each with its site count, in source order. Named
  * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
  */
 export function reachLatchRefusals(
@@ -774,7 +775,7 @@ export async function generateMutationSet(
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
-        `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). Placement rule pending, R303.`,
+        `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
       );
     }
   }

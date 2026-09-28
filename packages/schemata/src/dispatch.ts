@@ -86,19 +86,59 @@ export function reachGrainOf(member: ComponentMember, root: ALSyntaxNode): Reach
 }
 
 /**
- * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if`
- * (`preproc_conditional_var_block` between the header and `begin`), else `null`. The reach latch
- * is a local, and appending one there gives the member a SECOND `var` section in any build where an
- * arm declares one, which alc rejects; placing it in each arm is a placement rule not built yet
- * (R303). So such a member gets no latch and no marker: its mutants are `unplaced`, their reach is
- * `not-decided`, never "unreached". The member is still instrumented and scored.
+ * R303. The last token of a procedure or trigger header: the owner-level `)` that closes the
+ * parameter list, else the `return_type` after it (plain or named return), else a `;` directly
+ * after either. Attributes before the member and parameters spanning lines do not change it: an
+ * attribute's own parentheses sit inside `attribute_item`, and parameters inside `parameter_list`.
+ * `null` when the owner has no owner-level `)` (a split header keeps its `)` inside each arm).
+ */
+function headerEndOf(owner: ALSyntaxNode): ALSyntaxNode | null {
+  const kids = owner.children.filter(
+    (c) => c.rawKind !== "comment" && c.rawKind !== "multiline_comment",
+  );
+  const close = kids.find((c) => c.rawKind === ")");
+  if (close === undefined) return null;
+  const ret = owner.childForFieldName("return_type");
+  const end = ret !== null && ret.startIndex > close.startIndex ? ret : close;
+  const next = kids.find((c) => c.startIndex >= end.endIndex);
+  return next !== undefined && next.rawKind === ";" ? next : end;
+}
+
+/**
+ * R303. For a procedure or trigger whose `var` section sits inside `#if`
+ * (`preproc_conditional_var_block`), the header token to write ONE unconditional
+ * `var <latch>: Boolean;` after. The writer then blanks each arm's own `var` keyword, so each
+ * arm's declarations become conditional declarations in that one section, which is valid in every
+ * build. `null` when the member has no such block, or when the token before the block (comments
+ * skipped) is anything but the header's actual end: a pragma-only `#if` block, a split header's
+ * `#endif`, or any kind not yet seen. Those members stay refused by name.
+ */
+export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
+  const kids = owner.children;
+  const at = kids.findIndex((c) => c.rawKind === "preproc_conditional_var_block");
+  if (at < 0) return null;
+  const prev = kids
+    .slice(0, at)
+    .filter((c) => c.rawKind !== "comment" && c.rawKind !== "multiline_comment")
+    .at(-1);
+  const end = headerEndOf(owner);
+  if (prev === undefined || end === null) return null;
+  return prev.startIndex === end.startIndex && prev.endIndex === end.endIndex ? prev : null;
+}
+
+/**
+ * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if` in a
+ * shape `splitVarHoistAnchor` does not cover, else `null`. Such a member gets no latch and no
+ * marker: its mutants are `unplaced`, their reach is `not-decided`, never unreached. The member
+ * is still instrumented and scored.
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
   while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
     owner = owner.parent;
   if (owner === null) return null;
-  return owner.children.some((c) => c.rawKind === "preproc_conditional_var_block") ? owner : null;
+  const split = owner.children.some((c) => c.rawKind === "preproc_conditional_var_block");
+  return split && splitVarHoistAnchor(owner) === null ? owner : null;
 }
 
 /**
@@ -126,7 +166,7 @@ function placeReach(
   latch: string = REACH_LATCH,
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
-  // R303: no latch can be declared in a member whose var section is split by `#if`, so no marker.
+  // R303: a split var section in an unproven shape gets no latch, so no marker.
   if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any

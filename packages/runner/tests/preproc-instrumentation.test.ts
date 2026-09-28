@@ -1516,7 +1516,7 @@ describe("R301: split-header procedures get their manifest fields", () => {
 /** Captured after R301's latch fix (Step 4a), before the manifest fixes; see the test above. */
 const SPLIT_SITES: string[] = ["19 lethal.remove-assignment", "20 lethal.void-method-call"];
 
-describe("R303: a member whose var section is split by #if gets no reach latch, by name", () => {
+describe("R303: a member whose var section is split by #if gets a latch, or is refused by name", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -1554,12 +1554,29 @@ describe("R303: a member whose var section is split by #if gets no reach latch, 
         exit(P);
     end;
 
+    procedure Prag(X: Integer): Integer
+#if not CLEAN27
+#pragma warning disable AL0432
+#endif
+#if not CLEAN27
+    var
+        Q: Integer;
+#endif
+    begin
+        if X > 3 then
+            exit(X + 3);
+        exit(0);
+    end;
+
     var
         Glob: Integer;
+#if not CLEAN27
+        Old: Integer;
+#endif
 }
 `;
 
-  test("each refused member is named once in a reach-latch-refused warning; its mutants are unplaced, the plain member's are not", async () => {
+  test("header-anchored members get one latch on the header line; the pragma-first member is refused by name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r303-"));
     try {
       await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
@@ -1572,10 +1589,12 @@ describe("R303: a member whose var section is split by #if gets no reach latch, 
       });
       const refused = warnings.filter((w) => w.code === "reach-latch-refused");
       expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
-        "[lethal] Repro.Codeunit.al: trigger OnRun",
-        "[lethal] Repro.Codeunit.al: procedure Pick",
+        "[lethal] Repro.Codeunit.al: procedure Prag",
       ]);
-      for (const w of refused) expect(w.message).toContain("R303");
+      for (const w of refused) {
+        expect(w.message).toContain("R303");
+        expect(w.message).toContain("is not the end of its header");
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1585,11 +1604,19 @@ describe("R303: a member whose var section is split by #if gets no reach latch, 
       const who = m.triggerName ?? m.procedureName;
       grains.set(who, new Set([...(grains.get(who) ?? []), m.reachGrain ?? "none"]));
     }
-    expect([...(grains.get("OnRun") ?? [])]).toEqual(["unplaced"]);
-    expect([...(grains.get("Pick") ?? [])]).toEqual(["unplaced"]);
+    expect(grains.get("OnRun")?.has("statement")).toBe(true);
+    expect(grains.get("Pick")?.has("statement")).toBe(true);
+    expect([...(grains.get("Prag") ?? [])]).toEqual(["unplaced"]);
     expect(grains.get("Plain")?.has("statement")).toBe(true);
     const text = emitted.get("Repro.Codeunit.al") ?? "";
-    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(1);
+    expect(text).toContain("trigger OnRun() var LethALReachLatch: Boolean;");
+    expect(text).toContain("procedure Pick(X: Integer): Integer var LethALReachLatch: Boolean;");
     expect(text).toContain("P: Integer; LethALReachLatch: Boolean;");
+    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(3);
+    expect(text.split(SELECTOR).length - 1).toBe(1);
+    // R-297: the selector goes after a declaration-only #if block's #endif, on its own line.
+    expect(text).toContain(
+      `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR}`,
+    );
   });
 });
