@@ -3076,3 +3076,92 @@ table 50110 "Wrapped T"
     }
   });
 });
+
+/**
+ * R298, review r1 Important 3: the HUB path (`coverageMode: "procedure"`) applies the same
+ * refusal. A wrapped object's method ids, named or not, produce no entry, and the refusal is named
+ * once at deploy, whether or not a row for the object ever arrives.
+ */
+describe("hub coverage: #if-wrapped objects are refused by name (R298)", () => {
+  const WRAPPED = `#if not CLEAN27
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure Touch()
+    begin
+    end;
+
+    trigger OnInsert()
+    begin
+        Touch();
+    end;
+}
+#endif
+`;
+  const PLAIN = "codeunit 50107 Other\n{\n    procedure R()\n    begin\n    end;\n}\n";
+  const REFUSED =
+    "[lethal] coverage refused for Table:50110 (W.Table.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+  const symbols = {
+    Tables: [{ Id: 50110, Name: "Wrapped T", Methods: [{ Id: 777, Name: "Touch" }] }],
+    Codeunits: [{ Id: 50107, Name: "Other", Methods: [{ Id: 888, Name: "R" }] }],
+  };
+  const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  async function hub(covered: unknown[]) {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r298-hub-"));
+    await Bun.write(join(dir, "W.Table.al"), WRAPPED);
+    await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
+    const made = await makeBackendWithDeploy(
+      () => ({
+        results: [{ codeunitId: 50140, method: "T", status: "passed", durationMs: 1, output: "" }],
+        coverage: [{ testObjectId: 50140, testMethodId: 1, coveredProcedures: covered }],
+      }),
+      symbols,
+      dir,
+    );
+    return {
+      ...made,
+      cleanup: async () => {
+        await made.cleanup();
+        await rm(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("named and unnamed method ids of the wrapped table produce no entry; the plain one is named", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub([
+      { objectType: 1, objectId: 50110, methodId: 777 },
+      { objectType: 1, objectId: 50110, methodId: -1650094725 },
+      { objectType: 5, objectId: 50107, methodId: 888 },
+    ]);
+    try {
+      const v = await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("with ZERO rows for the wrapped table, it is still named once at deploy", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub([{ objectType: 5, objectId: 50107, methodId: 888 }]);
+    try {
+      await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});

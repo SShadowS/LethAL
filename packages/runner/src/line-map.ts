@@ -493,6 +493,21 @@ export async function lineMapFromSources(
   return new LineMap(entries, declared);
 }
 
+/**
+ * R298, for the HUB path, which builds no line map: the refused DECLARED objects of these sources,
+ * by the same rule (`coverageRefusedObjects`), keyed as `LineMap.refusedByKey` keys them.
+ */
+export async function refusedCoverageFromSources(
+  sources: readonly AlSource[],
+  declared: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, string>> {
+  await initParser();
+  const all = coverageRefusedObjects(
+    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+  );
+  return new Map([...all].filter(([key]) => declared.has(key)));
+}
+
 /** Forward slashes, so a path quoted to a user reads the same on every platform. */
 function normalizeSlashes(path: string): string {
   return path.split("\\").join("/");

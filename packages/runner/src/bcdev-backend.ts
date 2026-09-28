@@ -32,7 +32,14 @@ import { describeThrown } from "./describe-error";
 import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
-import { type LineMap, buildLineMap, lineMapFromSources } from "./line-map";
+import {
+  type AlSource,
+  type LineMap,
+  buildLineMap,
+  lineMapFromSources,
+  readAlSources,
+  refusedCoverageFromSources,
+} from "./line-map";
 import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
 import { quarantineResourceKey } from "./resource-key";
@@ -307,6 +314,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // R298: `type:id` keys whose coverage refusal this backend already named, so the warning is
   // printed once per object per session, at index time (`nameRefusals`), rows or not.
   private readonly refusalsWarned = new Set<string>();
+  // R298 (`coverageMode: "procedure"`, the hub): refused declared objects, `type:id` -> reason, by
+  // the line map's rule. `buildCoverageMap` drops every method id of one, named or not.
+  private hubRefused: ReadonlyMap<string, string> = new Map();
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.
   private coverageObjectIdFilter: string | undefined;
@@ -597,6 +607,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } else {
       this.lineMap = undefined;
       this.coverageObjectIdFilter = undefined;
+      this.hubRefused = new Map();
+      if (this.cfg.coverageMode === "procedure") {
+        await this.indexHubRefusals(await readAlSources(instrumentedDir));
+      }
     }
   }
 
@@ -616,6 +630,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } else {
       this.lineMap = undefined;
       this.coverageObjectIdFilter = undefined;
+      this.hubRefused = new Map();
+      if (this.cfg.coverageMode === "procedure") await this.indexHubRefusals(artifact.alSources);
     }
   }
 
@@ -623,6 +639,13 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * R298: names every refused object ONCE per session, when the artifact is indexed, so a wrapped
    * object no coverage row ever mentions is named too (a row-time warning missed exactly that case).
    */
+  /** R298: the hub builds no line map, so its refusals are read from the sources directly. */
+  private async indexHubRefusals(sources: readonly AlSource[]): Promise<void> {
+    const declared = this.methodIndex?.declaredObjects() ?? new Set<string>();
+    this.hubRefused = await refusedCoverageFromSources(sources, declared);
+    this.nameRefusals(this.hubRefused);
+  }
+
   private nameRefusals(refused: ReadonlyMap<string, string>): void {
     for (const [key, reason] of refused) {
       if (this.refusalsWarned.has(key)) continue;
@@ -1308,6 +1331,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
       if (this.methodIndex !== undefined && !this.methodIndex.declaredObjects().has(declaredKey)) {
         continue;
       }
+      // R298: a refused (#if-wrapped) object yields no entry of any grain, as on the fenced path.
+      if (this.hubRefused.has(declaredKey)) continue;
       const name = this.methodIndex?.lookup(p.objectType, p.objectId, p.methodId);
       if (name !== undefined) {
         entries.push({
