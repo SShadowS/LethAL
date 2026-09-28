@@ -559,3 +559,125 @@ None found. Everything this plan relies on is the grammar as R301 and R316 measu
 2. **No live gate.** Place 12 is on the emission path (it picks the statement a split member's body mutant is wrapped as), which this plan did not expect at `d0e094ac`. The evidence that it is safe is offline: alc 37 of 37 subsets, `reachGrain` and gap block equal to the twin's for all 128 split-member mutants, and al-runner verdicts equal to the plain twin's. Is that enough, or is a Cronus28 gate on a `q2`-shaped and a `k1`-shaped member wanted?
 3. **Named return values** are not resolved in a plain procedure either (HEAD's `parseProcedure` ignores them), so a named return that shares its name with a global resolves to the global's type. This is HEAD's behaviour, unchanged here; the split rule copies it. File it as its own roadmap item, or leave it?
 4. **The task text's "3 and 4 split procedures"** are file counts; the members are 11 and 11, and the pre-commitment covers all 22.
+
+---
+
+## Revision r2: review r1, and the PRE-COMMITMENT for C1 and C2
+
+Review: `H:/lethal-coord/reviews/R-302-plan/review-r1.md` (2 Critical, 2 Important, 1 Minor). The orchestrator verified the r1 pre-commitment order. The rows committed at `d0e094ac` are not touched. This section is committed on its own, BEFORE any prototype of the C1 or C2 fix, so history shows the order again. The r2 prototype results come in a later commit.
+
+The three roadmap items this round filed, each in its own commit before this one:
+
+- **R322** (`1aec1f41`): C2 hits PLAIN procedures at HEAD. Measured below.
+- **R323** (`49bc5b02`): a named return value is not a declaration to type resolution (the orchestrator's ruling on r1's open question 3). Measured on `n1-named-return-global`: HEAD emits a `swap-call-arguments` that fails `alc` with AL0133.
+- **R324** (`d5f6177e`): C1 hits PLAIN procedures at HEAD too, so it is a pre-existing defect and got its own item. It was not in the orchestrator's list; CLAUDE.md says to file a defect the moment it is found. The ids follow the order the ruling set: C2's item first, the named-return item next, this one after.
+
+The next free id was checked across every worktree under `U:/Git/LethAL-wt/` and every local branch (`git ls-tree`); the highest was R321.
+
+### C1: a call typed by the first overload of its name
+
+**Measured at HEAD `00e514c4`, plain procedures** (`o2-overload-plain`: `Foo(X: Integer): Integer` before `Foo(T: Text): Text`, caller `exit(Foo('x') + Foo('y'))`): HEAD emits `swap-additive` at the caller, and the instrumented project FAILS `alc`: `AL0175: Operator '-' cannot be applied to operands of type 'Text' and 'Text'`. So the defect predates R-302 (R324), and R-302 widens it: the r1 prototype makes `o1-overload-split-first` (the same, with the `Integer` overload as a split member) fail the same way, where HEAD refused.
+
+**The choice: no type when the name is not unique.** `callType` gives a type only when the owner declares EXACTLY ONE procedure of that name, compared as AL compares names (case-insensitive, quotes ignored), with a split member counted under every arm's name. Overload-aware resolution was rejected: choosing an overload needs the argument types and AL's implicit conversions (`Integer` to `Decimal`, `Code` to `Text`, and `Decimal` to `Integer`, which r1 measured), which is inference about the platform in the direction R175 warns against, and a wrong pick is a whole-run compile failure. Refusing costs sites only where an overloaded name's call is an operand of `+` or `-`, and the census below finds 0 such calls in every fixture and corpus. The rule also makes the call-name match case-insensitive: a unique `Foo` called as `FOO` now types (`o3-call-case`).
+
+### C2: a case-sensitive variable lookup
+
+**Measured at HEAD, plain procedures** (`e1-case-plain`: `Pick(X: Integer; y: Text)`, global `Y: Integer`, body `Show(X, Y)` with overloads `Show(Integer; Integer)` and `Show(Integer; Text)`): HEAD emits `swap-call-arguments`, and the instrumented project FAILS `alc` with AL0133. It is the review's split case, in a plain procedure, so R322. `resolveIdentifierType` compares `v.name === node.text` for locals, parameters and globals alike; the fix compares case-insensitively at all three. `e2-case-split` is the review's split repro (the arms agree on `y: Text`); `e3-case-adds` is the silent side (no global; `Amount + rate` against `amount` and `Rate` gets no `swap-additive` today).
+
+### How the corpus and fixture effects were pre-committed
+
+A read-only census of HEAD, `$S/case-census.ts`, visits only the positions the two type-reading operators consult: identifier arguments of a call that has at least two (`swap-call-arguments`), and the typed path of each `+` or `-` operand (`swap-additive`: through parentheses, unary and non-comparison binary operands, down to an identifier, a member access's record, or a call's name or receiver). It reports each C2 trigger (a reference that matches a visible declaration only case-insensitively) and each C1 trigger (a call to a name with other than one declaration, or matching only case-insensitively).
+
+| project | C1 triggers | C2 triggers |
+| --- | --- | --- |
+| every fixture (`sandbox-app`, `-data`, `-hang`, `-harden`, `-coverage-probe`) | 0 | 0 |
+| BusinessFoundation, BaseApp scratch | 0 | 0 |
+| DC/Cloud | 0 | 7 (6 local, 1 global; none takes a wrong global) |
+| System Application | 0 | 19 (all local; 15 call arguments, 4 additive operands) |
+
+For DC and System Application, a CASE TWIN (`$S/case-twin.ts`) rewrites each trigger to its declaration's spelling (same length, every offset kept), and HEAD, unchanged, runs on it: the source a case-insensitive resolver sees. It is an oracle, like r1's twin, and runs no fix. Its keys are not usable (the AST hash is case-sensitive, so rewritten source hashes differently); its site set is. Each resulting site was then audited by hand.
+
+### The r2 expectation set
+
+`$S/expect-r2/`: r1's `expect-final` (the `d0e094ac` rows plus the recorded `d4` correction), plus the rows below. Every file now also carries its pre-committed totals as `= raw N deployed M`, and `check-sites.ts` FAILS unless the capture's header equals them (I2). Red-checked on `q1`: a wrong total and a missing total line each FAIL.
+
+New repros (hand-written; the un-instrumented source compiles under every subset):
+
+| repro | HEAD (raw, deployed) | expected | rows |
+| --- | --- | --- | --- |
+| `e1-case-plain` | 10, 10 | 9, 9 | `-` `swap-call-arguments` L7 (`Y` is the `Text` parameter) |
+| `e2-case-split` | 6, 6 | 9, 9 | `+` `empty-block` L10, `swap-additive` L12, `return-value` L13; NOT `swap-call-arguments` L11 |
+| `e3-case-adds` | 4, 4 | 5, 5 | `+` `swap-additive` L8 (`Decimal` and `Decimal`) |
+| `o1-overload-split-first` | 2, 2 | 4, 4 | `+` `empty-block` L8, `return-value` L9 (the split `Foo`); NOT `swap-additive` L19 |
+| `o2-overload-plain` | 5, 5 | 4, 4 | `-` `swap-additive` L15 |
+| `o3-call-case` | 4, 4 | 5, 5 | `+` `swap-additive` L10 (`FOO(1)`: one `Foo`, `Integer`) |
+| `n1-named-return-global` | 9, 9 | 9, 9 | none: R323's evidence, out of R-302's scope. It stays a known `alc` FAIL and is excluded from the alc set |
+| `r302-gate` (the gate target, offline) | 5, 5 | 10, 10 | `+` `empty-block` L8, `swap-additive` L9, `return-value` L11 (`Pick`); `+` `empty-block` L19, `swap-additive` L20 (`Note`) |
+
+Totals now pre-committed for every r1 repro (raw, deployed): `q1` and `q2` 14, 14; `t5-loss-split` 30, 29; `t5-lit-split` 10, 10; `t5-hang-split` 8, 8; the three `t5-*-twin` unchanged (30, 29; 10, 10; 8, 8); `k1` 20, 17; `k2` 16, 16; `a1` 5, 5; `c1`, `c2`, `c3` 8, 8 each; `d1` 9, 9; `d2` 3, 3; `d3` 2, 2; `d4` 5, 5; `d5` and `d6` 2, 2 (the `remove-setrange` spec is no longer generated, so raw drops by one as well); `d7` 4, 4. Raw moves with deployed except where Tier 2 takes a span by precedence (`t5-loss-split`, `k1`): there the Tier-1 spec is still generated and then deduplicated.
+
+Corpora, raw and deployed asserted separately (I2):
+
+| corpus | HEAD raw | HEAD deployed | expected raw | expected deployed | rows |
+| --- | --- | --- | --- | --- | --- |
+| DC/Cloud | 102584 | 97132 | **102603** | **97144** | r1's 19 `+` and 7 `-`; C1 and C2 add NOTHING (the case twin changes no site: each of the 7 calls already had an earlier same-typed pair, or the corrected type makes no new pair) |
+| BaseApp scratch | 1537 | 1509 | **1568** | **1540** | r1's 31 `+`; C1 and C2 add nothing (0 triggers) |
+| System Application | 77286 | 75827 | **77291** | **75832** | 5 `+`, 0 `-`, 0 `k`, below |
+| BusinessFoundation | 3639 | 3573 | 3639 | 3573 | none |
+| every fixture | | | byte-identical | | none: 0 triggers of any kind, so hashes, identity keys, manifests and emitted targets stay byte-identical, and no frozen itest figure moves |
+
+System Application's 5 rows, audited:
+
+- `Source/System Application/Agent/Interaction/AgentMessage.Codeunit.al`, `ShowAttachment`: `+` `swap-call-arguments` L119. Two `BigInteger` parameters referenced with other casing; swapping two same-typed arguments.
+- `Source/System Application/Agent/Troubleshooting/Internal/AgentTaskLogEntry.Codeunit.al`, `ExtractPageStack`: `+` `swap-additive` L43 twice (the inner and outer subtraction of one expression; an `Integer` local referenced with other casing) and L48 once (the same local plus a literal).
+- `Source/System Application/SFTP Client/src/SFTPClient.Codeunit.al`, `Initialize`: `+` `swap-call-arguments` L42. A `Text` parameter referenced with other casing, beside another `Text` parameter.
+
+No existing key changes on any corpus. The case twin's own keys DO change (9 on System Application, including an ordinal at `SFTPClient` L56, because the rewritten L42 call became byte-identical to an overload's call); that is an artifact of rewriting source, which a fix that changes no source cannot cause. The checker, run on the real fix, enforces "0 `k` rows".
+
+### Twin parity, now mechanical (I1, I2)
+
+`$S/twin-parity.ts` replaces `grain-vs-twin.ts`. For every mutant of the split project inside a split member it requires a twin mutant at the same span and operator (a missing twin FAILS unless it is in the pre-committed allow list), equal `reachGrain`, gap block, member end line and name (or `""` for a renamed member), and an EQUAL EMITTED GUARD BRANCH: the text between `Active('<id>') then begin` and the next `end else`, with the mutant id and the latch name normalised. That compares the mutated text and the marker placement. It FAILS unless the number compared equals the pre-committed count:
+
+| project (twin) | compared | allowed with no twin |
+| --- | --- | --- |
+| `q1`, `q2` (a1) | 7, 7 | |
+| `t5-loss-split`, `t5-lit-split`, `t5-hang-split` (a1) | 29, 10, 8 | |
+| `k1`, `k2` (a1) | 15, 14 | |
+| `a1` (a1) | 5 | |
+| `c1`, `c2`, `c3` (a1) | 8, 8, 4 | |
+| `d1`, `d2`, `d3` (a1) | 5, 3, 2 | |
+| `d4` (a1) | 3 | `Repro.Codeunit.al:13:lethal.void-method-call` and `Repro.Codeunit.al:15:lethal.flip-boolean-literal` (the ambiguous receiver keeps Tier-1 sites where the twin claims Tier 2) |
+| `e2`, `o1` (a1) | 5, 2 | |
+| `r302-gate` (a1) | 8 | |
+| DC/Cloud (`$S/dc-twin`) | 29 | |
+| BaseApp scratch (a1, then a2) | 68, 68 | |
+
+These counts come from the committed rows (the mutants HEAD has inside split members, plus `+`, minus `-`), not from a prototype.
+
+### The live gate (review I1, ruling change)
+
+A small serial bcdev gate on Cronus28, reusing R-316's scratch-pair harness: `$S/gate/` holds `pair.ps1`, `run-gate.sh`, `build-pair.sh` and `gate-config.ts` copied from `../r316/gate` and renamed, and a `check-gate.ts` rewritten to key rows by line and operator. Scratch pair `LethAL R302 Gate` / `LethAL R302 Gate Tests`, object ids 91700 to 91799 (proposed; R-316 used 91600 to 91699), two symbol configurations (`[]` and `[R302A]`). THE CONTROLLER HOLDS `coord lease Cronus28 bugs` and heartbeats it; the driver never takes or releases the lease. R-316's cleanup rules are unchanged: one driver with an EXIT trap; the preflight refuses an existing scratch name or id; removal is by app id AND publisher, only after doctor's lease check is green; the full app inventory must be unchanged. The gate commits nothing unless it passes.
+
+The target is `codeunit 91700 "R302 Gate"`: `Pick(X: Integer): Integer`, a split member with identical arms, body `Glob := X + 1; Note(X); exit(Glob);`; `Note(X: Integer)`, a split member that is `local` in both arms, body `Seen := Seen + X;`; and a plain `Other(): Integer` returning 7. Tests: `PickEnters` (asserts `Pick(1) = 2`) and `OtherOnly` (asserts `Other() = 7`). `Note` is local, so its coverage widens to object grain (R63): BOTH tests cover it, and only `PickEnters` reaches it. That is the reached/not-reached control for a split member's whole-body block, the path place 12 admits.
+
+Pre-committed rows, both configurations (`$S/gate/expect-gate.json`):
+
+| member | line | operator | verdict | attribution | covering | reachedBy |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Pick` | 8 | `empty-block` (the split BODY) | killed | exact | PickEnters | killer PickEnters |
+| `Pick` | 9 | `remove-assignment` | killed | exact | PickEnters | killer PickEnters |
+| `Pick` | 9 | `swap-additive` | killed | exact | PickEnters | killer PickEnters |
+| `Pick` | 10 | `void-method-call` | survived | exact | PickEnters | exactly PickEnters |
+| `Pick` | 11 | `return-value` | killed | exact | PickEnters | killer PickEnters |
+| `Note` | 19 | `empty-block` (the split BODY) | survived | object | PickEnters, OtherOnly | exactly PickEnters (OtherOnly covers, does NOT reach) |
+| `Note` | 20 | `remove-assignment` | survived | object | PickEnters, OtherOnly | exactly PickEnters |
+| `Note` | 20 | `swap-additive` | survived | object | PickEnters, OtherOnly | exactly PickEnters |
+| `Other` | 24 | `empty-block` | killed | exact | OtherOnly | killer OtherOnly |
+| `Other` | 25 | `return-value` | killed | exact | OtherOnly | killer OtherOnly |
+
+Every row also requires `reachGrain` `statement` and `guardReached` true; a report mutant without a row, or a row without a mutant, FAILS. The two arms are identical, so no arm witness can tell them apart; each configuration's `preprocessorSymbols` is checked in the report, and `alc` proves each build compiles.
+
+### Minor
+
+- al-runner covers 6 repros (`q1`, `q2`, `k1`, `k2`, `a1`, `d1`), not all of them; `alc` covers all of them except `n1`. al-runner's PASS condition is a green baseline and no `error` verdict; it proves nothing about marker reach (al-runner reports none). The gate is what proves reach.
+- The duplicate procedure walk in `types.ts`: the r1 prototype widened the private walk instead of deleting it. The r2 prototype deletes it and imports the engine's `findEnclosingProcedure`, as Task 1 says.
