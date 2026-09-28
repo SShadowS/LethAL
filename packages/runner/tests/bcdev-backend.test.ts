@@ -429,7 +429,12 @@ describe("BcDevMcpBackend.attach", () => {
   });
 
   /** A second backend over the first one's output: records argv and every factory call. */
-  async function attachSetup(opts: { reportedIdentity?: string; fetch500?: boolean }) {
+  async function attachSetup(opts: {
+    reportedIdentity?: string;
+    fetch500?: boolean;
+    coverageMode?: "procedure" | "fenced";
+    alSources?: { path: string; text: string }[];
+  }) {
     const first = await makeBackendWithDeploy(hubRun, SYMBOLS);
     const argv: string[][] = [];
     const factoryCalls: Array<[string, string]> = [];
@@ -458,7 +463,11 @@ describe("BcDevMcpBackend.attach", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     void server.connect(serverTransport);
     const backend = new BcDevMcpBackend(
-      { ...baseConfig(), ...(await controlStaging(outputDir)) },
+      {
+        ...baseConfig(),
+        ...(opts.coverageMode !== undefined ? { coverageMode: opts.coverageMode } : {}),
+        ...(await controlStaging(outputDir)),
+      },
       () => clientTransport,
       deployment,
       (appId, artifactId) => {
@@ -475,8 +484,8 @@ describe("BcDevMcpBackend.attach", () => {
       // What `loadInstalledArtifact` hands over: the bytes it hashed. "procedure" coverage reads
       // no source, so the source fields are empty here.
       appBytes: new Uint8Array(await readFile(first.artifact.appPath)),
-      appJsonText: "{}",
-      alSources: [],
+      appJsonText: JSON.stringify({ idRanges: [{ from: 70000, to: 70099 }] }),
+      alSources: opts.alSources ?? [],
     };
     return {
       backend,
@@ -503,6 +512,43 @@ describe("BcDevMcpBackend.attach", () => {
       await s.cleanup();
     }
   });
+
+  // R298, run 002 re-review M3: the installed-artifact path (`indexInstalled`) names a wrapped
+  // declared object at index time too, in both the fenced and the hub branch.
+  for (const coverageMode of ["fenced", "procedure"] as const) {
+    test(`attach names a #if-wrapped declared object's refusal at index time (${coverageMode})`, async () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      const s = await attachSetup({
+        coverageMode,
+        alSources: [
+          {
+            path: "src/Some.Codeunit.al",
+            text: `namespace X;
+#if not CLEAN27
+codeunit 70000 "Some Codeunit"
+{
+    procedure Post()
+    begin
+    end;
+}
+#endif
+`,
+          },
+        ],
+      });
+      try {
+        warn.mockClear();
+        await s.backend.attach(s.bound);
+        const said = warn.mock.calls.map((c) => String(c[0]));
+        expect(said.filter((x) => x.includes("coverage refused"))).toEqual([
+          "[lethal] coverage refused for Codeunit:70000 (src/Some.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.",
+        ]);
+      } finally {
+        warn.mockRestore();
+        await s.cleanup();
+      }
+    });
+  }
 
   test("attach refuses a server that reports another artifact, and binds no transport", async () => {
     const s = await attachSetup({ reportedIdentity: "b".repeat(32) });

@@ -635,17 +635,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
     }
   }
 
+  /** R298: the hub builds no line map, so its refusals are read from the sources directly. */
+  private async indexHubRefusals(sources: readonly AlSource[]): Promise<void> {
+    const methodIndex = this.methodIndex;
+    if (methodIndex === undefined) {
+      // An empty declared set would refuse nothing, silently. Both callers assign the index first.
+      throw new Error(
+        "BcDevMcpBackend: no method index; the artifact must be indexed before its hub refusals",
+      );
+    }
+    this.hubRefused = await refusedCoverageFromSources(sources, methodIndex.declaredObjects());
+    this.nameRefusals(this.hubRefused);
+  }
+
   /**
    * R298: names every refused object ONCE per session, when the artifact is indexed, so a wrapped
    * object no coverage row ever mentions is named too (a row-time warning missed exactly that case).
    */
-  /** R298: the hub builds no line map, so its refusals are read from the sources directly. */
-  private async indexHubRefusals(sources: readonly AlSource[]): Promise<void> {
-    const declared = this.methodIndex?.declaredObjects() ?? new Set<string>();
-    this.hubRefused = await refusedCoverageFromSources(sources, declared);
-    this.nameRefusals(this.hubRefused);
-  }
-
   private nameRefusals(refused: ReadonlyMap<string, string>): void {
     for (const [key, reason] of refused) {
       if (this.refusalsWarned.has(key)) continue;
