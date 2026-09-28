@@ -192,7 +192,7 @@ function placeReach(
   latch: string = REACH_LATCH,
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
-  // R303: a split var section in an unproven shape gets no latch, so no marker.
+  // R303, R313: a split var section in an unproven shape, or one that did not parse cleanly, gets no latch, so no marker.
   if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any
