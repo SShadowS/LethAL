@@ -558,7 +558,6 @@ export function resolveOperatorNames(
  */
 function unnamedMemberLabel(owner: ALSyntaxNode): string {
   const raw = owner.children.filter((c) => c.fieldName === "name").map((c) => c.text);
-  if (raw.length <= 1) return "<unnamed>";
   // Same key `procedureLikeNameNode` compares by: quotes stripped, case-insensitive. A blank
   // (missing) arm name is dropped rather than joined as an empty entry.
   const key = (t: string): string => t.replace(/^"|"$/g, "").toLowerCase();
@@ -571,7 +570,9 @@ function unnamedMemberLabel(owner: ALSyntaxNode): string {
     seen.add(k);
     names.push(t);
   }
-  return `<renamed per #if arm: ${names.join(", ")}>`;
+  // Fewer than two real names left after dropping blanks and duplicates is not a rename: it is
+  // either nothing to report or one arm's own name standing alone, and "renamed" would mislead.
+  return names.length > 1 ? `<renamed per #if arm: ${names.join(", ")}>` : "<unnamed>";
 }
 
 /**

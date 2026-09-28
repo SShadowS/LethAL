@@ -1924,8 +1924,8 @@ describe("R309 review: a refused member's name label drops blank arms and dedupe
     return refusal.member;
   }
 
-  test("an arm with a missing (blank) name is dropped, not printed as an empty entry", () => {
-    expect(labelFor(["Pick", ""])).toBe("procedure <renamed per #if arm: Pick>");
+  test("an arm with a missing (blank) name, leaving only one real name, gives <unnamed> rather than a misleading rename", () => {
+    expect(labelFor(["Pick", ""])).toBe("procedure <unnamed>");
   });
 
   test("names that agree case- and quote-insensitively count once, keeping the first spelling", () => {

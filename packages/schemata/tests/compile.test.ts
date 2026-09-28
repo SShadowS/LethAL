@@ -3138,3 +3138,35 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     expect(linesWithoutInstrumentation(out)).toBe(src.split("\n").length);
   });
 });
+
+describe("The injector's guard: a statement marker with no owning member still throws", () => {
+  // Hand-built, not parsed: no real AL statement sits outside every procedure, trigger and
+  // preamble, so this shape is built directly, the same way the R309 review's label tests build a
+  // preamble owner by hand (packages/runner/tests/preproc-instrumentation.test.ts). `parent: null`
+  // means the owner walk in `injectReachLatches` never finds a procedure, a trigger or a preamble:
+  // the one shape none of R303, R309 or R313's refusals cover, because none of them applies here.
+  function fakeDetachedStatement(text: string): ALSyntaxNode {
+    return {
+      kind: ALNodeKind.assignment_statement,
+      rawKind: "assignment_statement",
+      text,
+      startIndex: 0,
+      endIndex: text.length,
+      startPosition: { row: 0, column: 0 },
+      endPosition: { row: 0, column: text.length },
+      parent: null,
+      children: [],
+      namedChildren: [],
+      fieldName: null,
+      childForFieldName: () => null,
+    };
+  }
+
+  it("a component root reachable from no procedure, trigger or preamble throws the guard message", () => {
+    const before = fakeDetachedStatement("L := 1");
+    const s = spec(before, "L := 2", "lethal.op");
+    expect(() => compileSchemataForFile("L := 1", before, [s])).toThrow(
+      "a reach marker sits outside any procedure or trigger body",
+    );
+  });
+});
