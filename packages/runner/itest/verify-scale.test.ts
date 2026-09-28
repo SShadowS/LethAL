@@ -1,20 +1,27 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { TestMethodRef } from "../src/backend";
+import type { DeploymentVerification } from "../src/deployment-verifier";
 import type { RunEvent, RunPhase } from "../src/events";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { TestPageScanError, scanTestPageTests } from "../src/testpage-scan";
 import type { NewTestResult, VerifyOutput, VerifyResult } from "../src/verify";
 import { type NormalizedMutant, keyOf } from "./mutant-equality";
 import {
+  type RestoreCandidate,
+  type RestoreDeps,
   type StampedEvent,
   VerifyScaleError,
   allSurvivorIds,
   assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
   discoveredTestRef,
+  finishScratch,
   firstSurvivorIds,
   foldLibraryTimeline,
   noOpTestCodeunit,
+  restoreResident,
   verdictDiffs,
   worstRatio,
 } from "./verify-scale";
@@ -410,5 +417,130 @@ describe("discoveredTestRef", () => {
     await expect(discoveredTestRef(TEST_DIR, "Data Tests", "NoSuchTest")).rejects.toBeInstanceOf(
       VerifyScaleError,
     );
+  });
+});
+
+describe("restoreResident (step 9's wiring)", () => {
+  const TEST_DIR = join(import.meta.dir, "..", "..", "..", "fixtures", "sandbox-data-tests");
+  const CARRIER = { codeunitName: "Data Tests", method: "InsertDoublesAmountWeak" };
+  const RECORDS: Record<string, { artifactId: string; appId: string }> = {
+    a: { artifactId: "a".repeat(32), appId: "app" },
+    b1: { artifactId: "b".repeat(32), appId: "app" },
+  };
+
+  function harness(resident: Record<string, DeploymentVerification["status"]>) {
+    const scans: (readonly TestMethodRef[])[] = [];
+    const scanResults: ReadonlyMap<string, string>[] = [];
+    const published: [RestoreCandidate, TestMethodRef, ReadonlyMap<string, string>][] = [];
+    const deps: RestoreDeps = {
+      began: [
+        { leg: "A", path: "a" },
+        { leg: "B1", path: "b1" },
+      ],
+      lastRecorded: (p) => RECORDS[p],
+      checkResident: async (c) => {
+        const status = resident[c.leg] ?? "mismatch";
+        if (status === "accepted") return { status };
+        if (status === "unavailable") return { status, detail: "down" };
+        return { status: "mismatch", reported: "other" };
+      },
+      testDir: TEST_DIR,
+      carrier: CARRIER,
+      scan: async (dir, tests) => {
+        scans.push(tests);
+        const r = await scanTestPageTests(dir, tests);
+        scanResults.push(r);
+        return r;
+      },
+      publish: async (r, m, t) => {
+        published.push([r, m, t]);
+      },
+      log: () => {},
+    };
+    return { deps, scans, scanResults, published };
+  }
+
+  test("publishes against the one resident artifact, with a DISCOVERED carrier and the scan's own result", async () => {
+    const h = harness({ B1: "accepted" });
+    const r = await restoreResident(h.deps);
+    expect(r).toEqual({ leg: "B1", path: "b1", ...RECORDS.b1 } as RestoreCandidate);
+    const discovered = await discoveredTestRef(TEST_DIR, CARRIER.codeunitName, CARRIER.method);
+    // The scan ran, once, on exactly the discovered ref (a hand-built ref has no file and the scan
+    // refuses it: session 1).
+    expect(h.scans).toEqual([[discovered]]);
+    expect(h.published.length).toBe(1);
+    const [[res, method, refused] = []] = h.published;
+    expect(res).toBe(r);
+    expect(method).toEqual(discovered);
+    expect(method?.file).toBeDefined();
+    // The map sent is the scan's own object, not an empty stand-in.
+    expect(refused).toBe(h.scanResults[0]);
+  });
+
+  test("refuses to publish unless exactly one candidate is resident", async () => {
+    for (const resident of [{}, { A: "accepted", B1: "accepted" }] as const) {
+      const h = harness(resident);
+      await expect(restoreResident(h.deps)).rejects.toBeInstanceOf(VerifyScaleError);
+      expect(h.published.length).toBe(0);
+    }
+  });
+
+  test("refuses to publish when a check is unavailable or a begun run recorded no artifact", async () => {
+    const down = harness({ A: "unavailable", B1: "accepted" });
+    await expect(restoreResident(down.deps)).rejects.toBeInstanceOf(VerifyScaleError);
+    expect(down.published.length).toBe(0);
+    const blank = harness({ B1: "accepted" });
+    const deps = { ...blank.deps, began: [...blank.deps.began, { leg: "B2", path: "none" }] };
+    await expect(restoreResident(deps)).rejects.toBeInstanceOf(VerifyScaleError);
+    expect(blank.published.length).toBe(0);
+  });
+});
+
+describe("finishScratch", () => {
+  const io = () => {
+    const removed: string[] = [];
+    const lines: string[] = [];
+    return {
+      removed,
+      lines,
+      io: {
+        rm: async (p: string) => {
+          removed.push(p);
+        },
+        list: async () => ["store-a-x", "quarantine"],
+        log: (l: string) => {
+          lines.push(l);
+        },
+      },
+    };
+  };
+
+  test("a proven restore deletes the scratch dir", async () => {
+    const h = io();
+    await finishScratch("S", false, h.io);
+    expect(h.removed).toEqual(["S"]);
+    expect(h.lines).toEqual([]);
+  });
+
+  test("a failed or refused restore KEEPS it and names the path and what it holds", async () => {
+    const h = io();
+    await finishScratch("S", true, h.io);
+    expect(h.removed).toEqual([]);
+    expect(h.lines.length).toBe(1);
+    expect(h.lines[0]).toContain("KEPT at S");
+    expect(h.lines[0]).toContain("store-a-x, quarantine");
+  });
+});
+
+describe("verify-scale.itest.ts wiring (the driver is not run offline)", () => {
+  test("step 9 goes through restoreResident with the real scan, and the finally through finishScratch", async () => {
+    const src = await readFile(join(import.meta.dir, "verify-scale.itest.ts"), "utf8");
+    expect(src).toContain("await restoreResident({");
+    expect(src).toContain("scan: scanTestPageTests,");
+    expect(src).toContain("restoreFailed = true;");
+    expect(src).toContain("await finishScratch(scratch, restoreFailed, {");
+    // No second path around the rule or the discovery.
+    expect(src).not.toMatch(/rm\(scratch/);
+    expect(src).not.toMatch(/codeunitId:/);
   });
 });

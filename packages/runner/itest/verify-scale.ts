@@ -7,6 +7,7 @@
  * `<codeunitName>.<method>`, the form `NewTestResult.test` carries.
  */
 import type { TestMethodRef } from "../src/backend";
+import type { DeploymentVerification } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
 import type { RunEvent } from "../src/events";
 import type { SessionReport } from "../src/report";
@@ -282,4 +283,104 @@ export async function discoveredTestRef(
     throw new VerifyScaleError(`${testDir} declares no test ${codeunitName}.${method}`);
   }
   return ref;
+}
+
+/** A full run that began, with the artifact its store last recorded. */
+export interface RestoreCandidate {
+  readonly leg: string;
+  readonly path: string;
+  readonly artifactId: string;
+  readonly appId: string;
+}
+
+/** Step 9's decisions, with every server touch injected so a test can drive them. */
+export interface RestoreDeps {
+  /** Every full run that began, in order. */
+  readonly began: readonly { readonly leg: string; readonly path: string }[];
+  readonly lastRecorded: (path: string) => { artifactId: string; appId: string } | undefined;
+  readonly checkResident: (c: RestoreCandidate) => Promise<DeploymentVerification>;
+  readonly testDir: string;
+  readonly carrier: { readonly codeunitName: string; readonly method: string };
+  /** The product's TestPage scan (R-236c); the driver passes `scanTestPageTests`. */
+  readonly scan: (
+    testDir: string,
+    tests: readonly TestMethodRef[],
+  ) => Promise<ReadonlyMap<string, string>>;
+  /** Publishes the committed tests app against `resident`, sending `method` as the carrier with
+   *  exactly `testPageRefused`, and proves it by a fresh read-back. */
+  readonly publish: (
+    resident: RestoreCandidate,
+    method: TestMethodRef,
+    testPageRefused: ReadonlyMap<string, string>,
+  ) => Promise<void>;
+  readonly log: (line: string) => void;
+}
+
+/**
+ * Names the RESIDENT artifact by the server's own read-back, never by `artifacts[]`, then publishes
+ * the committed tests app against it with a DISCOVERED carrier ref (a hand-built one has no `file`,
+ * which the scan refuses: R270 session 1) and that scan's own result. Refuses to publish when a run
+ * began but recorded no artifact, when a resident check is unavailable, or when not exactly one
+ * candidate is accepted. Returns the resident candidate.
+ */
+export async function restoreResident(deps: RestoreDeps): Promise<RestoreCandidate> {
+  const candidates: RestoreCandidate[] = [];
+  for (const r of deps.began) {
+    const rec = deps.lastRecorded(r.path);
+    if (rec === undefined) {
+      throw new VerifyScaleError(
+        `${r.leg} began but its store records no artifact, so the resident artifact cannot be named; not publishing`,
+      );
+    }
+    candidates.push({ ...r, ...rec });
+  }
+  const accepted: RestoreCandidate[] = [];
+  for (const c of candidates) {
+    const v = await deps.checkResident(c);
+    deps.log(`step 9: resident check ${c.artifactId} (${c.leg}): ${JSON.stringify(v)}`);
+    if (v.status === "unavailable") {
+      throw new VerifyScaleError(
+        `resident check of ${c.artifactId} unavailable: ${v.detail}; not publishing`,
+      );
+    }
+    if (v.status === "accepted") accepted.push(c);
+  }
+  const [resident] = accepted;
+  if (resident === undefined || accepted.length !== 1) {
+    throw new VerifyScaleError(
+      `${accepted.length} candidate artifacts are resident, not 1; not publishing`,
+    );
+  }
+  const method = await discoveredTestRef(
+    deps.testDir,
+    deps.carrier.codeunitName,
+    deps.carrier.method,
+  );
+  const testPageRefused = await deps.scan(deps.testDir, [method]);
+  await deps.publish(resident, method, testPageRefused);
+  return resident;
+}
+
+/**
+ * The outer `finally`'s rule. A proven restore (or none needed) deletes the scratch dir. A failed or
+ * refused restore KEEPS it and says what it holds: its run stores are the only record that names the
+ * resident artifact (session 1's could not be named after the fact because this dir was gone).
+ */
+export async function finishScratch(
+  scratch: string,
+  restoreFailed: boolean,
+  io: {
+    readonly rm: (path: string) => Promise<void>;
+    readonly list: (path: string) => Promise<readonly string[]>;
+    readonly log: (line: string) => void;
+  },
+): Promise<void> {
+  if (!restoreFailed) {
+    await io.rm(scratch);
+    return;
+  }
+  const entries = await io.list(scratch).catch((e: unknown) => [`(cannot list: ${String(e)})`]);
+  io.log(
+    `scratch KEPT at ${scratch} because the restore did not prove itself. It holds ${entries.join(", ")}: the run stores (store-<leg>-*/verify-scale.sqlite, whose batch_artifacts name each run's artifact), the scratch quarantine dir, the instrumented dirs and the compiled .app files under publish. Name the resident artifact from them, restore by hand, then delete it.`,
+  );
 }

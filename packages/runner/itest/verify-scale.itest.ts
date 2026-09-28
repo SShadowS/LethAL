@@ -19,7 +19,8 @@
  *   6. one library `runVerify` over the 68, with its event timeline (not lethal verify's time);
  *   7. B1, B2: fresh full runs with the scratch suite, the denominators;
  *   8. print and write every number;
- *   9. in a finally once 3 began: restore the committed tests app, checked by a fresh read-back.
+ *   9. in a finally once 3 began: restore the committed tests app, checked by a fresh read-back;
+ *      a restore that did not prove itself KEEPS the scratch dir (its run stores name the artifact).
  */
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -63,10 +64,11 @@ import {
   allSurvivorIds,
   assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
-  discoveredTestRef,
+  finishScratch,
   firstSurvivorIds,
   foldLibraryTimeline,
   noOpTestCodeunit,
+  restoreResident,
   runSummary,
   verdictDiffs,
   worstRatio,
@@ -98,7 +100,7 @@ const NOOP_NAMES: readonly string[] = Array.from(
 const SCRATCH_TESTS = COMMITTED_TESTS + NOOP_TESTS;
 const SCALING_K = [1, 5, 16] as const;
 /** The restore's one request, a green committed test, taken from discovery at restore time
- *  (`discoveredTestRef`). Its verdict is printed, not asserted. */
+ *  (`restoreResident`). Its verdict is printed, not asserted. */
 const RESTORE_TEST = { codeunitName: "Data Tests", method: "InsertDoublesAmountWeak" } as const;
 const RECOVERY =
   "The container may carry the scratch test app. Republish fixtures/sandbox-data-tests by hand and compare its read-back hash before any other gate.";
@@ -331,6 +333,8 @@ async function main(): Promise<void> {
   const b2Db = await storeFor("b2");
   /** Every full run that began, in order A, B1, B2: the restore's candidates. */
   const began: { leg: string; path: string }[] = [];
+  /** Set only when step 9 ran and did not prove itself: the `finally` then KEEPS the scratch dir. */
+  let restoreFailed = false;
 
   try {
     const base = await harnessVerifier.fetchExtensionInstalled(BASE_APPLICATION_ID);
@@ -538,6 +542,7 @@ async function main(): Promise<void> {
         await restore();
       } catch (err) {
         restoreErr = err;
+        restoreFailed = true;
       }
     }
     if (gateErr !== undefined || restoreErr !== undefined) {
@@ -548,110 +553,90 @@ async function main(): Promise<void> {
             ? `steps 3 to 8 FAILED: ${describe(gateErr)}`
             : "steps 3 to 8 passed",
           restoreErr !== undefined
-            ? `step 9 (restore) FAILED: ${describe(restoreErr)}. ${RECOVERY}`
+            ? `step 9 (restore) FAILED: ${describe(restoreErr)}. ${RECOVERY} Scratch kept at ${scratch}.`
             : "step 9 (restore) PASSED: the committed tests app is back, by a fresh read-back",
         ].join("\n"),
       );
     }
   } finally {
-    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+    await finishScratch(scratch, restoreFailed, {
+      rm: (p) => rm(p, { recursive: true, force: true }).catch(() => {}),
+      list: (p) => readdir(p),
+      log: (line) => console.error(line),
+    });
   }
 
-  /**
-   * Publishes the committed tests app against whichever artifact is RESIDENT, decided by the
-   * server's own read-back (`DeploymentVerifier.verify`), never by `artifacts[]`. Refuses to publish
-   * when a run began but recorded no artifact, when not exactly one candidate is accepted, or when
-   * ~/.lethal (read-only) or the shared scratch quarantine dir records this server quarantined.
-   */
+  /** Step 9: `restoreResident` decides; this supplies the server touches and the publish. */
   async function restore(): Promise<void> {
     await refuseRealQuarantine("step 9");
-    const candidates: { leg: string; path: string; artifactId: string; appId: string }[] = [];
-    for (const r of began) {
-      const rec = lastRecorded(r.path);
-      if (rec === undefined) {
-        throw new Error(
-          `${r.leg} began but its store records no artifact, so the resident artifact cannot be named; not publishing`,
-        );
-      }
-      candidates.push({ ...r, ...rec });
-    }
-    const accepted = [];
-    for (const c of candidates) {
-      const v = await deploymentVerifier.verify({ appId: c.appId, artifactId: c.artifactId });
-      console.log(`step 9: resident check ${c.artifactId} (${c.leg}): ${JSON.stringify(v)}`);
-      if (v.status === "unavailable") {
-        throw new Error(
-          `resident check of ${c.artifactId} unavailable: ${v.detail}; not publishing`,
-        );
-      }
-      if (v.status === "accepted") accepted.push(c);
-    }
-    const [resident] = accepted;
-    if (resident === undefined || accepted.length !== 1) {
-      throw new Error(`${accepted.length} candidate artifacts are resident, not 1; not publishing`);
-    }
-
-    const store = new ResultsStore(resident.path);
-    const backend = connect();
-    try {
-      const rec = store.artifactRecordById(resident.artifactId);
-      if (rec === null || rec.appPath === null || rec.instrumentedDir === null) {
-        throw new Error("the resident run did not record its installed files");
-      }
-      const installed = {
-        fromRunId: rec.runId,
-        batchIndex: rec.batchIndex,
-        appPath: rec.appPath,
-        instrumentedDir: rec.instrumentedDir,
-      };
-      const { artifact, manifest } = await loadInstalledArtifact(store, installed);
-      // ponytail: any installed mutant carries the publish; the restore measures nothing.
-      const [anyMutant] = manifest.mutants;
-      if (anyMutant === undefined) throw new Error("step 9: the resident manifest has no mutant");
-      const restoreMethod = await discoveredTestRef(
-        TEST_DIR,
-        RESTORE_TEST.codeunitName,
-        RESTORE_TEST.method,
-      );
-      const compiled = await backend.compileTestApp(TEST_DIR, artifact);
-      const runId = store.createRun({
-        projectPath: PROJECT_DIR,
-        backend: "itest-verify-scale-restore",
-        appVersion: "0.0.0.0",
-      });
-      let published: PublishedTestApp | undefined;
-      const res = await runNamedMutants({
-        backend,
-        store,
-        runId,
-        installed,
-        requests: [{ mutantId: anyMutant.mutantId, methods: [restoreMethod] }],
-        lease,
-        resourceServer: bcdev.server,
-        resourceServerInstance: bcdev.serverInstance,
-        quarantineDir,
-        // R-236c: the product's own scan, so a carrier that may open a TestPage is never sent.
-        testPageRefused: await scanTestPageTests(TEST_DIR, [restoreMethod]),
-        inLease: async (fence) => {
-          published = await backend.publishTestApp(fence, compiled);
-        },
-      });
-      assert.ok(published !== undefined, "step 9: the publish returned no identity");
-      assert.equal(published.sha256, compiled.sha256, "step 9: published sha256 = compiled");
-      const fresh = await backend.fetchPublishedAppPackage({
-        publisher: compiled.publisher,
-        name: compiled.name,
-      });
-      assert.ok(fresh instanceof Uint8Array, "step 9: a fresh read-back must answer");
-      assert.equal(hashPackage(fresh), compiled.sha256, "step 9: fresh read-back = compiled");
-      assert.equal(res.quarantined, undefined, `step 9: no quarantine (${res.quarantined})`);
-      console.log(
-        `step 9 PASS: restored ${compiled.name} against ${resident.artifactId} (${resident.leg}); fresh read-back equal; carrier verdict ${res.outcomes.map((o) => o.verdict).join(", ")}`,
-      );
-    } finally {
-      store.close();
-      await backend.close();
-    }
+    await restoreResident({
+      began,
+      lastRecorded,
+      checkResident: (c) => deploymentVerifier.verify({ appId: c.appId, artifactId: c.artifactId }),
+      testDir: TEST_DIR,
+      carrier: RESTORE_TEST,
+      scan: scanTestPageTests,
+      log: (line) => console.log(line),
+      publish: async (resident, restoreMethod, testPageRefused) => {
+        const store = new ResultsStore(resident.path);
+        const backend = connect();
+        try {
+          const rec = store.artifactRecordById(resident.artifactId);
+          if (rec === null || rec.appPath === null || rec.instrumentedDir === null) {
+            throw new Error("the resident run did not record its installed files");
+          }
+          const installed = {
+            fromRunId: rec.runId,
+            batchIndex: rec.batchIndex,
+            appPath: rec.appPath,
+            instrumentedDir: rec.instrumentedDir,
+          };
+          const { artifact, manifest } = await loadInstalledArtifact(store, installed);
+          // ponytail: any installed mutant carries the publish; the restore measures nothing.
+          const [anyMutant] = manifest.mutants;
+          if (anyMutant === undefined)
+            throw new Error("step 9: the resident manifest has no mutant");
+          const compiled = await backend.compileTestApp(TEST_DIR, artifact);
+          const runId = store.createRun({
+            projectPath: PROJECT_DIR,
+            backend: "itest-verify-scale-restore",
+            appVersion: "0.0.0.0",
+          });
+          let published: PublishedTestApp | undefined;
+          const res = await runNamedMutants({
+            backend,
+            store,
+            runId,
+            installed,
+            requests: [{ mutantId: anyMutant.mutantId, methods: [restoreMethod] }],
+            lease,
+            resourceServer: bcdev.server,
+            resourceServerInstance: bcdev.serverInstance,
+            quarantineDir,
+            // R-236c: the product's own scan, so a carrier that may open a TestPage is never sent.
+            testPageRefused,
+            inLease: async (fence) => {
+              published = await backend.publishTestApp(fence, compiled);
+            },
+          });
+          assert.ok(published !== undefined, "step 9: the publish returned no identity");
+          assert.equal(published.sha256, compiled.sha256, "step 9: published sha256 = compiled");
+          const fresh = await backend.fetchPublishedAppPackage({
+            publisher: compiled.publisher,
+            name: compiled.name,
+          });
+          assert.ok(fresh instanceof Uint8Array, "step 9: a fresh read-back must answer");
+          assert.equal(hashPackage(fresh), compiled.sha256, "step 9: fresh read-back = compiled");
+          assert.equal(res.quarantined, undefined, `step 9: no quarantine (${res.quarantined})`);
+          console.log(
+            `step 9 PASS: restored ${compiled.name} against ${resident.artifactId} (${resident.leg}); fresh read-back equal; carrier verdict ${res.outcomes.map((o) => o.verdict).join(", ")}`,
+          );
+        } finally {
+          store.close();
+          await backend.close();
+        }
+      },
+    });
   }
 
   console.log("verify-scale itest: PASS (measurement mode, the 0.20 line is recorded, not gated)");
