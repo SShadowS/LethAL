@@ -300,6 +300,24 @@ function stripQuotes(s: string): string {
   return s.startsWith('"') && s.endsWith('"') && s.length >= 2 ? s.slice(1, -1) : s;
 }
 
+/** What a `#if` object wrapper may hold without holding an OBJECT: file-level lines, no code. */
+const NOT_AN_OBJECT: ReadonlySet<string> = new Set([
+  "namespace_declaration",
+  "using_statement",
+  "comment",
+  "multiline_comment",
+]);
+
+/**
+ * R298: does this `preproc_conditional_object` hold an object? Decided by EXCLUSION (anything but
+ * namespace/using lines and comments), never by `objectIdentityOf`, which is null for an enum,
+ * an interface or a permission set: those are objects that shift a following object's base too,
+ * so the unsafe direction is to call them nothing.
+ */
+export function wrapperHoldsObject(wrapper: ALSyntaxNode): boolean {
+  return objectDeclarationsOf(wrapper).some((d) => !NOT_AN_OBJECT.has(d.rawKind));
+}
+
 /**
  * Builds the per-object entries for one parsed FILE.
  *
@@ -336,9 +354,8 @@ export function fileLineMapEntries(
   };
   for (const node of fileRoot.namedChildren) {
     if (node.rawKind === "preproc_conditional_object") {
-      let holdsObject = false;
-      for (const decl of objectDeclarationsOf(node)) holdsObject = push(decl, true) || holdsObject;
-      if (!holdsObject) continue;
+      for (const decl of objectDeclarationsOf(node)) push(decl, true);
+      if (!wrapperHoldsObject(node)) continue;
       afterWrapper = true;
       previousEndLine = node.endPosition.row + 1;
       continue;

@@ -50,7 +50,13 @@ import { initParser, objectDeclarationsOf, parseAL } from "@lethal/engine";
 import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
-import { LineMap, fileLineMapEntries, objectIdentityOf, refusedCoverageReason } from "./line-map";
+import {
+  LineMap,
+  fileLineMapEntries,
+  objectIdentityOf,
+  refusedCoverageReason,
+  wrapperHoldsObject,
+} from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
 export interface CoberturaLine {
@@ -107,15 +113,11 @@ function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: nu
   return found;
 }
 
-/** R298: the objects a file declares inside a `#if ... #endif` object wrapper, if any. */
-function wrappedObjectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
+/** R298: does this file hold a `#if ... #endif` object wrapper with an object (of ANY kind) in it? */
+function holdsWrappedObject(root: ALSyntaxNode): boolean {
   return root.namedChildren.some(
-    (c) =>
-      c.rawKind === "preproc_conditional_object" &&
-      objectDeclarationsOf(c).some((d) => objectIdentityOf(d) !== null),
-  )
-    ? objectsOf(root)
-    : [];
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
 }
 
 /**
@@ -194,11 +196,10 @@ export async function buildAlRunnerCoverageIndex(
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
-    const wrapped = wrappedObjectsOf(root);
-    if (wrapped.length > 0) {
+    if (holdsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
-      for (const o of wrapped)
+      for (const o of objectsOf(root))
         console.warn(`[lethal] ${refusedCoverageReason(o.objectType, o.objectId, file)}`);
       continue;
     }
@@ -254,6 +255,25 @@ function fileKeyCandidates(coberturaPath: string): string[] {
 }
 
 /**
+ * The object a reported file belongs to, matched on the LONGEST path ending first. R298: a refused
+ * file is left out of `byFile`, so its hits must STOP at its own ending rather than fall through to
+ * a shorter ending another file owns (`src/Foo.Codeunit.al` refused, a root `Foo.Codeunit.al`
+ * indexed): that would attribute the refused object's lines to a different object.
+ */
+function objectForFile(
+  file: string,
+  index: AlRunnerCoverageIndex,
+  refused: ReadonlySet<string>,
+): { objectType: string; objectId: number } | undefined {
+  for (const cand of fileKeyCandidates(file)) {
+    if (refused.has(cand)) return undefined;
+    const hit = index.byFile.get(cand);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+/**
  * Turns one test's Cobertura output into a `CoverageMap`.
  *
  * Only lines with `hits > 0` become entries: a reported-but-unhit line is evidence the file was
@@ -271,16 +291,10 @@ export function alRunnerCoverageFrom(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
+  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
   for (const ln of lines) {
     if (ln.hits <= 0) continue;
-    let object: { objectType: string; objectId: number } | undefined;
-    for (const cand of fileKeyCandidates(ln.file)) {
-      const hit = index.byFile.get(cand);
-      if (hit !== undefined) {
-        object = hit;
-        break;
-      }
-    }
+    const object = objectForFile(ln.file, index, refused);
     // A coverage row for something this bundle does not declare — the test app, Base Application,
     // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
     // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
@@ -320,15 +334,9 @@ export function alRunnerCoverageFromServer(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
+  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
   for (const file of entry.coverage ?? []) {
-    let object: { objectType: string; objectId: number } | undefined;
-    for (const cand of fileKeyCandidates(file.file)) {
-      const hit = index.byFile.get(cand);
-      if (hit !== undefined) {
-        object = hit;
-        break;
-      }
-    }
+    const object = objectForFile(file.file, index, refused);
     if (object === undefined) continue;
     for (const st of file.statements ?? []) {
       // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was

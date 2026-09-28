@@ -286,3 +286,56 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     });
   });
 });
+
+describe("R298: a refused file's hits never fall through to a shorter path ending", () => {
+  test("a hit on the refused src/Foo.Codeunit.al is not attributed to a root Foo.Codeunit.al", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dir = await bundle({
+        "src/Foo.Codeunit.al": R298_TWO_ARM,
+        "Foo.Codeunit.al": R298_PLAIN,
+      });
+      const index = await buildAlRunnerCoverageIndex(dir);
+      expect(index.refusedFiles).toEqual(["src/Foo.Codeunit.al"]);
+      expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
+      const cobertura = alRunnerCoverageFrom(
+        [
+          { file: "C:/x/instrumented/active/src/Foo.Codeunit.al", line: 7, hits: 1 },
+          { file: "C:/x/instrumented/active/Foo.Codeunit.al", line: 6, hits: 1 },
+        ],
+        index,
+      );
+      expect(cobertura.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
+      ]);
+      const server = alRunnerCoverageFromServer(
+        {
+          test: "Codeunit50140.T",
+          coverage: [
+            { file: "src/Foo.Codeunit.al", statements: [{ line: 7, hits: 1, scope: "AIf" }] },
+            { file: "Foo.Codeunit.al", statements: [{ line: 6, hits: 1, scope: "R" }] },
+          ],
+        },
+        index,
+      );
+      expect(server.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a file holding a wrapped ENUM is refused too, though an enum has no coverage identity", async () => {
+    const src = `#if not CLEAN27\nenum 50120 E\n{\n    value(0; A) { }\n}\n#endif\n${R298_PLAIN}`;
+    const dir = await bundle({ "src/E.Codeunit.al": src });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const index = await buildAlRunnerCoverageIndex(dir);
+      expect(index.refusedFiles).toEqual(["src/E.Codeunit.al"]);
+      expect(index.byFile.size).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

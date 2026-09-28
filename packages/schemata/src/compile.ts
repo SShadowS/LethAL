@@ -452,7 +452,7 @@ function injectSelectorVarIntoObject(
 
 /**
  * Nearest ancestor AL object declaration containing `node` (`codeunit_declaration`,
- * `table_declaration`, `page_declaration`, ...) — the ancestor whose OWN parent is an object
+ * `table_declaration`, `page_declaration`, ...): the ancestor whose OWN parent is an object
  * container (`isObjectContainer`): the `source_file` root, or, for a `#if`-wrapped object, the
  * `preproc_conditional_object` holding it (R298; each arm's declaration is its own object, so a
  * two-arm wrapper gets one selector var per arm). AL object declarations are never nested inside

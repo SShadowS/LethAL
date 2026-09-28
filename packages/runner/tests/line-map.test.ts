@@ -567,3 +567,19 @@ describe("R298: coverage for #if-wrapped objects is REFUSED, per object", () => 
     expect(m.lookup("Codeunit", 50107, 3)).toBeUndefined();
   });
 });
+
+describe("R298: a wrapper holding a non-coverage object (an enum) still refuses what follows", () => {
+  test("a wrapped enum then a bare codeunit: the codeunit is refused", async () => {
+    const src = `#if not CLEAN27\nenum 50120 E\n{\n    value(0; A) { }\n}\n#endif\n${R298_PLAIN}`;
+    const m = await lineMapFromSources([{ path: "E.Codeunit.al", text: src }], R298_DECLARED);
+    expect(m.isRefused("Codeunit", 50107)).toBe(true);
+    expect(m.lookup("Codeunit", 50107, 9)).toBeUndefined();
+  });
+
+  test("namespace, using and comments inside a wrapper are not an object", async () => {
+    const src = `#if not CLEAN27\nnamespace A.B;\nusing X.Y; // c\n/* m */\n#endif\n${R298_PLAIN}`;
+    const m = await lineMapFromSources([{ path: "N.Codeunit.al", text: src }], R298_DECLARED);
+    expect(m.isRefused("Codeunit", 50107)).toBe(false);
+    expect(m.lookup("Codeunit", 50107, 8)).toBe("R");
+  });
+});

@@ -2839,7 +2839,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
  * local-procedure fallback, which is attribution by the back door. An unaffected object in the
  * same run must still come back NAMED.
  */
-describe("fenced coverage — #if-wrapped objects are refused by name (R298)", () => {
+describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () => {
   const BODY = (name: string): string => `{
     procedure ${name}()
     var
