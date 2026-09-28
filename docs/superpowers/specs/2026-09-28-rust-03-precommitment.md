@@ -235,3 +235,28 @@ RSS and wall time. The commands, from the worktree root at `e6562c72`:
 `b.parseFlatOwned(s)` where `base` calls `b.parseFlat(s)`. Everything else, including the base
 shape (all sources read first, no `Bun.gc`, no event-loop turn), is unchanged. `$S/owned.node` is
 the scratch crate `$S/crate-owned` (this crate plus `parseFlatOwned`), built with clang-cl 23.1.2.
+
+## AMENDMENT 3 (S3 revisions)
+
+Recorded at S3.4 Step 0, before any S3.4 number is read. It fills in the Same-revision rule's two
+placeholders and changes nothing above OUTCOME.
+
+- LethAL S3 base commit: `37190d50aee7f555c59e2e3d3919e1a482595a57` (HEAD before the S3.2 edits).
+  The WASM side runs in a scratch worktree at exactly this commit. The native side is this commit's
+  child (this amendment, a docs-only commit) plus the uncommitted S3.2 and S3.3 switch; no file
+  outside this document differs from `37190d5` apart from the switch itself.
+- Corpus revisions (`git -C <corpus> rev-parse HEAD`):
+  - BC.History (bcf, sysapp, bsrc, btest, BaseApp): `4d61fc58bc55dd0acb78f8b9b6ea54109b960785`
+  - do-rel2 (do): `5f2a71d36215a83fa4a554de90637f151521feb5`
+  - DC (dc): `5d1bf414225459aff9e447158b139c6d1702bcc7`
+  - BusinessCentral.Sentinel (sentinel): `49af76ae53e96e3eee81eae445252767c2e94e6b`
+  Untracked files present at that time, none inside a scanned directory: BC.History `.tmp/`,
+  `SubscriptionBilling/Source/Subscription & Recurring Billing/`, `parsed.txt`; do-rel2
+  `.promotion-state.json`; DC `Cloud/CLAUDE.md`, `Cloud/Description3_Capture_Solution.md`;
+  Sentinel `.caltestrunner/`.
+- Native addon under test: `lethal-parser.win32-x64.node`, sha256
+  `19f5d477c475df3126791fec516d0a9ed8151f9fd8a1b9d96f3fb425e36aa767`, built at `37190d5` with
+  clang-cl 23.1.2 by `scripts/build-native-parser.ts`.
+
+The corpus revisions are re-read after the last native run. A moved corpus voids the comparison,
+and it is re-run.
