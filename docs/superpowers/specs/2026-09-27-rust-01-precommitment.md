@@ -222,3 +222,31 @@ without a memory win, for the owner to decide.
 
 Recorded, not gating: parse medians over 3 runs and the Rust-only parse time, for each build, with
 the compiler, its version and flags.
+
+## RESULT (RUST-02, 2026-09-28)
+
+Full figures: `docs/measurements/2026-09-28-rust-02-native-parser-gates.md`.
+
+**Gate (ii): PASS, both builds.** One pass over whole BaseApp (9,620 files) through the native parse
+call alone: no crash, nodes equal WASM (31,135,464) on every run, peak far under the 16,384 MB
+ceiling (base peak about 1,906 MB msvc, 1,908 MB clang). The best layout, a harness-only change that
+yields the event loop every 100 files, gets both builds under WASM W1's own 1,142 MB peak (827 MB
+clang, 835 MB msvc): the base peak is dead transferred typed arrays that Bun frees only on an
+event-loop turn, not a crate cost.
+
+**Gate (i): GO, both builds, with a memory win.** The whole-BaseApp census (W2) completes in one
+pass on each build with no crash, peak 8,957 MB clang and 8,792 MB msvc against the 16,384 MB
+ceiling, nodes equal, and the identity listing byte-identical to the pre-committed WASM capture
+(sha256 `a66a270e...`). W3a (BaseApp/Source) peaks at 5,855 MB clang and 5,502 MB msvc against
+WASM's 16,151 MB, about a third: the owner's memory win, on both builds. `bun test` under native is
+4,081 pass / 7 skip / 1 fail on each build (WASM at the same HEAD: 4,082 / 7 / 0); the one failing
+test pins WASM's own `Tree.delete()` mechanism and needs a native form as part of any switch-over,
+not a correctness regression in the parser.
+
+Clang is faster throughout (W2 wall 100.05 s against msvc's 129.78 s, Rust-only parse 2.65x faster)
+with no memory cost, so clang is preferred if one build is chosen for RUST-03. Speed was recorded
+only; it did not gate either verdict, by the amended bar above.
+
+The crate, the `FlatNode` layer and the native-parser switch stay uncommitted in the working tree.
+RUST-03 is the switch-over decision: the loader (grammar pin, staleness check, `--compile`
+embedding), the one differing unit test, and W4/W6, none of which this session measured.
