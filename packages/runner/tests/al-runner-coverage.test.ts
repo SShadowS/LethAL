@@ -1,9 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   alRunnerCoverageFrom,
+  alRunnerCoverageFromServer,
+  alRunnerCoverageSupport,
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "../src/al-runner-coverage";
@@ -196,5 +198,91 @@ describe("alRunnerCoverageFrom", () => {
     // The whole point: every Pricing line came back hits="0", so it contributes NO evidence and
     // its mutants are no-coverage rather than survived.
     expect(objects.has(79151)).toBe(false);
+  });
+});
+
+/** R298 repros, hand-written. */
+const R298_BODY = (name: string): string => `{
+    procedure ${name}()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+}
+`;
+const R298_TWO_ARM = `#if CLEAN27
+codeunit 50103 "Repro B2"
+${R298_BODY("AIf")}#else
+codeunit 50103 "Repro B2"
+${R298_BODY("AElse")}#endif
+`;
+const R298_MIXED = `codeunit 50104 Plain
+${R298_BODY("P")}#if not CLEAN27
+codeunit 50105 Wrapped
+${R298_BODY("W")}#endif
+`;
+const R298_PLAIN = `codeunit 50107 Other
+${R298_BODY("R")}`;
+const R298_REFUSED =
+  "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+
+describe("R298: a file holding a #if-wrapped object is refused whole", () => {
+  test("the wrapped file is named in refusedFiles and indexed nowhere; the plain file is indexed", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const dir = await bundle({
+        "src/B2.Codeunit.al": R298_TWO_ARM,
+        "src/Other.Codeunit.al": R298_PLAIN,
+      });
+      const index = await buildAlRunnerCoverageIndex(dir);
+      expect(index.refusedFiles).toEqual(["src/B2.Codeunit.al"]);
+      expect(index.multiObjectFiles).toEqual([]);
+      expect([...index.byFile.keys()]).toEqual(["src/other.codeunit.al"]);
+      expect(index.lineMap.declares("Codeunit", 50103)).toBe(false);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said).toEqual([R298_REFUSED]);
+
+      const cobertura = alRunnerCoverageFrom(
+        [
+          { file: "src/B2.Codeunit.al", line: 7, hits: 1 },
+          { file: "src/B2.Codeunit.al", line: 18, hits: 1 },
+          { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
+        ],
+        index,
+      );
+      expect(cobertura.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
+      ]);
+      const server = alRunnerCoverageFromServer(
+        {
+          test: "Codeunit50140.T",
+          coverage: [
+            { file: "src/B2.Codeunit.al", statements: [{ line: 7, hits: 1, scope: "AIf" }] },
+            { file: "src/Other.Codeunit.al", statements: [{ line: 6, hits: 1, scope: "R" }] },
+          ],
+        },
+        index,
+      );
+      expect(server.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 },
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a two-arm wrapped object counts as ONE object for the multi-object guard", async () => {
+    const dir = await bundle({ "src/B2.Codeunit.al": R298_TWO_ARM });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({ supported: true, multiObjectFiles: [] });
+  });
+
+  test("a bare object plus a wrapped one IS two objects for the guard", async () => {
+    const dir = await bundle({ "src/Mixed.Codeunit.al": R298_MIXED });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
+      multiObjectFiles: ["src/Mixed.Codeunit.al"],
+    });
   });
 });

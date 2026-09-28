@@ -1,6 +1,13 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ALNodeKind, type ALSyntaxNode, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import {
+  ALNodeKind,
+  type ALSyntaxNode,
+  initParser,
+  objectDeclarationsOf,
+  parseAL,
+  wrapRoot,
+} from "@lethal/engine";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -88,10 +95,26 @@ export interface LineMapEntry {
    * procedures yields the wrong name with full confidence — the R29 shape.
    */
   readonly baseLine: number;
+  /**
+   * R298: set when this object's coverage is REFUSED, and then it is the reason, a sentence naming
+   * the object and its file. Set on every object declared inside a `#if ... #endif` object wrapper,
+   * and on every object declared AFTER the first such wrapper in the same file: a bare object's
+   * base is "previous object's end + 1", and whether a wrapper's inactive arm counts as that
+   * previous object is exactly what R300 has to measure. A guessed base names the wrong procedure
+   * with full confidence (R29), so the map refuses rather than guesses.
+   */
+  readonly refused?: string;
+}
+
+/** R298: the fixed refusal sentence, shared by the fenced line map and the al-runner index. */
+export function refusedCoverageReason(objectType: string, objectId: number, file: string): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.`;
 }
 
 export class LineMap {
   private readonly byObject = new Map<string, ObjectLines>();
+  /** R298: declared objects whose coverage is refused, key -> reason. Read before `byObject`. */
+  private readonly refused = new Map<string, string>();
 
   /**
    * @param declared the `(objectType, objectId)` pairs the compiled ARTIFACT declares. A coverage
@@ -117,8 +140,29 @@ export class LineMap {
       // file, so an undeclared object still consumes the lines its declared neighbours are numbered
       // relative to.
       if (!declared.has(key)) continue;
+      // R298: no spans at all for a refused object, so nothing can name one of its lines, and
+      // `lookup`/`isNamingGap` answer from `refused` before they look for spans.
+      if (e.refused !== undefined) {
+        this.refused.set(key, e.refused);
+        continue;
+      }
       this.byObject.set(key, spansOf(e.root, e.baseLine));
     }
+  }
+
+  /**
+   * R298: is this object's coverage REFUSED? A caller that gets `true` must drop the row entirely:
+   * not a named entry and not an object-level one either, since an object-level entry feeds
+   * `byObjectUnnamed` and selection's local-procedure fallback, which is attribution by the back
+   * door.
+   */
+  isRefused(objectType: string, objectId: number): boolean {
+    return this.refused.has(keyOf(objectType, objectId));
+  }
+
+  /** R298: the refusal sentence for a refused object, `undefined` for any other. */
+  refusalReason(objectType: string, objectId: number): string | undefined {
+    return this.refused.get(keyOf(objectType, objectId));
   }
 
   /** Whether the compiled artifact declares this object at all. */
@@ -177,6 +221,7 @@ export class LineMap {
    * report line; under-flagging is the R175 defect itself.
    */
   isNamingGap(objectType: string, objectId: number, lineNo: number): boolean {
+    if (this.isRefused(objectType, objectId)) return false;
     const entry = this.byObject.get(keyOf(objectType, objectId));
     if (entry === undefined) return false;
     if (lineNo <= 0) return false;
@@ -187,6 +232,7 @@ export class LineMap {
 
   lookup(objectType: string, objectId: number, lineNo: number): string | undefined {
     const key = keyOf(objectType, objectId);
+    if (this.refused.has(key)) return undefined; // R298: refused, never unmapped
     const entry = this.byObject.get(key);
     if (entry === undefined) {
       if (this.declared.has(key)) {
@@ -260,22 +306,44 @@ function stripQuotes(s: string): string {
  * `baseLine` is computed as "one past the previous object's last line", with the first object
  * based at line 1 — see `LineMapEntry.baseLine` for the measurements that rule comes from and the
  * case that has not yet discriminated it.
+ *
+ * R298: an object inside a `preproc_conditional_object` (a `#if`-wrapped object, one declaration
+ * per arm) gets an entry marked `refused`, and so does every object after the first such wrapper
+ * in the file (see `LineMapEntry.refused`). A wrapper holding no object (only `using` lines, say)
+ * refuses nothing and moves no base, exactly as before: it is not an object.
  */
 export function fileLineMapEntries(
   fileRoot: ALSyntaxNode,
   objectIdentity: (node: ALSyntaxNode) => { objectType: string; objectId: number } | null,
+  file = "<source>",
 ): LineMapEntry[] {
   const entries: LineMapEntry[] = [];
   let previousEndLine = 0; // so the first object bases at 1
-  for (const node of fileRoot.children) {
+  let afterWrapper = false;
+  const push = (node: ALSyntaxNode, refuse: boolean): boolean => {
     const identity = objectIdentity(node);
-    if (identity === null) continue;
+    if (identity === null) return false;
     entries.push({
       objectType: identity.objectType,
       objectId: identity.objectId,
       root: node,
       baseLine: previousEndLine + 1,
+      ...(refuse
+        ? { refused: refusedCoverageReason(identity.objectType, identity.objectId, file) }
+        : {}),
     });
+    return true;
+  };
+  for (const node of fileRoot.namedChildren) {
+    if (node.rawKind === "preproc_conditional_object") {
+      let holdsObject = false;
+      for (const decl of objectDeclarationsOf(node)) holdsObject = push(decl, true) || holdsObject;
+      if (!holdsObject) continue;
+      afterWrapper = true;
+      previousEndLine = node.endPosition.row + 1;
+      continue;
+    }
+    if (!push(node, afterWrapper)) continue;
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
@@ -369,8 +437,15 @@ export async function lineMapFromSources(
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
-  for (const { text } of sources) {
-    entries.push(...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf));
+  for (const { path, text } of sources) {
+    entries.push(
+      ...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf, normalizeSlashes(path)),
+    );
   }
   return new LineMap(entries, declared);
+}
+
+/** Forward slashes, so a path quoted to a user reads the same on every platform. */
+function normalizeSlashes(path: string): string {
+  return path.split("\\").join("/");
 }

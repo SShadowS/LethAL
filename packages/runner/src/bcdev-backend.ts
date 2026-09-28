@@ -304,6 +304,9 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // own SymbolReference.json. Left undefined in every other mode — nothing builds it and nothing
   // reads it.
   private lineMap: LineMap | undefined;
+  // R298: `type:id` keys whose coverage refusal this backend already named, so the warning is
+  // printed once per object per session rather than once per row or per test.
+  private readonly refusalsWarned = new Set<string>();
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.
   private coverageObjectIdFilter: string | undefined;
@@ -1020,6 +1023,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const entries: CoverageEntry[] = [];
     const seen = new Set<string>();
     let declaredRows = 0;
+    let refusedRows = 0;
     let memberEntries = 0;
     // R175: objects where a row landed in NO known span — not a procedure, not a trigger. The map
     // is built from the source LethAL emitted and compiled, so it should be able to place every
@@ -1030,6 +1034,19 @@ export class BcDevMcpBackend implements ExecutionBackend {
     for (const row of rows) {
       const objectType = objectTypeName(row.objectType);
       if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
+      // R298, Review Focus 1: a refused object's row yields NO entry of any grain. Rule 2's
+      // object-level entry would feed `byObjectUnnamed` and selection's local-procedure fallback,
+      // which is attribution by the back door, so the row is dropped before it can make one.
+      const refusal = lineMap.refusalReason(objectType, row.objectId);
+      if (refusal !== undefined) {
+        refusedRows += 1;
+        const refusedKey = `${objectType}:${row.objectId}`;
+        if (!this.refusalsWarned.has(refusedKey)) {
+          this.refusalsWarned.add(refusedKey);
+          console.warn(`[lethal] ${refusal}`);
+        }
+        continue;
+      }
       declaredRows += 1;
       const procedure = lineMap.lookup(objectType, row.objectId, row.lineNo);
       if (procedure === undefined && lineMap.isNamingGap(objectType, row.objectId, row.lineNo)) {
@@ -1052,7 +1069,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // Distinct `type:id` keys actually seen, so the diagnostic can show BOTH sides of the
     // comparison that failed rather than only naming the two suspects.
     const rowKeys = [...new Set(rows.map((r) => `${objectTypeName(r.objectType)}:${r.objectId}`))];
-    this.warnOnThinFencedCoverage(ref, rows.length, declaredRows, memberEntries, rowKeys, stats);
+    this.warnOnThinFencedCoverage(
+      ref,
+      rows.length,
+      declaredRows,
+      refusedRows,
+      memberEntries,
+      rowKeys,
+      stats,
+    );
     return {
       granularity: "procedure",
       entries,
@@ -1086,11 +1111,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
     ref: TestMethodRef,
     totalRows: number,
     declaredRows: number,
+    refusedRows: number,
     memberEntries: number,
     rowKeys: readonly string[],
     stats?: FencedCoverageStats,
   ): void {
     if (totalRows === 0 || memberEntries > 0) return;
+    // R298: every declared row was a refused object's, and that refusal is already named. Neither
+    // the filter nor the base-line frame is to blame for it.
+    if (declaredRows === 0 && refusedRows > 0) return;
     const server =
       stats !== undefined
         ? ` (server scanned ${stats.scannedRows}, emitted ${stats.emittedRows} row(s) in ${stats.serializeMs} ms; the run itself took ${stats.runMs} ms)`

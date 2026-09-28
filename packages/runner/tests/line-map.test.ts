@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { LineMap, buildLineMap, fileLineMapEntries } from "../src/line-map";
+import { LineMap, buildLineMap, fileLineMapEntries, lineMapFromSources } from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 /**
@@ -489,5 +489,81 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/** R298 repros, hand-written. Each procedure spans lines 2..7 of its object's own `{ ... }`. */
+const R298_BODY = (name: string): string => `{
+    procedure ${name}()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+}
+`;
+const R298_TWO_ARM = `#if CLEAN27\ncodeunit 50103 "Repro B2"\n${R298_BODY("AIf")}#else\ncodeunit 50103 "Repro B2"\n${R298_BODY("AElse")}#endif\n`;
+const R298_MIXED = `codeunit 50104 Plain\n${R298_BODY("P")}#if not CLEAN27\ncodeunit 50105 Wrapped\n${R298_BODY("W")}#endif\ncodeunit 50106 After\n${R298_BODY("Q")}`;
+const R298_PLAIN = `codeunit 50107 Other\n${R298_BODY("R")}`;
+const R298_DECLARED = new Set([50103, 50104, 50105, 50106, 50107].map((id) => `codeunit:${id}`));
+
+describe("R298: coverage for #if-wrapped objects is REFUSED, per object", () => {
+  async function map(): Promise<LineMap> {
+    return await lineMapFromSources(
+      [
+        { path: "B2.Codeunit.al", text: R298_TWO_ARM },
+        { path: "Mixed.Codeunit.al", text: R298_MIXED },
+        { path: "Other.Codeunit.al", text: R298_PLAIN },
+      ],
+      R298_DECLARED,
+    );
+  }
+
+  test("wrapped objects, and objects after a wrapper in the same file, are refused; the rest are not", async () => {
+    const m = await map();
+    expect(m.isRefused("Codeunit", 50103)).toBe(true);
+    expect(m.isRefused("Codeunit", 50105)).toBe(true);
+    expect(m.isRefused("Codeunit", 50106)).toBe(true);
+    expect(m.isRefused("Codeunit", 50104)).toBe(false);
+    expect(m.isRefused("Codeunit", 50107)).toBe(false);
+  });
+
+  test("lookup on every line of a refused object returns undefined and never throws", async () => {
+    const m = await map();
+    const lines = R298_TWO_ARM.split("\n").length;
+    for (let line = 0; line <= lines + 2; line++) {
+      expect(m.lookup("Codeunit", 50103, line)).toBeUndefined();
+      expect(m.isNamingGap("Codeunit", 50103, line)).toBe(false);
+    }
+    for (let line = 0; line <= 12; line++) {
+      expect(m.lookup("Codeunit", 50105, line)).toBeUndefined();
+      expect(m.lookup("Codeunit", 50106, line)).toBeUndefined();
+    }
+  });
+
+  test("unaffected objects still name their procedures, in the same run", async () => {
+    const m = await map();
+    expect(m.lookup("Codeunit", 50104, 3)).toBe("P");
+    expect(m.lookup("Codeunit", 50104, 8)).toBe("P");
+    expect(m.lookup("Codeunit", 50107, 3)).toBe("R");
+    expect(m.lookup("Codeunit", 50107, 6)).toBe("R");
+  });
+
+  test("the refusal reason names the object, the file and R300", async () => {
+    const m = await map();
+    expect(m.refusalReason("Codeunit", 50105)).toBe(
+      "coverage refused for Codeunit:50105 (Mixed.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.",
+    );
+    expect(m.refusalReason("Codeunit", 50104)).toBeUndefined();
+  });
+
+  test("a wrapper holding only `using` lines refuses nothing and moves no base line", async () => {
+    const src = `#if not CLEAN27\nusing X.Y;\n#endif\n${R298_PLAIN}`;
+    const m = await lineMapFromSources([{ path: "U.Codeunit.al", text: src }], R298_DECLARED);
+    expect(m.isRefused("Codeunit", 50107)).toBe(false);
+    // Base 1: the object's `procedure R()` is file line 6, so object line 6.
+    expect(m.lookup("Codeunit", 50107, 6)).toBe("R");
+    expect(m.lookup("Codeunit", 50107, 3)).toBeUndefined();
   });
 });

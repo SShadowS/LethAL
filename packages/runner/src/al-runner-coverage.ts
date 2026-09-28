@@ -46,11 +46,11 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, parseAL } from "@lethal/engine";
+import { initParser, objectDeclarationsOf, parseAL } from "@lethal/engine";
 import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
-import { LineMap, fileLineMapEntries, objectIdentityOf } from "./line-map";
+import { LineMap, fileLineMapEntries, objectIdentityOf, refusedCoverageReason } from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
 export interface CoberturaLine {
@@ -87,14 +87,35 @@ export function parseCobertura(xml: string): readonly CoberturaLine[] {
   return out;
 }
 
-/** Every object header a file declares, in source order. */
+/**
+ * Every object a file declares, in source order, `#if`-wrapped ones included (R298). The arms of
+ * one wrapped object are ONE object: each compile builds exactly one arm, so a two-arm wrapper
+ * declaring the same `(type, id)` twice must not trip the multi-object guard. Counted by
+ * `(type, id)`, never by node.
+ */
 function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
   const found: Array<{ objectType: string; objectId: number }> = [];
-  for (const child of root.namedChildren) {
-    const id = objectIdentityOf(child);
-    if (id !== null) found.push(id);
+  const seen = new Set<string>();
+  for (const decl of objectDeclarationsOf(root)) {
+    const id = objectIdentityOf(decl);
+    if (id === null) continue;
+    const key = `${id.objectType}:${id.objectId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(id);
   }
   return found;
+}
+
+/** R298: the objects a file declares inside a `#if ... #endif` object wrapper, if any. */
+function wrappedObjectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
+  return root.namedChildren.some(
+    (c) =>
+      c.rawKind === "preproc_conditional_object" &&
+      objectDeclarationsOf(c).some((d) => objectIdentityOf(d) !== null),
+  )
+    ? objectsOf(root)
+    : [];
 }
 
 /**
@@ -107,6 +128,13 @@ export interface AlRunnerCoverageIndex {
   readonly lineMap: LineMap;
   /** Project-relative paths declaring more than one object. Non-empty disables coverage. */
   readonly multiObjectFiles: readonly string[];
+  /**
+   * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object. Refused WHOLE,
+   * because coverage here is per file: every object in one reads `no-coverage` until R300 measures
+   * how al-runner numbers a compiled arm. A refused file is in none of `byFile`, the line map's
+   * declared set, or `multiObjectFiles`.
+   */
+  readonly refusedFiles: readonly string[];
 }
 
 /**
@@ -159,12 +187,21 @@ export async function buildAlRunnerCoverageIndex(
 
   const byFile = new Map<string, { objectType: string; objectId: number }>();
   const multiObjectFiles: string[] = [];
+  const refusedFiles: string[] = [];
   const entries = [];
   const declared = new Set<string>();
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
+    const wrapped = wrappedObjectsOf(root);
+    if (wrapped.length > 0) {
+      const file = normalizeSlashes(rel);
+      refusedFiles.push(file);
+      for (const o of wrapped)
+        console.warn(`[lethal] ${refusedCoverageReason(o.objectType, o.objectId, file)}`);
+      continue;
+    }
     const objects = objectsOf(root);
     if (objects.length > 1) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
@@ -187,6 +224,7 @@ export async function buildAlRunnerCoverageIndex(
     byFile,
     lineMap: new LineMap(entries, declared),
     multiObjectFiles,
+    refusedFiles,
   };
 }
 
