@@ -1,6 +1,7 @@
 //! RUST-01: tree-sitter-al parsed natively, returned to JavaScript as flat arrays.
 //! One call per file; the tree is freed before the call returns. Design section 4.
-use napi::bindgen_prelude::{Int32Array, Uint16Array, Uint32Array, Uint8Array, Utf16String};
+use napi::bindgen_prelude::{ToNapiValue, Utf16String};
+use napi::{check_status, sys};
 use napi_derive::napi;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -146,20 +147,6 @@ pub fn kind_table_sha256() -> String {
 }
 
 #[napi(object)]
-pub struct FlatTree {
-    pub kind_names: Vec<String>,
-    pub kind: Uint16Array,
-    pub field_names: Vec<String>,
-    pub field: Uint16Array,
-    pub flags: Uint8Array,
-    pub child_count: Uint32Array,
-    pub next_sibling: Int32Array,
-    pub start_index: Uint32Array,
-    pub end_index: Uint32Array,
-    pub points: Uint32Array,
-}
-
-#[napi(object)]
 pub struct NativeInfo {
     pub binding_source_sha256: String,
     pub grammar_inputs: String,
@@ -172,21 +159,58 @@ pub struct NativeInfo {
     pub c_compiler: String,
 }
 
-#[napi]
-pub fn parse_flat(source: Utf16String) -> FlatTree {
-    let f = parse_units(&source);
-    FlatTree {
-        kind_names: f.kind_names,
-        kind: Uint16Array::new(f.kind),
-        field_names: f.field_names,
-        field: Uint16Array::new(f.field),
-        flags: Uint8Array::new(f.flags),
-        child_count: Uint32Array::new(f.child_count),
-        next_sibling: Int32Array::new(f.next_sibling),
-        start_index: Uint32Array::new(f.start_index),
-        end_index: Uint32Array::new(f.end_index),
-        points: Uint32Array::new(f.points),
+/// Copy `v` into an ArrayBuffer the JS engine owns (napi_create_arraybuffer), then view it.
+/// RUST-03 S1.4 (AMENDMENT 2): napi-rs typed arrays are external buffers that Bun frees only when
+/// the event loop turns, so a synchronous loop that drops results carried every array to the end
+/// (W1 peak 1,921 MB). An engine-owned copy is freed by an ordinary GC sweep (W1 peak 1,255 MB).
+unsafe fn owned_view<T: Copy>(
+    env: sys::napi_env,
+    v: &[T],
+    ty: sys::napi_typedarray_type,
+) -> napi::Result<sys::napi_value> {
+    let bytes = std::mem::size_of_val(v);
+    let mut data = std::ptr::null_mut();
+    let mut ab = std::ptr::null_mut();
+    check_status!(sys::napi_create_arraybuffer(env, bytes, &mut data, &mut ab))?;
+    if bytes > 0 {
+        std::ptr::copy_nonoverlapping(v.as_ptr() as *const u8, data as *mut u8, bytes);
     }
+    let mut view = std::ptr::null_mut();
+    check_status!(sys::napi_create_typedarray(env, ty, v.len(), ab, 0, &mut view))?;
+    Ok(view)
+}
+
+/// One file's flat tree on its way to JavaScript: the FlatTree object in syntax-node.ts, with
+/// the eight numeric arrays as engine-owned typed arrays.
+pub struct OwnedFlat(Flat);
+
+impl ToNapiValue for OwnedFlat {
+    unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> napi::Result<sys::napi_value> {
+        let f = val.0;
+        let mut obj = std::ptr::null_mut();
+        check_status!(sys::napi_create_object(env, &mut obj))?;
+        let set = |name: &str, v: sys::napi_value| -> napi::Result<()> {
+            let c = std::ffi::CString::new(name).expect("a property name has no NUL");
+            check_status!(sys::napi_set_named_property(env, obj, c.as_ptr(), v))
+        };
+        use sys::TypedarrayType as T;
+        set("kindNames", Vec::<String>::to_napi_value(env, f.kind_names)?)?;
+        set("kind", owned_view(env, &f.kind, T::uint16_array)?)?;
+        set("fieldNames", Vec::<String>::to_napi_value(env, f.field_names)?)?;
+        set("field", owned_view(env, &f.field, T::uint16_array)?)?;
+        set("flags", owned_view(env, &f.flags, T::uint8_array)?)?;
+        set("childCount", owned_view(env, &f.child_count, T::uint32_array)?)?;
+        set("nextSibling", owned_view(env, &f.next_sibling, T::int32_array)?)?;
+        set("startIndex", owned_view(env, &f.start_index, T::uint32_array)?)?;
+        set("endIndex", owned_view(env, &f.end_index, T::uint32_array)?)?;
+        set("points", owned_view(env, &f.points, T::uint32_array)?)?;
+        Ok(obj)
+    }
+}
+
+#[napi]
+pub fn parse_flat(source: Utf16String) -> OwnedFlat {
+    OwnedFlat(parse_units(&source))
 }
 
 #[napi]
