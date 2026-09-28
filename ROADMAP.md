@@ -359,7 +359,7 @@ that ordering is the priority.
 - **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
 - **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · open, filed 2026-09-28. RUST-02 (2026-09-28) reopened the route with clang and it passed both gates, GO on…
-- **R317** · Business Central throttles OData V4 at 5 concurrent requests per user, and a shared probe user can starve the gate it is watching · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
+- **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 
 ---
 

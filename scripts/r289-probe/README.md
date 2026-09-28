@@ -7,6 +7,13 @@ timeline. The predictions, the reading rules and the stop rule are pre-committed
 **Wedge risk: yes.** The gate they run beside wedged Cronus28 on 2026-09-26. Run only under
 `coord lease <container> <lane>`, one run at a time, and never restart the container or its server.
 
+**Privacy: keep this output private.** The `LETHAL_R289_TRACE` trace, the sidecar's NDJSON, and
+`container.ps1`'s NDJSON and its container-event-log dump all stay in local scratch or the coord
+store (`H:/lethal-coord/...`), never committed. They can carry server names, BC usernames, SQL
+statement text and Application event log text, so review (and redact where needed) before anything
+derived from them is published, the same rule this repo already applies to a committed
+`SessionReport` (`scripts/redact-campaign-report.ts`, see CLAUDE.md).
+
 ## Scripts
 
 - `sidecar.ts --container <name> --config <fixture>/lethal.config.<x>.json --user <sidecar BC user> --password <its password> --out <file> [--stop-file <path>] [--seconds <n>]`

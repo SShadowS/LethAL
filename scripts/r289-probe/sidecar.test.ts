@@ -3,7 +3,33 @@ import { describe, expect, test } from "bun:test";
 // import is matched by basename and would otherwise be read as importing an unrelated script.
 // sidecar.ts's CLI body is guarded by import.meta.main, so importing it only exposes the pure
 // scheduling function below; it opens no file, makes no request, starts no loop.
-import { MAX_CONCURRENT, pickProbesToRun } from "./sidecar.ts";
+import { MAX_CONCURRENT, pickProbesToRun, refusalForUsername } from "./sidecar.ts";
+
+describe("refusalForUsername (R289 review r1 I2: enforce a separate gate user)", () => {
+  test("refuses when the gate config's username is missing", () => {
+    expect(refusalForUsername(undefined, "LETHALPROBE")).toBeDefined();
+  });
+
+  test("refuses when the gate config's username is blank (whitespace only)", () => {
+    expect(refusalForUsername("   ", "LETHALPROBE")).toBeDefined();
+  });
+
+  test("refuses when the sidecar user is the same as the gate's", () => {
+    expect(refusalForUsername("gateuser", "gateuser")).toBeDefined();
+  });
+
+  test("refuses when the two usernames differ only by case", () => {
+    expect(refusalForUsername("GateUser", "gateuser")).toBeDefined();
+  });
+
+  test("refuses when the two usernames differ only by surrounding whitespace", () => {
+    expect(refusalForUsername("  gateuser  ", "gateuser")).toBeDefined();
+  });
+
+  test("allows a sidecar user that genuinely differs from the gate's", () => {
+    expect(refusalForUsername("gateuser", "LETHALPROBE")).toBeUndefined();
+  });
+});
 
 describe("pickProbesToRun (R289 P1 concurrency cap, ADDENDUM)", () => {
   test("fills up to the cap from idle probes, in order", () => {

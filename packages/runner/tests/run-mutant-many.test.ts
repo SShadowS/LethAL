@@ -1020,7 +1020,7 @@ describe("runMany, a connection failure keeps the watchdog's story (R289)", () =
     expect(v.failureMessage).toContain("RunMutantMany connection failed after dispatch");
     expect(v.failureMessage).toMatch(/stop sent at \+\d+ms, answered at \+\d+ms/);
     expect(v.failureMessage).toMatch(/failed at \+\d+ms/);
-    expect(v.failureMessage).toMatch(/polls ok \d+/);
+    expect(v.failureMessage).toContain("polls ok 1, polls failed 0");
     // ORDER is pinned by trace events, not by elapsed milliseconds (review r2).
     const events = readTrace(tracePath).map((e) => e.event);
     const at = (name: string) => events.indexOf(name);

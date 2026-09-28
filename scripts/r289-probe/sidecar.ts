@@ -8,10 +8,11 @@
 //     [--stop-file <path>] [--seconds <n>]
 //
 // The sidecar authenticates as its OWN BC user, never the gate config's: pass --user/--password, or
-// --creds <gitignored json file with {"user":..,"password":..}>. It refuses to start if that user
-// equals the gate config's bcdev.username. It never runs more than MAX_CONCURRENT requests of its
-// own at once (pickProbesToRun below; see sidecar.test.ts). The host check against the gate config
-// is unchanged.
+// --creds <gitignored json file with {"user":..,"password":..}>. It refuses to start if the gate
+// config's bcdev.username is missing or blank, or if it names the same user as --user, compared
+// case-insensitively after trimming both (see refusalForUsername below and sidecar.test.ts). It
+// never runs more than MAX_CONCURRENT requests of its own at once (pickProbesToRun below; see
+// sidecar.test.ts). The host check against the gate config is unchanged.
 //
 // It runs until --stop-file exists, --seconds pass, or it is killed. Every line is appended as it
 // happens, so a kill loses at most the calls still open.
@@ -41,6 +42,27 @@ interface Sample {
   error?: string;
   timedOut: boolean;
   value?: string;
+}
+
+/**
+ * Refusal reason if the sidecar must not start as `sidecarUser`, given the gate config's own
+ * `bcdev.username`: a gate username is required (refuses if missing or blank), and the two names
+ * are compared case-insensitively after trimming. Returns `undefined` when the sidecar may proceed
+ * (a non-blank gate username that differs from the sidecar's, ignoring case and surrounding
+ * whitespace). Pure: no I/O.
+ */
+export function refusalForUsername(
+  gateUsername: string | undefined,
+  sidecarUser: string,
+): string | undefined {
+  const gate = (gateUsername ?? "").trim();
+  if (gate === "") {
+    return "bcdev.username is missing or blank; the sidecar needs the gate's username to compare against";
+  }
+  if (gate.toLowerCase() === sidecarUser.trim().toLowerCase()) {
+    return `--user ${sidecarUser} is the gate config's own bcdev.username (${gate})`;
+  }
+  return undefined;
 }
 
 /**
@@ -102,9 +124,10 @@ if (import.meta.main) {
   if (bcdev?.server === undefined || bcdev.serverInstance === undefined) {
     throw new Error(`${configPath}: bcdev.server and bcdev.serverInstance are required`);
   }
-  if (bcdev.username !== undefined && bcdev.username === user) {
+  const refusal = refusalForUsername(bcdev.username, user);
+  if (refusal !== undefined) {
     throw new Error(
-      `refusing: --user ${user} is the gate config's own bcdev.username in ${configPath}; the sidecar must authenticate as a separate BC user`,
+      `refusing: ${refusal} in ${configPath}; the sidecar must authenticate as a separate BC user`,
     );
   }
   // The same base URL hang.itest.ts builds: odataBaseUrl(server, serverInstance), baseUrl unused.
