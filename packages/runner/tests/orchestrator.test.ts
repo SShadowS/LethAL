@@ -622,6 +622,9 @@ ${TRIGGER_TABLE_AL}#endif
         }
         // The plain codeunit is untouched: it still runs.
         expect(report.counts.survived).toBeGreaterThan(0);
+        // Selection's refusal warning prints ONCE per batch, not again from the second split.
+        const said = warnSpy.mock.calls.map((c) => String(c[0]));
+        expect(said.filter((x) => x.includes("because coverage is refused"))).toHaveLength(1);
       } finally {
         warnSpy.mockRestore();
         store.close();

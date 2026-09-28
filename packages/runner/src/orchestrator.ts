@@ -4874,7 +4874,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           uncovered.length === 0
             ? new Map<string, readonly TestMethodRef[]>()
             : coverageFilter(
-                uncovered,
+                // R298: a refused mutant was decided by the green split; it is left out here so
+                // its refusal is not warned a second time. `coverageRefused` stays as the guard.
+                uncovered.filter((m) => !refusedIds.has(m.mutantId)),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
                 undefined,
