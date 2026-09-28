@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**87 of 309 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 314 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -120,8 +120,11 @@ that ordering is the priority.
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · open, filed 2026-09-28
-- **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · open, filed 2026-09-28; minimal refusal landed 2026-09-28 (3c58bbb), per-arm placement rule pending
+- **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
+- **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
+- **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · open, filed 2026-09-28
+- **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · open, filed 2026-09-28
 
 ## Product gaps a real project hits
 
@@ -196,7 +199,7 @@ that ordering is the priority.
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · done (d24e766)
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · open
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · open
-- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · open
+- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · closed 2026-09-28, owner ruling: the 20% criterion is measured against a hardening round's survivors…
 - **R272** · `lethal explain` gaps do not list the covering tests' file:line or rank them by reach then duration · [R272.md](docs/roadmap/R272.md) · open
 - **R273** · `lethal explain` gives no suggested fix kind per gap · [R273.md](docs/roadmap/R273.md) · open
 - **R274** · an explain gap does not carry its source span with the surviving mutants marked inline · [R274.md](docs/roadmap/R274.md) · open
@@ -216,9 +219,10 @@ that ordering is the priority.
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · open, filed 2026-09-28
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · open, filed 2026-09-28
 - **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · open, filed 2026-09-28
-- **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and the injector still throws · [R309.md](docs/roadmap/R309.md) · open, filed 2026-09-28; 0 corpus files measured so far
-- **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · open, filed 2026-09-28; needs a live sample-report regeneration
+- **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
+- **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · open, filed 2026-09-28
+- **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28
 
 ## Backends and tooling
 
@@ -354,6 +358,7 @@ that ordering is the priority.
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
 - **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
 - **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
+- **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · open, filed 2026-09-28. RUST-02 (2026-09-28) reopened the route with clang and it passed both gates, GO on…
 
 ---
 

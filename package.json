@@ -26,6 +26,7 @@
     "itest:testapp": "bun packages/runner/itest/test-app-publish.itest.ts",
     "itest:verify": "bun packages/runner/itest/verify.itest.ts",
     "itest:agreement": "bun packages/runner/itest/verify-agreement.itest.ts",
+    "itest:verify-scale": "bun packages/runner/itest/verify-scale.itest.ts",
     "mutate": "stryker run"
   },
   "devDependencies": {
