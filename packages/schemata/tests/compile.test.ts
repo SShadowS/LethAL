@@ -20,6 +20,7 @@ import { buildComponents } from "../src/components";
 import {
   REACH_LATCH,
   REACH_MARKER,
+  preambleArmHeaderEnds,
   reachGrainOf,
   reachLatchRefusedOwner,
   splitVarHoistAnchor,
@@ -1771,13 +1772,13 @@ describe("R297: the selector var is inserted after the leading declarations", ()
     expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
-  it("a-preamble: a spec inside the preamble procedure is refused by name, not thrown (R309)", () => {
+  it("a-preamble: a spec inside the preamble procedure takes a latch in each arm (R316)", () => {
     const root = wrapRoot(parseAL(PREAMBLE));
     const s = spec(assignment(root, "L := 1"), "L := 2", "lethal.op");
-    expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+    expect(reachLatchRefusedOwner(s.before)).toBeNull();
     const out = compileSchemataForFile(PREAMBLE, root, [s]);
-    expect(out).not.toContain(REACH_LATCH);
-    expect(out).not.toContain("MutationSelector.Reached(");
+    expect(out.split(`    procedure A() var ${REACH_LATCH}: Boolean;`).length - 1).toBe(2);
+    expect(out.split("MutationSelector.Reached(").length - 1).toBe(1);
     expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
@@ -2906,7 +2907,7 @@ describe("R-303 run 002: a directive around a member's var section never carries
   });
 });
 
-/** R309: split-header procedures whose #if arms each hold their own header and var section. Hand-written. */
+/** R309, R316: split-header procedures whose #if arms each hold their own header and var section. Hand-written. */
 const PREAMBLE_BODY = `    begin
         Glob := X + 1;
         Glob := Glob + 2;
@@ -3002,6 +3003,22 @@ ${PREAMBLE_BODY}`,
 ${PREAMBLE_BODY}`,
   },
   {
+    name: "P11 a named return value, and a ; after one arm's header (R316)",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer) R: Integer;
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer) R: Integer
+    // a comment after the header
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
     name: "P10 arms that rename the procedure",
     src: `codeunit 50100 "Repro P"
 {
@@ -3018,7 +3035,7 @@ ${PREAMBLE_BODY}`,
   },
 ];
 
-describe("R309: a split-header procedure whose arms each have their own var section is refused by name", () => {
+describe("R316: a split-header procedure whose arms each have their own var section takes one reach latch per arm", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -3041,19 +3058,95 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     ...PREAMBLE_CASES,
     { name: "P6 P1 saved with CRLF", src: first.src.replace(/\n/g, "\r\n") },
   ];
+  const lf = (t: string): string => t.replace(/\r\n/g, "\n");
   for (const c of cases) {
-    it(`${c.name}: a preamble owns every site, all unplaced, no latch, no marker, no line moved`, () => {
+    it(`${c.name}: one latch per arm on its header line, every arm's var blanked, all statement, no line moved`, () => {
       const { specs, grains, out } = instrumentAll(c.src);
       expect(specs).toHaveLength(2);
-      for (const s of specs)
-        expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+      for (const s of specs) expect(reachLatchRefusedOwner(s.before)).toBeNull();
+      expect(grains).toEqual(["statement", "statement"]);
+      const text = lf(out);
+      const headers = text.split("\n").filter((l) => l.startsWith("    procedure "));
+      const arms = lf(c.src)
+        .split("\n")
+        .filter((l) => l.startsWith("    procedure ")).length;
+      expect(headers).toHaveLength(arms);
+      for (const h of headers) expect(h.endsWith(` var ${REACH_LATCH}: Boolean;`)).toBe(true);
+      expect(text.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(arms);
+      // Every arm's own `var` keyword is blanked: no line between the first #if and begin is `var`.
+      const region = text.slice(text.indexOf("#if"), text.indexOf("    begin"));
+      expect(region.split("\n").filter((l) => l.trim() === "var")).toEqual([]);
+      expect(text.split("MutationSelector.Reached(").length - 1).toBe(2);
+      expect(text.split(SELECTOR_DECL).length - 1).toBe(1);
+      expect(directiveLinesClean(out)).toBe(true);
+      expect(linesWithoutInstrumentation(text)).toBe(lf(c.src).split("\n").length);
+    });
+  }
+
+  // Task 1 review minor: a preamble is procedure-like since R316, so `latchNameFor` skips it as
+  // ANOTHER member: a local it declares is not in a different procedure's scope and forces no
+  // suffix there. Its own arms still see it, so the preamble's latch is suffixed.
+  it("latchNameFor: a preamble's locals are not in another procedure's scope, but are in its own", () => {
+    const src = `codeunit 50100 "Repro P"
+{
+    procedure Other(X: Integer): Integer
+    var
+        O: Integer;
+    begin
+        O := X + 9;
+        exit(O);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        ${REACH_LATCH}: Integer;
+#endif
+${PREAMBLE_BODY}`;
+    const { grains, out } = instrumentAll(src);
+    expect(grains).toEqual(["statement", "statement", "statement"]);
+    expect(out).toContain(`O: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(
+      out.split(`    procedure Pick(X: Integer): Integer var ${REACH_LATCH}2: Boolean;`).length - 1,
+    ).toBe(2);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+  });
+
+  // R316 review r1, I2: a parse error in ANY arm's header, even before the first arm's `)`, where
+  // R313's scan used to start, refuses the latch. tree-sitter-al keeps the preamble shape and one
+  // `)` per arm here, so the arm-header rule alone would admit it.
+  const P1_SRC = PREAMBLE_CASES.find((c) => c.name.startsWith("P1 "))?.src ?? "";
+  const MALFORMED_FIRST_ARM: { name: string; header: string }[] = [
+    {
+      name: "an ERROR inside the parameter list",
+      header: "procedure Pick(X: Integer; @@ Y: Integer): Integer",
+    },
+    { name: "an ERROR before the first arm's )", header: "procedure Pick(X: Integer;): Integer" },
+    {
+      name: "an ERROR right after the first arm's (",
+      header: "procedure Pick(X: Integer Y: Integer): Integer",
+    },
+  ];
+  for (const m of MALFORMED_FIRST_ARM) {
+    it(`P16 ${m.name}: refused by R313's predicate, all unplaced, no latch`, () => {
+      const src = P1_SRC.replace("procedure Pick(X: Integer): Integer", m.header);
+      expect(src).not.toBe(P1_SRC);
+      const { specs, grains, out } = instrumentAll(src);
+      expect(specs).toHaveLength(2);
+      for (const s of specs) {
+        const owner = reachLatchRefusedOwner(s.before);
+        expect(owner?.rawKind).toBe("preproc_split_procedure_preamble");
+        if (owner === null) throw new Error("unreachable");
+        expect(preambleArmHeaderEnds(owner)).not.toBeNull();
+        expect(varSectionUnparsed(owner)).toBe(true);
+      }
       expect(grains).toEqual(["unplaced", "unplaced"]);
       expect(out).not.toContain(REACH_LATCH);
       expect(out).not.toContain("MutationSelector.Reached(");
-      expect(out.split(SELECTOR_DECL).length - 1).toBe(1);
-      expect(directiveLinesClean(out)).toBe(true);
-      const lf = (t: string): string => t.replace(/\r\n/g, "\n");
-      expect(linesWithoutInstrumentation(lf(out))).toBe(lf(c.src).split("\n").length);
     });
   }
 
@@ -3120,7 +3213,7 @@ describe("R309: a split-header procedure whose arms each have their own var sect
       assignments.map((n) => `${n.text} -> ${reachLatchRefusedOwner(n)?.rawKind ?? "latch"}`),
     ).toEqual([
       "P := X + 3 -> latch",
-      "Glob := X + 1 -> preproc_split_procedure_preamble",
+      "Glob := X + 1 -> latch",
       "Glob := X + 4 -> latch",
       "S := X + 5 -> latch",
     ]);
@@ -3130,8 +3223,12 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
     expect(out).toContain(`    procedure Hoist(X: Integer): Integer var ${REACH_LATCH}: Boolean;`);
     expect(out).toContain(`S: Integer; ${REACH_LATCH}: Boolean;`);
-    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(3);
-    expect(out.split("MutationSelector.Reached(").length - 1).toBe(3);
+    // R316: the preamble's two arms each take the latch on their own header line.
+    expect(
+      out.split(`    procedure Pick(X: Integer): Integer var ${REACH_LATCH}: Boolean;`).length - 1,
+    ).toBe(2);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(5);
+    expect(out.split("MutationSelector.Reached(").length - 1).toBe(4);
     // R-297: the selector goes after a declaration-only #if block's #endif, on a line of its own.
     expect(out).toContain(
       `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR_DECL}\n`,

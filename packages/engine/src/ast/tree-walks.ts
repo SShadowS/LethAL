@@ -148,15 +148,19 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
 }
 
 /**
- * R301: a `procedure`, or a split-header procedure (`preproc_split_procedure`: one header per `#if`
- * arm, then ONE shared `var` section and body as direct children). The manifest, latch and
- * line-map walks own a split procedure through this. `findEnclosingProcedure` and the semantic
- * walks deliberately do NOT use it yet (R302). A `preproc_split_procedure_preamble` is not
- * procedure-like: each arm has its own `var` section, so one latch cannot serve every arm; the
- * writer refuses it by name (R309), and its missing name and span are R316.
+ * R301, R316: a `procedure`, or one of the two split-header procedure shapes. A
+ * `preproc_split_procedure` has one header per `#if` arm, then ONE shared `var` section and body
+ * as direct children. A `preproc_split_procedure_preamble` has one header AND one optional `var`
+ * section per arm, then one shared body; every arm's header and var section are direct children
+ * too. The manifest, latch and line-map walks own both shapes through this.
+ * `findEnclosingProcedure` and the semantic walks deliberately do NOT use it yet (R302).
  */
 export function isProcedureLike(n: ALSyntaxNode): boolean {
-  return n.kind === ALNodeKind.procedure || n.rawKind === "preproc_split_procedure";
+  return (
+    n.kind === ALNodeKind.procedure ||
+    n.rawKind === "preproc_split_procedure" ||
+    n.rawKind === "preproc_split_procedure_preamble"
+  );
 }
 
 /**
