@@ -2240,6 +2240,37 @@ const HOIST_CASES: { name: string; src: string; header: string; parseErrors?: nu
 }
 `,
   },
+  {
+    // R-303 final review M5. A single #if arm (no #else) whose own var section ends in a NESTED
+    // #if of more declarations, one level deeper than R312's own INBODY shape: the shape
+    // `splitVarHoistAnchor`/`varSectionUnparsed` admit from the INPUT parse (0 ERROR nodes there,
+    // same as S3's nested #if above), so it gets a latch, not a refusal. The EMITTED text's
+    // re-parse hits the same tree-sitter-al gap S3 does, hence `parseErrors` below; alc is the
+    // authority there, and alc-proved this exact shape under every subset of A and B
+    // (`fr-nested-arm`, local, no BC container), plus a local al-runner run under every subset:
+    // both PASS, `reachGrain=statement` on all 4 mutants in every subset, 0 errors.
+    name: "S12 a nested #if inside the arm's own var section, no #else",
+    parseErrors: NESTED_IF_IN_VAR_ERRORS,
+    header: "    procedure Pick(X: Integer): Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Pick(X: Integer): Integer
+#if A
+    var
+        K: Integer;
+#if B
+        M: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
 ];
 
 describe("R303: a member whose var section is split by #if gets one unconditional latch", () => {
