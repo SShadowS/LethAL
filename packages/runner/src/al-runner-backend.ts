@@ -253,6 +253,10 @@ export interface AlRunnerConfig {
    * The SAME list must reach LethAL's own `alc` step (`ArtifactCompilerConfig.preprocessorSymbols`).
    * Fixing only this half would leave the instrumented target compiled from the other branch, which
    * is the correction R101(c)'s row needed: the gap is in LethAL's own compile FIRST.
+   *
+   * Both transports send them. The one-shot argv carries them per invocation; under serverMode
+   * they are the daemon's start-time flags, because al-runner's server reads symbols nowhere else
+   * (R319, measured on 2.11.0). Before R319 the server leg silently compiled the no-symbol build.
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
@@ -343,7 +347,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     // EXECUTED and it is per COMPILE, and a warm run after an AL edit is 0.4 s against a cold
     // invocation's 12.5 s.
     if (cfg.serverMode === true) {
-      this.server = new AlRunnerServer(cfg.alRunnerPath, serverSpawn ?? defaultServerSpawn);
+      this.server = new AlRunnerServer(
+        cfg.alRunnerPath,
+        serverSpawn ?? defaultServerSpawn,
+        cfg.preprocessorSymbols ?? [],
+      );
     }
   }
 
