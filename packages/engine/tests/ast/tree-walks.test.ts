@@ -468,4 +468,13 @@ describe("R-297 Task 6: split-directive single-statement slots", () => {
     );
     expectSlot(src, "preproc_split_if_statement", "L := 5");
   });
+
+  it("preproc_split_if_else_statement: each arm's then-branch and the shared else-branch", () => {
+    const src = proc(
+      "#if not CLEAN27\n        if X > 1 then\n            L := 2\n        else\n#else\n        if X < 3 then\n            L := 4\n        else\n#endif\n            L := 5;",
+    );
+    expectSlot(src, "preproc_split_if_else_statement", "L := 2");
+    expectSlot(src, "preproc_split_if_else_statement", "L := 4");
+    expectSlot(src, "preproc_split_if_else_statement", "L := 5");
+  });
 });
