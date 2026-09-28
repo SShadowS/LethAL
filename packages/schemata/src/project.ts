@@ -699,29 +699,39 @@ export async function writeManifestJson(
       off += bytesWritten;
     }
   };
+  let written = false;
   let ok = false;
   try {
-    await writeAll(
-      `{\n  "selectorIds": ${nest(manifest.selectorIds, "  ")},\n  "artifactId": ${JSON.stringify(manifest.artifactId)},\n  "mutants": `,
-    );
-    if (manifest.mutants.length === 0) {
-      await writeAll("[]");
-    } else {
-      await writeAll("[\n");
-      let chunk = "";
-      for (let i = 0; i < manifest.mutants.length; i++) {
-        chunk += `${i === 0 ? "" : ",\n"}    ${nest(manifest.mutants[i], "    ")}`;
-        if (chunk.length > 1 << 20) {
-          await writeAll(chunk);
-          chunk = "";
+    try {
+      await writeAll(
+        `{\n  "selectorIds": ${nest(manifest.selectorIds, "  ")},\n  "artifactId": ${JSON.stringify(manifest.artifactId)},\n  "mutants": `,
+      );
+      if (manifest.mutants.length === 0) {
+        await writeAll("[]");
+      } else {
+        await writeAll("[\n");
+        let chunk = "";
+        for (let i = 0; i < manifest.mutants.length; i++) {
+          chunk += `${i === 0 ? "" : ",\n"}    ${nest(manifest.mutants[i], "    ")}`;
+          if (chunk.length > 1 << 20) {
+            await writeAll(chunk);
+            chunk = "";
+          }
         }
+        await writeAll(`${chunk}\n  ]`);
       }
-      await writeAll(`${chunk}\n  ]`);
+      await writeAll("\n}\n");
+      written = true;
+    } finally {
+      // After a whole write, a failing close is the failure. After a failed write, the write's
+      // own error wins and the close error is dropped.
+      await fh.close().catch((e: unknown) => {
+        if (written) throw e;
+      });
     }
-    await writeAll("\n}\n");
     ok = true;
   } finally {
-    await fh.close();
+    // Any failure above, close included, removes the .partial before the error propagates.
     if (!ok) await rm(partial, { force: true });
   }
   try {

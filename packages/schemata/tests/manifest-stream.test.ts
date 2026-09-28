@@ -21,7 +21,7 @@ const cases: Record<string, unknown[]> = {
     {
       mutantId: 1,
       file: "a.al",
-      text: 'x "q"  \n é',
+      text: 'x "q" \\ \n é',
       nested: { a: [1, 2], b: null },
       skip: undefined,
     },
@@ -136,4 +136,40 @@ it("the manifest name appears only by renaming a whole file onto it", async () =
   await writeManifestJson(target, m, { open, rename: spyRename });
   expect(seen.length).toBe(1);
   expect(await readdir(d)).toEqual(["m.json"]);
+});
+
+// A close that throws must still remove the .partial, and must not mask a write's own error.
+const closeFailOpen = (async (...args: Parameters<typeof open>) => {
+  const fh = await open(...args);
+  return Object.assign(Object.create(fh), {
+    write: fh.write.bind(fh),
+    close: async () => {
+      await fh.close();
+      throw new Error("close refused");
+    },
+  });
+}) as typeof open;
+
+it("a failing close after a whole write rethrows it and leaves nothing", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
+  dirs.push(d);
+  const m = { selectorIds, artifactId: "0".repeat(32), mutants: cases.one ?? [] } as never;
+  await expect(
+    writeManifestJson(join(d, "m.json"), m, { open: closeFailOpen, rename }),
+  ).rejects.toThrow("close refused");
+  expect(await readdir(d)).toEqual([]);
+});
+
+it("a failing close after a failed write keeps the write's error and leaves nothing", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
+  dirs.push(d);
+  const m = {
+    selectorIds,
+    artifactId: "0".repeat(32),
+    mutants: [{ mutantId: 1, bad: 1n }],
+  } as never;
+  await expect(
+    writeManifestJson(join(d, "m.json"), m, { open: closeFailOpen, rename }),
+  ).rejects.toThrow(/BigInt/);
+  expect(await readdir(d)).toEqual([]);
 });
