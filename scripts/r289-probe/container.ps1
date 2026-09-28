@@ -22,6 +22,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $env:DOCKER_CONTEXT = 'desktop-windows'
 
+# `pwsh -File ... -Parts sql,service,stats` passes ONE string, not an array, so split on commas here.
+# Without this no part matched and the collector wrote only its header line.
+$known = @('sql', 'service', 'stats', 'sessions')
+$Parts = @($Parts | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$unknown = @($Parts | Where-Object { $_ -notin $known })
+if ($Parts.Count -eq 0 -or $unknown.Count -gt 0) { throw "refusing: -Parts must be some of $($known -join ','), got '$($Parts -join ',')'" }
+
 $cfg = Get-Content $Config -Raw | ConvertFrom-Json
 $server = $cfg.bcdev.server
 if ([string]::IsNullOrEmpty($server)) { throw "${Config}: bcdev.server is missing" }
