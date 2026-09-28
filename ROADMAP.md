@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**79 of 298 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 300 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -118,6 +118,8 @@ that ordering is the priority.
 - **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · open, filed 2026-09-28
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open, filed 2026-09-28
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
+- **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · open, filed 2026-09-28
+- **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · open, filed 2026-09-28
 
 ## Product gaps a real project hits
 
