@@ -3,6 +3,7 @@ import {
   ALNodeKind,
   declarationMembers,
   findFirst,
+  isObjectContainer,
   isStatementPosition,
   printWithRewrites,
 } from "@lethal/engine";
@@ -132,8 +133,7 @@ function injectReachLatches(
  * costs nothing but a suffix.
  */
 function latchNameFor(owner: ALSyntaxNode): string {
-  let object = owner;
-  while (object.parent !== null && object.parent.rawKind !== "source_file") object = object.parent;
+  const object = enclosingObjectDeclaration(owner) ?? owner;
   const used = new Set<string>();
   const walk = (n: ALSyntaxNode): void => {
     // Span, not identity: the engine's wrapper nodes are created per traversal.
@@ -452,9 +452,11 @@ function injectSelectorVarIntoObject(
 
 /**
  * Nearest ancestor AL object declaration containing `node` (`codeunit_declaration`,
- * `table_declaration`, `page_declaration`, ...) — the ancestor whose OWN parent is the
- * `source_file` root. AL object declarations are always direct top-level children of the file
- * (never nested inside another declaration), so this is exact regardless of which grammar kind
+ * `table_declaration`, `page_declaration`, ...) — the ancestor whose OWN parent is an object
+ * container (`isObjectContainer`): the `source_file` root, or, for a `#if`-wrapped object, the
+ * `preproc_conditional_object` holding it (R298; each arm's declaration is its own object, so a
+ * two-arm wrapper gets one selector var per arm). AL object declarations are never nested inside
+ * another declaration, so this is exact regardless of which grammar kind
  * the object is, unlike matching on a `_declaration`-suffixed rawKind: a TABLE's field-level
  * trigger sits inside `field_declaration` (itself `_declaration`-suffixed, several levels below
  * the table), so a "first `_declaration` ancestor" walk stops there instead of at the table —
@@ -469,7 +471,7 @@ function injectSelectorVarIntoObject(
 function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
-    if (current.parent !== null && current.parent.kind === ALNodeKind.source_file) {
+    if (current.parent !== null && isObjectContainer(current.parent)) {
       return current;
     }
     current = current.parent;

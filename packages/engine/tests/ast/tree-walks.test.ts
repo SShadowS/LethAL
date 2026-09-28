@@ -8,8 +8,10 @@ import {
   findFirst,
   gapBlockOf,
   initParser,
+  isObjectContainer,
   isStatementPosition,
   isStatementSlot,
+  objectDeclarationsOf,
   parseAL,
   visit,
   wrapRoot,
@@ -253,5 +255,77 @@ describe("gapBlockOf (C02-09)", () => {
     const got = gapBlockOf(nodeAt(root, "F"));
     expect(got.parent).toBeNull();
     expect(span(got)).toEqual(span(root));
+  });
+});
+
+describe("R298: objectDeclarationsOf flattens #if-wrapped objects", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const body = `{
+    procedure P()
+    begin
+        Message('x');
+    end;
+}
+`;
+
+  it("b-single: one codeunit_declaration under the wrapper", () => {
+    const root = wrapRoot(
+      parseAL(`#if not CLEAN27
+codeunit 50101 "Repro B"
+${body}#endif
+`),
+    );
+    const decls = objectDeclarationsOf(root);
+    expect(decls.map((d) => d.rawKind)).toEqual(["codeunit_declaration"]);
+    const [wrapper] = root.namedChildren;
+    expect(wrapper?.rawKind).toBe("preproc_conditional_object");
+    expect(decls[0]?.parent?.rawKind).toBe("preproc_conditional_object");
+    const parent = decls[0]?.parent;
+    expect(parent !== null && parent !== undefined && isObjectContainer(parent)).toBe(true);
+    expect(isObjectContainer(root)).toBe(true);
+    expect(isObjectContainer(decls[0] ?? root)).toBe(false);
+  });
+
+  it("b-two-arm: both arms' declarations, in source order", () => {
+    const src = `#if CLEAN27
+codeunit 50103 "Repro B2"
+${body.replace("P()", "AIf()")}#else
+codeunit 50103 "Repro B2"
+${body.replace("P()", "AElse()")}#endif
+`;
+    const decls = objectDeclarationsOf(wrapRoot(parseAL(src)));
+    expect(decls.map((d) => d.rawKind)).toEqual(["codeunit_declaration", "codeunit_declaration"]);
+    const [first, second] = decls;
+    expect(first?.text).toContain("AIf");
+    expect(second?.text).toContain("AElse");
+    expect((first?.startIndex ?? 0) < (second?.startIndex ?? 0)).toBe(true);
+  });
+
+  it("nested wrapper (BaseApp-like, namespace inside): the inner declaration", () => {
+    const src = `#if not CLEAN26
+#if not CLEAN27
+namespace X.Y;
+codeunit 50110 "Nested"
+${body}#endif
+#endif
+`;
+    const decls = objectDeclarationsOf(wrapRoot(parseAL(src)));
+    expect(decls.map((d) => d.rawKind)).toEqual(["namespace_declaration", "codeunit_declaration"]);
+  });
+
+  it("a bare file: the source_file's own named children", () => {
+    const src = `codeunit 50104 Plain
+${body}#if not CLEAN27
+codeunit 50105 Wrapped
+${body}#endif
+codeunit 50106 After
+${body}`;
+    const ids = objectDeclarationsOf(wrapRoot(parseAL(src))).map(
+      (d) => d.childForFieldName("object_id")?.text,
+    );
+    expect(ids).toEqual(["50104", "50105", "50106"]);
   });
 });

@@ -1795,3 +1795,82 @@ describe("R297: the selector var is inserted after the leading declarations", ()
     selectorAt(out);
   });
 });
+
+describe("R298: #if-wrapped objects are instrumented (one object-container rule)", () => {
+  const SELECTOR = 'MutationSelector: Codeunit "Mutation Selector";';
+  const body = (name: string): string => `{
+    procedure ${name}()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+}
+`;
+  const B_SINGLE = `#if not CLEAN27\ncodeunit 50101 "Repro B"\n${body("P")}#endif\n`;
+  const B_TWO_ARM = `#if CLEAN27\ncodeunit 50103 "Repro B2"\n${body("AIf")}#else\ncodeunit 50103 "Repro B2"\n${body("AElse")}#endif\n`;
+
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  /** Every node of ONE walk, so specs share a traversal the way the real pipeline's do. */
+  function nodesOf(root: ALSyntaxNode): ALSyntaxNode[] {
+    const out: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      out.push(n);
+    });
+    return out;
+  }
+
+  const count = (text: string, needle: string): number => text.split(needle).length - 1;
+
+  it("b-single: one selector line, inside the codeunit's braces", () => {
+    const root = wrapRoot(parseAL(B_SINGLE));
+    const nodes = nodesOf(root);
+    const assign = nodes.find((n) => n.kind === ALNodeKind.assignment_statement);
+    if (assign === undefined) throw new Error("fixture drift: no assignment");
+    const out = compileSchemataForFile(B_SINGLE, root, [spec(assign, "L := 2", "lethal.op")]);
+    expect(count(out, SELECTOR)).toBe(1);
+    const at = out.indexOf(SELECTOR);
+    expect(at).toBeGreaterThan(out.indexOf("{"));
+    expect(at).toBeLessThan(out.indexOf("procedure P"));
+    expect(at).toBeLessThan(out.indexOf("#endif"));
+  });
+
+  it("b-two-arm: specs in both arms, one walk, one selector per arm", () => {
+    const root = wrapRoot(parseAL(B_TWO_ARM));
+    const assigns = nodesOf(root).filter((n) => n.kind === ALNodeKind.assignment_statement);
+    expect(assigns).toHaveLength(2);
+    const out = compileSchemataForFile(
+      B_TWO_ARM,
+      root,
+      assigns.map((a) => spec(a, "L := 2", "lethal.op")),
+    );
+    expect(count(out, SELECTOR)).toBe(2);
+    const elseAt = out.indexOf("#else");
+    const first = out.indexOf(SELECTOR);
+    const second = out.indexOf(SELECTOR, first + 1);
+    expect(first).toBeGreaterThan(out.indexOf("{"));
+    expect(first).toBeLessThan(out.indexOf("procedure AIf"));
+    expect(second).toBeGreaterThan(elseAt);
+    expect(second).toBeLessThan(out.indexOf("procedure AElse"));
+  });
+
+  it("b-single: a statement-grain spec emits the reach latch", () => {
+    const root = wrapRoot(parseAL(B_SINGLE));
+    const nodes = nodesOf(root);
+    const block = nodes.find(
+      (n) => n.kind === ALNodeKind.block && n.parent?.kind === ALNodeKind.procedure,
+    );
+    const assign = nodes.find((n) => n.kind === ALNodeKind.assignment_statement);
+    if (block === undefined || assign === undefined) throw new Error("fixture drift");
+    const out = compileSchemataForFile(B_SINGLE, root, [
+      spec(block, "begin end", "lethal.empty-block"),
+      spec(assign, "", "lethal.remove-assignment"),
+    ]);
+    expect(out).toContain(`${REACH_LATCH}: Boolean;`);
+    expect(count(out, SELECTOR)).toBe(1);
+  });
+});

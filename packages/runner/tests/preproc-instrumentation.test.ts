@@ -6,6 +6,7 @@ import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { identityKeyOf, serializeKey } from "../src/selection";
 
 // R297 and its successors: preprocessor shapes through the real operator set and the real writer.
 // Every repro is hand-written (no corpus text).
@@ -1308,4 +1309,83 @@ describe("R297: the selector var through the real pipeline", () => {
       expect(() => assertSelectorPlacement(HEAD_WRONG[name] ?? "")).toThrow();
     });
   }
+});
+
+/** R298 repros (R297 Task 0's `b-*` directories), hand-written. */
+const B_BODY = (name: string): string => `{
+    procedure ${name}()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+}
+`;
+const B_REPRO = {
+  "b-single": `#if not CLEAN27\ncodeunit 50101 "Repro B"\n${B_BODY("P")}#endif\n`,
+  "b-two-arm": `#if CLEAN27\ncodeunit 50103 "Repro B2"\n${B_BODY("AIf")}#else\ncodeunit 50103 "Repro B2"\n${B_BODY("AElse")}#endif\n`,
+  "b-mixed-file": `codeunit 50104 Plain\n${B_BODY("P")}#if not CLEAN27\ncodeunit 50105 Wrapped\n${B_BODY("W")}#endif\ncodeunit 50106 After\n${B_BODY("Q")}`,
+};
+
+describe("R298: #if-wrapped objects through the real pipeline", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("b-single: entries carry objectType codeunit and objectId 50101", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": B_REPRO["b-single"] });
+    expect(manifest.mutants.length).toBeGreaterThan(0);
+    for (const m of manifest.mutants) {
+      expect(m.objectType).toBe("codeunit");
+      expect(m.codeunitId).toBe(50101);
+      expect(m.procedureName).toBe("P");
+    }
+  });
+
+  test("b-two-arm: each arm's entries name that arm's procedure, never the other's", async () => {
+    const src = B_REPRO["b-two-arm"];
+    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
+    const elseLine = src.split("\n").findIndex((l) => l.startsWith("#else")) + 1;
+    expect(elseLine).toBeGreaterThan(1);
+    const before = manifest.mutants.filter((m) => m.startLine < elseLine);
+    const after = manifest.mutants.filter((m) => m.startLine > elseLine);
+    expect(before.length).toBeGreaterThan(0);
+    expect(after.length).toBeGreaterThan(0);
+    expect(before.length + after.length).toBe(manifest.mutants.length);
+    for (const m of manifest.mutants) {
+      expect(m.objectType).toBe("codeunit");
+      expect(m.codeunitId).toBe(50103);
+    }
+    for (const m of before) {
+      expect(m.procedureName).toBe("AIf");
+      expect(m.procedureName).not.toBe("AElse");
+    }
+    for (const m of after) {
+      expect(m.procedureName).toBe("AElse");
+      expect(m.procedureName).not.toBe("AIf");
+    }
+    const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
+    expect(new Set(keys).size).toBe(keys.length);
+    expect((emitted.get("Repro.Codeunit.al") ?? "").split(SELECTOR).length - 1).toBe(2);
+  });
+
+  test("b-mixed-file: entries carry objectId 50104, 50105 and 50106 by position", async () => {
+    const src = B_REPRO["b-mixed-file"];
+    const { manifest } = await instrument({ "Repro.Codeunit.al": src });
+    const lines = src.split("\n");
+    const lineOf = (needle: string): number => lines.findIndex((l) => l.startsWith(needle)) + 1;
+    const wrapped = lineOf("codeunit 50105");
+    const after = lineOf("codeunit 50106");
+    const expected = (line: number): number =>
+      line >= after ? 50106 : line >= wrapped ? 50105 : 50104;
+    const byName: Record<number, string> = { 50104: "P", 50105: "W", 50106: "Q" };
+    expect(new Set(manifest.mutants.map((m) => m.codeunitId))).toEqual(
+      new Set([50104, 50105, 50106]),
+    );
+    for (const m of manifest.mutants) {
+      expect(m.codeunitId).toBe(expected(m.startLine));
+      expect(m.procedureName).toBe(byName[m.codeunitId] ?? "");
+    }
+  });
 });

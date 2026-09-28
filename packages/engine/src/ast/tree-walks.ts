@@ -191,3 +191,28 @@ export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxN
   const inner = objectNode.namedChildren.find((c) => c.kind === ALNodeKind.declaration_body);
   return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
 }
+
+/**
+ * R298: the nodes whose children are AL object declarations. A `#if`-wrapped object sits under a
+ * `preproc_conditional_object` (one declaration per arm), never directly under `source_file`, so
+ * a walk that stops at `source_file`'s children misses it or names the wrapper as the object.
+ */
+export function isObjectContainer(n: ALSyntaxNode): boolean {
+  return n.kind === ALNodeKind.source_file || n.rawKind === "preproc_conditional_object";
+}
+
+/**
+ * R298: the named children of `root` with every `preproc_conditional_object` flattened
+ * recursively and the `preproc_*` markers (`#if`, `#else`, `#endif`, ...) dropped, in source order.
+ * Anything else a container holds (a `namespace_declaration`, a `using`, a comment) is returned as
+ * is; callers pick the object kinds they care about. A two-arm wrapper yields BOTH arms'
+ * declarations, which may be the SAME object id: a caller that counts objects must say so itself.
+ */
+export function objectDeclarationsOf(root: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const c of root.namedChildren) {
+    if (c.rawKind === "preproc_conditional_object") out.push(...objectDeclarationsOf(c));
+    else if (!c.rawKind.startsWith("preproc_")) out.push(c);
+  }
+  return out;
+}

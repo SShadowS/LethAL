@@ -18,6 +18,8 @@ export {
   isStatementSlot,
   gapBlockOf,
   declarationMembers,
+  isObjectContainer,
+  objectDeclarationsOf,
 } from "./ast/tree-walks";
 
 // Semantic
