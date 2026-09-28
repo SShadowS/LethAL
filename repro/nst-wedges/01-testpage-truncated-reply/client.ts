@@ -9,7 +9,7 @@
 // The arm call is read from a raw TCP socket (not fetch), so the output can say whether the chunked
 // terminator ("0\r\n\r\n") arrived and exactly how many body bytes did.
 import net from "node:net";
-import { AUTH, BC_URL, QUERY, arg, healthy, log, probeHealth } from "../common";
+import { arg, healthy, log, probeHealth, settingsFromEnv } from "../common";
 
 const SERVICE = "NstRepro01";
 const arm = arg("arm", "testpage");
@@ -20,7 +20,8 @@ const timeoutMs = Number(arg("timeout-ms", "120000"));
 const padTo = Number(arg("pad-to", "6600"));
 const stopOnWedge = arg("stop-on-wedge", "1") === "1";
 
-const url = new URL(BC_URL);
+const settings = settingsFromEnv();
+const url = new URL(settings.baseUrl);
 const host = url.hostname;
 const port = Number(url.port || "80");
 
@@ -52,7 +53,7 @@ class Conn {
     const head = [
       `POST ${path} HTTP/1.1`,
       `Host: ${url.host}`,
-      `Authorization: ${AUTH}`,
+      `Authorization: ${settings.auth}`,
       "Accept: application/json",
       "Content-Type: application/json",
       `Content-Length: ${Buffer.byteLength(body)}`,
@@ -163,7 +164,7 @@ class Conn {
   }
 }
 
-const path = `${url.pathname.replace(/\/$/, "")}/ODataV4/${SERVICE}_RunTest${QUERY}`;
+const path = `${url.pathname.replace(/\/$/, "")}/ODataV4/${SERVICE}_RunTest${settings.query}`;
 const testMethod = arm === "testpage" ? "OpenCardPage" : "Passes";
 let lost = 0;
 
@@ -181,7 +182,7 @@ for (let s = 1; s <= sessions; s++) {
   const ok = r.ending === "complete" && r.status === 200;
   if (!ok) lost++;
   log({ session: s, arm, testMethod, ok, ...r });
-  const health = await probeHealth(SERVICE);
+  const health = await probeHealth(settings, SERVICE);
   log({ session: s, check: "health", healthy: healthy(health), ...health });
   if (!healthy(health)) {
     log({

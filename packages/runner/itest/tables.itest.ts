@@ -264,7 +264,7 @@ const EXPECTED = {
   // docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md (section 5): 407 sites,
   // 301 / 68 / 18, groupedCalls 369 + 13. The owner updates them, and re-records
   // tables.baseline.json, only after a live run matches that file per mutant.
-  totalMutantSites: 397,
+  totalMutantSites: 407,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -370,7 +370,7 @@ const EXPECTED = {
   // kill. That is deliberate rather than lucky -- every covering test drives BOTH sides of its
   // blank check, so a toggled literal cannot pass by accident on whichever input a test happened to
   // pick. A survivor here would mean a test that does not actually separate the two states.
-  killed: 299,
+  killed: 301,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -453,7 +453,7 @@ const EXPECTED = {
   // R159's `shift-integer` moves this from 60 to 63: the same three `Data Commit Ops` arms every
   // value-mutating operator survives, whose tests assert the row exists and that `Flagged` is set
   // and never read `Amount`.
-  survived: 63,
+  survived: 68,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -492,7 +492,7 @@ const EXPECTED = {
   // that would cover it was removed after wedging the fenced session twice.
   // R159's `remove-assignment` moves this from 12 to 15: three of its sites sit in procedures no
   // test calls.
-  noCoverage: 15,
+  noCoverage: 18,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
@@ -519,7 +519,7 @@ const EXPECTED = {
   // of nineteen kills and no survivors raises it. Fully DERIVED from the killed and survived counts
   // pre-committed before the run, not an independent claim -- though the pre-commitment should have
   // said so explicitly and did not, which cost a re-run.
-  mutationScore: 299 / (299 + 63),
+  mutationScore: 301 / (301 + 68),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -588,7 +588,7 @@ const EXPECTED = {
    * survived; the 15 no-coverage never reach it, and 299 + 63 + 15 = 377 deployed leaves no other
    * outcome to account for. A number, not a predicate, for the reason bcdev's 15 is one.
    */
-  groupedCalls: 362 + 13,
+  groupedCalls: 369 + 13,
   /**
    * R206: kills measured at group position > 1, each confirmed by replaying its call's prefix
    * unmutated (one extra `RunMutantMany` each, hence the `+ 13` above). MEASURED from run 334's

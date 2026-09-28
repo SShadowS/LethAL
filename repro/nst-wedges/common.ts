@@ -1,24 +1,61 @@
 // Shared settings and health probes for the four repro clients. No LethAL imports.
 //
-// Settings come from the environment so no credential is ever written into this folder:
-//   BC_URL      base URL of the server tier, default http://Cronus28:7048/BC
-//   BC_USER     user name (NavUserPassword / basic auth)
-//   BC_PASSWORD password
-//   BC_COMPANY  default "CRONUS Danmark A/S"
-//   BC_TENANT   default "default"
+// Nothing is read at import time and there is no default server: every request is built from a
+// `Settings` the caller made, so a client cannot quietly probe a server it did not name (R289).
+// The clients build theirs with `settingsFromEnv()`:
+//   --url or BC_URL  base URL of the server tier, e.g. http://<container>:7048/BC (required)
+//   BC_USER          user name (NavUserPassword / basic auth)
+//   BC_PASSWORD      password
+//   BC_COMPANY       default "CRONUS Danmark A/S"
+//   BC_TENANT        default "default"
 
-export const BC_URL = (process.env.BC_URL ?? "http://Cronus28:7048/BC").replace(/\/$/, "");
-const user = process.env.BC_USER ?? "";
-const pass = process.env.BC_PASSWORD ?? "";
-if (user === "" || pass === "") throw new Error("set BC_USER and BC_PASSWORD");
-export const AUTH = `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
-const company = process.env.BC_COMPANY ?? "CRONUS Danmark A/S";
-const tenant = process.env.BC_TENANT ?? "default";
-export const QUERY = `?company=${encodeURIComponent(company)}&tenant=${encodeURIComponent(tenant)}`;
+export interface Settings {
+  /** Server tier base URL, no trailing slash, e.g. http://Cronus284:7048/BC */
+  baseUrl: string;
+  /** The `authorization` header value. */
+  auth: string;
+  /** `?company=..&tenant=..` */
+  query: string;
+}
+
+export function settingsFor(opts: {
+  url: string;
+  user: string;
+  password: string;
+  company?: string;
+  tenant?: string;
+}): Settings {
+  if (opts.url === "") throw new Error("settingsFor: url is empty");
+  if (opts.user === "" || opts.password === "")
+    throw new Error("settingsFor: user and password are required");
+  const company = opts.company ?? "CRONUS Danmark A/S";
+  const tenant = opts.tenant ?? "default";
+  return {
+    baseUrl: opts.url.replace(/\/+$/, ""),
+    auth: `Basic ${Buffer.from(`${opts.user}:${opts.password}`).toString("base64")}`,
+    query: `?company=${encodeURIComponent(company)}&tenant=${encodeURIComponent(tenant)}`,
+  };
+}
+
+/** The repro clients' settings: `--url` or `BC_URL`, and fail when neither is set. */
+export function settingsFromEnv(): Settings {
+  const url = arg("url", process.env.BC_URL ?? "");
+  if (url === "") throw new Error("set --url or BC_URL (no default server)");
+  const user = process.env.BC_USER ?? "";
+  const password = process.env.BC_PASSWORD ?? "";
+  if (user === "" || password === "") throw new Error("set BC_USER and BC_PASSWORD");
+  return settingsFor({
+    url,
+    user,
+    password,
+    ...(process.env.BC_COMPANY !== undefined ? { company: process.env.BC_COMPANY } : {}),
+    ...(process.env.BC_TENANT !== undefined ? { tenant: process.env.BC_TENANT } : {}),
+  });
+}
 
 /** Full URL of an unbound OData V4 action: <base>/ODataV4/<Service>_<Action>?company=..&tenant=.. */
-export const actionUrl = (service: string, action: string) =>
-  `${BC_URL}/ODataV4/${service}_${action}${QUERY}`;
+export const actionUrl = (s: Settings, service: string, action: string) =>
+  `${s.baseUrl}/ODataV4/${service}_${action}${s.query}`;
 
 export interface CallOutcome {
   status?: number;
@@ -31,6 +68,7 @@ export interface CallOutcome {
 
 /** POST an action with fetch. `signal` lets a caller abort it; `timeoutMs` bounds it otherwise. */
 export async function call(
+  s: Settings,
   service: string,
   action: string,
   body: Record<string, unknown>,
@@ -41,10 +79,10 @@ export async function call(
   const out: CallOutcome = { ms: 0 };
   const signals = [AbortSignal.timeout(timeoutMs), ...(signal !== undefined ? [signal] : [])];
   try {
-    const res = await fetch(actionUrl(service, action), {
+    const res = await fetch(actionUrl(s, service, action), {
       method: "POST",
       headers: {
-        authorization: AUTH,
+        authorization: s.auth,
         "content-type": "application/json",
         accept: "application/json",
       },
@@ -70,13 +108,14 @@ export async function call(
 
 /** The wedge check: $metadata (touches no table) and the app's trivial Ping action, 30 s each. */
 export async function probeHealth(
+  s: Settings,
   service: string,
 ): Promise<{ metadata: CallOutcome; ping: CallOutcome }> {
   const t0 = performance.now();
   const metadata: CallOutcome = { ms: 0 };
   try {
-    const res = await fetch(`${BC_URL}/ODataV4/$metadata${QUERY}`, {
-      headers: { authorization: AUTH },
+    const res = await fetch(`${s.baseUrl}/ODataV4/$metadata${s.query}`, {
+      headers: { authorization: s.auth },
       signal: AbortSignal.timeout(30_000),
     });
     metadata.status = res.status;
@@ -85,7 +124,7 @@ export async function probeHealth(
     metadata.error = String(err);
   }
   metadata.ms = Math.round(performance.now() - t0);
-  const ping = await call(service, "Ping", {}, 30_000);
+  const ping = await call(s, service, "Ping", {}, 30_000);
   return { metadata, ping };
 }
 

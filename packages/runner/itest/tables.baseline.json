@@ -35,6 +35,13 @@
     "errorClass": null
   },
   {
+    "key": "051c2d2d4965dbabc37cbf53c4571c62132a907741d9d3a0258a84fb1c911499|Data Reach Ops|Classify|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "ReachTakesBranch",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "05bc581f9d2241861c8788259e809971033cff570b12b942c70fe20c8b282d0c|Data Filter Ops|CountBelowThreshold|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BoundaryShiftAdmitsTheThresholdRow",
@@ -179,6 +186,13 @@
     "verdict": "killed",
     "killingTest": "NotBlankFilterCountsOnlyTaggedRows",
     "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "1d97f1930103cbec3bb1424c376fad840826a97fdf078d696a5668d76fd5516e|Data Reach Ops|Touch|lethal.empty-block|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
     "errorClass": null
   },
   {
@@ -700,6 +714,13 @@
     "errorClass": null
   },
   {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Reach Ops|Classify|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "ReachTakesBranch",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Data Shadow|BumpViaCommit|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "ShadowedBuiltinsRun",
@@ -1022,6 +1043,13 @@
     "errorClass": null
   },
   {
+    "key": "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Data Reach Ops|Classify|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
     "key": "5c119300787451f4f575f2b4181b4f55f750e9ac53455018fd8c0cb7f35cec1b|Data Temporal Ops|StampFixedDate|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "StampFixedDateReturnsTheNonBlankDate",
@@ -1099,9 +1127,23 @@
     "errorClass": null
   },
   {
+    "key": "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Data Reach Ops|Touch|lethal.shift-integer|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "6427f3b7115d5b36f3415613eeb54125f67d8efe101847a821617cd28f57b887|Data Set Ops|BothOutsideRange|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "64dc570e60f5eed53add02008636e675428578c912817762f9e30854b2f6d7ac|Data Reach Ops|Classify|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1673,6 +1715,13 @@
     "errorClass": null
   },
   {
+    "key": "96a63130808135b948b1586ff3955d7a0691ff1d8a86e6c03212ba73831d4f29|Data Reach Ops|Touch|lethal.remove-assignment|1",
+    "verdict": "no-coverage",
+    "killingTest": null,
+    "coverageFiltered": true,
+    "errorClass": null
+  },
+  {
     "key": "96a7c9494093fe6d24be905288e9a47eb81e761e3aa075432ba841587be549ea|Data Set Ops|PlainMembership|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
@@ -1683,6 +1732,20 @@
     "key": "9791edda9ee5977f39cb58933fea5e43192757df272dbd3e149665eca45fa84d|Data Loader|SetLoadFields|lethal.empty-block|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "9791edda9ee5977f39cb58933fea5e43192757df272dbd3e149665eca45fa84d|Data Reach Ops|Classify|lethal.empty-block|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "983a8d755ea7f321c779e707b1379ba79c2511e4d67c390aee01916605b366bf|Data Reach Ops|Classify|lethal.void-method-call|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },
@@ -1851,6 +1914,13 @@
     "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Loader|SetLoadFields|lethal.remove-assignment|1",
     "verdict": "killed",
     "killingTest": "UserDefinedBuiltinsRun",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|Data Reach Ops|Classify|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },

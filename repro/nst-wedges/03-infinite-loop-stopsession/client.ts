@@ -9,9 +9,10 @@
 //   1. hold mode: the held StartLoop request ends with HTTP 408 naming the StopSession call.
 //   2. both modes: after the loop's own bound (--max-ms) has passed, LoopState.finished must still be
 //      false. true means the loop ran to its bound: the stop did not take.
-import { arg, call, healthy, log, probeHealth, sleep } from "../common";
+import { arg, call, healthy, log, probeHealth, settingsFromEnv, sleep } from "../common";
 
 const SERVICE = "NstRepro03";
+const settings = settingsFromEnv();
 const mode = arg("mode", "abort");
 if (mode !== "hold" && mode !== "abort") throw new Error("--mode must be hold or abort");
 const budgetMs = Number(arg("budget-ms", "20000"));
@@ -20,13 +21,13 @@ const runId = crypto.randomUUID();
 
 const t0 = performance.now();
 const abort = new AbortController();
-const held = call(SERVICE, "StartLoop", { runId, maxMs }, maxMs + 120_000, abort.signal);
+const held = call(settings, SERVICE, "StartLoop", { runId, maxMs }, maxMs + 120_000, abort.signal);
 
 // Wait until the looping session has recorded its id under this run's id.
 let sessionId = 0;
 while (sessionId === 0 && performance.now() - t0 < 30_000) {
   await sleep(500);
-  const s = await call(SERVICE, "LoopState", {}, 30_000);
+  const s = await call(settings, SERVICE, "LoopState", {}, 30_000);
   if (s.value === undefined) continue;
   try {
     const st = JSON.parse(s.value) as { runId?: string; sessionId?: number };
@@ -49,7 +50,7 @@ if (mode === "abort") {
   await sleep(2000);
 }
 
-const stop = await call(SERVICE, "StopLoop", { targetSessionId: sessionId }, 60_000);
+const stop = await call(settings, SERVICE, "StopLoop", { targetSessionId: sessionId }, 60_000);
 log({ stop });
 
 if (mode === "hold") {
@@ -69,13 +70,13 @@ if (waitMs > 0) {
   });
   await sleep(waitMs);
 }
-const final = await call(SERVICE, "LoopState", {}, 30_000);
+const final = await call(settings, SERVICE, "LoopState", {}, 30_000);
 log({
   finalState: final.value ?? final.error,
   sessionEnded: final.value?.includes('"finished":false'),
 });
 
-const health = await probeHealth(SERVICE);
+const health = await probeHealth(settings, SERVICE);
 log({ check: "health", healthy: healthy(health), ...health });
 abort.abort();
 process.exit(0);

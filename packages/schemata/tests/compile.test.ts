@@ -11,9 +11,20 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { canCarryMutationSelectorVar, compileSchemataForFile } from "../src/compile";
+import {
+  canCarryMutationSelectorVar,
+  compileSchemataForFile,
+  latchAnchorInVarSection,
+} from "../src/compile";
 import { buildComponents } from "../src/components";
-import { REACH_LATCH, REACH_MARKER, reachGrainOf } from "../src/dispatch";
+import {
+  REACH_LATCH,
+  REACH_MARKER,
+  reachGrainOf,
+  reachLatchRefusedOwner,
+  splitVarHoistAnchor,
+  varSectionUnparsed,
+} from "../src/dispatch";
 import { assignMutantIds } from "../src/ids";
 
 /** Builds a MutationSpec matching the shape the existing tests construct by hand. */
@@ -1760,13 +1771,14 @@ describe("R297: the selector var is inserted after the leading declarations", ()
     expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
-  it("a-preamble: a spec inside the preamble procedure still throws (no latch owner; filed)", () => {
+  it("a-preamble: a spec inside the preamble procedure is refused by name, not thrown (R309)", () => {
     const root = wrapRoot(parseAL(PREAMBLE));
-    expect(() =>
-      compileSchemataForFile(PREAMBLE, root, [
-        spec(assignment(root, "L := 1"), "L := 2", "lethal.op"),
-      ]),
-    ).toThrow("a reach marker sits outside any procedure or trigger body");
+    const s = spec(assignment(root, "L := 1"), "L := 2", "lethal.op");
+    expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+    const out = compileSchemataForFile(PREAMBLE, root, [s]);
+    expect(out).not.toContain(REACH_LATCH);
+    expect(out).not.toContain("MutationSelector.Reached(");
+    expect(selectorAt(out)).toBeLessThan(out.indexOf("#if"));
   });
 
   it("R251: specs for one object from two separate tree walks yield exactly one selector", () => {
@@ -2010,43 +2022,1151 @@ const R303_SRC = `codeunit 50100 "Repro D"
 }
 `;
 
-describe("R303: a member whose var section is split by #if gets no reach latch", () => {
+/** tree-sitter-al's ERROR count for one nested `#if` inside an ordinary var section's `#if`: a
+ *  grammar gap, filed upstream as SShadowS/tree-sitter-al #30. */
+const NESTED_IF_IN_VAR_ERRORS = 3;
+
+/** Re-parsed emitted text: declarations named `latch` directly in a var section, those nested
+ *  deeper (inside an #if), and how many split var blocks are left. */
+function latchShape(
+  out: string,
+  latch: string,
+): { direct: number; nested: number; blocks: number } {
+  const root = wrapRoot(parseAL(out));
+  let direct = 0;
+  let nested = 0;
+  let blocks = 0;
+  visit(root, (n) => {
+    if (n.rawKind === "preproc_conditional_var_block") blocks++;
+    if (n.rawKind !== "variable_declaration") return;
+    if (n.childForFieldName("name")?.text !== latch) return;
+    if (n.parent?.rawKind === "var_body") direct++;
+    else nested++;
+  });
+  return { direct, nested, blocks };
+}
+
+/**
+ * `parseErrors`: ERROR nodes tree-sitter-al gives the EMITTED text. Non-zero only where the
+ * grammar cannot parse the result at all, pinned by the grammar control below (a nested `#if`
+ * inside an ordinary var section, hand-written, gives the same count). alc is the authority there.
+ */
+const HOIST_CASES: { name: string; src: string; header: string; parseErrors?: number }[] = [
+  {
+    name: "S1 procedure with a return type, #if arm only",
+    header: "    procedure Pick(X: Integer): Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Pick(X: Integer): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S2 trigger, #if and #else arms",
+    header: "    trigger OnRun()",
+    src: `codeunit 50100 "Repro H"
+{
+    trigger OnRun()
+#if not CLEAN27
+    var
+        L: Integer;
+#else
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S3 header ending in ; and a // comment, nested #if in the arm",
+    parseErrors: NESTED_IF_IN_VAR_ERRORS,
+    header: "    procedure Pick(X: Integer);",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Pick(X: Integer); // header note
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S4 named return, empty #if arm, var only in #else",
+    // No object var section, so R-297 writes the selector's section before this member, which
+    // takes the member's indentation with it.
+    header: "local procedure Named(X: Integer) R: Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    local procedure Named(X: Integer) R: Integer
+#if CLEAN27
+#else
+    var
+        K: Integer;
+#endif
+    begin
+        R := X + 1;
+    end;
+}
+`,
+  },
+  {
+    name: "S5 #elif chain with an empty middle arm and an attribute",
+    header: "    procedure E(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure E(X: Integer)
+#if A
+    var K: Integer;
+#elif B
+#else
+    var
+        [NonDebuggable]
+        M: Text;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S8 a // comment on its own line between the header and #if",
+    header: "    procedure C(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure C(X: Integer)
+    // own-line note
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S9 an attribute before the member",
+    header: "    procedure Pick(X: Integer): Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    [Scope('OnPrem')]
+    procedure Pick(X: Integer): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S11 #elif chain where every arm declares",
+    header: "    procedure E(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure E(X: Integer)
+#if A
+    var K: Integer;
+#elif B
+    var N: Integer;
+#else
+    var
+        M: Text;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    name: "S10 parameters spanning lines: the latch goes on the header's LAST line",
+    header: "        Z: Text): Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Pick(X: Integer;
+        Y: Integer;
+        Z: Text): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#else
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    // R-303 final review M5. A single #if arm (no #else) whose own var section ends in a NESTED
+    // #if of more declarations, one level deeper than R312's own INBODY shape: the shape
+    // `splitVarHoistAnchor`/`varSectionUnparsed` admit from the INPUT parse (0 ERROR nodes there,
+    // same as S3's nested #if above), so it gets a latch, not a refusal. The EMITTED text's
+    // re-parse hits the same tree-sitter-al gap S3 does, hence `parseErrors` below; alc is the
+    // authority there, and alc-proved this exact shape under every subset of A and B
+    // (`fr-nested-arm`, local, no BC container), plus a local al-runner run under every subset:
+    // both PASS, `reachGrain=statement` on all 4 mutants in every subset, 0 errors.
+    name: "S12 a nested #if inside the arm's own var section, no #else",
+    parseErrors: NESTED_IF_IN_VAR_ERRORS,
+    header: "    procedure Pick(X: Integer): Integer",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Pick(X: Integer): Integer
+#if A
+    var
+        K: Integer;
+#if B
+        M: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    // alc and al-runner proved this as `s6-empty-var-arm` (scratch evidence, run 001).
+    name: "S6 an #if arm holding a bare var with no declarations",
+    header: "    procedure P(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure P(X: Integer)
+#if A
+    var
+#else
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    // R-303 run 002, `d8-split-then-pragma`: a `#pragma` between the split block and `begin`.
+    name: "D8 a #pragma after the split var block",
+    header: "    procedure Split(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Split(X: Integer)
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+#pragma warning disable AL0432
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+];
+
+describe("R303: a member whose var section is split by #if gets one unconditional latch", () => {
   beforeAll(async () => {
     await initParser();
   });
-  const at = (root: ALSyntaxNode, text: string): ALSyntaxNode => {
-    const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
-    if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+
+  const firstAssignment = (root: ALSyntaxNode): ALSyntaxNode => {
+    const a = findAll(root, ALNodeKind.assignment_statement)[0];
+    if (a === undefined) throw new Error("fixture drift: no assignment");
     return a;
   };
+  const instrument = (src: string) => {
+    const root = wrapRoot(parseAL(src));
+    const specs = [spec(firstAssignment(root), "Glob := 0", "lethal.op")];
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const grains = buildComponents(ided).flatMap((c) =>
+      c.members.map((m) => reachGrainOf(m, c.root)),
+    );
+    return { grains, out: compileSchemataForFile(src, root, specs, ided) };
+  };
 
-  it("trigger and procedure: no latch, no marker, grain unplaced; the plain member keeps its latch", () => {
+  const [s1] = HOIST_CASES;
+  if (s1 === undefined) throw new Error("fixture drift: no S1 case");
+  for (const c of [
+    ...HOIST_CASES,
+    { ...s1, name: "S1-crlf", src: s1.src.replace(/\n/g, "\r\n") },
+  ]) {
+    it(`${c.name}: statement grain, latch on the header line, every arm's var blanked, no line moved`, () => {
+      const { grains, out } = instrument(c.src);
+      expect(grains).toEqual(["statement"]);
+      expect(out).toContain(`${c.header} var ${REACH_LATCH}: Boolean;`);
+      expect(latchShape(out, REACH_LATCH)).toEqual({ direct: 1, nested: 0, blocks: 0 });
+      // Every arm's own `var` is blanked: between the header and `begin` the only `var` left is the
+      // latch's. The re-parse above cannot see this: tree-sitter-al accepts a repeated `var`
+      // inside an #if arm of one section, while alc rejects it (AL0104).
+      const head = out.indexOf(c.header);
+      const section = out.slice(head, out.indexOf("\n    begin", head));
+      expect(section.match(/\bvar\b/gi)?.length).toBe(1);
+      expect(out.split("MutationSelector.Reached(").length - 1).toBe(1);
+      expect(directiveLinesClean(out)).toBe(true);
+      expect(linesWithoutInstrumentation(out)).toBe(c.src.split("\n").length);
+      expect(countErrorNodes(out)).toBe(c.parseErrors ?? 0);
+    });
+  }
+
+  it("grammar control: a nested #if inside an ordinary var section is a tree-sitter-al gap", () => {
+    const src = `codeunit 50100 "Repro G"
+{
+    procedure Pick(X: Integer)
+    var
+        L: Boolean;
+#if not CLEAN27
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+    end;
+}
+`;
+    expect(countErrorNodes(src)).toBe(NESTED_IF_IN_VAR_ERRORS);
+  });
+
+  it("S7: an arm that declares the default name pushes the latch to a free one", () => {
+    const src = `codeunit 50100 "Repro H"
+{
+    procedure P(X: Integer)
+#if A
+    var
+        ${REACH_LATCH}: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    const { out } = instrument(src);
+    expect(out).toContain(`    procedure P(X: Integer) var ${REACH_LATCH}2: Boolean;`);
+    expect(latchShape(out, `${REACH_LATCH}2`)).toEqual({ direct: 1, nested: 0, blocks: 0 });
+  });
+
+  it("M1: R-297's selector anchor and both latch insertions in one emitted file", () => {
+    const src = `codeunit 50100 "Repro M"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        H: Integer;
+#endif
+
+    procedure Pick(X: Integer): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        G := X + 1;
+    end;
+
+    procedure Keep(X: Integer): Integer
+    var
+#if not CLEAN27
+        L: Integer;
+#endif
+    begin
+        G := X + 2;
+    end;
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        G := X + 3;
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+      spec(n, "G := 0", "lethal.op"),
+    );
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(src, root, specs, ided);
+    expect(out.split(SELECTOR_DECL).length - 1).toBe(1);
+    // R-297's real behaviour: an #if block holding only declarations is declaration-only, so the
+    // selector goes after its #endif, on a line of its own (as in a-ordinary-ifdecl's HEAD_EMIT).
+    expect(out).toContain(
+      `        G: Integer;\n#if not CLEAN27\n        H: Integer;\n#endif\n        ${SELECTOR_DECL}\n`,
+    );
+    expect(out).toContain(`    procedure Pick(X: Integer): Integer var ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`    var ${REACH_LATCH}: Boolean;\n#if not CLEAN27\n        L: Integer;`);
+    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(3);
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(src.split("\n").length);
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("R303_SRC: all three members get a latch; none is refused", () => {
     const root = wrapRoot(parseAL(R303_SRC));
+    const specs = findAll(root, ALNodeKind.assignment_statement)
+      .filter((n) => ["Glob := Glob + 1", "Glob := X + 1", "P := X + 2"].includes(n.text))
+      .map((n) => spec(n, "Glob := 0", "lethal.op"));
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(R303_SRC, root, specs, ided);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(3);
+    expect(out).toContain(`    trigger OnRun() var ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`    procedure Pick(X: Integer): Integer var ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(latchShape(out, REACH_LATCH).blocks).toBe(0);
+    expect(countErrorNodes(out)).toBe(0);
+  });
+
+  it("a token of a header-end kind that is not the header's end is no anchor", () => {
+    // `);;`: the second `;` sits after an ERROR node, not directly after `)`. alc rejects this
+    // source too (AL0519); it is here because it is the one parse found whose token before the
+    // block has a header-end KIND without being the header's END, which a kind check would admit.
+    const src = `codeunit 50100 "Repro X"
+{
+    procedure P(X: Integer);;
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+    end;
+}
+`;
+    const blocks: ALSyntaxNode[] = [];
+    visit(wrapRoot(parseAL(src)), (n) => {
+      if (n.rawKind === "preproc_conditional_var_block") blocks.push(n);
+    });
+    const owner = blocks[0]?.parent;
+    if (owner === undefined || owner === null) throw new Error("fixture drift: no block owner");
+    expect(owner.children.map((k) => k.rawKind).slice(4, 7)).toEqual([")", "ERROR", ";"]);
+    expect(splitVarHoistAnchor(owner)).toBeNull();
+  });
+
+  // tree-sitter-al puts both of these under ERROR nodes, so the owner has no
+  // `preproc_conditional_var_block` child for the hoist to see. Before the refusal, two-blocks
+  // got its latch in the second block's section (alc AL0118 under [A]) and nested-wrap got a new
+  // `var` before `begin` (alc AL0104 under [A,B]).
+  const UNPARSED: { name: string; member: string }[] = [
+    {
+      name: "two #if var blocks in a row",
+      member: `    procedure E(X: Integer)
+#if A
+    var K: Integer;
+#endif
+#if not A
+    var N: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+`,
+    },
+    {
+      name: "a nested #if wrapping the whole var section",
+      member: `    procedure E(X: Integer)
+#if A
+#if B
+    var K: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+`,
+    },
+  ];
+  for (const u of UNPARSED) {
+    it(`${u.name}: the var section does not parse, so the member is refused and gets no latch`, () => {
+      const src = `codeunit 50100 "Repro U"
+{
+${u.member}
+    procedure Plain(X: Integer)
+    var
+        P: Integer;
+    begin
+        Glob := X + 3;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+      const root = wrapRoot(parseAL(src));
+      const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+        spec(n, "Glob := 0", "lethal.op"),
+      );
+      const [e, plain] = specs;
+      if (e === undefined || plain === undefined) throw new Error("fixture drift: two assignments");
+      const owner = reachLatchRefusedOwner(e.before);
+      if (owner === null) throw new Error("expected the member to be refused");
+      expect(owner.text.startsWith("procedure E(")).toBe(true);
+      expect(owner.children.some((c) => c.rawKind === "preproc_conditional_var_block")).toBe(false);
+      expect(varSectionUnparsed(owner)).toBe(true);
+      expect(reachLatchRefusedOwner(plain.before)).toBeNull();
+      const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+      const grains = buildComponents(ided).flatMap((c) =>
+        c.members.map((m) => reachGrainOf(m, c.root)),
+      );
+      expect(grains).toEqual(["unplaced", "statement"]);
+      const out = compileSchemataForFile(src, root, specs, ided);
+      expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+      expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    });
+  }
+
+  it("a missing node (no ERROR) in the var section also counts as unparsed; a clean one does not", () => {
+    const member = (decl: string) => {
+      const src = `codeunit 50100 "Repro M"
+{
+    procedure P(X: Integer)
+    var
+        ${decl}
+    begin
+        K := X;
+    end;
+}
+`;
+      const root = wrapRoot(parseAL(src));
+      const p = findAll(root, ALNodeKind.procedure)[0];
+      if (p === undefined) throw new Error("fixture drift: no procedure");
+      return { p, errors: countErrorNodes(src) };
+    };
+    // `K: Integer` without its `;`: tree-sitter-al inserts a zero-width missing `;`, no ERROR.
+    const missing = member("K: Integer");
+    expect(missing.errors).toBe(0);
+    expect(varSectionUnparsed(missing.p)).toBe(true);
+    expect(varSectionUnparsed(member("K: Integer;").p)).toBe(false);
+  });
+
+  it("a pragma-only #if before the block, and a split header, stay refused", () => {
+    const src = `codeunit 50100 "Repro R"
+{
+    procedure Prag(X: Integer)
+#if not CLEAN27
+#pragma warning disable AL0432
+#endif
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+#if A
+    procedure S(X: Integer)
+#else
+    procedure S(X: Integer; Y: Integer)
+#endif
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 2;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    const root = wrapRoot(parseAL(src));
     const blocks: ALSyntaxNode[] = [];
     visit(root, (n) => {
       if (n.rawKind === "preproc_conditional_var_block") blocks.push(n);
     });
-    expect(blocks.map((b) => b.parent?.rawKind)).toEqual(["trigger_declaration", "procedure"]);
-    const specs = [
-      spec(at(root, "Glob := Glob + 1"), "Glob := 0", "lethal.op"),
-      spec(at(root, "Glob := X + 1"), "Glob := 0", "lethal.op"),
-      spec(at(root, "P := X + 2"), "P := 0", "lethal.op"),
-    ];
+    expect(blocks.map((b) => b.parent?.rawKind)).toEqual(["procedure", "preproc_split_procedure"]);
+    for (const b of blocks) {
+      const owner = b.parent;
+      if (owner === null) throw new Error("fixture drift: block without owner");
+      expect(splitVarHoistAnchor(owner)).toBeNull();
+      expect(reachLatchRefusedOwner(b)?.startIndex).toBe(owner.startIndex);
+    }
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+      spec(n, "Glob := 0", "lethal.op"),
+    );
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => [m.spec.before.text, reachGrainOf(m, c.root)]),
+      c.members.map((m) => reachGrainOf(m, c.root)),
     );
-    expect(grains).toEqual([
-      ["Glob := Glob + 1", "unplaced"],
-      ["Glob := X + 1", "unplaced"],
-      ["P := X + 2", "statement"],
-    ]);
-    const out = compileSchemataForFile(R303_SRC, root, specs, ided);
-    // One latch, in Plain's own var section; none before either split var block's `begin`.
-    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
-    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
-    expect(out).not.toContain(`var ${REACH_LATCH}`);
-    expect(out.split("MutationSelector.Reached(").length - 1).toBe(1);
+    expect(grains).toEqual(["unplaced", "unplaced"]);
+    const out = compileSchemataForFile(src, root, specs, ided);
+    expect(out).not.toContain(REACH_LATCH);
+  });
+});
+
+/** R312: a member var section whose LAST child is `#if` of declarations. Hand-written. */
+const INBODY_SRC = `codeunit 50100 "Repro K"
+{
+    procedure Pick(X: Integer): Integer
+    var
+#if not CLEAN27
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    trigger OnRun()
+    var // note
+        A: Integer;
+#if not CLEAN27
+        L: Integer;
+#else
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 2;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+/** No code after a directive on its line (alc AL0631), and no latch inside one. */
+function directiveLinesClean(text: string): boolean {
+  return text.split("\n").every((raw) => {
+    const l = raw.replace(/\r$/, "");
+    if (/^\s*#(if|elif)\b/.test(l)) return !l.includes(";");
+    if (/^\s*#(else|endif)\b/.test(l)) return /^\s*#(else|endif)\s*(\/\/.*)?$/.test(l);
+    // R-303 run 002: text after `#pragma`/`#region`/`#endregion` is part of the directive.
+    if (/^\s*#(pragma|region|endregion)\b/.test(l)) return !l.includes(REACH_LATCH);
+    return true;
+  });
+}
+
+const SELECTOR_DECL = 'MutationSelector: Codeunit "Mutation Selector";';
+
+/** Line count with the lines the rest of the instrumentation adds by design undone, so what is
+ *  left measures whether the LATCH edits moved a line. Two things are undone:
+ *  - R-297's object-level selector declaration (`\n        <decl>` appended to a var section, or
+ *    `    var\n        <decl>\n\n` before the first member), once;
+ *  - each ONE-BRANCH `emitDispatch` guard chain,
+ *    `if MutationSelector.Active('id') then begin\n  <branch>\nend else begin\n  <original>\nend;`,
+ *    folded back to `<original>`.
+ *  Only that shape: a chain with several branches, or an original statement containing `\nend`,
+ *  is not folded correctly and the count comes out wrong. That fails the test, never passes it. */
+function linesWithoutInstrumentation(text: string): number {
+  return text
+    .replace(`    var\n        ${SELECTOR_DECL}\n\n`, "")
+    .replace(`\n        ${SELECTOR_DECL}`, "")
+    .replace(
+      /if MutationSelector\.Active\('[^']+'\) then begin\n {2}[\s\S]*?\nend else begin\n {2}([\s\S]*?)\nend(;?)/g,
+      "$1$2",
+    )
+    .split("\n").length;
+}
+
+describe("R312: a member var section ending in #if gets its latch after the var keyword", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("writes the latch on the var line, never on the #endif line, and moves no line", () => {
+    const root = wrapRoot(parseAL(INBODY_SRC));
+    const at = (text: string): ALSyntaxNode => {
+      const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
+      if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+      return a;
+    };
+    const specs = [
+      spec(at("Glob := X + 1"), "Glob := 0", "lethal.op"),
+      spec(at("Glob := Glob + 2"), "Glob := 0", "lethal.op"),
+    ];
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(INBODY_SRC, root, specs, ided);
+    expect(out).toContain(`    var ${REACH_LATCH}: Boolean;\n#if not CLEAN27\n        K: Integer;`);
+    expect(out).toContain(`    var ${REACH_LATCH}: Boolean; // note\n        A: Integer;`);
+    // Same-line only: `\s` alone would also match the newline before `begin` a few lines later,
+    // making this unsatisfiable for any real emission. `[ \t]*` stays on the `#endif` line.
+    expect(out).not.toMatch(/#endif[ \t]*\S/);
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(INBODY_SRC.split("\n").length);
     expect(countErrorNodes(out)).toBe(0);
+  });
+});
+
+/**
+ * R-303 run 002: `#pragma`, `#region` and `#endregion` around a member's var section. Grammar
+ * extras, hand-written (the `d1`..`d10` scratch repros, each alc-compiled under every symbol subset
+ * and run through al-runner). tree-sitter-al 4.4.1 attaches a TRAILING directive to the member,
+ * not to the var section, so the latch stays on the last declaration's line, before the directive.
+ */
+const DIRECTIVE_SRC = `codeunit 50100 "Repro P"
+{
+    procedure P1(X: Integer)
+    var
+        A1: Integer;
+#pragma warning disable AL0432
+    begin
+        Glob := X + 1;
+    end;
+
+    procedure P2(X: Integer)
+    var
+#region Locals
+        A2: Integer;
+#endregion
+    begin
+        Glob := X + 2;
+    end;
+
+    procedure P3(X: Integer)
+    var
+        A3: Integer;
+#region Body
+    begin
+        Glob := X + 3;
+    end;
+#endregion
+
+    procedure P4(X: Integer)
+    var
+        A4: Integer;
+#if not CLEAN27
+        K4: Integer;
+#endif
+#pragma warning disable AL0432
+    begin
+        Glob := X + 4;
+    end;
+
+    procedure P5(X: Integer)
+    var
+        A5: Integer;
+#pragma warning disable AL0432
+#if not CLEAN27
+        K5: Integer;
+#endif
+    begin
+        Glob := X + 5;
+    end;
+
+    procedure P6(X: Integer)
+#pragma warning disable AL0432
+    var
+        A6: Integer;
+    begin
+        Glob := X + 6;
+    end;
+
+    procedure P7(X: Integer)
+    var
+#pragma warning disable AL0432
+        A7: Integer;
+    begin
+        Glob := X + 7;
+    end;
+
+    procedure P10(X: Integer)
+#pragma warning disable AL0432
+    begin
+        Glob := X + 10;
+    end;
+
+    procedure P9(X: Integer)
+#region Locals
+#if not CLEAN27
+    var
+        K9: Integer;
+#endif
+#endregion
+    begin
+        Glob := X + 9;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+describe("R-303 run 002: a directive around a member's var section never carries the latch", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("puts each latch on a declaration or var line, never on a directive line, and moves no line", () => {
+    const root = wrapRoot(parseAL(DIRECTIVE_SRC));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((a) =>
+      spec(a, "Glob := 0", "lethal.op"),
+    );
+    expect(specs.length).toBe(9);
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(DIRECTIVE_SRC, root, specs, ided);
+    const L = `${REACH_LATCH}: Boolean;`;
+    expect(out).toContain(`        A1: Integer; ${L}\n#pragma warning disable AL0432\n    begin`);
+    expect(out).toContain(`#region Locals\n        A2: Integer; ${L}\n#endregion`);
+    expect(out).toContain(`        A3: Integer; ${L}\n#region Body`);
+    expect(out).toContain(`    var ${L}\n        A4: Integer;\n#if not CLEAN27\n        K4`);
+    expect(out).toContain(`    var ${L}\n        A5: Integer;\n#pragma`);
+    expect(out).toContain(`#pragma warning disable AL0432\n    var\n        A6: Integer; ${L}`);
+    expect(out).toContain(`    var\n#pragma warning disable AL0432\n        A7: Integer; ${L}`);
+    // P9: `#region` between the header and the split block is not the header's end: refused.
+    expect(out).toContain(
+      "    procedure P9(X: Integer)\n#region Locals\n#if not CLEAN27\n    var\n",
+    );
+    // P10: no var section, so a new one directly before `begin`, after the directive's line.
+    expect(out).toContain(`#pragma warning disable AL0432
+    var ${L} begin`);
+    expect(out.split(L).length - 1).toBe(8);
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(DIRECTIVE_SRC.split("\n").length);
+  });
+
+  it("a var section whose last child is a directive anchors after the var keyword", () => {
+    // Not reachable through tree-sitter-al 4.4.1 (see DIRECTIVE_SRC), so the node is built by
+    // hand: P1's own var section with its trailing #pragma moved inside the var body.
+    const root = wrapRoot(parseAL(DIRECTIVE_SRC));
+    const p1 = findAll(root, ALNodeKind.procedure).find((p) => p.text.includes("P1("));
+    const vars = p1?.children.find((n) => n.kind === ALNodeKind.var_section);
+    const pragma = p1?.children.find((n) => n.rawKind === "pragma");
+    const [keyword, body] = vars?.children ?? [];
+    if (vars === undefined || pragma === undefined || keyword === undefined || body === undefined)
+      throw new Error("fixture drift: P1 is not var_keyword, var_body, then #pragma");
+    const fake = (n: ALSyntaxNode, children: ALSyntaxNode[]): ALSyntaxNode => ({
+      kind: n.kind,
+      rawKind: n.rawKind,
+      text: n.text,
+      startIndex: n.startIndex,
+      endIndex: n.endIndex,
+      startPosition: n.startPosition,
+      endPosition: n.endPosition,
+      parent: n.parent,
+      children,
+      namedChildren: children,
+      fieldName: null,
+      childForFieldName: () => null,
+    });
+    const moved = fake(vars, [keyword, fake(body, [...body.children, pragma])]);
+    expect(latchAnchorInVarSection(moved)?.rawKind).toBe("var_keyword");
+    // Control: the real, unmoved section anchors on its declaration.
+    expect(latchAnchorInVarSection(vars)?.rawKind).toBe("variable_declaration");
+  });
+});
+
+/** R309: split-header procedures whose #if arms each hold their own header and var section. Hand-written. */
+const PREAMBLE_BODY = `    begin
+        Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+const PREAMBLE_CASES: { name: string; src: string }[] = [
+  {
+    name: "P1 #if and #else arms, an attribute in the #else arm",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P2 #if, #elif and #else arms",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#elif B
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        N: Text;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P3 #if and #elif, no #else",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#elif not A
+    [Scope('OnPrem')]
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P4 one arm with no var section",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P8 an arm whose own var section is itself inside #if",
+    src: `codeunit 50100 "Repro P"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+#if B
+    var
+        K: Integer;
+#endif
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+  {
+    name: "P10 arms that rename the procedure",
+    src: `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Choose(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+${PREAMBLE_BODY}`,
+  },
+];
+
+describe("R309: a split-header procedure whose arms each have their own var section is refused by name", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const instrumentAll = (src: string) => {
+    const root = wrapRoot(parseAL(src));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((n) =>
+      spec(n, "Glob := 0", "lethal.op"),
+    );
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const grains = buildComponents(ided).flatMap((c) =>
+      c.members.map((m) => reachGrainOf(m, c.root)),
+    );
+    return { specs, grains, out: compileSchemataForFile(src, root, specs, ided) };
+  };
+
+  const [first] = PREAMBLE_CASES;
+  if (first === undefined) throw new Error("fixture drift: no preamble case");
+  const cases = [
+    ...PREAMBLE_CASES,
+    { name: "P6 P1 saved with CRLF", src: first.src.replace(/\n/g, "\r\n") },
+  ];
+  for (const c of cases) {
+    it(`${c.name}: a preamble owns every site, all unplaced, no latch, no marker, no line moved`, () => {
+      const { specs, grains, out } = instrumentAll(c.src);
+      expect(specs).toHaveLength(2);
+      for (const s of specs)
+        expect(reachLatchRefusedOwner(s.before)?.rawKind).toBe("preproc_split_procedure_preamble");
+      expect(grains).toEqual(["unplaced", "unplaced"]);
+      expect(out).not.toContain(REACH_LATCH);
+      expect(out).not.toContain("MutationSelector.Reached(");
+      expect(out.split(SELECTOR_DECL).length - 1).toBe(1);
+      expect(directiveLinesClean(out)).toBe(true);
+      const lf = (t: string): string => t.replace(/\r\n/g, "\n");
+      expect(linesWithoutInstrumentation(lf(out))).toBe(lf(c.src).split("\n").length);
+    });
+  }
+
+  it("M1: a plain member, a preamble, an R303 hoist, an R301 split header and R-297's selector anchor in one file", () => {
+    const src = `codeunit 50100 "Repro P"
+{
+    var
+        Glob: Integer;
+#if not CLEAN27
+        Old: Integer;
+#endif
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        P := X + 3;
+        exit(P);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+    begin
+        Glob := X + 1;
+        exit(Glob);
+    end;
+
+    procedure Hoist(X: Integer): Integer
+#if not CLEAN27
+    var
+        H: Integer;
+#endif
+    begin
+        Glob := X + 4;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure Split(X: Integer): Integer
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Split(X: Integer): Integer
+#endif
+    var
+        S: Integer;
+    begin
+        S := X + 5;
+        exit(S);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const assignments = findAll(root, ALNodeKind.assignment_statement);
+    expect(
+      assignments.map((n) => `${n.text} -> ${reachLatchRefusedOwner(n)?.rawKind ?? "latch"}`),
+    ).toEqual([
+      "P := X + 3 -> latch",
+      "Glob := X + 1 -> preproc_split_procedure_preamble",
+      "Glob := X + 4 -> latch",
+      "S := X + 5 -> latch",
+    ]);
+    const specs = assignments.map((n) => spec(n, "Glob := 0", "lethal.op"));
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(src, root, specs, ided);
+    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`    procedure Hoist(X: Integer): Integer var ${REACH_LATCH}: Boolean;`);
+    expect(out).toContain(`S: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(3);
+    expect(out.split("MutationSelector.Reached(").length - 1).toBe(3);
+    // R-297: the selector goes after a declaration-only #if block's #endif, on a line of its own.
+    expect(out).toContain(
+      `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR_DECL}\n`,
+    );
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(src.split("\n").length);
+  });
+});
+
+describe("The injector's guard: a statement marker with no owning member still throws", () => {
+  // Hand-built, not parsed: no real AL statement sits outside every procedure, trigger and
+  // preamble, so this shape is built directly, the same way the R309 review's label tests build a
+  // preamble owner by hand (packages/runner/tests/preproc-instrumentation.test.ts). `parent: null`
+  // means the owner walk in `injectReachLatches` never finds a procedure, a trigger or a preamble:
+  // the one shape none of R303, R309 or R313's refusals cover, because none of them applies here.
+  function fakeDetachedStatement(text: string): ALSyntaxNode {
+    return {
+      kind: ALNodeKind.assignment_statement,
+      rawKind: "assignment_statement",
+      text,
+      startIndex: 0,
+      endIndex: text.length,
+      startPosition: { row: 0, column: 0 },
+      endPosition: { row: 0, column: text.length },
+      parent: null,
+      children: [],
+      namedChildren: [],
+      fieldName: null,
+      childForFieldName: () => null,
+    };
+  }
+
+  it("a component root reachable from no procedure, trigger or preamble throws the guard message", () => {
+    const before = fakeDetachedStatement("L := 1");
+    const s = spec(before, "L := 2", "lethal.op");
+    expect(() => compileSchemataForFile("L := 1", before, [s])).toThrow(
+      "a reach marker sits outside any procedure or trigger body",
+    );
   });
 });

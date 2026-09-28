@@ -51,7 +51,7 @@ Published.
 file in this folder:
 
 ```bash
-export BC_URL=http://<container>:7048/BC     # server tier base URL, OData on port 7048
+export BC_URL=http://<container>:7048/BC     # server tier base URL, OData on port 7048 (required, or pass --url; no default)
 export BC_USER=<user> BC_PASSWORD=<password>  # NavUserPassword / basic auth
 export BC_COMPANY="CRONUS Danmark A/S"        # default
 bun <repro folder>/client.ts [options]
