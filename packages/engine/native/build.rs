@@ -32,8 +32,10 @@ fn main() {
     let cc = env::var("CC").unwrap_or_else(|_| panic!("CC is not set: build with `bun scripts/build-native-parser.ts`, which selects clang"));
     let v = Command::new(&cc).arg("--version").output().unwrap_or_else(|e| panic!("cannot run {cc} --version: {e}"));
     let banner = String::from_utf8_lossy(&v.stdout).lines().next().unwrap_or("").trim().to_string();
-    if !v.status.success() || !banner.contains("clang version") {
-        panic!("CC={cc} is not clang (`--version` printed {banner:?}): build with `bun scripts/build-native-parser.ts`, which selects clang");
+    // RUST-03: exactly LLVM clang 23.1.2 (scripts/build-native-parser.ts CLANG_VERSION holds the same pin).
+    let pinned = banner == "clang version 23.1.2" || banner.starts_with("clang version 23.1.2 ");
+    if !v.status.success() || !pinned {
+        panic!("CC={cc} is not clang 23.1.2 (`--version` printed {banner:?}): build with `bun scripts/build-native-parser.ts`, which selects it");
     }
     println!("cargo:rustc-env=LETHAL_C_COMPILER={banner}");
 }

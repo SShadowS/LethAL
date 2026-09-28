@@ -98,8 +98,18 @@ describe("native parser binding", () => {
     expect(() => checkBinding(loadBindingFor(key), key, crate)).not.toThrow();
   });
 
-  it("was built by clang (release rule)", () => {
-    expect(nativeInfo().cCompiler).toMatch(/clang version/);
+  // The release rule: LLVM clang 23.1.2 exactly (build-native-parser.ts CLANG_VERSION, build.rs).
+  const PINNED_CLANG = /^clang version 23\.1\.2(?: |$)/;
+  it("was built by clang 23.1.2 (release rule)", () => {
+    expect(nativeInfo().cCompiler).toMatch(PINNED_CLANG);
+  });
+  it("the compiler pin refuses any other version", () => {
+    for (const b of [
+      "clang version 23.1.1 (x)",
+      "clang version 23.1.20",
+      "Apple clang version 23.1.2",
+    ])
+      expect(b).not.toMatch(PINNED_CLANG);
   });
 
   it("counts live parse results and releases them after GC", async () => {

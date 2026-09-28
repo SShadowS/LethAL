@@ -8,7 +8,7 @@
  *   bun scripts/build-native-parser.ts [--test]
  */
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CRATE, grammarInputs } from "./check-native-grammar";
 
 const LIB: Readonly<Record<string, string>> = {
@@ -39,16 +39,38 @@ export function cargoEnv(
   return env;
 }
 
+/** RUST-03: the one LLVM release every addon is built with. build.rs and native-binding.test.ts
+ *  hold the same pin. */
+export const CLANG_VERSION = "23.1.2";
+
+/** True only for LLVM's own clang at exactly CLANG_VERSION ("Apple clang ..." and 23.1.20 fail). */
+export function isPinnedClang(banner: string): boolean {
+  return (
+    banner === `clang version ${CLANG_VERSION}` ||
+    banner.startsWith(`clang version ${CLANG_VERSION} `)
+  );
+}
+
+/** One absolute target dir for both cargo (which runs in the crate dir) and the copy (which runs
+ *  from here). A relative CARGO_TARGET_DIR is resolved against `cwd`, the caller's directory. */
+export function cargoTargetDir(
+  env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
+): string {
+  const dir = env.CARGO_TARGET_DIR;
+  return dir !== undefined && dir !== "" ? resolve(cwd, dir) : join(CRATE, "target");
+}
+
 /** RUST-03: clang on every target. clang-cl on Windows (MSVC ABI), clang elsewhere. LLVM_BIN may
- *  point at a specific install; otherwise PATH. The build refuses a compiler that is not clang. */
+ *  point at a specific install; otherwise PATH. The build refuses anything but clang CLANG_VERSION. */
 function clangCc(): string {
   const exe = process.platform === "win32" ? "clang-cl.exe" : "clang";
   const cc = process.env.LLVM_BIN !== undefined ? join(process.env.LLVM_BIN, exe) : exe;
   const v = Bun.spawnSync([cc, "--version"]);
-  const banner = v.stdout.toString().split("\n")[0] ?? "";
-  if (v.exitCode !== 0 || !/clang version/.test(banner)) {
+  const banner = (v.stdout.toString().split("\n")[0] ?? "").trim();
+  if (v.exitCode !== 0 || !isPinnedClang(banner)) {
     throw new Error(
-      `build-native-parser: ${cc} is not a working clang (${banner || v.stderr.toString().trim()}). Install LLVM 23.1.2 or set LLVM_BIN.`,
+      `build-native-parser: ${cc} is not clang ${CLANG_VERSION} (${banner || v.stderr.toString().trim()}). Install LLVM ${CLANG_VERSION} (bash scripts/install-llvm.sh <platform-key>) or set LLVM_BIN.`,
     );
   }
   return cc;
@@ -59,6 +81,8 @@ async function main(): Promise<void> {
   const lib = LIB[key];
   if (lib === undefined) throw new Error(`build-native-parser: no LethAL target for ${key}`);
   const env = cargoEnv(process.env, clangCc(), grammarInputs());
+  const targetDir = cargoTargetDir(process.env, process.cwd());
+  env.CARGO_TARGET_DIR = targetDir;
   const test = process.argv.includes("--test");
   const run = Bun.spawnSync(["cargo", test ? "test" : "build", "--release", "--locked"], {
     cwd: CRATE,
@@ -70,7 +94,6 @@ async function main(): Promise<void> {
     throw new Error(`build-native-parser: cargo failed with exit ${run.exitCode}`);
   if (test) return;
 
-  const targetDir = process.env.CARGO_TARGET_DIR ?? join(CRATE, "target");
   const outDir = join(import.meta.dir, "..", "packages", "engine", "vendor", "native");
   const out = join(outDir, `lethal-parser.${key}.node`);
   await mkdir(outDir, { recursive: true });
