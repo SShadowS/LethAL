@@ -1,6 +1,7 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  isProcedureLike,
   isStatementPosition,
   isStatementSlot,
 } from "@lethal/engine";
@@ -85,6 +86,22 @@ export function reachGrainOf(member: ComponentMember, root: ALSyntaxNode): Reach
 }
 
 /**
+ * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if`
+ * (`preproc_conditional_var_block` between the header and `begin`), else `null`. The reach latch
+ * is a local, and appending one there gives the member a SECOND `var` section in any build where an
+ * arm declares one, which alc rejects; placing it in each arm is a placement rule not built yet
+ * (R303). So such a member gets no latch and no marker: its mutants are `unplaced`, their reach is
+ * `not-decided`, never "unreached". The member is still instrumented and scored.
+ */
+export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
+  let owner: ALSyntaxNode | null = node;
+  while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
+    owner = owner.parent;
+  if (owner === null) return null;
+  return owner.children.some((c) => c.rawKind === "preproc_conditional_var_block") ? owner : null;
+}
+
+/**
  * Span and kind, never object identity: the engine's wrapper nodes are created per traversal, so
  * the same node reached by two walks is two objects.
  */
@@ -109,6 +126,8 @@ function placeReach(
   latch: string = REACH_LATCH,
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
+  // R303: no latch can be declared in a member whose var section is split by `#if`, so no marker.
+  if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any
   // slot or list member on the way means the statement does not always run the mutated code.

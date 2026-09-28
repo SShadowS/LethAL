@@ -4,12 +4,14 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
+  ALNodeKind,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
   initParser,
   parseAL,
+  procedureLikeNameNode,
   validateSpec,
   visit,
   wrapRoot,
@@ -25,6 +27,7 @@ import {
   dedupeSpecs,
   describeObjectKinds,
   isMutableSite,
+  reachLatchRefusedOwner,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
@@ -75,6 +78,7 @@ import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from ".
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
+import { coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -543,6 +547,33 @@ export function resolveOperatorNames(
   return resolved;
 }
 
+/**
+ * R303: the members of one file whose `var` section is split by `#if`, so the writer declares no
+ * reach latch there (`reachLatchRefusedOwner`), each with its site count, in source order. Named
+ * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
+ */
+export function reachLatchRefusals(
+  specs: readonly MutationSpec[],
+): { member: string; start: number; sites: number }[] {
+  const byStart = new Map<number, { member: string; start: number; sites: number }>();
+  for (const spec of specs) {
+    const owner = reachLatchRefusedOwner(spec.before);
+    if (owner === null) continue;
+    const known = byStart.get(owner.startIndex);
+    if (known !== undefined) {
+      known.sites++;
+      continue;
+    }
+    const nameNode =
+      owner.kind === ALNodeKind.trigger
+        ? owner.childForFieldName("name")
+        : procedureLikeNameNode(owner);
+    const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? "<unnamed>"}`;
+    byStart.set(owner.startIndex, { member, start: owner.startIndex, sites: 1 });
+  }
+  return [...byStart.values()].sort((x, y) => x.start - y.start);
+}
+
 export async function generateMutationSet(
   projectDir: string,
   options: MutationSetOptions = {},
@@ -740,6 +771,12 @@ export async function generateMutationSet(
     }
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
+    for (const r of reachLatchRefusals(fileSpecs)) {
+      warn(
+        "reach-latch-refused",
+        `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). Placement rule pending, R303.`,
+      );
+    }
   }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
@@ -4052,6 +4089,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
+  // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
+  const coverageRefused = coverageRefusedObjects(allFiles);
   // R92: raw site count (every spec that made it into an instrumentable file) vs the DEPLOYED
   // count once per-file dedup (`dedupeSpecs`) collapses same-site operator collisions into one
   // winner — the same collapse `writeInstrumentedProject` runs at compile time, per file (identity
@@ -4766,6 +4806,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         let uncovered: readonly MutantManifestEntry[] = [];
         // R192: which of `uncovered` R175 flagged unplaceable, persisted with each `no-coverage` row.
         let unplaceableIds: ReadonlySet<string> = new Set();
+        // R298: which of `uncovered` are refused (wrapped objects), with the sentence naming why.
+        let refusedIds: ReadonlyMap<string, string> = new Map();
         // R197: how narrow each test is, for the covering-test order. Empty under "none", where
         // there is no attribution to be narrow about and the order falls through to duration.
         let memberCounts: ReadonlyMap<string, number> = new Map();
@@ -4792,8 +4834,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // get the same answer. Spelling it as a comparison against one mode's NAME meant every
             // new source-parsing mode silently opted into the widening it must not have.
             isHubCoverageMode(caps.coverage),
+            coverageRefused,
           );
           perMutantTests = split.covered;
+          refusedIds = split.refused;
           coverageAttribution = split.attribution;
           uncovered = split.uncovered;
           unplaceableIds = split.unplaceable;
@@ -4830,9 +4874,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           uncovered.length === 0
             ? new Map<string, readonly TestMethodRef[]>()
             : coverageFilter(
-                uncovered,
+                // R298: a refused mutant was decided by the green split; it is left out here so
+                // its refusal is not warned a second time. `coverageRefused` stays as the guard.
+                uncovered.filter((m) => !refusedIds.has(m.mutantId)),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
+                undefined,
+                true,
+                coverageRefused,
               ).covered;
         // R69 (closed): a mutant covered ONLY by a test this session cannot run is NAMED rather
         // than silently scored `no-coverage`. Recording is deferred until after the fenced mutant
@@ -4856,7 +4905,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               batchIdx,
               emit,
               undefined,
-              undefined,
+              // R298: a refused object's mutant says WHY it reads no-coverage, per row.
+              refusedIds.get(m.mutantId),
               undefined,
               0,
               [],

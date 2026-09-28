@@ -1028,3 +1028,91 @@ describe("coverage: a manifest entry with no objectType is refused, never defaul
     ).toThrow(/object type/i);
   });
 });
+
+describe("R298: a mutant in a refused (#if-wrapped) object reads no-coverage, whatever the entries say", () => {
+  const reason =
+    "coverage refused for Table:50110 (src/W.Table.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+  const refused = new Map([["table:50110", reason]]);
+  const tableCoverage = (procedure?: string) => ({
+    granularity: "procedure" as const,
+    entries: [
+      {
+        objectType: "Table",
+        objectId: 50110,
+        ...(procedure !== undefined ? { procedure } : {}),
+      },
+    ],
+  });
+  const empty = { granularity: "procedure" as const, entries: [] };
+
+  test("a table trigger with no entry does NOT take the all-green fallback", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const index = buildCoverageIndex([{ ref: t1, coverage: empty }]);
+      const m = entry({
+        objectType: "table",
+        codeunitId: 50110,
+        procedureName: "",
+        triggerName: "OnInsert",
+      });
+      const split = coverageFilter([m], index, [t1, t2], undefined, false, refused);
+      expect(split.covered.has("M0001")).toBe(false);
+      expect(split.uncovered.map((u) => u.mutantId)).toEqual(["M0001"]);
+      expect(split.untargetedTriggerCount).toBe(0);
+      expect(split.refused.get("M0001")).toBe(reason);
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toContain("Table:50110");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("no other fallback scores it either: member, object, unnamed-local or all-green", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Entries a mode that does NOT refuse would produce: a named member and an unnamed one.
+      const index = buildCoverageIndex([
+        { ref: t1, coverage: tableCoverage("Post") },
+        { ref: t2, coverage: tableCoverage() },
+      ]);
+      const exact = entry({ mutantId: "M1", objectType: "table", codeunitId: 50110 });
+      const trigger = entry({
+        mutantId: "M2",
+        objectType: "table",
+        codeunitId: 50110,
+        procedureName: "",
+        triggerName: "OnInsert",
+      });
+      const local = entry({
+        mutantId: "M3",
+        objectType: "table",
+        codeunitId: 50110,
+        procedureName: "Helper",
+        procedureScope: "local",
+      });
+      const split = coverageFilter(
+        [exact, trigger, local],
+        index,
+        [t1, t2],
+        undefined,
+        true,
+        refused,
+      );
+      expect(split.covered.size).toBe(0);
+      expect(split.uncovered.map((u) => u.mutantId)).toEqual(["M1", "M2", "M3"]);
+      expect([...split.refused.keys()]).toEqual(["M1", "M2", "M3"]);
+      // The second, non-green call (orchestrator's `unsupportedCoverage`) refuses the same way.
+      const second = coverageFilter(split.uncovered, index, [t1, t2], undefined, true, refused);
+      expect(second.covered.size).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("an object that is not refused is untouched", () => {
+    const index = buildCoverageIndex([{ ref: t1, coverage: tableCoverage("Post") }]);
+    const m = entry({ objectType: "table", codeunitId: 50110 });
+    const split = coverageFilter([m], index, [t1], undefined, false, new Map());
+    expect(split.covered.get("M0001")).toEqual([t1]);
+    expect(split.refused.size).toBe(0);
+  });
+});

@@ -6,9 +6,10 @@ import {
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
-  findEnclosingProcedure,
   gapBlockOf,
+  isProcedureLike,
   maskAlNonCode,
+  procedureLikeNameNode,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { buildComponents } from "./components";
@@ -445,10 +446,21 @@ function stripQuotes(s: string): string {
   return s;
 }
 
+/**
+ * R301: the narrowest procedure-like ancestor (a `procedure` or a split-header procedure), or
+ * `null`. Project-local on purpose: the engine's `findEnclosingProcedure` also feeds semantic
+ * resolution, which does not see inside a split procedure yet (R302), so it stays unchanged.
+ */
+function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
+  let current: ALSyntaxNode | null = node.parent;
+  while (current !== null && !isProcedureLike(current)) current = current.parent;
+  return current;
+}
+
 function procedureNameOf(spec: MutationSpec): string {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return "";
-  const nameNode = proc.childForFieldName("name");
+  const nameNode = procedureLikeNameNode(proc);
   return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
@@ -461,9 +473,22 @@ const LOCAL_SCOPE_PREFIX = /^\s*(?:\[[^\]]*\]\s*)*local\b/;
 
 /** `local`/`public` for the enclosing procedure, or `undefined` outside one (a trigger body). */
 function procedureScopeOf(spec: MutationSpec): "local" | "public" | undefined {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return undefined;
+  if (proc.rawKind === "preproc_split_procedure") return splitIsLocal(proc) ? "local" : "public";
   return LOCAL_SCOPE_PREFIX.test(proc.text) ? "local" : "public";
+}
+
+/** R301: a split procedure is `local` only when EVERY arm is: `local` widens coverage to object
+ *  grain (selection.ts, R63), so a public arm read as local could manufacture a vacuous `survived`.
+ *  Each arm is one `procedure_keyword`, with its `local` in a `procedure_modifier` before it. */
+function splitIsLocal(proc: ALSyntaxNode): boolean {
+  const arms = proc.children.filter((c) => c.rawKind === "procedure_keyword").length;
+  const localArms = proc.children.filter(
+    (c) =>
+      c.rawKind === "procedure_modifier" && c.children.some((k) => k.rawKind === "local_keyword"),
+  ).length;
+  return arms > 0 && localArms === arms;
 }
 
 /**
@@ -489,7 +514,7 @@ function triggerNameOf(spec: MutationSpec): string | undefined {
 
 /** C02-01: the enclosing `procedure` node, else the nearest `trigger` ancestor, else `null`. */
 function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc !== null) return proc;
   let current: ALSyntaxNode | null = spec.before;
   while (current !== null && current.kind !== ALNodeKind.trigger) current = current.parent;
