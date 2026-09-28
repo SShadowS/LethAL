@@ -1,8 +1,5 @@
 import type { ALNodeKind } from "./node-kinds";
 
-// Backed by the WASM reference until the RUST-03 switch (S3.4).
-export { wrapWasmRoot as wrapRoot } from "./parser-wasm";
-
 export interface ALSyntaxNode {
   readonly kind: ALNodeKind;
   readonly rawKind: string;
@@ -137,6 +134,9 @@ class FlatNode implements ALSyntaxNode {
 export function wrapFlatRoot(parsed: ParsedAL): ALSyntaxNode {
   return new FlatNode(parsed, 0, null, null);
 }
+
+// The engine's wrapper since RUST-03: the native flat tree (wrapWasmRoot is reference only).
+export const wrapRoot = wrapFlatRoot;
 
 export function findFirst(root: ALSyntaxNode, kind: ALNodeKind): ALSyntaxNode | null {
   if (root.kind === kind) return root;

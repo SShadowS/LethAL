@@ -142,7 +142,9 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
   let bad = false;
   const walk = (n: ALSyntaxNode): void => {
     if (bad || n.endIndex <= from || n.startIndex >= to) return;
-    // A missing node is the zero-width token the parser invented; the wrapper has no isMissing.
+    // A missing node is the zero-width token the parser invented. Matched by shape (a zero-width
+    // leaf) rather than by `isMissing`: every missing node is such a leaf, so the shape is the wider
+    // test, and it is kept as it was so the set of refused members does not move with the parser.
     if (n.rawKind === "ERROR" || (n.children.length === 0 && n.startIndex === n.endIndex)) {
       bad = true;
       return;
