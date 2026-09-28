@@ -195,3 +195,30 @@ OUTCOME changes. Per that section, the native route stops and R292 takes the Typ
   with the file hidden; variant A does not build) passed. Details in
   `.superpowers/sdd/2026-09-27-RUST-01-native-parser/task-1-steps1-8-report.md`.
 - `packages/engine/native/` is deleted uncommitted.
+
+## AMENDMENT 3 (2026-09-28, RUST-02, owner bar change, before any MSVC or clang number of RUST-02)
+Committed alone, before any number from either build is read. RUST-02 retries the native parser with
+two builds of the same crate: the MSVC build (RUST-01's, cl /O2 through the cc crate) and a clang
+build (clang-cl 23.1.2, LLVM installed 2026-09-28). The owner's priority, relayed by the coordinator:
+1) no crash, 2) lower peak memory, 3) speed. Speed no longer gates. The Spike STOP bar of AMENDMENT 2
+(parse median at most 9,547 ms) is replaced for RUST-02 by the two gates below. Both builds are
+measured against both gates.
+
+Gate (ii), parse only, first. One pass over all of `U:/Git/BC.History/BaseApp` (9,620 files) through
+the native parse call alone, with no census. STOP only if it crashes or its peak exceeds 16,384 MB.
+Node counts must equal the WASM parse of the same files (31,135,464 on W1's input). The peak is
+recorded against WASM W1's 1,148 MB. Before judging, the cheap layout shrinks are tried (typed arrays,
+dropping fields not needed until later, freeing per file). A peak above 1,148 MB is NOT a stop by
+itself.
+
+Gate (i), the census, if (ii) passes. A minimal FlatNode implementing ALSyntaxNode and a switch of the
+engine's parse interface to native, both uncommitted until GO. GO requires, for at least one build:
+native completes W2 (the census over whole BaseApp, 9,620 files) in ONE pass with no crash; its peak
+is at most 16,384 MB; nodes equal; and the identity listing equals the WASM spec-level listing
+(sha256 a66a270e1530907e2b6c2b468b29f409fcd822b2ee92e02e6827bd083c59621b). The native peak on W3a
+(BaseApp/Source, the half WASM completes) is compared with WASM's 16,151 MB: lower is the owner's
+memory win and is reported beside the verdict; a GO whose W3a peak is not lower is reported as GO
+without a memory win, for the owner to decide.
+
+Recorded, not gating: parse medians over 3 runs and the Rust-only parse time, for each build, with
+the compiler, its version and flags.
