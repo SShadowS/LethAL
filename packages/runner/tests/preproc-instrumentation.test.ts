@@ -1736,7 +1736,7 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
   });
 });
 
-describe("R309: a split-header procedure whose arms each have their own var section is refused by name", () => {
+describe("R316: a split-header procedure whose arms each have their own var section takes one reach latch per arm", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -1796,6 +1796,26 @@ describe("R309: a split-header procedure whose arms each have their own var sect
         Glob := X + 7;
         exit(Glob);
     end;
+
+#if CLEAN27
+    procedure Twin(X: Integer): Integer
+#if A
+    var
+        K: Integer;
+#endif
+#if not A
+    var
+        N: Integer;
+#endif
+#else
+    procedure Twin(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := X + 8;
+        exit(Glob);
+    end;
 }
 `;
   const lines = SRC.split("\n");
@@ -1805,19 +1825,22 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     if (i < 0) throw new Error(`fixture drift: no line starting ${JSON.stringify(prefix)}`);
     return i + 1;
   };
-  /** A member from its first line (the `#if` for a preamble) through its closing `end;`. */
+  /** A member from its first line (the `#if` for a split header) through its closing `end;`. */
   const member = (name: string, prefix: string, from: number, grain: "statement" | "unplaced") => {
     const first = lineOf(prefix, from);
     return { name, first, last: lineOf("    end;", first), grain };
   };
   const plain = member("Plain", "    procedure Plain(", 1, "statement");
-  const pick = member("Pick", "#if CLEAN27", plain.last, "unplaced");
+  const pick = member("Pick", "#if CLEAN27", plain.last, "statement");
   const hoist = member("Hoist", "    procedure Hoist(", pick.last, "statement");
-  const pick2 = member("Pick2", "#if CLEAN27", hoist.last, "unplaced");
-  const members = [plain, pick, hoist, pick2];
+  const pick2 = member("Pick2", "#if CLEAN27", hoist.last, "statement");
+  // One arm's var section is two #if blocks in a row, which tree-sitter-al leaves as ERROR nodes
+  // (R313): refused by R313's predicate, which runs before the preamble's own rule.
+  const twin = member("Twin", "#if CLEAN27", pick2.last, "unplaced");
+  const members = [plain, pick, hoist, pick2, twin];
 
-  test("the run completes; both preamble members are named in a reach-latch-refused warning", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-r309-"));
+  test("the only reach-latch-refused warning is the unparsed arm's, with R313's sentence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r316-"));
     try {
       await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
       await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
@@ -1828,26 +1851,19 @@ describe("R309: a split-header procedure whose arms each have their own var sect
         },
       });
       const refused = warnings.filter((w) => w.code === "reach-latch-refused");
-      // Arms that rename the procedure name neither arm (R301's rule). The message lists every
-      // arm's own name instead of a bare "<unnamed>", which would hide why there is no one name.
       expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
-        "[lethal] Repro.Codeunit.al: procedure Pick",
-        "[lethal] Repro.Codeunit.al: procedure <renamed per #if arm: Pick2, Choose>",
+        "[lethal] Repro.Codeunit.al: procedure Twin",
       ]);
-      for (const w of refused) {
-        expect(w.message).toContain("R309");
-        expect(w.message).toContain("preproc_split_procedure_preamble");
-        expect(w.message).toContain("its own var section, if any");
-        expect(w.message).not.toContain("R303");
-        expect(w.message).not.toContain("R313");
-        expect(w.message).not.toContain("<unnamed>");
-      }
+      const [w] = refused;
+      expect(w?.message).toContain("did not parse cleanly");
+      expect(w?.message).toContain("R313");
+      expect(w?.message).not.toContain("R316");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("each refused member's sites are unplaced, each admitted member's are statement, and only admitted members get a latch", async () => {
+  test("each member's sites carry its grain, and each admitted preamble arm gets its own latch", async () => {
     const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
     // Every mutant sits in exactly one member, each bounded through its closing `end;`.
     for (const m of manifest.mutants) {
@@ -1859,19 +1875,80 @@ describe("R309: a split-header procedure whose arms each have their own var sect
         .filter((m) => m.startLine >= x.first && m.startLine <= x.last)
         .map((m) => m.reachGrain);
       expect(grains.length).toBeGreaterThan(0);
-      expect([...new Set(grains)]).toEqual([x.grain]);
+      expect([x.name, ...new Set(grains)]).toEqual([x.name, x.grain]);
     }
-    // Identity keys still serialize, and no two mutants share one.
     const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
     expect(new Set(keys).size).toBe(keys.length);
     const text = emitted.get("Repro.Codeunit.al") ?? "";
+    const latch = " var LethALReachLatch: Boolean;";
     expect(text).toContain("P: Integer; LethALReachLatch: Boolean;");
-    expect(text).toContain("procedure Hoist(X: Integer): Integer var LethALReachLatch: Boolean;");
-    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(2);
+    expect(text).toContain(`procedure Hoist(X: Integer): Integer${latch}`);
+    expect(text.split(`    procedure Pick(X: Integer): Integer${latch}`).length - 1).toBe(2);
+    expect(text).toContain(`    procedure Pick2(X: Integer): Integer${latch}`);
+    expect(text).toContain(`    procedure Choose(X: Integer): Integer${latch}`);
+    expect(text).not.toContain(`procedure Twin(X: Integer): Integer${latch}`);
+    // Plain, Hoist, both Pick arms, Pick2 and Choose; none for Twin.
+    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(6);
     expect(text.split(SELECTOR).length - 1).toBe(1);
     expect(text).toContain(
       `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR}`,
     );
+  });
+
+  // Task 2 review: a parse error in a LATER arm's header (here the #else arm's parameter list) is
+  // refused the same way as one in the first arm (P16): R313's predicate scans the whole preamble
+  // before its body, so the member is unplaced, gets no latch, and is named by R313's sentence.
+  test("P16 a later arm's header does not parse: refused by R313's sentence, all unplaced, no latch", async () => {
+    const BAD = `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer Y: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+    begin
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": BAD });
+    expect(manifest.mutants.length).toBeGreaterThan(0);
+    expect([...new Set(manifest.mutants.map((m) => m.reachGrain))]).toEqual(["unplaced"]);
+    const text = emitted.get("Repro.Codeunit.al") ?? "";
+    expect(text).not.toContain("LethALReachLatch");
+    expect(text).not.toContain("MutationSelector.Reached(");
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r316-"));
+    try {
+      await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
+      await writeFile(join(dir, "Repro.Codeunit.al"), BAD);
+      const warnings: { code: string; message: string }[] = [];
+      await generateMutationSet(dir, {
+        emit: (e) => {
+          if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
+        },
+      });
+      const refused = warnings.filter((w) => w.code === "reach-latch-refused");
+      expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
+        "[lethal] Repro.Codeunit.al: procedure Pick",
+      ]);
+      const [w] = refused;
+      expect(w?.message).toContain("did not parse cleanly");
+      expect(w?.message).toContain("R313");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1923,6 +2000,19 @@ describe("R309 review: a refused member's name label drops blank arms and dedupe
     if (refusal === undefined) throw new Error("fixture drift: reachLatchRefusals refused nothing");
     return refusal.member;
   }
+
+  test("R316: a preamble whose arms give no header end to anchor on is refused, cause preamble", () => {
+    const owner = fakeNode({ children: [fakeName("Pick")] });
+    const spec: MutationSpec = {
+      operatorName: "lethal.op",
+      operatorVersion: "1.0.0",
+      astNodeId: "0-0",
+      before: owner,
+      after: { ...owner, text: "" } as never,
+      parentContext: "statement-position",
+    };
+    expect(reachLatchRefusals([spec]).map((r) => r.cause)).toEqual(["preamble"]);
+  });
 
   test("an arm with a missing (blank) name, leaving only one real name, gives <unnamed> rather than a misleading rename", () => {
     expect(labelFor(["Pick", ""])).toBe("procedure <unnamed>");

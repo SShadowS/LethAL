@@ -104,6 +104,48 @@ function headerEndOf(owner: ALSyntaxNode): ALSyntaxNode | null {
   return next !== undefined && next.rawKind === ";" ? next : end;
 }
 
+/** The `#if` directives that open, switch and close a preamble's arms, as its direct children. */
+const ARM_MARKERS: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+]);
+
+/**
+ * R316. For a `preproc_split_procedure_preamble`, the last header token of EACH `#if` arm, in
+ * source order: the arm's `)`, else its return type after it (plain or named), else a `;` directly
+ * after either. `headerEndOf`'s rule, applied per arm: every arm's header tokens are direct
+ * children of the preamble. `null` unless every arm holds exactly one `procedure` keyword and one
+ * `)`, and an `#endif` closes the arms before the body: any other split is refused, never guessed.
+ */
+export function preambleArmHeaderEnds(owner: ALSyntaxNode): ALSyntaxNode[] | null {
+  const arms: ALSyntaxNode[][] = [];
+  let arm: ALSyntaxNode[] | null = null;
+  for (const c of owner.children) {
+    if (c.kind === ALNodeKind.block) break;
+    if (ARM_MARKERS.has(c.rawKind)) {
+      if (arm !== null) arms.push(arm);
+      arm = c.rawKind === "preproc_endif" ? null : [];
+    } else if (arm !== null && c.rawKind !== "comment" && c.rawKind !== "multiline_comment") {
+      arm.push(c);
+    }
+  }
+  if (arm !== null || arms.length === 0) return null;
+  const ends: ALSyntaxNode[] = [];
+  for (const kids of arms) {
+    const closes = kids.filter((c) => c.rawKind === ")");
+    const [close] = closes;
+    const keywords = kids.filter((c) => c.rawKind === "procedure_keyword").length;
+    if (close === undefined || closes.length !== 1 || keywords !== 1) return null;
+    const ret = kids.find((c) => c.fieldName === "return_type" && c.startIndex > close.startIndex);
+    const end = ret ?? close;
+    const next = kids.find((c) => c.startIndex >= end.endIndex);
+    ends.push(next !== undefined && next.rawKind === ";" ? next : end);
+  }
+  return ends;
+}
+
 /**
  * R303. For a procedure or trigger whose `var` section sits inside `#if`
  * (`preproc_conditional_var_block`), the header token to write ONE unconditional
@@ -112,8 +154,8 @@ function headerEndOf(owner: ALSyntaxNode): ALSyntaxNode | null {
  * build. `null` when the member has no such block, or when the token before the block (comments
  * skipped) is anything but the header's actual end: a pragma-only `#if` block, a split header's
  * `#endif`, or any kind not yet seen. Those members stay refused by name. A
- * `preproc_split_procedure_preamble` never reaches here: `reachLatchRefusedOwner` refuses it first
- * (R309).
+ * `preproc_split_procedure_preamble` never reaches here: `reachLatchRefusedOwner` decides it by
+ * `preambleArmHeaderEnds` first (R316).
  */
 export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
   const kids = owner.children;
@@ -135,9 +177,15 @@ export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
  * a nested `#if` wrapping the whole section, that way, so no `preproc_conditional_var_block` is
  * left for `splitVarHoistAnchor` to see, and a latch written by the plain rules lands in one
  * arm (alc AL0118) or beside a `var` that is already there (AL0104). Fail safe: refuse.
+ * R316: for a `preproc_split_procedure_preamble` the region is the WHOLE preamble before its body,
+ * every arm's header included: each arm's header end anchors a latch there, so a parse error in
+ * any header, even before the first arm's `)`, must refuse it too.
  */
 export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
-  const from = headerEndOf(owner)?.endIndex ?? owner.startIndex;
+  const from =
+    owner.rawKind === "preproc_split_procedure_preamble"
+      ? owner.startIndex
+      : (headerEndOf(owner)?.endIndex ?? owner.startIndex);
   const to = owner.children.find((c) => c.kind === ALNodeKind.block)?.startIndex ?? owner.endIndex;
   let bad = false;
   const walk = (n: ALSyntaxNode): void => {
@@ -155,12 +203,13 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
 
 /**
  * The member holding `node` when the writer declares no reach latch there, else `null`. Three
- * shapes, each refused by name in the `reach-latch-refused` warning:
- * - R309: a `preproc_split_procedure_preamble`, a split-header procedure whose `#if` arms each
- *   hold their own header and their own `var` section (an arm may have none), with one shared body
- *   after `#endif`. One latch declaration cannot serve every arm's section, and a per-arm placement
- *   is not built. The node returned is the preamble itself, procedure-like since R316.
- * - R313: a procedure or trigger whose var section did not parse cleanly (`varSectionUnparsed`).
+ * shapes, each refused by name in the `reach-latch-refused` warning, checked in this order:
+ * - R313: a member whose var section did not parse cleanly (`varSectionUnparsed`), one arm's var
+ *   section in a preamble included.
+ * - R316: a `preproc_split_procedure_preamble` (each `#if` arm holds its own header and its own
+ *   `var` section, if any, then one shared body after `#endif`) whose arm header ends
+ *   `preambleArmHeaderEnds` cannot all find. No parse is known to reach this: a preamble it can
+ *   anchor takes one latch per arm (`injectReachLatches`).
  * - R303: a procedure or trigger whose var section sits inside `#if` in a shape
  *   `splitVarHoistAnchor` does not cover.
  * Such a member gets no latch and no marker: its mutants are `unplaced`, their reach is
@@ -171,8 +220,9 @@ export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null 
   while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
     owner = owner.parent;
   if (owner === null) return null;
-  if (owner.rawKind === "preproc_split_procedure_preamble") return owner;
   if (varSectionUnparsed(owner)) return owner;
+  if (owner.rawKind === "preproc_split_procedure_preamble")
+    return preambleArmHeaderEnds(owner) === null ? owner : null;
   const split = owner.children.some((c) => c.rawKind === "preproc_conditional_var_block");
   return split && splitVarHoistAnchor(owner) === null ? owner : null;
 }
@@ -202,7 +252,7 @@ function placeReach(
   latch: string = REACH_LATCH,
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
-  // R303, R309, R313: a member the writer declares no latch in gets no marker.
+  // R303, R313, R316: a member the writer declares no latch in gets no marker.
   if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any

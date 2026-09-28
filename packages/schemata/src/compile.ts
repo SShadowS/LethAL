@@ -9,7 +9,13 @@ import {
   printWithRewrites,
 } from "@lethal/engine";
 import { type Component, buildComponents } from "./components";
-import { REACH_LATCH, emitDispatch, reachGrainOf, splitVarHoistAnchor } from "./dispatch";
+import {
+  REACH_LATCH,
+  emitDispatch,
+  preambleArmHeaderEnds,
+  reachGrainOf,
+  splitVarHoistAnchor,
+} from "./dispatch";
 import { type IdedSpec, assignMutantIds } from "./ids";
 
 export function compileSchemataForFile(
@@ -89,15 +95,7 @@ function injectReachLatches(
     const begin = body?.children[0];
     if (owner === null || begin === undefined) {
       throw new Error(
-        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: a split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble) is refused by \`placeReach\` before any marker is placed (R309).`,
-      );
-    }
-    // R316: a preamble is procedure-like now, but each arm has its own var section, so the plain
-    // rules below would declare the latch in ONE arm only (alc AL0118 in every other build).
-    // `placeReach` refuses it (R309), so no statement-grain marker reaches here.
-    if (owner.rawKind === "preproc_split_procedure_preamble") {
-      throw new Error(
-        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble), which has no latch placement (R309).`,
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: every procedure, both split-header procedure shapes and every trigger own their body (R301, R316).`,
       );
     }
     const known = byOwner.get(owner.startIndex);
@@ -108,6 +106,31 @@ function injectReachLatches(
     const latch = latchNameFor(owner);
     byOwner.set(owner.startIndex, latch);
     latches.set(c, latch);
+    // R316: a preamble, each `#if` arm with its own header and var section. R303's hoist, once per
+    // arm: ` var <latch>: Boolean;` right after each arm's header end, and every var-section `var`
+    // keyword before the body blanked to spaces, so each build declares the latch exactly once, in
+    // the one section its arm's declarations then continue. No newline, so no LINE moves.
+    if (owner.rawKind === "preproc_split_procedure_preamble") {
+      const ends = preambleArmHeaderEnds(owner);
+      if (ends === null) {
+        // `placeReach` refuses these members, so no statement-grain marker can reach here.
+        throw new Error(
+          `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a split-header procedure whose #if arms each have their own var section, and not every arm's header end was found (R316).`,
+        );
+      }
+      for (const end of ends)
+        rewrites.set(insertionNodeAt(end, end.endIndex), ` var ${latch}: Boolean;`);
+      const blank = (n: ALSyntaxNode): void => {
+        if (n.kind === ALNodeKind.block) return;
+        if (n.rawKind === "var_keyword" && n.parent?.kind === ALNodeKind.var_section) {
+          rewrites.set(n, " ".repeat(n.endIndex - n.startIndex));
+          return;
+        }
+        for (const k of n.children) blank(k);
+      };
+      for (const k of owner.children) blank(k);
+      continue;
+    }
     // R303: the var section sits inside `#if`. One unconditional `var` on the header line, and
     // each arm's own `var` keyword blanked to spaces, so the arms' declarations join that one
     // section in every build. No newline, so no LINE moves (offsets and later columns do).
