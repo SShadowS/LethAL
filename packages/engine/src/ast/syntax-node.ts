@@ -131,6 +131,60 @@ class FlatNode implements ALSyntaxNode {
   }
 }
 
+/** A spec's `after` node: `before` with its text replaced. Every other member reads through
+ *  `before` on demand, so the spec keeps one wrapper (`before`) and pins no child arrays, position
+ *  objects or bound closure (RUST-03 S4.2c). */
+class TextOverride implements ALSyntaxNode {
+  constructor(
+    private readonly before: ALSyntaxNode,
+    readonly text: string,
+  ) {}
+  get kind(): ALNodeKind {
+    return this.before.kind;
+  }
+  get rawKind(): string {
+    return this.before.rawKind;
+  }
+  get startIndex(): number {
+    return this.before.startIndex;
+  }
+  get endIndex(): number {
+    return this.before.endIndex;
+  }
+  get startPosition(): { readonly row: number; readonly column: number } {
+    return this.before.startPosition;
+  }
+  get endPosition(): { readonly row: number; readonly column: number } {
+    return this.before.endPosition;
+  }
+  get parent(): ALSyntaxNode | null {
+    return this.before.parent;
+  }
+  get children(): readonly ALSyntaxNode[] {
+    return this.before.children;
+  }
+  get namedChildren(): readonly ALSyntaxNode[] {
+    return this.before.namedChildren;
+  }
+  get fieldName(): string | null {
+    return this.before.fieldName;
+  }
+  get isMissing(): boolean {
+    return this.before.isMissing;
+  }
+  get hasError(): boolean {
+    return this.before.hasError;
+  }
+  childForFieldName(name: string): ALSyntaxNode | null {
+    return this.before.childForFieldName(name);
+  }
+}
+
+/** `before` with only its text replaced: what an operator's `after` node is. */
+export function withText(before: ALSyntaxNode, text: string): ALSyntaxNode {
+  return new TextOverride(before, text);
+}
+
 export function wrapFlatRoot(parsed: ParsedAL): ALSyntaxNode {
   return new FlatNode(parsed, 0, null, null);
 }

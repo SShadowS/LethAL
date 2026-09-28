@@ -1,3 +1,4 @@
+import { withText } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/operator-sdk";
 
 /** `argument_list` isn't in `ALNodeKind`; the field name is grammar-stable regardless. */
@@ -94,31 +95,14 @@ export function soleArgument(call: ALSyntaxNode): ALSyntaxNode | null {
 }
 
 /**
- * Produce a synthetic "after" node that reuses every structural field of
- * `before` but swaps `text`. The schemata compiler only reads `.text` from
- * `after`, so the rest of the shape exists only to satisfy the `ALSyntaxNode`
- * contract for TypeScript and any downstream consumer that inspects it.
+ * Produce a synthetic "after" node: `before` with only `text` swapped. Every
+ * other member reads through `before` on demand (`withText`, RUST-03 S4.2c), so
+ * a spec pins no copied child arrays or closure. The schemata compiler only
+ * reads `.text` from `after`.
  *
  * Mirrors `packages/builtin-tier1/src/mutate-helpers.ts`'s helper of the same
- * name and shape. Duplicated rather than imported: each tier package owns its
- * own synthesis helper instead of Tier 2 taking a dependency on Tier 1's
- * internals for what is a five-line structural adapter.
+ * name. Both delegate to the engine rather than Tier 2 importing Tier 1.
  */
 export function synthesizeAfter(before: ALSyntaxNode, text: string): ALSyntaxNode {
-  return {
-    kind: before.kind,
-    rawKind: before.rawKind,
-    text,
-    startIndex: before.startIndex,
-    endIndex: before.endIndex,
-    startPosition: before.startPosition,
-    endPosition: before.endPosition,
-    parent: before.parent,
-    children: before.children,
-    namedChildren: before.namedChildren,
-    fieldName: before.fieldName,
-    isMissing: before.isMissing,
-    hasError: before.hasError,
-    childForFieldName: before.childForFieldName.bind(before),
-  };
+  return withText(before, text);
 }

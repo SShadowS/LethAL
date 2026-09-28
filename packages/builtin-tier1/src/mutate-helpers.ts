@@ -1,3 +1,4 @@
+import { withText } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/operator-sdk";
 
 /**
@@ -68,20 +69,5 @@ export function replaceOperatorToken(
 }
 
 export function synthesizeAfter(before: ALSyntaxNode, text: string): ALSyntaxNode {
-  return {
-    kind: before.kind,
-    rawKind: before.rawKind,
-    text,
-    startIndex: before.startIndex,
-    endIndex: before.endIndex,
-    startPosition: before.startPosition,
-    endPosition: before.endPosition,
-    parent: before.parent,
-    children: before.children,
-    namedChildren: before.namedChildren,
-    fieldName: before.fieldName,
-    isMissing: before.isMissing,
-    hasError: before.hasError,
-    childForFieldName: before.childForFieldName.bind(before),
-  };
+  return withText(before, text);
 }
