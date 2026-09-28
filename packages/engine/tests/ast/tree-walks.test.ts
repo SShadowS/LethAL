@@ -422,3 +422,50 @@ describe("R301: split-header procedures", () => {
     expect(findEnclosingProcedure(first(root, "assignment_statement"))).toBeNull();
   });
 });
+
+/**
+ * R-297 Task 6: split-directive single-statement slots. BaseApp retires code with `#if` around an
+ * `if` header or a case label while the branch body sits after `#endif`, shared by both builds. The
+ * parse puts that body in a `<split kind>.<field>` slot; without it in SINGLE_STATEMENT_SLOTS the
+ * statement is not a site and its gap is the whole procedure body. Each test asserts the tree kind
+ * first, so a grammar that stopped building the split node fails here rather than passing vacuously.
+ */
+describe("R-297 Task 6: split-directive single-statement slots", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const proc = (body: string) =>
+    `codeunit 50100 "Repro D"\n{\n    procedure Pick(X: Integer): Integer\n    var\n        L: Integer;\n    begin\n${body}\n        exit(L);\n    end;\n}\n`;
+  /** The first node of `kind`, and the first assignment whose text is `text`. */
+  const parts = (src: string, kind: string, text: string) => {
+    const root = wrapRoot(parseAL(src));
+    let split: ALSyntaxNode | null = null;
+    let stmt: ALSyntaxNode | null = null;
+    visit(root, (n) => {
+      if (split === null && n.rawKind === kind) split = n;
+      if (stmt === null && n.kind === ALNodeKind.assignment_statement && n.text === text) stmt = n;
+    });
+    if (split === null) throw new Error(`no ${kind} in source`);
+    if (stmt === null) throw new Error(`no ${text} in source`);
+    return { split: split as ALSyntaxNode, stmt: stmt as ALSyntaxNode };
+  };
+  const expectSlot = (src: string, kind: string, text: string) => {
+    const { split, stmt } = parts(src, kind, text);
+    expect([stmt.parent?.rawKind, stmt.parent?.startIndex]).toEqual([
+      split.rawKind,
+      split.startIndex,
+    ]);
+    expect(isStatementSlot(stmt)).toBe(true);
+    expect([gapBlockOf(stmt).startIndex, gapBlockOf(stmt).endIndex]).toEqual([
+      stmt.startIndex,
+      stmt.endIndex,
+    ]);
+  };
+
+  it("preproc_split_if_statement: the shared then-branch is a slot and its own gap block", () => {
+    const src = proc(
+      "#if not CLEAN27\n        if X > 1 then\n#else\n        if X < 3 then\n#endif\n            L := 5;",
+    );
+    expectSlot(src, "preproc_split_if_statement", "L := 5");
+  });
+});

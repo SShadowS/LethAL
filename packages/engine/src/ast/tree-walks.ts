@@ -51,6 +51,8 @@ const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
   `${ALNodeKind.while_statement}.body`,
   `${ALNodeKind.for_statement}.body`,
   "foreach_statement.body",
+  // R287 (C6): `#if` around an `if` header, the then-branch shared after `#endif`.
+  "preproc_split_if_statement.then_branch",
 ]);
 
 /**
