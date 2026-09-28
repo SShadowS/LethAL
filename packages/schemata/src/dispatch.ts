@@ -111,10 +111,9 @@ function headerEndOf(owner: ALSyntaxNode): ALSyntaxNode | null {
  * arm's declarations become conditional declarations in that one section, which is valid in every
  * build. `null` when the member has no such block, or when the token before the block (comments
  * skipped) is anything but the header's actual end: a pragma-only `#if` block, a split header's
- * `#endif`, or any kind not yet seen. Those members stay refused by name. Not every unproven shape
- * reaches here: a `preproc_split_procedure_preamble` (each header arm with its own `var` section)
- * is not procedure-like, so it has no owner to refuse, and `injectReachLatches` throws for the
- * whole run instead (R309, open).
+ * `#endif`, or any kind not yet seen. Those members stay refused by name. A
+ * `preproc_split_procedure_preamble` never reaches here: `reachLatchRefusedOwner` refuses it first
+ * (R309).
  */
 export function splitVarHoistAnchor(owner: ALSyntaxNode): ALSyntaxNode | null {
   const kids = owner.children;
@@ -155,18 +154,30 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
 }
 
 /**
- * R303: the procedure or trigger holding `node` when its `var` section sits inside `#if` in a
- * shape `splitVarHoistAnchor` does not cover, or did not parse cleanly (`varSectionUnparsed`),
- * else `null`. Such a member gets no latch and no marker: its mutants are `unplaced`, their reach
- * is `not-decided`, never unreached. The member is still instrumented and scored. A
- * `preproc_split_procedure_preamble` is never returned: it is not procedure-like, so the walk finds
- * no owner and `injectReachLatches` throws for the whole run (R309, open).
+ * The member holding `node` when the writer declares no reach latch there, else `null`. Three
+ * shapes, each refused by name in the `reach-latch-refused` warning:
+ * - R309: a `preproc_split_procedure_preamble`, a split-header procedure whose `#if` arms each
+ *   hold their own header and their own `var` section (an arm may have none), with one shared body
+ *   after `#endif`. One latch declaration cannot serve every arm's section, and a per-arm placement
+ *   is not built (it would measure nothing until R316 gives the member a name and a span). The
+ *   node returned is the preamble itself, which is not procedure-like.
+ * - R313: a procedure or trigger whose var section did not parse cleanly (`varSectionUnparsed`).
+ * - R303: a procedure or trigger whose var section sits inside `#if` in a shape
+ *   `splitVarHoistAnchor` does not cover.
+ * Such a member gets no latch and no marker: its mutants are `unplaced`, their reach is
+ * `not-decided`, never unreached. The member is still instrumented and scored.
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
-  while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
+  while (
+    owner !== null &&
+    !isProcedureLike(owner) &&
+    owner.kind !== ALNodeKind.trigger &&
+    owner.rawKind !== "preproc_split_procedure_preamble"
+  )
     owner = owner.parent;
   if (owner === null) return null;
+  if (owner.rawKind === "preproc_split_procedure_preamble") return owner;
   if (varSectionUnparsed(owner)) return owner;
   const split = owner.children.some((c) => c.rawKind === "preproc_conditional_var_block");
   return split && splitVarHoistAnchor(owner) === null ? owner : null;
@@ -197,8 +208,7 @@ function placeReach(
   latch: string = REACH_LATCH,
 ): { grain: ReachGrain; text: string } {
   const text = spliceIntoRoot(root, m);
-  // R303, R313: a split var section in an unproven shape, or one that did not parse cleanly, gets no latch, so no marker.
-  // Not R309's preamble shape: that one has no owner here and throws in `injectReachLatches`.
+  // R303, R309, R313: a member the writer declares no latch in gets no marker.
   if (reachLatchRefusedOwner(root) !== null) return { grain: "unplaced", text };
   const s = m.statement;
   // The walk from the mutated node up to (not including) its resolved statement. Crossing any
