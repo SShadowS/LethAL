@@ -1286,6 +1286,28 @@ spawn must RACE it, the way `OneShotTransport.send` does, rather than wait for a
 - **Not the verdicts.** Whether v2 reproduces the frozen 3 killed / 13 survived / 0 no-coverage
   per-mutant is the gate's job, not this section's.
 
+### `--server` takes preprocessor symbols only at start (measured 2026-09-28, v2.11.0)
+
+Scratch evidence, R319: hand-written repro, local, no BC container. The probe is `$S/wire-probe.ts`
+(`$S` is the R319 scratch directory), driving al-runner directly with no LethAL involved. The repro
+app has one procedure whose value is 1 under `CLEAN27` and 2 otherwise; the one test asserts 1 with
+no `#if` of its own, so the test passes only in the `CLEAN27` build.
+
+| mode | result | build measured |
+| --- | --- | --- |
+| one-shot, no symbols | 0 passed, 1 failed | no-symbol |
+| one-shot, `--define CLEAN27` | 1 passed | `CLEAN27` |
+| `--server`, no symbols | 0 passed, 1 failed | no-symbol |
+| `--server --define CLEAN27` (at daemon start) | 1 passed | `CLEAN27` |
+| `--server --preprocessor-symbols CLEAN27` (at daemon start) | 1 passed | `CLEAN27` |
+| `--server`, request field `"preprocessorSymbols": ["CLEAN27"]` | 0 passed, 1 failed, no error | no-symbol |
+| `--server`, request field `"defines": ["CLEAN27"]` | 0 passed, 1 failed, no error | no-symbol |
+
+So the server reads symbols only as start-time CLI flags, fixed for the life of the daemon. A
+symbols field sent in the `runTests` request is silently ignored: no error, no acknowledgement, the
+daemon just keeps running whichever build it was started with. LethAL's fix (R319) starts the
+daemon with one `--define` per symbol, the same list the one-shot argv already sent.
+
 ## al-runner 2.1.0.0 server mode — measured, and it is a different protocol now
 
 Answers R97. Every line below came from driving `al-runner --server` directly over stdin/stdout on
