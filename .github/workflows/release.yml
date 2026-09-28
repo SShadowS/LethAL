@@ -10,6 +10,9 @@ on:
   push:
     tags:
       - "v*"
+  # A trial run (RUST-03 S2): every step except the release notes and the publish, which are guarded
+  # to tag pushes below, so a dispatch can never create a release or a draft.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,6 +40,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Tag must match the version in package.json
+        if: github.event_name == 'push'
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -119,6 +123,7 @@ jobs:
       # be a second account of the same release, free to disagree with the first; the script refuses
       # a missing or empty section rather than shipping a release with no notes.
       - name: Release notes from the changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           bun scripts/changelog-section.ts "${GITHUB_REF_NAME}" > release-notes.md
@@ -146,6 +151,7 @@ jobs:
           EOF
 
       - name: Publish the release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           draft: true
