@@ -6,6 +6,8 @@
  * and every `VerifyResult.id` echoes it). New-test names are `qualifiedTestName`'s
  * `<codeunitName>.<method>`, the form `NewTestResult.test` carries.
  */
+import type { TestMethodRef } from "../src/backend";
+import { discoverTests } from "../src/discovery";
 import type { RunEvent } from "../src/events";
 import type { SessionReport } from "../src/report";
 import { VERIFY_EXIT, type VerifyOutput } from "../src/verify";
@@ -264,4 +266,20 @@ export function noOpTestCodeunit(id: number, name: string, n: number): string {
       `    [Test]\n    procedure VerifyScaleNoOp${i + 1}()\n    var\n        X: Integer;\n    begin\n        X := ${i + 1};\n    end;\n`,
   );
   return `codeunit ${id} "${name}"\n{\n    Subtype = Test;\n\n${procs.join("\n")}}\n`;
+}
+
+/** The restore's carrier test as the product's own discovery reports it, `file` included: the
+ *  TestPage scan (R-236c) refuses a ref without one. Throws when the suite does not declare it. */
+export async function discoveredTestRef(
+  testDir: string,
+  codeunitName: string,
+  method: string,
+): Promise<TestMethodRef> {
+  const ref = (await discoverTests(testDir)).find(
+    (r) => r.codeunitName === codeunitName && r.method === method,
+  );
+  if (ref === undefined) {
+    throw new VerifyScaleError(`${testDir} declares no test ${codeunitName}.${method}`);
+  }
+  return ref;
 }

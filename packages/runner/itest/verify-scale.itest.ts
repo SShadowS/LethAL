@@ -27,7 +27,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
-import type { TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import {
@@ -64,6 +63,7 @@ import {
   allSurvivorIds,
   assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
+  discoveredTestRef,
   firstSurvivorIds,
   foldLibraryTimeline,
   noOpTestCodeunit,
@@ -97,12 +97,9 @@ const NOOP_NAMES: readonly string[] = Array.from(
 );
 const SCRATCH_TESTS = COMMITTED_TESTS + NOOP_TESTS;
 const SCALING_K = [1, 5, 16] as const;
-/** The restore's one request: a green committed test. Its verdict is printed, not asserted. */
-const RESTORE_METHOD: TestMethodRef = {
-  codeunitId: 79310,
-  codeunitName: "Data Tests",
-  method: "InsertDoublesAmountWeak",
-};
+/** The restore's one request, a green committed test, taken from discovery at restore time
+ *  (`discoveredTestRef`). Its verdict is printed, not asserted. */
+const RESTORE_TEST = { codeunitName: "Data Tests", method: "InsertDoublesAmountWeak" } as const;
 const RECOVERY =
   "The container may carry the scratch test app. Republish fixtures/sandbox-data-tests by hand and compare its read-back hash before any other gate.";
 
@@ -611,6 +608,11 @@ async function main(): Promise<void> {
       // ponytail: any installed mutant carries the publish; the restore measures nothing.
       const [anyMutant] = manifest.mutants;
       if (anyMutant === undefined) throw new Error("step 9: the resident manifest has no mutant");
+      const restoreMethod = await discoveredTestRef(
+        TEST_DIR,
+        RESTORE_TEST.codeunitName,
+        RESTORE_TEST.method,
+      );
       const compiled = await backend.compileTestApp(TEST_DIR, artifact);
       const runId = store.createRun({
         projectPath: PROJECT_DIR,
@@ -623,13 +625,13 @@ async function main(): Promise<void> {
         store,
         runId,
         installed,
-        requests: [{ mutantId: anyMutant.mutantId, methods: [RESTORE_METHOD] }],
+        requests: [{ mutantId: anyMutant.mutantId, methods: [restoreMethod] }],
         lease,
         resourceServer: bcdev.server,
         resourceServerInstance: bcdev.serverInstance,
         quarantineDir,
         // R-236c: the product's own scan, so a carrier that may open a TestPage is never sent.
-        testPageRefused: await scanTestPageTests(TEST_DIR, [RESTORE_METHOD]),
+        testPageRefused: await scanTestPageTests(TEST_DIR, [restoreMethod]),
         inLease: async (fence) => {
           published = await backend.publishTestApp(fence, compiled);
         },

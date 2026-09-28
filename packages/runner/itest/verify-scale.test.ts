@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import type { RunEvent, RunPhase } from "../src/events";
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { TestPageScanError, scanTestPageTests } from "../src/testpage-scan";
 import type { NewTestResult, VerifyOutput, VerifyResult } from "../src/verify";
 import { type NormalizedMutant, keyOf } from "./mutant-equality";
 import {
@@ -9,6 +11,7 @@ import {
   allSurvivorIds,
   assertOnlyExpectedTestPageRefusal,
   assertVerifyMeasured,
+  discoveredTestRef,
   firstSurvivorIds,
   foldLibraryTimeline,
   noOpTestCodeunit,
@@ -382,5 +385,30 @@ describe("noOpTestCodeunit", () => {
 
   test("names no Record, Codeunit.Run or target object", () => {
     expect(al).not.toMatch(/Record|Codeunit\.Run|Data |Page|Table/i);
+  });
+});
+
+describe("discoveredTestRef", () => {
+  const TEST_DIR = join(import.meta.dir, "..", "..", "..", "fixtures", "sandbox-data-tests");
+
+  test("the restore's carrier, as discovered, passes the TestPage scan; a hand-built ref does not", async () => {
+    const ref = await discoveredTestRef(TEST_DIR, "Data Tests", "InsertDoublesAmountWeak");
+    expect(ref.file).toBeDefined();
+    expect((await scanTestPageTests(TEST_DIR, [ref])).size).toBe(0);
+    // The ref step 9 used to build by hand: no file, so the scan refuses (session 1, 2026-09-28).
+    const handBuilt = {
+      codeunitId: 79310,
+      codeunitName: "Data Tests",
+      method: "InsertDoublesAmountWeak",
+    };
+    await expect(scanTestPageTests(TEST_DIR, [handBuilt])).rejects.toBeInstanceOf(
+      TestPageScanError,
+    );
+  });
+
+  test("throws when the suite does not declare the test", async () => {
+    await expect(discoveredTestRef(TEST_DIR, "Data Tests", "NoSuchTest")).rejects.toBeInstanceOf(
+      VerifyScaleError,
+    );
   });
 });
