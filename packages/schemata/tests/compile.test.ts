@@ -2050,3 +2050,94 @@ describe("R303: a member whose var section is split by #if gets no reach latch",
     expect(countErrorNodes(out)).toBe(0);
   });
 });
+
+/** R312: a member var section whose LAST child is `#if` of declarations. Hand-written. */
+const INBODY_SRC = `codeunit 50100 "Repro K"
+{
+    procedure Pick(X: Integer): Integer
+    var
+#if not CLEAN27
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    trigger OnRun()
+    var // note
+        A: Integer;
+#if not CLEAN27
+        L: Integer;
+#else
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 2;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+/** No code after a directive on its line (alc AL0631). */
+function directiveLinesClean(text: string): boolean {
+  return text.split("\n").every((raw) => {
+    const l = raw.replace(/\r$/, "");
+    if (/^\s*#(if|elif)\b/.test(l)) return !l.includes(";");
+    if (/^\s*#(else|endif)\b/.test(l)) return /^\s*#(else|endif)\s*(\/\/.*)?$/.test(l);
+    return true;
+  });
+}
+
+const SELECTOR_DECL = 'MutationSelector: Codeunit "Mutation Selector";';
+
+/** Line count with R-297's object-level selector insertion removed. That insertion adds lines by
+ *  design (`\n        <decl>` appended to a var section, or `    var\n        <decl>\n\n` before
+ *  the first member) and is not what these tests measure; the latch edits must add none.
+ *
+ *  `emitDispatch` (dispatch.ts) also embeds real newlines in every guard chain, independent of
+ *  where the latch lands (measured against the reference `head-emit-c1-plain.al`: 15 source
+ *  lines become 52). That growth is pre-existing, unrelated to this fix, and deterministic for a
+ *  single-mutant guard: `if Active('id') then begin\n  <branch>\nend else begin\n  <original>\nend;`
+ *  always reduces back to exactly `<original>`. Undoing it here isolates the one thing this test
+ *  measures: whether the LATCH insertion itself moves any line. */
+function linesWithoutSelector(text: string): number {
+  return text
+    .replace(`    var\n        ${SELECTOR_DECL}\n\n`, "")
+    .replace(`\n        ${SELECTOR_DECL}`, "")
+    .replace(
+      /if MutationSelector\.Active\('[^']+'\) then begin\n {2}[\s\S]*?\nend else begin\n {2}([\s\S]*?)\nend(;?)/g,
+      "$1$2",
+    )
+    .split("\n").length;
+}
+
+describe("R312: a member var section ending in #if gets its latch after the var keyword", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("writes the latch on the var line, never on the #endif line, and moves no line", () => {
+    const root = wrapRoot(parseAL(INBODY_SRC));
+    const at = (text: string): ALSyntaxNode => {
+      const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
+      if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+      return a;
+    };
+    const specs = [
+      spec(at("Glob := X + 1"), "Glob := 0", "lethal.op"),
+      spec(at("Glob := Glob + 2"), "Glob := 0", "lethal.op"),
+    ];
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(INBODY_SRC, root, specs, ided);
+    expect(out).toContain(`    var ${REACH_LATCH}: Boolean;\n#if not CLEAN27\n        K: Integer;`);
+    expect(out).toContain(`    var ${REACH_LATCH}: Boolean; // note\n        A: Integer;`);
+    // Same-line only: `\s` alone would also match the newline before `begin` a few lines later,
+    // making this unsatisfiable for any real emission. `[ \t]*` stays on the `#endif` line.
+    expect(out).not.toMatch(/#endif[ \t]*\S/);
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutSelector(out)).toBe(INBODY_SRC.split("\n").length);
+    expect(countErrorNodes(out)).toBe(0);
+  });
+});

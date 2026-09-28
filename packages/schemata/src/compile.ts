@@ -107,8 +107,21 @@ function injectReachLatches(
     const decls = vars?.children.find((n) => n.kind === "var_body") ?? vars;
     const lastDecl = decls?.children.filter((n) => !isComment(n)).at(-1);
     if (vars !== undefined && lastDecl !== undefined) {
-      // After the last DECLARATION, before any trailing comment on its line.
-      rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${latch}: Boolean;`);
+      if (lastDecl.rawKind === "preproc_conditional_var") {
+        // R312: the section ends in `#if` declarations, and after its last child is the
+        // `#endif` line, where alc allows no code (AL0631). Right after the `var` keyword is
+        // unconditional and on a line of its own; any comment after it stays after it.
+        const keyword = vars.children.find((n) => n.rawKind === "var_keyword");
+        if (keyword === undefined) {
+          throw new Error(
+            `compileSchemataForFile: cannot instrument ${filePath}: a var section ending in #if has no var keyword to anchor the latch \`${latch}\` after.`,
+          );
+        }
+        rewrites.set(insertionNodeAt(keyword, keyword.endIndex), ` ${latch}: Boolean;`);
+      } else {
+        // After the last DECLARATION, before any trailing comment on its line.
+        rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${latch}: Boolean;`);
+      }
     } else {
       // Directly before `begin`, after any comment: the header's own line comment ends at a newline.
       rewrites.set(insertionNodeAt(begin, begin.startIndex), `var ${latch}: Boolean; `);
