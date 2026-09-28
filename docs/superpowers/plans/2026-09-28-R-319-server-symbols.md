@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r2 (2026-09-28), final.** Folds in review r1 (`H:/lethal-coord/reviews/R-319-plan/review-r1.md`) and the orchestrator's rulings; there is no round 2. **I1:** `run-equal.sh` now REQUIRES `expect/s1-clean-rate.json` and `expect/p12-mixed-scope.json` whenever those repros are named, checked for every named repro before any probe starts, and refuses to run if either is missing; it also stops (`set -euo pipefail`) when a probe exits non-zero or prints no `DONE`. Red-checked at r2: with either file moved away the run exits 1 at once, prints `MISSING EXPECTATION FILE ... refusing to run`, and writes no probe log (`$S/logs/redcheck-i1-p12.log`, `$S/logs/redcheck-i1-s1.log`); with both present, the r2 script runs `p12-mixed-scope` on the prototype to `check=0 CHECK PASS` (`$S/logs/equal-r2-p12.summary`). **I2:** Task 0's BEFORE check now requires both probes to finish (`DONE`, enforced by `run-equal.sh` and again by `diff-rows.ts`) and compares every row where a server leg differs from the one-shot leg with a named list, `expect/before-s1-clean-rate.txt` (24 rows) and `expect/before-p12-mixed-scope.txt` (8 rows), measured on HEAD's logs; `check=1` alone no longer passes it. **Minor 1:** the saved expectation rows are called selected witnesses (14 of `s1`'s 28 subset-mutant verdicts, all 8 of `p12`'s), not a complete table. **Minor 2:** Task 4 (the R316 pointer) stays its own commit and is not a condition of R-319's completion. **Q1:** the symbol-defining fixture leg for `itest:alrunner` is filed as [[R321]] (separate commit `fa064fd3`). **Q2:** the upstream issue is filed by the orchestrator as StefanMaron/BusinessCentral.AL.Runner#4952; Task 5 links it, and the draft is gone from the notes. **Q3:** the implementer removes the prototype worktree `$S/proto` when building starts.
+
 **Revision r1 (2026-09-28), draft for the orchestrator's review.**
 
 **Goal:** With `serverMode` on, al-runner compiles and runs the build the session's `preprocessorSymbols` select, exactly as the one-shot path does. Today the daemon is started without them and every server verdict belongs to the no-symbol build, while the report records the symbols as used.
@@ -46,7 +48,7 @@ The CLEAN-style repro `s1-clean-rate` (symbols `CLEAN27` and `A`, 7 mutants) has
 
 ### The fix, prototyped (`$S/proto`, detached at `fd000a7`, diff `$S/proto-full.patch`)
 
-Task 1's two small product edits and its three tests. The prototype worktree is removed (`git worktree remove`) once this plan is accepted. `bun run typecheck` clean; `bun test packages/runner/tests/al-runner-backend.test.ts packages/runner/tests/al-runner-server.test.ts` 57 pass, 0 fail; `bunx biome check` on the three touched files clean (at HEAD they are clean too). Red-checks, each restored green afterwards (3 pass):
+Task 1's two small product edits and its three tests. The implementer removes the prototype worktree (`git worktree remove`) when building starts. `bun run typecheck` clean; `bun test packages/runner/tests/al-runner-backend.test.ts packages/runner/tests/al-runner-server.test.ts` 57 pass, 0 fail; `bunx biome check` on the three touched files clean (at HEAD they are clean too). Red-checks, each restored green afterwards (3 pass):
 
 - the `--define` spread removed from `start`: both symbol tests FAIL (`$S/logs/redcheck-argv.log`), the no-symbol test passes;
 - the backend passing `[]` instead of `cfg.preprocessorSymbols`: both symbol tests FAIL (`$S/logs/redcheck-wire.log`);
@@ -66,7 +68,7 @@ Equality, every repro and every subset, on the prototype (`$S/logs/equal-fix.sum
 
 Seven `check=0 CHECK PASS` lines, 200 server-side agreements, 45 minutes serial (logs `$S/logs/eq-fix-*.log`).
 
-`s1-clean-rate` and `p12-mixed-scope` are checked against expectation files (`$S/expect/`) written from the HEAD one-shot leg's verdicts, which were already correct. That is what makes their PASS non-vacuous: three legs that all measured the no-symbol build agree with each other and still FAIL. The other five repros differ between builds only in declarations, so their builds give the same verdicts; they are equality controls, with no expectation file.
+`s1-clean-rate` and `p12-mixed-scope` are also checked against selected witnesses (`$S/expect/*.json`): verdicts taken from the HEAD one-shot leg, which was already correct, for the mutants whose verdict depends on the build. `s1`'s file fixes 14 of its 28 subset-mutant verdicts and `p12`'s all 8; the equality rule still covers every mutant. The witnesses are what make the PASS non-vacuous: three legs that all measured the no-symbol build agree with each other and still FAIL. From r2, `run-equal.sh` refuses to run either repro without its witness file. The other five repros differ between builds only in declarations, so their builds give the same verdicts; they are equality controls, with no expectation file.
 
 The checker was red-checked on the REAL logs (`$S/redcheck.py`, outputs under `$S/redcheck/`, log `$S/logs/redcheck-checker.log`, `ALL AS WANTED`): the fixed `s1` and `p12` logs exit 0; HEAD's `s1` log exits 1; and eleven edited copies of the fixed `s1` log each exit 1 (one server verdict flipped; one killing test changed in the resource leg; two verdicts swapped with the totals unchanged; one mutant dropped; one mutant duplicated; a second `BASE` line; a missing `END`; a `THREW` line; no `DONE`; one mutant's line moved; and every leg of every subset replaced by HEAD's server rows, which agree with each other and fail only on the expectation file).
 
@@ -130,7 +132,7 @@ The task allowed refusing `serverMode` together with `preprocessorSymbols` if th
 
 1. **The symbols reach the daemon, every leg.** Expected: with symbols, the daemon's argv holds one `--define` per symbol, in order, the same list as the one-shot argv, for both selector modes. Pinned by Task 1's two symbol tests; red-checked twice (the argv half and the backend half).
 2. **Nothing changes without symbols.** Expected: the daemon's argv is exactly `["al-runner", "--server"]`. Pinned by Task 1's no-symbol test (red-checked with an unconditional flag) and by `itest:alrunner` (Task 3).
-3. **Equal per mutant, not per count.** Expected: all three legs give the same verdict AND killing test for every mutant, in every subset, with the same id map; and `s1` and `p12` hold each build's own verdicts. Pinned by Task 2's checker, red-checked on real logs, including the "all legs agree on the wrong build" case.
+3. **Equal per mutant, not per count.** Expected: all three legs give the same verdict AND killing test for every mutant, in every subset, with the same id map; and `s1` and `p12` hold their selected witnesses, which only the right build gives. Pinned by Task 2's checker, red-checked on real logs, including the "all legs agree on the wrong build" case.
 4. **No field that would silently do nothing.** The request is not given a symbols field. Measured: the server ignores one.
 
 ---
@@ -141,7 +143,7 @@ The task allowed refusing `serverMode` together with `preprocessorSymbols` if th
 - Modify `packages/runner/src/al-runner-backend.ts`: the constructor passes `cfg.preprocessorSymbols`; the `preprocessorSymbols` doc comment names both paths (Task 1).
 - Modify `packages/runner/tests/al-runner-backend.test.ts`: three tests in the `AlRunnerBackend serverMode (R220)` describe (Task 1).
 - Modify `docs/measurements/README.md`: one subsection under "al-runner v2" with the wire table (Task 5).
-- Roadmap: `docs/roadmap/R316.md` gains the gate-evidence pointer (Task 4); `docs/roadmap/R319.md` is closed (Task 5); `ROADMAP.md` regenerated in both.
+- Roadmap: `docs/roadmap/R316.md` gains the gate-evidence pointer (Task 4, its own commit, not a condition of completion); `docs/roadmap/R319.md` is closed (Task 5); `ROADMAP.md` regenerated in both. [[R321]] was filed at plan time (r2).
 - Scratch, never committed: everything under `$S`, present at plan time.
 
 ---
@@ -150,7 +152,7 @@ The task allowed refusing `serverMode` together with `preprocessorSymbols` if th
 
 **Files:** scratch only.
 
-- [ ] **Step 1: Tools.** Present at plan time in `$S`: `wire-probe.ts`, `equal-probe.ts`, `check-equal.ts`, `run-equal.sh`, `redcheck.py`, the repros `repro/s1-clean-rate`, `repro/w1-wire` (new, hand-written) and `repro/p12-mixed-scope`, `p2-elif-else`, `p8-nested-condvar`, `p3-elif-noelse`, `p1-if-else`, `p14-arm-unparsed` (copied from R-316's scratch dir) with their `repro-tests-*` twins, and `expect/s1-clean-rate.json`, `expect/p12-mixed-scope.json`. `equal-probe.ts` imports the backend, orchestrator and store from `$ROOT` (default `U:/Git/LethAL-wt/r319`) by dynamic import, so one tool serves HEAD and the build under test. Confirm nothing points at another worktree:
+- [ ] **Step 1: Tools.** Present at plan time in `$S`: `wire-probe.ts`, `equal-probe.ts`, `check-equal.ts`, `run-equal.sh`, `redcheck.py`, the repros `repro/s1-clean-rate`, `repro/w1-wire` (new, hand-written) and `repro/p12-mixed-scope`, `p2-elif-else`, `p8-nested-condvar`, `p3-elif-noelse`, `p1-if-else`, `p14-arm-unparsed` (copied from R-316's scratch dir) with their `repro-tests-*` twins, the selected witnesses `expect/s1-clean-rate.json` and `expect/p12-mixed-scope.json`, and (r2) `diff-rows.ts` with the named BEFORE rows `expect/before-s1-clean-rate.txt` and `expect/before-p12-mixed-scope.txt`. `equal-probe.ts` imports the backend, orchestrator and store from `$ROOT` (default `U:/Git/LethAL-wt/r319`) by dynamic import, so one tool serves HEAD and the build under test. Confirm nothing points at another worktree:
 
 ```bash
 set -euo pipefail
@@ -173,16 +175,29 @@ tail -n 1 "$S/logs/wire-probe-t0.log"
 
 Expected: `WIRE PROBE PASS`, exit 0 (the seven rows of the table above). If the request-field rows now read `passed=1`, the server has gained per-request symbols: STOP and tell the coordinator, since the design choice changes.
 
-- [ ] **Step 3: BEFORE capture at HEAD.** On `lethal/r319` before Task 1, the equality probe must FAIL on the two discriminating repros:
+- [ ] **Step 3: BEFORE capture at HEAD.** On `lethal/r319` before Task 1, both probes must finish and the server legs must differ from the one-shot leg in exactly the named rows:
 
 ```bash
 set -euo pipefail
 S=C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r319
 bash "$S/run-equal.sh" before U:/Git/LethAL-wt/r319 s1-clean-rate p12-mixed-scope | tee "$S/logs/equal-before.summary"
-if grep -q "check=0" "$S/logs/equal-before.summary"; then exit 1; fi
+test "$(wc -l < "$S/logs/equal-before.summary")" -eq 2
+grep -qxF "before s1-clean-rate check=1 CHECK FAIL: server [CLEAN27]: M0001 is killed/RateSmall, oneshot says killed/RateBig" "$S/logs/equal-before.summary"
+grep -qxF "before p12-mixed-scope check=1 CHECK FAIL: server [CLEAN27]: M0001 is survived/-, oneshot says no-coverage/-" "$S/logs/equal-before.summary"
+for r in s1-clean-rate p12-mixed-scope; do
+  grep -qx DONE "$S/logs/eq-before-$r.log"
+  bun "$S/diff-rows.ts" "$S/logs/eq-before-$r.log" > "$S/logs/diff-before-$r.txt"
+  diff "$S/expect/before-$r.txt" "$S/logs/diff-before-$r.txt"
+done
+echo "BEFORE: both probes finished, 24 + 8 named rows differ, nothing else"
 ```
 
-Expected: two lines, both `check=1`; `s1` fails with `server [CLEAN27]: M0001 is killed/RateSmall, oneshot says killed/RateBig`; `p12` fails with `server [CLEAN27]: M0001 is survived/-, oneshot says no-coverage/-`. About 13 minutes. (Measured at plan time: `$S/logs/head-s1.log` and `$S/logs/eq-head-p12-mixed-scope.log`.)
+`run-equal.sh` itself exits 1 if a probe exits non-zero or prints no `DONE` (r2, I2), so under `set -euo pipefail` a crashed probe stops the block before any grep; `diff-rows.ts` exits 1 on a log without `DONE` too (red-checked at r2 on `$S/redcheck/nodone.log`, HEAD's `s1` log minus its last line: `NO DONE`, exit 1). Expected: the final line, exit 0, about 13 minutes. The named rows, as `diff-rows.ts` prints them (`DIFF <leg> <subset> <code> <server verdict/killer> oneshot <one-shot verdict/killer>`), measured on HEAD's logs (`$S/logs/head-s1.log`, `$S/logs/eq-head-p12-mixed-scope.log`):
+
+- `s1-clean-rate`, 24 rows, the same 12 in each of `server` and `server-resource`: under `[A]`, `M0004` and `M0005` read `survived/-` where the one-shot leg has `killed/RateSmall`, and `M0006` and `M0007` read `killed/RateSmall` where it has `survived/-`; under `[CLEAN27]`, `M0001` reads `killed/RateSmall` where it has `killed/RateBig`, and `M0003` reads `survived/-` where it has `killed/RateBig`; under `[CLEAN27,A]`, all six of those (`M0001`, `M0003`, `M0004`, `M0005`, `M0006`, `M0007`) as above. Subset `[]` has no differing row.
+- `p12-mixed-scope`, 8 rows, the same 4 in each server leg, all under `[CLEAN27]`: `M0001` reads `survived/-` and `M0002`, `M0003`, `M0004` read `killed/PickFive`, where the one-shot leg has `no-coverage/-` for all four. Subset `[]` has no differing row.
+
+After Task 1 the same tool prints no row for either repro (measured on the prototype's logs: 0 lines each).
 
 ---
 
@@ -349,7 +364,7 @@ git commit -m "fix(R319): start al-runner --server with the session's preprocess
 
 ### Task 2: Server and one-shot verdicts are equal per mutant, every repro, every subset (scratch, no container)
 
-**Files:** scratch only. `check-equal.ts`'s rules, in order, each exiting 1 on the first failure: no `THREW` line; exactly one `DONE`; every `BASE`, `MUT` and `END` line names an expected subset and leg; exactly the 2^n subsets of the repro's symbols, each with exactly the three legs, each with exactly one `BASE` and one `END`; baseline green and `errors=0` in every leg; no mutant code twice in one leg and subset; at least one mutant per leg; the complete id map (code to `file:line operator`) identical across the three legs of a subset AND across subsets; the same mutant count as the one-shot leg; verdict AND killing test equal to the one-shot leg's for every mutant; and, with an expectation file, every listed mutant holding its listed verdict in every leg of that subset.
+**Files:** scratch only. `check-equal.ts`'s rules, in order, each exiting 1 on the first failure: no `THREW` line; exactly one `DONE`; every `BASE`, `MUT` and `END` line names an expected subset and leg; exactly the 2^n subsets of the repro's symbols, each with exactly the three legs, each with exactly one `BASE` and one `END`; baseline green and `errors=0` in every leg; no mutant code twice in one leg and subset; at least one mutant per leg; the complete id map (code to `file:line operator`) identical across the three legs of a subset AND across subsets; the same mutant count as the one-shot leg; verdict AND killing test equal to the one-shot leg's for every mutant; and, with an expectation file, every listed mutant holding its listed verdict (a selected witness) in every leg of that subset. `run-equal.sh` passes the expectation file for `s1-clean-rate` and `p12-mixed-scope` unconditionally and refuses to start if either is missing (r2, I1).
 
 - [ ] **Step 1: The equality probe on the committed fix.**
 
@@ -399,6 +414,8 @@ Expected: its first line names al-runner v2.11.0; `--server leg: 3 killed, verdi
 
 **Files:** Modify `docs/roadmap/R316.md`; regenerate `ROADMAP.md`.
 
+Its own commit, independent of the fix: it tests nothing about symbols, and R-319 is complete without it (review r1, minor 2). It can land before, after, or apart from Tasks 1 to 3 and 5.
+
 - [ ] **Step 1: Add the pointer.** In `docs/roadmap/R316.md`, at the end of the bullet that begins `**Live gate, Cronus28**`, after `... was unchanged.`, add:
 
 ```markdown
@@ -427,7 +444,7 @@ Expected: its first line names al-runner v2.11.0; `--server leg: 3 killed, verdi
 
 - [ ] **Step 1: The measurement.** In `docs/measurements/README.md`, section "al-runner v2", add a subsection `### \`--server\` takes preprocessor symbols only at start (measured 2026-09-28, v2.11.0)` holding the wire table from "What was measured" above, the sentence that a request field is silently ignored, and the probe's location (scratch; the method is `$S/wire-probe.ts`'s: an app whose value differs by `CLEAN27` and a test with no `#if` that asserts one value).
 
-- [ ] **Step 2: Close the item.** In `docs/roadmap/R319.md`, set `status: "done (<Task 1 commit>)"` and append a `**Closed 2026-09-28 (R-319).**` paragraph: the plan path; the measured contract (start-time `--define` works, a request field is ignored); the fix (the daemon's argv, one `--define` per symbol, passed from `AlRunnerBackend`'s constructor); that the resource selector leg had the same gap and needed no separate code; the three tests and their three red-checks; the scratch equality probe (7 repros, every subset, three legs, per mutant, `s1` and `p12` against each build's own verdicts, checker red-checked on real logs); and that `itest:alrunner` passed unchanged with four legs identical.
+- [ ] **Step 2: Close the item.** In `docs/roadmap/R319.md`, set `status: "done (<Task 1 commit>)"` and append a `**Closed 2026-09-28 (R-319).**` paragraph: the plan path; the measured contract (start-time `--define` works, a request field is ignored); the fix (the daemon's argv, one `--define` per symbol, passed from `AlRunnerBackend`'s constructor); that the resource selector leg had the same gap and needed no separate code; the three tests and their three red-checks; the upstream issue StefanMaron/BusinessCentral.AL.Runner#4952 (https://github.com/StefanMaron/BusinessCentral.AL.Runner/issues/4952), filed 2026-09-28, which asks for per-request symbols or an error on an unknown request field, and the related closed #4064; a cross-link to [[R321]], the missing symbol-defining gate leg; the scratch equality probe (7 repros, every subset, three legs, per mutant, `s1` and `p12` also against selected witnesses that only the right build gives, checker red-checked on real logs); and that `itest:alrunner` passed unchanged with four legs identical.
 
 - [ ] **Step 3: Regenerate, check, commit.**
 
@@ -442,18 +459,17 @@ git commit -m "roadmap(R319): closed, al-runner --server now starts with the ses
 
 ## Notes
 
-### Upstream issue draft (for SShadowS/al-runner, not filed)
+### Upstream issue (filed)
 
-**Title:** `--server`: preprocessor symbols can only be set at daemon start, and a symbols field in `runTests` is silently ignored
-
-**Body:** On v2.11.0, `al-runner --server --define SYM` selects the `SYM` build for every request, and so does `--preprocessor-symbols SYM`. A `runTests` request carrying `"preprocessorSymbols": ["SYM"]` (or any other unknown field) is accepted without an error and compiles the no-symbol build. Repro: an app whose one procedure returns 1 under `#if SYM` and 2 otherwise, and a test with no `#if` that asserts 1. `--server --define SYM` then `runTests`: 1 passed. `--server` then `runTests` with `"preprocessorSymbols": ["SYM"]`: 0 passed, 1 failed, no error. Two asks, either would do: (1) accept per-request symbols in `runTests` (and key the warm state on them), so one daemon can serve builds with different symbols; or (2) reject unknown request fields with an error, so a client that sends one learns it did nothing. Smaller: the usage line `al-runner --server [--package-cache PATH ...] [--cache DIR]` does not list `--define` or `--preprocessor-symbols`, though both work there.
+Filed by the orchestrator on 2026-09-28, after owner approval: StefanMaron/BusinessCentral.AL.Runner#4952, https://github.com/StefanMaron/BusinessCentral.AL.Runner/issues/4952, "--server: preprocessor symbols can only be set at daemon start; a symbols field in runTests is silently ignored". Related and closed: #4064. The r1 draft is removed; the issue is the record.
 
 ### What this plan does not cover
 
 - The server legs still receive no platform-app pin and no `--auto-provision` (CLAUDE.md's `itest:alrunner` notes, R235 and R242); unchanged.
 - `al-runner-contract.ts` (R123's per-session probe) does not exercise `--server`; not widened here.
 
-## Open questions for the orchestrator
+## Rulings (r2)
 
-1. **A committed symbol leg.** Should a later task add a symbol-defining fixture pair to `itest:alrunner` (a fifth leg under two symbol sets), so the gate itself would catch a regression of R319? It needs a new fixture, `compile:fixtures` wiring and a new frozen baseline. This plan leaves it out and files nothing; say if it should be filed.
-2. **Filing the upstream issue.** The draft above is ready; say if and where to file it.
+1. **A committed symbol leg:** filed now as [[R321]] (`open, filed 2026-09-28`), its own commit on `lethal/r319`. Not built in R-319.
+2. **The upstream issue:** filed by the orchestrator as #4952; Task 5 links it.
+3. **The prototype worktree `$S/proto`:** removed by the implementer when building starts (`git worktree remove`), not at plan time.
