@@ -59,6 +59,8 @@
  * - **No `cancel`.** The protocol has it, and stopping at the first failure is what the one-shot
  *   path gets for free. It is worth having and is not here yet; leaving it out costs wall-clock,
  *   whereas getting it wrong mid-stream costs a verdict.
+ * - **No symbols in the request.** The request has no such field and the server ignores one
+ *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
 /** The subset of a spawned process this client uses, so tests can supply one without a binary. */
@@ -222,6 +224,13 @@ export class AlRunnerServer {
   constructor(
     private readonly alRunnerPath: string,
     private readonly spawn: ServerSpawnFn,
+    /**
+     * R319. Fixed for the daemon's life, because that is where al-runner reads them: measured on
+     * 2.11.0, `--define` at `--server` start selects the build, and a symbols field in a
+     * `runTests` request is silently ignored. One `--define` per symbol, the same form the
+     * one-shot argv uses (R101 (c)).
+     */
+    private readonly preprocessorSymbols: readonly string[] = [],
   ) {}
 
   /**
@@ -238,6 +247,7 @@ export class AlRunnerServer {
       this.alRunnerPath,
       "--server",
       ...packagePaths.flatMap((p) => ["--package-cache", p]),
+      ...this.preprocessorSymbols.flatMap((sym) => ["--define", sym]),
     ];
     const proc = this.spawn(argv);
     this.proc = proc;

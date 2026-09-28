@@ -757,6 +757,95 @@ describe("AlRunnerBackend serverMode (R220)", () => {
     );
     expect(backend.capabilities().coverage).toBe("none");
   });
+
+  /** The values that follow each `--define` in one argv, in order. */
+  function definesOf(argv: readonly string[]): string[] {
+    const out: string[] = [];
+    argv.forEach((a, i) => {
+      const next = argv[i + 1];
+      if (a === "--define" && next !== undefined) out.push(next);
+    });
+    return out;
+  }
+
+  for (const selectorMode of ["static", "resource"] as const) {
+    test(`R319: the daemon is started with the SAME --define list the one-shot path sends (${selectorMode} selector)`, async () => {
+      // al-runner 2.11.0's server takes preprocessor symbols ONLY as start-time flags. Its
+      // `runTests` request has no symbols field and silently ignores one, measured. So a daemon
+      // started without them compiles the no-symbol build for the whole session.
+      const symbols = ["CLEAN27", "A"];
+      const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-syms-"));
+      const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
+      const serverArgv: string[][] = [];
+      const spy: ServerSpawnFn = (argv) => {
+        serverArgv.push([...argv]);
+        return fake.spawn(argv);
+      };
+      const server = new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: dir,
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          serverMode: true,
+          selectorMode,
+          preprocessorSymbols: symbols,
+        },
+        okSpawn({ tests: [] }).spawn,
+        spy,
+      );
+      const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
+      await server.run(ref, { coverage: "none", timeoutMs: 1000 });
+      await server.close();
+
+      const oneShotSpawn = okSpawn({ tests: [] });
+      const oneShot = new AlRunnerBackend(
+        {
+          alRunnerPath: "al-runner",
+          instrumentedDir: dir,
+          testDir: "/tests",
+          selectorObjectId: 50000,
+          preprocessorSymbols: symbols,
+        },
+        oneShotSpawn.spawn,
+      );
+      await oneShot.run(ref, { coverage: "none", timeoutMs: 1000 });
+
+      expect(serverArgv.length).toBe(1);
+      const [started] = serverArgv;
+      const [sent] = oneShotSpawn.calls;
+      if (started === undefined || sent === undefined) throw new Error("no argv captured");
+      expect(definesOf(started)).toEqual(["CLEAN27", "A"]);
+      expect(definesOf(started)).toEqual(definesOf(sent));
+    });
+  }
+
+  test("R319: with no symbols the daemon's argv carries no --define at all", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-nosyms-"));
+    const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
+    const serverArgv: string[][] = [];
+    const spy: ServerSpawnFn = (argv) => {
+      serverArgv.push([...argv]);
+      return fake.spawn(argv);
+    };
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        serverMode: true,
+      },
+      okSpawn({ tests: [] }).spawn,
+      spy,
+    );
+    await backend.run(
+      { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
+      { coverage: "none", timeoutMs: 1000 },
+    );
+    await backend.close();
+    expect(serverArgv).toEqual([["al-runner", "--server"]]);
+  });
 });
 
 describe("AlRunnerBackend capabilities", () => {

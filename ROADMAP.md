@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 318 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 319 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -126,7 +126,7 @@ that ordering is the priority.
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · open, filed 2026-09-28
 - **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · done (56b7e3b3..ae0793a9)
 - **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · open, filed 2026-09-28
-- **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · open, filed 2026-09-28
+- **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · done (33cfc55a)
 
 ## Product gaps a real project hits
 
@@ -363,6 +363,7 @@ that ordering is the priority.
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · open, filed 2026-09-28. RUST-02 (2026-09-28) reopened the route with clang and it passed both gates, GO on…
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · open, filed 2026-09-28
+- **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · open, filed 2026-09-28
 
 ---
 
