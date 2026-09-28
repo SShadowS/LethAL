@@ -144,3 +144,118 @@ Policy, fixed before the rerun:
    that re-record and then uses the re-recorded baseline's survivor count in place of 63.
 
 2026-09-28: SURVIVORS set to 68 from the re-recorded tables.baseline.json (f25d647), per the b246d01 note; timing ranges stay model estimates.
+
+## Results (appended 2026-09-28)
+
+Both sessions below ran after the 2026-09-28 rebaseline (SURVIVORS 63 to 68, `ea3e09b`) and after
+R-236c's restore guard (`49d0458`). LethAL Control on Cronus28: `1.0.0.20`. Base Application build:
+`28.4.53241.53758`.
+
+### The no-measurement attempt
+
+Session 1's first attempt (lease 044, 2026-09-27) is NO MEASUREMENT, under the b246d01 policy above.
+Its source run A quarantined with no mutants scored, and at the same time `tables.baseline.json` was
+stale (GH-24 had added 10 sites and the owner's re-record had not landed yet), so both the run and the
+baseline it would compare against were bad. No number from that attempt appears below.
+
+### Session 1 (lease 059)
+
+- A: 387 mutants, 301 killed / 68 survived / 18 no-coverage, 0 errors. Verdicts equal
+  `tables.baseline.json`. Artifact `29b29564fe95a977ac495b40b5a5411d`. totalMs 269241, outer 269543 ms.
+- V1: 64415 ms (runVerify totalMs 64389, compileMs 1163, publishMs 1481).
+- V2: 64183 ms (runVerify totalMs 64158, compileMs 1229, publishMs 1070).
+- V3: 63555 ms (runVerify totalMs 63521, compileMs 1203, publishMs 1004).
+- Spread max(V)/min(V) = 64415 / 63555 = 1.014.
+- B1: 301/68/18, totalMs 269266, outer 269588 ms.
+- B2: 301/68/18, totalMs 241112, outer 241245 ms.
+- Worst ratio max(V)/min(B outer) = 64415 / 241245 = **0.2670. NOT under 0.20.**
+- Scaling: k=1 7509 ms (ratio 0.0311), k=5 11095 ms (ratio 0.0460), k=16 19247 ms (ratio 0.0798).
+- Library `runVerify` timeline for one call against A, labelled library (this is not `lethal verify`'s
+  wall time): totalMs 65858, compileMs 1109, publishMs 1100, baselineMs 11591, mutantsMs 51126,
+  postMutantsMixedMs 645 (labelled mixed: reruns plus teardown plus return work, not separable by
+  event), unattributedMs 287.
+- `itest:tables`: the run right after the failed restore (below) is UNPROVEN and is not used here.
+  The run after the proven hand restore (`r270-s1b-real-tables.log`) is the real result: PASS,
+  301/68/18.
+
+**Restore, session 1.** Step 9 FAILED on its first, automated run: `RESTORE_METHOD` was a hand-built
+test reference with no file, and R-236c's `scanTestPageSources` (added by `49d0458`) refuses a
+reference without one: `TestPageScanError: Data Tests.InsertDoublesAmountWeak has no file`. The
+container was left carrying the scratch test app (`LethAL Sandbox Data Tests` 1.0.0.18, its package
+holding both `DataTests.Codeunit.al` and `DataVerifyScaleNoOp.Codeunit.al`, its
+`SymbolReference.json` naming codeunit 79396 "Verify Scale"). It was restored by hand, with the
+product's own functions (`DeploymentVerifier.verify`, `compileTestApp`, `publishTestApp`) against
+B2's artifact. Fresh read-back hash `9fadbcfb3831a09297d7804cc6936492aeeae89be06a69930360937f5ecc34b1`
+equals the hash that was published, the source is byte-identical to the committed file, and codeunit
+79396 is absent from the fresh package. The driver bug is fixed in `2b76cca` (`discoveredTestRef`,
+red-checked): step 9 now takes its restore method from `discoverTests` instead of a hand-built
+reference.
+
+### Session 2 (lease 060)
+
+- A: 301/68/18, verdicts equal `tables.baseline.json`. Artifact `f34780ee991d60bc9b119bd66f71514c`.
+  totalMs 240192, outer 240382 ms.
+- V1: 61314 ms (totalMs 61277, compileMs 1283, publishMs 1146).
+- V2: 58485 ms (totalMs 58463, compileMs 1192, publishMs 1276).
+- V3: 59671 ms (totalMs 59486, compileMs 1168, publishMs 1086).
+- Spread max(V)/min(V) = 61314 / 58485 = 1.048.
+- B1: 301/68/18, totalMs 243828, outer 243938 ms.
+- B2: 301/68/18, totalMs 240555, outer 240676 ms.
+- Worst ratio max(V)/min(B outer) = 61314 / 240676 = **0.2548. NOT under 0.20.**
+- Scaling: k=1 7956 ms (ratio 0.0331), k=5 11156 ms (ratio 0.0464), k=16 18189 ms (ratio 0.0756).
+- Library `runVerify` timeline: totalMs 61214, compileMs 1222, publishMs 1172, baselineMs 11749,
+  mutantsMs 46251, postMutantsMixedMs 544 (mixed), unattributedMs 276.
+- `itest:tables`: PASS, 301/68/18.
+
+**Restore, session 2.** Step 9 PASSED on its first run: fresh read-back equal to the compiled hash,
+carrier verdict survived, against B2's artifact `c7d41804ef2a1235c130be53f93f2d74`.
+
+### F, verify's fixed cost: least-squares fit
+
+Method: an ordinary least-squares line `V = F + s*k` through four points per session: the three
+scaling points `(k, V)` at k = 1, 5, 16, plus the all-survivor point at k = 68, using the MEAN of V1,
+V2 and V3 as that point's V (so the fit is not dominated by three nearly-identical k=68 readings). F
+is the fitted intercept.
+
+- Session 1: points (1, 7509), (5, 11095), (16, 19247), (68, 64051). Fit: slope 844.71 ms/survivor,
+  **F = 6469.5 ms = 6.47 s.**
+- Session 2: points (1, 7956), (5, 11156), (16, 18189), (68, 59823.3). Fit: slope 776.62 ms/survivor,
+  **F = 6807.1 ms = 6.81 s.**
+
+### Predictions: MATCHED / MISSED
+
+- **B warm outer time, 100 to 400 s: MATCHED.** Session 1: 241.2 to 269.6 s. Session 2: 240.7 to
+  243.9 s.
+- **Verify fixed cost F, 4 to 12 s outer (intercept of the k points): MATCHED.** Session 1: 6.47 s.
+  Session 2: 6.81 s.
+- **Verify over all survivors, 25 to 150 s outer: MATCHED.** Session 1: 63.6 to 64.4 s. Session 2:
+  58.5 to 61.3 s. (The workload is 68 survivors, not the spec's original 63, after the 2026-09-28
+  rebaseline; the range was derived from the same fixture's scaling and still holds.)
+- **Worst ratio range 0.16 to 0.49, point about 0.31, predicting "not met": MATCHED**, on the range
+  and on the direction. Session 1: 0.2670. Session 2: 0.2548. Both sit below the 0.31 point estimate,
+  nearer the low corner of the model (f 0.26, giving 0.16), and both correctly land above 0.20, so
+  "not met" is confirmed in both sessions.
+- **Scaling rises with k, and the ratio at k=1 is below 0.10: MATCHED.** Session 1: 0.0311 (k=1) <
+  0.0460 (k=5) < 0.0798 (k=16) < 0.2670 (k=68). Session 2: 0.0331 < 0.0464 < 0.0756 < 0.2548.
+- **Spread max(V)/min(V) under 1.25: MATCHED.** Session 1: 1.014. Session 2: 1.048.
+- **BLOCK conditions (zero verdictDiffs, exactly one expected TestPage refusal, one batch and 68
+  survivors, exit 5 with the right row and new-test counts, restore's read-back hash matching): all
+  MET in both sessions.** In session 1 the restore's read-back match was proven by hand after the
+  automated step 9 failed on a driver bug (above), not by the single automated run. No verdict
+  difference was found anywhere in either session, so no BLOCK was raised.
+
+`killingTest` of B equal to the baseline's is a finding-only line (never a BLOCK); it is not
+separately printed by the driver, so it is not scored here.
+
+### Task 5a: not triggered
+
+Trigger condition 3 (a pre-lease read whose cost, divided by min(B), is larger than the worst ratio
+minus 0.20) cannot fire on this fixture: Task 1's offline probe measured `hashTargetSource` and
+`discoverTests` at single-digit milliseconds on `sandbox-data` (median 4 ms and 2 ms), against
+`min(B outer)` of 241245 ms (session 1) and 240676 ms (session 2). Task 5a is dropped, as the spec
+already predicted.
+
+### Workload limit
+
+The five new tests measured here are no-ops on one fixture (`fixtures/sandbox-data`). This result
+says nothing about verify's wall time with real answer tests, or on a real project.
