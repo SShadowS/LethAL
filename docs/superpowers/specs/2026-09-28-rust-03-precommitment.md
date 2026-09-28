@@ -329,3 +329,35 @@ stored field, so the loop's parent walks (`enclosingProcedureLike`, `triggerName
 `enclosingMemberOf`, `gapBlockOf`) build no arrays. The only child-array reads left in the loop
 are the split-header procedure paths (`splitIsLocal`, `procedureLikeNameNode`), which are rare.
 AMENDMENT 5's figures are unchanged by this note.
+
+## AMENDMENT 6 (S4.2c prediction)
+
+Recorded before any S4.2c code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead A, the spec's `after` node. `synthesizeAfter` (one copy in
+  `packages/builtin-tier1/src/mutate-helpers.ts`, one in `packages/builtin-tier2/src/mutate-helpers.ts`)
+  builds a plain object that copies `before.children` and `before.namedChildren` (each read builds a
+  fresh array of fresh `FlatNode` wrappers on the native tree), both position objects and a bound
+  `childForFieldName` closure. The change: the `after` node holds only `before` and its own text and
+  reads every other member through `before` when asked, so a spec site keeps one wrapper (`before`)
+  and pins no child arrays and no closure. Every member of `ALSyntaxNode` reads the same value as
+  before; only `text` differs from `before`, as today.
+- Predicted A after the fix, read as in AMENDMENT 1 (live cells, heap minus extra, at p4 minus p2 on
+  one marked W8 run; at p3 minus p2 on one marked W4 run): at or below 1,400 MB on W8 and at or below
+  550 MB on W4. These are AMENDMENT 1's figures, unchanged. The same-revision A before is read on the
+  S4.2a marked tree (`167f540c`, whose source differs from `b4213f23` only by two `export` keywords):
+  1,629 MB on W8 (AMENDMENT 5's marked run), and one marked W4 run taken for this item.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  15,850 MB. Predicted W4 median peak (3 runs): at or below 5,030 MB. Derivation: the saving A should
+  lose, by AMENDMENT 1 (2,369 to 1,400 on W8, about 970 MB; 900 to 550 on W4, 350 MB), taken off
+  AMENDMENT 5's same-revision medians (W8 16,799, W4 5,383): 16,799 - 950 and 5,383 - 350. A check
+  from the scaled sysapp snapshot gives the same size: per spec site the fix drops about 4.5
+  `FlatNode` wrappers (61 B each), two arrays, one closure (92 B), two position objects and most of
+  a 14-field object, about 600 B, so about 1,000 MB over W8's 1,775,366 raw sites and about 470 MB
+  over W4's 782,940. A lives through both peaks (p5 on W8, the dry-run's printing on W4), so the
+  whole-run peak should fall by about the same amount. The W8 runs spread 1.1 GB at S4.2a, so the W8
+  verdict can be decided by noise; that is recorded, not a reason to widen the bound.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged. The W4 dry-run output unchanged (sha256 `f31530b0...`,
+  788,619 lines).
