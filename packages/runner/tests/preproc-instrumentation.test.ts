@@ -1947,3 +1947,56 @@ describe("R309 review: a refused member's name label drops blank arms and dedupe
     );
   });
 });
+
+describe("R-309 review run 002, I1: unnamedMemberLabel is also the fallback for an R303-refused split-header procedure", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  // R301's shape (preproc_split_procedure: one header per arm, no var section of its own), whose
+  // arms rename the procedure, followed by ONE shared var section that is itself split by #if
+  // (r2-split-header in the R-303 plan). splitVarHoistAnchor finds no single header end for a
+  // split header, so this member is refused by R303's cause, not R309's: this is the combination
+  // the run 001 review found untested (Important finding).
+  const SRC = `codeunit 50100 "Repro R"
+{
+#if A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        if X > 1 then
+            exit(X + 1);
+        exit(0);
+    end;
+}
+`;
+
+  test("the R303 warning for a renamed split-header procedure uses the new <renamed per #if arm: ...> label, not <unnamed>", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r309-r002-i1-"));
+    try {
+      await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
+      await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
+      const warnings: { code: string; message: string }[] = [];
+      await generateMutationSet(dir, {
+        emit: (e) => {
+          if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
+        },
+      });
+      const refused = warnings.filter((w) => w.code === "reach-latch-refused");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]?.message.split("'s var section")[0]).toBe(
+        "[lethal] Repro.Codeunit.al: procedure <renamed per #if arm: Pick, Choose>",
+      );
+      expect(refused[0]?.message).toContain("R303");
+      expect(refused[0]?.message).not.toContain("R309");
+      expect(refused[0]?.message).not.toContain("<unnamed>");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
