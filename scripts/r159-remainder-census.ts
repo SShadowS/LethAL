@@ -36,8 +36,12 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, parseAL } from "../packages/engine/src/ast/parser";
-import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import {
+  initWasmParser as initParser,
+  parseALWasm as parseAL,
+  wrapWasmRoot as wrapRoot,
+} from "../packages/engine/src/ast/parser-wasm";
+import type { ALSyntaxNode } from "../packages/engine/src/ast/syntax-node";
 import { corpusEntries, describeFingerprint, fingerprintCorpus } from "./corpus-fingerprint";
 
 const [projectDir] = process.argv.slice(2);

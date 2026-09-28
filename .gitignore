@@ -44,3 +44,6 @@ reports/mutation/
 # scripts/redact-campaign-report.test.ts).
 mutation-report.json
 mutation-report.html
+packages/engine/native/target/
+packages/engine/vendor/native/*.node
+packages/engine/vendor/native/*.provenance.json

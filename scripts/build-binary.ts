@@ -37,6 +37,9 @@ interface BuildTarget {
   readonly npmCpu: string;
   /** Trailing part of the output filename, extension included. */
   readonly suffix: string;
+  /** `process.platform-process.arch` of the target: which native parser addon the binary embeds
+   *  (RUST-03, `__LETHAL_NATIVE_KEY__` in packages/engine/src/ast/native-parser.ts). */
+  readonly nativeKey: string;
 }
 
 const TARGETS: readonly BuildTarget[] = [
@@ -46,6 +49,7 @@ const TARGETS: readonly BuildTarget[] = [
     npmOs: "win32",
     npmCpu: "x64",
     suffix: "windows-x64.exe",
+    nativeKey: "win32-x64",
   },
   {
     target: "bun-linux-x64",
@@ -53,6 +57,7 @@ const TARGETS: readonly BuildTarget[] = [
     npmOs: "linux",
     npmCpu: "x64",
     suffix: "linux-x64",
+    nativeKey: "linux-x64",
   },
   {
     target: "bun-linux-arm64",
@@ -60,6 +65,7 @@ const TARGETS: readonly BuildTarget[] = [
     npmOs: "linux",
     npmCpu: "arm64",
     suffix: "linux-arm64",
+    nativeKey: "linux-arm64",
   },
   {
     target: "bun-darwin-x64",
@@ -67,6 +73,7 @@ const TARGETS: readonly BuildTarget[] = [
     npmOs: "darwin",
     npmCpu: "x64",
     suffix: "darwin-x64",
+    nativeKey: "darwin-x64",
   },
   {
     target: "bun-darwin-arm64",
@@ -74,6 +81,7 @@ const TARGETS: readonly BuildTarget[] = [
     npmOs: "darwin",
     npmCpu: "arm64",
     suffix: "darwin-arm64",
+    nativeKey: "darwin-arm64",
   },
 ];
 
@@ -241,7 +249,17 @@ async function build(
 ): Promise<{ readonly outPath: string; readonly bytes: number }> {
   const outPath = join(OUT_DIR, `lethal-${version}-${t.suffix}`);
   const proc = Bun.spawn(
-    ["bun", "build", "--compile", `--target=${t.target}`, ...defines, ENTRY, "--outfile", outPath],
+    [
+      "bun",
+      "build",
+      "--compile",
+      `--target=${t.target}`,
+      ...defines,
+      `--define=__LETHAL_NATIVE_KEY__=${JSON.stringify(t.nativeKey)}`,
+      ENTRY,
+      "--outfile",
+      outPath,
+    ],
     { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
   );
   const exitCode = await proc.exited;

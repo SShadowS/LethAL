@@ -1894,6 +1894,8 @@ describe("R309 review: a refused member's name label drops blank arms and dedupe
       children: [],
       namedChildren: [],
       fieldName: null,
+      isMissing: false,
+      hasError: false,
       childForFieldName: () => null,
       ...overrides,
     };
