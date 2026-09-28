@@ -34,10 +34,12 @@ jobs:
       # cc-rs's CC_<target>/TARGET_CC lookup order is stripped down to just CC by
       # scripts/build-native-parser.ts so no stray env var can swap the compiler silently.
       - uses: dtolnay/rust-toolchain@1.96.0
+      # Pinned by URL and sha256, and refused unless clang-cl says exactly 23.1.2. Not
+      # KyleMayes/install-llvm-action: its asset list ends at 21.1.8 (run 36443811955). The script
+      # exports LLVM_BIN for the steps below; release.yml uses the same script on every target.
       - name: LLVM 23.1.2 (clang-cl builds the grammar)
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "23.1.2"
+        shell: bash
+        run: bash scripts/install-llvm.sh win32-x64
       - uses: actions/cache@v4
         with:
           path: |
@@ -46,10 +48,10 @@ jobs:
           key: native-${{ runner.os }}-${{ hashFiles('packages/engine/native/Cargo.lock', 'packages/engine/native/src/**', 'packages/engine/native/build.rs') }}
       - name: Build the native parser (grammar check, clang, provenance)
         shell: bash
-        run: CARGO_TARGET_DIR=packages/engine/native/target LLVM_BIN="$LLVM_PATH/bin" bun scripts/build-native-parser.ts
+        run: CARGO_TARGET_DIR=packages/engine/native/target bun scripts/build-native-parser.ts
       - name: Native Rust tests
         shell: bash
-        run: CARGO_TARGET_DIR=packages/engine/native/target LLVM_BIN="$LLVM_PATH/bin" bun scripts/build-native-parser.ts --test
+        run: CARGO_TARGET_DIR=packages/engine/native/target bun scripts/build-native-parser.ts --test
       - name: Native notice inventory is current
         run: bun scripts/native-notices.ts --check
 
