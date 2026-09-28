@@ -11,7 +11,11 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { canCarryMutationSelectorVar, compileSchemataForFile } from "../src/compile";
+import {
+  canCarryMutationSelectorVar,
+  compileSchemataForFile,
+  latchAnchorInVarSection,
+} from "../src/compile";
 import { buildComponents } from "../src/components";
 import {
   REACH_LATCH,
@@ -2271,6 +2275,49 @@ const HOIST_CASES: { name: string; src: string; header: string; parseErrors?: nu
 }
 `,
   },
+  {
+    // alc and al-runner proved this as `s6-empty-var-arm` (scratch evidence, run 001).
+    name: "S6 an #if arm holding a bare var with no declarations",
+    header: "    procedure P(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure P(X: Integer)
+#if A
+    var
+#else
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
+  {
+    // R-303 run 002, `d8-split-then-pragma`: a `#pragma` between the split block and `begin`.
+    name: "D8 a #pragma after the split var block",
+    header: "    procedure Split(X: Integer)",
+    src: `codeunit 50100 "Repro H"
+{
+    procedure Split(X: Integer)
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+#pragma warning disable AL0432
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`,
+  },
 ];
 
 describe("R303: a member whose var section is split by #if gets one unconditional latch", () => {
@@ -2635,12 +2682,14 @@ const INBODY_SRC = `codeunit 50100 "Repro K"
 }
 `;
 
-/** No code after a directive on its line (alc AL0631). */
+/** No code after a directive on its line (alc AL0631), and no latch inside one. */
 function directiveLinesClean(text: string): boolean {
   return text.split("\n").every((raw) => {
     const l = raw.replace(/\r$/, "");
     if (/^\s*#(if|elif)\b/.test(l)) return !l.includes(";");
     if (/^\s*#(else|endif)\b/.test(l)) return /^\s*#(else|endif)\s*(\/\/.*)?$/.test(l);
+    // R-303 run 002: text after `#pragma`/`#region`/`#endregion` is part of the directive.
+    if (/^\s*#(pragma|region|endregion)\b/.test(l)) return !l.includes(REACH_LATCH);
     return true;
   });
 }
@@ -2693,5 +2742,163 @@ describe("R312: a member var section ending in #if gets its latch after the var 
     expect(directiveLinesClean(out)).toBe(true);
     expect(linesWithoutInstrumentation(out)).toBe(INBODY_SRC.split("\n").length);
     expect(countErrorNodes(out)).toBe(0);
+  });
+});
+
+/**
+ * R-303 run 002: `#pragma`, `#region` and `#endregion` around a member's var section. Grammar
+ * extras, hand-written (the `d1`..`d10` scratch repros, each alc-compiled under every symbol subset
+ * and run through al-runner). tree-sitter-al 4.4.1 attaches a TRAILING directive to the member,
+ * not to the var section, so the latch stays on the last declaration's line, before the directive.
+ */
+const DIRECTIVE_SRC = `codeunit 50100 "Repro P"
+{
+    procedure P1(X: Integer)
+    var
+        A1: Integer;
+#pragma warning disable AL0432
+    begin
+        Glob := X + 1;
+    end;
+
+    procedure P2(X: Integer)
+    var
+#region Locals
+        A2: Integer;
+#endregion
+    begin
+        Glob := X + 2;
+    end;
+
+    procedure P3(X: Integer)
+    var
+        A3: Integer;
+#region Body
+    begin
+        Glob := X + 3;
+    end;
+#endregion
+
+    procedure P4(X: Integer)
+    var
+        A4: Integer;
+#if not CLEAN27
+        K4: Integer;
+#endif
+#pragma warning disable AL0432
+    begin
+        Glob := X + 4;
+    end;
+
+    procedure P5(X: Integer)
+    var
+        A5: Integer;
+#pragma warning disable AL0432
+#if not CLEAN27
+        K5: Integer;
+#endif
+    begin
+        Glob := X + 5;
+    end;
+
+    procedure P6(X: Integer)
+#pragma warning disable AL0432
+    var
+        A6: Integer;
+    begin
+        Glob := X + 6;
+    end;
+
+    procedure P7(X: Integer)
+    var
+#pragma warning disable AL0432
+        A7: Integer;
+    begin
+        Glob := X + 7;
+    end;
+
+    procedure P10(X: Integer)
+#pragma warning disable AL0432
+    begin
+        Glob := X + 10;
+    end;
+
+    procedure P9(X: Integer)
+#region Locals
+#if not CLEAN27
+    var
+        K9: Integer;
+#endif
+#endregion
+    begin
+        Glob := X + 9;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+describe("R-303 run 002: a directive around a member's var section never carries the latch", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("puts each latch on a declaration or var line, never on a directive line, and moves no line", () => {
+    const root = wrapRoot(parseAL(DIRECTIVE_SRC));
+    const specs = findAll(root, ALNodeKind.assignment_statement).map((a) =>
+      spec(a, "Glob := 0", "lethal.op"),
+    );
+    expect(specs.length).toBe(9);
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const out = compileSchemataForFile(DIRECTIVE_SRC, root, specs, ided);
+    const L = `${REACH_LATCH}: Boolean;`;
+    expect(out).toContain(`        A1: Integer; ${L}\n#pragma warning disable AL0432\n    begin`);
+    expect(out).toContain(`#region Locals\n        A2: Integer; ${L}\n#endregion`);
+    expect(out).toContain(`        A3: Integer; ${L}\n#region Body`);
+    expect(out).toContain(`    var ${L}\n        A4: Integer;\n#if not CLEAN27\n        K4`);
+    expect(out).toContain(`    var ${L}\n        A5: Integer;\n#pragma`);
+    expect(out).toContain(`#pragma warning disable AL0432\n    var\n        A6: Integer; ${L}`);
+    expect(out).toContain(`    var\n#pragma warning disable AL0432\n        A7: Integer; ${L}`);
+    // P9: `#region` between the header and the split block is not the header's end: refused.
+    expect(out).toContain(
+      "    procedure P9(X: Integer)\n#region Locals\n#if not CLEAN27\n    var\n",
+    );
+    // P10: no var section, so a new one directly before `begin`, after the directive's line.
+    expect(out).toContain(`#pragma warning disable AL0432
+    var ${L} begin`);
+    expect(out.split(L).length - 1).toBe(8);
+    expect(directiveLinesClean(out)).toBe(true);
+    expect(linesWithoutInstrumentation(out)).toBe(DIRECTIVE_SRC.split("\n").length);
+  });
+
+  it("a var section whose last child is a directive anchors after the var keyword", () => {
+    // Not reachable through tree-sitter-al 4.4.1 (see DIRECTIVE_SRC), so the node is built by
+    // hand: P1's own var section with its trailing #pragma moved inside the var body.
+    const root = wrapRoot(parseAL(DIRECTIVE_SRC));
+    const p1 = findAll(root, ALNodeKind.procedure).find((p) => p.text.includes("P1("));
+    const vars = p1?.children.find((n) => n.kind === ALNodeKind.var_section);
+    const pragma = p1?.children.find((n) => n.rawKind === "pragma");
+    const [keyword, body] = vars?.children ?? [];
+    if (vars === undefined || pragma === undefined || keyword === undefined || body === undefined)
+      throw new Error("fixture drift: P1 is not var_keyword, var_body, then #pragma");
+    const fake = (n: ALSyntaxNode, children: ALSyntaxNode[]): ALSyntaxNode => ({
+      kind: n.kind,
+      rawKind: n.rawKind,
+      text: n.text,
+      startIndex: n.startIndex,
+      endIndex: n.endIndex,
+      startPosition: n.startPosition,
+      endPosition: n.endPosition,
+      parent: n.parent,
+      children,
+      namedChildren: children,
+      fieldName: null,
+      childForFieldName: () => null,
+    });
+    const moved = fake(vars, [keyword, fake(body, [...body.children, pragma])]);
+    expect(latchAnchorInVarSection(moved)?.rawKind).toBe("var_keyword");
+    // Control: the real, unmoved section anchors on its declaration.
+    expect(latchAnchorInVarSection(vars)?.rawKind).toBe("variable_declaration");
   });
 });

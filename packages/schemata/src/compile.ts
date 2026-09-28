@@ -89,7 +89,7 @@ function injectReachLatches(
     const begin = body?.children[0];
     if (owner === null || begin === undefined) {
       throw new Error(
-        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared.`,
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. A split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble) lands here: it is not refused by name, it stops the run (R309).`,
       );
     }
     const known = byOwner.get(owner.startIndex);
@@ -124,24 +124,14 @@ function injectReachLatches(
     // begin". After a `//` comment the declaration would be commented out (AL0118), and a comment
     // between the var section and begin used to hide the section and emit a second one.
     const vars = owner.children.find((n) => n.kind === ALNodeKind.var_section);
-    const decls = vars?.children.find((n) => n.kind === "var_body") ?? vars;
-    const lastDecl = decls?.children.filter((n) => !isComment(n)).at(-1);
-    if (vars !== undefined && lastDecl !== undefined) {
-      if (lastDecl.rawKind === "preproc_conditional_var") {
-        // R312: the section ends in `#if` declarations, and after its last child is the
-        // `#endif` line, where alc allows no code (AL0631). Right after the `var` keyword is
-        // unconditional and on a line of its own; any comment after it stays after it.
-        const keyword = vars.children.find((n) => n.rawKind === "var_keyword");
-        if (keyword === undefined) {
-          throw new Error(
-            `compileSchemataForFile: cannot instrument ${filePath}: a var section ending in #if has no var keyword to anchor the latch \`${latch}\` after.`,
-          );
-        }
-        rewrites.set(insertionNodeAt(keyword, keyword.endIndex), ` ${latch}: Boolean;`);
-      } else {
-        // After the last DECLARATION, before any trailing comment on its line.
-        rewrites.set(insertionNodeAt(lastDecl, lastDecl.endIndex), ` ${latch}: Boolean;`);
+    if (vars !== undefined) {
+      const anchor = latchAnchorInVarSection(vars);
+      if (anchor === undefined) {
+        throw new Error(
+          `compileSchemataForFile: cannot instrument ${filePath}: a var section that does not end in a declaration has no var keyword to anchor the latch \`${latch}\` after.`,
+        );
       }
+      rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` ${latch}: Boolean;`);
     } else {
       // Directly before `begin`, after any comment: the header's own line comment ends at a newline.
       rewrites.set(insertionNodeAt(begin, begin.startIndex), `var ${latch}: Boolean; `);
@@ -179,6 +169,24 @@ function latchNameFor(owner: ALSyntaxNode): string {
   let name = REACH_LATCH;
   for (let k = 2; used.has(name.toLowerCase()); k++) name = `${REACH_LATCH}${k}`;
   return name;
+}
+
+/**
+ * The node a plain (unsplit) var section's latch goes right after: its last DECLARATION when the
+ * section ends in one, which keeps the latch before any trailing comment on that line, else its
+ * `var` keyword, which is unconditional and on a line holding no directive.
+ *
+ * "Ends in a declaration" is an allowlist of one kind on purpose. R312: after a trailing `#if`
+ * block comes the `#endif` line, where alc allows no code (AL0631). R-303 run 002: text after a
+ * `#pragma`, `#region` or `#endregion` is part of the directive. Those are grammar extras, and
+ * tree-sitter-al 4.4.1 was measured attaching a TRAILING one to the member rather than to the var
+ * section in every shape tried, so that case is not reached today; the allowlist covers it anyway.
+ */
+export function latchAnchorInVarSection(vars: ALSyntaxNode): ALSyntaxNode | undefined {
+  const decls = vars.children.find((n) => n.kind === ALNodeKind.var_body) ?? vars;
+  const last = decls.children.filter((n) => !isComment(n)).at(-1);
+  if (last?.rawKind === ALNodeKind.variable_declaration) return last;
+  return vars.children.find((n) => n.rawKind === "var_keyword");
 }
 
 function isComment(n: ALSyntaxNode): boolean {
