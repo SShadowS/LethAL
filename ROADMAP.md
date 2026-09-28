@@ -199,7 +199,7 @@ that ordering is the priority.
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · done (d24e766)
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · open
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · open
-- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · open
+- **R270** · The epic's 20% verify wall-time criterion (c02) is recorded but not gated: C02-08 measured it on sandbox-harden and left it open · [R270.md](docs/roadmap/R270.md) · closed 2026-09-28, owner ruling: the 20% criterion is measured against a hardening round's survivors…
 - **R272** · `lethal explain` gaps do not list the covering tests' file:line or rank them by reach then duration · [R272.md](docs/roadmap/R272.md) · open
 - **R273** · `lethal explain` gives no suggested fix kind per gap · [R273.md](docs/roadmap/R273.md) · open
 - **R274** · an explain gap does not carry its source span with the surviving mutants marked inline · [R274.md](docs/roadmap/R274.md) · open
