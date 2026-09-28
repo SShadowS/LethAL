@@ -103,12 +103,8 @@ function assertSelectorPlacement(emitted: string): void {
   for (let p = decl.parent; p !== null; p = p.parent) ancestors.push(p.rawKind);
   expect(ancestors.slice(0, 3)).toEqual(["var_body", "var_section", "declaration_body"]);
   const siblings = decl.parent?.namedChildren ?? [];
-  const before = lastMeaningful(
-    siblings.slice(
-      0,
-      siblings.findIndex((s) => s === decl),
-    ),
-  );
+  // By position, never by identity: `wrapRoot` wrappers are not the same objects across walks.
+  const before = lastMeaningful(siblings.filter((s) => s.endIndex <= decl.startIndex));
   if (before === undefined) return;
   expect(ATTRIBUTE_KINDS.has(before.rawKind)).toBe(false);
   expect(holdsMember(before)).toBe(false);
@@ -345,6 +341,406 @@ const REPRO: Record<string, string> = {
         G := L;
         H := G;
         Message('%1', H);
+    end;
+}
+`,
+  // The reviewer's hunt shapes (Task 2 fix round 1), pinned through the placement oracle.
+  "h-comment-before": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+        // trailing comment
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-elif": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+        H: Integer;
+#elif CLEAN26
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-else-decl-then-proc": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+        H: Integer;
+#else
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-else-only": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if CLEAN27
+#else
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-empty-var": `codeunit 50100 "Repro A"
+{
+    var
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-if-decl-plus-attr": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        H: Integer;
+        [Obsolete('x', '27.0')]
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-if-decl-plus-attr-else": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        [Obsolete('x', '27.0')]
+#else
+        H: Integer;
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-if-decl-then-bare-proc": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        H: Integer;
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-if-proc-then-decl": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+        H: Integer;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-if-varattr-var": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        [InDataSet]
+        H: Boolean;
+#endif
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-multiline-before": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+        /* block */
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-nested": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+#if not CLEAN26
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-pragma-before": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#pragma warning disable AL0432
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+#pragma warning restore AL0432
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-region": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#region stuff
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+#endregion
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-varattr-dangling": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+        [InDataSet]
+#if not CLEAN27
+        H: Boolean;
+#endif
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-varattr-in-if-then-proc": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        [NonDebuggable]
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
+    end;
+}
+`,
+  "h-varattr-then-if": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+        [NonDebuggable]
+#if not CLEAN27
+    procedure A()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        G := L;
+        Message('%1', L);
+    end;
+#endif
+
+    procedure B()
+    begin
+        G := 2;
+        Message('%1', G);
     end;
 }
 `,
@@ -840,6 +1236,40 @@ end;
 }
 `,
 };
+/** Hand-written WRONG mid-section emissions: the selector after an attribute in a `#if`, and after
+ *  a `#if` procedure, each followed by another declaration. The oracle must reject both. */
+const WRONG_MID: Record<string, string> = {
+  "wrong-mid": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+        [Obsolete('x', '27.0')]
+#endif
+        MutationSelector: Codeunit "Mutation Selector";
+        H: Integer;
+
+    procedure B()
+    begin
+        G := 2;
+    end;
+}
+`,
+  "wrong-mid2": `codeunit 50100 "Repro A"
+{
+    var
+        G: Integer;
+#if not CLEAN27
+    procedure A()
+    begin
+    end;
+#endif
+        MutationSelector: Codeunit "Mutation Selector";
+        H: Integer;
+}
+`,
+};
+
 describe("R297: the selector var through the real pipeline", () => {
   beforeAll(async () => {
     await initParser();
@@ -864,6 +1294,12 @@ describe("R297: the selector var through the real pipeline", () => {
     test(`${name}: the selector sits in the object's var section, after no attribute and no member`, async () => {
       const { emitted } = await instrument({ "Repro.Codeunit.al": REPRO[name] ?? "" });
       assertSelectorPlacement(emitted.get("Repro.Codeunit.al") ?? "");
+    });
+  }
+
+  for (const name of Object.keys(WRONG_MID)) {
+    test(`the placement oracle rejects the mid-section wrong emission ${name}`, () => {
+      expect(() => assertSelectorPlacement(WRONG_MID[name] ?? "")).toThrow();
     });
   }
 
