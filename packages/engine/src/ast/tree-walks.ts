@@ -51,6 +51,14 @@ const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
   `${ALNodeKind.while_statement}.body`,
   `${ALNodeKind.for_statement}.body`,
   "foreach_statement.body",
+  // R287 (C6): `#if` around an `if` header, the then- and else-branches shared after `#endif`.
+  "preproc_split_if_statement.then_branch",
+  "preproc_split_if_statement.else_branch",
+  // R287 (C5): each arm's then-branch, and the else-branch shared after `#endif`.
+  "preproc_split_if_else_statement.then_branch",
+  "preproc_split_if_else_statement.else_branch",
+  // R285: `#if` around a case label, the arm's body shared after `#endif`.
+  "preproc_split_case_extended.body",
 ]);
 
 /**
@@ -98,9 +106,10 @@ export function gapBlockOf(node: ALSyntaxNode): ALSyntaxNode {
     const slot = n.fieldName === null ? null : `${parent.rawKind}.${n.fieldName}`;
     if (slot !== null && (SINGLE_STATEMENT_SLOTS.has(slot) || WRAPPED_BRANCH_BODIES.has(slot)))
       return n;
+    // R301: a split-header procedure's shared body is a direct child too.
     if (
       n.kind === ALNodeKind.block &&
-      (parent.kind === ALNodeKind.procedure || parent.kind === ALNodeKind.trigger)
+      (isProcedureLike(parent) || parent.kind === ALNodeKind.trigger)
     )
       return n;
     n = parent;
@@ -136,6 +145,34 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
     current = current.parent;
   }
   return null;
+}
+
+/**
+ * R301: a `procedure`, or a split-header procedure (`preproc_split_procedure`: one header per `#if`
+ * arm, then ONE shared `var` section and body as direct children). The manifest, latch and
+ * line-map walks own a split procedure through this. `findEnclosingProcedure` and the semantic
+ * walks deliberately do NOT use it yet (R302). A `preproc_split_procedure_preamble` is not
+ * procedure-like: each arm has its own `var` section, so one latch cannot serve both (R301).
+ */
+export function isProcedureLike(n: ALSyntaxNode): boolean {
+  return n.kind === ALNodeKind.procedure || n.rawKind === "preproc_split_procedure";
+}
+
+/**
+ * R301: the `name` node of a procedure-like node. A plain procedure: its one name. A split-header
+ * procedure has one name per arm; they are returned only when every arm agrees (compared as AL
+ * compares names: case-insensitive, quotes ignored). An arm that RENAMES the procedure gives
+ * `null`, because which arm is compiled depends on preprocessor symbols the writer never sees, and
+ * the first arm's name may be the inactive one: no name is honest, a guessed one attributes
+ * coverage to the wrong member.
+ */
+export function procedureLikeNameNode(n: ALSyntaxNode): ALSyntaxNode | null {
+  if (n.kind === ALNodeKind.procedure) return n.childForFieldName("name");
+  const names = n.children.filter((c) => c.fieldName === "name");
+  const [first] = names;
+  if (first === undefined) return null;
+  const key = (x: ALSyntaxNode): string => x.text.replace(/^"|"$/g, "").toLowerCase();
+  return names.every((x) => key(x) === key(first)) ? first : null;
 }
 
 /** Narrowest `procedure` ancestor, or `null` if the node is outside any procedure. */
@@ -190,4 +227,29 @@ export function varDeclarations(varSection: ALSyntaxNode): readonly ALSyntaxNode
 export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
   const inner = objectNode.namedChildren.find((c) => c.kind === ALNodeKind.declaration_body);
   return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
+}
+
+/**
+ * R298: the nodes whose children are AL object declarations. A `#if`-wrapped object sits under a
+ * `preproc_conditional_object` (one declaration per arm), never directly under `source_file`, so
+ * a walk that stops at `source_file`'s children misses it or names the wrapper as the object.
+ */
+export function isObjectContainer(n: ALSyntaxNode): boolean {
+  return n.kind === ALNodeKind.source_file || n.rawKind === "preproc_conditional_object";
+}
+
+/**
+ * R298: the named children of `root` with every `preproc_conditional_object` flattened
+ * recursively and the `preproc_*` markers (`#if`, `#else`, `#endif`, ...) dropped, in source order.
+ * Anything else a container holds (a `namespace_declaration`, a `using`, a comment) is returned as
+ * is; callers pick the object kinds they care about. A two-arm wrapper yields BOTH arms'
+ * declarations, which may be the SAME object id: a caller that counts objects must say so itself.
+ */
+export function objectDeclarationsOf(root: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const c of root.namedChildren) {
+    if (c.rawKind === "preproc_conditional_object") out.push(...objectDeclarationsOf(c));
+    else if (!c.rawKind.startsWith("preproc_")) out.push(c);
+  }
+  return out;
 }

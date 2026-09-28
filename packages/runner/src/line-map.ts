@@ -1,6 +1,15 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ALNodeKind, type ALSyntaxNode, initParser, parseAL, wrapRoot } from "@lethal/engine";
+import {
+  ALNodeKind,
+  type ALSyntaxNode,
+  initParser,
+  isProcedureLike,
+  objectDeclarationsOf,
+  parseAL,
+  procedureLikeNameNode,
+  wrapRoot,
+} from "@lethal/engine";
 
 /**
  * R58: maps a BC `Code Coverage` row's `(objectType, objectId, lineNo)` to the procedure that owns
@@ -88,10 +97,31 @@ export interface LineMapEntry {
    * procedures yields the wrong name with full confidence — the R29 shape.
    */
   readonly baseLine: number;
+  /**
+   * R298: set when this object's coverage is REFUSED, and then it is the reason, a sentence naming
+   * the object and its file. Set on every object declared inside a `#if ... #endif` object wrapper,
+   * and on every object declared AFTER the first such wrapper in the same file: a bare object's
+   * base is "previous object's end + 1", and whether a wrapper's inactive arm counts as that
+   * previous object is exactly what R300 has to measure. A guessed base names the wrong procedure
+   * with full confidence (R29), so the map refuses rather than guesses.
+   */
+  readonly refused?: string;
+}
+
+/** R298: the fixed refusal sentence, shared by the fenced line map and the al-runner index. */
+export function refusedCoverageReason(objectType: string, objectId: number, file: string): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.`;
+}
+
+/** R298: the sentence for a bare object refused only because its FILE holds an object wrapper. */
+export function refusedWholeFileReason(objectType: string, objectId: number, file: string): string {
+  return `coverage refused for ${objectType}:${objectId} (${file}): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.`;
 }
 
 export class LineMap {
   private readonly byObject = new Map<string, ObjectLines>();
+  /** R298: declared objects whose coverage is refused, key -> reason. Read before `byObject`. */
+  private readonly refused = new Map<string, string>();
 
   /**
    * @param declared the `(objectType, objectId)` pairs the compiled ARTIFACT declares. A coverage
@@ -117,8 +147,37 @@ export class LineMap {
       // file, so an undeclared object still consumes the lines its declared neighbours are numbered
       // relative to.
       if (!declared.has(key)) continue;
+      // R298: no spans at all for a refused object, so nothing can name one of its lines, and
+      // `lookup`/`isNamingGap` answer from `refused` before they look for spans.
+      if (e.refused !== undefined) {
+        this.refused.set(key, e.refused);
+        continue;
+      }
       this.byObject.set(key, spansOf(e.root, e.baseLine));
     }
+  }
+
+  /**
+   * R298: is this object's coverage REFUSED? A caller that gets `true` must drop the row entirely:
+   * not a named entry and not an object-level one either, since an object-level entry feeds
+   * `byObjectUnnamed` and selection's local-procedure fallback, which is attribution by the back
+   * door.
+   */
+  isRefused(objectType: string, objectId: number): boolean {
+    return this.refused.has(keyOf(objectType, objectId));
+  }
+
+  /** R298: the refusal sentence for a refused object, `undefined` for any other. */
+  refusalReason(objectType: string, objectId: number): string | undefined {
+    return this.refused.get(keyOf(objectType, objectId));
+  }
+
+  /**
+   * R298: every refused DECLARED object, `type:id` (lower-cased) -> reason. Read at index time so
+   * a wrapped object is named even when no coverage row ever arrives for it.
+   */
+  refusedByKey(): ReadonlyMap<string, string> {
+    return this.refused;
   }
 
   /** Whether the compiled artifact declares this object at all. */
@@ -177,6 +236,7 @@ export class LineMap {
    * report line; under-flagging is the R175 defect itself.
    */
   isNamingGap(objectType: string, objectId: number, lineNo: number): boolean {
+    if (this.isRefused(objectType, objectId)) return false;
     const entry = this.byObject.get(keyOf(objectType, objectId));
     if (entry === undefined) return false;
     if (lineNo <= 0) return false;
@@ -187,6 +247,7 @@ export class LineMap {
 
   lookup(objectType: string, objectId: number, lineNo: number): string | undefined {
     const key = keyOf(objectType, objectId);
+    if (this.refused.has(key)) return undefined; // R298: refused, never unmapped
     const entry = this.byObject.get(key);
     if (entry === undefined) {
       if (this.declared.has(key)) {
@@ -234,8 +295,11 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
       triggers.push(span(n, nameNode === null ? "" : stripQuotes(nameNode.text)));
       return;
     }
-    if (n.kind === ALNodeKind.procedure) {
-      const nameNode = n.childForFieldName("name");
+    // R301: a split-header procedure is one procedure (one shared body). Its span starts at the
+    // `#if` line, which holds no code, so no covered line can land there. An arm that renames the
+    // procedure gets no span: which name is compiled is not known here.
+    if (isProcedureLike(n)) {
+      const nameNode = procedureLikeNameNode(n);
       const name = nameNode === null ? null : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its
@@ -254,31 +318,122 @@ function stripQuotes(s: string): string {
   return s.startsWith('"') && s.endsWith('"') && s.length >= 2 ? s.slice(1, -1) : s;
 }
 
+/** What a `#if` object wrapper may hold without holding an OBJECT: file-level lines, no code. */
+const NOT_AN_OBJECT: ReadonlySet<string> = new Set([
+  "namespace_declaration",
+  "using_statement",
+  "comment",
+  "multiline_comment",
+]);
+
+/**
+ * R298: does this `preproc_conditional_object` hold an object? Decided by EXCLUSION (anything but
+ * namespace/using lines and comments), never by `objectIdentityOf`, which is null for an enum,
+ * an interface or a permission set: those are objects that shift a following object's base too,
+ * so the unsafe direction is to call them nothing.
+ */
+export function wrapperHoldsObject(wrapper: ALSyntaxNode): boolean {
+  return objectDeclarationsOf(wrapper).some((d) => !NOT_AN_OBJECT.has(d.rawKind));
+}
+
 /**
  * Builds the per-object entries for one parsed FILE.
  *
  * `baseLine` is computed as "one past the previous object's last line", with the first object
  * based at line 1 — see `LineMapEntry.baseLine` for the measurements that rule comes from and the
  * case that has not yet discriminated it.
+ *
+ * R298: an object inside a `preproc_conditional_object` (a `#if`-wrapped object, one declaration
+ * per arm) gets an entry marked `refused`, and so does every object after the first such wrapper
+ * in the file (see `LineMapEntry.refused`). A wrapper holding no object (only `using` lines, say)
+ * refuses nothing and moves no base, exactly as before: it is not an object.
  */
 export function fileLineMapEntries(
   fileRoot: ALSyntaxNode,
   objectIdentity: (node: ALSyntaxNode) => { objectType: string; objectId: number } | null,
+  file = "<source>",
 ): LineMapEntry[] {
   const entries: LineMapEntry[] = [];
   let previousEndLine = 0; // so the first object bases at 1
-  for (const node of fileRoot.children) {
+  let afterWrapper = false;
+  const push = (node: ALSyntaxNode, refuse: boolean): boolean => {
     const identity = objectIdentity(node);
-    if (identity === null) continue;
+    if (identity === null) return false;
     entries.push({
       objectType: identity.objectType,
       objectId: identity.objectId,
       root: node,
       baseLine: previousEndLine + 1,
+      ...(refuse
+        ? { refused: refusedCoverageReason(identity.objectType, identity.objectId, file) }
+        : {}),
     });
+    return true;
+  };
+  for (const node of fileRoot.namedChildren) {
+    if (node.rawKind === "preproc_conditional_object") {
+      for (const decl of objectDeclarationsOf(node)) push(decl, true);
+      if (!wrapperHoldsObject(node)) continue;
+      afterWrapper = true;
+      previousEndLine = node.endPosition.row + 1;
+      continue;
+    }
+    if (!push(node, afterWrapper)) continue;
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
+}
+
+/**
+ * R298: does this file hold, at its root, a `#if ... #endif` object wrapper with an object (of ANY
+ * kind) in it? al-runner's index refuses such a file WHOLE, and selection refuses every object in
+ * it (`coverageRefusedObjects`), so the two cannot disagree.
+ */
+export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
+  return root.namedChildren.some(
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
+}
+
+/**
+ * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
+ * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence.
+ *
+ * The UNION of two rules, so selection refuses at least what any coverage path refuses: the line
+ * map's per-object rule (`fileLineMapEntries`: inside a wrapper, or after the first wrapper that
+ * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
+ * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
+ * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
+ * enum, an interface): the multi-object guard then counts one object and leaves coverage on, al-runner
+ * drops the whole file's hits, and without the union the bare table's trigger mutants would reach
+ * the all-green fallback. Over-refusing is the safe direction.
+ */
+export function coverageRefusedObjects(
+  files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
+): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    for (const [key, reason] of refusedObjectsOfFile(f.root, normalizeSlashes(f.path))) {
+      out.set(key, reason);
+    }
+  }
+  return out;
+}
+
+/**
+ * R298: one file's refused objects, by the union rule `coverageRefusedObjects` documents. A bare
+ * object BEFORE the wrapper gets its own sentence (`refusedWholeFileReason`), since "inside, or
+ * after" would be false for it. al-runner's index prints exactly these sentences.
+ */
+export function refusedObjectsOfFile(root: ALSyntaxNode, file: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const wholeFile = fileHoldsWrappedObject(root);
+  for (const e of fileLineMapEntries(root, objectIdentityOf, file)) {
+    const reason =
+      e.refused ?? (wholeFile ? refusedWholeFileReason(e.objectType, e.objectId, file) : undefined);
+    if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
+  }
+  return out;
 }
 
 /**
@@ -369,8 +524,30 @@ export async function lineMapFromSources(
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
-  for (const { text } of sources) {
-    entries.push(...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf));
+  for (const { path, text } of sources) {
+    entries.push(
+      ...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf, normalizeSlashes(path)),
+    );
   }
   return new LineMap(entries, declared);
+}
+
+/**
+ * R298, for the HUB path, which builds no line map: the refused DECLARED objects of these sources,
+ * by the same rule (`coverageRefusedObjects`), keyed as `LineMap.refusedByKey` keys them.
+ */
+export async function refusedCoverageFromSources(
+  sources: readonly AlSource[],
+  declared: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, string>> {
+  await initParser();
+  const all = coverageRefusedObjects(
+    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+  );
+  return new Map([...all].filter(([key]) => declared.has(key)));
+}
+
+/** Forward slashes, so a path quoted to a user reads the same on every platform. */
+function normalizeSlashes(path: string): string {
+  return path.split("\\").join("/");
 }

@@ -46,11 +46,17 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, parseAL } from "@lethal/engine";
+import { initParser, objectDeclarationsOf, parseAL } from "@lethal/engine";
 import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
-import { LineMap, fileLineMapEntries, objectIdentityOf } from "./line-map";
+import {
+  LineMap,
+  fileHoldsWrappedObject,
+  fileLineMapEntries,
+  objectIdentityOf,
+  refusedObjectsOfFile,
+} from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
 export interface CoberturaLine {
@@ -87,12 +93,22 @@ export function parseCobertura(xml: string): readonly CoberturaLine[] {
   return out;
 }
 
-/** Every object header a file declares, in source order. */
+/**
+ * Every object a file declares, in source order, `#if`-wrapped ones included (R298). The arms of
+ * one wrapped object are ONE object: each compile builds exactly one arm, so a two-arm wrapper
+ * declaring the same `(type, id)` twice must not trip the multi-object guard. Counted by
+ * `(type, id)`, never by node.
+ */
 function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
   const found: Array<{ objectType: string; objectId: number }> = [];
-  for (const child of root.namedChildren) {
-    const id = objectIdentityOf(child);
-    if (id !== null) found.push(id);
+  const seen = new Set<string>();
+  for (const decl of objectDeclarationsOf(root)) {
+    const id = objectIdentityOf(decl);
+    if (id === null) continue;
+    const key = `${id.objectType}:${id.objectId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(id);
   }
   return found;
 }
@@ -107,6 +123,13 @@ export interface AlRunnerCoverageIndex {
   readonly lineMap: LineMap;
   /** Project-relative paths declaring more than one object. Non-empty disables coverage. */
   readonly multiObjectFiles: readonly string[];
+  /**
+   * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object. Refused WHOLE,
+   * because coverage here is per file: every object in one reads `no-coverage` until R300 measures
+   * how al-runner numbers a compiled arm. A refused file is in none of `byFile`, the line map's
+   * declared set, or `multiObjectFiles`.
+   */
+  readonly refusedFiles: readonly string[];
 }
 
 /**
@@ -159,12 +182,21 @@ export async function buildAlRunnerCoverageIndex(
 
   const byFile = new Map<string, { objectType: string; objectId: number }>();
   const multiObjectFiles: string[] = [];
+  const refusedFiles: string[] = [];
   const entries = [];
   const declared = new Set<string>();
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
+    if (fileHoldsWrappedObject(root)) {
+      const file = normalizeSlashes(rel);
+      refusedFiles.push(file);
+      for (const reason of refusedObjectsOfFile(root, file).values()) {
+        console.warn(`[lethal] ${reason}`);
+      }
+      continue;
+    }
     const objects = objectsOf(root);
     if (objects.length > 1) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
@@ -187,6 +219,7 @@ export async function buildAlRunnerCoverageIndex(
     byFile,
     lineMap: new LineMap(entries, declared),
     multiObjectFiles,
+    refusedFiles,
   };
 }
 
@@ -216,6 +249,25 @@ function fileKeyCandidates(coberturaPath: string): string[] {
 }
 
 /**
+ * The object a reported file belongs to, matched on the LONGEST path ending first. R298: a refused
+ * file is left out of `byFile`, so its hits must STOP at its own ending rather than fall through to
+ * a shorter ending another file owns (`src/Foo.Codeunit.al` refused, a root `Foo.Codeunit.al`
+ * indexed): that would attribute the refused object's lines to a different object.
+ */
+function objectForFile(
+  file: string,
+  index: AlRunnerCoverageIndex,
+  refused: ReadonlySet<string>,
+): { objectType: string; objectId: number } | undefined {
+  for (const cand of fileKeyCandidates(file)) {
+    if (refused.has(cand)) return undefined;
+    const hit = index.byFile.get(cand);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+/**
  * Turns one test's Cobertura output into a `CoverageMap`.
  *
  * Only lines with `hits > 0` become entries: a reported-but-unhit line is evidence the file was
@@ -233,16 +285,10 @@ export function alRunnerCoverageFrom(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
+  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
   for (const ln of lines) {
     if (ln.hits <= 0) continue;
-    let object: { objectType: string; objectId: number } | undefined;
-    for (const cand of fileKeyCandidates(ln.file)) {
-      const hit = index.byFile.get(cand);
-      if (hit !== undefined) {
-        object = hit;
-        break;
-      }
-    }
+    const object = objectForFile(ln.file, index, refused);
     // A coverage row for something this bundle does not declare — the test app, Base Application,
     // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
     // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
@@ -282,15 +328,9 @@ export function alRunnerCoverageFromServer(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
+  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
   for (const file of entry.coverage ?? []) {
-    let object: { objectType: string; objectId: number } | undefined;
-    for (const cand of fileKeyCandidates(file.file)) {
-      const hit = index.byFile.get(cand);
-      if (hit !== undefined) {
-        object = hit;
-        break;
-      }
-    }
+    const object = objectForFile(file.file, index, refused);
     if (object === undefined) continue;
     for (const st of file.statements ?? []) {
       // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was

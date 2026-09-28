@@ -52,4 +52,27 @@ describe("printer", () => {
     expect(output).toContain("// trailing comment");
     expect(output).toContain("// inside-block comment");
   });
+
+  it("names the file and both node kinds when two rewrites overlap (R297)", async () => {
+    await initParser();
+    const source =
+      "codeunit 50100 X\n{\n    procedure P()\n    begin\n        Message('a');\n    end;\n}\n";
+    const root = wrapRoot(parseAL(source));
+    const proc = findFirst(root, ALNodeKind.procedure);
+    const call = findFirst(root, ALNodeKind.procedure_call);
+    if (proc === null || call === null) throw new Error("fixture shape");
+    expect(() =>
+      printWithRewrites(
+        source,
+        root,
+        new Map([
+          [proc, "x"],
+          [call, "y"],
+        ]),
+        "src/X.Codeunit.al",
+      ),
+    ).toThrow(
+      `overlapping rewrites in src/X.Codeunit.al at ${proc.startIndex}..${proc.endIndex} (procedure) and ${call.startIndex}..${call.endIndex} (${call.rawKind})`,
+    );
+  });
 });

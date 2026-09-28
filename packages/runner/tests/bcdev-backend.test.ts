@@ -2,6 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,11 +24,13 @@ import { DeploymentVerifier } from "../src/deployment-verifier";
 import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
+import { coverageRefusedObjects } from "../src/line-map";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
 import type { SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
+import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -426,7 +429,12 @@ describe("BcDevMcpBackend.attach", () => {
   });
 
   /** A second backend over the first one's output: records argv and every factory call. */
-  async function attachSetup(opts: { reportedIdentity?: string; fetch500?: boolean }) {
+  async function attachSetup(opts: {
+    reportedIdentity?: string;
+    fetch500?: boolean;
+    coverageMode?: "procedure" | "fenced";
+    alSources?: { path: string; text: string }[];
+  }) {
     const first = await makeBackendWithDeploy(hubRun, SYMBOLS);
     const argv: string[][] = [];
     const factoryCalls: Array<[string, string]> = [];
@@ -455,7 +463,11 @@ describe("BcDevMcpBackend.attach", () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     void server.connect(serverTransport);
     const backend = new BcDevMcpBackend(
-      { ...baseConfig(), ...(await controlStaging(outputDir)) },
+      {
+        ...baseConfig(),
+        ...(opts.coverageMode !== undefined ? { coverageMode: opts.coverageMode } : {}),
+        ...(await controlStaging(outputDir)),
+      },
       () => clientTransport,
       deployment,
       (appId, artifactId) => {
@@ -472,8 +484,8 @@ describe("BcDevMcpBackend.attach", () => {
       // What `loadInstalledArtifact` hands over: the bytes it hashed. "procedure" coverage reads
       // no source, so the source fields are empty here.
       appBytes: new Uint8Array(await readFile(first.artifact.appPath)),
-      appJsonText: "{}",
-      alSources: [],
+      appJsonText: JSON.stringify({ idRanges: [{ from: 70000, to: 70099 }] }),
+      alSources: opts.alSources ?? [],
     };
     return {
       backend,
@@ -500,6 +512,43 @@ describe("BcDevMcpBackend.attach", () => {
       await s.cleanup();
     }
   });
+
+  // R298, run 002 re-review M3: the installed-artifact path (`indexInstalled`) names a wrapped
+  // declared object at index time too, in both the fenced and the hub branch.
+  for (const coverageMode of ["fenced", "procedure"] as const) {
+    test(`attach names a #if-wrapped declared object's refusal at index time (${coverageMode})`, async () => {
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      const s = await attachSetup({
+        coverageMode,
+        alSources: [
+          {
+            path: "src/Some.Codeunit.al",
+            text: `namespace X;
+#if not CLEAN27
+codeunit 70000 "Some Codeunit"
+{
+    procedure Post()
+    begin
+    end;
+}
+#endif
+`,
+          },
+        ],
+      });
+      try {
+        warn.mockClear();
+        await s.backend.attach(s.bound);
+        const said = warn.mock.calls.map((c) => String(c[0]));
+        expect(said.filter((x) => x.includes("coverage refused"))).toEqual([
+          "[lethal] coverage refused for Codeunit:70000 (src/Some.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.",
+        ]);
+      } finally {
+        warn.mockRestore();
+        await s.cleanup();
+      }
+    });
+  }
 
   test("attach refuses a server that reports another artifact, and binds no transport", async () => {
     const s = await attachSetup({ reportedIdentity: "b".repeat(32) });
@@ -2826,6 +2875,336 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
       await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
       const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
       expect(said).not.toContain("fenced coverage for");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});
+
+/**
+ * R298, Review Focus 1: a #if-wrapped object's fenced coverage rows must produce NO attribution
+ * entry of ANY grain. An object-level entry would feed `byObjectUnnamed` and selection's
+ * local-procedure fallback, which is attribution by the back door. An unaffected object in the
+ * same run must still come back NAMED.
+ */
+describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () => {
+  const BODY = (name: string): string => `{
+    procedure ${name}()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+}
+`;
+  const TWO_ARM = `#if CLEAN27\ncodeunit 50103 "Repro B2"\n${BODY("AIf")}#else\ncodeunit 50103 "Repro B2"\n${BODY("AElse")}#endif\n`;
+  const PLAIN = `codeunit 50107 Other\n${BODY("R")}`;
+  const REFUSED =
+    "[lethal] coverage refused for Codeunit:50103 (B2.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+
+  function factory(coverage: unknown) {
+    const captureFetch = (async (_url: unknown, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const payload = {
+        status: "ran",
+        testRunsBefore: 0,
+        sessionId: 2037,
+        targetAppId: b.targetAppId,
+        artifactId: b.artifactId,
+        attemptId: b.attemptId,
+        mutantId: b.mutantId,
+        codeunitId: b.testCodeunitId,
+        method: b.testMethod,
+        codeunitResults: JSON.stringify({ testResults: [{ method: b.testMethod, result: 2 }] }),
+        observedActive: true,
+        coverage,
+      };
+      return new Response(JSON.stringify({ value: JSON.stringify(payload) }), { status: 200 });
+    }) as typeof fetch;
+    return (targetAppId: string, artifactId: string) =>
+      new RunMutantTransport(
+        { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+        targetAppId,
+        artifactId,
+        captureFetch,
+      );
+  }
+
+  async function deployed(
+    coverage: unknown,
+    extraFiles: Record<string, string> = {},
+    tables: readonly { Id: number; Name: string }[] = [],
+  ): Promise<{
+    backend: BcDevMcpBackend;
+    cleanup: () => Promise<void>;
+  }> {
+    const outputDir = await mkdtemp(join(tmpdir(), "lethal-r298-"));
+    await writeDeployInputs(outputDir);
+    const appJsonPath = join(outputDir, "app.json");
+    const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
+    await Bun.write(
+      appJsonPath,
+      JSON.stringify({ ...app, idRanges: [{ from: 50100, to: 50149 }] }),
+    );
+    await Bun.write(join(outputDir, "B2.Codeunit.al"), TWO_ARM);
+    await Bun.write(join(outputDir, "Other.Codeunit.al"), PLAIN);
+    for (const [rel, text] of Object.entries(extraFiles))
+      await Bun.write(join(outputDir, rel), text);
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        coverageMode: "fenced",
+        ...(await controlStaging(outputDir)),
+      },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted in fenced mode");
+      },
+      makeDeployment(outputDir, {
+        Codeunits: [
+          { Id: 50103, Name: "Repro B2" },
+          { Id: 50107, Name: "Other" },
+        ],
+        Tables: tables,
+      }),
+      factory(coverage),
+    );
+    await backend.deploy(outputDir);
+    backend.setLease(FAKE_LEASE);
+    await backend.activate(null);
+    return {
+      backend,
+      cleanup: async () => {
+        await rmStaged(outputDir);
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  test("rows for the wrapped object yield NO entry of any grain; the plain object's are named", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([
+      { objectType: 5, objectId: 50103, lineNo: 0, hits: 1 },
+      { objectType: 5, objectId: 50103, lineNo: 3, hits: 1 },
+      { objectType: 5, objectId: 50103, lineNo: 7, hits: 1 },
+      { objectType: 5, objectId: 50103, lineNo: 16, hits: 1 },
+      { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+    ]);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      expect(v.coverage?.namingGaps).toBeUndefined();
+      // A second test in the same session: the refusal is named once per object, not per row
+      // and not per test.
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s === REFUSED)).toHaveLength(1);
+      expect(said.filter((s) => s.includes("coverage refused"))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  const WRAPPED_TABLE = `#if not CLEAN27
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Message('x');
+    end;
+}
+#endif
+`;
+
+  test("end to end: a wrapped TABLE trigger reads no-coverage in selection, not all-green", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const files = { "W.Table.al": WRAPPED_TABLE };
+    const { backend, cleanup } = await deployed(
+      [
+        { objectType: 1, objectId: 50110, lineNo: 0, hits: 1 },
+        { objectType: 1, objectId: 50110, lineNo: 11, hits: 1 },
+        { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+      ],
+      files,
+      [{ Id: 50110, Name: "Wrapped T" }],
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      await initParser();
+      const refused = coverageRefusedObjects(
+        Object.entries({ ...files, "B2.Codeunit.al": TWO_ARM, "Other.Codeunit.al": PLAIN }).map(
+          ([path, text]) => ({ path, root: wrapRoot(parseAL(text)) }),
+        ),
+      );
+      const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
+      const index = buildCoverageIndex([
+        { ref, ...(v.coverage !== undefined ? { coverage: v.coverage } : {}) },
+        { ref: other, coverage: { granularity: "procedure", entries: [] } },
+      ]);
+      const trigger = {
+        mutantId: "M1",
+        file: "W.Table.al",
+        startIndex: 10,
+        endIndex: 20,
+        startLine: 11,
+        operatorName: "empty-block",
+        operatorVersion: "1.0.0",
+        astHash: "h",
+        objectType: "table",
+        codeunitId: 50110,
+        codeunitName: "Wrapped T",
+        procedureName: "",
+        triggerName: "OnInsert",
+        originalText: "x",
+        mutatedText: "",
+      };
+      const split = coverageFilter([trigger], index, [ref, other], undefined, false, refused);
+      expect(split.covered.has("M1")).toBe(false);
+      expect(split.untargetedTriggerCount).toBe(0);
+      expect(split.refused.get("M1")).toContain("coverage refused for Table:50110 (W.Table.al)");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("a wrapped object with ZERO rows is still named, once, at deploy (review r1 Important 2)", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([
+      { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+    ]);
+    try {
+      // Named by deploy() itself, before any row could arrive.
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((s) => s === REFUSED)).toHaveLength(1);
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("when the only declared rows were refused, the thin-coverage warning blames neither the filter nor the base-line frame", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([
+      { objectType: 5, objectId: 50103, lineNo: 3, hits: 1 },
+      { objectType: 5, objectId: 50103, lineNo: 7, hits: 1 },
+    ]);
+    try {
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([]);
+      const said = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(said).toContain(REFUSED);
+      expect(said).not.toContain("base-line frame");
+      expect(said).not.toContain("NONE of them for an object this artifact declares");
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+});
+
+/**
+ * R298, review r1 Important 3: the HUB path (`coverageMode: "procedure"`) applies the same
+ * refusal. A wrapped object's method ids, named or not, produce no entry, and the refusal is named
+ * once at deploy, whether or not a row for the object ever arrives.
+ */
+describe("hub coverage: #if-wrapped objects are refused by name (R298)", () => {
+  const WRAPPED = `#if not CLEAN27
+table 50110 "Wrapped T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure Touch()
+    begin
+    end;
+
+    trigger OnInsert()
+    begin
+        Touch();
+    end;
+}
+#endif
+`;
+  const PLAIN = "codeunit 50107 Other\n{\n    procedure R()\n    begin\n    end;\n}\n";
+  const REFUSED =
+    "[lethal] coverage refused for Table:50110 (W.Table.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
+  const symbols = {
+    Tables: [{ Id: 50110, Name: "Wrapped T", Methods: [{ Id: 777, Name: "Touch" }] }],
+    Codeunits: [{ Id: 50107, Name: "Other", Methods: [{ Id: 888, Name: "R" }] }],
+  };
+  const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+
+  async function hub(covered: unknown[]) {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r298-hub-"));
+    await Bun.write(join(dir, "W.Table.al"), WRAPPED);
+    await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
+    const made = await makeBackendWithDeploy(
+      () => ({
+        results: [{ codeunitId: 50140, method: "T", status: "passed", durationMs: 1, output: "" }],
+        coverage: [{ testObjectId: 50140, testMethodId: 1, coveredProcedures: covered }],
+      }),
+      symbols,
+      dir,
+    );
+    return {
+      ...made,
+      cleanup: async () => {
+        await made.cleanup();
+        await rm(dir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  test("named and unnamed method ids of the wrapped table produce no entry; the plain one is named", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub([
+      { objectType: 1, objectId: 50110, methodId: 777 },
+      { objectType: 1, objectId: 50110, methodId: -1650094725 },
+      { objectType: 5, objectId: 50107, methodId: 888 },
+    ]);
+    try {
+      const v = await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  test("with ZERO rows for the wrapped table, it is still named once at deploy", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await hub([{ objectType: 5, objectId: 50107, methodId: 888 }]);
+    try {
+      await backend.run(hubRef, { coverage: "procedure", timeoutMs: 5000 });
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
     } finally {
       warn.mockRestore();
       await cleanup();
