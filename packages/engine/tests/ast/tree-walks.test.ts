@@ -366,7 +366,7 @@ describe("R301: split-header procedures", () => {
     return hit;
   };
 
-  it("isProcedureLike: a procedure and a split procedure, never a trigger or a preamble", () => {
+  it("isProcedureLike: a procedure, a split procedure and a preamble (R316), never a trigger", () => {
     const root = wrapRoot(parseAL(SPLIT));
     expect(isProcedureLike(first(root, "preproc_split_procedure"))).toBe(true);
     expect(
@@ -392,7 +392,35 @@ describe("R301: split-header procedures", () => {
 `;
     expect(
       isProcedureLike(first(wrapRoot(parseAL(preamble)), "preproc_split_procedure_preamble")),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("gapBlockOf: a top-level statement of a preamble's shared body belongs to the body (R316)", () => {
+    const src = `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure A(X: Integer)
+    var
+        L: Integer;
+#else
+    procedure A(X: Integer)
+    var
+        M: Integer;
+#endif
+    begin
+        G := X;
+        Message('%1', G);
+    end;
+
+    var
+        G: Integer;
+}
+`;
+    const got = gapBlockOf(first(wrapRoot(parseAL(src)), "assignment_statement"));
+    const begin = src.indexOf("begin\n        G := X");
+    const end = src.indexOf("end;\n\n    var") + "end".length;
+    expect([got.startIndex, got.endIndex]).toEqual([begin, end]);
+    expect(got.parent?.rawKind).toBe("preproc_split_procedure_preamble");
   });
 
   it("gapBlockOf: a top-level statement of the split body belongs to the body, not the root", () => {

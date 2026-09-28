@@ -447,8 +447,8 @@ function stripQuotes(s: string): string {
 }
 
 /**
- * R301: the narrowest procedure-like ancestor (a `procedure` or a split-header procedure), or
- * `null`. Project-local on purpose: the engine's `findEnclosingProcedure` also feeds semantic
+ * R301, R316: the narrowest procedure-like ancestor (a `procedure`, or either split-header shape),
+ * or `null`. Project-local on purpose: the engine's `findEnclosingProcedure` also feeds semantic
  * resolution, which does not see inside a split procedure yet (R302), so it stays unchanged.
  */
 function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
@@ -475,13 +475,15 @@ const LOCAL_SCOPE_PREFIX = /^\s*(?:\[[^\]]*\]\s*)*local\b/;
 function procedureScopeOf(spec: MutationSpec): "local" | "public" | undefined {
   const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return undefined;
-  if (proc.rawKind === "preproc_split_procedure") return splitIsLocal(proc) ? "local" : "public";
+  // R301, R316: a split header's node text starts with `#if`, so its scope is read per arm.
+  if (proc.kind !== ALNodeKind.procedure) return splitIsLocal(proc) ? "local" : "public";
   return LOCAL_SCOPE_PREFIX.test(proc.text) ? "local" : "public";
 }
 
-/** R301: a split procedure is `local` only when EVERY arm is: `local` widens coverage to object
- *  grain (selection.ts, R63), so a public arm read as local could manufacture a vacuous `survived`.
- *  Each arm is one `procedure_keyword`, with its `local` in a `procedure_modifier` before it. */
+/** R301, R316: a split procedure, either shape, is `local` only when EVERY arm is: `local` widens
+ *  coverage to object grain (selection.ts, R63), so a public arm read as local could manufacture a
+ *  vacuous `survived`. Each arm is one `procedure_keyword`, with its `local` in a
+ *  `procedure_modifier` before it. */
 function splitIsLocal(proc: ALSyntaxNode): boolean {
   const arms = proc.children.filter((c) => c.rawKind === "procedure_keyword").length;
   const localArms = proc.children.filter(

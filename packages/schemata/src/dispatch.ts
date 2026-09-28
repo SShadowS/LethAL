@@ -159,8 +159,7 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
  * - R309: a `preproc_split_procedure_preamble`, a split-header procedure whose `#if` arms each
  *   hold their own header and their own `var` section (an arm may have none), with one shared body
  *   after `#endif`. One latch declaration cannot serve every arm's section, and a per-arm placement
- *   is not built (it would measure nothing until R316 gives the member a name and a span). The
- *   node returned is the preamble itself, which is not procedure-like.
+ *   is not built. The node returned is the preamble itself, procedure-like since R316.
  * - R313: a procedure or trigger whose var section did not parse cleanly (`varSectionUnparsed`).
  * - R303: a procedure or trigger whose var section sits inside `#if` in a shape
  *   `splitVarHoistAnchor` does not cover.
@@ -169,12 +168,7 @@ export function varSectionUnparsed(owner: ALSyntaxNode): boolean {
  */
 export function reachLatchRefusedOwner(node: ALSyntaxNode): ALSyntaxNode | null {
   let owner: ALSyntaxNode | null = node;
-  while (
-    owner !== null &&
-    !isProcedureLike(owner) &&
-    owner.kind !== ALNodeKind.trigger &&
-    owner.rawKind !== "preproc_split_procedure_preamble"
-  )
+  while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)
     owner = owner.parent;
   if (owner === null) return null;
   if (owner.rawKind === "preproc_split_procedure_preamble") return owner;

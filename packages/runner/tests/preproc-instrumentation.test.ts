@@ -7,7 +7,7 @@ import type { MutationSpec } from "@lethal/engine";
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
-import { lineMapFromSources } from "../src/line-map";
+import { buildLineMap, lineMapFromSources } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
@@ -1995,6 +1995,236 @@ describe("R-309 review run 002, I1: unnamedMemberLabel is also the fallback for 
       expect(refused[0]?.message).toContain("R303");
       expect(refused[0]?.message).not.toContain("R309");
       expect(refused[0]?.message).not.toContain("<unnamed>");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R316: a split-header procedure whose arms each have their own var section is a member", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SRC = `codeunit 50100 "Repro M"
+{
+    procedure Plain(X: Integer): Integer
+    begin
+        Glob := Glob + 1;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+    begin
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    local procedure LPick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    local procedure LPick(X: Integer): Integer
+#endif
+    begin
+        Glob := Glob + 3;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    local procedure MPick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure MPick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 4;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure Pick2(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        Glob := Glob + 5;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+  const lines = SRC.split("\n");
+  /** 1-based number of the first line at or after line `from` that starts with `prefix`. */
+  const lineOf = (prefix: string, from = 1): number => {
+    const i = lines.findIndex((l, k) => k + 1 >= from && l.startsWith(prefix));
+    if (i < 0) throw new Error(`fixture drift: no line starting ${JSON.stringify(prefix)}`);
+    return i + 1;
+  };
+  /** A member from its first line (the `#if` for a split header) through its closing `end;`. */
+  const member = (
+    label: string,
+    prefix: string,
+    from: number,
+    name: string,
+    scope: "local" | "public",
+  ) => {
+    const first = lineOf(prefix, from);
+    const begin = lineOf("    begin", first);
+    return { label, name, scope, first, begin, last: lineOf("    end;", first) };
+  };
+  const plain = member("Plain", "    procedure Plain(", 1, "Plain", "public");
+  const pick = member("Pick", "#if CLEAN27", plain.last, "Pick", "public");
+  const lpick = member("LPick", "#if CLEAN27", pick.last, "LPick", "local");
+  const mpick = member("MPick", "#if CLEAN27", lpick.last, "MPick", "public");
+  // Arms that rename the procedure: which arm is compiled is not known here (R301's rule).
+  const renamed = member("Pick2/Choose", "#if CLEAN27", mpick.last, "", "public");
+  const members = [plain, pick, lpick, mpick, renamed];
+  const ownerOf = (line: number) => {
+    const owners = members.filter((x) => line >= x.first && line <= x.last);
+    expect(owners).toHaveLength(1);
+    const [owner] = owners;
+    if (owner === undefined) throw new Error("unreachable");
+    return owner;
+  };
+
+  test("name, scope, member lines and gap block for every member, each bounded through its end;", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": SRC });
+    for (const x of members) {
+      expect(manifest.mutants.filter((m) => ownerOf(m.startLine) === x).length).toBeGreaterThan(0);
+    }
+    for (const m of manifest.mutants) {
+      const x = ownerOf(m.startLine);
+      expect([x.label, m.procedureName]).toEqual([x.label, x.name]);
+      expect([x.label, m.procedureScope]).toEqual([x.label, x.scope]);
+      expect([x.label, m.procedureStartLine, m.procedureEndLine]).toEqual([
+        x.label,
+        x.first,
+        x.last,
+      ]);
+      // The shared body or a branch inside it, never the file root.
+      expect(m.blockStartLine ?? 0).toBeGreaterThanOrEqual(x.begin);
+      expect(m.blockEndLine ?? 0).toBeLessThanOrEqual(x.last);
+    }
+  });
+
+  test("identity keys carry the member's name, and no two mutants share one", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": SRC });
+    const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const m of manifest.mutants) {
+      expect(serializeKey(identityKeyOf(m)).split("|")[2]).toBe(ownerOf(m.startLine).name);
+    }
+  });
+
+  // Review r1, I1: an identity key carries an ordinal among its twins (same hash, object, member
+  // name, operator), numbered in SOURCE order. An agreeing preamble used to sit in the "" group
+  // and now sits in its name's group, so an identical site AFTER it in the same object is
+  // renumbered: a renamed R301 split procedure's ordinal drops, a same-named overload's rises.
+  // Both need a preamble in the object, which no fixture or measured corpus has. Pinned so the
+  // effect stays deliberate.
+  test("ordinals: a preamble leaves the empty-name group and joins its name's group", async () => {
+    const PRE = `#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 2;
+    end;
+`;
+    const RENAMED = `#if CLEAN27
+    procedure AIf(X: Integer): Integer
+#else
+    procedure AElse(X: Integer): Integer
+#endif
+    var
+        S: Integer;
+    begin
+        Glob := Glob + 2;
+    end;
+`;
+    const OVERLOAD = `    procedure Pick(X: Text): Integer
+    begin
+        Glob := Glob + 2;
+    end;
+`;
+    const file = (a: string, b: string): string =>
+      `codeunit 50100 "Repro K"
+{
+${a}
+${b}
+    var
+        Glob: Integer;
+}
+`;
+    const ordinals = async (src: string) => {
+      const { manifest } = await instrument({ "Repro.Codeunit.al": src });
+      return manifest.mutants
+        .filter((m) => m.operatorName === "lethal.remove-assignment")
+        .sort((a, b) => a.startIndex - b.startIndex)
+        .map((m) => `${m.procedureName}#${m.identityOrdinal ?? 0}`);
+    };
+    // Before R316 these read ["#0", "#1"] and ["#0", "Pick#0"].
+    expect(await ordinals(file(PRE, RENAMED))).toEqual(["Pick#0", "#0"]);
+    expect(await ordinals(file(PRE, OVERLOAD))).toEqual(["Pick#0", "Pick#1"]);
+    // A renamed split procedure BEFORE the preamble keeps its ordinal.
+    expect(await ordinals(file(RENAMED, PRE))).toEqual(["#0", "Pick#0"]);
+  });
+
+  test("both line maps, built from the EMITTED target, name every dispatch line of a named split member and none of a renamed one", async () => {
+    // Fenced bcdev (`buildLineMap` over the instrumented dir) and al-runner's Cobertura index both
+    // read the emitted source, whose lines differ from SRC. al-runner's --server path does not
+    // use a line map at all (`st.scope`), so it needs a probe of its own.
+    const { emitted } = await instrument({ "Repro.Codeunit.al": SRC });
+    const text = emitted.get("Repro.Codeunit.al") ?? "";
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r316-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), text);
+      const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      const alr = await buildAlRunnerCoverageIndex(dir);
+      expect(alr.refusedFiles).toEqual([]);
+      const out = text.split("\n");
+      const starts = out.flatMap((l, k) =>
+        l.startsWith("#if CLEAN27") || l.startsWith("    procedure Plain(") ? [k + 1] : [],
+      );
+      expect(starts).toHaveLength(members.length);
+      const ends = [...starts.slice(1), out.length + 1];
+      let checked = 0;
+      for (const [i, x] of members.entries()) {
+        const from = starts[i] ?? 0;
+        const to = (ends[i] ?? 0) - 1;
+        for (let n = from; n <= to; n++) {
+          if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
+          expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
+          expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(members.length);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

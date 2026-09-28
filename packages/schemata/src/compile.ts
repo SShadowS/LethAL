@@ -92,6 +92,14 @@ function injectReachLatches(
         `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: a split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble) is refused by \`placeReach\` before any marker is placed (R309).`,
       );
     }
+    // R316: a preamble is procedure-like now, but each arm has its own var section, so the plain
+    // rules below would declare the latch in ONE arm only (alc AL0118 in every other build).
+    // `placeReach` refuses it (R309), so no statement-grain marker reaches here.
+    if (owner.rawKind === "preproc_split_procedure_preamble") {
+      throw new Error(
+        `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a split-header procedure whose #if arms each have their own var section (preproc_split_procedure_preamble), which has no latch placement (R309).`,
+      );
+    }
     const known = byOwner.get(owner.startIndex);
     if (known !== undefined) {
       latches.set(c, known);
