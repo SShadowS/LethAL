@@ -89,6 +89,10 @@ function lastMeaningful(nodes: readonly ALSyntaxNode[]): ALSyntaxNode | undefine
  * declaration to sit in an object-level var section, outside any procedure, trigger or `#if`
  * block, and not directly after an attribute or after anything holding a member. Deliberately
  * written as a denylist, independently of the injector's allowlist, so the two cannot share a gap.
+ *
+ * POSITIONAL only: it checks where the selector sits in the parse tree. It is NOT a warnings-clean
+ * `alc` compile (no test here runs `alc`), so an emission placed right that still draws an AL
+ * warning passes it. The two-symbol `alc` proof of the R-297 shapes was a manual scratch step.
  */
 function assertSelectorPlacement(emitted: string): void {
   expect(emitted.split(SELECTOR).length - 1).toBe(1);
