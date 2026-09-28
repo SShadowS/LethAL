@@ -561,6 +561,43 @@ describe("runSession", () => {
     // R298, end to end through runSession: the SAME table wrapped in `#if`. Its trigger mutants
     // must read no-coverage, named, and must NOT take fallback 2, though coverage names the table
     // nowhere exactly as above.
+    // R298, run 002 re-review I1: a BARE table, then a wrapped interface. al-runner refuses such a
+    // file whole while its multi-object guard (which cannot count an interface) leaves coverage on,
+    // so selection refuses every object of the file too. Every mutant of the table reads
+    // no-coverage. (An interface, not an enum: the writer refuses a table and an enum in one file
+    // outright, `assertNoUnsupportedObjectMix`, but its header scan does not see an interface.)
+    test("a bare table before a #if-wrapped interface: every table mutant reads no-coverage, named (R298)", async () => {
+      const dirs = await makeProject();
+      await Bun.write(
+        join(dirs.projectDir, "SandboxTable.Table.al"),
+        `${TRIGGER_TABLE_AL}#if not CLEAN27
+interface "I Probe"
+{
+    procedure P();
+}
+#endif
+`,
+      );
+      const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const tableMutants = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+        expect(tableMutants.length).toBeGreaterThan(0);
+        expect(report.untargetedTriggerCount).toBe(0);
+        for (const m of tableMutants) {
+          expect(m.verdict).toBe("no-coverage");
+          expect(m.failureNote).toContain(
+            "coverage refused for Table:79001 (SandboxTable.Table.al)",
+          );
+        }
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    });
+
     test("a #if-wrapped table's trigger mutants read no-coverage, named, not all-green (R298)", async () => {
       const dirs = await makeProject();
       await Bun.write(

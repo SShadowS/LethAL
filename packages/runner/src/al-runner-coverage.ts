@@ -52,10 +52,10 @@ import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
 import {
   LineMap,
+  fileHoldsWrappedObject,
   fileLineMapEntries,
   objectIdentityOf,
   refusedCoverageReason,
-  wrapperHoldsObject,
 } from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
@@ -111,13 +111,6 @@ function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: nu
     found.push(id);
   }
   return found;
-}
-
-/** R298: does this file hold a `#if ... #endif` object wrapper with an object (of ANY kind) in it? */
-function holdsWrappedObject(root: ALSyntaxNode): boolean {
-  return root.namedChildren.some(
-    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
-  );
 }
 
 /**
@@ -196,7 +189,7 @@ export async function buildAlRunnerCoverageIndex(
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
     const root = wrapRoot(parseAL(source));
-    if (holdsWrappedObject(root)) {
+    if (fileHoldsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
       for (const o of objectsOf(root))

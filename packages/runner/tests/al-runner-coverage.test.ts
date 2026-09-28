@@ -448,3 +448,98 @@ describe("R298 end to end (al-runner): a wrapped table trigger reads no-coverage
     }
   });
 });
+
+/**
+ * R298, run 002 re-review I1: a BARE table, then a wrapped ENUM. The enum has no coverage
+ * identity, so the multi-object guard counts ONE object and coverage stays on, while al-runner
+ * refuses the whole file. Selection must refuse the table too (the union rule), or its trigger
+ * mutants reach the all-green fallback.
+ */
+const R298_TABLE_THEN_WRAPPED_ENUM = `table 50110 "Plain T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure Touch()
+    begin
+        Message('t');
+    end;
+
+    trigger OnInsert()
+    begin
+        Message('x');
+    end;
+}
+#if not CLEAN27
+enum 50120 E
+{
+    value(0; A) { }
+}
+#endif
+`;
+
+describe("R298 end to end (al-runner): a bare table before a wrapped enum reads no-coverage", () => {
+  test("al-runner keeps coverage on and refuses the file; selection refuses every mutant of the table", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const files = {
+        "src/T.Table.al": R298_TABLE_THEN_WRAPPED_ENUM,
+        "src/Other.Codeunit.al": R298_PLAIN,
+      };
+      const dir = await bundle(files);
+      expect(await alRunnerCoverageSupport(dir)).toEqual({ supported: true, multiObjectFiles: [] });
+      const index = await buildAlRunnerCoverageIndex(dir);
+      expect(index.refusedFiles).toEqual(["src/T.Table.al"]);
+      await initParser();
+      const refused = coverageRefusedObjects(
+        Object.entries(files).map(([path, text]) => ({ path, root: wrapRoot(parseAL(text)) })),
+      );
+      expect(refused.get("table:50110")).toContain(
+        "coverage refused for Table:50110 (src/T.Table.al)",
+      );
+      const ref = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
+      const other = { codeunitId: 50140, codeunitName: "Tests", method: "U" };
+      const coverage = alRunnerCoverageFrom(
+        [
+          { file: "src/T.Table.al", line: 10, hits: 1 },
+          { file: "src/T.Table.al", line: 15, hits: 1 },
+          { file: "src/Other.Codeunit.al", line: 6, hits: 1 },
+        ],
+        index,
+      );
+      const cov = buildCoverageIndex([
+        { ref, coverage },
+        { ref: other, coverage: { granularity: "procedure", entries: [] } },
+      ]);
+      const base = {
+        file: "src/T.Table.al",
+        startIndex: 10,
+        endIndex: 20,
+        operatorName: "empty-block",
+        operatorVersion: "1.0.0",
+        astHash: "h",
+        objectType: "table",
+        codeunitId: 50110,
+        codeunitName: "Plain T",
+        originalText: "x",
+        mutatedText: "",
+      };
+      const trigger = {
+        ...base,
+        mutantId: "M1",
+        startLine: 15,
+        procedureName: "",
+        triggerName: "OnInsert",
+      };
+      const proc = { ...base, mutantId: "M2", startLine: 10, procedureName: "Touch" };
+      const split = coverageFilter([trigger, proc], cov, [ref, other], undefined, false, refused);
+      expect(split.covered.size).toBe(0);
+      expect(split.untargetedTriggerCount).toBe(0);
+      expect([...split.refused.keys()]).toEqual(["M1", "M2"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

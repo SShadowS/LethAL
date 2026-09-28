@@ -380,18 +380,41 @@ export function fileLineMapEntries(
 }
 
 /**
+ * R298: does this file hold, at its root, a `#if ... #endif` object wrapper with an object (of ANY
+ * kind) in it? al-runner's index refuses such a file WHOLE, and selection refuses every object in
+ * it (`coverageRefusedObjects`), so the two cannot disagree.
+ */
+export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
+  return root.namedChildren.some(
+    (c) => c.rawKind === "preproc_conditional_object" && wrapperHoldsObject(c),
+  );
+}
+
+/**
  * R298: the refused objects of the project's parsed files, `type:id` (lower-cased, the same key
- * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence. The SAME object-container rule
- * as the line map (`fileLineMapEntries`), so selection refuses exactly what the fenced path
- * refuses, whatever coverage mode produced the entries.
+ * `selection.ts`'s `objectKeyOf` builds) -> the refusal sentence.
+ *
+ * The UNION of two rules, so selection refuses at least what any coverage path refuses: the line
+ * map's per-object rule (`fileLineMapEntries`: inside a wrapper, or after the first wrapper that
+ * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
+ * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
+ * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
+ * enum, an interface): the multi-object guard then counts one object and leaves coverage on, al-runner
+ * drops the whole file's hits, and without the union the bare table's trigger mutants would reach
+ * the all-green fallback. Over-refusing is the safe direction.
  */
 export function coverageRefusedObjects(
   files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],
 ): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   for (const f of files) {
-    for (const e of fileLineMapEntries(f.root, objectIdentityOf, normalizeSlashes(f.path))) {
-      if (e.refused !== undefined) out.set(keyOf(e.objectType, e.objectId), e.refused);
+    const file = normalizeSlashes(f.path);
+    const wholeFile = fileHoldsWrappedObject(f.root);
+    for (const e of fileLineMapEntries(f.root, objectIdentityOf, file)) {
+      const reason =
+        e.refused ??
+        (wholeFile ? refusedCoverageReason(e.objectType, e.objectId, file) : undefined);
+      if (reason !== undefined) out.set(keyOf(e.objectType, e.objectId), reason);
     }
   }
   return out;
