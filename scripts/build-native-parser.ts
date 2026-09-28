@@ -94,6 +94,15 @@ export interface CargoPlan {
   readonly cross: boolean;
 }
 
+/** `cargo test` links the crate into EXECUTABLES (the unit-test harness, tests/tree_freed.rs, and
+ *  examples/split.rs, which cargo test builds too). The #[napi] glue references napi_* symbols that
+ *  only a JS host provides, so on Linux and macOS those executables cannot link (release trial run
+ *  36452180784; Windows links because napi-sys loads its symbols at runtime there). napi-derive's
+ *  `noop` feature makes #[napi] emit no glue, for the test build only: the Rust tests exercise
+ *  parsing and flattening, never the glue, which the JS-side tests cover through the real addon.
+ *  Cargo.toml is untouched, so the shipped addon and its source hash are unchanged. */
+const TEST_FEATURES = ["--features", "napi-derive/noop"] as const;
+
 /** What cargo runs for `host` building `target` (a platform key; default: the host). A cross build
  *  passes the target triple, so cargo writes under <triple>/release; the compiler is the same
  *  checked clang either way, since cc-rs gives clang the triple itself. */
@@ -114,6 +123,7 @@ export function cargoPlan(host: string, target: string | undefined, test: boolea
       test ? "test" : "build",
       "--release",
       "--locked",
+      ...(test ? TEST_FEATURES : []),
       ...(cross ? ["--target", triple] : []),
     ],
     libPath: cross ? [triple, "release", lib] : ["release", lib],

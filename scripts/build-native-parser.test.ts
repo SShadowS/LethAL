@@ -77,10 +77,14 @@ describe("cargoPlan", () => {
       libPath: ["release", "lethal_parser.dll"],
       cross: false,
     });
+    // The test build drops the #[napi] glue, whose napi_* symbols no test executable can link on
+    // Linux or macOS; the addon build never does.
     expect(cargoPlan("win32-x64", "win32-x64", true).args).toEqual([
       "test",
       "--release",
       "--locked",
+      "--features",
+      "napi-derive/noop",
     ]);
   });
   it("cross-builds darwin-x64 on darwin-arm64 with the x86_64 triple", () => {
