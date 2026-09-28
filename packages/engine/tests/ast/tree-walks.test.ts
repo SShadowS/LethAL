@@ -477,4 +477,11 @@ describe("R-297 Task 6: split-directive single-statement slots", () => {
     expectSlot(src, "preproc_split_if_else_statement", "L := 4");
     expectSlot(src, "preproc_split_if_else_statement", "L := 5");
   });
+
+  it("preproc_split_case_extended: the arm body shared after #endif", () => {
+    const src = proc(
+      "        case X of\n            1:\n                L := 10;\n#if not CLEAN27\n            2:\n#else\n            4:\n#endif\n                L := X + 20;\n            3:\n                L := 30;\n        end;",
+    );
+    expectSlot(src, "preproc_split_case_extended", "L := X + 20");
+  });
 });

@@ -56,6 +56,8 @@ const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
   // R287 (C5): each arm's then-branch, and the else-branch shared after `#endif`.
   "preproc_split_if_else_statement.then_branch",
   "preproc_split_if_else_statement.else_branch",
+  // R285: `#if` around a case label, the arm's body shared after `#endif`.
+  "preproc_split_case_extended.body",
 ]);
 
 /**
