@@ -195,3 +195,58 @@ OUTCOME changes. Per that section, the native route stops and R292 takes the Typ
   with the file hidden; variant A does not build) passed. Details in
   `.superpowers/sdd/2026-09-27-RUST-01-native-parser/task-1-steps1-8-report.md`.
 - `packages/engine/native/` is deleted uncommitted.
+
+## AMENDMENT 3 (2026-09-28, RUST-02, owner bar change, before any MSVC or clang number of RUST-02)
+Committed alone, before any number from either build is read. RUST-02 retries the native parser with
+two builds of the same crate: the MSVC build (RUST-01's, cl /O2 through the cc crate) and a clang
+build (clang-cl 23.1.2, LLVM installed 2026-09-28). The owner's priority, relayed by the coordinator:
+1) no crash, 2) lower peak memory, 3) speed. Speed no longer gates. The Spike STOP bar of AMENDMENT 2
+(parse median at most 9,547 ms) is replaced for RUST-02 by the two gates below. Both builds are
+measured against both gates.
+
+Gate (ii), parse only, first. One pass over all of `U:/Git/BC.History/BaseApp` (9,620 files) through
+the native parse call alone, with no census. STOP only if it crashes or its peak exceeds 16,384 MB.
+Node counts must equal the WASM parse of the same files (31,135,464 on W1's input). The peak is
+recorded against WASM W1's 1,148 MB. Before judging, the cheap layout shrinks are tried (typed arrays,
+dropping fields not needed until later, freeing per file). A peak above 1,148 MB is NOT a stop by
+itself.
+
+Gate (i), the census, if (ii) passes. A minimal FlatNode implementing ALSyntaxNode and a switch of the
+engine's parse interface to native, both uncommitted until GO. GO requires, for at least one build:
+native completes W2 (the census over whole BaseApp, 9,620 files) in ONE pass with no crash; its peak
+is at most 16,384 MB; nodes equal; and the identity listing equals the WASM spec-level listing
+(sha256 a66a270e1530907e2b6c2b468b29f409fcd822b2ee92e02e6827bd083c59621b). The native peak on W3a
+(BaseApp/Source, the half WASM completes) is compared with WASM's 16,151 MB: lower is the owner's
+memory win and is reported beside the verdict; a GO whose W3a peak is not lower is reported as GO
+without a memory win, for the owner to decide.
+
+Recorded, not gating: parse medians over 3 runs and the Rust-only parse time, for each build, with
+the compiler, its version and flags.
+
+## RESULT (RUST-02, 2026-09-28)
+
+Full figures: `docs/measurements/2026-09-28-rust-02-native-parser-gates.md`.
+
+**Gate (ii): PASS, both builds.** One pass over whole BaseApp (9,620 files) through the native parse
+call alone: no crash, nodes equal WASM (31,135,464) on every run, peak far under the 16,384 MB
+ceiling (base peak about 1,906 MB msvc, 1,908 MB clang). The best layout, a harness-only change that
+yields the event loop every 100 files, gets both builds under WASM W1's own 1,142 MB peak (827 MB
+clang, 835 MB msvc): the base peak is dead transferred typed arrays that Bun frees only on an
+event-loop turn, not a crate cost.
+
+**Gate (i): GO, both builds, with a memory win.** The whole-BaseApp census (W2) completes in one
+pass on each build with no crash, peak 8,957 MB clang and 8,792 MB msvc against the 16,384 MB
+ceiling, nodes equal, and the identity listing byte-identical to the pre-committed WASM capture
+(sha256 `a66a270e...`). W3a (BaseApp/Source) peaks at 5,855 MB clang and 5,502 MB msvc against
+WASM's 16,151 MB, about a third: the owner's memory win, on both builds. `bun test` under native is
+4,081 pass / 7 skip / 1 fail on each build (WASM at the same HEAD: 4,082 / 7 / 0); the one failing
+test pins WASM's own `Tree.delete()` mechanism and needs a native form as part of any switch-over,
+not a correctness regression in the parser.
+
+Clang is faster throughout (W2 wall 100.05 s against msvc's 129.78 s, Rust-only parse 2.65x faster)
+with no memory cost, so clang is preferred if one build is chosen for RUST-03. Speed was recorded
+only; it did not gate either verdict, by the amended bar above.
+
+The crate, the `FlatNode` layer and the native-parser switch stay uncommitted in the working tree.
+RUST-03 is the switch-over decision: the loader (grammar pin, staleness check, `--compile`
+embedding), the one differing unit test, and W4/W6, none of which this session measured.
