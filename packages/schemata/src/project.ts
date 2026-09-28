@@ -94,6 +94,15 @@ export function identityTupleOf(
 export function assignIdentityOrdinals(
   entries: readonly MutantManifestEntry[],
 ): MutantManifestEntry[] {
+  const ordinalOf = identityOrdinalsOf(entries);
+  return entries.map((e) => ({ ...e, identityOrdinal: ordinalOf.get(e) ?? 0 }));
+}
+
+/** The numbering `assignIdentityOrdinals` applies, without copying the entries (RUST-03 S4.2a:
+ *  the writer sets it on its own rows, so a whole-BaseApp manifest is not held twice). */
+function identityOrdinalsOf(
+  entries: readonly MutantManifestEntry[],
+): Map<MutantManifestEntry, number> {
   const order = [...entries].sort(
     (a, b) =>
       a.file.localeCompare(b.file) ||
@@ -108,7 +117,7 @@ export function assignIdentityOrdinals(
     ordinalOf.set(e, n);
     next.set(tuple, n + 1);
   }
-  return entries.map((e) => ({ ...e, identityOrdinal: ordinalOf.get(e) ?? 0 }));
+  return ordinalOf;
 }
 
 export interface MutantManifestEntry {
@@ -258,12 +267,23 @@ export interface MutantManifest {
   readonly mutants: readonly MutantManifestEntry[];
 }
 
-function lineOfIndex(source: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index && i < source.length; i++) {
-    if (source[i] === "\n") line++;
+/** RUST-03 S4.2a: the offset of every line's first character, built once per file. */
+function lineStartsOf(source: string): number[] {
+  const starts = [0];
+  for (let i = source.indexOf("\n"); i !== -1; i = source.indexOf("\n", i + 1)) starts.push(i + 1);
+  return starts;
+}
+
+/** 1-based line of `index`: one plus the newlines before it (a binary search over `starts`). */
+function lineOfIndex(starts: readonly number[], index: number): number {
+  let lo = 0;
+  let hi = starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if ((starts[mid] ?? 0) <= index) lo = mid + 1;
+    else hi = mid;
   }
-  return line;
+  return Math.max(1, lo);
 }
 
 /** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
@@ -469,15 +489,20 @@ function procedureNameOf(spec: MutationSpec): string {
 // `local` word ahead of the `procedure` keyword is the scope marker. Text-level, but anchored
 // to the declaration's own start, so a `local` in a preceding comment line cannot match — the
 // parse has already separated comments from the declaration node.
-const LOCAL_SCOPE_PREFIX = /^\s*(?:\[[^\]]*\]\s*)*local\b/;
+// RUST-03 S4.2a: sticky, run on the file's source at the declaration's start, so no procedure's
+// whole text is taken per mutant. A match must end inside the declaration.
+const LOCAL_SCOPE_PREFIX = /\s*(?:\[[^\]]*\]\s*)*local\b/y;
 
 /** `local`/`public` for the enclosing procedure, or `undefined` outside one (a trigger body). */
-function procedureScopeOf(spec: MutationSpec): "local" | "public" | undefined {
+function procedureScopeOf(spec: MutationSpec, source: string): "local" | "public" | undefined {
   const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return undefined;
   // R301, R316: a split header's node text starts with `#if`, so its scope is read per arm.
   if (proc.kind !== ALNodeKind.procedure) return splitIsLocal(proc) ? "local" : "public";
-  return LOCAL_SCOPE_PREFIX.test(proc.text) ? "local" : "public";
+  LOCAL_SCOPE_PREFIX.lastIndex = proc.startIndex;
+  return LOCAL_SCOPE_PREFIX.test(source) && LOCAL_SCOPE_PREFIX.lastIndex <= proc.endIndex
+    ? "local"
+    : "public";
 }
 
 /** R301, R316: a split procedure, either shape, is `local` only when EVERY arm is: `local` widens
@@ -534,7 +559,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
-  const unnumbered: MutantManifestEntry[] = [];
+  // RUST-03 S4.2a: rows are built once and numbered in place (`identityOrdinalsOf`), not copied.
+  const rows: { -readonly [K in keyof MutantManifestEntry]: MutantManifestEntry[K] }[] = [];
   // C02-09: gap id -> "<file>\n<start>\n<end>" of the block it names. Offsets decide: two blocks
   // on one line are two blocks. A second, different block under one id is refused, never merged.
   const blockOfGap = new Map<string, string>();
@@ -556,45 +582,61 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
     }
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
+    // RUST-03 S4.2a: per file, not per mutant: the line index, and each gap block's id and lines.
+    const starts = lineStartsOf(f.source);
+    const gapOf = new Map<
+      string,
+      { gapId: string; blockStartLine: number; blockEndLine: number }
+    >();
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
-      const procedureScope = procedureScopeOf(spec);
+      const procedureScope = procedureScopeOf(spec, f.source);
       const member = enclosingMemberOf(spec);
       const block = gapBlockOf(spec.before);
-      const gapId = idOf(
-        f.path,
-        block.startIndex,
-        block.endIndex,
-        f.source.slice(block.startIndex, block.endIndex),
-      );
-      const blockKey = `${f.path}\n${block.startIndex}\n${block.endIndex}`;
-      const firstBlock = blockOfGap.get(gapId);
-      if (firstBlock === undefined) blockOfGap.set(gapId, blockKey);
-      else if (firstBlock !== blockKey) {
-        throw new Error(
-          `writeInstrumentedProject: two blocks share gap id ${gapId}: ${JSON.stringify(firstBlock)} and ${JSON.stringify(blockKey)}`,
+      const inFile = `${block.startIndex}\n${block.endIndex}`;
+      let gap = gapOf.get(inFile);
+      if (gap === undefined) {
+        const gapId = idOf(
+          f.path,
+          block.startIndex,
+          block.endIndex,
+          f.source.slice(block.startIndex, block.endIndex),
         );
+        const blockKey = `${f.path}\n${inFile}`;
+        const firstBlock = blockOfGap.get(gapId);
+        if (firstBlock === undefined) blockOfGap.set(gapId, blockKey);
+        else if (firstBlock !== blockKey) {
+          throw new Error(
+            `writeInstrumentedProject: two blocks share gap id ${gapId}: ${JSON.stringify(firstBlock)} and ${JSON.stringify(blockKey)}`,
+          );
+        }
+        gap = {
+          gapId,
+          blockStartLine: lineOfIndex(starts, block.startIndex),
+          blockEndLine: lineOfIndex(starts, block.endIndex),
+        };
+        gapOf.set(inFile, gap);
       }
       const reachGrain = grainOf.get(mutantId);
       if (reachGrain === undefined) {
         throw new Error(`writeInstrumentedProject: no reach grain for ${mutantId} in ${f.path}`);
       }
-      unnumbered.push({
+      rows.push({
         mutantId,
         file: f.path,
         startIndex: spec.before.startIndex,
         endIndex: spec.before.endIndex,
-        startLine: lineOfIndex(f.source, spec.before.startIndex),
+        startLine: lineOfIndex(starts, spec.before.startIndex),
         operatorName: spec.operatorName,
         operatorVersion: spec.operatorVersion,
         astHash: astSubtreeHash(spec.before),
-        gapId,
-        blockStartLine: lineOfIndex(f.source, block.startIndex),
-        blockEndLine: lineOfIndex(f.source, block.endIndex),
+        gapId: gap.gapId,
+        blockStartLine: gap.blockStartLine,
+        blockEndLine: gap.blockEndLine,
         reachGrain,
         objectType: header.type,
         codeunitId: header.id,
@@ -605,8 +647,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         ...(procedureScope !== undefined ? { procedureScope } : {}),
         ...(member !== null
           ? {
-              procedureStartLine: lineOfIndex(f.source, member.startIndex),
-              procedureEndLine: lineOfIndex(f.source, member.endIndex),
+              procedureStartLine: lineOfIndex(starts, member.startIndex),
+              procedureEndLine: lineOfIndex(starts, member.endIndex),
             }
           : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
@@ -614,6 +656,8 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
+        // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
+        identityOrdinal: 0,
       });
     }
   }
@@ -621,7 +665,9 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   // R193: identity ordinals are assigned over the WHOLE manifest, after every file's entries exist,
   // because a twin pair sits in one procedure and therefore one file, but numbering per file
   // would still be a second implementation of the same rule.
-  const manifest = assignIdentityOrdinals(unnumbered);
+  const ordinalOf = identityOrdinalsOf(rows);
+  for (const r of rows) r.identityOrdinal = ordinalOf.get(r) ?? 0;
+  const manifest: readonly MutantManifestEntry[] = rows;
 
   // The delegating selector (Active -> LC Control State.IsActive) and the register-install
   // codeunit (registers targetAppId -> artifactId on install). The in-target Mutation Active
