@@ -1971,3 +1971,82 @@ describe("R301: a split-header procedure owns its reach latch", () => {
     expect(out).not.toContain(`${REACH_LATCH}2`);
   });
 });
+
+/** R303 repro, hand-written: members whose `var` section sits inside `#if`, beside a plain one. */
+const R303_SRC = `codeunit 50100 "Repro D"
+{
+    trigger OnRun()
+#if not CLEAN27
+    var
+        L: Integer;
+#else
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 1;
+    end;
+
+    procedure Pick(X: Integer): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        Glob := X + 1;
+        exit(0);
+    end;
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        P := X + 2;
+        exit(P);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+describe("R303: a member whose var section is split by #if gets no reach latch", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const at = (root: ALSyntaxNode, text: string): ALSyntaxNode => {
+    const a = findAll(root, ALNodeKind.assignment_statement).find((n) => n.text === text);
+    if (a === undefined) throw new Error(`fixture drift: no assignment ${text}`);
+    return a;
+  };
+
+  it("trigger and procedure: no latch, no marker, grain unplaced; the plain member keeps its latch", () => {
+    const root = wrapRoot(parseAL(R303_SRC));
+    const blocks: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (n.rawKind === "preproc_conditional_var_block") blocks.push(n);
+    });
+    expect(blocks.map((b) => b.parent?.rawKind)).toEqual(["trigger_declaration", "procedure"]);
+    const specs = [
+      spec(at(root, "Glob := Glob + 1"), "Glob := 0", "lethal.op"),
+      spec(at(root, "Glob := X + 1"), "Glob := 0", "lethal.op"),
+      spec(at(root, "P := X + 2"), "P := 0", "lethal.op"),
+    ];
+    const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
+    const grains = buildComponents(ided).flatMap((c) =>
+      c.members.map((m) => [m.spec.before.text, reachGrainOf(m, c.root)]),
+    );
+    expect(grains).toEqual([
+      ["Glob := Glob + 1", "unplaced"],
+      ["Glob := X + 1", "unplaced"],
+      ["P := X + 2", "statement"],
+    ]);
+    const out = compileSchemataForFile(R303_SRC, root, specs, ided);
+    // One latch, in Plain's own var section; none before either split var block's `begin`.
+    expect(out.split(`${REACH_LATCH}: Boolean;`).length - 1).toBe(1);
+    expect(out).toContain(`P: Integer; ${REACH_LATCH}: Boolean;`);
+    expect(out).not.toContain(`var ${REACH_LATCH}`);
+    expect(out.split("MutationSelector.Reached(").length - 1).toBe(1);
+    expect(countErrorNodes(out)).toBe(0);
+  });
+});

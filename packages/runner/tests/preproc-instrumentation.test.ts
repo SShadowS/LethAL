@@ -1511,3 +1511,81 @@ describe("R301: split-header procedures get their manifest fields", () => {
 });
 /** Captured after R301's latch fix (Step 4a), before the manifest fixes; see the test above. */
 const SPLIT_SITES: string[] = ["19 lethal.remove-assignment", "20 lethal.void-method-call"];
+
+describe("R303: a member whose var section is split by #if gets no reach latch, by name", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SRC = `codeunit 50100 "Repro D"
+{
+    trigger OnRun()
+#if not CLEAN27
+    var
+        L: Integer;
+#else
+    var
+        M: Integer;
+#endif
+    begin
+        if Glob > 1 then
+            Glob := Glob + 1;
+    end;
+
+    procedure Pick(X: Integer): Integer
+#if not CLEAN27
+    var
+        K: Integer;
+#endif
+    begin
+        if X > 1 then
+            exit(X + 1);
+        exit(0);
+    end;
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        P := X + 2;
+        exit(P);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+  test("each refused member is named once in a reach-latch-refused warning; its mutants are unplaced, the plain member's are not", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r303-"));
+    try {
+      await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
+      await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
+      const warnings: { code: string; message: string }[] = [];
+      await generateMutationSet(dir, {
+        emit: (e) => {
+          if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
+        },
+      });
+      const refused = warnings.filter((w) => w.code === "reach-latch-refused");
+      expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
+        "[lethal] Repro.Codeunit.al: trigger OnRun",
+        "[lethal] Repro.Codeunit.al: procedure Pick",
+      ]);
+      for (const w of refused) expect(w.message).toContain("R303");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
+    const grains = new Map<string, Set<string>>();
+    for (const m of manifest.mutants) {
+      const who = m.triggerName ?? m.procedureName;
+      grains.set(who, new Set([...(grains.get(who) ?? []), m.reachGrain ?? "none"]));
+    }
+    expect([...(grains.get("OnRun") ?? [])]).toEqual(["unplaced"]);
+    expect([...(grains.get("Pick") ?? [])]).toEqual(["unplaced"]);
+    expect(grains.get("Plain")?.has("statement")).toBe(true);
+    const text = emitted.get("Repro.Codeunit.al") ?? "";
+    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(1);
+    expect(text).toContain("P: Integer; LethALReachLatch: Boolean;");
+  });
+});

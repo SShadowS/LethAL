@@ -41,7 +41,7 @@ export type {
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
-export { REACH_MARKER, reachGrainOf } from "./dispatch";
+export { REACH_MARKER, reachGrainOf, reachLatchRefusedOwner } from "./dispatch";
 export type { ReachGrain } from "./dispatch";
 export { resolveSite, isMutableSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";

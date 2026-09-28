@@ -4,12 +4,14 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
+  ALNodeKind,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
   initParser,
   parseAL,
+  procedureLikeNameNode,
   validateSpec,
   visit,
   wrapRoot,
@@ -25,6 +27,7 @@ import {
   dedupeSpecs,
   describeObjectKinds,
   isMutableSite,
+  reachLatchRefusedOwner,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
@@ -543,6 +546,33 @@ export function resolveOperatorNames(
   return resolved;
 }
 
+/**
+ * R303: the members of one file whose `var` section is split by `#if`, so the writer declares no
+ * reach latch there (`reachLatchRefusedOwner`), each with its site count, in source order. Named
+ * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
+ */
+export function reachLatchRefusals(
+  specs: readonly MutationSpec[],
+): { member: string; start: number; sites: number }[] {
+  const byStart = new Map<number, { member: string; start: number; sites: number }>();
+  for (const spec of specs) {
+    const owner = reachLatchRefusedOwner(spec.before);
+    if (owner === null) continue;
+    const known = byStart.get(owner.startIndex);
+    if (known !== undefined) {
+      known.sites++;
+      continue;
+    }
+    const nameNode =
+      owner.kind === ALNodeKind.trigger
+        ? owner.childForFieldName("name")
+        : procedureLikeNameNode(owner);
+    const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? "<unnamed>"}`;
+    byStart.set(owner.startIndex, { member, start: owner.startIndex, sites: 1 });
+  }
+  return [...byStart.values()].sort((x, y) => x.start - y.start);
+}
+
 export async function generateMutationSet(
   projectDir: string,
   options: MutationSetOptions = {},
@@ -740,6 +770,12 @@ export async function generateMutationSet(
     }
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
+    for (const r of reachLatchRefusals(fileSpecs)) {
+      warn(
+        "reach-latch-refused",
+        `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). Placement rule pending, R303.`,
+      );
+    }
   }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
