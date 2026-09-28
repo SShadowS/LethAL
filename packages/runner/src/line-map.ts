@@ -4,8 +4,10 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   initParser,
+  isProcedureLike,
   objectDeclarationsOf,
   parseAL,
+  procedureLikeNameNode,
   wrapRoot,
 } from "@lethal/engine";
 
@@ -280,8 +282,11 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
       triggers.push(span(n, nameNode === null ? "" : stripQuotes(nameNode.text)));
       return;
     }
-    if (n.kind === ALNodeKind.procedure) {
-      const nameNode = n.childForFieldName("name");
+    // R301: a split-header procedure is one procedure (one shared body). Its span starts at the
+    // `#if` line, which holds no code, so no covered line can land there. An arm that renames the
+    // procedure gets no span: which name is compiled is not known here.
+    if (isProcedureLike(n)) {
+      const nameNode = procedureLikeNameNode(n);
       const name = nameNode === null ? null : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its

@@ -395,6 +395,15 @@ describe("R301: split-header procedures", () => {
     ).toBe(false);
   });
 
+  it("gapBlockOf: a top-level statement of the split body belongs to the body, not the root", () => {
+    const root = wrapRoot(parseAL(SPLIT));
+    const got = gapBlockOf(first(root, "assignment_statement"));
+    const begin = SPLIT.indexOf("begin\n        L := X");
+    const end = SPLIT.indexOf("end;\n\n    trigger") + "end".length;
+    expect([got.startIndex, got.endIndex]).toEqual([begin, end]);
+    expect(got.parent?.rawKind).toBe("preproc_split_procedure");
+  });
+
   it("procedureLikeNameNode: the shared name when every arm agrees, null when an arm renames", () => {
     const root = wrapRoot(parseAL(SPLIT));
     expect(procedureLikeNameNode(first(root, "preproc_split_procedure"))?.text).toBe("A");

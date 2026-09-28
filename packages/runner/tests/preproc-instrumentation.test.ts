@@ -1479,6 +1479,16 @@ describe("R301: split-header procedures get their manifest fields", () => {
     }
   });
 
+  test("c-split: the split body is the gap block, shared by its statements", async () => {
+    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
+    const split = manifest.mutants.filter(inSplit);
+    for (const m of split) expect([m.blockStartLine, m.blockEndLine]).toEqual([18, 21]);
+    expect(new Set(split.filter((m) => m.startLine === 19).map((m) => m.gapId)).size).toBe(1);
+    const lines = new Set(split.map((m) => m.startLine));
+    expect(lines.has(19) && lines.has(20)).toBe(true);
+    expect(new Set(split.map((m) => m.gapId)).size).toBe(1);
+  });
+
   test("a renamed arm names neither arm: the writer cannot tell which one is compiled", async () => {
     const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT_RENAMED });
     const split = manifest.mutants.filter(inSplit);

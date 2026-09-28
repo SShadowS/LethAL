@@ -98,9 +98,10 @@ export function gapBlockOf(node: ALSyntaxNode): ALSyntaxNode {
     const slot = n.fieldName === null ? null : `${parent.rawKind}.${n.fieldName}`;
     if (slot !== null && (SINGLE_STATEMENT_SLOTS.has(slot) || WRAPPED_BRANCH_BODIES.has(slot)))
       return n;
+    // R301: a split-header procedure's shared body is a direct child too.
     if (
       n.kind === ALNodeKind.block &&
-      (parent.kind === ALNodeKind.procedure || parent.kind === ALNodeKind.trigger)
+      (isProcedureLike(parent) || parent.kind === ALNodeKind.trigger)
     )
       return n;
     n = parent;

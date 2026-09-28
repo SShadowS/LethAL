@@ -583,3 +583,50 @@ describe("R298: a wrapper holding a non-coverage object (an enum) still refuses 
     expect(m.lookup("Codeunit", 50107, 8)).toBe("R");
   });
 });
+
+/** R301: a procedure whose HEADER is split by `#if`. The split body is lines 18..21. */
+const R301_SPLIT = (ifName: string, elseName: string): string => `codeunit 50100 "Repro C"
+{
+    procedure First()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+
+#if CLEAN27
+    procedure ${ifName}(X: Integer)
+#else
+    internal procedure ${elseName}(X: Integer)
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        Message('%1', L);
+    end;
+}
+`;
+
+describe("R301: a split-header procedure has a coverage span", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("a covered line inside the split body names A; First keeps its own lines", () => {
+    const m = mapFor(R301_SPLIT("A", "A"));
+    for (const line of [11, 12, 16, 18, 19, 20, 21])
+      expect(m.lookup("Codeunit", 50100, line)).toBe("A");
+    for (const line of [3, 7, 9]) expect(m.lookup("Codeunit", 50100, line)).toBe("First");
+  });
+
+  test("an arm that renames the procedure names neither arm", () => {
+    const m = mapFor(R301_SPLIT("AIf", "AElse"));
+    for (const line of [19, 20]) {
+      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AIf");
+      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AElse");
+      expect(m.lookup("Codeunit", 50100, line)).toBeUndefined();
+    }
+  });
+});
