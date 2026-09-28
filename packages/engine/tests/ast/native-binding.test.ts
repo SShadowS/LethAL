@@ -46,6 +46,29 @@ describe("native parser binding", () => {
     expect(parsed.flat.kindNames[parsed.flat.kind[0] ?? -1]).toBe("source_file");
   });
 
+  it("returns the layout FlatNode reads: exact typed-array types, 4 points per node, -1 for no sibling", async () => {
+    await initNativeParser();
+    const { flat } = parseALNative("codeunit 50100 X { procedure P() begin end; }");
+    const types = Object.fromEntries(
+      Object.entries(flat).map(([k, v]) => [k, (v as object).constructor.name]),
+    );
+    expect(types).toEqual({
+      kindNames: "Array",
+      kind: "Uint16Array",
+      fieldNames: "Array",
+      field: "Uint16Array",
+      flags: "Uint8Array",
+      childCount: "Uint32Array",
+      nextSibling: "Int32Array",
+      startIndex: "Uint32Array",
+      endIndex: "Uint32Array",
+      points: "Uint32Array",
+    });
+    expect(flat.kind.length).toBeGreaterThan(1);
+    expect(flat.points.length).toBe(4 * flat.kind.length);
+    expect(flat.nextSibling[0]).toBe(-1);
+  });
+
   const real = () => nativeInfo();
   const fake = (over: Partial<NativeInfo>): NativeBinding => ({
     parseFlat: () => {

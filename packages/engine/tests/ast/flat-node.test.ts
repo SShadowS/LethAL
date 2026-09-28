@@ -59,9 +59,42 @@ describe("FlatNode", () => {
     expect(root.startPosition).toEqual({ row: 0, column: 0 });
     expect(x?.startPosition).toEqual({ row: 0, column: 0 });
     expect(x?.endPosition).toEqual({ row: 0, column: 1 });
+    expect(plus?.startPosition).toEqual({ row: 0, column: 1 });
     expect(plus?.fieldName).toBeNull();
     expect(plus?.hasError).toBe(false);
     expect(x?.namedChildren).toEqual([]);
     expect(x?.childForFieldName("left")).toBeNull();
+  });
+});
+
+// "(ab)": an anonymous "(" in field "open", then a named x in field "left" that sits in the MIDDLE of
+// its parent's text (1..3, so slice and substr differ) and starts at a non-zero column, then ")".
+const mid: FlatTree = {
+  kindNames: ["r", "(", "x", ")"],
+  kind: Uint16Array.of(0, 1, 2, 3),
+  fieldNames: ["", "open", "left"],
+  field: Uint16Array.of(0, 1, 2, 0),
+  flags: Uint8Array.of(1, 0, 1, 0),
+  childCount: Uint32Array.of(3, 0, 0, 0),
+  nextSibling: Int32Array.of(-1, 2, 3, -1),
+  startIndex: Uint32Array.of(0, 0, 1, 3),
+  endIndex: Uint32Array.of(4, 1, 3, 4),
+  points: Uint32Array.of(0, 0, 0, 4, 0, 0, 0, 1, 0, 1, 0, 3, 0, 3, 0, 4),
+};
+const midRoot = wrapFlatRoot({ source: "(ab)", flat: mid });
+
+describe("FlatNode, a named child after an anonymous sibling", () => {
+  it("slices the child's own text and reads its own column", () => {
+    const [, x] = midRoot.children;
+    expect(x?.text).toBe("ab");
+    expect(x?.startPosition).toEqual({ row: 0, column: 1 });
+    expect(x?.endPosition).toEqual({ row: 0, column: 3 });
+  });
+
+  it("takes a named child's field name from the node, not from its position", () => {
+    expect(midRoot.children.map((c) => c.fieldName)).toEqual(["open", "left", null]);
+    const named = midRoot.namedChildren;
+    expect(named.map((c) => [c.rawKind, c.fieldName])).toEqual([["x", "left"]]);
+    expect(midRoot.childForFieldName("left")?.text).toBe("ab");
   });
 });
