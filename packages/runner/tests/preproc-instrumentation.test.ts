@@ -3,11 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
+import type { MutationSpec } from "@lethal/engine";
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { lineMapFromSources } from "../src/line-map";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
 // R297 and its successors: preprocessor shapes through the real operator set and the real writer.
@@ -1870,6 +1871,79 @@ describe("R309: a split-header procedure whose arms each have their own var sect
     expect(text.split(SELECTOR).length - 1).toBe(1);
     expect(text).toContain(
       `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR}`,
+    );
+  });
+});
+
+describe("R309 review: a refused member's name label drops blank arms and dedupes case/quote-insensitively", () => {
+  // Hand-built nodes, not parsed: tree-sitter-al is not known to produce a MISSING `name` field on
+  // a real preamble arm, so these two shapes are exercised directly through the exported
+  // `reachLatchRefusals`, the same way `packages/schemata/tests/compile.test.ts` builds a node by
+  // hand for a shape "not reachable through tree-sitter-al 4.4.1".
+  const POS = { row: 0, column: 0 };
+  function fakeNode(overrides: Partial<ALSyntaxNode> = {}): ALSyntaxNode {
+    return {
+      kind: "preproc_split_procedure_preamble" as ALSyntaxNode["kind"],
+      rawKind: "preproc_split_procedure_preamble",
+      text: "",
+      startIndex: 0,
+      endIndex: 0,
+      startPosition: POS,
+      endPosition: POS,
+      parent: null,
+      children: [],
+      namedChildren: [],
+      fieldName: null,
+      childForFieldName: () => null,
+      ...overrides,
+    };
+  }
+  /** A fake `name`-field child, as every arm's own header exposes one directly (see "The grammar"). */
+  function fakeName(text: string): ALSyntaxNode {
+    return fakeNode({
+      rawKind: "identifier",
+      kind: "identifier" as ALSyntaxNode["kind"],
+      text,
+      fieldName: "name",
+    });
+  }
+  /** The one `reach-latch-refused` member label `reachLatchRefusals` computes for a preamble
+   *  `owner` whose arm `name` children are exactly `armNames`. */
+  function labelFor(armNames: readonly string[]): string {
+    const owner = fakeNode({ children: armNames.map(fakeName) });
+    const spec: MutationSpec = {
+      operatorName: "lethal.op",
+      operatorVersion: "1.0.0",
+      astNodeId: "0-0",
+      before: owner,
+      after: { ...owner, text: "" } as never,
+      parentContext: "statement-position",
+    };
+    const [refusal] = reachLatchRefusals([spec]);
+    if (refusal === undefined) throw new Error("fixture drift: reachLatchRefusals refused nothing");
+    return refusal.member;
+  }
+
+  test("an arm with a missing (blank) name is dropped, not printed as an empty entry", () => {
+    expect(labelFor(["Pick", ""])).toBe("procedure <renamed per #if arm: Pick>");
+  });
+
+  test("names that agree case- and quote-insensitively count once, keeping the first spelling", () => {
+    expect(labelFor(["Pick", '"pick"', "Other"])).toBe(
+      "procedure <renamed per #if arm: Pick, Other>",
+    );
+  });
+
+  // Controls: the shapes the review already measured as correct, unchanged by this fix.
+  test("control: three arms that really do all differ list every one", () => {
+    expect(labelFor(["Pick", "Choose", "Take"])).toBe(
+      "procedure <renamed per #if arm: Pick, Choose, Take>",
+    );
+  });
+
+  test("control: two arms sharing one exact name among three collapse to two", () => {
+    expect(labelFor(["Pick", "Pick", "Choose"])).toBe(
+      "procedure <renamed per #if arm: Pick, Choose>",
     );
   });
 });

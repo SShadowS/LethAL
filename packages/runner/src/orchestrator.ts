@@ -557,10 +557,21 @@ export function resolveOperatorNames(
  * procedure or trigger always has exactly one, so this only differs from "<unnamed>" there.
  */
 function unnamedMemberLabel(owner: ALSyntaxNode): string {
-  const names = [
-    ...new Set(owner.children.filter((c) => c.fieldName === "name").map((c) => c.text)),
-  ];
-  return names.length > 1 ? `<renamed per #if arm: ${names.join(", ")}>` : "<unnamed>";
+  const raw = owner.children.filter((c) => c.fieldName === "name").map((c) => c.text);
+  if (raw.length <= 1) return "<unnamed>";
+  // Same key `procedureLikeNameNode` compares by: quotes stripped, case-insensitive. A blank
+  // (missing) arm name is dropped rather than joined as an empty entry.
+  const key = (t: string): string => t.replace(/^"|"$/g, "").toLowerCase();
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const t of raw) {
+    if (t === "") continue;
+    const k = key(t);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    names.push(t);
+  }
+  return `<renamed per #if arm: ${names.join(", ")}>`;
 }
 
 /**
