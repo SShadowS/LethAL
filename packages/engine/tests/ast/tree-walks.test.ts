@@ -14,6 +14,7 @@ import {
   isStatementSlot,
   objectDeclarationsOf,
   parseAL,
+  procedureLikeNameNode,
   visit,
   wrapRoot,
 } from "../../src";
@@ -392,6 +393,19 @@ describe("R301: split-header procedures", () => {
     expect(
       isProcedureLike(first(wrapRoot(parseAL(preamble)), "preproc_split_procedure_preamble")),
     ).toBe(false);
+  });
+
+  it("procedureLikeNameNode: the shared name when every arm agrees, null when an arm renames", () => {
+    const root = wrapRoot(parseAL(SPLIT));
+    expect(procedureLikeNameNode(first(root, "preproc_split_procedure"))?.text).toBe("A");
+    const renamed = SPLIT.replace("internal procedure A(", "internal procedure AElse(");
+    expect(
+      procedureLikeNameNode(first(wrapRoot(parseAL(renamed)), "preproc_split_procedure")),
+    ).toBeNull();
+    const quoted = SPLIT.replace("internal procedure A(", 'internal procedure "a"(');
+    expect(
+      procedureLikeNameNode(first(wrapRoot(parseAL(quoted)), "preproc_split_procedure"))?.text,
+    ).toBe("A");
   });
 
   it("findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)", () => {

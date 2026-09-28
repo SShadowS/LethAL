@@ -8,7 +8,9 @@ import {
   astSubtreeHash,
   findEnclosingProcedure,
   gapBlockOf,
+  isProcedureLike,
   maskAlNonCode,
+  procedureLikeNameNode,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { buildComponents } from "./components";
@@ -445,10 +447,21 @@ function stripQuotes(s: string): string {
   return s;
 }
 
+/**
+ * R301: the narrowest procedure-like ancestor (a `procedure` or a split-header procedure), or
+ * `null`. Project-local on purpose: the engine's `findEnclosingProcedure` also feeds semantic
+ * resolution, which does not see inside a split procedure yet (R302), so it stays unchanged.
+ */
+function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
+  let current: ALSyntaxNode | null = node.parent;
+  while (current !== null && !isProcedureLike(current)) current = current.parent;
+  return current;
+}
+
 function procedureNameOf(spec: MutationSpec): string {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return "";
-  const nameNode = proc.childForFieldName("name");
+  const nameNode = procedureLikeNameNode(proc);
   return nameNode === null ? "" : stripQuotes(nameNode.text);
 }
 
@@ -489,7 +502,7 @@ function triggerNameOf(spec: MutationSpec): string | undefined {
 
 /** C02-01: the enclosing `procedure` node, else the nearest `trigger` ancestor, else `null`. */
 function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
-  const proc = findEnclosingProcedure(spec.before);
+  const proc = enclosingProcedureLike(spec.before);
   if (proc !== null) return proc;
   let current: ALSyntaxNode | null = spec.before;
   while (current !== null && current.kind !== ALNodeKind.trigger) current = current.parent;

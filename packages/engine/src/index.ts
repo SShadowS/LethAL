@@ -18,6 +18,7 @@ export {
   isStatementSlot,
   gapBlockOf,
   isProcedureLike,
+  procedureLikeNameNode,
   declarationMembers,
   isObjectContainer,
   objectDeclarationsOf,

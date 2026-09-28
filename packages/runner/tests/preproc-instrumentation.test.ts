@@ -1413,3 +1413,75 @@ describe("R298: #if-wrapped objects through the real pipeline", () => {
     }
   });
 });
+/** R301 (class C) repros, hand-written (R-297 Task 0's `c-split*`): a procedure whose HEADER is
+ *  split by `#if`, sharing one var section and one body. Lines: First 3..9, `#if` 11, body 18..21. */
+const C_SPLIT_OF = (ifArm: string, elseArm: string): string => `codeunit 50100 "Repro C"
+{
+    procedure First()
+    var
+        L: Integer;
+    begin
+        L := 1;
+        Message('%1', L);
+    end;
+
+#if CLEAN27
+    ${ifArm}
+#else
+    ${elseArm}
+#endif
+    var
+        L: Integer;
+    begin
+        L := X;
+        Message('%1', L);
+    end;
+}
+`;
+const C_SPLIT = C_SPLIT_OF("procedure A(X: Integer)", "internal procedure A(X: Integer)");
+/** The rename case R301 leaves open: which arm is live depends on symbols the writer does not see. */
+const C_SPLIT_RENAMED = C_SPLIT_OF("procedure AIf(X: Integer)", "procedure AElse(X: Integer)");
+
+describe("R301: split-header procedures get their manifest fields", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const inSplit = (m: { startLine: number }): boolean => m.startLine >= 18 && m.startLine <= 21;
+
+  test("c-split: every entry in the split body names A, and First's name First", async () => {
+    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
+    const split = manifest.mutants.filter(inSplit);
+    expect(split.length).toBeGreaterThan(0);
+    for (const m of manifest.mutants) expect(m.procedureName).toBe(inSplit(m) ? "A" : "First");
+  });
+
+  test("c-split: the member span of a split-body entry is the split procedure's lines", async () => {
+    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
+    for (const m of manifest.mutants) {
+      expect([m.procedureStartLine, m.procedureEndLine]).toEqual(inSplit(m) ? [11, 21] : [3, 9]);
+    }
+  });
+
+  test("a renamed arm names neither arm: the writer cannot tell which one is compiled", async () => {
+    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT_RENAMED });
+    const split = manifest.mutants.filter(inSplit);
+    expect(split.length).toBeGreaterThan(0);
+    for (const m of split) {
+      expect(m.procedureName).not.toBe("AIf");
+      expect(m.procedureName).not.toBe("AElse");
+      expect(m.procedureName).toBe("");
+    }
+  });
+
+  test("c-split: the site set is unchanged by the manifest fixes (operator multiset)", async () => {
+    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
+    const ops = manifest.mutants
+      .filter(inSplit)
+      .map((m) => `${m.startLine} ${m.operatorName}`)
+      .sort();
+    expect(ops).toEqual(SPLIT_SITES);
+  });
+});
+/** Captured after R301's latch fix (Step 4a), before the manifest fixes; see the test above. */
+const SPLIT_SITES: string[] = ["19 lethal.remove-assignment", "20 lethal.void-method-call"];

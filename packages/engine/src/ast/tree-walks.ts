@@ -149,6 +149,23 @@ export function isProcedureLike(n: ALSyntaxNode): boolean {
   return n.kind === ALNodeKind.procedure || n.rawKind === "preproc_split_procedure";
 }
 
+/**
+ * R301: the `name` node of a procedure-like node. A plain procedure: its one name. A split-header
+ * procedure has one name per arm; they are returned only when every arm agrees (compared as AL
+ * compares names: case-insensitive, quotes ignored). An arm that RENAMES the procedure gives
+ * `null`, because which arm is compiled depends on preprocessor symbols the writer never sees, and
+ * the first arm's name may be the inactive one: no name is honest, a guessed one attributes
+ * coverage to the wrong member.
+ */
+export function procedureLikeNameNode(n: ALSyntaxNode): ALSyntaxNode | null {
+  if (n.kind === ALNodeKind.procedure) return n.childForFieldName("name");
+  const names = n.children.filter((c) => c.fieldName === "name");
+  const [first] = names;
+  if (first === undefined) return null;
+  const key = (x: ALSyntaxNode): string => x.text.replace(/^"|"$/g, "").toLowerCase();
+  return names.every((x) => key(x) === key(first)) ? first : null;
+}
+
 /** Narrowest `procedure` ancestor, or `null` if the node is outside any procedure. */
 export function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
