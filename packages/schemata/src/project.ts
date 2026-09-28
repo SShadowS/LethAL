@@ -268,14 +268,14 @@ export interface MutantManifest {
 }
 
 /** RUST-03 S4.2a: the offset of every line's first character, built once per file. */
-function lineStartsOf(source: string): number[] {
+export function lineStartsOf(source: string): number[] {
   const starts = [0];
   for (let i = source.indexOf("\n"); i !== -1; i = source.indexOf("\n", i + 1)) starts.push(i + 1);
   return starts;
 }
 
 /** 1-based line of `index`: one plus the newlines before it (a binary search over `starts`). */
-function lineOfIndex(starts: readonly number[], index: number): number {
+export function lineOfIndex(starts: readonly number[], index: number): number {
   let lo = 0;
   let hi = starts.length;
   while (lo < hi) {

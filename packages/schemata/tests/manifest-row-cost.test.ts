@@ -13,8 +13,51 @@ import {
   type MutantManifest,
   type WriteInput,
   gapIdOf,
+  lineOfIndex,
+  lineStartsOf,
   writeInstrumentedProject,
 } from "../src/project";
+
+/** The scan `lineOfIndex` replaced (before `167f540c`): one plus the newlines before `index`. */
+function scanLine(source: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < source.length; i++) {
+    if (source[i] === "\n") line++;
+  }
+  return line;
+}
+
+describe("lineOfIndex over one line index equals the old scan", () => {
+  const cases: readonly (readonly [name: string, source: string, index: number, line: number])[] = [
+    ["CRLF, after the first line break", "ab\r\ncd\r\nef", 4, 2],
+    ["CRLF, on the \\r", "ab\r\ncd", 2, 1],
+    ["offset ON a newline", "ab\ncd", 2, 1],
+    ["offset at a line start", "ab\ncd", 3, 2],
+    ["final line with no newline", "ab\ncd\nef", 7, 3],
+    ["end of a file with no final newline", "ab\ncd\nef", 8, 3],
+    ["end of a file with a final newline", "ab\ncd\n", 6, 3],
+    ["BOM at 0", "﻿ab\ncd", 0, 1],
+    ["BOM, second line", "﻿ab\ncd", 4, 2],
+    ["index past the end", "ab\ncd", 99, 2],
+    ["negative index", "ab\ncd", -5, 1],
+    ["empty source", "", 0, 1],
+    ["only newlines", "\n\n\n", 2, 3],
+  ];
+  for (const [name, source, index, line] of cases) {
+    it(name, () => {
+      expect(scanLine(source, index)).toBe(line);
+      expect(lineOfIndex(lineStartsOf(source), index)).toBe(line);
+    });
+  }
+
+  it("agrees with the scan at every offset of every case, and one past each end", () => {
+    for (const [, source] of cases) {
+      const starts = lineStartsOf(source);
+      for (let i = -2; i <= source.length + 2; i++)
+        expect(lineOfIndex(starts, i)).toBe(scanLine(source, i));
+    }
+  });
+});
 
 const N = 400;
 const SRC = [
@@ -53,10 +96,30 @@ function inputFor(dir: string, source: string, root: ALSyntaxNode): WriteInput {
   };
 }
 
-/** A stand-in for the source string that counts character reads by index (`s[i]`). Every method
- *  runs on the real string, so only indexed reads are counted. */
-function countingSource(src: string): { source: string; reads: () => number } {
+/** A stand-in for the source string. It counts character reads by index (`s[i]`), and, for every
+ *  method call, the characters that call can have scanned: what `slice`/`substring`/`substr`
+ *  returned, how far `indexOf` searched, one for `charAt`-like reads, and the whole string for
+ *  anything else (`split`, `lastIndexOf`, `replace`, regex methods, ...). Every method runs on the
+ *  real string. */
+function countingSource(src: string): {
+  source: string;
+  reads: () => number;
+  scanned: () => number;
+} {
   let reads = 0;
+  let scanned = 0;
+  const costOf = (method: string, args: readonly unknown[], result: unknown): number => {
+    if (method === "slice" || method === "substring" || method === "substr")
+      return typeof result === "string" ? result.length : src.length;
+    if (method === "indexOf") {
+      const from = typeof args[1] === "number" ? Math.max(0, args[1]) : 0;
+      const needle = typeof args[0] === "string" ? args[0].length : 1;
+      return typeof result === "number" && result >= 0 ? result - from + needle : src.length - from;
+    }
+    if (method === "charAt" || method === "charCodeAt" || method === "codePointAt") return 1;
+    if (method === "toString" || method === "valueOf") return 0;
+    return src.length;
+  };
   const proxy = new Proxy(new String(src), {
     get(_t, prop) {
       if (typeof prop === "string" && /^\d+$/.test(prop)) {
@@ -65,10 +128,17 @@ function countingSource(src: string): { source: string; reads: () => number } {
       }
       if (prop === "length") return src.length;
       const v: unknown = Reflect.get(String.prototype, prop);
-      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(src) : v;
+      if (typeof v !== "function") return v;
+      const f = v as (...a: unknown[]) => unknown;
+      if (typeof prop !== "string") return f.bind(src);
+      return (...a: unknown[]) => {
+        const result = f.apply(src, a);
+        scanned += costOf(prop, a, result);
+        return result;
+      };
     },
   });
-  return { source: proxy as unknown as string, reads: () => reads };
+  return { source: proxy as unknown as string, reads: () => reads, scanned: () => scanned };
 }
 
 /** Wraps a node so every `.text` read is summed by raw kind; parents and children stay wrapped. */
@@ -103,6 +173,9 @@ describe("manifest-row loop cost (RUST-03 S4.2a)", () => {
       await writeInstrumentedProject(inputFor(dir, counted.source, wrapRoot(parseAL(SRC))));
       // A line-number scan from offset 0 per mutant reads about N times the file.
       expect(counted.reads()).toBeLessThanOrEqual(4 * SRC.length);
+      // The same bound through method calls: per-mutant line work or block text taken through
+      // slice, indexOf or split scans about N times the file.
+      expect(counted.scanned()).toBeLessThanOrEqual(4 * SRC.length);
       const m = JSON.parse(
         await readFile(join(dir, "mutant-manifest.json"), "utf8"),
       ) as MutantManifest;
