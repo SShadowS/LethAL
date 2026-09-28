@@ -305,7 +305,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // reads it.
   private lineMap: LineMap | undefined;
   // R298: `type:id` keys whose coverage refusal this backend already named, so the warning is
-  // printed once per object per session rather than once per row or per test.
+  // printed once per object per session, at index time (`nameRefusals`), rows or not.
   private readonly refusalsWarned = new Set<string>();
   // R58 (`coverageMode: "fenced"` only): the `SetFilter` expression over `Code Coverage."Object ID"`
   // this batch's artifact declares — see `coverageObjectIdFilterOf`.
@@ -592,6 +592,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
       this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
     } else {
       this.lineMap = undefined;
@@ -607,6 +608,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         artifact.alSources,
         this.methodIndex.declaredObjects(),
       );
+      this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = coverageObjectIdFilterFromText(
         artifact.appJsonText,
         join(artifact.instrumentedDir, "app.json"),
@@ -614,6 +616,18 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } else {
       this.lineMap = undefined;
       this.coverageObjectIdFilter = undefined;
+    }
+  }
+
+  /**
+   * R298: names every refused object ONCE per session, when the artifact is indexed, so a wrapped
+   * object no coverage row ever mentions is named too (a row-time warning missed exactly that case).
+   */
+  private nameRefusals(refused: ReadonlyMap<string, string>): void {
+    for (const [key, reason] of refused) {
+      if (this.refusalsWarned.has(key)) continue;
+      this.refusalsWarned.add(key);
+      console.warn(`[lethal] ${reason}`);
     }
   }
 
@@ -1036,15 +1050,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
       if (!lineMap.declares(objectType, row.objectId)) continue; // rule 1
       // R298, Review Focus 1: a refused object's row yields NO entry of any grain. Rule 2's
       // object-level entry would feed `byObjectUnnamed` and selection's local-procedure fallback,
-      // which is attribution by the back door, so the row is dropped before it can make one.
-      const refusal = lineMap.refusalReason(objectType, row.objectId);
-      if (refusal !== undefined) {
+      // which is attribution by the back door, so the row is dropped before it can make one. The
+      // refusal itself was named when the artifact was indexed (`nameRefusals`), rows or not.
+      if (lineMap.isRefused(objectType, row.objectId)) {
         refusedRows += 1;
-        const refusedKey = `${objectType}:${row.objectId}`;
-        if (!this.refusalsWarned.has(refusedKey)) {
-          this.refusalsWarned.add(refusedKey);
-          console.warn(`[lethal] ${refusal}`);
-        }
         continue;
       }
       declaredRows += 1;

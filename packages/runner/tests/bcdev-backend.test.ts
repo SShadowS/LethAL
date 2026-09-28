@@ -3039,6 +3039,24 @@ table 50110 "Wrapped T"
     }
   });
 
+  test("a wrapped object with ZERO rows is still named, once, at deploy (review r1 Important 2)", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const { backend, cleanup } = await deployed([
+      { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+    ]);
+    try {
+      // Named by deploy() itself, before any row could arrive.
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((s) => s === REFUSED)).toHaveLength(1);
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said.filter((s) => s.includes("coverage refused"))).toEqual([REFUSED]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
   test("when the only declared rows were refused, the thin-coverage warning blames neither the filter nor the base-line frame", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     const { backend, cleanup } = await deployed([
