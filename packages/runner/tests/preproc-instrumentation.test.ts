@@ -1734,3 +1734,142 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     }
   });
 });
+
+describe("R309: a split-header procedure whose arms each have their own var section is refused by name", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SRC = `codeunit 50100 "Repro P"
+{
+    var
+        Glob: Integer;
+#if not CLEAN27
+        Old: Integer;
+#endif
+
+    procedure Plain(X: Integer): Integer
+    var
+        P: Integer;
+    begin
+        P := X + 3;
+        exit(P);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    [Obsolete('Old', '27.0')]
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+        M: Integer;
+#endif
+    begin
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    procedure Hoist(X: Integer): Integer
+#if not CLEAN27
+    var
+        H: Integer;
+#endif
+    begin
+        if X > 4 then
+            exit(X + 4);
+        exit(0);
+    end;
+
+#if CLEAN27
+    procedure Pick2(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        Glob := X + 7;
+        exit(Glob);
+    end;
+}
+`;
+  const lines = SRC.split("\n");
+  /** 1-based number of the first line at or after line `from` that starts with `prefix`. */
+  const lineOf = (prefix: string, from = 1): number => {
+    const i = lines.findIndex((l, k) => k + 1 >= from && l.startsWith(prefix));
+    if (i < 0) throw new Error(`fixture drift: no line starting ${JSON.stringify(prefix)}`);
+    return i + 1;
+  };
+  /** A member from its first line (the `#if` for a preamble) through its closing `end;`. */
+  const member = (name: string, prefix: string, from: number, grain: "statement" | "unplaced") => {
+    const first = lineOf(prefix, from);
+    return { name, first, last: lineOf("    end;", first), grain };
+  };
+  const plain = member("Plain", "    procedure Plain(", 1, "statement");
+  const pick = member("Pick", "#if CLEAN27", plain.last, "unplaced");
+  const hoist = member("Hoist", "    procedure Hoist(", pick.last, "statement");
+  const pick2 = member("Pick2", "#if CLEAN27", hoist.last, "unplaced");
+  const members = [plain, pick, hoist, pick2];
+
+  test("the run completes; both preamble members are named in a reach-latch-refused warning", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r309-"));
+    try {
+      await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
+      await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
+      const warnings: { code: string; message: string }[] = [];
+      await generateMutationSet(dir, {
+        emit: (e) => {
+          if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
+        },
+      });
+      const refused = warnings.filter((w) => w.code === "reach-latch-refused");
+      // Arms that rename the procedure name neither arm (R301's rule). The message lists every
+      // arm's own name instead of a bare "<unnamed>", which would hide why there is no one name.
+      expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
+        "[lethal] Repro.Codeunit.al: procedure Pick",
+        "[lethal] Repro.Codeunit.al: procedure <renamed per #if arm: Pick2, Choose>",
+      ]);
+      for (const w of refused) {
+        expect(w.message).toContain("R309");
+        expect(w.message).toContain("preproc_split_procedure_preamble");
+        expect(w.message).toContain("its own var section, if any");
+        expect(w.message).not.toContain("R303");
+        expect(w.message).not.toContain("R313");
+        expect(w.message).not.toContain("<unnamed>");
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("each refused member's sites are unplaced, each admitted member's are statement, and only admitted members get a latch", async () => {
+    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
+    // Every mutant sits in exactly one member, each bounded through its closing `end;`.
+    for (const m of manifest.mutants) {
+      const owners = members.filter((x) => m.startLine >= x.first && m.startLine <= x.last);
+      expect(owners).toHaveLength(1);
+    }
+    for (const x of members) {
+      const grains = manifest.mutants
+        .filter((m) => m.startLine >= x.first && m.startLine <= x.last)
+        .map((m) => m.reachGrain);
+      expect(grains.length).toBeGreaterThan(0);
+      expect([...new Set(grains)]).toEqual([x.grain]);
+    }
+    // Identity keys still serialize, and no two mutants share one.
+    const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
+    expect(new Set(keys).size).toBe(keys.length);
+    const text = emitted.get("Repro.Codeunit.al") ?? "";
+    expect(text).toContain("P: Integer; LethALReachLatch: Boolean;");
+    expect(text).toContain("procedure Hoist(X: Integer): Integer var LethALReachLatch: Boolean;");
+    expect(text.split("LethALReachLatch: Boolean;").length - 1).toBe(2);
+    expect(text.split(SELECTOR).length - 1).toBe(1);
+    expect(text).toContain(
+      `        Glob: Integer;\n#if not CLEAN27\n        Old: Integer;\n#endif\n        ${SELECTOR}`,
+    );
+  });
+});

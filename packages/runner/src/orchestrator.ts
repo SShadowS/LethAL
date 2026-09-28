@@ -5,6 +5,7 @@ import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
+  type ALSyntaxNode,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
@@ -549,21 +550,36 @@ export function resolveOperatorNames(
 }
 
 /**
- * R303: the members of one file whose `var` section is split by `#if` in a shape
- * `splitVarHoistAnchor` does not cover, or did not parse cleanly (`unparsed`,
- * `varSectionUnparsed`), so the writer declares no reach latch there
- * (`reachLatchRefusedOwner`), each with its site count, in source order. Named
- * per member by `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
- * Not every unproven shape is listed: a `preproc_split_procedure_preamble` has no owner for
- * `reachLatchRefusedOwner` to return, so it is absent here and the writer throws for the whole run
- * instead (R309, open).
+ * A member name for the `reach-latch-refused` warning when `procedureLikeNameNode`/the trigger's
+ * own `name` field gives no single name: every arm's own name, so the reader sees WHY there is no
+ * one name instead of a bare "<unnamed>". Only a split-header shape (R301's `preproc_split_procedure`
+ * or R309's `preproc_split_procedure_preamble`) can have more than one `name`-field child; a plain
+ * procedure or trigger always has exactly one, so this only differs from "<unnamed>" there.
  */
-export function reachLatchRefusals(
-  specs: readonly MutationSpec[],
-): { member: string; start: number; sites: number; unparsed: boolean }[] {
+function unnamedMemberLabel(owner: ALSyntaxNode): string {
+  const names = [
+    ...new Set(owner.children.filter((c) => c.fieldName === "name").map((c) => c.text)),
+  ];
+  return names.length > 1 ? `<renamed per #if arm: ${names.join(", ")}>` : "<unnamed>";
+}
+
+/**
+ * The members of one file the writer declares no reach latch in (`reachLatchRefusedOwner`), each
+ * with its site count and why, in source order. `cause` is `"preamble"` for a split-header
+ * procedure whose arms each hold their own var section (R309), `"unparsed"` for a var section that
+ * did not parse cleanly (R313, `varSectionUnparsed`), else `"split-var"` for a var section split by
+ * `#if` in a shape `splitVarHoistAnchor` does not cover (R303). Named per member by
+ * `generateMutationSet`'s `reach-latch-refused` warning, and counted by scripts.
+ */
+export function reachLatchRefusals(specs: readonly MutationSpec[]): {
+  member: string;
+  start: number;
+  sites: number;
+  cause: "preamble" | "unparsed" | "split-var";
+}[] {
   const byStart = new Map<
     number,
-    { member: string; start: number; sites: number; unparsed: boolean }
+    { member: string; start: number; sites: number; cause: "preamble" | "unparsed" | "split-var" }
   >();
   for (const spec of specs) {
     const owner = reachLatchRefusedOwner(spec.before);
@@ -577,12 +593,17 @@ export function reachLatchRefusals(
       owner.kind === ALNodeKind.trigger
         ? owner.childForFieldName("name")
         : procedureLikeNameNode(owner);
-    const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? "<unnamed>"}`;
+    const member = `${owner.kind === ALNodeKind.trigger ? "trigger" : "procedure"} ${nameNode?.text ?? unnamedMemberLabel(owner)}`;
     byStart.set(owner.startIndex, {
       member,
       start: owner.startIndex,
       sites: 1,
-      unparsed: varSectionUnparsed(owner),
+      cause:
+        owner.rawKind === "preproc_split_procedure_preamble"
+          ? "preamble"
+          : varSectionUnparsed(owner)
+            ? "unparsed"
+            : "split-var",
     });
   }
   return [...byStart.values()].sort((x, y) => x.start - y.start);
@@ -788,9 +809,11 @@ export async function generateMutationSet(
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
-        r.unparsed
-          ? `[lethal] ${rel}: ${r.member}'s var section did not parse cleanly (tree-sitter-al left an ERROR or missing node between the header and begin), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R313.`
-          : `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
+        r.cause === "preamble"
+          ? `[lethal] ${rel}: ${r.member}'s var section is split together with its header (preproc_split_procedure_preamble: each #if arm holds its own procedure header and its own var section, if any, and one body follows the #endif), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R309.`
+          : r.cause === "unparsed"
+            ? `[lethal] ${rel}: ${r.member}'s var section did not parse cleanly (tree-sitter-al left an ERROR or missing node between the header and begin), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R313.`
+            : `[lethal] ${rel}: ${r.member}'s var section is split by #if (preproc_conditional_var_block), and the token before that #if is not the end of its header (the parameter list's ")", the return type, or a ";" after either), so no reach latch is declared there: its ${r.sites} site(s) carry no reach marker (reachGrain "unplaced", reach not-decided, never unreached). R303.`,
       );
     }
   }
