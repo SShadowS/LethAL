@@ -1,2 +1,2 @@
-// The engine's parse entry point. Backed by the WASM reference until the RUST-03 switch (S3.4).
-export { initWasmParser as initParser, parseALWasm as parseAL } from "./parser-wasm";
+// The engine's parse entry point: native since RUST-03. parser-wasm.ts is a reference instrument only.
+export { initNativeParser as initParser, parseALNative as parseAL } from "./native-parser";

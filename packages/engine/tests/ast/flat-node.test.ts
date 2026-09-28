@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { type FlatTree, wrapFlatRoot } from "../../src/ast/syntax-node";
+import { FLAG_FIELD_TARGET, type FlatTree, wrapFlatRoot } from "../../src/ast/syntax-node";
 
 const flat: FlatTree = {
   kindNames: ["r", "x", "+"],
   kind: Uint16Array.of(0, 1, 2),
   fieldNames: ["", "left"],
   field: Uint16Array.of(0, 1, 0),
-  flags: Uint8Array.of(1 | 4, 1, 2),
+  flags: Uint8Array.of(1 | 4, 1 | FLAG_FIELD_TARGET, 2),
   childCount: Uint32Array.of(2, 0, 0),
   nextSibling: Int32Array.of(-1, 2, -1),
   startIndex: Uint32Array.of(0, 0, 1),
@@ -44,6 +44,16 @@ describe("FlatNode", () => {
     expect(root.childForFieldName("right")).toBeNull();
   });
 
+  it("does not find a fielded child that tree-sitter's lookup would not return", () => {
+    // An ERROR node's child can carry a field from a hidden node that child_by_field_id misses.
+    const noTarget = wrapFlatRoot({
+      source: "ab",
+      flat: { ...flat, flags: Uint8Array.of(1 | 4, 1, 2) },
+    });
+    expect(noTarget.children[0]?.fieldName).toBe("left");
+    expect(noTarget.childForFieldName("left")).toBeNull();
+  });
+
   it("returns fresh wrappers per read, as WrappedNode did", () => {
     expect(root.children[0]).not.toBe(root.children[0]);
   });
@@ -74,7 +84,7 @@ const mid: FlatTree = {
   kind: Uint16Array.of(0, 1, 2, 3),
   fieldNames: ["", "open", "left"],
   field: Uint16Array.of(0, 1, 2, 0),
-  flags: Uint8Array.of(1, 0, 1, 0),
+  flags: Uint8Array.of(1, FLAG_FIELD_TARGET, 1 | FLAG_FIELD_TARGET, 0),
   childCount: Uint32Array.of(3, 0, 0, 0),
   nextSibling: Int32Array.of(-1, 2, 3, -1),
   startIndex: Uint32Array.of(0, 0, 1, 3),

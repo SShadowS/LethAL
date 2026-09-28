@@ -5,7 +5,7 @@ use napi::{check_status, sys};
 use napi_derive::napi;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
-use tree_sitter::{Language, Parser, Tree};
+use tree_sitter::{Language, Node, Parser, Tree};
 
 pub const GRAMMAR_VERSION: &str = "4.4.1";
 pub const TREE_SITTER_VERSION: &str = "0.25.10";
@@ -14,6 +14,10 @@ pub const FLAG_NAMED: u8 = 1;
 pub const FLAG_MISSING: u8 = 2;
 pub const FLAG_HAS_ERROR: u8 = 4;
 pub const FLAG_EXTRA: u8 = 8;
+/// This child is what `parent.child_by_field_id(its field)` returns. tree-sitter's field lookup is
+/// not a scan of the children's field names: on an ERROR node, a field a hidden child supplies is
+/// reported by the cursor but not found by the lookup (RUST-03 S3.1, the broken snippet).
+pub const FLAG_FIELD_TARGET: u8 = 16;
 
 #[derive(Default)]
 pub struct Flat {
@@ -72,20 +76,27 @@ pub fn flatten(tree: &Tree) -> Flat {
     let mut fields = Interner::new(Some(""));
     let mut cursor = tree.walk();
     let mut parents: Vec<usize> = Vec::new();
+    let mut parent_nodes: Vec<Node> = Vec::new();
     let mut prev: Vec<Option<usize>> = vec![None];
     loop {
         let node = cursor.node();
         let i = f.kind.len();
         f.kind.push(kinds.get(node.kind_id(), node.kind()));
-        f.field.push(match (cursor.field_id(), cursor.field_name()) {
+        let field_id = cursor.field_id();
+        f.field.push(match (field_id, cursor.field_name()) {
             (Some(id), Some(name)) => fields.get(id.get(), name),
             _ => 0,
         });
+        let target = match (field_id, parent_nodes.last()) {
+            (Some(id), Some(p)) => p.child_by_field_id(id.get()).is_some_and(|t| t.id() == node.id()),
+            _ => false,
+        };
         f.flags.push(
             (node.is_named() as u8) * FLAG_NAMED
                 | (node.is_missing() as u8) * FLAG_MISSING
                 | (node.has_error() as u8) * FLAG_HAS_ERROR
-                | (node.is_extra() as u8) * FLAG_EXTRA,
+                | (node.is_extra() as u8) * FLAG_EXTRA
+                | (target as u8) * FLAG_FIELD_TARGET,
         );
         f.child_count.push(0);
         f.next_sibling.push(-1);
@@ -104,6 +115,7 @@ pub fn flatten(tree: &Tree) -> Flat {
         }
         if cursor.goto_first_child() {
             parents.push(i);
+            parent_nodes.push(node);
             prev.push(None);
             continue;
         }
@@ -117,6 +129,7 @@ pub fn flatten(tree: &Tree) -> Flat {
                 return f;
             }
             parents.pop();
+            parent_nodes.pop();
             prev.pop();
         }
     }
@@ -276,6 +289,23 @@ mod tests {
     fn has_error_flag_on_broken_input() {
         let f = parse_units(&units("codeunit 50100 X { procedure P() begin if then end; }"));
         assert_ne!(f.flags[0] & FLAG_HAS_ERROR, 0);
+    }
+
+    #[test]
+    fn a_field_the_lookup_cannot_find_is_not_a_field_target() {
+        // The ERROR node's identifier carries field `name` from a hidden child, but
+        // child_by_field_id on the ERROR node returns nothing, so it is not a target.
+        let f = parse_units(&units("codeunit 50100 X { procedure P() begin if then end; }"));
+        let error = (0..f.kind.len()).find(|&i| f.kind_names[f.kind[i] as usize] == "ERROR");
+        let error = error.expect("the broken snippet has an ERROR node");
+        let name = (0..f.kind.len()).find(|&i| {
+            i > error && f.field[i] != 0 && f.field_names[f.field[i] as usize] == "name"
+        });
+        let name = name.expect("a child of the ERROR node has field `name`");
+        assert_eq!(f.flags[name] & FLAG_FIELD_TARGET, 0);
+        let ok = parse_units(&units("codeunit 50100 X { }"));
+        let id = (0..ok.kind.len()).find(|&i| ok.field[i] != 0).expect("a fielded child");
+        assert_ne!(ok.flags[id] & FLAG_FIELD_TARGET, 0);
     }
 
     #[test]

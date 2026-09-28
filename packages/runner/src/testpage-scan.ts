@@ -103,8 +103,6 @@ export interface TestPageAnalysis {
   readonly errors: readonly string[];
 }
 
-type TsNode = ReturnType<typeof parseAL>["rootNode"];
-
 interface ErrorSite {
   readonly startIndex: number;
   /** The ERROR/MISSING node's own text: an unclosed object can swallow the next one whole, so its
@@ -113,12 +111,12 @@ interface ErrorSite {
 }
 
 /** Every ERROR and MISSING node (MISSING carries the missing token's type, and its text is empty). */
-function errorOffsets(root: TsNode): ErrorSite[] {
+function errorOffsets(root: ALSyntaxNode): ErrorSite[] {
   if (!root.hasError) return [];
   const out: ErrorSite[] = [];
-  const walk = (n: TsNode): void => {
-    if (n.type === "ERROR" || n.isMissing) out.push({ startIndex: n.startIndex, text: n.text });
-    for (const c of n.children) if (c !== null) walk(c);
+  const walk = (n: ALSyntaxNode): void => {
+    if (n.rawKind === "ERROR" || n.isMissing) out.push({ startIndex: n.startIndex, text: n.text });
+    for (const c of n.children) walk(c);
   };
   walk(root);
   return out;
@@ -146,9 +144,10 @@ function insideWithStatement(n: ALSyntaxNode): boolean {
 }
 
 /**
- * Plain facts only, no syntax nodes: every tree is deleted as soon as its file is read (a kept tree
- * lives in the wasm heap, and BC.History/BaseApp's 9,620 kept trees hit its 2,048 MB ceiling and
- * aborted). A call site, in source pre-order, as the traversal will need it.
+ * Plain facts only, no syntax nodes: no parse result may outlive the reading of its file. Under WASM a
+ * kept tree lived in the wasm heap, and BC.History/BaseApp's 9,620 kept trees hit its 2,048 MB
+ * ceiling and aborted; natively a kept ParsedAL still holds its source and flat arrays (R-236c's
+ * memory test). A call site, in source pre-order, as the traversal will need it.
  */
 type Site =
   /** A bare call (`Name(...)` or a call statement): same codeunit, possibly a with-receiver. */
@@ -671,15 +670,15 @@ class Scanner {
   }
 }
 
-/** Reads one file's codeunits and parse damage into plain facts; `tree` is not kept. */
+/** Reads one file's codeunits and parse damage into plain facts; `parsed` is not kept. */
 function scanFile(
   path: string,
-  tree: ReturnType<typeof parseAL>,
+  parsed: ReturnType<typeof parseAL>,
   units: Unit[],
   suspect: string[],
 ): void {
-  const errors = errorOffsets(tree.rootNode);
-  const root = wrapRoot(tree);
+  const root = wrapRoot(parsed);
+  const errors = errorOffsets(root);
   const objects = flattenPreproc(root.namedChildren).filter(
     (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
   );
@@ -710,13 +709,7 @@ export function analyzeTestPageSources(
   /** Errors inside a codeunit, or outside every top-level object: either could hide a target. */
   const suspect: string[] = [];
   for (const f of files) {
-    const tree = parseAL(f.text);
-    try {
-      scanFile(f.path, tree, units, suspect);
-    } finally {
-      // Units hold plain facts only, so the tree can go now (see `Site`).
-      tree.delete();
-    }
+    scanFile(f.path, parseAL(f.text), units, suspect);
   }
   const scanner = new Scanner(units);
   const refused = new Map<string, string>();
