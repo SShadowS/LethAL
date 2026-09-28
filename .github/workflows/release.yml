@@ -315,13 +315,14 @@ jobs:
       fail-fast: true
       matrix:
         # native_nodes: the node count of native-check's built-in snippet, from a local run.
+        # machine: the runner's real machine (uname -m; on macOS, hw.optional.arm64 decides).
         include:
-          - { key: win32-x64, runner: windows-latest, suffix: windows-x64.exe, triple: x86_64-pc-windows-msvc, native_nodes: 56 }
-          - { key: linux-x64, runner: ubuntu-22.04, suffix: linux-x64, triple: x86_64-unknown-linux-gnu, native_nodes: 56 }
-          - { key: linux-arm64, runner: ubuntu-22.04-arm, suffix: linux-arm64, triple: aarch64-unknown-linux-gnu, native_nodes: 56 }
+          - { key: win32-x64, runner: windows-latest, suffix: windows-x64.exe, triple: x86_64-pc-windows-msvc, native_nodes: 56, machine: x86_64 }
+          - { key: linux-x64, runner: ubuntu-22.04, suffix: linux-x64, triple: x86_64-unknown-linux-gnu, native_nodes: 56, machine: x86_64 }
+          - { key: linux-arm64, runner: ubuntu-22.04-arm, suffix: linux-arm64, triple: aarch64-unknown-linux-gnu, native_nodes: 56, machine: aarch64 }
           # macos-15-intel: GitHub's last Intel macOS image (macos-13 retired 2025-12-04).
-          - { key: darwin-x64, runner: macos-15-intel, suffix: darwin-x64, triple: x86_64-apple-darwin, native_nodes: 56 }
-          - { key: darwin-arm64, runner: macos-14, suffix: darwin-arm64, triple: aarch64-apple-darwin, native_nodes: 56 }
+          - { key: darwin-x64, runner: macos-15-intel, suffix: darwin-x64, triple: x86_64-apple-darwin, native_nodes: 56, machine: x86_64 }
+          - { key: darwin-arm64, runner: macos-14, suffix: darwin-arm64, triple: aarch64-apple-darwin, native_nodes: 56, machine: arm64 }
     runs-on: ${{ matrix.runner }}
     steps:
       # For the fixture only. The binary runs from a directory with no packages/ tree, so it cannot
@@ -333,11 +334,19 @@ jobs:
           name: binaries
           path: dl
 
+      # Defence in depth: the runner's REAL machine, not what a translated process reports. Under
+      # Rosetta an x64 process on an arm64 Mac reports x86_64, so on macOS hw.optional.arm64 decides.
+      - name: The runner is the machine this target needs
+        shell: bash
+        run: |
+          m="$(uname -m)"
+          if [ "$(uname -s)" = Darwin ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then m=arm64; fi
+          echo "machine $m"
+          test "$m" = "${{ matrix.machine }}"
+
       - name: The downloadable binary carries a working addon and parses AL on its own platform
         shell: bash
         run: |
-          # The two count lines of a local `lethal run --project fixtures/sandbox-data --dry-run`.
-          COUNTS='^(dry run: 29 file\(s\), 407 mutant site\(s\), 387 deployed mutant\(s\), 1 batch\(es\)|batch 0 \(407 mutant site\(s\), 387 deployed\):)$'
           # cygpath on Windows only, so the globs below never see a backslash path.
           bin="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")/bin"
           mkdir -p "$bin"
@@ -355,8 +364,13 @@ jobs:
           grep -Eq '^native ${{ matrix.triple }} clang version 23\.1\.2.* nodes ${{ matrix.native_nodes }}$' native.txt \
             || { echo "expected: native ${{ matrix.triple }} clang version 23.1.2 ... nodes ${{ matrix.native_nodes }}"; exit 1; }
           "$exe" run --project "$fixture" --dry-run | tr -d '\r' > dry-run-bin.txt
-          grep -E "$COUNTS" dry-run-bin.txt || true
-          test "$(grep -cE "$COUNTS" dry-run-bin.txt)" = 2 || { echo "count lines differ from the committed expectation"; exit 1; }
+          # The two count lines of a local `lethal run --project fixtures/sandbox-data --dry-run`,
+          # each required as a whole line on its own.
+          for want in \
+            'dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)' \
+            'batch 0 (407 mutant site(s), 387 deployed):'; do
+            grep -qxF "$want" dry-run-bin.txt || { echo "missing count line: $want"; exit 1; }
+          done
 
   publish:
     # needs: smoke, so all five compiled-binary smoke jobs (and through them build and all five
@@ -364,6 +378,9 @@ jobs:
     needs: smoke
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
+    # Inside `release`, as the release step was when it lived in `build`: whatever rules the
+    # environment gains (reviewers, tag policy) gate the job that creates the release.
+    environment: release
     permissions:
       contents: write
     steps:
@@ -414,7 +431,8 @@ jobs:
           EOF
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        # v2.6.2 (the v2 tag), pinned by commit: this is the step with contents: write.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           draft: true
           generate_release_notes: true

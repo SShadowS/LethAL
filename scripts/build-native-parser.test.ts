@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { join, resolve } from "node:path";
-import { cargoEnv, cargoPlan, cargoTargetDir, isPinnedClang } from "./build-native-parser";
+import {
+  buildArgs,
+  cargoEnv,
+  cargoPlan,
+  cargoTargetDir,
+  isPinnedClang,
+} from "./build-native-parser";
 import { CRATE } from "./check-native-grammar";
 
 describe("cargoEnv", () => {
@@ -88,5 +94,26 @@ describe("cargoPlan", () => {
   it("refuses an unknown key and cross-target tests", () => {
     expect(() => cargoPlan("darwin-arm64", "linux-riscv64", false)).toThrow(/no LethAL target/);
     expect(() => cargoPlan("darwin-arm64", "darwin-x64", true)).toThrow(/cannot/);
+  });
+});
+
+describe("buildArgs", () => {
+  it("reads --target, --test and --provenance", () => {
+    expect(buildArgs(["--target", "darwin-x64"])).toEqual({
+      test: false,
+      target: "darwin-x64",
+      provenance: false,
+    });
+    expect(buildArgs(["--provenance"])).toEqual({
+      test: false,
+      target: undefined,
+      provenance: true,
+    });
+  });
+  it("refuses --provenance with --target or --test, which it would ignore", () => {
+    expect(() => buildArgs(["--provenance", "--target", "darwin-x64"])).toThrow(
+      /takes no --target/,
+    );
+    expect(() => buildArgs(["--provenance", "--test"])).toThrow(/takes no --target/);
   });
 });

@@ -101,6 +101,13 @@ license and copyright text).
 `native-darwin-x64` and all five `native-parser` jobs. A failing target blocks the release; there is
 no per-target opt-out.
 
+**Both `build` and `publish` run in the `release` GitHub environment.** `build` needs it for the
+signing login: the Entra federated credential's subject is `repo:SShadowS/LethAL:environment:release`.
+`publish` is there because it creates the release: before S2 that step lived inside `build`, so it
+was gated by the environment, and moving it to its own job must not drop that gate. The environment
+has no protection rules today, so this costs nothing; any it gains later (a reviewer, a tag policy)
+then gate the release itself, not only the signing.
+
 The workflow also has a `workflow_dispatch` trigger, for a trial run. On a dispatch the tag check is
 replaced by a version-stamp check, and `publish` is skipped (it runs only on a pushed `v*` tag), so
 a trial can never create a release or a draft. GitHub dispatches a workflow only if the trigger
@@ -165,6 +172,11 @@ and it writes the addon's provenance there, since a cross-built addon cannot be 
 built. The native Rust tests (`--test`) run on the four native targets only: a cross-built test
 binary cannot run on the arm64 runner.
 
+The clang 23.1.2 guarantee covers COMPILATION on darwin-x64, not linking. The grammar and the
+tree-sitter runtime (all the C) are compiled by the pinned clang with `--target=x86_64-apple-darwin`,
+which is what `nativeInfo().cCompiler` records. rustc then LINKS the addon through the runner's
+Apple `cc -arch x86_64`, as it does on every macOS build; no LLVM 23.1.2 linker is involved.
+
 `KyleMayes/install-llvm-action` is not used: its asset list stops at 21.1.8 (CI run 36443811955).
 
 ### Checks per target
@@ -218,8 +230,8 @@ Measured for `0.1.0-alpha.1`:
 | `bun-darwin-arm64` | `lethal-0.1.0-alpha.1-darwin-arm64` | 69.4 MiB |
 
 With the native parser embedded (RUST-03 S2, `0.1.0-alpha.3`), the Windows binary is **118.1 MiB**
-(123,790,848 bytes, built at `b2a34fb`). The other four were not built locally: `build:binaries` needs all five addons,
-which only release CI has.
+(123,790,848 bytes, built at `2ec3884`'s tree). The other four were not built locally:
+`build:binaries` needs all five addons, which only release CI has.
 
 Each was confirmed to be a genuine executable for its platform (`file`: PE32+, ELF x86-64, ELF
 aarch64, Mach-O x86_64, Mach-O arm64). Most of the size is the embedded Bun runtime; roughly 8 MB

@@ -147,20 +147,40 @@ async function writeProvenance(key: string): Promise<void> {
   console.log(`build-native-parser: wrote ${out} (${provenance.sha256})`);
 }
 
-async function main(): Promise<void> {
-  const host = `${process.platform}-${process.arch}`;
+export interface BuildArgs {
+  readonly test: boolean;
+  readonly target: string | undefined;
+  readonly provenance: boolean;
+}
+
+/** --provenance records the addon of the platform it runs on, so it takes no other flag: a
+ *  --target beside it would be silently ignored, and --test would not run. */
+export function buildArgs(argv: readonly string[]): BuildArgs {
   const { values } = parseArgs({
+    args: [...argv],
     options: {
       test: { type: "boolean", default: false },
       target: { type: "string" },
       provenance: { type: "boolean", default: false },
     },
   });
+  const provenance = values.provenance === true;
+  const test = values.test === true;
+  if (provenance && (values.target !== undefined || test))
+    throw new Error(
+      "build-native-parser: --provenance records the addon for the platform it runs on and takes no --target or --test",
+    );
+  return { test, target: values.target, provenance };
+}
+
+async function main(): Promise<void> {
+  const host = `${process.platform}-${process.arch}`;
+  const values = buildArgs(process.argv.slice(2));
   if (values.provenance) {
     await writeProvenance(host);
     return;
   }
-  const plan = cargoPlan(host, values.target, values.test === true);
+  const plan = cargoPlan(host, values.target, values.test);
   const env = cargoEnv(process.env, clangCc(), grammarInputs());
   const targetDir = cargoTargetDir(process.env, process.cwd());
   env.CARGO_TARGET_DIR = targetDir;
