@@ -48,15 +48,15 @@ jobs:
           - { key: darwin-arm64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: false, triple: aarch64-apple-darwin, parse_expect: "files 32 nodes 7382 errors 0" }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
 
       - run: bun install --frozen-lockfile
 
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
 
       - name: Rust standard library for the cross target
         if: matrix.cross
@@ -107,7 +107,7 @@ jobs:
         run: bun scripts/native-notices.ts --check
 
       # A cross-built addon has no provenance yet: native-darwin-x64 writes it where it loads.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-${{ matrix.key }}
           if-no-files-found: error
@@ -123,9 +123,9 @@ jobs:
     needs: native-parser
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
 
@@ -135,7 +135,7 @@ jobs:
         shell: bash
         run: test "$(bun -e 'console.log(process.arch)')" = "x64"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: native-darwin-x64
           path: packages/engine/vendor/native
@@ -164,7 +164,7 @@ jobs:
         shell: bash
         run: bun scripts/build-native-parser.ts --provenance
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-darwin-x64-provenance
           if-no-files-found: error
@@ -185,9 +185,9 @@ jobs:
     # to get a stable OIDC subject. Borrowed from claude-code-lsps, which learned it the hard way.
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
 
@@ -213,7 +213,7 @@ jobs:
           test -n "$pkg"
 
       # The unit tests need the native parser, so the addons land BEFORE typecheck and tests.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: native-*
           path: native-artifacts
@@ -258,7 +258,7 @@ jobs:
       # `.claude/skills/release/SKILL.md`.
       - name: Azure login
         if: vars.AZURE_SIGNING_ACCOUNT != ''
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -266,7 +266,7 @@ jobs:
 
       - name: Sign the Windows binary
         if: vars.AZURE_SIGNING_ACCOUNT != ''
-        uses: azure/artifact-signing-action@v2
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
@@ -301,7 +301,7 @@ jobs:
           # that cannot answer this is not one to publish.
           "$exe" --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: binaries
           if-no-files-found: error
@@ -329,9 +329,9 @@ jobs:
     steps:
       # For the fixture only. The binary runs from a directory with no packages/ tree, so it cannot
       # resolve a .node from disk: whatever it parses with is what it embeds.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: binaries
           path: dl
@@ -386,13 +386,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: binaries
           path: dl
@@ -435,7 +435,7 @@ jobs:
 
       - name: Publish the release
         # v2.6.2 (the v2 tag), pinned by commit: this is the step with contents: write.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true
