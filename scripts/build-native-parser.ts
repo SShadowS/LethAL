@@ -5,10 +5,18 @@
  * gitignored, D2). `--test` runs `cargo test` with the same checked environment instead.
  * Honours CARGO_TARGET_DIR, so worktrees can share one build cache.
  *
- *   bun scripts/build-native-parser.ts [--test]
+ * RUST-03 S2: `--target <key>` cross-builds for another platform key with the same checked clang
+ * (release CI builds darwin-x64 on the arm64 runner: LLVM 23.1.2 ships no x64 macOS build). A
+ * cross-built addon cannot load here, so its provenance is written on the target machine by
+ * `--provenance`, which loads the vendor addon for the running platform and records it.
+ *
+ *   bun scripts/build-native-parser.ts [--test] [--target <key>]
+ *   bun scripts/build-native-parser.ts --provenance
  */
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { EXPECTED_TARGET } from "../packages/engine/src/ast/native-parser";
 import { CRATE, grammarInputs } from "./check-native-grammar";
 
 const LIB: Readonly<Record<string, string>> = {
@@ -76,29 +84,59 @@ function clangCc(): string {
   return cc;
 }
 
-async function main(): Promise<void> {
-  const key = `${process.platform}-${process.arch}`;
+export interface CargoPlan {
+  /** The addon's platform key, which names the .node file. */
+  readonly key: string;
+  readonly args: readonly string[];
+  /** The built library, relative to the cargo target dir. */
+  readonly libPath: readonly string[];
+  /** True when the addon is for another platform than this process, so it cannot be loaded here. */
+  readonly cross: boolean;
+}
+
+/** `cargo test` links the crate into EXECUTABLES (the unit-test harness, tests/tree_freed.rs, and
+ *  examples/split.rs, which cargo test builds too). The #[napi] glue references napi_* symbols that
+ *  only a JS host provides, so on Linux and macOS those executables cannot link (release trial run
+ *  36452180784; Windows links because napi-sys loads its symbols at runtime there). napi-derive's
+ *  `noop` feature makes #[napi] emit no glue, for the test build only: the Rust tests exercise
+ *  parsing and flattening, never the glue, which the JS-side tests cover through the real addon.
+ *  Cargo.toml is untouched, so the shipped addon and its source hash are unchanged. */
+const TEST_FEATURES = ["--features", "napi-derive/noop"] as const;
+
+/** What cargo runs for `host` building `target` (a platform key; default: the host). A cross build
+ *  passes the target triple, so cargo writes under <triple>/release; the compiler is the same
+ *  checked clang either way, since cc-rs gives clang the triple itself. */
+export function cargoPlan(host: string, target: string | undefined, test: boolean): CargoPlan {
+  const key = target ?? host;
   const lib = LIB[key];
-  if (lib === undefined) throw new Error(`build-native-parser: no LethAL target for ${key}`);
-  const env = cargoEnv(process.env, clangCc(), grammarInputs());
-  const targetDir = cargoTargetDir(process.env, process.cwd());
-  env.CARGO_TARGET_DIR = targetDir;
-  const test = process.argv.includes("--test");
-  const run = Bun.spawnSync(["cargo", test ? "test" : "build", "--release", "--locked"], {
-    cwd: CRATE,
-    env,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  if (run.exitCode !== 0)
-    throw new Error(`build-native-parser: cargo failed with exit ${run.exitCode}`);
-  if (test) return;
+  const triple = EXPECTED_TARGET[key];
+  if (lib === undefined || triple === undefined)
+    throw new Error(`build-native-parser: no LethAL target for ${key}`);
+  const cross = key !== host;
+  if (cross && test)
+    throw new Error(
+      `build-native-parser: --test runs the tests, which a ${host} machine cannot do for ${key}`,
+    );
+  return {
+    key,
+    args: [
+      test ? "test" : "build",
+      "--release",
+      "--locked",
+      ...(test ? TEST_FEATURES : []),
+      ...(cross ? ["--target", triple] : []),
+    ],
+    libPath: cross ? [triple, "release", lib] : ["release", lib],
+    cross,
+  };
+}
 
-  const outDir = join(import.meta.dir, "..", "packages", "engine", "vendor", "native");
-  const out = join(outDir, `lethal-parser.${key}.node`);
-  await mkdir(outDir, { recursive: true });
-  await copyFile(join(targetDir, "release", lib), out);
+const VENDOR = join(import.meta.dir, "..", "packages", "engine", "vendor", "native");
 
+/** Writes <addon>.provenance.json from the addon's own nativeInfo, so it must run where the addon
+ *  loads: after a native build, or with --provenance on the target machine after a cross build. */
+async function writeProvenance(key: string): Promise<void> {
+  const out = join(VENDOR, `lethal-parser.${key}.node`);
   const bytes = await readFile(out);
   const binding = require(out) as { nativeInfo(): unknown };
   const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
@@ -117,6 +155,65 @@ async function main(): Promise<void> {
     `${JSON.stringify(provenance, null, 2)}\n`,
   );
   console.log(`build-native-parser: wrote ${out} (${provenance.sha256})`);
+}
+
+export interface BuildArgs {
+  readonly test: boolean;
+  readonly target: string | undefined;
+  readonly provenance: boolean;
+}
+
+/** --provenance records the addon of the platform it runs on, so it takes no other flag: a
+ *  --target beside it would be silently ignored, and --test would not run. */
+export function buildArgs(argv: readonly string[]): BuildArgs {
+  const { values } = parseArgs({
+    args: [...argv],
+    options: {
+      test: { type: "boolean", default: false },
+      target: { type: "string" },
+      provenance: { type: "boolean", default: false },
+    },
+  });
+  const provenance = values.provenance === true;
+  const test = values.test === true;
+  if (provenance && (values.target !== undefined || test))
+    throw new Error(
+      "build-native-parser: --provenance records the addon for the platform it runs on and takes no --target or --test",
+    );
+  return { test, target: values.target, provenance };
+}
+
+async function main(): Promise<void> {
+  const host = `${process.platform}-${process.arch}`;
+  const values = buildArgs(process.argv.slice(2));
+  if (values.provenance) {
+    await writeProvenance(host);
+    return;
+  }
+  const plan = cargoPlan(host, values.target, values.test);
+  const env = cargoEnv(process.env, clangCc(), grammarInputs());
+  const targetDir = cargoTargetDir(process.env, process.cwd());
+  env.CARGO_TARGET_DIR = targetDir;
+  const run = Bun.spawnSync(["cargo", ...plan.args], {
+    cwd: CRATE,
+    env,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if (run.exitCode !== 0)
+    throw new Error(`build-native-parser: cargo failed with exit ${run.exitCode}`);
+  if (values.test) return;
+
+  const out = join(VENDOR, `lethal-parser.${plan.key}.node`);
+  await mkdir(VENDOR, { recursive: true });
+  await copyFile(join(targetDir, ...plan.libPath), out);
+  if (plan.cross) {
+    console.log(
+      `build-native-parser: wrote ${out} (cross-built on ${host}; run \`bun scripts/build-native-parser.ts --provenance\` on ${plan.key} to check it loads and record its provenance)`,
+    );
+    return;
+  }
+  await writeProvenance(plan.key);
 }
 
 if (import.meta.main) await main();

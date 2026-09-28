@@ -1,30 +1,184 @@
 name: Release
 
-# Fires on a version tag. Builds all five standalone binaries and publishes them, plus the LethAL
-# Control app, as a GitHub release.
+# Fires on a version tag. Five jobs, in order, and nothing is published until all of them pass:
+#
+#   native-parser (5 targets) -> native-darwin-x64 -> build (Windows) -> smoke (5 targets) -> publish
+#
+# RUST-03 S2: every target's native tree-sitter-al addon is built by the pinned LLVM 23.1.2 clang
+# (darwin-x64 cross-built on the arm64 Mac, then checked on an Intel one), checked (runner arch,
+# compiler, target triple, a real parse), and only then embedded into the five standalone
+# binaries. Each compiled binary is then run on its own platform.
+# `publish` is the only job that creates a release, and it needs every one of those jobs.
 #
 # The tag is the trigger, not the source of truth: `scripts/build-binary.ts` stamps the version from
 # the root package.json, and the guard below refuses a tag that disagrees with it. A release whose
 # filenames say one version and whose tag says another is exactly the confusion R88 exists to stop.
+#
+# `workflow_dispatch` is a trial run: every job except `publish`, which is guarded to tag pushes, so
+# a dispatch can never create a release or a draft.
 on:
   push:
     tags:
       - "v*"
-  # A trial run (RUST-03 S2): every step except the release notes and the publish, which are guarded
-  # to tag pushes below, so a dispatch can never create a release or a draft.
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  native-parser:
+    strategy:
+      # false: one target failing must not cancel the others and hide their results.
+      fail-fast: false
+      matrix:
+        # key: the addon's platform key. arch: the RUNNER's arch, checked before building.
+        # llvm: which pinned LLVM 23.1.2 build install-llvm.sh fetches. cross: the addon is for
+        # another arch than the runner, so it cannot be loaded here and is checked by
+        # native-darwin-x64 instead. parse_expect: the same on every target (the parse does not
+        # depend on the platform), taken from a local Windows run; a target that needs another
+        # value is a finding, not a paste.
+        #
+        # darwin-x64 is CROSS-BUILT on the arm64 macOS runner (owner ruling, RUST-03 S2): LLVM
+        # 23.1.2 ships no macOS x64 build, and every release addon is built by that one clang.
+        include:
+          - { key: win32-x64, runner: windows-latest, arch: x64, llvm: win32-x64, cross: false, triple: x86_64-pc-windows-msvc, parse_expect: "files 32 nodes 7382 errors 0" }
+          - { key: linux-x64, runner: ubuntu-22.04, arch: x64, llvm: linux-x64, cross: false, triple: x86_64-unknown-linux-gnu, parse_expect: "files 32 nodes 7382 errors 0" }
+          - { key: linux-arm64, runner: ubuntu-22.04-arm, arch: arm64, llvm: linux-arm64, cross: false, triple: aarch64-unknown-linux-gnu, parse_expect: "files 32 nodes 7382 errors 0" }
+          - { key: darwin-x64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: true, triple: x86_64-apple-darwin, parse_expect: "files 32 nodes 7382 errors 0" }
+          - { key: darwin-arm64, runner: macos-14, arch: arm64, llvm: darwin-arm64, cross: false, triple: aarch64-apple-darwin, parse_expect: "files 32 nodes 7382 errors 0" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Rust standard library for the cross target
+        if: matrix.cross
+        run: rustup target add ${{ matrix.triple }}
+
+      - name: The runner is the arch this job needs
+        shell: bash
+        run: test "$(bun -e 'console.log(process.arch)')" = "${{ matrix.arch }}"
+
+      # Pinned by URL and sha256, and the banner must say clang version 23.1.2. Exports LLVM_BIN.
+      - name: LLVM 23.1.2
+        shell: bash
+        run: bash scripts/install-llvm.sh "${{ matrix.llvm }}"
+
+      - name: macOS SDK for cc-rs
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "SDKROOT=$(xcrun --show-sdk-path)" >> "$GITHUB_ENV"
+
+      # --target equal to the runner's own key is a native build (and writes provenance); a
+      # different key cross-builds with the same checked clang.
+      - name: Build the native parser (grammar check, clang, provenance)
+        shell: bash
+        run: bun scripts/build-native-parser.ts --target "${{ matrix.key }}"
+
+      - name: The addon was built by the pinned compiler, for this target
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          bun -e '
+            const b = require("./packages/engine/vendor/native/lethal-parser.${{ matrix.key }}.node");
+            const i = b.nativeInfo();
+            console.log(i.cCompiler, i.target);
+            if (!/^clang version 23\.1\.2( |$)/.test(i.cCompiler)) throw new Error("compiler " + i.cCompiler);
+            if (i.target !== "${{ matrix.triple }}") throw new Error("target " + i.target);'
+
+      - name: The addon parses a fixture (WASM is still the product parser until S3)
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "${{ matrix.parse_expect }}"
+
+      - name: Native Rust tests on this platform
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: bun scripts/build-native-parser.ts --test
+
+      - name: Native notice inventory is current
+        run: bun scripts/native-notices.ts --check
+
+      # A cross-built addon has no provenance yet: native-darwin-x64 writes it where it loads.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.key }}
+          if-no-files-found: error
+          path: |
+            packages/engine/vendor/native/lethal-parser.${{ matrix.key }}.node
+            packages/engine/vendor/native/lethal-parser.${{ matrix.key }}.provenance.json
+
+  native-darwin-x64:
+    # The cross-built darwin-x64 addon, checked on a real x64 Mac: the same checks every native
+    # target's own job runs, plus native-check through the CLI, then its provenance. macos-15-intel
+    # is GitHub's last Intel macOS image (macos-13 was retired 2025-12-04; this label runs until
+    # August 2027).
+    needs: native-parser
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: The runner is x64
+        shell: bash
+        run: test "$(bun -e 'console.log(process.arch)')" = "x64"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-darwin-x64
+          path: packages/engine/vendor/native
+
+      - name: The addon was built by the pinned compiler, for x86_64
+        shell: bash
+        run: |
+          bun -e '
+            const b = require("./packages/engine/vendor/native/lethal-parser.darwin-x64.node");
+            const i = b.nativeInfo();
+            console.log(i.cCompiler, i.target);
+            if (!/^clang version 23\.1\.2( |$)/.test(i.cCompiler)) throw new Error("compiler " + i.cCompiler);
+            if (i.target !== "x86_64-apple-darwin") throw new Error("target " + i.target);'
+
+      - name: native-check through the CLI (source mode, so the stale-source check runs too)
+        shell: bash
+        run: |
+          bun packages/runner/src/cli.ts native-check | tee native.txt
+          grep -Eq '^native x86_64-apple-darwin clang version 23\.1\.2.* nodes 56$' native.txt
+
+      - name: The addon parses a fixture
+        shell: bash
+        run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32 nodes 7382 errors 0"
+
+      - name: Provenance, written where the addon loads
+        shell: bash
+        run: bun scripts/build-native-parser.ts --provenance
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-darwin-x64-provenance
+          if-no-files-found: error
+          path: packages/engine/vendor/native/lethal-parser.darwin-x64.provenance.json
+
   build:
-    # Cross-compiles every target from one machine — `bun build --compile --target` downloads the
-    # target's runtime, so no matrix is needed. Windows, to match CI and the development machine,
-    # and because the Windows binary is the one that gets Authenticode-signed.
+    needs: [native-parser, native-darwin-x64]
+    # Cross-compiles every target from one machine: `bun build --compile --target` downloads the
+    # target's runtime, so no matrix is needed here. The five native addons come from the
+    # native-parser jobs, darwin-x64's provenance from native-darwin-x64. Windows, to match CI and the development machine, and because the Windows
+    # binary is the one that gets Authenticode-signed. Publishes NOTHING; `publish` does.
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write # OIDC for azure/login (Windows signing)
     # The Entra federated credential's subject is `repo:SShadowS/LethAL:environment:release`;
     # wildcard-tag credentials are rejected by the tenant, so the job binds to a GitHub environment
@@ -46,9 +200,37 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(bun --print 'require("./package.json").version')"
           if [ "$tag" != "$pkg" ]; then
-            echo "tag $GITHUB_REF_NAME says $tag, package.json says $pkg — bump one of them" >&2
+            echo "tag $GITHUB_REF_NAME says $tag, package.json says $pkg: bump one of them" >&2
             exit 1
           fi
+
+      - name: Version stamp (dispatch trial, no tag to compare)
+        if: github.event_name != 'push'
+        shell: bash
+        run: |
+          pkg="$(bun --print 'require("./package.json").version')"
+          echo "package.json version: $pkg"
+          test -n "$pkg"
+
+      # The unit tests need the native parser, so the addons land BEFORE typecheck and tests.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-artifacts
+          merge-multiple: true
+
+      - name: All five addons are present, and the tree is still clean
+        shell: bash
+        run: |
+          mkdir -p packages/engine/vendor/native
+          cp native-artifacts/*.node native-artifacts/*.provenance.json packages/engine/vendor/native/
+          for k in win32-x64 linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            for f in "lethal-parser.$k.node" "lethal-parser.$k.provenance.json"; do
+              test -f "packages/engine/vendor/native/$f" || { echo "missing $f"; exit 1; }
+            done
+          done
+          rm -rf native-artifacts
+          test -z "$(git status --porcelain)" || { git status --porcelain; echo "dirty tree: binaries would be stamped DIRTY"; exit 1; }
 
       # The same gate a human runs before cutting a release (docs/releasing.md step 3). The live
       # integration gates are NOT here and cannot be: they need a Business Central container.
@@ -102,7 +284,7 @@ jobs:
         run: |
           $exe = (Get-ChildItem build/lethal-*-windows-x64.exe)[0].FullName
           $sig = Get-AuthenticodeSignature $exe
-          "$($sig.Status) — $($sig.SignerCertificate.Subject)"
+          "$($sig.Status): $($sig.SignerCertificate.Subject)"
           if ($sig.Status -ne 'Valid') {
             # A release that claims to be signed and is not is worse than an unsigned one: the
             # claim is what a user checks instead of checking the binary.
@@ -119,6 +301,102 @@ jobs:
           # that cannot answer this is not one to publish.
           "$exe" --version
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          if-no-files-found: error
+          path: |
+            build/lethal-*
+            packages/engine/vendor/native/*.provenance.json
+            packages/engine/native/THIRD-PARTY-NOTICES.md
+
+  smoke:
+    needs: build
+    strategy:
+      # false: one target failing must not cancel the others and hide their results.
+      fail-fast: false
+      matrix:
+        # native_nodes: the node count of native-check's built-in snippet, from a local run.
+        # machine: the runner's real machine (uname -m; on macOS, hw.optional.arm64 decides).
+        include:
+          - { key: win32-x64, runner: windows-latest, suffix: windows-x64.exe, triple: x86_64-pc-windows-msvc, native_nodes: 56, machine: x86_64 }
+          - { key: linux-x64, runner: ubuntu-22.04, suffix: linux-x64, triple: x86_64-unknown-linux-gnu, native_nodes: 56, machine: x86_64 }
+          - { key: linux-arm64, runner: ubuntu-22.04-arm, suffix: linux-arm64, triple: aarch64-unknown-linux-gnu, native_nodes: 56, machine: aarch64 }
+          # macos-15-intel: GitHub's last Intel macOS image (macos-13 retired 2025-12-04).
+          - { key: darwin-x64, runner: macos-15-intel, suffix: darwin-x64, triple: x86_64-apple-darwin, native_nodes: 56, machine: x86_64 }
+          - { key: darwin-arm64, runner: macos-14, suffix: darwin-arm64, triple: aarch64-apple-darwin, native_nodes: 56, machine: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # For the fixture only. The binary runs from a directory with no packages/ tree, so it cannot
+      # resolve a .node from disk: whatever it parses with is what it embeds.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dl
+
+      # Defence in depth: the runner's REAL machine, not what a translated process reports. Under
+      # Rosetta an x64 process on an arm64 Mac reports x86_64, so on macOS hw.optional.arm64 decides.
+      - name: The runner is the machine this target needs
+        shell: bash
+        run: |
+          m="$(uname -m)"
+          if [ "$(uname -s)" = Darwin ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then m=arm64; fi
+          echo "machine $m"
+          test "$m" = "${{ matrix.machine }}"
+
+      - name: The downloadable binary carries a working addon and parses AL on its own platform
+        shell: bash
+        run: |
+          # cygpath on Windows only, so the globs below never see a backslash path.
+          bin="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")/bin"
+          mkdir -p "$bin"
+          cp dl/build/lethal-*-${{ matrix.suffix }} "$bin/"
+          exe="$(ls "$bin"/lethal-*-${{ matrix.suffix }})"
+          chmod +x "$exe"
+          fixture="$GITHUB_WORKSPACE/fixtures/sandbox-data"
+          cd "$bin"
+          "$exe" --version | tee version.txt
+          if grep -q DIRTY version.txt; then echo "binary is stamped DIRTY"; exit 1; fi
+          # Before S3 --dry-run parses with WASM and never touches the addon, so this is the check
+          # that the embedded addon exists, loads and parses. A missing one exits non-zero with
+          # NativeParserMissingError.
+          "$exe" native-check | tr -d '\r' | tee native.txt
+          grep -Eq '^native ${{ matrix.triple }} clang version 23\.1\.2.* nodes ${{ matrix.native_nodes }}$' native.txt \
+            || { echo "expected: native ${{ matrix.triple }} clang version 23.1.2 ... nodes ${{ matrix.native_nodes }}"; exit 1; }
+          "$exe" run --project "$fixture" --dry-run | tr -d '\r' > dry-run-bin.txt
+          # The two count lines of a local `lethal run --project fixtures/sandbox-data --dry-run`,
+          # each required as a whole line on its own.
+          for want in \
+            'dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)' \
+            'batch 0 (407 mutant site(s), 387 deployed):'; do
+            grep -qxF "$want" dry-run-bin.txt || { echo "missing count line: $want"; exit 1; }
+          done
+
+  publish:
+    # needs: smoke, so all five compiled-binary smoke jobs (and through them build and all five
+    # native-parser jobs) must pass. The only job that creates a release, and never on a dispatch.
+    needs: smoke
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    # Inside `release`, as the release step was when it lived in `build`: whatever rules the
+    # environment gains (reviewers, tag policy) gate the job that creates the release.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dl
+
       # The release body is the CHANGELOG's own section for this version. A hand-written body would
       # be a second account of the same release, free to disagree with the first; the script refuses
       # a missing or empty section rather than shipping a release with no notes.
@@ -127,7 +405,7 @@ jobs:
         shell: bash
         run: |
           bun scripts/changelog-section.ts "${GITHUB_REF_NAME}" > release-notes.md
-          signed="not signed — Azure Trusted Signing is not configured for this repository"
+          signed="not signed: Azure Trusted Signing is not configured for this repository"
           if [ -n "${{ vars.AZURE_SIGNING_ACCOUNT }}" ]; then
             signed="Authenticode-signed via Azure Trusted Signing, and the signature is verified in CI before publishing. The Linux and macOS binaries are NOT signed: Authenticode is a Windows PE format and macOS needs separate notarisation"
           fi
@@ -142,6 +420,11 @@ jobs:
 
           **Windows binary:** $signed.
 
+          **Native parser:** each binary embeds the native tree-sitter-al addon for its platform,
+          built in CI by clang from LLVM 23.1.2. The \`.provenance.json\` files record each addon's
+          sha256, compiler and target; \`THIRD-PARTY-NOTICES.md\` holds the licenses of everything
+          compiled into it.
+
           **\`lethal-control.app\`** is the LethAL Control extension, attached to this release by
           hand (building it needs \`alc\` from the AL VS Code extension, which no hosted runner has).
           Publish it to your sandbox or dev container once and point \`controlSymbolPath\` at it.
@@ -151,18 +434,21 @@ jobs:
           EOF
 
       - name: Publish the release
+        # v2.6.2 (the v2 tag), pinned by commit: this is the step with contents: write.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
-          # Binaries only. `lethal-control.app` is NOT here and cannot be: building it needs `alc`
-          # from the AL VS Code extension, which no hosted runner has, and `*.app` is gitignored so
-          # there is no committed copy to attach either. The release is created as a DRAFT for
-          # exactly this reason — attach the control app by hand before publishing, and say which
-          # version it is. See docs/releasing.md.
+          # `lethal-control.app` is NOT here and cannot be: building it needs `alc` from the AL VS
+          # Code extension, which no hosted runner has, and `*.app` is gitignored so there is no
+          # committed copy to attach either. The release is created as a DRAFT for exactly this
+          # reason: attach the control app by hand before publishing, and say which version it is.
+          # See docs/releasing.md.
           files: |
-            build/lethal-*
+            dl/build/lethal-*
+            dl/packages/engine/vendor/native/*.provenance.json
+            dl/packages/engine/native/THIRD-PARTY-NOTICES.md
           # The changelog section, then a fixed footer, then GitHub's generated commit list beneath
           # both. `body_path` and `body` cannot both be set, so the footer is appended to the file.
           body_path: release-notes.md

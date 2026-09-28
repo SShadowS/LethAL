@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { join, resolve } from "node:path";
-import { cargoEnv, cargoTargetDir, isPinnedClang } from "./build-native-parser";
+import {
+  buildArgs,
+  cargoEnv,
+  cargoPlan,
+  cargoTargetDir,
+  isPinnedClang,
+} from "./build-native-parser";
 import { CRATE } from "./check-native-grammar";
 
 describe("cargoEnv", () => {
@@ -60,5 +66,58 @@ describe("cargoTargetDir", () => {
     const abs = resolve("/shared/target");
     expect(cargoTargetDir({ CARGO_TARGET_DIR: abs }, resolve("/repo"))).toBe(abs);
     expect(cargoTargetDir({}, resolve("/repo"))).toBe(join(CRATE, "target"));
+  });
+});
+
+describe("cargoPlan", () => {
+  it("builds natively with no --target, from release/", () => {
+    expect(cargoPlan("win32-x64", undefined, false)).toEqual({
+      key: "win32-x64",
+      args: ["build", "--release", "--locked"],
+      libPath: ["release", "lethal_parser.dll"],
+      cross: false,
+    });
+    // The test build drops the #[napi] glue, whose napi_* symbols no test executable can link on
+    // Linux or macOS; the addon build never does.
+    expect(cargoPlan("win32-x64", "win32-x64", true).args).toEqual([
+      "test",
+      "--release",
+      "--locked",
+      "--features",
+      "napi-derive/noop",
+    ]);
+  });
+  it("cross-builds darwin-x64 on darwin-arm64 with the x86_64 triple", () => {
+    expect(cargoPlan("darwin-arm64", "darwin-x64", false)).toEqual({
+      key: "darwin-x64",
+      args: ["build", "--release", "--locked", "--target", "x86_64-apple-darwin"],
+      libPath: ["x86_64-apple-darwin", "release", "liblethal_parser.dylib"],
+      cross: true,
+    });
+  });
+  it("refuses an unknown key and cross-target tests", () => {
+    expect(() => cargoPlan("darwin-arm64", "linux-riscv64", false)).toThrow(/no LethAL target/);
+    expect(() => cargoPlan("darwin-arm64", "darwin-x64", true)).toThrow(/cannot/);
+  });
+});
+
+describe("buildArgs", () => {
+  it("reads --target, --test and --provenance", () => {
+    expect(buildArgs(["--target", "darwin-x64"])).toEqual({
+      test: false,
+      target: "darwin-x64",
+      provenance: false,
+    });
+    expect(buildArgs(["--provenance"])).toEqual({
+      test: false,
+      target: undefined,
+      provenance: true,
+    });
+  });
+  it("refuses --provenance with --target or --test, which it would ignore", () => {
+    expect(() => buildArgs(["--provenance", "--target", "darwin-x64"])).toThrow(
+      /takes no --target/,
+    );
+    expect(() => buildArgs(["--provenance", "--test"])).toThrow(/takes no --target/);
   });
 });
