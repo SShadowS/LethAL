@@ -1,0 +1,24 @@
+[package]
+name = "lethal-parser"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi4"] }
+napi-derive = "3"
+tree-sitter = "=0.25.10"
+tree-sitter-al = "=4.4.1"
+sha2 = "0.10"
+
+[build-dependencies]
+napi-build = "2"
+sha2 = "0.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
