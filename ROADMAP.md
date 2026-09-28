@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 320 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**90 of 321 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -128,6 +128,7 @@ that ordering is the priority.
 - **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · open, filed 2026-09-28
 - **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · done (33cfc55a)
 - **R322** · Type resolution compares variable names case-sensitively, so a differently-cased reference can take a same-named global's type and authorize a mutant that does not compile · [R322.md](docs/roadmap/R322.md) · open, filed 2026-09-29
+- **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · open, filed 2026-09-29
 
 ## Product gaps a real project hits
 
