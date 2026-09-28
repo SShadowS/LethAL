@@ -28,7 +28,8 @@ permissions:
 jobs:
   native-parser:
     strategy:
-      fail-fast: true
+      # false: one target failing must not cancel the others and hide their results.
+      fail-fast: false
       matrix:
         # key: the addon's platform key. arch: the RUNNER's arch, checked before building.
         # llvm: which pinned LLVM 23.1.2 build install-llvm.sh fetches. cross: the addon is for
@@ -312,7 +313,8 @@ jobs:
   smoke:
     needs: build
     strategy:
-      fail-fast: true
+      # false: one target failing must not cancel the others and hide their results.
+      fail-fast: false
       matrix:
         # native_nodes: the node count of native-check's built-in snippet, from a local run.
         # machine: the runner's real machine (uname -m; on macOS, hw.optional.arm64 decides).

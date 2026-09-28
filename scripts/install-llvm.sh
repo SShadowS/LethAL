@@ -40,6 +40,8 @@ case "$key" in
     # An administrative install only unpacks the files, so it never touches the LLVM the runner
     # image already has in C:\Program Files\LLVM.
     MSYS_NO_PATHCONV=1 msiexec /a "$(cygpath -w "$dest.msi")" /qn TARGETDIR="$(cygpath -w "$dest")"
+    # The msi's directory table puts everything under LLVM\ (measured on 23.1.2).
+    bin="$dest/LLVM/bin"
     exe=clang-cl.exe
     ;;
   linux-x64 | linux-arm64 | darwin-arm64)
@@ -49,7 +51,11 @@ case "$key" in
       darwin-arm64) asset=LLVM-$VERSION-macOS-ARM64.tar.xz sha=d7c26fc6177e42842e2d1ffaad31aec057c56a924392b1a23d830abe2c5d53b1 ;;
     esac
     fetch "$REL/$asset" "$sha" "$dest.tar.xz"
+    # Each tarball has one top-level dir, LLVM-23.1.2-<platform>/, stripped here. bin/clang is a
+    # SYMLINK to clang-23 in all three (read from the 23.1.2 assets), so nothing below may look
+    # for a regular file.
     tar -xJf "$dest.tar.xz" -C "$dest" --strip-components=1
+    bin="$dest/bin"
     exe=clang
     ;;
   darwin-x64)
@@ -62,7 +68,10 @@ case "$key" in
     ;;
 esac
 
-bin="$(dirname "$(find "$dest" -type f -name "$exe" -path "*/bin/*" | head -n 1)")"
+if [ ! -x "$bin/$exe" ]; then
+  echo "install-llvm: no executable $bin/$exe after unpacking; the asset's layout is not the one this script expects" >&2
+  exit 1
+fi
 banner="$("$bin/$exe" --version | head -n 1)"
 echo "install-llvm: $bin/$exe: $banner"
 case "$banner" in
