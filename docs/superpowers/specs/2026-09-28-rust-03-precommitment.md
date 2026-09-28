@@ -260,3 +260,32 @@ placeholders and changes nothing above OUTCOME.
 
 The corpus revisions are re-read after the last native run. A moved corpus voids the comparison,
 and it is re-run.
+
+## AMENDMENT 4 (S4.2a prediction)
+
+Recorded before any S4.2a code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead E, the per-mutant allocation in the manifest-row loop of
+  `writeInstrumentedProject` (`packages/schemata/src/project.ts`). The change: line numbers from one
+  line-start index per file instead of a scan from offset 0 per call; the `local` scope prefix
+  tested without taking a whole procedure's text; each gap block's id computed once per block
+  rather than once per mutant; no child arrays built in the loop's parent walks. B's second copy
+  of the manifest rows (the spread copy in `assignIdentityOrdinals`) is cut in the same loop, as
+  the orchestrator asked; it is not part of the E prediction.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  13,000 MB. Predicted E after the fix: at or below 1,000 MB, read as in AMENDMENT 1 (the p5 phase
+  peak minus the p5 post-GC RSS) on one marked W8 run with the S0.2 phase markers. Both are
+  AMENDMENT 1's figures, unchanged: 17,161 MB minus the 4,120 MB E should lose is about 13,000 MB.
+- Predicted W4 median peak after the fix (3 runs): unchanged, at or below 5,779 MB (AMENDMENT 1's
+  highest native W4 run). Derivation: W4 is `run --dry-run`, which runs `dedupeSpecs` and prints; it
+  never calls `writeInstrumentedProject`, so the loop is not on W4's path, and AMENDMENT 1's W4
+  attribution has no lead E row. The change is confined to `project.ts`, so W4's code path is
+  byte-for-byte the same and the predicted saving on W4 is 0 MB.
+- The before figures are re-measured at `d945e6f` (the native switch, S3.1 and S4.1 have landed
+  since `e5bed71`) with the same harness, 3 runs each, so the before and after sit on one revision
+  of everything except the fix. The verdict is against the bounds above, not against the before runs.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged.
+- Recorded, not gating: the loop is 90% of W8's wall time today; the W8 wall medians before and
+  after are reported next to the peaks.
