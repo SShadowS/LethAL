@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { REPORT_SCHEMA_VERSION, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
@@ -211,7 +212,12 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
 
   test("recordMutant persists runner at the column level, NULL when absent", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
     const withRunner = store.recordMutant(runId, mutantRow({ runner: "client-services" }));
     const withoutRunner = store.recordMutant(
       runId,
@@ -230,7 +236,12 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
 
   test("mutantVerdicts reads the runner back, and omits it when NULL", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
     store.recordMutant(runId, mutantRow({ runner: "client-services" }));
     store.recordMutant(runId, mutantRow({ mutantCode: "M0002", astHash: "def" }));
     const verdicts = store.mutantVerdicts(runId);
@@ -281,7 +292,12 @@ CREATE TABLE IF NOT EXISTS mutants (
       old.close();
 
       const store = new ResultsStore(dbPath);
-      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
+        projectPath: "/p",
+        backend: "bcdev",
+        appVersion: "1",
+      });
       const rowId = store.recordMutant(runId, mutantRow({ runner: "client-services" }));
       store.close();
 
@@ -302,7 +318,12 @@ CREATE TABLE IF NOT EXISTS mutants (
     try {
       new ResultsStore(dbPath).close();
       const store = new ResultsStore(dbPath); // second open must not throw on ALTER
-      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+      const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
+        projectPath: "/p",
+        backend: "bcdev",
+        appVersion: "1",
+      });
       store.recordMutant(runId, mutantRow());
       store.close();
     } finally {

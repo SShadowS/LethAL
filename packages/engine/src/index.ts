@@ -28,6 +28,7 @@ export {
   isProcedureLike,
   inMemberBody,
   memberArms,
+  swallowedSplitMembers,
   procedureLikeReturnType,
   procedureLikeNameNode,
   declarationMembers,

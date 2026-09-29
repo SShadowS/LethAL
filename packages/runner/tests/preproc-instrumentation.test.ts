@@ -2322,3 +2322,126 @@ ${b}
     }
   });
 });
+
+// R327: a split member placed after the object's global `var` section parses INSIDE that section,
+// so the symbol table does not index it. Before the fix its names typed by the object's GLOBALS
+// (swap-call-arguments at the Show call failed `alc` with AL0133 in both builds), a swallowed
+// overload left the plain one "unique" (swap-additive on Text failed `alc` with AL0175), and a
+// swallowed `SetRange` did not stop a Tier-2 claim. The repros are hand-written; `alc` of each
+// instrumented project passes under [] and [CLEAN27] (logged in the R-302 task report).
+const R327_SWALLOW = `codeunit 50100 "Repro R327"
+{
+    var
+        Glob: Integer;
+        X: Integer;
+        Y: Integer;
+
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Text): Integer
+#else
+    procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        Show(X, Y);
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+}
+`;
+const R327_OVERLOAD = `codeunit 50100 "Repro R327O"
+{
+    var
+        Glob: Integer;
+
+#if CLEAN27
+    procedure Foo(T: Text): Text
+#else
+    procedure Foo(T: Text): Text
+#endif
+    begin
+        exit(T);
+    end;
+
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Caller(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+}
+`;
+const R327_TABLE = `table 50100 "Repro Tab"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    var
+        Glob: Integer;
+
+#if CLEAN27
+    procedure SetRange(F: Code[20]; V: Code[20])
+#else
+    procedure SetRange(F: Code[20]; V: Code[20])
+#endif
+    begin
+        Glob := 1;
+    end;
+}
+`;
+const R327_CALLER = `codeunit 50101 "Repro R327S"
+{
+    procedure Pick(C: Code[20])
+    var
+        R: Record "Repro Tab";
+    begin
+        R.SetRange(Code, C);
+    end;
+}
+`;
+
+describe("R327: a split member swallowed by the global var section gets no site typed by a global", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const sites = (m: MutantManifest) =>
+    m.mutants.map((x) => `${x.file} L${x.startLine} ${x.operatorName}`).sort();
+
+  test("swallow: no swap at Show(X, Y), no swap-additive on X + 1", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R327_SWALLOW });
+    expect(sites(manifest)).toEqual([
+      "Repro.Codeunit.al L16 lethal.void-method-call",
+      "Repro.Codeunit.al L17 lethal.remove-assignment",
+      "Repro.Codeunit.al L18 lethal.return-value",
+      "Repro.Codeunit.al L22 lethal.empty-block",
+      "Repro.Codeunit.al L23 lethal.remove-assignment",
+    ]);
+  });
+
+  test("overload: no swap-additive at the call a swallowed overload makes ambiguous", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R327_OVERLOAD });
+    expect(sites(manifest)).not.toContain("Repro.Codeunit.al L22 lethal.swap-additive");
+    expect(sites(manifest)).toContain("Repro.Codeunit.al L21 lethal.empty-block");
+  });
+
+  test("setrange: a swallowed SetRange stops the Tier-2 claim; the Tier-1 site stays", async () => {
+    const { manifest } = await instrument({
+      "Tab.Table.al": R327_TABLE,
+      "Repro.Codeunit.al": R327_CALLER,
+    });
+    const got = sites(manifest);
+    expect(got).not.toContain("Repro.Codeunit.al L7 lethal.remove-setrange");
+    expect(got).toContain("Repro.Codeunit.al L7 lethal.void-method-call");
+  });
+});

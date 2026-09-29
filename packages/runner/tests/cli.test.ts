@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
@@ -2133,6 +2134,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = join(root, "r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -2180,6 +2182,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = join(root, "r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",

@@ -84,7 +84,12 @@ function oneBatchRun(
   rows: ReturnType<typeof mutantRow>[],
   projectPath = "P",
 ): number {
-  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.0" });
+  const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
+    projectPath,
+    backend: "bcdev",
+    appVersion: "0.0.0.0",
+  });
   store.recordArtifact(runId, artifact(0, artifactId));
   store.recordSourceHash(runId, "5".repeat(64));
   for (const r of rows) store.recordMutant(runId, r);
@@ -167,7 +172,12 @@ describe("resolveVerifySource", () => {
 
   test("verify refuses an artifact that is not its run's highest batch", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A1));
     store.recordArtifact(runId, artifact(1, A2));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -179,7 +189,12 @@ describe("resolveVerifySource", () => {
 
   test("an id from another batch of the same artifact's run is wrong-batch, even when that batch has the same code", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A2));
     store.recordArtifact(runId, artifact(1, A1));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -245,7 +260,12 @@ describe("resolveVerifySource", () => {
     // must come first.
     for (const over of [{ appPath: undefined }, { instrumentedDir: undefined }, {}]) {
       const store = new ResultsStore(":memory:");
-      const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+      const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
+        projectPath: "P",
+        backend: "bcdev",
+        appVersion: "0.0.0.0",
+      });
       store.recordArtifact(runId, artifact(0, A1, over));
       if (Object.keys(over).length > 0) store.recordSourceHash(runId, "5".repeat(64));
       store.recordMutant(runId, mutantRow("M0001", "survived", { coveringTests: undefined }));
@@ -257,7 +277,12 @@ describe("resolveVerifySource", () => {
 
   test("source-predates-verify names all four reasons a run records no source hash", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A1));
     const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
     expect(e.reason).toBe("source-predates-verify");
@@ -303,7 +328,12 @@ describe("resolveVerifySource", () => {
 
   test("a request mixing a wrong-batch id and a carried id refuses as wrong-batch and names both", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A2));
     store.recordArtifact(runId, artifact(1, A1));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -958,7 +988,12 @@ function installedRun(
   writeFileSync(join(dir, "app.json"), "{}");
   const appBytes = new TextEncoder().encode(`app-${artifactId}`);
   writeFileSync(join(dir, "x.app"), appBytes);
-  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.0" });
+  const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
+    projectPath,
+    backend: "bcdev",
+    appVersion: "0.0.0.0",
+  });
   store.recordArtifact(
     runId,
     artifact(0, artifactId, {

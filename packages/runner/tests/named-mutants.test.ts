@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
@@ -50,7 +51,12 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const appPath = join(dir, `${sha(appBytes).slice(0, 16)}-${ARTIFACT_ID}.app`);
     await Bun.write(appPath, appBytes);
     store = new ResultsStore(":memory:");
-    runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, {
       batchIndex: 0,
       appVersion: "1.0.1.1",
@@ -84,7 +90,12 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     // Record the hash of a manifest carrying ANOTHER id: the hash link holds, the id link must not.
     const other = { ...MANIFEST, artifactId: "f".repeat(32) };
     await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(other));
-    const runB = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runB = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runB, {
       batchIndex: 0,
       appVersion: "1.0.1.1",
@@ -129,7 +140,12 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     await expect(loadInstalledArtifact(store, { ...ref, batchIndex: 1 })).rejects.toMatchObject({
       reason: "no-record",
     });
-    const runB = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runB = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runB, {
       batchIndex: 0,
       appVersion: "1.0.1.1",
@@ -146,7 +162,12 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
   test("loadInstalledArtifact refuses a record whose artifactId is not 32 lowercase hex", async () => {
     const bad = { ...MANIFEST, artifactId: ARTIFACT_ID.toUpperCase() };
     await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(bad));
-    const runB = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runB = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runB, {
       batchIndex: 0,
       appVersion: "1.0.1.1",

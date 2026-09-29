@@ -1093,6 +1093,8 @@ export async function runVerify(
       const compiled: CompiledTestApp = await backend.compileTestApp(args.testDir, artifact);
       compileMs = now() - tc;
       verifyRunId = store.createRun({
+        // R325: the rows this run records carry the SOURCE run's manifest keys.
+        identityScheme: source.identityScheme,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",

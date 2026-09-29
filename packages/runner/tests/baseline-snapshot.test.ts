@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import {
   hashAlTree,
   hashPackage,
@@ -182,7 +183,12 @@ describe("snapshotApplies (R192)", () => {
 describe("ResultsStore baseline snapshots (R192)", () => {
   test("round-trips a completed baseline under its two hashes, latest first", () => {
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
     const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
     store.recordBaselineSnapshot({
       runId: id,

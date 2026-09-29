@@ -1107,6 +1107,19 @@ describe("claimsRecordMethod: split members (R302)", () => {
   const cu = () =>
     parseClean(codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }));
 
+  // R327: a split member after the table's global var section parses inside that section. It is
+  // still a member of the table, so it still shadows the built-in.
+  it("REFUSES it when the split member sits after the table's global var section", () => {
+    const root = cu();
+    const table = splitTable("SetRange").replace(
+      "#if CLEAN27",
+      "    var\n        G: Integer;\n\n#if CLEAN27",
+    );
+    expect(table).toContain("G: Integer;");
+    const ctx = projectContextFor([root, parseClean(table)]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+  });
+
   it("REFUSES a call on a table that declares that name as a split member", () => {
     const root = cu();
     const ctx = projectContextFor([root, parseClean(splitTable("SetRange"))]);

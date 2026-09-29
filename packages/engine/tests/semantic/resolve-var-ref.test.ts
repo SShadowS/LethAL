@@ -204,3 +204,30 @@ describe("resolveVarRef: split members (R302)", () => {
     expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
   });
 });
+
+// R327: a split member swallowed by the global var section is not indexed; its own names resolve
+// to nothing, never to a global of the same name.
+describe("resolveVarRef: a swallowed split member (R327)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("a name in the swallowed member resolves to null, not to the global", () => {
+    const { root, ctx } = load(`codeunit 50203 "R"
+{
+    var
+        Amount: Text;
+
+#if CLEAN27
+    procedure P(Amount: Decimal)
+#else
+    procedure P(Amount: Decimal)
+#endif
+    begin
+        Amount := 2;
+    end;
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
+  });
+});

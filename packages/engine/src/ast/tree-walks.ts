@@ -295,6 +295,22 @@ export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxN
 }
 
 /**
+ * R327: split members the grammar placed INSIDE an object-level `var` section. A split member that
+ * follows the object's global `var` section parses as a child of that section's `var_body`, where
+ * a plain procedure in the same place is a member of the object. They are still members of the
+ * object, so every "does the object declare this name" question must count them; the symbol table
+ * does not index them, so their own names resolve to nothing (see `buildSymbolTable`).
+ */
+export function swallowedSplitMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const member of declarationMembers(objectNode)) {
+    if (member.kind !== ALNodeKind.var_section) continue;
+    for (const c of varDeclarations(member)) if (isProcedureLike(c)) out.push(c);
+  }
+  return out;
+}
+
+/**
  * R298: the nodes whose children are AL object declarations. A `#if`-wrapped object sits under a
  * `preproc_conditional_object` (one declaration per arm), never directly under `source_file`, so
  * a walk that stops at `source_file`'s children misses it or names the wrapper as the object.

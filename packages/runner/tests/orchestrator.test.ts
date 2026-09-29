@@ -4642,7 +4642,12 @@ function seedPriorSurvivor(
   projectPath: string,
   target: MutantManifestEntry,
 ): void {
-  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.1" });
+  const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
+    projectPath,
+    backend: "bcdev",
+    appVersion: "0.0.0.1",
+  });
   store.recordMutant(runId, {
     mutantCode: "SEED",
     astHash: target.astHash,
@@ -11053,6 +11058,7 @@ async function installedFixture(
     instrumentedDir: join(dirs.instrumentedDir, `run-${fromRunId}-batch-0`),
   };
   const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
     projectPath: dirs.projectDir,
     backend: "named-mutants-test",
     appVersion: "0.0.0.0",
@@ -12603,6 +12609,18 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(
       fx.store.db.query("SELECT backend, config_fingerprint FROM runs WHERE id = ?").get(id),
     ).toEqual({ backend: "lethal-verify", config_fingerprint: null });
+  });
+
+  // R325 review M2: verify records the SOURCE run's manifest keys, so its run row carries the
+  // source run's identity scheme, not this build's.
+  test("verify's run row carries the source run's identity scheme", async () => {
+    const fx = await verifyFixture();
+    fx.store.db.run("UPDATE runs SET identity_scheme = 7 WHERE id = ?", [fx.installed.fromRunId]);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const id = out.verifyRunId;
+    if (id === undefined) throw new Error("no verify run row");
+    expect(fx.store.getRun(id)?.identityScheme).toBe(7);
   });
 
   test("a TestAppError publish-indeterminate exits 3", async () => {

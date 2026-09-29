@@ -241,9 +241,15 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
     // R210: by the declaration's position, so an overloaded name cannot answer with a different
     // procedure's locals. The name lookup remains the fallback for a declaration this scope's
     // index does not hold, which is what this line did for every case before.
+    // R327: a split member the symbol table did not index (the grammar swallowed it into the
+    // global var section) types NOTHING. The name fallback would answer with another procedure's
+    // declarations, and falling through to the globals typed its parameters by the object's
+    // globals: an `alc`-failing swap. A plain procedure keeps the name fallback it had.
+    const plain = proc.kind === ALNodeKind.procedure;
     const procSym =
       symbols.resolveProcedureAt(scope, proc.startIndex) ??
-      symbols.resolveProcedure(scope, procedureLikeNameNode(proc)?.text ?? "");
+      (plain ? symbols.resolveProcedure(scope, procedureLikeNameNode(proc)?.text ?? "") : null);
+    if (procSym === null && !plain) return null;
     if (procSym !== null) {
       // R302: a name a split member's arms declare differently types as nothing, and it HIDES a
       // global of that name: falling through would type it by a declaration no build uses here.

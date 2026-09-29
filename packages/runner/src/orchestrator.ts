@@ -4109,6 +4109,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   );
 
   const runId = cfg.store.createRun({
+    identityScheme: IDENTITY_SCHEME,
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,

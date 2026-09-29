@@ -29,6 +29,7 @@ import {
   memberArms,
   procedureLikeNameNode,
   procedureLikeReturnType,
+  swallowedSplitMembers,
   varDeclarations,
 } from "../ast/tree-walks";
 
@@ -150,7 +151,9 @@ export interface SymbolTable {
    */
   resolveProcedureAt(ownerName: string, declStartIndex: number): ProcedureSymbol | null;
   /** R302/R324: the procedure of that name when the owner declares EXACTLY ONE (names compared as
-   *  AL compares them; a split member counts under every arm's name), else null. */
+   *  AL compares them; a split member counts under every arm's name, including one the grammar
+   *  swallowed into the global var section, R327), else null. Never a renamed split member
+   *  (Decision 2). */
   uniqueProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
@@ -284,7 +287,9 @@ export function enclosingObjectScopeKey(node: ALSyntaxNode): string | null {
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
-  const procedureNames = new Map<string, Map<string, ProcedureSymbol[]>>();
+  // R327: `null` stands for a split member the grammar swallowed into the global var section. It
+  // is not indexed, but its names still count, so no other procedure of that name is "unique".
+  const procedureNames = new Map<string, Map<string, (ProcedureSymbol | null)[]>>();
   const globals = new Map<string, VarSymbol[]>();
 
   const tableExtensions: ExtensionSymbol[] = [];
@@ -370,15 +375,17 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       }
     }
     procedures.set(ownerName, procs);
-    const byName = new Map<string, ProcedureSymbol[]>();
-    for (const p of procs) {
+    const byName = new Map<string, (ProcedureSymbol | null)[]>();
+    const count = (node: ALSyntaxNode, p: ProcedureSymbol | null): void => {
       const names = new Set(
-        p.node.children
+        node.children
           .filter((c) => c.fieldName === "name")
           .map((c) => stripQuotes(c.text).toLowerCase()),
       );
       for (const nm of names) byName.set(nm, [...(byName.get(nm) ?? []), p]);
-    }
+    };
+    for (const p of procs) count(p.node, p);
+    for (const swallowed of swallowedSplitMembers(objectNode)) count(swallowed, null);
     procedureNames.set(ownerName, byName);
   };
 
@@ -470,7 +477,11 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;
-      return list.length === 1 && only !== undefined ? only : null;
+      // Decision 2: a renamed split member (name "") still counts under each arm's name, but a
+      // call by either name never resolves to it.
+      return list.length === 1 && only !== undefined && only !== null && only.name !== ""
+        ? only
+        : null;
     },
     fieldsOf(tableName) {
       return fields.get(tableName.toLowerCase()) ?? [];

@@ -506,6 +506,7 @@ async function buildVerifyHappyPathOutput() {
     const store = new ResultsStore(":memory:");
     const preprocessorSymbols: string[] = [];
     const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: projectDir,
       backend: "bcdev",
       appVersion: "0.0.0.0",

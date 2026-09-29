@@ -484,6 +484,10 @@ export class ResultsStore {
     backend: string;
     appVersion: string;
     configFingerprint?: string;
+    /** R325: the identity scheme the run's mutant rows are keyed under. Required, so a caller
+     *  that records keys made by another build (verify records the SOURCE run's manifest keys)
+     *  must say so rather than inherit this build's `IDENTITY_SCHEME`. */
+    identityScheme: number;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
@@ -497,7 +501,7 @@ export class ResultsStore {
         info.backend,
         info.appVersion,
         info.configFingerprint ?? null,
-        IDENTITY_SCHEME,
+        info.identityScheme,
       ) as {
       id: number;
     };

@@ -46,6 +46,7 @@ import {
   findEnclosingProcedure,
   isProcedureLike,
   procedureLikeNameNode,
+  swallowedSplitMembers,
 } from "../ast/tree-walks";
 import type { SemanticContext } from "./context";
 import {
@@ -507,9 +508,13 @@ export function lookupVar(
     // The name lookup is kept as a fallback for the case the positional one cannot serve: a
     // procedure whose declaration node is not in this scope's index at all. That answers exactly
     // what it answered before, so the fallback cannot regress a project that has no overloads.
+    // R327: an unindexed split member (swallowed into the global var section) resolves nothing,
+    // neither by name nor through the globals below. See `resolveIdentifierType` (types.ts).
+    const plain = procedure.kind === ALNodeKind.procedure;
     const symbol =
       symbols.resolveProcedureAt(objectName, procedure.startIndex) ??
-      nameOf(procedure, symbols, objectName);
+      (plain ? nameOf(procedure, symbols, objectName) : null);
+    if (symbol === null && !plain) return null;
     if (symbol !== null) {
       // R302: an ambiguous name resolves to nothing, and never to a global of that name.
       if (symbol.ambiguous?.includes(name.toLowerCase())) return null;
@@ -583,7 +588,8 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
  * — a hand-rolled `namedChildren` walk silently matches nothing here.
  */
 function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
-  for (const member of declarationMembers(objectNode)) {
+  // R327: a split member swallowed into the global var section is still a member of the object.
+  for (const member of [...declarationMembers(objectNode), ...swallowedSplitMembers(objectNode)]) {
     if (!isProcedureLike(member)) continue;
     for (const nameNode of member.children.filter((c) => c.fieldName === "name"))
       if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;

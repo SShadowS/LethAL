@@ -131,7 +131,7 @@ that ordering is the priority.
 - **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · open, filed 2026-09-29
 - **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · open, filed 2026-09-29
 - **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · open, filed 2026-09-29
-- **R327** · A split-header procedure placed after an object-level `var` section parses INSIDE that section's `var_body`, so it is not a member of its object · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29
+- **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29 (engine guarded; the grammar defect stays)
 
 ## Product gaps a real project hits
 

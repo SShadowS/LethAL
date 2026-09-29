@@ -15,6 +15,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { itestConfigPath } from "../packages/runner/itest/config-path";
 import { diffMutants, normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
@@ -237,6 +238,7 @@ async function main(): Promise<void> {
 
     // 3. A NEW unfinished run row, then the named call against the installed artifact.
     const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: PROJECT_DIR,
       backend: "c0204b-live-probe",
       appVersion: "0.0.0.0",

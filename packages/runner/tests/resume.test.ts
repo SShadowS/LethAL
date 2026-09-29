@@ -494,6 +494,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("findResumableRun matches an unfinished run with the same fingerprint", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -527,6 +528,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a FINISHED run is not resumable — there is nothing left to score", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -546,6 +548,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a different fingerprint does not match — scopes are not interchangeable", () => {
     const store = new ResultsStore(":memory:");
     store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -564,7 +567,12 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a run recorded with NO fingerprint never matches", () => {
     // A pre-R47 lethal.sqlite row cannot prove how it was scoped, so it must not be resumable.
     const store = new ResultsStore(":memory:");
-    store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     expect(
       store.findResumableRun({
         projectPath: "/p",
@@ -582,6 +590,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // have recorded nothing, so "most recent unfinished" alone is the wrong rule.
     const store = new ResultsStore(":memory:");
     const withVerdicts = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -602,6 +611,7 @@ describe("ResultsStore resume queries (R47)", () => {
     });
     // Newer, but died before recording anything.
     store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -622,6 +632,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // one — the SQL filter and CARRYABLE_VERDICTS must agree on that.
     const store = new ResultsStore(":memory:");
     const good = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -641,6 +652,7 @@ describe("ResultsStore resume queries (R47)", () => {
       batchIndex: 0,
     });
     const allErrors = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -672,6 +684,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("mutantVerdicts reads back identity, verdict, killing test and duration", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -708,7 +721,12 @@ describe("ResultsStore resume queries (R47)", () => {
 
   test("R192: mutantVerdicts reads back the coverage facts, and their absence stays an absence", () => {
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     const base = {
       codeunitName: "C",
       procedureName: "Post",
@@ -808,6 +826,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("R86: mutantVerdicts reads back the killing run's failure text, so --resume can carry it", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -861,7 +880,12 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
 
   test("rewrites the named batch's verdicts to error and drops the killing test", () => {
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     seed(store, id, 0, { astHash: "a", verdict: "survived" });
     seed(store, id, 0, { astHash: "b", verdict: "killed", killingTest: "T" });
     expect(store.invalidateBatch(id, 0, "unattested")).toBe(2);
@@ -879,7 +903,12 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
    */
   test("R86: invalidateBatch drops the killing run's failure text along with the killing test", () => {
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     seed(store, id, 0, {
       astHash: "b",
       verdict: "killed",
@@ -894,7 +923,12 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   test("leaves ANOTHER batch alone", () => {
     // One artifact's attestation says nothing about a different artifact's verdicts.
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     seed(store, id, 0, { astHash: "a" });
     seed(store, id, 1, { astHash: "b" });
     expect(store.invalidateBatch(id, 0, "unattested")).toBe(1);
@@ -906,7 +940,12 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     // known survivor was never run against this binary, and an existing error carries a more
     // specific diagnosis than this generic note.
     const store = new ResultsStore(":memory:");
-    const id = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const id = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     seed(store, id, 0, { astHash: "a", verdict: "known-survivor" });
     seed(store, id, 0, { astHash: "b", verdict: "error", failureNote: "deadline exceeded" });
     expect(store.invalidateBatch(id, 0, "unattested")).toBe(0);
@@ -1514,6 +1553,7 @@ describe("runSession --resume (R47)", () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");
     const foreign = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: "/somewhere/else",
       backend: "bcdev",
       appVersion: "1.0.0.0",

@@ -27,6 +27,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
@@ -328,6 +329,7 @@ async function main(): Promise<void> {
       inLease?: (fence: LeaseFence) => Promise<void>,
     ): Promise<NamedMutantsResult> => {
       const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
         projectPath: PROJECT_DIR,
         backend: `itest-testapp-${++calls}`,
         appVersion: "0.0.0.0",

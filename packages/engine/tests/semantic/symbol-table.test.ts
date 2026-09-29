@@ -387,3 +387,77 @@ describe("buildSymbolTable: split members (R302)", () => {
     expect(single.uniqueProcedure(KEY, '"pick"')?.name).toBe("Pick");
   });
 });
+
+// R327: a split member swallowed by the global var section is not indexed, but its names still
+// count, so `uniqueProcedure` never answers with another procedure of the same name.
+describe("buildSymbolTable: a swallowed split member still counts by name (R327)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+  const src = (plain: string) => `codeunit 50100 "Repro S"
+{
+    var
+        G: Integer;
+
+#if CLEAN27
+    procedure Foo(T: Text): Text
+#else
+    procedure FooOld(T: Text): Text
+#endif
+    begin
+        exit(T);
+    end;
+${plain}}
+`;
+
+  it("a plain overload after a swallowed one is not unique", () => {
+    const t = buildSymbolTable([
+      {
+        path: "s.al",
+        root: wrapRoot(
+          parseAL(
+            src(
+              "\n    procedure Foo(X: Integer): Integer\n    begin\n        exit(X);\n    end;\n",
+            ),
+          ),
+        ),
+      },
+    ]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+  });
+
+  it("a name only a swallowed member declares, under any arm, is not unique either", () => {
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src(""))) }]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "FooOld")).toBeNull();
+  });
+});
+
+// Review M3, Decision 2: a call by either name of a RENAMED split member does not resolve to it,
+// even when no other procedure has that name. Which arm compiles is decided by symbols the engine
+// never sees, so neither name is the member's name.
+describe("buildSymbolTable: a renamed split member is never a call's target (R302, Decision 2)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("uniqueProcedure answers null for either arm's name", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure AIf(X: Integer): Integer
+#else
+    procedure AElse(X: Integer): Integer
+#endif
+    begin
+        exit(X);
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    const key = objectScopeKey("codeunit", "Repro S");
+    expect(t.uniqueProcedure(key, "AIf")).toBeNull();
+    expect(t.uniqueProcedure(key, "AElse")).toBeNull();
+  });
+});

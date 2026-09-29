@@ -459,3 +459,68 @@ describe("buildTypeTable: split members (R302), unique calls (R324), case (R322)
     expect(typeAt(split, "Y")).toBe("Text");
   });
 });
+
+// R327: a split member placed after the object's global `var` section parses INSIDE that section,
+// so the symbol table never indexes it. Its names must then type as NOTHING: falling through to
+// the object's globals typed `Y` below as the global `Integer`, and `swap-call-arguments` emitted
+// a swap that fails `alc` with AL0133 in both builds.
+describe("buildTypeTable: a split member swallowed by the global var section (R327)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SWALLOWED = `codeunit 50100 "Repro R327"
+{
+    var
+        X: Integer;
+        Y: Integer;
+
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Text): Integer
+#else
+    procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    begin
+        Show(X, Y);
+        exit(X);
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+    end;
+}
+`;
+
+  it("a name in the swallowed member types as nothing, not as the global", () => {
+    expect(typeAt(SWALLOWED, "X")).toBeNull();
+    expect(typeAt(SWALLOWED, "Y")).toBeNull();
+  });
+
+  it("R324: a call to a name a swallowed member also declares is untyped", () => {
+    const src = `codeunit 50100 "Repro R327O"
+{
+    var
+        Glob: Integer;
+
+#if CLEAN27
+    procedure Foo(T: Text): Text
+#else
+    procedure Foo(T: Text): Text
+#endif
+    begin
+        exit(T);
+    end;
+
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Caller(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+}
+`;
+    expect(typeAt(src, "Foo", true)).toBeNull();
+  });
+});
