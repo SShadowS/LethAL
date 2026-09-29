@@ -65,6 +65,18 @@ function parseBaseline(
   return parsed as NormalizedMutant[];
 }
 
+/**
+ * R296: reads `err.stack` once, where the error is made. Bun builds the stack string on the first
+ * read, and if a garbage collection runs before that read, an async-thrown Error's stack comes out
+ * as a bare `Error` plus frames, with no message (oven-sh/bun#34398). Every gate prints
+ * `err.stack ?? err.message`, so on a long live run the per-mutant difference lines were lost.
+ * One read here fixes the string before a later collection can drop the message.
+ */
+function withStack<E extends Error>(err: E): E {
+  void err.stack;
+  return err;
+}
+
 /** Throws when `actual` differs from the committed baseline text. Never writes. */
 function throwOnDiff(
   actual: readonly NormalizedMutant[],
@@ -76,8 +88,10 @@ function throwOnDiff(
   const baseline = parseBaseline(baselineRaw, baselinePath, remedy);
   const diffs = diffMutants(baseline, actual);
   if (diffs.length > 0) {
-    throw new Error(
-      `${label}: per-mutant regression against the committed baseline at ${baselinePath} (${diffs.length} mutant(s) differ):\n${diffs.map((d) => `  - ${d}`).join("\n")}\n${remedy}`,
+    throw withStack(
+      new Error(
+        `${label}: per-mutant regression against the committed baseline at ${baselinePath} (${diffs.length} mutant(s) differ):\n${diffs.map((d) => `  - ${d}`).join("\n")}\n${remedy}`,
+      ),
     );
   }
 }
@@ -194,14 +208,18 @@ export function recordRequested(
 }
 
 function overwriteRefusal(baselinePath: string, label: string): Error {
-  return new Error(
-    `${label}: record mode refuses to overwrite the committed baseline at ${baselinePath}. Recording is one-time: a change needs a new pre-commitment, then the file deleted deliberately, then one record run.`,
+  return withStack(
+    new Error(
+      `${label}: record mode refuses to overwrite the committed baseline at ${baselinePath}. Recording is one-time: a change needs a new pre-commitment, then the file deleted deliberately, then one record run.`,
+    ),
   );
 }
 
 function missingRefusal(baselinePath: string, label: string): Error {
-  return new Error(
-    `${label}: no committed baseline at ${baselinePath}. This gate never records one silently; after a pre-commitment, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the file and commit it.`,
+  return withStack(
+    new Error(
+      `${label}: no committed baseline at ${baselinePath}. This gate never records one silently; after a pre-commitment, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the file and commit it.`,
+    ),
   );
 }
 
