@@ -40,7 +40,7 @@ import { join } from "node:path";
 /** One reader's ruling about one mutant, as it appears in the marks file. */
 export interface EquivalenceMark {
   /**
-   * [[R166]]'s serialized identity — `astHash|codeunitName|procedureName|operatorName|operatorMajor`,
+   * [[R166]]'s serialized identity: `astHash|codeunitName|procedureName|operatorName|operatorMajor`,
    * plus `|<identityOrdinal>` for a twin after the first (R193, R230).
    * Built with `serializeKey(identityKeyOf(entry))` so a mark and a run agree by construction; a
    * second spelling of the same key is how the two would drift apart.
