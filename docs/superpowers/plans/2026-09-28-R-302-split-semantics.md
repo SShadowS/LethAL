@@ -830,3 +830,99 @@ The renumberings are inherent in R193's source-order ordinals: a new same-tuple 
 ### Superseded, kept
 
 Decision 5 ("Live gate: not needed") and its later restatement in r1's corrections, and the pre-commitment's "System Application and BusinessFoundation ... byte-identical" bullet, are labelled SUPERSEDED in place. Their text is kept; the committed rows are unchanged.
+
+---
+
+## ADDENDUM, run 002: the R330 fail-safe (PRE-COMMITMENT, committed before the branch code)
+
+The final review found two regressions on this branch in rare shapes (R330, filed in `5e158e41`).
+In each, `master` emits nothing, and the branch emits a `swap-additive` that fails `alc` with AL0175.
+
+- **I1.** An overload of the same name, wrapped whole in `#if`, is not indexed. So `uniqueProcedure`
+  calls a split member unique, and the call is typed by the split member's return type.
+- **I2.** A plain procedure's local declared in a `#if` var block (R303's shape) is not indexed.
+  So since R322's case-insensitive compare, the local fails to hide a global whose name differs
+  only in case.
+
+The rows committed above are not edited. This addendum only adds.
+
+### The rule: one fail-safe, the same as R327's
+
+A name declared in a `#if` region that the symbol table does not index is UNKNOWN. It gets no type,
+and no typed operator can claim a site that depends on it. It has two uses:
+
+- **Procedures (I1, and master's older plain form).** Every procedure-like declaration of an object
+  counts under its names, wherever the grammar put it: a direct member, a member inside a
+  `preproc_conditional`, or a member swallowed by the global `var` section (R327). The unindexed
+  ones count as `null`. So `uniqueProcedure` answers only when exactly one INDEXED declaration
+  carries the name and no other declaration does. This one walk replaces R327's special case.
+- **Locals and parameters (I2).** A member's header can declare a name inside a `#if` region of
+  its own: a `preproc_conditional_var_block`, or a conditional parameter. Such a name is in the
+  member's `ambiguous` set. So `resolveIdentifierType` and `lookupVar` return `null` for it, before
+  the locals and before the globals. For a split member, this also makes a `#if` block nested inside
+  one arm's header unknown. That is review M6's case, until now read as unconditional for that arm,
+  and it has 0 corpus hits.
+
+Both uses read only where names are DECLARED, never the body.
+
+### Scope decision: run 002 closes R330, plain form included
+
+The guard is a small change: one walk in `buildSymbolTable` and one header walk per member, with no
+`#if` indexing. It covers `master`'s older plain I1 form at no extra cost. So run 002 does both, and
+R330 closes with it.
+
+### Measured on a scratch prototype, then reasoned per row
+
+I measured the effect on a scratch worktree: `$S/proto2`, detached at `c59d2b62` (this branch
+merged with `master`), with the rule applied (`$S/run002-patch.py`). No branch code existed yet.
+The sources are the same as `$S/cap/merged/`, which matched every row above.
+
+| scope | before | with the guard | removals |
+| --- | --- | --- | --- |
+| DC/Cloud (the whole project) | 102603 raw, 97144 deployed | 102603, 97144 | **0**; the capture is byte-identical |
+| BaseApp scratch project | 1568, 1540 | 1568, 1540 | **0** |
+| System Application | 77291, 75832 | 77291, 75832 | **0** |
+| BusinessFoundation | 3639, 3573 | 3639, 3573 | **0** |
+| Every repro above, and the gate target (version 2) | as pre-committed | identical | **0** |
+| All of `BC.History/BaseApp` (`Source` and `Test`, spec generation only) | 1775413 raw specs over 7106 files | the identical spec set | **0** |
+| Every fixture: identity keys and emitted targets | byte-identical to BEFORE | byte-identical | **0** |
+
+Every runner warning (`.err`) is byte-identical too.
+
+**The review's 32 plain same-name pairs** (a direct procedure plus a `#if`-wrapped one of the same
+name, in DC and BaseApp) lose no mutant. No typed-operator site in those corpora reads a call to one
+of those names, so no pair-by-pair list exists to pin. The full-BaseApp row above is the
+measurement that says so. It covers the qualified calls from other objects that the four-file
+scratch project cannot see.
+
+### The rows the guard does remove: three new hand-written repros
+
+These are in `$S/repro/r330-*` and `$S/expect-r002/`. The branch totals are at `c59d2b62`.
+
+| repro | shape | branch (raw, deployed) | expected (raw, deployed) | row |
+| --- | --- | --- | --- | --- |
+| `r330-i1` | a split `Foo(Integer): Integer`; inside `#if X`, a plain `Foo(Text): Text` and `Bar` calling `Foo('x') + Foo('y')` | 5, 5 | **4, 4** | `-` `swap-additive` in `Bar`, key `907a63da28a269ecb3f6fe80dfd511dc0590d35c4e22f0dc6072738bdfddc531\|Repro R330A\|Bar\|lethal.swap-additive\|1` |
+| `r330-i2` | a global `AMT: Integer`; a plain `Bar` whose `#if not CLEAN27` var block declares `Amt: Text`; body `Amt + Amt` | 3, 3 | **2, 2** | `-` `swap-additive` in `Bar`, key `29cb74e25b27b013d70909c2b6d38f4ca2ad28040ac9566879e4f0e634dfa189\|Repro R330B\|Bar\|lethal.swap-additive\|1` |
+| `r330-p1` | `master`'s older plain form: a direct `Foo(Integer): Integer`; inside `#if X`, `Foo(Text): Text` and `Bar` as in `r330-i1` | 5, 5 | **4, 4** | `-` `swap-additive` in `Bar`, key `907a63da28a269ecb3f6fe80dfd511dc0590d35c4e22f0dc6072738bdfddc531\|Repro R330P\|Bar\|lethal.swap-additive\|1` |
+
+**Reasons, from the rule.**
+
+- In `r330-i1` and `r330-p1`, `Foo` has two declarations, one of them unindexed, so no call to `Foo`
+  is typed. `swap-additive` needs both operands typed as numeric.
+- In `r330-i2`, `amt` is in `Bar`'s `ambiguous` set, so `Amt` is unknown and never reaches the
+  global `AMT`.
+- No other row moves: `empty-block`, `return-value` and `void-method-call` need no type.
+
+**Every removal is AL0175, a mutant that does not compile.** Each instrumented project was compiled
+with `alc`, under every subset of its symbols. The logs are `$S/logs/p002-alc-<tool>-<repro>.log`.
+
+| emission | `r330-i1` | `r330-i2` | `r330-p1` |
+| --- | --- | --- | --- |
+| branch at `c59d2b62` | FAIL AL0175 under `[X]` and `[X,Y]`, PASS under `[]` and `[Y]` | FAIL AL0175 under `[]`, PASS under `[CLEAN27]` | FAIL AL0175 under `[X]`, PASS under `[]` |
+| `master` at `9680dad9` | no swap; PASS all 4 | no swap; PASS both | **FAIL AL0175 under `[X]`** (the older plain form); PASS under `[]` |
+| prototype with the guard | no swap; PASS all 4 | no swap; PASS both | no swap; PASS both |
+
+**Checker.** `$S/expect-r002/` is `$S/expect-r2-final/` plus the three files above. Their BEFORE is
+`$S/cap/head002/`, which is `$S/cap/head/` plus the branch captures of the three repros. On the
+prototype, all three pass. The unedited files FAIL against the branch's own captures, each with the
+`-` row not seen.
