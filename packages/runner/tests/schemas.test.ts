@@ -1072,7 +1072,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     ]);
   });
 
-  test("every line of the committed event stream validates, header and one pinned R196 exception excepted", () => {
+  test("every line of the committed event stream validates, header excepted", () => {
     // The header is NOT a RunEvent — the sink writes it itself, and it carries `ndjsonHeader: true`
     // with no `seq` precisely so a consumer can tell the two apart. A schema that accepted it would
     // erase that distinction.
@@ -1090,63 +1090,11 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
 
     for (const [i, line] of lines.slice(1).entries()) {
       const event = JSON.parse(line) as Record<string, unknown>;
-      // R196: seq 5, this file's own `mutation-set-generated` event, is the one pinned exception.
-      // See the dedicated test right below this one for why it is pinned rather than backfilled.
-      if (event.seq === 5) continue;
+      // R211 closed: seq 5 (`mutation-set-generated`) used to be pinned as a known failure because
+      // the stream predated hangCapableCount and excludedByExclude. The R231 re-freeze re-ran the
+      // stage live, so every line, seq 5 included, now carries measured values and must validate.
       expect(conformsTo(streamSchema, event), `line ${i + 2} (${String(event.type)})`).toEqual([]);
     }
-  });
-
-  test("the committed stream's own mutation-set-generated event does NOT validate: pinned, not backfilled (R196)", () => {
-    // Same shape as R157's "OLDER reports are also v2 and do NOT validate", one schema below. This
-    // committed campaign's mutation-set-generated event (seq 5) predates hangCapableCount, added
-    // required in orchestrator.ts and events.ts, while streamSchemaVersion stayed 1 throughout,
-    // because the versioning rule treats an added field as additive. A required added field is not
-    // backward compatible for a VALIDATOR even when it is for a reader, and this line meets that as
-    // a false rejection.
-    //
-    // Deliberately NOT hand-patched to add "hangCapableCount":0. That would write a MEASUREMENT
-    // into a run from 2026-08-16 whose build could not measure it, making an absent count and a
-    // measured zero look alike in the one artifact where they most differ, which is the entire
-    // reason the field is required (see hangCapableCount's own doc comment in events.ts). Making the
-    // field optional instead would reopen the same ambiguity from the other direction. This file has
-    // also been re-frozen four times before, always by a real live re-run and never by hand. The
-    // honest fix is another one of those, tracked as R211, not a one-line edit here.
-    const text = readFileSync(
-      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson"),
-      "utf8",
-    );
-    const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
-    const generated = lines
-      .map((l) => JSON.parse(l) as Record<string, unknown>)
-      .find((e) => e.seq === 5);
-    if (generated === undefined) {
-      throw new Error("expected seq 5 (mutation-set-generated) in rehearsal.events.ndjson");
-    }
-    // Validated against its own branch of the union, not the top-level anyOf directly: a failed
-    // anyOf collapses to one synthetic violation at "$" (see conformsTo's own anyOf handling
-    // above), which would not name the missing field. R157's report-schema test does not hit this
-    // because reportSchema is a single object schema there, not a union.
-    const branches = (streamSchema.anyOf as Schema[] | undefined) ?? [];
-    const branch = branches.find((b) => {
-      const props = b.properties as Record<string, Schema> | undefined;
-      return props?.type?.const === "mutation-set-generated";
-    });
-    if (branch === undefined) {
-      throw new Error("no mutation-set-generated branch in stream-v1.schema.json");
-    }
-    // The FULL violation list, not filtered to "required but absent": a filtered assertion would
-    // leave any OTHER kind of violation on this line checked by neither this test nor the general
-    // per-line loop above, which skips seq 5 outright. Asserting exact equality closes that gap.
-    const violations = conformsTo(streamSchema, generated, branch);
-    // R221 adds the second entry, for the same reason [[R211]] pins the first: this committed
-    // stream predates the field, and BACKFILLING it would be inventing a value the run never
-    // emitted. The list grows by one required-but-absent entry per field added since the file was
-    // recorded, and that growth is the pin working rather than a regression.
-    expect(violations).toEqual([
-      { path: "$.hangCapableCount", problem: "required but absent" },
-      { path: "$.excludedByExclude", problem: "required but absent" },
-    ]);
   });
 
   test("the report schema REFUSES a document it should refuse", () => {

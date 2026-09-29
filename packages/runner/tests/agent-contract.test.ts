@@ -967,7 +967,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       expect(parsed.configPath).toBe("C");
     }
     // "A row with no `artifactId` has `artifactIdAbsent` instead": the report without artifacts.
-    for (const row of explain(JSON.parse(read(GIFT_CARD))).survivors) {
+    // Since the R231 re-freeze the committed report carries its own `artifacts`, so drop them here.
+    const { artifacts: _published, ...unpublished } = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    for (const row of explain(unpublished as SessionReport).survivors) {
       expect(row.artifactId).toBeUndefined();
       expect(row.artifactIdAbsent).toBeDefined();
     }
@@ -990,8 +992,11 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     const mutants = base.mutants.map((m) => {
       const k = `${m.file}|${m.procedureName}`;
       const lines = blocks.get(k) ?? [];
+      // A carried row's reach was not measured in this run, so explain refuses one that carries
+      // reach fields. The re-frozen report (R231) measured reach on every row; drop it from M0038.
+      const { guardReached: _g, reachedBy: _r, ...row } = m;
       return {
-        ...m,
+        ...(m.mutantCode === "M0038" ? row : m),
         batchIndex: LATE.has(m.procedureName) ? 1 : 0,
         gapId: `G${ids.indexOf(k).toString(16).padStart(12, "0")}`,
         blockStartLine: Math.min(...lines),
