@@ -501,15 +501,12 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     const KILLED = mutant("M0003", { astHash: "hash-killed" });
     const KEY_B1 = serializeKey(identityKeyOf(B1));
     const KEY_KILLED = serializeKey(identityKeyOf(KILLED));
-    // Today's `??` key for the trigger row, i.e. the way the RUN-LEVEL list keys it: the procedure
-    // field is "" because `"" ?? triggerName` never reaches `triggerName`. This is R229's BUG, not
-    // the correct identity. R229's fix changes this constant to `serializeKey(identityKeyOf(TRIGGER))`;
-    // a test that reads it as the right key would obstruct that fix.
-    const LEGACY_R229_TRIGGER_KEY = serializeKey({ ...identityKeyOf(TRIGGER), procedureName: "" });
+    // R229: the trigger row is keyed by `identityKeyOf`, whose member is its `triggerName`.
+    const TRIGGER_KEY = serializeKey(identityKeyOf(TRIGGER));
     const STALE_KEY = serializeKey(identityKeyOf(mutant("M0009", { astHash: "hash-gone" })));
     const MARKS = [
       { key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME },
-      { key: LEGACY_R229_TRIGGER_KEY, reason: "R-trg", identityScheme: IDENTITY_SCHEME },
+      { key: TRIGGER_KEY, reason: "R-trg", identityScheme: IDENTITY_SCHEME },
       { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME },
       { key: STALE_KEY, reason: "R-stale", identityScheme: IDENTITY_SCHEME },
     ];
@@ -637,7 +634,8 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
           },
           {
             mutantCode: "M0002",
-            key: "hash-trg|Sales Helper||lethal.remove-assignment|1",
+            // R229 changed this one literal: before it the trigger's member was blank.
+            key: "hash-trg|Sales Helper|OnInsert|lethal.remove-assignment|1",
             reason: "R-trg",
           },
         ],
