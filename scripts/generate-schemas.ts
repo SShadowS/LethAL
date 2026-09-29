@@ -2,7 +2,7 @@
 /**
  * Generate the JSON Schemas for the two BIG output surfaces from their TypeScript declarations.
  *
- *   bun scripts/generate-schemas.ts            # writes schemas/report-v2.schema.json + stream-v1
+ *   bun scripts/generate-schemas.ts            # writes schemas/report-v<REPORT_SCHEMA_VERSION>.schema.json + stream-v1
  *   bun scripts/generate-schemas.ts --check     # exits 1 if a committed schema is stale
  *
  * WHY GENERATED, WHEN THE OTHER TWO ARE HAND-WRITTEN. `explain` (34 leaves) and `doctor` (8) are
@@ -313,11 +313,11 @@ function build(root: string, id: string, title: string, description: string): Sc
 
 const targets = [
   {
-    file: "report-v2.schema.json",
+    file: `report-v${REPORT_SCHEMA_VERSION}.schema.json`,
     schema: pinVersion(
       build(
         "SessionReport",
-        "report-v2.schema.json",
+        `report-v${REPORT_SCHEMA_VERSION}.schema.json`,
         "LethAL session report",
         "The JSON report a run writes with --out. GENERATED from the SessionReport TypeScript declaration by scripts/generate-schemas.ts — edit the type, not this file. It describes the shape THIS build writes: additive fields do not bump schemaVersion, so a report written by an older build of the same version can lack a property this schema requires. Read `validity` before quoting `mutationScore`.",
       ),

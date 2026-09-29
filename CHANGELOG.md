@@ -29,6 +29,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   applied, until you check each mark against a fresh report and add the current `"identityScheme"` at
   the top level. For the same reason, `--skip-known-survivors` skips nothing from a run recorded before this
   version, and `--resume` / `--resume-run` refuse such a run by name.
+- **Report schema v3** (R231): mutant codes restart at `M0001` in every batch, so a bare code named
+  a mutant only inside its batch, and on a multi-batch run a run-level list could point at another
+  batch's row. These lists now hold `<batchIndex>/<mutantCode>` ids (for example `0/M0004`, the id
+  `lethal verify --survivors` takes): `platformArtifactKills.byMechanism[].mutants`,
+  `likelyEquivalentSurvivors.byRisk[].mutants`, `assertionScreen.flaggedMutants`,
+  `assertionScreen.runnerRefusalMutants` and `unplaceableMutants`. `unplaceableMutants` also no
+  longer drops one of two batches' same-numbered mutants. `readerMarkedEquivalent.matched[]` and
+  `.contradicted[]` entries carry `batchIndex` beside `mutantCode`. `survivorsByProcedure` keeps bare
+  codes, since one procedure's mutants are always in one batch. `lethal export` uses the same id, so
+  a multi-batch export no longer repeats mutant ids. `lethal explain` still reads v2 reports, and
+  `schemas/report-v2.schema.json` is frozen beside the new `report-v3.schema.json`.
 
 
 ## [0.1.0-alpha.3] — 2026-08-27

@@ -142,7 +142,7 @@ describe("R230: a twin after the first can be reader-marked, through the real re
 
     const report = await reportWithMark(projectDir, entries, key);
     expect(report.readerMarkedEquivalent).toEqual({
-      matched: [{ mutantCode: second.mutantId, key, reason: "reader ruling" }],
+      matched: [{ batchIndex: 0, mutantCode: second.mutantId, key, reason: "reader ruling" }],
       stale: [],
       contradicted: [],
     });
@@ -195,7 +195,7 @@ describe("R229: a trigger mutant can be reader-marked, through the real report p
     ).toBe(key);
 
     expect(report.readerMarkedEquivalent).toEqual({
-      matched: [{ mutantCode: target.mutantId, key, reason: "reader ruling" }],
+      matched: [{ batchIndex: 0, mutantCode: target.mutantId, key, reason: "reader ruling" }],
       stale: [],
       contradicted: [],
     });

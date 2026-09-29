@@ -80,6 +80,7 @@ const SOURCE = [
 function mutant(over: Partial<MutantOutcome> = {}): MutantOutcome {
   return {
     mutantCode: "M0001",
+    batchIndex: 0,
     file: "src/X.Codeunit.al",
     line: 3,
     startIndex: SOURCE.indexOf("procedure"),
@@ -288,5 +289,105 @@ describe("R184: refusals are carried as Ignored rather than dropped silently", (
 
   test("a report with no refusals declares no such loss, so the line means something", () => {
     expect(lossesFor(report([mutant()])).some((l) => l.includes("refused site"))).toBe(false);
+  });
+});
+
+describe("R231: run-level lists are joined by batch AND code", () => {
+  // Mutant ids restart per batch. Batch 0's M0001 (file A) survived under an operator with no
+  // risk; batch 1's M0001 (file B) survived under a `value-rewrite` operator. A join by bare code
+  // would call file A's mutant likely equivalent too.
+  const A = mutant({ batchIndex: 0, file: "src/A.Codeunit.al" } as never);
+  const B = mutant({
+    batchIndex: 1,
+    file: "src/B.Codeunit.al",
+    operatorName: "lethal.remove-assignment",
+  } as never);
+  const r = report([A, B], {
+    schemaVersion: 3,
+    unplaceableMutants: [],
+    likelyEquivalentSurvivors: {
+      count: 1,
+      byRisk: [{ risk: "value-rewrite", mutants: ["1/M0001"], meaning: "" }],
+    },
+  } as never);
+  const describedIn = async (file: string) => {
+    const { report: out } = await toMutationElements(r, OPTS);
+    const f = out.files[file] as { mutants: { description?: string }[] } | undefined;
+    return f?.mutants[0]?.description ?? "";
+  };
+
+  test("only batch 1's M0001 is described as likely equivalent", async () => {
+    expect(await describedIn("src/B.Codeunit.al")).toMatch(/LIKELY EQUIVALENT/);
+    expect(await describedIn("src/A.Codeunit.al")).not.toMatch(/LIKELY EQUIVALENT/);
+  });
+
+  test("an unplaceable token names only its own batch's mutant", async () => {
+    const both = [
+      mutant({ batchIndex: 0, file: "src/A.Codeunit.al", verdict: "no-coverage" } as never),
+      mutant({ batchIndex: 1, file: "src/B.Codeunit.al", verdict: "no-coverage" } as never),
+    ];
+    const { report: out } = await toMutationElements(
+      report(both, { schemaVersion: 3, unplaceableMutants: ["1/M0001"] } as never),
+      OPTS,
+    );
+    const d = (file: string) =>
+      (out.files[file] as { mutants: { description?: string }[] }).mutants[0]?.description ?? "";
+    expect(d("src/B.Codeunit.al")).toMatch(/R175/);
+    expect(d("src/A.Codeunit.al")).not.toMatch(/R175/);
+  });
+});
+
+describe("R231: exported mutant ids are unique across batches", () => {
+  test("a two-batch export gives each mutant its own id, v3 and archived v2 alike", async () => {
+    // Ids restart per batch, so two batches both hold an M0001. The schema says ids are unique.
+    const rows = [
+      mutant({ batchIndex: 0 } as never),
+      mutant({ batchIndex: 1, operatorName: "lethal.negate-conditional" } as never),
+    ];
+    const idsOf = async (schemaVersion: number) => {
+      const { report: out } = await toMutationElements(
+        report(rows, { schemaVersion, unplaceableMutants: [] } as never),
+        OPTS,
+      );
+      return Object.values(out.files).flatMap((f) =>
+        (f as { mutants: { id: string }[] }).mutants.map((m) => m.id),
+      );
+    };
+    expect(await idsOf(3)).toEqual(["0/M0001", "1/M0001"]);
+    // v2 rows carry `batchIndex` too, so the id is built from the row, never from a v2 list.
+    expect(await idsOf(2)).toEqual(["0/M0001", "1/M0001"]);
+  });
+
+  test("an archived v2 bare list entry naming two rows attaches to NEITHER, and says so", async () => {
+    // v2 wrote bare codes into its lists. When two batches both hold an M0001, the entry cannot
+    // say which one it meant, so attaching it to the first match would be a guess.
+    const rows = [
+      mutant({ batchIndex: 0, file: "src/A.Codeunit.al", verdict: "no-coverage" } as never),
+      mutant({ batchIndex: 1, file: "src/B.Codeunit.al", verdict: "no-coverage" } as never),
+      mutant({ batchIndex: 0, mutantCode: "M0002", file: "src/C.Codeunit.al" } as never),
+    ];
+    const { report: out, losses } = await toMutationElements(
+      report(rows, {
+        schemaVersion: 2,
+        unplaceableMutants: ["M0001"],
+        likelyEquivalentSurvivors: {
+          count: 2,
+          byRisk: [{ risk: "value-rewrite", mutants: ["M0001", "M0002"], meaning: "" }],
+        },
+      } as never),
+      OPTS,
+    );
+    const d = (file: string) =>
+      (out.files[file] as { mutants: { description?: string }[] }).mutants[0]?.description ?? "";
+    expect(d("src/A.Codeunit.al")).not.toMatch(/R175|LIKELY EQUIVALENT/);
+    expect(d("src/B.Codeunit.al")).not.toMatch(/R175|LIKELY EQUIVALENT/);
+    // An unambiguous v2 entry still attaches, so the refusal is per entry, not per report.
+    expect(d("src/C.Codeunit.al")).toMatch(/LIKELY EQUIVALENT/);
+    const warned = losses.filter((l) => l.startsWith("ambiguous-v2-list-entry"));
+    expect(warned).toHaveLength(2);
+    expect(warned.join(" ")).toContain(
+      "unplaceableMutants: M0001 names 2 mutants (0/M0001, 1/M0001)",
+    );
+    expect(warned.join(" ")).toContain("likelyEquivalentSurvivors: M0001 names 2 mutants");
   });
 });

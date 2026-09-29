@@ -396,7 +396,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
       "Sales Post Tests.ValidatePostingRejectsClosed",
     ],
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "staleTestApp": {
     "missingTests": [
       "Sales Regression Tests.LegacyDiscountApplies",

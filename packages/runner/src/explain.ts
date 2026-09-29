@@ -483,8 +483,8 @@ export interface ExplainSurvivorSelection {
 
 export interface ExplainOutput {
   readonly explainSchemaVersion: number;
-  /** The `REPORT_SCHEMA_VERSION` the input declared — always equal to this build's, because
-   *  `assertExplainableReport` refuses anything else. Recorded so the output is self-describing
+  /** The `REPORT_SCHEMA_VERSION` the input declared: 2 or this build's 3, the only versions
+   *  `assertExplainableReport` accepts (R231). Recorded so the output is self-describing
    *  once it has been written to a file and outlived the binary that made it. */
   readonly derivedFromReportSchemaVersion: number;
   readonly contract: ExplainContract;
@@ -603,6 +603,9 @@ function refuse(what: string, got: unknown, closedSet?: ReadonlySet<string>): ne
   );
 }
 
+/** The report versions `assertExplainableReport` accepts. See the R231 note at its check. */
+const EXPLAINABLE_REPORT_VERSIONS: readonly number[] = [2, REPORT_SCHEMA_VERSION];
+
 /**
  * Turns an untrusted value — the parse of a report file — into a `SessionReport`, or throws.
  *
@@ -669,14 +672,17 @@ export function assertExplainableReport(value: unknown): SessionReport {
     refuse("input is not a JSON object", value);
   }
   const record = value as Record<string, unknown>;
-  if (record.schemaVersion !== REPORT_SCHEMA_VERSION) {
+  // R231 ruling 1: v3 changed only the run-level mutant lists (bare codes became
+  // `<batchIndex>/<mutantCode>`), and explain reads none of them, so a v2 report still projects
+  // with the same meanings. A change that makes explain read one of those lists must revisit this.
+  if (!EXPLAINABLE_REPORT_VERSIONS.includes(record.schemaVersion as number)) {
     const why =
       "A REPORT_SCHEMA_VERSION bump means a field was renamed, removed, or changed meaning (v1 -> " +
       "v2 renamed `executionContext` and changed its cardinality), so projecting a report of " +
       "another version would attach this build's meanings to another build's fields — the one " +
       "error a projection must not make.";
     throw new MalformedReportError(
-      `lethal explain: report schemaVersion is ${JSON.stringify(record.schemaVersion)}, but this build explains ${REPORT_SCHEMA_VERSION}. ${why}`,
+      `lethal explain: report schemaVersion is ${JSON.stringify(record.schemaVersion)}, but this build explains ${EXPLAINABLE_REPORT_VERSIONS.join(" and ")}. ${why}`,
     );
   }
   const validity = record.validity;

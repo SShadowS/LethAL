@@ -278,7 +278,8 @@ export type RunEventInput =
       /**
        * R175. WHICH ones, as `mutantId`s. A count tells a reader there is a problem; only the
        * identities tell them which mutants to re-run under coverageMode "none", which is the whole
-       * remedy. Sorted, so a gate can assert on it.
+       * remedy. Sorted, so a gate can assert on it. Bare codes, valid only inside this event's
+       * `batchIndex`: the fold qualifies them as `<batchIndex>/<mutantCode>` (R231).
        */
       readonly unplaceableMutants: readonly string[];
     }

@@ -71,7 +71,7 @@ describe("SessionReport.platformArtifactKills (R72)", () => {
     expect(r.platformArtifactKills?.byMechanism).toEqual([
       {
         mechanism: "write-txn-codeunit-run",
-        mutants: ["M0001"],
+        mutants: ["0/M0001"],
         // Asserted as a substring rather than verbatim so the wording can be improved without a
         // test edit, but the MEASURED fact it exists to state cannot quietly leave it.
         explanation: expect.stringContaining("return value is consumed") as unknown as string,
@@ -160,8 +160,8 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
       "write-txn-codeunit-run",
     ]);
     expect(r.platformArtifactKills?.byMechanism.map((g) => g.mutants)).toEqual([
-      ["M0002", "M0003"],
-      ["M0001"],
+      ["0/M0002", "0/M0003"],
+      ["0/M0001"],
     ]);
   });
 

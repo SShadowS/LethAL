@@ -51,7 +51,7 @@ import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { defaultQuarantineDir, runNamedMutants, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
-import type { MutantOutcome, SessionReport } from "../src/report";
+import { type MutantOutcome, type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import type { PublishedTestApp } from "../src/test-app-publish";
@@ -570,7 +570,8 @@ async function main(): Promise<void> {
       assert.ok(
         les !== undefined &&
           les.count === 1 &&
-          JSON.stringify(les.byRisk.flatMap((g) => g.mutants)) === JSON.stringify([s5b.mutantCode]),
+          JSON.stringify(les.byRisk.flatMap((g) => g.mutants)) ===
+            JSON.stringify([mutantRef(s5b.batchIndex, s5b.mutantCode)]),
         `step 4: likelyEquivalentSurvivors lists S5 only: ${JSON.stringify(les ?? null)}`,
       );
       assert.deepEqual(
