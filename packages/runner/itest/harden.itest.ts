@@ -241,7 +241,9 @@ async function main(): Promise<void> {
 try {
   await main();
 } catch (err) {
-  await emitFailed("harden", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  await emitFailed("harden", err instanceof Error ? err.message : String(err));
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 }

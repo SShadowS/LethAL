@@ -154,7 +154,7 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // Same fixture as bcdev.itest.ts, same coverage mode ("procedure" — see the header comment above),
 // so the same table is expected. NOT hard-coded per-mutant here (unlike tables.itest.ts): which
 // mutant lands on which verdict cannot be known without a live run against this specific
-// environment, and this task is scoped to never perform one — `assertGateBaseline` below is
+// environment, and this task is scoped to never perform one: `assertGateBaseline` below is
 // what pins the per-mutant table down, against the file a deliberate record run wrote.
 const EXPECTED = {
   // MEASURED 2026-08-28 on a restored environment, and no longer inferred. These figures spent
