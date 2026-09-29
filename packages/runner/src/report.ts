@@ -2057,15 +2057,17 @@ const EQUIVALENCE_RISK_BY_OPERATOR: ReadonlyMap<string, string> = new Map(
 
 /**
  * The R166 identity a reader's mark is matched against. ONE definition, used by the per-row
- * `readerMark` and by the run-level `readerMarkedEquivalent`, so the two can never disagree. The
- * `??` is R229's bug (a trigger row's `procedureName` is "", so `triggerName` is never reached);
- * fixing it here fixes both.
+ * `readerMark` and by the run-level `readerMarkedEquivalent`, so the two can never disagree.
+ *
+ * The member is `identityKeyOf`'s rule (selection.ts), `||` and not `??`: a trigger row's
+ * `procedureName` is "", not absent, so `??` never reached `triggerName` and every mark on a
+ * trigger mutant was reported stale (R229).
  */
 function markIdentityOf(m: MutantOutcome): string {
   return serializeKey({
     astHash: m.astHash,
     codeunitName: m.codeunitName,
-    procedureName: m.procedureName ?? m.triggerName ?? "",
+    procedureName: m.procedureName || m.triggerName || "",
     operatorName: m.operatorName,
     operatorMajor: m.operatorMajor,
     ordinal: m.identityOrdinal ?? 0,

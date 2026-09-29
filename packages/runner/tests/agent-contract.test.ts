@@ -1138,9 +1138,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(own).toContain("`reason` is required.");
   });
 
-  test("the R230 limit the doc states is the code's", () => {
-    // A twin after the first serializes with a sixth field, which the marks parser refuses today.
-    // When R230 is fixed this test goes red: then delete the limit from the doc and this test.
+  test("the twin rule the doc states is the code's (R230)", () => {
+    // A twin after the first serializes with its ordinal as a sixth field, and the marks parser
+    // accepts exactly that key.
     const twin = serializeKey({
       astHash: "h",
       codeunitName: "C",
@@ -1149,12 +1149,14 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       operatorMajor: 1,
       ordinal: 2,
     });
-    expect(() =>
+    expect(twin).toBe("h|C|P|o|1|2");
+    expect(
       parseEquivalenceMarks(JSON.stringify({ marks: [{ key: twin, reason: "r" }] }), "t"),
-    ).toThrow(/expected 5/);
+    ).toHaveLength(1);
     const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
     expect(body).toContain("`identityOrdinal`");
-    expect(body).toContain("R230");
+    expect(body).toContain("append `|<identityOrdinal>` as a sixth field");
+    expect(body).not.toContain("R230");
   });
 
   test("verifySchemaVersion is this build's", () => {

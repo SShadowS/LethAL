@@ -495,8 +495,8 @@ mutant after an engine change renumbers its twins (R325). Build the key from the
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
 ```
 
-Use `triggerName` when `procedureName` is empty. **A row with `identityOrdinal` (a twin after the
-first) cannot be marked today, because the marks file accepts only five-field keys (R230).**
+Use `triggerName` when `procedureName` is empty. For a row with `identityOrdinal` (a twin after
+the first), append `|<identityOrdinal>` as a sixth field; a row without it takes no sixth field.
 
 #### Marking notes (guidance)
 

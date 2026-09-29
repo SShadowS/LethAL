@@ -73,6 +73,27 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
     ).toThrow(/expected 5/);
   });
 
+  test("R230: a six-field key loads when the sixth is a positive integer as serializeKey writes it", () => {
+    const five = "aaaa|Sandbox Logic|Bump|lethal.remove-assignment|1";
+    for (const ordinal of ["1", "2", "10", "123"]) {
+      const marks = parseEquivalenceMarks(file([{ key: `${five}|${ordinal}`, reason: "x" }]), "m");
+      expect(marks.map((m) => m.key)).toEqual([`${five}|${ordinal}`]);
+    }
+    // Anything else serializeKey never writes: 0 (a first twin has no sixth field), a leading
+    // zero, a sign, a decimal, a blank, a non-number, and a seventh field.
+    for (const bad of ["0", "01", "+1", "-1", "1.0", "", " 1", "x"]) {
+      expect(() =>
+        parseEquivalenceMarks(file([{ key: `${five}|${bad}`, reason: "x" }]), "m"),
+      ).toThrow(EquivalenceMarksError);
+      expect(() =>
+        parseEquivalenceMarks(file([{ key: `${five}|${bad}`, reason: "x" }]), "m"),
+      ).toThrow(/not a positive integer/);
+    }
+    expect(() => parseEquivalenceMarks(file([{ key: `${five}|1|1`, reason: "x" }]), "m")).toThrow(
+      /has 7 field\(s\), expected 5/,
+    );
+  });
+
   test("a duplicate key is refused rather than last-wins", () => {
     expect(() =>
       parseEquivalenceMarks(

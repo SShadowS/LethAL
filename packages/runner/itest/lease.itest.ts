@@ -146,6 +146,7 @@ import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import type { LethalConfigFile } from "../src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import type { Lease, LeaseTuple } from "../src/lease";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
@@ -1525,7 +1526,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
+  // R346: print the reason before any await, as R332 does, so a kill during the receipt write
+  // cannot hide it.
+  console.error(formatFailure(err));
   await emitFailed("lease", err instanceof Error ? err.message : String(err));
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });
