@@ -37,6 +37,60 @@ describe("R346: formatFailure", () => {
     expect(formatFailure(undefined)).toBe("undefined");
     expect(formatFailure(Object.create(null))).toBe("[object Object]");
   });
+
+  const bare = (message: string, cause?: unknown, name = "Error"): Error => {
+    const e = cause === undefined ? new Error(message) : new Error(message, { cause });
+    e.name = name;
+    e.stack = undefined as unknown as string;
+    return e;
+  };
+
+  test("the cause chain follows the frames, one line per cause", () => {
+    const root = bare("disk full", undefined, "IOError");
+    const mid = bare("cannot write receipt", root);
+    const top = bare("gate failed", mid);
+    top.stack = "Error: gate failed\n    at f (frame-a)";
+    expect(formatFailure(top)).toBe(
+      "Error: gate failed\n    at f (frame-a)\nCaused by: Error: cannot write receipt\nCaused by: IOError: disk full",
+    );
+  });
+
+  test("a non-Error cause is printed as a string, even one String() cannot convert", () => {
+    expect(formatFailure(bare("top", "a plain reason"))).toBe(
+      "Error: top\nCaused by: a plain reason",
+    );
+    expect(formatFailure(bare("top", Object.create(null)))).toBe(
+      "Error: top\nCaused by: [object Object]",
+    );
+  });
+
+  test("a cause cycle ends with one line saying so, and does not loop", () => {
+    const a = bare("a");
+    const b = bare("b", a);
+    a.cause = b;
+    expect(formatFailure(a)).toBe(
+      "Error: a\nCaused by: Error: b\nCaused by: (cycle: this cause was already printed above)",
+    );
+  });
+
+  test("a chain past the bound is cut after 8 causes, with a line saying so", () => {
+    let e = bare("c0");
+    for (let i = 1; i <= 12; i++) e = bare(`c${i}`, e);
+    const lines = formatFailure(e).split("\n");
+    expect(lines).toHaveLength(1 + 8 + 1);
+    expect(lines[8]).toBe("Caused by: Error: c4");
+    expect(lines[9]).toBe("Caused by: (chain cut after 8 causes)");
+  });
+
+  test("a cause getter that throws does not throw out of formatFailure", () => {
+    const e = bare("top");
+    Object.defineProperty(e, "cause", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    expect(formatFailure(e)).toBe("Error: top\nCaused by: (unreadable)");
+  });
 });
 
 describe("R346: a gate failure reaches stderr with its message after a GC", () => {
