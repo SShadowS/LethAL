@@ -640,7 +640,9 @@ describe("R301: a split-header procedure has a coverage span", () => {
     try {
       expect((await readRenamedMemberNames(dir)).size).toBe(0); // no manifest: a hand-built dir
       await writeFile(join(dir, "mutant-manifest.json"), "{ not json");
-      await expect(readRenamedMemberNames(dir)).rejects.toThrow();
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(
+        /mutant-manifest\.json is not valid JSON/,
+      );
       await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ artifactId: "x" }));
       await expect(readRenamedMemberNames(dir)).rejects.toThrow(/no "mutants" array/);
       await writeFile(
@@ -669,5 +671,79 @@ describe("R301: a split-header procedure has a coverage span", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a manifest list names only the member whose own arms carry its first name (R318, re-review N1)", async () => {
+    // r4's shape: `Alpha`/`Beta` (lines 3-13, body 10-12) and `Beta`/`Gamma` (lines 15-25, body
+    // 22-24). The manifest lists only the first member (the second has no mutant). `Bad` makes the
+    // object parse with ERROR, so the tree fallback names nothing and the second member must stay
+    // unnamed rather than take its neighbour's list.
+    const r4 = (tail: string): string => `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Alpha(X: Integer): Integer
+#else
+    procedure Beta(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+#if R318A
+    procedure Beta(X: Integer): Integer
+#else
+    procedure Gamma(X: Integer): Integer
+#endif
+    var
+        L: Integer;
+    begin
+        L := X + 2;
+        exit(L);
+    end;
+${tail}}
+`;
+    const entry = (names: string[]) => ({
+      objectType: "codeunit",
+      codeunitId: 50100,
+      coverageArmNames: names,
+    });
+    const namesAt = async (src: string, mutants: object[]): Promise<(string | undefined)[]> => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-n1-"));
+      try {
+        await writeFile(join(dir, "R.Codeunit.al"), src);
+        await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ mutants }));
+        const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        return [10, 11, 12, 22, 23, 24].map((n) => m.lookup("Codeunit", 50100, n));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    };
+    const broken = r4("\n    procedure Bad()\n    begin\n        X := ;\n    end;\n");
+    expect(wrapRoot(parseAL(broken)).hasError).toBe(true);
+    const u = undefined;
+    // One member listed, object broken: the other member names nobody.
+    expect(await namesAt(broken, [entry(["Alpha"])])).toEqual(["Alpha", "Alpha", "Alpha", u, u, u]);
+    expect(await namesAt(broken, [entry(["Gamma"])])).toEqual([u, u, u, "Gamma", "Gamma", "Gamma"]);
+    // Both listed: each member its own.
+    expect(await namesAt(broken, [entry(["Alpha"]), entry(["Gamma"])])).toEqual([
+      "Alpha",
+      "Alpha",
+      "Alpha",
+      "Gamma",
+      "Gamma",
+      "Gamma",
+    ]);
+    // One member listed, object clean: the other gets its own name from the tree, not the list's.
+    expect(await namesAt(r4(""), [entry(["Alpha"])])).toEqual([
+      "Alpha",
+      "Alpha",
+      "Alpha",
+      "Gamma",
+      "Gamma",
+      "Gamma",
+    ]);
   });
 });

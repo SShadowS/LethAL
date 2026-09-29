@@ -477,7 +477,14 @@ export async function readRenamedMemberNames(dir: string): Promise<RenamedMember
       `line-map: could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `line-map: ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   const mutants =
     typeof parsed === "object" && parsed !== null
       ? (parsed as { mutants?: unknown }).mutants
