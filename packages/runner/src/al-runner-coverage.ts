@@ -315,7 +315,9 @@ export function alRunnerCoverageFrom(
  * SIMPLER than the Cobertura path in the one way that matters: each statement carries `scope`, the
  * PROCEDURE the server itself attributes it to, so nothing has to place a line inside a member.
  * The Cobertura path resolves that through `line-map.ts`, which is correct but is a second opinion
- * about the same source; here the producer answers directly.
+ * about the same source; here the producer answers directly. Except inside a renamed split member
+ * (R318), where the producer's answer is the compiled arm's name and the line map's is the name the
+ * manifest looks up; see `LineMap.renamedMemberAt` for when the line map wins.
  *
  * The multi-object restriction still applies and is NOT relaxed here. Measured on 2.11.0, the
  * server loses a multi-object file exactly as the Cobertura writer does -- given two codeunits in
@@ -338,7 +340,18 @@ export function alRunnerCoverageFromServer(
       // COMPILED, never that this test reached it. Treating it as coverage is [[R63]]'s
       // manufactured coverage.
       if ((st.hits ?? 0) <= 0) continue;
-      const procedure = st.scope;
+      // R318: a statement inside a renamed split member takes the member's coverage name, by
+      // POSITION, instead of `st.scope`, when the line is the member's alone and `st.scope` is one
+      // of its own arm names (`LineMap.renamedMemberAt`). The server names the COMPILED arm, which
+      // the collision rule may have dropped (`r3`, build `[]`: `Choose`) and which in another build
+      // can be another declaration's name (`r4`: `Beta`). A line two declarations share, or a scope
+      // the member does not declare, keeps `st.scope`: that may be the other member's statement
+      // (`r10`: `OtherOnly`, line 12, scope `Other`). Every other statement keeps `st.scope` exactly.
+      const renamed =
+        st.line === undefined
+          ? undefined
+          : index.lineMap.renamedMemberAt(object.objectType, object.objectId, st.line, st.scope);
+      const procedure = renamed ?? st.scope;
       const key = `${object.objectType}:${object.objectId}:${procedure ?? ""}:${st.line ?? -1}`;
       if (seen.has(key)) continue;
       seen.add(key);

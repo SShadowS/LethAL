@@ -70,6 +70,12 @@ interface ObjectLines {
   readonly shared: ReadonlySet<number>;
 }
 
+/**
+ * R318 (pre-flight P8): how many `renamedMemberAt` calls got past the no-renamed-member exit, so a
+ * test can pin that an ordinary object costs one map read per statement and no span search.
+ */
+export const renamedMemberAttempts = { count: 0 };
+
 /** Key for the `(objectType, objectId)` pair. Never the bare id: a table and a codeunit may share
  *  one, which is the bug `6e89948` fixed for the hub's coverage map. */
 function keyOf(objectType: string, objectId: number): string {
@@ -315,6 +321,7 @@ export class LineMap {
   ): string | undefined {
     const entry = this.byObject.get(keyOf(objectType, objectId));
     if (entry === undefined || entry.renamed.length === 0) return undefined;
+    renamedMemberAttempts.count++;
     if (scope === undefined || lineNo <= 0 || entry.shared.has(lineNo)) return undefined;
     const own = scope.toLowerCase();
     for (const p of entry.renamed) {
