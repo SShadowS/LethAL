@@ -559,3 +559,76 @@ Same-session drift control, recorded, not gating:
   stub removed beyond this fix is not attributed here.
 - The p5 phase got about 4 s faster (36 to 32 s), far less than the stub's 13 s.
 - W4's third run (5,068 MB) is above the W4 bound; the verdict is on the median, as committed.
+
+## AMENDMENT 10 (S4.2b gate and S4.3 ceilings)
+
+Measured on the final S4 tree, `5e8a537d` (S4.2a and S4.2c in, S4.2d reverted). Native addon
+sha256 `19f5d477c475df3126791fec516d0a9ed8151f9fd8a1b9d96f3fb425e36aa767`, a release build (the
+build script always passes `--release`) with clang 23.1.2 (`x86_64-pc-windows-msvc`), built at
+`95d31e6a`; `packages/engine/native` and its `Cargo.lock` are unchanged from there to `5e8a537d`.
+BC.History `4d61fc58...`. One heavy run at a time, nothing else heavy on the machine. Every peak is
+`scripts/measure-peak.ts`; every verdict is on the median of 3 runs, as committed. Harness under
+`U:/rust03-s43/`; evidence in `.superpowers/sdd/rust-03/s4-3-report.md`.
+
+### S4.2b: lead F, re-read
+
+One marked W8 run, the same phase markers as S0.2 (a full GC at each marker). At p5: heap capacity
+5,267 MB, heap size 3,037 MB, so **F = 2,230 MB**, against the pre-committed bound of at or below
+2,000 MB: **MISSED**. S4.2b grows no fix inside RUST-03; the miss is recorded here and in the S5
+OUTCOME, and filed as a roadmap item by the controller. The p5 figures, for that item: p5 phase peak
+10,663 MB, p5 post-GC RSS 6,454 MB (so E = 4,209 MB), external memory 1,658 MB, 25,518,099 objects;
+the marked run's whole peak 10,664 MB. For context only: S4.2c's marked run read F at 1,728 MB and
+S4.2d's marked runs at 2,157 (fixed tree, since reverted) and 2,205 (unfixed tree) MB. The listing of
+the marked run is the identity listing below.
+
+### S4.3 ceilings
+
+| workload | peaks MB (3 runs) | median peak MB | ceiling MB | result | median wall s |
+| --- | --- | ---: | ---: | --- | ---: |
+| W2, census over whole BaseApp, one pass | 10,112 / 10,217 / 9,300 | **10,112** | 16,384 | **MET** | 89.63 |
+| W4, product dry-run on the Base Application | 4,549 / 5,001 / 5,045 | **5,001** | 16,384 | **MET** | 493.72 |
+| W8, spec-level identity capture | 11,798 / 11,300 / 11,936 | **11,798** | 16,384 | **MET** | 182.80 |
+| W9, W8's harness with the product manifest writer on | 10,209 / 9,969 / 9,910 | **9,969** | 16,384 | **MET** | 158.56 |
+
+- Every run exits 0. No run crashed.
+- **No W8 memory win is claimed.** The W8 median, 11,798 MB, is above the 8,192 MB a win needs. It
+  is under the ceiling, and it is 5,363 MB below S0's native median (17,161) and 6,049 MB below S0's
+  WASM median (17,847), but a win was pre-committed only at 8,192 MB or below.
+- W4 is judged on W4's own runs, not on W2 or W8. W2 is a census result only and is never a W4 or
+  product-wide result.
+- W9 is judged on W9's own runs. It completes where WASM died at 13.0 GB in `JSON.stringify` (R311).
+- Speed, recorded, not gating: W1 parse 15,051 / 15,378 / 15,435 ms (median **15,378 ms**, 9,620
+  files, 31,135,464 nodes, peak about 934 MB); W2 wall median 89.63 s; W4 wall median 493.72 s.
+  W4's wall is about 104 s above S0's native median (389.99 s); that is recorded, not explained here.
+
+### W9 audit and streaming check
+
+- **Patch audit: PASS**, before any W9 number (`U:/rust03-s43/w9-patch-audit.txt`). The harness
+  differs from product code in `project.ts` only, by four hunks: W8's three SPEC_ONLY switches
+  (they turn off the object-mix refusal, the instrumented AL and its file write, and the reach
+  grain, so rows carry no `reachGrain`), one line printing `W9: deployed <n>` after the rows are built
+  (instrumentation, outside the writer), and the one EXEMPT marker line as the first statement of
+  `writeManifestJson`. With the marker removed, the harness's `writeManifestJson` and its call site
+  are byte-identical to `5e8a537d` (`cmp`, exit 0 on both). W8's NDJSON substitute is not present
+  (`grep -in ndjson` over the harness diff prints nothing). Each W9 run's stderr holds the marker
+  exactly once, naming `<target>\mutant-manifest.json`.
+- **Streaming check: PASS on all 3 W9 manifests.** `@streamparser/json` 0.0.26 (`JSONParser`,
+  `paths: ["$.mutants.*"]`, `keepStack: false`, fed from `fs.createReadStream`), installed only in
+  scratch. Each manifest: 1,512,104,535 bytes, the parser reaches the end with no error and no
+  trailing data, top-level keys `selectorIds`, `artifactId`, `mutants` in that order, 1,687,722 rows
+  equal to the run's own `deployed` 1,687,722, and no `mutant-manifest.json.partial` left. Before
+  BaseApp, the check passed the sandbox-app manifest (19 rows) and failed all five broken copies:
+  truncated by one byte, a comma removed between two rows, a trailing comma after the last row, a bad
+  token `tru`, and an extra `}` appended. The sandbox-app manifest holds no `true`, so the bad token
+  replaced a number (`"identityOrdinal": 0` became `tru`). Truncating the last byte removes only the
+  final newline, which is still valid JSON; the check fails it on its end-of-file test (the product
+  writes `JSON.stringify(...)` plus a newline, so the file must end `\n}\n`), not in the parser.
+
+### Identity
+
+All 4 W8 listings (3 unmarked, 1 marked) are sha256
+eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+`raw 1775366 deployed 1687722 skippedFiles 73`, byte-identical to each other. All 3 W4 outputs are
+sha256 `f31530b0521ddfc15df717586313b2b354ffb3b7f94cd4b1d21e7d8443acd2c9`, 788,619 lines. All 3 W2
+outputs are sha256 `153bac07df02e98f...`, equal to RUST-02's and S3's W2. The harness smoke (the
+`System Application` listing) is byte-identical to S3's. Unchanged throughout.
