@@ -736,16 +736,28 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   const reportSchema = loadSchema("report-v2.schema.json");
   const streamSchema = loadSchema("stream-v1.schema.json");
 
-  test("the committed schemas are what the generator produces from today's types", () => {
-    // The whole guarantee for a generated artifact: edit the type, forget to regenerate, and this
-    // reddens instead of a consumer discovering it.
-    const r = spawnSync("bun", [join(REPO_ROOT, "scripts/generate-schemas.ts"), "--check"], {
-      encoding: "utf8",
-      cwd: REPO_ROOT,
-    });
-    expect(r.stdout + r.stderr).not.toContain("STALE");
-    expect(r.status).toBe(0);
-  });
+  /**
+   * Spawns a real `bun` subprocess, which passes alone in well under a second but can push past
+   * Bun's 5 s default test timeout when something else is loading the machine (a full `bun test`
+   * run, or a live itest at the same time). See HOOK_TIMEOUT_MS in campaign-subcommands.test.ts
+   * (R335) for the measured shape of this failure.
+   */
+  const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
+  test(
+    "the committed schemas are what the generator produces from today's types",
+    () => {
+      // The whole guarantee for a generated artifact: edit the type, forget to regenerate, and this
+      // reddens instead of a consumer discovering it.
+      const r = spawnSync("bun", [join(REPO_ROOT, "scripts/generate-schemas.ts"), "--check"], {
+        encoding: "utf8",
+        cwd: REPO_ROOT,
+      });
+      expect(r.stdout + r.stderr).not.toContain("STALE");
+      expect(r.status).toBe(0);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
   test("each pins its own version constant, and its filename agrees", () => {
     const props = reportSchema.properties as Record<string, Schema>;

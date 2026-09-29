@@ -74,160 +74,201 @@ function run(args: string[]) {
   return spawnSync("bun", [SCRIPT, ...args], { encoding: "utf8" });
 }
 
+/**
+ * Every test below that calls `run(...)` (or `execFileSync("git", ...)`) spawns a real subprocess,
+ * which passes alone in well under a second but can push past Bun's 5 s default test timeout when
+ * something else is loading the machine (a full `bun test` run, or a live itest at the same time).
+ * See HOOK_TIMEOUT_MS in campaign-subcommands.test.ts (R335) for the measured shape of this
+ * failure.
+ */
+const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
 describe("redact-campaign-report", () => {
-  test("replaces the two source fields and NOTHING else", () => {
-    const { path, original } = reportFixture();
-    expect(run([path]).status).toBe(0);
-    const after = JSON.parse(readFileSync(path, "utf8"));
+  test(
+    "replaces the two source fields and NOTHING else",
+    () => {
+      const { path, original } = reportFixture();
+      expect(run([path]).status).toBe(0);
+      const after = JSON.parse(readFileSync(path, "utf8"));
 
-    expect(after.mutants[0].originalText).toBe(MARKER);
-    expect(after.mutants[1].originalText).toBe(MARKER);
-    expect(after.mutants[1].mutatedText).toBe(MARKER);
+      expect(after.mutants[0].originalText).toBe(MARKER);
+      expect(after.mutants[1].originalText).toBe(MARKER);
+      expect(after.mutants[1].mutatedText).toBe(MARKER);
 
-    // Everything a reader needs to check the campaign's numbers against the artifact that produced
-    // them must survive byte-identically. A redactor that quietly widened its scope would destroy
-    // the record it exists to protect, and that is far harder to notice than an unredacted field.
-    for (const [i, before] of (original.mutants as Record<string, unknown>[]).entries()) {
-      for (const key of Object.keys(before)) {
-        if (key === "originalText" || key === "mutatedText") continue;
-        expect(after.mutants[i][key]).toEqual(before[key]);
+      // Everything a reader needs to check the campaign's numbers against the artifact that produced
+      // them must survive byte-identically. A redactor that quietly widened its scope would destroy
+      // the record it exists to protect, and that is far harder to notice than an unredacted field.
+      for (const [i, before] of (original.mutants as Record<string, unknown>[]).entries()) {
+        for (const key of Object.keys(before)) {
+          if (key === "originalText" || key === "mutatedText") continue;
+          expect(after.mutants[i][key]).toEqual(before[key]);
+        }
       }
-    }
-    expect(after.mutationScore).toBe(0.5);
-    expect(after.counts).toEqual({ killed: 1, survived: 1 });
-  });
+      expect(after.mutationScore).toBe(0.5);
+      expect(after.counts).toEqual({ killed: 1, survived: 1 });
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("leaves an EMPTY mutatedText alone — it is meaningful and reveals nothing", () => {
-    // `mutatedText: ""` is a deletion operator's mutation, not a missing field. Stamping a marker
-    // over it would turn a fact into a redaction and make deletions unreadable in the record.
-    const { path } = reportFixture();
-    run([path]);
-    expect(JSON.parse(readFileSync(path, "utf8")).mutants[0].mutatedText).toBe("");
-  });
+  test(
+    "leaves an EMPTY mutatedText alone — it is meaningful and reveals nothing",
+    () => {
+      // `mutatedText: ""` is a deletion operator's mutation, not a missing field. Stamping a marker
+      // over it would turn a fact into a redaction and make deletions unreadable in the record.
+      const { path } = reportFixture();
+      run([path]);
+      expect(JSON.parse(readFileSync(path, "utf8")).mutants[0].mutatedText).toBe("");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("is idempotent — re-running does not re-count or double-mark", () => {
-    const { path } = reportFixture();
-    run([path]);
-    const first = readFileSync(path, "utf8");
-    expect(run([path]).stdout).toContain("0 field(s) redacted");
-    expect(readFileSync(path, "utf8")).toBe(first);
-  });
+  test(
+    "is idempotent — re-running does not re-count or double-mark",
+    () => {
+      const { path } = reportFixture();
+      run([path]);
+      const first = readFileSync(path, "utf8");
+      expect(run([path]).stdout).toContain("0 field(s) redacted");
+      expect(readFileSync(path, "utf8")).toBe(first);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("--check FAILS on an unredacted report", () => {
-    // A check that passes on an unredacted file is worse than no check: it would certify exactly
-    // the state it exists to catch.
-    const { path } = reportFixture();
-    const r = run(["--check", path]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain("UNREDACTED");
-  });
+  test(
+    "--check FAILS on an unredacted report",
+    () => {
+      // A check that passes on an unredacted file is worse than no check: it would certify exactly
+      // the state it exists to catch.
+      const { path } = reportFixture();
+      const r = run(["--check", path]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("UNREDACTED");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("--check PASSES once redacted", () => {
-    const { path } = reportFixture();
-    run([path]);
-    expect(run(["--check", path]).status).toBe(0);
-  });
+  test(
+    "--check PASSES once redacted",
+    () => {
+      const { path } = reportFixture();
+      run([path]);
+      expect(run(["--check", path]).status).toBe(0);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("refuses a file that is not a SessionReport rather than reporting nothing to do", () => {
-    // "nothing to redact" and "could not look" must not produce the same exit code.
-    const dir = mkdtempSync(join(tmpdir(), "lethal-redact-bad-"));
-    const path = join(dir, "not-a-report.json");
-    writeFileSync(path, JSON.stringify({ hello: "world" }), "utf8");
-    const r = run([path]);
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain("not a SessionReport");
-  });
+  test(
+    "refuses a file that is not a SessionReport rather than reporting nothing to do",
+    () => {
+      // "nothing to redact" and "could not look" must not produce the same exit code.
+      const dir = mkdtempSync(join(tmpdir(), "lethal-redact-bad-"));
+      const path = join(dir, "not-a-report.json");
+      writeFileSync(path, JSON.stringify({ hello: "world" }), "utf8");
+      const r = run([path]);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain("not a SessionReport");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("EVERY committed campaign report is clean, and the set is DISCOVERED not listed", () => {
-    // The regression guard that matters: if a future campaign commits a raw report here, this
-    // reddens in `bun test` rather than waiting for someone to notice on GitHub.
-    //
-    // This used to name two paths by hand, and that hand-maintained pair is exactly how the guard
-    // failed: the six reports in `docs/campaign/2026-08-03-do/` predate the 2026-08-09 ruling, were
-    // never swept, and sat unguarded next to the two that were — 1,857 fields of a commercial
-    // product's AL source in a PUBLIC repository, found 2026-08-16 and redacted the same day. A
-    // list cannot cover a file nobody remembered to add to it, so the set is now globbed.
-    const repoRoot = join(import.meta.dir, "..");
+  test(
+    "EVERY committed campaign report is clean, and the set is DISCOVERED not listed",
+    () => {
+      // The regression guard that matters: if a future campaign commits a raw report here, this
+      // reddens in `bun test` rather than waiting for someone to notice on GitHub.
+      //
+      // This used to name two paths by hand, and that hand-maintained pair is exactly how the guard
+      // failed: the six reports in `docs/campaign/2026-08-03-do/` predate the 2026-08-09 ruling, were
+      // never swept, and sat unguarded next to the two that were — 1,857 fields of a commercial
+      // product's AL source in a PUBLIC repository, found 2026-08-16 and redacted the same day. A
+      // list cannot cover a file nobody remembered to add to it, so the set is now globbed.
+      const repoRoot = join(import.meta.dir, "..");
 
-    // WIDENED 2026-08-26. The glob was `docs/campaign/**/*.report.json`, and a measured report
-    // committed at `examples/credit-limit/report.json` on 2026-08-24 was invisible to it for TWO
-    // independent reasons: the wrong directory, and a bare `report.json` that does not match the
-    // `*.report.json` suffix. That one was ours and MIT, so nothing leaked — but the same two
-    // misses would hide a third party's source just as completely, and "a list cannot cover a file
-    // nobody remembered to add" applies to a glob's SCOPE exactly as it applied to the old list.
-    //
-    // So: both roots where a MEASURED report can legitimately land, and any filename containing
-    // `report`. Discovery then narrows by CONTENT rather than by name — a session report is one
-    // with a `mutants` array — because `schemas/report-v2.schema.json` and
-    // `scripts/redact-first-party-reports.json` also contain the word.
-    //
-    // Deliberately OUT of scope: `packages/**/tests/fixtures/**`. `golden-report-before.json` there
-    // is a session report by shape and carries `Codeunit 50100 Sales Helper.al`, which is authored
-    // test input rather than anything measured from a project. It cannot satisfy the first-party
-    // proof (its files exist in no project directory) and redacting it would break the tests that
-    // read it. That is a scope boundary stated here, not a gap nobody noticed.
-    const candidates = [
-      ...new Glob("docs/**/*report*.json").scanSync({ cwd: repoRoot }),
-      ...new Glob("examples/**/*report*.json").scanSync({ cwd: repoRoot }),
-    ];
-    const reports = candidates.filter((p) => {
-      try {
-        const parsed = JSON.parse(readFileSync(join(repoRoot, p), "utf8")) as {
-          mutants?: unknown;
-        };
-        return Array.isArray(parsed.mutants);
-      } catch {
-        return false;
-      }
-    });
+      // WIDENED 2026-08-26. The glob was `docs/campaign/**/*.report.json`, and a measured report
+      // committed at `examples/credit-limit/report.json` on 2026-08-24 was invisible to it for TWO
+      // independent reasons: the wrong directory, and a bare `report.json` that does not match the
+      // `*.report.json` suffix. That one was ours and MIT, so nothing leaked — but the same two
+      // misses would hide a third party's source just as completely, and "a list cannot cover a file
+      // nobody remembered to add" applies to a glob's SCOPE exactly as it applied to the old list.
+      //
+      // So: both roots where a MEASURED report can legitimately land, and any filename containing
+      // `report`. Discovery then narrows by CONTENT rather than by name — a session report is one
+      // with a `mutants` array — because `schemas/report-v2.schema.json` and
+      // `scripts/redact-first-party-reports.json` also contain the word.
+      //
+      // Deliberately OUT of scope: `packages/**/tests/fixtures/**`. `golden-report-before.json` there
+      // is a session report by shape and carries `Codeunit 50100 Sales Helper.al`, which is authored
+      // test input rather than anything measured from a project. It cannot satisfy the first-party
+      // proof (its files exist in no project directory) and redacting it would break the tests that
+      // read it. That is a scope boundary stated here, not a gap nobody noticed.
+      const candidates = [
+        ...new Glob("docs/**/*report*.json").scanSync({ cwd: repoRoot }),
+        ...new Glob("examples/**/*report*.json").scanSync({ cwd: repoRoot }),
+      ];
+      const reports = candidates.filter((p) => {
+        try {
+          const parsed = JSON.parse(readFileSync(join(repoRoot, p), "utf8")) as {
+            mutants?: unknown;
+          };
+          return Array.isArray(parsed.mutants);
+        } catch {
+          return false;
+        }
+      });
 
-    // A glob that stops matching — a directory rename, a changed suffix convention — would make
-    // `--check` pass over NOTHING and read exactly like "everything is clean". That is this
-    // repository's signature bug (CLAUDE.md), so the count is asserted before the content. The
-    // floor is the number committed on 2026-08-16; raise it when a campaign adds reports, and
-    // never lower it to make a red test green.
-    // Raised from 8 to 9 when the scope widened to `examples/`. Never lower it to make a red test
-    // green: a glob that stops matching makes `--check` pass over NOTHING and read exactly like
-    // "everything is clean", which is this repository's signature bug.
-    expect(reports.length).toBeGreaterThanOrEqual(9);
+      // A glob that stops matching — a directory rename, a changed suffix convention — would make
+      // `--check` pass over NOTHING and read exactly like "everything is clean". That is this
+      // repository's signature bug (CLAUDE.md), so the count is asserted before the content. The
+      // floor is the number committed on 2026-08-16; raise it when a campaign adds reports, and
+      // never lower it to make a red test green.
+      // Raised from 8 to 9 when the scope widened to `examples/`. Never lower it to make a red test
+      // green: a glob that stops matching makes `--check` pass over NOTHING and read exactly like
+      // "everything is clean", which is this repository's signature bug.
+      expect(reports.length).toBeGreaterThanOrEqual(9);
 
-    // First-party reports are exempt, and the exemption is PROVEN rather than trusted — see the
-    // test below. Everything else must be redacted.
-    const exempt = new Set(firstParty().map((e) => e.path));
-    const mustBeClean = reports.filter((p) => !exempt.has(p.replace(/\\/g, "/")));
-    expect(mustBeClean.length).toBeGreaterThanOrEqual(8);
+      // First-party reports are exempt, and the exemption is PROVEN rather than trusted — see the
+      // test below. Everything else must be redacted.
+      const exempt = new Set(firstParty().map((e) => e.path));
+      const mustBeClean = reports.filter((p) => !exempt.has(p.replace(/\\/g, "/")));
+      expect(mustBeClean.length).toBeGreaterThanOrEqual(8);
 
-    const r = run(["--check", ...mustBeClean.map((p) => join(repoRoot, p))]);
-    expect(r.status).toBe(0);
-  });
+      const r = run(["--check", ...mustBeClean.map((p) => join(repoRoot, p))]);
+      expect(r.status).toBe(0);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("R178: no exported mutation report is COMMITTED, because it embeds full source", () => {
-    // `lethal export --format mutation-elements` writes a file whose schema REQUIRES each mutated
-    // file's complete source, so the renderer can highlight the span. That is correct for a
-    // project's own code in its own pipeline and is exactly what the 2026-08-09 ruling forbids
-    // publishing for a third party's. The command warns on every run, but a warning is not a
-    // control: this is, because it fails if one is ever committed to this public repository.
-    // R184 STRENGTHENED this from a filename regex to a SHAPE test. It used to filter
-    // `git ls-files` on /mutation-report.*\.(json|html)$/i, so the same dangerous file saved as
-    // `out.json` or `elements.json` passed straight through — and `--out` is the user's to name.
-    // A filename convention is exactly the hand-maintained claim the next test argues is what "let
-    // six reports sit unswept". The predicate is imported rather than redefined, so this guard and
-    // the script's own refusal cannot drift apart.
-    const repoRoot = join(import.meta.dir, "..");
-    const tracked = execFileSync("git", ["ls-files"], { cwd: repoRoot, encoding: "utf8" })
-      .split(/\r?\n/)
-      .filter((f) => f.toLowerCase().endsWith(".json"));
-    const offenders = tracked.filter((f) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(join(repoRoot, f), "utf8"));
-      } catch {
-        return false; // not JSON we can read is not a report we produced
-      }
-      return isMutationElementsExport(parsed);
-    });
-    expect(offenders).toEqual([]);
-  });
+  test(
+    "R178: no exported mutation report is COMMITTED, because it embeds full source",
+    () => {
+      // `lethal export --format mutation-elements` writes a file whose schema REQUIRES each mutated
+      // file's complete source, so the renderer can highlight the span. That is correct for a
+      // project's own code in its own pipeline and is exactly what the 2026-08-09 ruling forbids
+      // publishing for a third party's. The command warns on every run, but a warning is not a
+      // control: this is, because it fails if one is ever committed to this public repository.
+      // R184 STRENGTHENED this from a filename regex to a SHAPE test. It used to filter
+      // `git ls-files` on /mutation-report.*\.(json|html)$/i, so the same dangerous file saved as
+      // `out.json` or `elements.json` passed straight through — and `--out` is the user's to name.
+      // A filename convention is exactly the hand-maintained claim the next test argues is what "let
+      // six reports sit unswept". The predicate is imported rather than redefined, so this guard and
+      // the script's own refusal cannot drift apart.
+      const repoRoot = join(import.meta.dir, "..");
+      const tracked = execFileSync("git", ["ls-files"], { cwd: repoRoot, encoding: "utf8" })
+        .split(/\r?\n/)
+        .filter((f) => f.toLowerCase().endsWith(".json"));
+      const offenders = tracked.filter((f) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(readFileSync(join(repoRoot, f), "utf8"));
+        } catch {
+          return false; // not JSON we can read is not a report we produced
+        }
+        return isMutationElementsExport(parsed);
+      });
+      expect(offenders).toEqual([]);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
   test("the committed-file guard DETECTS one, so the test above is not vacuous", () => {
     // Every tracked .json today is expected to be clean, so the assertion above passes whether the

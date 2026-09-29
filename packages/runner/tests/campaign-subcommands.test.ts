@@ -49,6 +49,19 @@ import { git, makeGitRepo } from "./helpers/git-repo";
 const HOOK_TIMEOUT_MS = 60_000;
 
 /**
+ * Same value as HOOK_TIMEOUT_MS, for the TESTS in this file rather than its hooks. Every test that
+ * spawns `git` or a `lethal campaign` subprocess itself (directly, through `deps.git`, or through
+ * the `run` helper below) passes alone in well under a second, but the exact same spawn can push
+ * past Bun's 5 s default when something else is loading the machine at the same time: a full
+ * `bun test` run (about 4,400 tests) or a live itest. Measured (R335): "each verb ANNOUNCES exactly
+ * which committed paths it verified" timed out at 5,000 ms under a full-suite run, and the
+ * compare-after-freeze test's `git ls-files` was killed at 5,002 to 5,011 ms (exit 143); both pass
+ * alone every time. Generous for the same reason HOOK_TIMEOUT_MS is: there is nothing to gain by
+ * tuning it close to the observed cost.
+ */
+const TEST_TIMEOUT_MS = HOOK_TIMEOUT_MS;
+
+/**
  * The error `p` rejected with — and a FAILURE if it resolved instead. `.catch((e) => e)` alone
  * yields `undefined` for a call that did not throw, and every subsequent `expect` on it then reads
  * as "no match found", which is indistinguishable from a passing assertion in the direction that
@@ -288,99 +301,127 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
     await rm(repo, { recursive: true, force: true });
   });
 
-  test("a tracked, clean file passes", async () => {
-    await expect(assertCampaignPathsCommitted(["docs/clean.md"], deps)).resolves.toBeUndefined();
-  });
+  test(
+    "a tracked, clean file passes",
+    async () => {
+      await expect(assertCampaignPathsCommitted(["docs/clean.md"], deps)).resolves.toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a MODIFIED tracked file is refused, naming it", async () => {
-    await expect(assertCampaignPathsCommitted(["docs/modified.md"], deps)).rejects.toThrow(
-      /docs\/modified\.md/,
-    );
-  });
+  test(
+    "a MODIFIED tracked file is refused, naming it",
+    async () => {
+      await expect(assertCampaignPathsCommitted(["docs/modified.md"], deps)).rejects.toThrow(
+        /docs\/modified\.md/,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("an UNTRACKED file is refused", async () => {
-    await expect(assertCampaignPathsCommitted(["docs/untracked.md"], deps)).rejects.toThrow(
-      /untracked|not committed|not known to git/i,
-    );
-  });
+  test(
+    "an UNTRACKED file is refused",
+    async () => {
+      await expect(assertCampaignPathsCommitted(["docs/untracked.md"], deps)).rejects.toThrow(
+        /untracked|not committed|not known to git/i,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a STAGED-ONLY file is refused — `git add` is not a commit", async () => {
-    // Staged-only is the one category in this module's header claim that reaches `assertCommitted`
-    // itself rather than being stopped by an earlier check, so measure WHICH layer catches it:
-    // the file exists, and `ls-files` DOES list it (a staged path is in the index), so both
-    // pre-checks pass and it is the porcelain status that refuses.
-    const echo = await deps.git([
-      "--no-optional-locks",
-      "--literal-pathspecs",
-      "ls-files",
-      "-z",
-      "--",
-      "docs/staged.md",
-    ]);
-    expect(echo.stdout).toBe("docs/staged.md\0"); // tracked, so the pre-checks let it through
+  test(
+    "a STAGED-ONLY file is refused — `git add` is not a commit",
+    async () => {
+      // Staged-only is the one category in this module's header claim that reaches `assertCommitted`
+      // itself rather than being stopped by an earlier check, so measure WHICH layer catches it:
+      // the file exists, and `ls-files` DOES list it (a staged path is in the index), so both
+      // pre-checks pass and it is the porcelain status that refuses.
+      const echo = await deps.git([
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "ls-files",
+        "-z",
+        "--",
+        "docs/staged.md",
+      ]);
+      expect(echo.stdout).toBe("docs/staged.md\0"); // tracked, so the pre-checks let it through
 
-    const err = await refusalFrom(assertCampaignPathsCommitted(["docs/staged.md"], deps));
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    // The REAL porcelain code git produced, carried through the -z join un-mangled.
-    expect(err.message).toContain('"A  docs/staged.md"');
-    // ... and the rule's own sentence, which names this exact case.
-    expect(err.message).toContain("never staged or edited after seeing the results");
-    expect((err as UncommittedPathError).paths).toEqual(["docs/staged.md"]);
-  });
+      const err = await refusalFrom(assertCampaignPathsCommitted(["docs/staged.md"], deps));
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      // The REAL porcelain code git produced, carried through the -z join un-mangled.
+      expect(err.message).toContain('"A  docs/staged.md"');
+      // ... and the rule's own sentence, which names this exact case.
+      expect(err.message).toContain("never staged or edited after seeing the results");
+      expect((err as UncommittedPathError).paths).toEqual(["docs/staged.md"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a pre-commitment that DOES NOT EXIST is refused — git itself calls it clean", async () => {
-    // The measurement this guard exists for. git answers "nothing to report", exit 0 — which
-    // `assertCommitted` reads as clean, i.e. a missing pre-commitment would PASS the gate.
-    const raw = await deps.git([
-      "--no-optional-locks",
-      "--literal-pathspecs",
-      "status",
-      "--porcelain",
-      "-z",
-      "--",
-      "docs/never-written.md",
-    ]);
-    expect(raw.code).toBe(0);
-    expect(raw.stdout).toBe("");
+  test(
+    "a pre-commitment that DOES NOT EXIST is refused — git itself calls it clean",
+    async () => {
+      // The measurement this guard exists for. git answers "nothing to report", exit 0 — which
+      // `assertCommitted` reads as clean, i.e. a missing pre-commitment would PASS the gate.
+      const raw = await deps.git([
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "status",
+        "--porcelain",
+        "-z",
+        "--",
+        "docs/never-written.md",
+      ]);
+      expect(raw.code).toBe(0);
+      expect(raw.stdout).toBe("");
 
-    await expect(assertCampaignPathsCommitted(["docs/never-written.md"], deps)).rejects.toThrow(
-      /does not exist/i,
-    );
-  });
+      await expect(assertCampaignPathsCommitted(["docs/never-written.md"], deps)).rejects.toThrow(
+        /does not exist/i,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a GITIGNORED, never-committed file is refused — git says nothing about it either", async () => {
-    const raw = await deps.git([
-      "--no-optional-locks",
-      "--literal-pathspecs",
-      "status",
-      "--porcelain",
-      "-z",
-      "--",
-      "docs/ignored.md",
-    ]);
-    expect(raw.code).toBe(0);
-    expect(raw.stdout).toBe(""); // it EXISTS and is dirty in every human sense; git is silent
+  test(
+    "a GITIGNORED, never-committed file is refused — git says nothing about it either",
+    async () => {
+      const raw = await deps.git([
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "status",
+        "--porcelain",
+        "-z",
+        "--",
+        "docs/ignored.md",
+      ]);
+      expect(raw.code).toBe(0);
+      expect(raw.stdout).toBe(""); // it EXISTS and is dirty in every human sense; git is silent
 
-    await expect(assertCampaignPathsCommitted(["docs/ignored.md"], deps)).rejects.toThrow(
-      /not known to git|untracked/i,
-    );
-  });
+      await expect(assertCampaignPathsCommitted(["docs/ignored.md"], deps)).rejects.toThrow(
+        /not known to git|untracked/i,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a whitespace-only path is refused — git exits 0 and reports nothing for it", async () => {
-    const raw = await deps.git([
-      "--no-optional-locks",
-      "--literal-pathspecs",
-      "status",
-      "--porcelain",
-      "-z",
-      "--",
-      "   ",
-    ]);
-    expect(raw.code).toBe(0);
-    expect(raw.stdout).toBe("");
+  test(
+    "a whitespace-only path is refused — git exits 0 and reports nothing for it",
+    async () => {
+      const raw = await deps.git([
+        "--no-optional-locks",
+        "--literal-pathspecs",
+        "status",
+        "--porcelain",
+        "-z",
+        "--",
+        "   ",
+      ]);
+      expect(raw.code).toBe(0);
+      expect(raw.stdout).toBe("");
 
-    await expect(assertCampaignPathsCommitted(["   "], deps)).rejects.toThrow(/blank|empty/i);
-  });
+      await expect(assertCampaignPathsCommitted(["   "], deps)).rejects.toThrow(/blank|empty/i);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test("an empty-string path is refused", async () => {
     await expect(assertCampaignPathsCommitted([""], deps)).rejects.toThrow(/blank|empty/i);
@@ -390,50 +431,68 @@ describe("assertCampaignPathsCommitted — the wiring assertCommitted trusts", (
     await expect(assertCampaignPathsCommitted([], deps)).rejects.toThrow(/empty paths array/i);
   });
 
-  test("EVERY dirty path is named in ONE refusal", async () => {
-    const err = await refusalFrom(
-      assertCampaignPathsCommitted(["docs/modified.md", "docs/clean.md", "docs/café.md"], deps),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect(err.message).toContain("docs/modified.md");
-    expect(err.message).toContain("docs/café.md");
-    expect((err as UncommittedPathError).paths).toHaveLength(2);
-  });
+  test(
+    "EVERY dirty path is named in ONE refusal",
+    async () => {
+      const err = await refusalFrom(
+        assertCampaignPathsCommitted(["docs/modified.md", "docs/clean.md", "docs/café.md"], deps),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect(err.message).toContain("docs/modified.md");
+      expect(err.message).toContain("docs/café.md");
+      expect((err as UncommittedPathError).paths).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a path with a SPACE is one pathspec, not two — clean passes, dirty is refused by full name", async () => {
-    // A shell-string invocation would split this into `docs/with` and `space.md`: two pathspecs,
-    // neither of which exists, and git would answer "nothing to report" for both — a false PASS on
-    // an edited pre-commitment.
-    await expect(
-      assertCampaignPathsCommitted(["docs/clean space.md"], deps),
-    ).resolves.toBeUndefined();
-    await expect(assertCampaignPathsCommitted(["docs/with space.md"], deps)).rejects.toThrow(
-      /docs\/with space\.md/,
-    );
-  });
+  test(
+    "a path with a SPACE is one pathspec, not two — clean passes, dirty is refused by full name",
+    async () => {
+      // A shell-string invocation would split this into `docs/with` and `space.md`: two pathspecs,
+      // neither of which exists, and git would answer "nothing to report" for both — a false PASS on
+      // an edited pre-commitment.
+      await expect(
+        assertCampaignPathsCommitted(["docs/clean space.md"], deps),
+      ).resolves.toBeUndefined();
+      await expect(assertCampaignPathsCommitted(["docs/with space.md"], deps)).rejects.toThrow(
+        /docs\/with space\.md/,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a filename holding glob metacharacters is matched LITERALLY, not expanded", async () => {
-    // Measured: WITHOUT `--literal-pathspecs`, `git ls-files -- 'docs/[ab]tricky.md'` returns TWO
-    // paths — the file itself AND `docs/atricky.md`, which is clean. The decoy is committed clean
-    // on purpose: it is what a glob-expanded pathspec would report on instead.
-    await expect(assertCampaignPathsCommitted(["docs/atricky.md"], deps)).resolves.toBeUndefined();
-    const err = await refusalFrom(assertCampaignPathsCommitted(["docs/[ab]tricky.md"], deps));
-    // The CLASS is the discriminator, not just the fact of a refusal. Dropping `--literal-pathspecs`
-    // makes `ls-files` resolve this pathspec to TWO files, and the echo check then refuses it as a
-    // `CampaignGitInvocationError` — also a refusal, and also carrying this filename in its message,
-    // so asserting only "it threw naming the file" would stay green with the flag removed.
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect(err).not.toBeInstanceOf(CampaignGitInvocationError);
-    expect(err.message).toContain("[ab]tricky.md");
-  });
+  test(
+    "a filename holding glob metacharacters is matched LITERALLY, not expanded",
+    async () => {
+      // Measured: WITHOUT `--literal-pathspecs`, `git ls-files -- 'docs/[ab]tricky.md'` returns TWO
+      // paths — the file itself AND `docs/atricky.md`, which is clean. The decoy is committed clean
+      // on purpose: it is what a glob-expanded pathspec would report on instead.
+      await expect(
+        assertCampaignPathsCommitted(["docs/atricky.md"], deps),
+      ).resolves.toBeUndefined();
+      const err = await refusalFrom(assertCampaignPathsCommitted(["docs/[ab]tricky.md"], deps));
+      // The CLASS is the discriminator, not just the fact of a refusal. Dropping `--literal-pathspecs`
+      // makes `ls-files` resolve this pathspec to TWO files, and the echo check then refuses it as a
+      // `CampaignGitInvocationError` — also a refusal, and also carrying this filename in its message,
+      // so asserting only "it threw naming the file" would stay green with the flag removed.
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect(err).not.toBeInstanceOf(CampaignGitInvocationError);
+      expect(err.message).toContain("[ab]tricky.md");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a non-ASCII path is named UNQUOTED in the refusal", async () => {
-    // Default `core.quotePath` renders this as `"docs/caf\303\251.md"` — a different string than
-    // the one the caller passed, and one no operator can grep for. `-z` never quotes.
-    const err = await refusalFrom(assertCampaignPathsCommitted(["docs/café.md"], deps));
-    expect(err.message).toContain("docs/café.md");
-    expect(err.message).not.toContain("\\303");
-  });
+  test(
+    "a non-ASCII path is named UNQUOTED in the refusal",
+    async () => {
+      // Default `core.quotePath` renders this as `"docs/caf\303\251.md"` — a different string than
+      // the one the caller passed, and one no operator can grep for. `-z` never quotes.
+      const err = await refusalFrom(assertCampaignPathsCommitted(["docs/café.md"], deps));
+      expect(err.message).toContain("docs/café.md");
+      expect(err.message).not.toContain("\\303");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test("an absolute path is refused — this gate speaks repo-relative paths only", async () => {
     await expect(assertCampaignPathsCommitted([join(repo, "docs/clean.md")], deps)).rejects.toThrow(
@@ -579,166 +638,221 @@ describe("lethal campaign freeze | anchors | compare", () => {
 
   // ---- freeze -------------------------------------------------------------------------------
 
-  test("freeze refuses when the pre-commitment is UNCOMMITTED, and writes nothing", async () => {
-    await expect(
-      runCampaignFreeze({
+  test(
+    "freeze refuses when the pre-commitment is UNCOMMITTED, and writes nothing",
+    async () => {
+      await expect(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-untracked",
+          reportPath,
+          expectedMutantCount: 2,
+        }),
+      ).rejects.toThrow(/precommit/);
+      // The refusal has to come BEFORE any records-directory write: `assertMatchesBaseline`
+      // self-records when the baseline file is absent, so a freeze that ran first and refused second
+      // would have minted `stage-untracked.baseline.json` from the very run it then rejected.
+      const written = (await readdir(recordsDir)).filter((f) => f.startsWith("stage-untracked."));
+      expect(written).toEqual(["stage-untracked.precommit.md"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "freeze refuses when the pre-commitment is DIRTY",
+    async () => {
+      await expect(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-dirty",
+          reportPath,
+          expectedMutantCount: 2,
+        }),
+      ).rejects.toThrow(/stage-dirty\.precommit\.md/);
+      const written = (await readdir(recordsDir)).filter((f) => f.startsWith("stage-dirty."));
+      expect(written).toEqual(["stage-dirty.precommit.md"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "freeze archives the report and the per-mutant baseline when everything is committed",
+    async () => {
+      const code = await runCampaignFreeze({
+        manifestPath,
+        stage: "stage-freeze",
+        reportPath,
+        expectedMutantCount: 2,
+      });
+      expect(code).toBe(0);
+      const written = (await readdir(recordsDir))
+        .filter((f) => f.startsWith("stage-freeze."))
+        .sort();
+      expect(written).toEqual([
+        "stage-freeze.baseline.json",
+        "stage-freeze.precommit.md",
+        "stage-freeze.report.json",
+      ]);
+      const archived = JSON.parse(
+        await readFile(join(recordsDir, "stage-freeze.report.json"), "utf8"),
+      ) as SessionReport;
+      expect(archived.mutants).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "freeze refuses when --expect-mutants disagrees with the COMMITTED anchor count",
+    async () => {
+      // Cardinality alone cannot catch this: the report really does hold 3 mutants, so `3` passes
+      // `assertCardinality`. What it contradicts is the number pre-committed BEFORE the run.
+      await expect(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-crosscheck",
+          reportPath: threeMutantReportPath,
+          expectedMutantCount: 3,
+        }),
+      ).rejects.toThrow(/pre-committed .*2.*3|expectedMutantCount/);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "freeze checks git BEFORE anything else",
+    async () => {
+      const order: string[] = [];
+      await runCampaignFreeze({
         manifestPath,
         stage: "stage-untracked",
         reportPath,
         expectedMutantCount: 2,
-      }),
-    ).rejects.toThrow(/precommit/);
-    // The refusal has to come BEFORE any records-directory write: `assertMatchesBaseline`
-    // self-records when the baseline file is absent, so a freeze that ran first and refused second
-    // would have minted `stage-untracked.baseline.json` from the very run it then rejected.
-    const written = (await readdir(recordsDir)).filter((f) => f.startsWith("stage-untracked."));
-    expect(written).toEqual(["stage-untracked.precommit.md"]);
-  });
-
-  test("freeze refuses when the pre-commitment is DIRTY", async () => {
-    await expect(
-      runCampaignFreeze({ manifestPath, stage: "stage-dirty", reportPath, expectedMutantCount: 2 }),
-    ).rejects.toThrow(/stage-dirty\.precommit\.md/);
-    const written = (await readdir(recordsDir)).filter((f) => f.startsWith("stage-dirty."));
-    expect(written).toEqual(["stage-dirty.precommit.md"]);
-  });
-
-  test("freeze archives the report and the per-mutant baseline when everything is committed", async () => {
-    const code = await runCampaignFreeze({
-      manifestPath,
-      stage: "stage-freeze",
-      reportPath,
-      expectedMutantCount: 2,
-    });
-    expect(code).toBe(0);
-    const written = (await readdir(recordsDir)).filter((f) => f.startsWith("stage-freeze.")).sort();
-    expect(written).toEqual([
-      "stage-freeze.baseline.json",
-      "stage-freeze.precommit.md",
-      "stage-freeze.report.json",
-    ]);
-    const archived = JSON.parse(
-      await readFile(join(recordsDir, "stage-freeze.report.json"), "utf8"),
-    ) as SessionReport;
-    expect(archived.mutants).toHaveLength(2);
-  });
-
-  test("freeze refuses when --expect-mutants disagrees with the COMMITTED anchor count", async () => {
-    // Cardinality alone cannot catch this: the report really does hold 3 mutants, so `3` passes
-    // `assertCardinality`. What it contradicts is the number pre-committed BEFORE the run.
-    await expect(
-      runCampaignFreeze({
-        manifestPath,
-        stage: "stage-crosscheck",
-        reportPath: threeMutantReportPath,
-        expectedMutantCount: 3,
-      }),
-    ).rejects.toThrow(/pre-committed .*2.*3|expectedMutantCount/);
-  });
-
-  test("freeze checks git BEFORE anything else", async () => {
-    const order: string[] = [];
-    await runCampaignFreeze({
-      manifestPath,
-      stage: "stage-untracked",
-      reportPath,
-      expectedMutantCount: 2,
-      onStep: (s) => order.push(s),
-    }).catch(() => {});
-    expect(order[0]).toBe("assert-committed");
-  });
+        onStep: (s) => order.push(s),
+      }).catch(() => {});
+      expect(order[0]).toBe("assert-committed");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   // ---- anchors ------------------------------------------------------------------------------
 
-  test("campaign anchors returns 0 when every anchor passes", async () => {
-    const lines: string[] = [];
-    const code = await runCampaignAnchors({
-      manifestPath,
-      stage: "stage-ok",
-      reportPath,
-      log: (l) => lines.push(l),
-    });
-    expect(code).toBe(0);
-    expect(lines.join("\n")).toContain("PASS coverage-location");
-  });
+  test(
+    "campaign anchors returns 0 when every anchor passes",
+    async () => {
+      const lines: string[] = [];
+      const code = await runCampaignAnchors({
+        manifestPath,
+        stage: "stage-ok",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toContain("PASS coverage-location");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("campaign anchors exits non-zero when an anchor fails", async () => {
-    const lines: string[] = [];
-    const code = await runCampaignAnchors({
-      manifestPath,
-      stage: "stage-fail",
-      reportPath,
-      log: (l) => lines.push(l),
-    });
-    expect(code).not.toBe(0);
-    expect(lines.join("\n")).toContain("FAIL coverage-location");
-  });
+  test(
+    "campaign anchors exits non-zero when an anchor fails",
+    async () => {
+      const lines: string[] = [];
+      const code = await runCampaignAnchors({
+        manifestPath,
+        stage: "stage-fail",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(code).not.toBe(0);
+      expect(lines.join("\n")).toContain("FAIL coverage-location");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("campaign anchors asserts cardinality BEFORE reading any anchor", async () => {
-    // `assertMatchesBaseline` self-records when the baseline file is absent, so a cardinality check
-    // running second would freeze a truncated report and then compare it against itself. The git
-    // check comes first of all (the brief's own "before doing anything else"), so what is pinned
-    // here is: cardinality is the first step that TOUCHES THE REPORT, and it precedes every anchor.
-    const order: string[] = [];
-    await runCampaignAnchors({
-      manifestPath,
-      stage: "stage-ok",
-      reportPath,
-      onStep: (s) => order.push(s),
-    }).catch(() => {});
-    expect(order[0]).toBe("assert-committed");
-    expect(order[1]).toBe("cardinality");
-    expect(order.indexOf("cardinality")).toBeLessThan(order.indexOf("anchors"));
-    expect(order.indexOf("anchors")).toBeGreaterThan(-1);
-  });
+  test(
+    "campaign anchors asserts cardinality BEFORE reading any anchor",
+    async () => {
+      // `assertMatchesBaseline` self-records when the baseline file is absent, so a cardinality check
+      // running second would freeze a truncated report and then compare it against itself. The git
+      // check comes first of all (the brief's own "before doing anything else"), so what is pinned
+      // here is: cardinality is the first step that TOUCHES THE REPORT, and it precedes every anchor.
+      const order: string[] = [];
+      await runCampaignAnchors({
+        manifestPath,
+        stage: "stage-ok",
+        reportPath,
+        onStep: (s) => order.push(s),
+      }).catch(() => {});
+      expect(order[0]).toBe("assert-committed");
+      expect(order[1]).toBe("cardinality");
+      expect(order.indexOf("cardinality")).toBeLessThan(order.indexOf("anchors"));
+      expect(order.indexOf("anchors")).toBeGreaterThan(-1);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("campaign anchors refuses when the ANCHOR CONFIG is uncommitted, precommit clean", async () => {
-    // Fix round 1, Important 2: this used to point at `stage-untracked`, whose PRECOMMIT is
-    // untracked and whose anchors.json does not exist at all — so it stayed green whichever of the
-    // two paths was dropped, and did not test what it names. `stage-anchorsuntracked` has a
-    // committed, clean precommit and an untracked anchors.json, so the only thing that can refuse
-    // it is the anchor config being checked. `paths` pins that exactly.
-    const err = await refusalFrom(
-      runCampaignAnchors({ manifestPath, stage: "stage-anchorsuntracked", reportPath }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual([
-      rec("stage-anchorsuntracked.anchors.json"),
-    ]);
-  });
+  test(
+    "campaign anchors refuses when the ANCHOR CONFIG is uncommitted, precommit clean",
+    async () => {
+      // Fix round 1, Important 2: this used to point at `stage-untracked`, whose PRECOMMIT is
+      // untracked and whose anchors.json does not exist at all — so it stayed green whichever of the
+      // two paths was dropped, and did not test what it names. `stage-anchorsuntracked` has a
+      // committed, clean precommit and an untracked anchors.json, so the only thing that can refuse
+      // it is the anchor config being checked. `paths` pins that exactly.
+      const err = await refusalFrom(
+        runCampaignAnchors({ manifestPath, stage: "stage-anchorsuntracked", reportPath }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual([
+        rec("stage-anchorsuntracked.anchors.json"),
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("campaign anchors throws on a cardinality mismatch rather than reporting a pass", async () => {
-    await expect(
-      runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath: threeMutantReportPath }),
-    ).rejects.toThrow(/cardinality|expected 2, got 3/);
-  });
+  test(
+    "campaign anchors throws on a cardinality mismatch rather than reporting a pass",
+    async () => {
+      await expect(
+        runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath: threeMutantReportPath }),
+      ).rejects.toThrow(/cardinality|expected 2, got 3/);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   // ---- compare ------------------------------------------------------------------------------
 
-  test("compare returns 0 when the report matches the committed baseline", async () => {
-    const lines: string[] = [];
-    const code = await runCampaignCompare({
-      manifestPath,
-      stage: "stage-cmp",
-      reportPath,
-      log: (l) => lines.push(l),
-    });
-    expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/identical|no per-mutant difference/i);
-  });
+  test(
+    "compare returns 0 when the report matches the committed baseline",
+    async () => {
+      const lines: string[] = [];
+      const code = await runCampaignCompare({
+        manifestPath,
+        stage: "stage-cmp",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toMatch(/identical|no per-mutant difference/i);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("compare returns non-zero and NAMES the mutant when a verdict differs", async () => {
-    const lines: string[] = [];
-    const code = await runCampaignCompare({
-      manifestPath,
-      stage: "stage-cmp",
-      reportPath: changedReportPath,
-      log: (l) => lines.push(l),
-    });
-    expect(code).not.toBe(0);
-    expect(lines.join("\n")).toContain("hash-M0002");
-    expect(lines.join("\n")).toContain("survived");
-  });
+  test(
+    "compare returns non-zero and NAMES the mutant when a verdict differs",
+    async () => {
+      const lines: string[] = [];
+      const code = await runCampaignCompare({
+        manifestPath,
+        stage: "stage-cmp",
+        reportPath: changedReportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(code).not.toBe(0);
+      expect(lines.join("\n")).toContain("hash-M0002");
+      expect(lines.join("\n")).toContain("survived");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   test("compare REFUSES when the committed baseline is absent — it never records one", async () => {
     // The difference between `compare` and `freeze`: `assertMatchesBaseline` mints a baseline when
@@ -761,11 +875,15 @@ describe("lethal campaign freeze | anchors | compare", () => {
     expect(existsSync(baselinePath)).toBe(false);
   });
 
-  test("compare refuses a report that is not the committed baseline's size", async () => {
-    await expect(
-      runCampaignCompare({ manifestPath, stage: "stage-cmp", reportPath: threeMutantReportPath }),
-    ).rejects.toThrow(/expected 2, got 3/);
-  });
+  test(
+    "compare refuses a report that is not the committed baseline's size",
+    async () => {
+      await expect(
+        runCampaignCompare({ manifestPath, stage: "stage-cmp", reportPath: threeMutantReportPath }),
+      ).rejects.toThrow(/expected 2, got 3/);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   // ---- WHICH paths each verb checks (fix round 1, Important 1) --------------------------------
   //
@@ -778,89 +896,113 @@ describe("lethal campaign freeze | anchors | compare", () => {
   // Two independent pins per verb: the announced list (exact), and a stage whose PRE-COMMITMENT is
   // committed and clean so the only file that can refuse it is the other one.
 
-  test("each verb ANNOUNCES exactly which committed paths it verified", async () => {
-    const freezeLines: string[] = [];
-    await runCampaignFreeze({
-      manifestPath,
-      stage: "stage-full",
-      reportPath,
-      expectedMutantCount: 2,
-      log: (l) => freezeLines.push(l),
-    });
-    expect(freezeLines[0]).toBe(
-      `[campaign] fixture-campaign-77: 4 committed path(s) verified — campaign.json, ${rec("stage-full.precommit.md")}, ${rec("stage-full.anchors.json")}, ${rec("stage-full.baseline.json")}`,
-    );
-
-    const anchorLines: string[] = [];
-    await runCampaignAnchors({
-      manifestPath,
-      stage: "stage-ok",
-      reportPath,
-      log: (l) => anchorLines.push(l),
-    });
-    expect(anchorLines[0]).toBe(
-      `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("stage-ok.precommit.md")}, ${rec("stage-ok.anchors.json")}`,
-    );
-
-    const compareLines: string[] = [];
-    await runCampaignCompare({
-      manifestPath,
-      stage: "stage-cmp",
-      reportPath,
-      log: (l) => compareLines.push(l),
-    });
-    expect(compareLines[0]).toBe(
-      `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("stage-cmp.precommit.md")}, ${rec("stage-cmp.baseline.json")}`,
-    );
-  });
-
-  test("freeze checks the stage's ANCHOR CONFIG, not just its pre-commitment", async () => {
-    // `--expect-mutants` reads this file and treats ITS count as the pre-commitment. Unchecked, the
-    // cross-check compares a number typed on the command line against a file that could have been
-    // written after the run — which is the thing the cross-check exists to prevent.
-    const err = await refusalFrom(
-      runCampaignFreeze({
+  test(
+    "each verb ANNOUNCES exactly which committed paths it verified",
+    async () => {
+      const freezeLines: string[] = [];
+      await runCampaignFreeze({
         manifestPath,
-        stage: "stage-dirtyanchors",
+        stage: "stage-full",
         reportPath,
         expectedMutantCount: 2,
-      }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtyanchors.anchors.json")]);
-  });
+        log: (l) => freezeLines.push(l),
+      });
+      expect(freezeLines[0]).toBe(
+        `[campaign] fixture-campaign-77: 4 committed path(s) verified — campaign.json, ${rec("stage-full.precommit.md")}, ${rec("stage-full.anchors.json")}, ${rec("stage-full.baseline.json")}`,
+      );
 
-  test("freeze checks the stage's existing BASELINE too", async () => {
-    const err = await refusalFrom(
-      runCampaignFreeze({
+      const anchorLines: string[] = [];
+      await runCampaignAnchors({
         manifestPath,
-        stage: "stage-dirtybaseline",
+        stage: "stage-ok",
         reportPath,
-        expectedMutantCount: 2,
-      }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtybaseline.baseline.json")]);
-  });
+        log: (l) => anchorLines.push(l),
+      });
+      expect(anchorLines[0]).toBe(
+        `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("stage-ok.precommit.md")}, ${rec("stage-ok.anchors.json")}`,
+      );
 
-  test("anchors checks the ANCHOR CONFIG it is about to read", async () => {
-    // The sharpest of the four: this file IS the pre-commitment the verb gates against
-    // (expectedMutantCount, coveredProcedureRanges). The dirty copy on disk says 999 — a verb that
-    // did not check it would happily gate against an edit made after the run.
-    const err = await refusalFrom(
-      runCampaignAnchors({ manifestPath, stage: "stage-dirtyanchors", reportPath }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtyanchors.anchors.json")]);
-  });
+      const compareLines: string[] = [];
+      await runCampaignCompare({
+        manifestPath,
+        stage: "stage-cmp",
+        reportPath,
+        log: (l) => compareLines.push(l),
+      });
+      expect(compareLines[0]).toBe(
+        `[campaign] fixture-campaign-77: 3 committed path(s) verified — campaign.json, ${rec("stage-cmp.precommit.md")}, ${rec("stage-cmp.baseline.json")}`,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("compare checks the BASELINE it is about to compare against", async () => {
-    const err = await refusalFrom(
-      runCampaignCompare({ manifestPath, stage: "stage-dirtybaseline", reportPath }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtybaseline.baseline.json")]);
-  });
+  test(
+    "freeze checks the stage's ANCHOR CONFIG, not just its pre-commitment",
+    async () => {
+      // `--expect-mutants` reads this file and treats ITS count as the pre-commitment. Unchecked, the
+      // cross-check compares a number typed on the command line against a file that could have been
+      // written after the run — which is the thing the cross-check exists to prevent.
+      const err = await refusalFrom(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-dirtyanchors",
+          reportPath,
+          expectedMutantCount: 2,
+        }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtyanchors.anchors.json")]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "freeze checks the stage's existing BASELINE too",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignFreeze({
+          manifestPath,
+          stage: "stage-dirtybaseline",
+          reportPath,
+          expectedMutantCount: 2,
+        }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual([
+        rec("stage-dirtybaseline.baseline.json"),
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "anchors checks the ANCHOR CONFIG it is about to read",
+    async () => {
+      // The sharpest of the four: this file IS the pre-commitment the verb gates against
+      // (expectedMutantCount, coveredProcedureRanges). The dirty copy on disk says 999 — a verb that
+      // did not check it would happily gate against an edit made after the run.
+      const err = await refusalFrom(
+        runCampaignAnchors({ manifestPath, stage: "stage-dirtyanchors", reportPath }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual([rec("stage-dirtyanchors.anchors.json")]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "compare checks the BASELINE it is about to compare against",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignCompare({ manifestPath, stage: "stage-dirtybaseline", reportPath }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual([
+        rec("stage-dirtybaseline.baseline.json"),
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   // ---- shared argument validation ------------------------------------------------------------
 
@@ -922,29 +1064,41 @@ describe("lethal campaign — the manifest itself must be committed", () => {
     await rm(repo, { recursive: true, force: true });
   });
 
-  test("freeze refuses a dirty manifest even when every record is clean", async () => {
-    const err = await refusalFrom(
-      runCampaignFreeze({ manifestPath, stage: "stage-ok", reportPath, expectedMutantCount: 2 }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
-  });
+  test(
+    "freeze refuses a dirty manifest even when every record is clean",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignFreeze({ manifestPath, stage: "stage-ok", reportPath, expectedMutantCount: 2 }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("anchors refuses a dirty manifest even when every record is clean", async () => {
-    const err = await refusalFrom(
-      runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
-  });
+  test(
+    "anchors refuses a dirty manifest even when every record is clean",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignAnchors({ manifestPath, stage: "stage-ok", reportPath }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("compare refuses a dirty manifest even when every record is clean", async () => {
-    const err = await refusalFrom(
-      runCampaignCompare({ manifestPath, stage: "stage-ok", reportPath }),
-    );
-    expect(err).toBeInstanceOf(UncommittedPathError);
-    expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
-  });
+  test(
+    "compare refuses a dirty manifest even when every record is clean",
+    async () => {
+      const err = await refusalFrom(
+        runCampaignCompare({ manifestPath, stage: "stage-ok", reportPath }),
+      );
+      expect(err).toBeInstanceOf(UncommittedPathError);
+      expect((err as UncommittedPathError).paths).toEqual(["campaign.json"]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1045,111 +1199,143 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
     return { code, out: out + err };
   }
 
-  test("exits 0 when every anchor passes", async () => {
-    const { code, out } = await run("anchors", "stage-ok", passingReport);
-    expect(out).toContain("PASS baseline-green");
-    expect(code).toBe(0);
-  });
+  test(
+    "exits 0 when every anchor passes",
+    async () => {
+      const { code, out } = await run("anchors", "stage-ok", passingReport);
+      expect(out).toContain("PASS baseline-green");
+      expect(code).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("exits NON-ZERO when one anchor fails", async () => {
-    const { code, out } = await run("anchors", "stage-fail", passingReport);
-    expect(out).toContain("FAIL coverage-location");
-    expect(code).not.toBe(0);
-  });
+  test(
+    "exits NON-ZERO when one anchor fails",
+    async () => {
+      const { code, out } = await run("anchors", "stage-fail", passingReport);
+      expect(out).toContain("FAIL coverage-location");
+      expect(code).not.toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("`freeze` runs FREEZE — it archives the report and mints the baseline", async () => {
-    // Dispatch to any other verb produces neither file. `compare` in particular would print
-    // "[compare] … identical" and exit 0, which reads like success.
-    const { code, out } = await run("freeze", "stage-spawnfreeze", passingReport, [
-      "--expect-mutants",
-      "2",
-    ]);
-    expect(out).toContain("[freeze] stage-spawnfreeze: 2 mutants archived and frozen");
-    expect(code).toBe(0);
-    const written = (await readdir(recordsDir))
-      .filter((f) => f.startsWith("stage-spawnfreeze."))
-      .sort();
-    expect(written).toEqual([
-      "stage-spawnfreeze.baseline.json",
-      "stage-spawnfreeze.precommit.md",
-      "stage-spawnfreeze.report.json",
-    ]);
-  });
+  test(
+    "`freeze` runs FREEZE — it archives the report and mints the baseline",
+    async () => {
+      // Dispatch to any other verb produces neither file. `compare` in particular would print
+      // "[compare] … identical" and exit 0, which reads like success.
+      const { code, out } = await run("freeze", "stage-spawnfreeze", passingReport, [
+        "--expect-mutants",
+        "2",
+      ]);
+      expect(out).toContain("[freeze] stage-spawnfreeze: 2 mutants archived and frozen");
+      expect(code).toBe(0);
+      const written = (await readdir(recordsDir))
+        .filter((f) => f.startsWith("stage-spawnfreeze."))
+        .sort();
+      expect(written).toEqual([
+        "stage-spawnfreeze.baseline.json",
+        "stage-spawnfreeze.precommit.md",
+        "stage-spawnfreeze.report.json",
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("`freeze` threads --expect-mutants through to the cardinality assertion", async () => {
-    // A count that never reached `assertCardinality` — defaulted, or dropped by the adapter — would
-    // let a report of the wrong size freeze itself.
-    const { code, out } = await run("freeze", "stage-spawncount", threeMutantReport, [
-      "--expect-mutants",
-      "2",
-    ]);
-    expect(out).toContain("expected 2, got 3");
-    expect(code).not.toBe(0);
-    // ... and nothing was written: cardinality precedes every records-directory touch.
-    expect((await readdir(recordsDir)).filter((f) => f.startsWith("stage-spawncount."))).toEqual([
-      "stage-spawncount.precommit.md",
-    ]);
-  });
+  test(
+    "`freeze` threads --expect-mutants through to the cardinality assertion",
+    async () => {
+      // A count that never reached `assertCardinality` — defaulted, or dropped by the adapter — would
+      // let a report of the wrong size freeze itself.
+      const { code, out } = await run("freeze", "stage-spawncount", threeMutantReport, [
+        "--expect-mutants",
+        "2",
+      ]);
+      expect(out).toContain("expected 2, got 3");
+      expect(code).not.toBe(0);
+      // ... and nothing was written: cardinality precedes every records-directory touch.
+      expect((await readdir(recordsDir)).filter((f) => f.startsWith("stage-spawncount."))).toEqual([
+        "stage-spawncount.precommit.md",
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("`compare` runs COMPARE against the baseline `freeze` just committed", async () => {
-    // Depends on the freeze test above having produced the files — then commits them, which is the
-    // real operator flow ("Review and commit this file") and the only way `compare` will accept
-    // them. It also proves freeze's output is directly consumable by compare.
-    await git(repo, ["add", "--", `${RECORDS_DIR}/stage-spawnfreeze.baseline.json`]);
-    await git(repo, ["commit", "-qm", "freeze stage-spawnfreeze"]);
+  test(
+    "`compare` runs COMPARE against the baseline `freeze` just committed",
+    async () => {
+      // Depends on the freeze test above having produced the files — then commits them, which is the
+      // real operator flow ("Review and commit this file") and the only way `compare` will accept
+      // them. It also proves freeze's output is directly consumable by compare.
+      await git(repo, ["add", "--", `${RECORDS_DIR}/stage-spawnfreeze.baseline.json`]);
+      await git(repo, ["commit", "-qm", "freeze stage-spawnfreeze"]);
 
-    const same = await run("compare", "stage-spawnfreeze", passingReport);
-    expect(same.out).toContain("identical — all 2 mutant(s) match the committed baseline");
-    expect(same.code).toBe(0);
+      const same = await run("compare", "stage-spawnfreeze", passingReport);
+      expect(same.out).toContain("identical — all 2 mutant(s) match the committed baseline");
+      expect(same.code).toBe(0);
 
-    const differing = await run("compare", "stage-spawnfreeze", changedReport);
-    expect(differing.out).toContain("RESULT: DIFFERENT");
-    expect(differing.out).toContain("hash-M0002");
-    expect(differing.code).toBe(1);
-  });
+      const differing = await run("compare", "stage-spawnfreeze", changedReport);
+      expect(differing.out).toContain("RESULT: DIFFERENT");
+      expect(differing.out).toContain("hash-M0002");
+      expect(differing.code).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a re-freeze on a stage whose baseline is ALREADY committed still FREEZES", async () => {
-    // The exit-0 shape of the dispatch swap, which the fresh-stage freeze test does NOT cover: there,
-    // `compare` is refused by its own missing-baseline gate, so the swap surfaces as a refusal. Here
-    // the baseline exists and is committed (the test above committed it), `<stage>.report.json`
-    // already exists from the first freeze, and so a swapped verb prints
-    // "[compare] … identical — all 2 mutant(s) match", exits 0, freezes nothing, and leaves a
-    // directory listing byte-identical to the one a real freeze produces. Only the `[freeze]` line
-    // separates the two.
-    //
-    // The narrow mutation that survives everything else — `if (baseline exists && no anchors.json)
-    // return runCampaignCompare(args)` — is the PRODUCTION shape, not a contrived one: stages 2 and 3
-    // of the 2026-08-03 campaign carry no anchors.json, so freeze and compare announce the identical
-    // path list and the announced-list test's kill evaporates.
-    const { code, out } = await run("freeze", "stage-spawnfreeze", passingReport, [
-      "--expect-mutants",
-      "2",
-    ]);
-    expect(out).toContain("[freeze] stage-spawnfreeze: 2 mutants archived and frozen");
-    expect(code).toBe(0);
-  });
+  test(
+    "a re-freeze on a stage whose baseline is ALREADY committed still FREEZES",
+    async () => {
+      // The exit-0 shape of the dispatch swap, which the fresh-stage freeze test does NOT cover: there,
+      // `compare` is refused by its own missing-baseline gate, so the swap surfaces as a refusal. Here
+      // the baseline exists and is committed (the test above committed it), `<stage>.report.json`
+      // already exists from the first freeze, and so a swapped verb prints
+      // "[compare] … identical — all 2 mutant(s) match", exits 0, freezes nothing, and leaves a
+      // directory listing byte-identical to the one a real freeze produces. Only the `[freeze]` line
+      // separates the two.
+      //
+      // The narrow mutation that survives everything else — `if (baseline exists && no anchors.json)
+      // return runCampaignCompare(args)` — is the PRODUCTION shape, not a contrived one: stages 2 and 3
+      // of the 2026-08-03 campaign carry no anchors.json, so freeze and compare announce the identical
+      // path list and the announced-list test's kill evaporates.
+      const { code, out } = await run("freeze", "stage-spawnfreeze", passingReport, [
+        "--expect-mutants",
+        "2",
+      ]);
+      expect(out).toContain("[freeze] stage-spawnfreeze: 2 mutants archived and frozen");
+      expect(code).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("`anchors --project` threads projectDir into the reconciliation", async () => {
-    // `reconcileNotInstrumented: true` makes --project REQUIRED. A dropped `projectDir` throws
-    // "Refusing to skip a requested gate item" — so this fails loudly rather than silently
-    // skipping, but only if something actually runs the verb with the flag.
-    const { code, out } = await run("anchors", "stage-recon", reconReport, [
-      "--project",
-      projectDir,
-    ]);
-    expect(out).toContain("PASS notinstrumented-reconciliation");
-    // `{"page":1}` is the oracle's classification of the SOURCE it read at `--project` — it cannot
-    // be produced without the flag having reached `runAnchorCheck` and the file having been read.
-    expect(out).toContain('confirmed uninstrumentable by object header ({"page":1})');
-    expect(code).toBe(0);
-  });
+  test(
+    "`anchors --project` threads projectDir into the reconciliation",
+    async () => {
+      // `reconcileNotInstrumented: true` makes --project REQUIRED. A dropped `projectDir` throws
+      // "Refusing to skip a requested gate item" — so this fails loudly rather than silently
+      // skipping, but only if something actually runs the verb with the flag.
+      const { code, out } = await run("anchors", "stage-recon", reconReport, [
+        "--project",
+        projectDir,
+      ]);
+      expect(out).toContain("PASS notinstrumented-reconciliation");
+      // `{"page":1}` is the oracle's classification of the SOURCE it read at `--project` — it cannot
+      // be produced without the flag having reached `runAnchorCheck` and the file having been read.
+      expect(out).toContain('confirmed uninstrumentable by object header ({"page":1})');
+      expect(code).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("exits NON-ZERO on a cardinality mismatch", async () => {
-    const { code, out } = await run("anchors", "stage-ok", threeMutantReport);
-    // Asserted on the OUTPUT as well as the code: a CLI that failed to parse its own arguments
-    // also exits non-zero, and this test passed for exactly that reason while `--manifest` was
-    // still an unknown option.
-    expect(out).toContain("expected 2, got 3");
-    expect(code).not.toBe(0);
-  });
+  test(
+    "exits NON-ZERO on a cardinality mismatch",
+    async () => {
+      const { code, out } = await run("anchors", "stage-ok", threeMutantReport);
+      // Asserted on the OUTPUT as well as the code: a CLI that failed to parse its own arguments
+      // also exits non-zero, and this test passed for exactly that reason while `--manifest` was
+      // still an unknown option.
+      expect(out).toContain("expected 2, got 3");
+      expect(code).not.toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

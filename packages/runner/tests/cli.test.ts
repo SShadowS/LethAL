@@ -298,6 +298,14 @@ describe("native-check", () => {
   const REPO = join(import.meta.dir, "..", "..", "..");
   const CLI = join(REPO, "packages", "runner", "src", "cli.ts");
 
+  /**
+   * The two tests below spawn a real `bun` subprocess, which passes alone in well under a second
+   * but can push past Bun's 5 s default test timeout when something else is loading the machine (a
+   * full `bun test` run, or a live itest at the same time). See HOOK_TIMEOUT_MS in
+   * campaign-subcommands.test.ts (R335) for the measured shape of this failure.
+   */
+  const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
   test("parses to its own mode", () => {
     expect(parseCliConfig(["native-check"])).toEqual({ mode: "native-check" });
   });
@@ -319,28 +327,36 @@ describe("native-check", () => {
     expect(message).not.toContain("native-check");
   });
 
-  test("source mode parses the snippet through the addon", () => {
-    const r = Bun.spawnSync(["bun", CLI, "native-check"], { cwd: REPO });
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout.toString().trim()).toMatch(
-      /^native \S+ clang version 23\.1\.2.* nodes [1-9]\d*$/,
-    );
-  });
+  test(
+    "source mode parses the snippet through the addon",
+    () => {
+      const r = Bun.spawnSync(["bun", CLI, "native-check"], { cwd: REPO });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.toString().trim()).toMatch(
+        /^native \S+ clang version 23\.1\.2.* nodes [1-9]\d*$/,
+      );
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("a missing embedded addon fails with NativeParserMissingError, never a parse", () => {
-    // The compiled binary requires the key its build defined; defining one with no .node on disk
-    // is exactly a release binary that shipped without its addon.
-    const r = Bun.spawnSync(
-      ["bun", "--define", '__LETHAL_NATIVE_KEY__="linux-riscv64"', CLI, "native-check"],
-      { cwd: REPO },
-    );
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stdout.toString()).toBe("");
-    const err = r.stderr.toString();
-    expect(err).toContain("NativeParserMissingError");
-    expect(err).toContain("linux-riscv64");
-    expect(err).toContain("bun scripts/build-native-parser.ts");
-  });
+  test(
+    "a missing embedded addon fails with NativeParserMissingError, never a parse",
+    () => {
+      // The compiled binary requires the key its build defined; defining one with no .node on disk
+      // is exactly a release binary that shipped without its addon.
+      const r = Bun.spawnSync(
+        ["bun", "--define", '__LETHAL_NATIVE_KEY__="linux-riscv64"', CLI, "native-check"],
+        { cwd: REPO },
+      );
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stdout.toString()).toBe("");
+      const err = r.stderr.toString();
+      expect(err).toContain("NativeParserMissingError");
+      expect(err).toContain("linux-riscv64");
+      expect(err).toContain("bun scripts/build-native-parser.ts");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });
 
 /**

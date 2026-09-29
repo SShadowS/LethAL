@@ -452,6 +452,14 @@ describe("matrix doc and probe matrix do not drift", () => {
  * still reads a `PreToolUse` event on stdin and answers in the shape Claude Code understands. A
  * pure-function test cannot see a broken shell, and a hook whose shell is broken fails OPEN.
  */
+/**
+ * A test below spawns a real `bun` subprocess, which passes alone in well under a second but can
+ * push past Bun's 5 s default test timeout when something else is loading the machine (a full
+ * `bun test` run, or a live itest at the same time). See HOOK_TIMEOUT_MS in
+ * campaign-subcommands.test.ts (R335) for the measured shape of this failure.
+ */
+const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
 describe("fence-hook.ts (the shell)", () => {
   const HOOK = join(import.meta.dir, "..", "..", "..", "fixtures", "do-campaign", "fence-hook.ts");
   // A real directory that exists and is NOT under `U:/Git/LethAL` — the child's cwd has to be
@@ -470,17 +478,25 @@ describe("fence-hook.ts (the shell)", () => {
     return JSON.parse(out);
   }
 
-  test("emits a well-formed deny for a write under LETHAL_ROOT", async () => {
-    const decision = (await runHook(write("U:/Git/LethAL/PROBE.txt"), OUTSIDE_LETHAL)) as {
-      hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
-    };
-    expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
-    expect(decision.hookSpecificOutput?.permissionDecisionReason).toContain("campaign fence");
-  });
+  test(
+    "emits a well-formed deny for a write under LETHAL_ROOT",
+    async () => {
+      const decision = (await runHook(write("U:/Git/LethAL/PROBE.txt"), OUTSIDE_LETHAL)) as {
+        hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+      };
+      expect(decision.hookSpecificOutput?.permissionDecision).toBe("deny");
+      expect(decision.hookSpecificOutput?.permissionDecisionReason).toContain("campaign fence");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("emits a bare {} for the agent's own workspace (finding C2, end to end)", async () => {
-    expect(
-      await runHook(bash("cd U:/Git/do-lethal && bun run scripts/x.ts"), OUTSIDE_LETHAL),
-    ).toEqual({});
-  });
+  test(
+    "emits a bare {} for the agent's own workspace (finding C2, end to end)",
+    async () => {
+      expect(
+        await runHook(bash("cd U:/Git/do-lethal && bun run scripts/x.ts"), OUTSIDE_LETHAL),
+      ).toEqual({});
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });

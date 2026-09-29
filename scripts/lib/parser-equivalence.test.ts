@@ -97,18 +97,28 @@ describe("native vs wasm, lockstep through ALSyntaxNode", () => {
 });
 
 describe("probe-parser-equivalence CLI", () => {
-  it("refuses an empty corpus instead of reporting a clean Q1", () => {
-    const dir = mkdtempSync(join(tmpdir(), "q1-empty-"));
-    try {
-      const r = Bun.spawnSync([
-        "bun",
-        join(import.meta.dir, "..", "probe-parser-equivalence.ts"),
-        dir,
-      ]);
-      expect(r.stderr.toString()).toContain("no .al files");
-      expect(r.exitCode).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  // Spawns a real `bun` subprocess, which passes alone in well under a second but can push past
+  // Bun's 5 s default test timeout when something else is loading the machine (a full `bun test`
+  // run, or a live itest at the same time). See HOOK_TIMEOUT_MS in campaign-subcommands.test.ts
+  // (R335) for the measured shape of this failure.
+  const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
+  it(
+    "refuses an empty corpus instead of reporting a clean Q1",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "q1-empty-"));
+      try {
+        const r = Bun.spawnSync([
+          "bun",
+          join(import.meta.dir, "..", "probe-parser-equivalence.ts"),
+          dir,
+        ]);
+        expect(r.stderr.toString()).toContain("no .al files");
+        expect(r.exitCode).toBe(1);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });
