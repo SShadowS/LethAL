@@ -50,6 +50,7 @@ import { ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
+import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
@@ -139,6 +140,7 @@ async function quarantineRecords(dir: string): Promise<string[]> {
 }
 
 async function main(): Promise<void> {
+  preflightReadOnlyBaseline(BASELINE_PATH, "testapp itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
   if (!symbols.some((n) => n.toLowerCase().endsWith(".app"))) {
@@ -482,7 +484,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await emitFailed("testapp", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  await emitFailed("testapp", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
