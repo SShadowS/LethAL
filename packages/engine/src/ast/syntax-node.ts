@@ -113,10 +113,6 @@ class FlatNode implements ALSyntaxNode {
     }
     return null;
   }
-  /** Walks this node's named subtree by index, allocating no wrappers (see `walkNamedFlat`). */
-  walkNamed(v: NamedNodeVisitor): void {
-    walkNamedAt(this.p, this.i, this.fieldName, v);
-  }
   private firstChild(): number {
     return at(this.p.flat.childCount, this.i, "childCount") > 0 ? this.i + 1 : -1;
   }
@@ -133,45 +129,6 @@ class FlatNode implements ALSyntaxNode {
     }
     return out;
   }
-}
-
-/** What `walkNamedFlat` reports for each named node of a subtree, in pre-order. */
-export interface NamedNodeVisitor {
-  /** True: the node is reported as `open`, then its named children, then `close`. False: as `leaf`. */
-  descends(kind: string, hasNamedChild: boolean): boolean;
-  leaf(kind: string, fieldName: string | null, text: string): void;
-  open(kind: string): void;
-  close(): void;
-}
-
-/** Walks a native `FlatNode`'s named subtree by index, reading the same kind, text and child field
- *  name the wrappers expose, and returns true. Any other node is not walked, and it returns false.
- *  Anonymous children and their subtrees are skipped. RUST-03 S4.2d: the hash walk over 23 million
- *  nodes built 43 million wrappers and 23 million arrays through `namedChildren`. */
-export function walkNamedFlat(node: ALSyntaxNode, v: NamedNodeVisitor): boolean {
-  if (!(node instanceof FlatNode)) return false;
-  node.walkNamed(v);
-  return true;
-}
-
-function walkNamedAt(p: ParsedAL, i: number, fieldName: string | null, v: NamedNodeVisitor): void {
-  const f = p.flat;
-  let named = at(f.childCount, i, "childCount") > 0 ? i + 1 : -1;
-  while (named !== -1 && (at(f.flags, named, "flags") & FLAG_NAMED) === 0)
-    named = at(f.nextSibling, named, "nextSibling");
-  const kind = at(f.kindNames, at(f.kind, i, "kind"), "kindNames");
-  if (!v.descends(kind, named !== -1)) {
-    const text = p.source.slice(at(f.startIndex, i, "startIndex"), at(f.endIndex, i, "endIndex"));
-    v.leaf(kind, fieldName, text);
-    return;
-  }
-  v.open(kind);
-  for (let c = named; c !== -1; c = at(f.nextSibling, c, "nextSibling")) {
-    if ((at(f.flags, c, "flags") & FLAG_NAMED) === 0) continue;
-    const id = at(f.field, c, "field");
-    walkNamedAt(p, c, id === 0 ? null : at(f.fieldNames, id, "fieldNames"), v);
-  }
-  v.close();
 }
 
 /** A spec's `after` node: `before` with its text replaced. Every other member reads through
