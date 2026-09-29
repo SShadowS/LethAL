@@ -1308,3 +1308,52 @@ describe("claimsRecordMethod: unparsed objects (R331)", () => {
     ).toBe(true);
   });
 });
+
+// R331 (run 005): the unparsed-object fallback is conservative. It reads any ERROR node, at any
+// depth, and matches the called name as an identifier token with comments stripped.
+describe("claimsRecordMethod: the unparsed fallback is conservative (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"\n{\n    procedure P()\n    var\n        R: Record "Other Table";\n        N: Integer;\n    begin\n        R.Validate(N, 5);\n    end;\n}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const EXT = (header: string) =>
+    `tableextension 50002 "Other Ext" extends 50001\n{\n    ${header}(A: Integer; B: Integer)\n    begin\n    end;\n}\n`;
+  const claims = (unparsed: string) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, parseClean(TABLE), wrapRoot(parseAL(unparsed))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+  it("REFUSES with a block comment between procedure and the name", () => {
+    expect(claims(EXT("procedure /* note */ Validate"))).toBe(false);
+  });
+  it("REFUSES with a line comment between procedure and the name", () => {
+    expect(claims(EXT("procedure // the custom one\n        Validate"))).toBe(false);
+  });
+  it("REFUSES when the unparsed extension is wrapped whole in #if", () => {
+    const e = EXT("procedure Validate");
+    expect(claims(`#if X\n${e}#else\n${e}#endif\n`)).toBe(false);
+  });
+  // No valid every-build program isolates this shape through the pipeline: every build that calls
+  // the custom `Validate` needs one, and the other arm's is then visible to the guard as well. So it
+  // is pinned here, on the parse alone.
+  it("REFUSES when the unparsed extension sits BELOW a #if split declaration", () => {
+    const e = EXT("procedure Validate");
+    const other = `table 50004 "Plain"
+{
+    fields { field(1; F; Integer) { } }
+}
+`;
+    const src = `#if X
+${e}#else
+${other}#endif
+`;
+    const tree = wrapRoot(parseAL(src));
+    const [top] = tree.namedChildren;
+    expect(top?.rawKind).toBe("preproc_split_declaration");
+    expect(claims(src)).toBe(false);
+  });
+  it("control: the name only inside a comment does not refuse", () => {
+    expect(claims(EXT("procedure /* Validate */ Check"))).toBe(true);
+  });
+});

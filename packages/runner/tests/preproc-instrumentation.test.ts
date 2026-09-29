@@ -3559,3 +3559,94 @@ describe("R331: the table's id and name are one table for rule 3", () => {
     ).toEqual(WANT);
   });
 });
+
+// R331 (run 005): the unparsed fallback reads any ERROR node, at any depth, by identifier token with
+// comments stripped. Sources copied byte for byte from the scratch repros r331-u1 to u3; before the
+// fix each emitted a `validate-to-assign` assigning a field that does not exist (AL0132).
+const R331_U1_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure /* note */ Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_U2_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_U3_EXT = `// an extension that extends its table by number
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure // the custom one
+        Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_U_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_U_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+
+describe("R331: the unparsed-object fallback is conservative", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("u1: a block comment inside an unparsed extension's procedure header", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U1_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("u2: an unparsed extension wrapped whole in #if", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U2_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("u3: a line comment inside the header, and a leading comment line", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U3_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+});

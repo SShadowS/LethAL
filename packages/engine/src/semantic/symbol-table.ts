@@ -166,8 +166,9 @@ export interface SymbolTable {
    */
   readonly unindexedObjects: readonly ALSyntaxNode[];
   /**
-   * R331 (run 004): root-level ERROR nodes, i.e. objects the grammar could not parse at all. Rule 3
-   * reads their TEXT, since they have no structure; see `projectDeclaresProcedureOnTable`.
+   * R331 (run 005): every outermost ERROR node, at any depth (under a `#if` wrapper too): source the
+   * grammar could not parse. Rule 3 reads their TEXT, conservatively, since they have no structure;
+   * see `projectDeclaresProcedureOnTable`.
    */
   readonly unparsedObjects: readonly ALSyntaxNode[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
@@ -411,7 +412,13 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const unindexedObjects: ALSyntaxNode[] = [];
   const unparsedObjects: ALSyntaxNode[] = [];
   for (const file of files) {
-    for (const c of file.root.children) if (c.rawKind === "ERROR") unparsedObjects.push(c);
+    const collectErrors = (n: ALSyntaxNode): void => {
+      for (const c of n.children) {
+        if (c.rawKind === "ERROR") unparsedObjects.push(c);
+        else collectErrors(c);
+      }
+    };
+    collectErrors(file.root);
     for (const c of file.root.namedChildren)
       if (c.rawKind === "preproc_conditional_object")
         unindexedObjects.push(...objectDeclarationsOf(c));

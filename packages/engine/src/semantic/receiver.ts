@@ -665,18 +665,45 @@ function projectDeclaresProcedureOnTable(
       return true;
   }
   if ([...aliases].some((a) => extensionDeclaresProcedure(symbols, a, procName))) return true;
-  // R331 (run 004): a table or `tableextension` the grammar could not parse at all (a root-level
-  // ERROR node; measured: `tableextension ... extends 50101`, by number, which `alc` accepts) has
-  // no structure to read, so which table it extends is unknown. If its text declares a procedure of
-  // this name, refuse: under-claiming costs one site, over-claiming can cost the build (AL0132).
-  const declares = new RegExp(`\\bprocedure\\s+"?${escapeRegExp(procName)}"?\\s*\\(`, "i");
-  return symbols.unparsedObjects.some(
-    (o) => /^\s*(table|tableextension)\b/i.test(o.text) && declares.test(o.text),
-  );
+  // R331 (run 005): a CONSERVATIVE fallback for source the grammar could not parse, not a parser.
+  // Any ERROR node, at any depth (under a `#if` wrapper too), that could be a table or
+  // `tableextension` and that holds the called name as an identifier token once comments are
+  // stripped, refuses the claim. Measured: `tableextension ... extends 50101` (by number) does not
+  // parse (R336), and a claim there let `validate-to-assign` assign a field that does not exist
+  // (AL0132). Over-refusal costs one site; a wrong claim costs the build.
+  const wanted = procName.toLowerCase();
+  return symbols.unparsedObjects.some((o) => {
+    const tokens = identifierTokens(o.text);
+    const tableLike =
+      tokens.has("table") ||
+      tokens.has("tableextension") ||
+      hasAncestor(
+        o,
+        (a) =>
+          a.kind === ALNodeKind.table ||
+          a.kind === ALNodeKind.tableextension ||
+          // A header the grammar split across `#if` arms keeps its keyword as a direct child.
+          a.children.some(
+            (c) => c.rawKind === "table_keyword" || c.rawKind === "tableextension_keyword",
+          ),
+      );
+    return tableLike && tokens.has(wanted);
+  });
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** R331 (run 005): the lowercase identifier tokens of `text`, comments stripped. A quoted
+ *  identifier counts as its inner text. Strings are not stripped: a false match only refuses. */
+function identifierTokens(text: string): ReadonlySet<string> {
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  const out = new Set<string>();
+  for (const m of code.matchAll(/"([^"\n]*)"|[A-Za-z_][A-Za-z0-9_]*/g))
+    out.add((m[1] ?? m[0]).toLowerCase());
+  return out;
+}
+
+function hasAncestor(node: ALSyntaxNode, test: (n: ALSyntaxNode) => boolean): boolean {
+  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) if (test(p)) return true;
+  return false;
 }
 
 /**
