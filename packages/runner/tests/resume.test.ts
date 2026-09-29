@@ -1927,3 +1927,179 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     ).toBe(false);
   });
 });
+
+/** R318: a target whose public split member is renamed by its `#if` arms, and one test. */
+const R318_TARGET = `codeunit 79000 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := 1;
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob + K);
+    end;
+
+    procedure Plain(X: Integer): Integer
+    begin
+        exit(X + 3);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const R318_TESTS = `codeunit 79100 "Repro Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure PickFive()
+    begin
+    end;
+}
+`;
+
+/**
+ * R318: a backend whose BASELINE coverage names the renamed member the way a pre-R318 line map
+ * did (`pre`: an object-level row, no procedure, which is what an unmapped line becomes) or the way
+ * R318's does (`post`: `Pick`). Every mutant run fails (a kill) and attests on the
+ * `coverage: "none"` runs, as CountingBackend does (without it the attestation gate discards every
+ * verdict). `abortAfter` strands the run the way CountingBackend's does, so it stays resumable.
+ */
+class R318Backend implements ExecutionBackend {
+  baselineRuns = 0;
+  mutantRuns = 0;
+  private activations: Array<string | null> = [];
+  constructor(
+    private readonly naming: "pre" | "post",
+    private readonly abortAfter?: number,
+  ) {}
+  capabilities(): BackendCapabilities {
+    return CAPS;
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "stub" };
+  }
+  async deploy(): Promise<CompiledArtifact | null> {
+    return null;
+  }
+  async compileCheck(): Promise<void> {}
+  async activate(id: string | null): Promise<void> {
+    this.activations.push(id);
+  }
+  async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const active = this.activations.at(-1) ?? null;
+    const attest =
+      opts.coverage === "none"
+        ? { attestation: { observedAny: true, identityMismatch: false } }
+        : {};
+    if (active === null) {
+      this.baselineRuns += 1;
+      const member =
+        this.naming === "pre"
+          ? { objectType: "Codeunit", objectId: 79000 }
+          : { objectType: "Codeunit", objectId: 79000, procedure: "Pick" };
+      return {
+        ref,
+        outcome: "pass",
+        durationMs: 5,
+        coverage: {
+          granularity: "procedure" as const,
+          entries: [member, { objectType: "Codeunit", objectId: 79000, procedure: "Plain" }],
+        },
+      };
+    }
+    this.mutantRuns += 1;
+    if (this.abortAfter !== undefined && this.mutantRuns > this.abortAfter) {
+      return {
+        ref,
+        ...attest,
+        outcome: "error",
+        durationMs: 5,
+        operation: "in-flight-unknown",
+        failureMessage: "RunMutant timed out: AbortError",
+      };
+    }
+    return { ref, ...attest, outcome: "fail", durationMs: 5, failureMessage: "killed" };
+  }
+}
+
+describe("R318: a resume across R318 re-scores a renamed member instead of keeping no-coverage", () => {
+  test("carriedVerdictFor: a no-coverage row does not carry onto a mutant with coverageArmNames", () => {
+    const index = buildResumeIndex(
+      [row({ astHash: "h-r", procedureName: "", verdict: "no-coverage" })],
+      false,
+    );
+    const base = { ...manifestEntry("h-r"), procedureName: "" };
+    expect(
+      carriedVerdictFor(index, { ...base, coverageArmNames: ["Pick", "Choose"] }),
+    ).toBeUndefined();
+    // Controls: the same row onto an entry without the field still carries, and a kill on a
+    // renamed member still carries (a kill is a measurement whatever attributed it).
+    expect(carriedVerdictFor(index, base)?.verdict).toBe("no-coverage");
+    const killed = buildResumeIndex(
+      [row({ astHash: "h-k", procedureName: "", verdict: "killed" })],
+      false,
+    );
+    expect(
+      carriedVerdictFor(killed, {
+        ...manifestEntry("h-k"),
+        procedureName: "",
+        coverageArmNames: ["Pick"],
+      })?.verdict,
+    ).toBe("killed");
+  });
+
+  test("runSession: the member is scored exact against a FRESH baseline, not carried or snapshot-reused", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r318-resume-"));
+    const dirs = {
+      projectDir: join(root, "app"),
+      testDir: join(root, "tests"),
+      instrumentedDir: join(root, "instr"),
+    };
+    await Bun.write(join(dirs.projectDir, "Repro.Codeunit.al"), R318_TARGET);
+    await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(dirs.testDir, "ReproTests.Codeunit.al"), R318_TESTS);
+    const store = new ResultsStore(":memory:");
+
+    // Run 1 sees the member as a pre-R318 line map did: its 10 mutants read no-coverage, Plain's
+    // first two are killed and its third strands, so the run stays resumable. Its completed
+    // baseline is recorded as a snapshot. MEASURED at HEAD b6562aba (R-318 plan scratch): with
+    // abortAfter 2, run 2 replays the WHOLE batch from the store (batchCarriesEntirely), the 10
+    // member mutants carried as no-coverage, 0 baseline runs, 0 mutant runs. So this one shape
+    // exercises both guards: guard 1 stops the replay, and guard 2 then stops the snapshot reuse.
+    const first = new R318Backend("pre", 2);
+    const firstReport = await runSession({ backend: first, store, ...dirs, selectorIds });
+    expect(firstReport.quarantined).toBeDefined();
+    const inMember = (r: typeof firstReport) =>
+      r.mutants.filter((m) => m.line >= 3 && m.line <= 16);
+    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(10).fill("no-coverage"));
+
+    const second = new R318Backend("post");
+    const report = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(report.resumedFrom?.runId).toBeGreaterThan(0);
+    // Guard 2: the snapshot recorded by run 1 was NOT reused; this session ran its own baseline.
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    // Guard 1 and 2 together: every member mutant was scored now, exact, never carried.
+    const member = inMember(report);
+    expect(member).toHaveLength(10);
+    for (const m of member) {
+      expect([m.line, m.verdict]).toEqual([m.line, "killed"]);
+      expect(m.coverageAttribution).toBe("exact");
+      expect(m.carried).not.toBe(true);
+    }
+  });
+});

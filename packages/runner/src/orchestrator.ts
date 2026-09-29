@@ -5267,7 +5267,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
-        snapshot: { batchDir, testDir: cfg.testDir, allowReuse: resumeState !== undefined },
+        snapshot: {
+          batchDir,
+          testDir: cfg.testDir,
+          // R318: a snapshot stores the baseline's coverage as the line map of ITS day named it,
+          // and before R318 a renamed split member's lines had no name. Its key (instrumented
+          // bytes, test app) cannot tell, so a batch holding such a member never reuses one: the
+          // baseline runs again. 0 known sites; the cost is that one baseline.
+          allowReuse:
+            resumeState !== undefined &&
+            !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
+        },
         select,
         ...(workers > 1 ? { executeCovering } : {}),
       });
