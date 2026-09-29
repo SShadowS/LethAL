@@ -1,3 +1,4 @@
+import { inMemberBody, isProcedureLike } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -181,10 +182,7 @@ function shifted(node: ALSyntaxNode): string | null {
  * when a table key's `Clustered = true` reached the emit path and the artifact would not build.
  */
 function inExecutableBody(node: ALSyntaxNode): boolean {
-  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (p.rawKind === "procedure" || p.rawKind === "trigger_declaration") return true;
-  }
-  return false;
+  return inMemberBody(node);
 }
 
 /** In the CONDITION of a `repeat` or `while`, see the doc comment for why those are refused. */
@@ -196,7 +194,8 @@ function inLoopCondition(node: ALSyntaxNode): boolean {
         return true;
       }
     }
-    if (p.rawKind === "procedure" || p.rawKind === "trigger_declaration") break;
+    // R302: the member boundary. Nothing encloses a member, so this stop is for consistency.
+    if (isProcedureLike(p) || p.rawKind === "trigger_declaration") break;
   }
   return false;
 }

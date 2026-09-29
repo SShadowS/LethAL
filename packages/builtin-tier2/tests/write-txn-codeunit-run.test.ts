@@ -106,3 +106,35 @@ describe("remove-commit — platformKillMechanism (R72)", () => {
     expect(mechanismsFor(src)).toEqual(["write-txn-codeunit-run", undefined]);
   });
 });
+
+// R302: a split member's body is a procedure body for the tag's scope walk, so a consumed
+// `Codeunit.Run` after a `Commit` in one is tagged exactly as in its plain twin.
+describe("remove-commit: a split member is a procedure body (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const body = `    var
+        Ran: Boolean;
+    begin
+        Commit();
+        Ran := Codeunit.Run(Codeunit::"T");
+    end;
+}`;
+
+  it("tags as the twin does", () => {
+    const twin = `codeunit 50210 "C"
+{
+    procedure P()
+${body}`;
+    const split = `codeunit 50210 "C"
+{
+#if CLEAN27
+    procedure P()
+#else
+    internal procedure P()
+#endif
+${body}`;
+    expect(mechanismsFor(twin)).toEqual(["write-txn-codeunit-run"]);
+    expect(mechanismsFor(split)).toEqual(mechanismsFor(twin));
+  });
+});

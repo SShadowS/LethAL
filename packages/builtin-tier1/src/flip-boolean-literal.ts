@@ -1,4 +1,4 @@
-import { claimsRecordMethod } from "@lethal/engine";
+import { claimsRecordMethod, inMemberBody } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -31,25 +31,6 @@ const OPERATOR_VERSION = "1.0.0";
  * the fixture arm pins.
  */
 const CEDED_TO_MODIFY_FLAG = ["Modify", "Insert", "Delete"] as const;
-
-/**
- * A boolean is EXECUTABLE only inside a procedure or trigger body. Everything else is a declarative
- * surface, which R135 rules out and R144 pins the refusal for.
- *
- * Stated as "must have a body ancestor" rather than as a list of declarative parents, because the
- * list version was WRONG and the emit probe is what caught it. The first draft named
- * `label_attribute` only — the 26 sites the corpus census found — and the instrumented artifact then
- * failed to build at all: `resolveSite: no enclosing statement for node at 271..275`, which was
- * `Clustered = true` on a table key. That value is a compile-time property, so there is no statement
- * to wrap a runtime guard around.
- *
- * The naive splice could never have found it: `Clustered = false` is perfectly valid AL. Only the
- * real emit path fails, which is exactly why the spike runs both.
- *
- * An allow-list of executable contexts cannot be outrun by a property nobody enumerated; a deny-list
- * of declarative ones is only ever as complete as the last person's memory.
- */
-const BODY_ANCESTORS: ReadonlySet<string> = new Set(["procedure", "trigger_declaration"]);
 
 /**
  * Parent kinds that make a boolean literal a CASE LABEL, where flipping it does not compile.
@@ -317,12 +298,30 @@ function isCaseLabel(node: ALSyntaxNode): boolean {
   return parent !== null && CASE_LABEL_PARENTS.has(parent.rawKind);
 }
 
-/** Inside a procedure or trigger body — see `BODY_ANCESTORS` for why this is an allow-list. */
+/**
+ * A boolean is EXECUTABLE only inside a procedure or trigger body. Everything else is a declarative
+ * surface, which R135 rules out and R144 pins the refusal for.
+ *
+ * Stated as "must have a body ancestor" rather than as a list of declarative parents, because the
+ * list version was WRONG and the emit probe is what caught it. The first draft named
+ * `label_attribute` only, the 26 sites the corpus census found, and the instrumented artifact then
+ * failed to build at all: `resolveSite: no enclosing statement for node at 271..275`, which was
+ * `Clustered = true` on a table key. That value is a compile-time property, so there is no statement
+ * to wrap a runtime guard around.
+ *
+ * The naive splice could never have found it: `Clustered = false` is perfectly valid AL. Only the
+ * real emit path fails, which is exactly why the spike runs both.
+ *
+ * An allow-list of executable contexts cannot be outrun by a property nobody enumerated; a deny-list
+ * of declarative ones is only ever as complete as the last person's memory.
+ *
+ * The allow-list is `inMemberBody` (`@lethal/engine`) since R302: a `procedure` or trigger, or a
+ * split-header member's shared BODY. Not the whole split node: an attribute inside an `#if` arm
+ * is a child of the split node (a plain procedure's attribute is its sibling), so "any ancestor is
+ * procedure-like" would admit `[IntegrationEvent(false, false)]`'s booleans.
+ */
 function inExecutableBody(node: ALSyntaxNode): boolean {
-  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (BODY_ANCESTORS.has(p.rawKind)) return true;
-  }
-  return false;
+  return inMemberBody(node);
 }
 
 /**

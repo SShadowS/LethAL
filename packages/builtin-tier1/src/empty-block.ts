@@ -1,3 +1,4 @@
+import { isProcedureLike } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -38,7 +39,7 @@ export const emptyBlock: MutationOperator = {
   targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.block) return false;
     if (node.parent === null) return false;
-    if (!BODY_PARENT_KINDS.has(node.parent.kind)) return false;
+    if (!BODY_PARENT_KINDS.has(node.parent.kind) && !isProcedureLike(node.parent)) return false;
     // R179: CEDE a `while` loop's body to `lethal.loop-skip`.
     //
     // A `while` loop's body is what advances its condition — it must be, or the original would never

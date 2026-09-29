@@ -1,3 +1,4 @@
+import { inMemberBody } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -182,8 +183,5 @@ function toggled(node: ALSyntaxNode): string | null {
 }
 
 function inExecutableBody(node: ALSyntaxNode): boolean {
-  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (p.rawKind === "procedure" || p.rawKind === "trigger_declaration") return true;
-  }
-  return false;
+  return inMemberBody(node);
 }

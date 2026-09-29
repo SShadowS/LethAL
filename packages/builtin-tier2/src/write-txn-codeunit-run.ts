@@ -1,3 +1,4 @@
+import { isProcedureLike } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -21,7 +22,7 @@ function equalsIgnoreCase(a: string, b: string): boolean {
 function enclosingBody(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null) {
-    if (current.kind === ALNodeKind.procedure || current.kind === ALNodeKind.trigger) {
+    if (isProcedureLike(current) || current.kind === ALNodeKind.trigger) {
       return current;
     }
     current = current.parent;

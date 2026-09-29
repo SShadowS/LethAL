@@ -1507,17 +1507,26 @@ describe("R301: split-header procedures get their manifest fields", () => {
     }
   });
 
-  test("c-split: the site set is unchanged by the manifest fixes (operator multiset)", async () => {
-    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
-    const ops = manifest.mutants
-      .filter(inSplit)
-      .map((m) => `${m.startLine} ${m.operatorName}`)
-      .sort();
-    expect(ops).toEqual(SPLIT_SITES);
+  // R302 flipped this pin. It was a literal list of the sites HEAD found, which pinned the
+  // blindness (the split body had no `empty-block`). The oracle is now the member's twin: the same
+  // text with the markers and the `#else` arm blanked, every line kept.
+  test("c-split: the split body's site set equals its twin's (line and operator multiset)", async () => {
+    const twin = C_SPLIT.replace("#if CLEAN27", "").replace(
+      "#else\n    internal procedure A(X: Integer)\n#endif",
+      "\n\n",
+    );
+    expect(twin.split("\n")).toHaveLength(C_SPLIT.split("\n").length);
+    expect(twin).not.toContain("#");
+    const ops = async (src: string) =>
+      (await instrument({ "Split.Codeunit.al": src })).manifest.mutants
+        .filter(inSplit)
+        .map((m) => `${m.startLine} ${m.operatorName}`)
+        .sort();
+    const want = await ops(twin);
+    expect(want).toContain("18 lethal.empty-block");
+    expect(await ops(C_SPLIT)).toEqual(want);
   });
 });
-/** Captured after R301's latch fix (Step 4a), before the manifest fixes; see the test above. */
-const SPLIT_SITES: string[] = ["19 lethal.remove-assignment", "20 lethal.void-method-call"];
 
 describe("R303: a member whose var section is split by #if gets a latch, or is refused by name", () => {
   beforeAll(async () => {
@@ -2418,9 +2427,12 @@ describe("R327: a split member swallowed by the global var section gets no site 
   const sites = (m: MutantManifest) =>
     m.mutants.map((x) => `${x.file} L${x.startLine} ${x.operatorName}`).sort();
 
+  // The whole-body `empty-block` (L15) needs no type, so Task 2's body walks admit it; `alc`
+  // passes on it in both builds (scratch, logged in the R-302 task report).
   test("swallow: no swap at Show(X, Y), no swap-additive on X + 1", async () => {
     const { manifest } = await instrument({ "Repro.Codeunit.al": R327_SWALLOW });
     expect(sites(manifest)).toEqual([
+      "Repro.Codeunit.al L15 lethal.empty-block",
       "Repro.Codeunit.al L16 lethal.void-method-call",
       "Repro.Codeunit.al L17 lethal.remove-assignment",
       "Repro.Codeunit.al L18 lethal.return-value",

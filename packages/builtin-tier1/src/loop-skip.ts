@@ -1,3 +1,4 @@
+import { inMemberBody } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -144,8 +145,5 @@ function skipCondition(node: ALSyntaxNode): ALSyntaxNode | null {
  * gives: a deny-list of declarative parents is only ever as complete as the last person's memory.
  */
 function inExecutableBody(node: ALSyntaxNode): boolean {
-  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (p.rawKind === "procedure" || p.rawKind === "trigger_declaration") return true;
-  }
-  return false;
+  return inMemberBody(node);
 }
