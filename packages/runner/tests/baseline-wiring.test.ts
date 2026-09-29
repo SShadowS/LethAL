@@ -10,8 +10,8 @@ import { SYMBOL_SETS } from "../itest/symbol-fixture";
  * is checked on the AST: comments and unused imports do not count, and a checked call must name a
  * function imported from `./baseline-guard`, so a local stub with the same name does not count.
  *
- * The writer scan reads every `*.ts` under `packages/<pkg>/src`, `packages/<pkg>/itest` and
- * `scripts`, and proves it reached each root. It skips `tests` folders and `*.test.ts` on purpose:
+ * The writer scan reads every `*.ts` under `packages/<pkg>/src`, `packages/<pkg>/itest`,
+ * `packages/<pkg>/scripts` and `scripts`, and proves it reached each root. It skips `tests` folders and `*.test.ts` on purpose:
  * unit tests write temporary `*.baseline.json` files to exercise the guard. It also skips
  * `packages/runner/itest/baseline-guard.ts` (the one writer) and allows exactly one plain import of
  * the self-recording helper in `packages/runner/src/campaign-freeze.ts`.
@@ -24,6 +24,8 @@ import { SYMBOL_SETS } from "../itest/symbol-fixture";
  *   reassignment, a map lookup or a string built from unrelated parts.
  * - A baseline path passed as a function parameter: `save(BASELINE_PATH)` then `writeFile(p)`
  *   inside `save`. The parameter is not traced back to its callers.
+ * - A baseline path from another file. Tracing is per file: `import { OUT } from "./paths"` then
+ *   `writeFile(OUT)` is not traced to whatever `OUT` holds in `paths.ts`.
  * - Writers the scan does not know: file handles (`open` then `.write`), `openSync`/`writeSync`,
  *   shell commands (`Bun.$`, spawn), other libraries' writers under other names, and element
  *   access such as `Bun["write"]`.
@@ -123,7 +125,14 @@ function writeViolations(
   // Keyed by symbol, so a `dir` traced to a baseline in one function does not taint another
   // function's `dir`. An identifier with no symbol (undeclared) falls back to its name.
   const baselineVars = new Set<ts.Symbol | string>();
-  const key = (id: ts.Identifier): ts.Symbol | string => checker.getSymbolAtLocation(id) ?? id.text;
+  // In `{ p }` the identifier's own symbol is the PROPERTY; the value is the variable `p`.
+  const key = (id: ts.Identifier): ts.Symbol | string =>
+    (ts.isShorthandPropertyAssignment(id.parent) && id.parent.name === id
+      ? checker.getShorthandAssignmentValueSymbol(id.parent)
+      : checker.getSymbolAtLocation(id)) ?? id.text;
+  const namesFsModule = (n: ts.Node): boolean =>
+    (ts.isStringLiteralLike(n) && FS_MODULES.has(n.text)) ||
+    (ts.forEachChild(n, (c) => namesFsModule(c) || undefined) ?? false);
   const tracesToBaseline = (e: ts.Node): boolean =>
     LOOKS_LIKE_BASELINE.test(e.getText(sf)) || mentions(e, (id) => baselineVars.has(key(id)));
   const collect = (n: ts.Node): void => {
@@ -139,7 +148,7 @@ function writeViolations(
       const init = n.initializer;
       // `const { writeFile: w } = await import("node:fs/promises")` or `= require("fs")`.
       if (ts.isObjectBindingPattern(n.name)) {
-        const fromFs = [...FS_MODULES].some((m) => init.getText(sf).includes(`"${m}"`));
+        const fromFs = namesFsModule(init);
         for (const e of n.name.elements) {
           const key = e.propertyName ?? e.name;
           if (fromFs && ts.isIdentifier(key) && WRITERS.has(key.text) && ts.isIdentifier(e.name)) {
@@ -316,12 +325,12 @@ const READERS: Record<string, string> = {
   "verify-scale.itest.ts": "tables.baseline.json",
 };
 
-/** The writer scan's roots: every package's src and itest, and scripts. */
+/** The writer scan's roots: every package's src, itest and scripts, and the repo's scripts. */
 function scanRoots(): string[] {
   const pkgs = join(ROOT, "packages");
   const roots = readdirSync(pkgs, { withFileTypes: true })
     .filter((e) => e.isDirectory())
-    .flatMap((e) => ["src", "itest"].map((sub) => join(pkgs, e.name, sub)))
+    .flatMap((e) => ["src", "itest", "scripts"].map((sub) => join(pkgs, e.name, sub)))
     .filter((d) => existsSync(d));
   return [...roots, join(ROOT, "scripts")];
 }
@@ -329,6 +338,7 @@ function scanRoots(): string[] {
 const KNOWN: Record<string, string> = {
   "packages/runner/itest": "bcdev.itest.ts",
   "packages/runner/src": "campaign-subcommands.ts",
+  "packages/runner/scripts": "probe-r63-hub-payload.ts",
   "packages/engine/src": "index.ts",
   scripts: "roadmap-index.ts",
 };
@@ -456,7 +466,7 @@ describe("R332 wiring: real call sites, not text", () => {
     }
   });
 
-  test("no non-test source under packages/*/src, packages/*/itest or scripts writes a baseline, except the guard and campaign freeze", () => {
+  test("no non-test source under packages/*/src, packages/*/itest, packages/*/scripts or scripts writes a baseline, except the guard and campaign freeze", () => {
     const roots = scanRoots();
     const files: string[] = [];
     for (const root of roots) {
@@ -533,6 +543,14 @@ describe("R332 wiring: the checker catches alternate writers (negative tests)", 
     [
       "re-exported self-recording helper",
       `export { assertMatchesBaseline as amb } from "./baseline-guard";`,
+    ],
+    [
+      "a destructured writer from a single-quoted dynamic import",
+      `const { writeFile: w } = await import('node:fs/promises');\nawait w(BASELINE_PATH, "x");`,
+    ],
+    [
+      "a path through a shorthand property",
+      `import { writeFile } from "node:fs/promises";\nconst p = join(HERE, "x.baseline.json");\nconst o = { p };\nawait writeFile(o.p, "x");`,
     ],
   ])("%s is a violation", (_name, text) => {
     expect(violations(text).length).toBeGreaterThan(0);
