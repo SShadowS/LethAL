@@ -42,7 +42,13 @@ import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline, assertMatchesFrozenBaseline } from "./baseline-guard";
+import {
+  BaselineRecordedError,
+  assertGateBaseline,
+  assertMatchesFrozenBaseline,
+  preflightFrozenBaseline,
+  preflightGateBaseline,
+} from "./baseline-guard";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   assertEveryMutantHasReachGrain,
@@ -510,6 +516,15 @@ async function runSymbolLegs(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  preflightGateBaseline(BASELINE_PATH, "al-runner itest");
+  // Finding C / I2: BOTH symbol baselines, before either leg runs and before either is written.
+  for (const symbols of SYMBOL_SETS) {
+    preflightFrozenBaseline(
+      symbolBaselinePath(symbols),
+      "al-runner itest symbols",
+      RECORD_SYMBOL_BASELINES,
+    );
+  }
   await stampRunnerVersion();
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
@@ -530,7 +545,7 @@ async function main(): Promise<void> {
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
     // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
     // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
-    await assertMatchesBaseline(first, BASELINE_PATH, "al-runner itest");
+    await assertGateBaseline(first, BASELINE_PATH, "al-runner itest");
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second);
@@ -604,5 +619,5 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   await emitFailed("alrunner", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  process.exit(1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

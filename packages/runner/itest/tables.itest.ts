@@ -14,7 +14,7 @@
  * hand, into `fixtures/README.md`, with no committed gate — so a regression in trigger
  * attribution, in the (objectType, objectId) coverage key, or in table selector-var injection
  * would break the one behaviour Phase 0 exists to prove and nothing would fail. `assertVerdictTable`
- * below plus `assertMatchesBaseline` close that.
+ * below plus `assertGateBaseline` close that.
  *
  * Connection details are never committed: this script reads
  *   fixtures/sandbox-data/lethal.config.local.json         (LethAL bcdev section — gitignored)
@@ -42,7 +42,7 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline } from "./baseline-guard";
+import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
@@ -115,8 +115,9 @@ const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
  *
  * PER-MUTANT: the old `verdicts` map (7 entries, from the superseded 7-mutant fixture) is gone.
  * Asserting a 7-key map against 75 scored mutants cannot pass and proves nothing; the per-mutant
- * regression guard for THIS fixture is `assertMatchesBaseline` against the committed
- * `tables.baseline.json` (semantic-identity keyed, and self-recording when the file is absent).
+ * regression guard for THIS fixture is `assertGateBaseline` against the committed
+ * `tables.baseline.json` (semantic-identity keyed; since R332 a missing file is refused, never
+ * recorded silently).
  * The file IS committed; delete it to re-record after a deliberate fixture change, and review the
  * diff before committing — a re-record is the one operation that can silently bless a regression.
  * `assertTriggerKillAndSurvive` below independently pins the trigger claim.
@@ -126,7 +127,7 @@ const EXPECTED = {
   // `tableextension` over `Data Main` and a `page`/`pageextension` pair — so that extension
   // support, which had only ever run in unit tests, is instrumented, compiled, published and
   // EXECUTED by a gate. New sites have no frozen baseline entry by construction; every
-  // PRE-EXISTING mutant must keep its verdict, which is what `assertMatchesBaseline` checks.
+  // PRE-EXISTING mutant must keep its verdict, which is what `assertGateBaseline` checks.
   // R78 moved this from 93 to 96. The fixture gained `codeunit 79308 "Data Value Source"` and
   // `page 79323 "Data Value Card"` — a deliberately minimal pair whose only route in is a
   // `TestPage` test, built to answer whether a mutant covered EXCLUSIVELY by a TestPage test can be
@@ -141,7 +142,7 @@ const EXPECTED = {
   // the same-named page's `Helper: Record "Data Main"` answered for the table and Tier 2 CLAIMED
   // the site, whose §3.2 precedence then DELETED the Tier-1 mutant — measured offline on this
   // fixture as raw specs 99 -> 100 with DEPLOYED unchanged at 90. So the regression shows up as an
-  // OPERATOR NAME at a fixed file:line, which `assertMatchesBaseline` compares per mutant.
+  // OPERATOR NAME at a fixed file:line, which `assertGateBaseline` compares per mutant.
   // R68 moved this from 117 to 118: resolving a trigger's own `var` section made
   // `Data Scope Probe.OnInsert`'s receiver claimable, so Tier 2 gained a `remove-setrange` spec
   // there. DEPLOYED is unchanged at 106 — §3.2 precedence deletes the Tier-1 `void-method-call`
@@ -1194,7 +1195,7 @@ function assertVerdictTable(report: SessionReport): void {
   // above. Extracted into its own module (`notinstrumented-evidence.ts`) so the offline red-check
   // can call the identical assertion against a doctored report without a second billed live run.
   assertNotInstrumentedEvidence(report, EXPECTED.notInstrumented);
-  // Per-mutant verdicts are asserted by `assertMatchesBaseline` (tables.baseline.json), not here
+  // Per-mutant verdicts are asserted by `assertGateBaseline` (tables.baseline.json), not here
   // — see EXPECTED's doc comment for why the old inline 7-entry map was removed rather than
   // extended by hand.
 
@@ -1640,6 +1641,7 @@ function assertFilterLiteralEvidence(report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightGateBaseline(BASELINE_PATH, "tables itest");
   // PROJECT_DIR, not `<PROJECT_DIR>/src` — `runSession` generates from `cfg.projectDir`, so
   // scanning anything else would let this header describe a different file set than the run
   // below it actually executes.
@@ -1674,7 +1676,7 @@ async function main(): Promise<void> {
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
-    await assertMatchesBaseline(first.report, BASELINE_PATH, "tables itest");
+    await assertGateBaseline(first.report, BASELINE_PATH, "tables itest");
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second.report);
@@ -1715,5 +1717,5 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   await emitFailed("tables", err instanceof Error ? err.message : String(err));
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  process.exit(1);
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });
