@@ -829,6 +829,10 @@ export interface ExecutionContext {
    * worse than the problem — so a resumed report can hold verdicts produced against two different
    * platform-app builds. Carried entries never receive this field, so the seam is visible instead of
    * hidden.
+   *
+   * R242: absent on a `--server` session (the server and resource legs of `itest:alrunner`). The
+   * daemon starts with `packagesDir` alone and never receives the pin, so recording it there would
+   * name a directory the run never searched.
    */
   readonly platformAppsDir?: string;
 }

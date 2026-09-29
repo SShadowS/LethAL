@@ -314,6 +314,10 @@ export type RunEventInput =
        * parse had gone stale would otherwise produce exactly the same verdicts, the same counts and
        * no line anywhere.
        *
+       * R242: also NOT emitted when the backend's transport would not send the pin (`--server`).
+       * That session emits an `al-runner-platform-apps-not-consumed` warning instead, so the
+       * report records `platformAppsDir` only where the run actually searched it.
+       *
        * al-runner-specific by design, the same as `al-runner-bc-build`: no other backend provisions
        * anything.
        */
