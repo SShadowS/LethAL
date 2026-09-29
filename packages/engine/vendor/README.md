@@ -1,8 +1,120 @@
 # Vendored `tree-sitter-al.wasm`
 
 This directory contains a prebuilt tree-sitter parser WebAssembly binary for the
-AL language (Microsoft Dynamics 365 Business Central). The `@lethal/engine`
-package loads this file at runtime via `web-tree-sitter` to parse AL source.
+AL language (Microsoft Dynamics 365 Business Central). Since RUST-03 (`9f7cb5f0`)
+the `@lethal/engine` package does NOT parse with it: the product parses AL with a
+native addon built from the same grammar sources (next section). The WASM is kept
+as the reference parser for the equivalence and grammar cross-check scripts,
+loaded via `web-tree-sitter` in `src/ast/parser-wasm.ts`, which product code must
+not import (`tests/ast/no-wasm-in-product.test.ts`).
+
+## Native parser (RUST-03, 2026-09-29)
+
+The engine's parse entry point (`src/ast/parser.ts`) is `src/ast/native-parser.ts`,
+which loads a napi-rs addon, `vendor/native/lethal-parser.<platform>-<arch>.node`.
+
+**The crate and its pins.** `packages/engine/native/` (`lethal-parser`, `src/lib.rs`,
+`build.rs`). `Cargo.toml` pins `tree-sitter = "=0.25.10"` and `tree-sitter-al = "=4.4.1"`
+exactly; `napi` 3 (feature `napi4`), `napi-derive` 3 and `sha2` 0.10 resolve through the
+committed `Cargo.lock`, and every build passes `--locked`. The release profile is
+`lto = true`, `codegen-units = 1`; on Windows `.cargo/config.toml` adds `/Brepro` to the
+link and to the C flags.
+
+**No binary is committed.** `packages/engine/native/target/`, `vendor/native/*.node` and
+`vendor/native/*.provenance.json` are gitignored. Only CI-built addons ship (see
+`docs/releasing.md`, "The native parser (RUST-03)"). Building one needs **Rust 1.96**
+(release CI pins `dtolnay/rust-toolchain` at 1.96.0) and **LLVM 23.1.2** clang:
+
+```bash
+bash scripts/install-llvm.sh <platform-key>   # pinned asset, sha256-checked; or set LLVM_BIN
+bun scripts/build-native-parser.ts            # addon plus provenance for this machine
+bun scripts/build-native-parser.ts --test     # the Rust tests, same checked environment
+```
+
+**Run the build before `bun test` on a fresh checkout, and again after any change under
+`packages/engine/native/`.** The unit tests parse through the addon. In source mode the
+loader refuses an addon built from other crate sources (`NativeParserStaleError`, from
+`bindingSourceSha256` against the local `Cargo.toml`, `Cargo.lock`, `build.rs` and
+`src/lib.rs`), and a missing addon fails with `NativeParserMissingError`, which names this
+command. There is no WASM fallback. `CARGO_TARGET_DIR` is honoured, so worktrees can share
+one build cache.
+
+**The compiler for each target.** Every addon's C code (the grammar and the tree-sitter
+runtime) is compiled by clang from LLVM 23.1.2, macOS included. `build-native-parser.ts`
+strips every `CC`/`CFLAGS` override from cargo's environment, sets `CC` to the checked
+clang (clang-cl on Windows), and refuses any `--version` line other than
+`clang version 23.1.2`; `build.rs` refuses the same way and bakes that line into the addon
+(`nativeInfo().cCompiler`).
+
+| platform key | built on (release CI) | Rust target | C compiler | LLVM asset |
+| --- | --- | --- | --- | --- |
+| win32-x64 | windows-latest | `x86_64-pc-windows-msvc` | clang-cl 23.1.2 | `LLVM-23.1.2-win64.msi` |
+| linux-x64 | ubuntu-22.04 | `x86_64-unknown-linux-gnu` | clang 23.1.2 | `LLVM-23.1.2-Linux-X64.tar.xz` |
+| linux-arm64 | ubuntu-22.04-arm | `aarch64-unknown-linux-gnu` | clang 23.1.2 | `LLVM-23.1.2-Linux-ARM64.tar.xz` |
+| darwin-x64 | macos-14 (arm64), cross-built; checked on macos-15-intel | `x86_64-apple-darwin` | clang 23.1.2 | `LLVM-23.1.2-macOS-ARM64.tar.xz` |
+| darwin-arm64 | macos-14 | `aarch64-apple-darwin` | clang 23.1.2 | `LLVM-23.1.2-macOS-ARM64.tar.xz` |
+
+LLVM 23.1.2 ships no macOS x64 build, so darwin-x64 is cross-built on the arm64 runner
+(`--target darwin-x64`) and its provenance is written on the Intel runner
+(`--provenance`), where it can load. Clang compiles its C; rustc links it through Apple's
+`cc`.
+
+**The grammar check.** `scripts/check-native-grammar.ts` reads the `tree-sitter-al` package
+cargo resolves, requires version 4.4.1, and requires its `src/parser.c` and `src/scanner.c`
+to hash to upstream's `tree-sitter-al.wasm.inputs.sha256` at tag v4.4.1, the inputs the
+vendored WASM was built from. The build runs it first and passes the result to `build.rs`,
+which embeds it. At init the loader checks the addon's `nativeInfo()` against `GRAMMAR_PIN`
+in `native-parser.ts` (grammar version, tree-sitter version, language ABI 15, kind-table
+sha256, grammar inputs) and its `target` against the running platform
+(`NativeParserPinError`).
+
+**The provenance record.** Beside each addon the build writes
+`lethal-parser.<key>.provenance.json`: file name, sha256, size, the addon's own
+`nativeInfo()` (including the C compiler line and the Rust target), the `Cargo.lock`
+sha256 and the git commit. Release CI attaches all five to every release.
+
+**The notice inventory.** `scripts/native-notices.ts` lists every crate cargo resolves,
+checks each crate's full SPDX expression against an allowlist, and writes
+`packages/engine/native/THIRD-PARTY-NOTICES.md` with each crate's license and copyright
+text. Crates whose package carries no license file take a committed copy under
+`packages/engine/native/licenses/`, keyed by `name@version`, so a version bump fails until
+the text is copied again. `--check` exits 1 when the committed file differs; CI runs it, and
+the file is attached to every release.
+
+**Reproducibility.** Measured on Windows only (`docs/releasing.md`, "Reproducibility"): two
+builds into two fresh, empty target directories gave the same `.node` sha256
+(`196686bb...d3259`), so the build is byte-reproducible on one machine. Across machines and
+platforms it was not measured; there the claim is "reproducible in behaviour, not bytes".
+
+**What RUST-03 measured.** The switch gates and the memory ceilings are in the OUTCOME of
+`docs/superpowers/specs/2026-09-28-rust-03-precommitment.md`. The W8 wall-time win (the
+spec-level identity capture, 1,573 s to 186 s median after S4.2a, AMENDMENT 5) is recorded,
+not gating: speed is the owner's third priority, after no crash and lower RAM.
+
+### Bumping the grammar in the native parser
+
+The WASM bump steps below still apply, and the WASM must be bumped to the same tag, because
+the native parser is checked against it.
+
+1. Bump the crate pin (`tree-sitter-al = "=<new>"` in `packages/engine/native/Cargo.toml`)
+   and update `Cargo.lock`.
+2. Set `EXPECTED_VERSION` and the two `EXPECTED` hashes in
+   `scripts/check-native-grammar.ts` from the new tag's `tree-sitter-al.wasm.inputs.sha256`,
+   and run `bun scripts/check-native-grammar.ts`. A difference is a stop.
+3. Rebuild (`bun scripts/build-native-parser.ts`, then `--test`), and re-copy any license
+   text `bun scripts/native-notices.ts` asks for; commit the regenerated notices.
+4. Update `GRAMMAR_PIN` in `packages/engine/src/ast/native-parser.ts` from the new addon's
+   `nativeInfo()`.
+5. Run `bun scripts/probe-parser-equivalence.ts <dir>` on every fixture and every corpus
+   (the fixtures, the grammar probe, do, dc, sentinel, bcf, sysapp and the whole BaseApp):
+   0 differing nodes and equal kind tables on each.
+6. Then the census method of the 4.3.0 -> 4.4.1 bump below (TSAL-441): the per-file tree
+   diff on the fixtures, `census-operator-sites.ts` before and after on every corpus
+   (the whole BaseApp now runs in one pass, R292), the identity listings, and the live gates.
+
+**WASM is the reference only.** It stays until one grammar bump has been done natively
+(standing ruling). After that, removing `web-tree-sitter`, `src/ast/parser-wasm.ts` and the
+vendored `.wasm` is the owner's decision.
 
 ## Upstream grammar
 

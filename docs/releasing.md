@@ -134,9 +134,9 @@ after a merge reports a problem that has already shipped. Corrected in `af0b056`
 ## The native parser (RUST-03)
 
 Each binary embeds a native tree-sitter-al addon (`packages/engine/native`, a Rust crate) built for
-its own platform. Until the RUST-03 switch (S3) the product still parses with WASM, but the addon is
-built, checked and embedded from S2 on, so no release can carry an addon that was not built and
-parse-tested on every target.
+its own platform. Since the RUST-03 switch (`9f7cb5f0`) the product parses AL with this addon only;
+there is no WASM fallback. The addon is built, checked and embedded on every target, so no release
+can carry an addon that was not built and parse-tested there.
 
 **Only CI-built addons ship, and no `.node` file is ever committed.** Release CI builds each addon,
 uploads it, and `build` downloads all five into `packages/engine/vendor/native/` before it typechecks,
@@ -184,7 +184,7 @@ Apple `cc -arch x86_64`, as it does on every macOS build; no LLVM 23.1.2 linker 
 - `native-parser`: `bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "files 32
   nodes 7382 errors 0"` parses every fixture file through the addon directly. `--expect` is
   required, and all five targets expect the same line (the parse does not depend on the platform).
-  Before S3 the product `--dry-run` never calls the addon, so this is the addon's own parse check.
+  This checks the addon on its own, before any binary is compiled.
 - `smoke`: runs each compiled binary from a directory with no `packages/` tree, so it cannot load a
   `.node` from disk. `--version` must not say DIRTY; the hidden `lethal native-check` must print
   `native <triple> clang version 23.1.2 ... nodes 56` (a missing embedded addon exits non-zero with
@@ -259,37 +259,23 @@ somewhere the compile step never consults.
 
 This happens once per target per machine. The `seed` lines in the build output mark it.
 
-## Runtime assets — the thing that breaks compiled binaries
+## Runtime assets: the thing that breaks compiled binaries
 
-LethAL parses AL with tree-sitter, which needs **two** WebAssembly files at runtime:
+LethAL parses AL with a native tree-sitter-al addon (RUST-03), one `.node` file per platform under
+`packages/engine/vendor/native/`. The compiled binary must carry the one for its own target.
 
-- `packages/engine/vendor/tree-sitter-al.wasm` — the vendored AL grammar (7.9 MB, see R14).
-- `web-tree-sitter/tree-sitter.wasm` — web-tree-sitter's own emscripten runtime (205 KB).
+`packages/engine/src/ast/native-parser.ts` reaches it through a `require` whose path is a template
+over the build-time define `__LETHAL_NATIVE_KEY__`, which `scripts/build-binary.ts` sets per target.
+That is the only form `bun build --compile` embeds: a literal `require` per platform fails the build,
+because Bun treats every literal `require` of an absent file as a hard resolve error (R314). Under
+`bun run` the define is absent and the loader reads the addon for the running platform from disk.
 
-Both are reached through Bun's `file` loader in `packages/engine/src/ast/parser.ts`:
+The WASM grammar (`packages/engine/vendor/tree-sitter-al.wasm`) and web-tree-sitter's runtime are no
+longer runtime assets. They stay in the repository as the reference parser for the equivalence
+scripts, and product code must not import them (`no-wasm-in-product.test.ts`).
 
-```ts
-import alGrammarWasmPath from "../../vendor/tree-sitter-al.wasm" with { type: "file" };
-import treeSitterRuntimeWasmPath from "web-tree-sitter/tree-sitter.wasm" with { type: "file" };
-```
-
-A **static** import is what tells `bun build` to carry the asset into the binary at all. A path
-computed at runtime is invisible to the bundler and cannot be embedded. Before this, `parser.ts`
-resolved the grammar relative to `import.meta.url`; under `--compile` that is Bun's virtual root, so
-every parse died before reading a byte of AL:
-
-```
-failed to asynchronously prepare wasm: Error: ENOENT: no such file or directory,
-open 'B:\~BUN\root\tree-sitter.wasm'
-```
-
-The `file` loader yields a **path**, and that path works in both modes: the real absolute path under
-`bun run`, and Bun's virtual root (`B:/~BUN/root/tree-sitter-al-pgb865xw.wasm`) in a compiled
-binary, which `node:fs` reads out of the embedded blob store. The hashed basename is Bun's — never
-parse or construct these paths.
-
-**If you add a non-TS runtime asset, import it the same way and re-run the check below.** A missing
-asset does not fail the build; it fails the first time a user runs the tool.
+**If you add a non-TS runtime asset, make sure `bun build --compile` embeds it, and re-run the check
+below.** A missing asset does not fail the build; it fails the first time a user runs the tool.
 
 ## Verifying a build
 
