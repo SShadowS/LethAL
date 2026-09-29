@@ -469,8 +469,9 @@ function resolveReceiver(
 
 /**
  * Find the declaration of `name` visible at the call site: a TRIGGER's own `var` section first (if
- * the call sits inside one), then the enclosing procedure's locals, then its parameters, then the
- * object's globals.
+ * the call sits inside one), then the enclosing procedure's locals (with its named return value,
+ * R323), then its parameters, then the object's globals. A trigger's named return value is unknown
+ * and resolves to nothing (R323, through `triggerLocalNames`).
  *
  * The trigger case is resolved from the AST node rather than from a name-keyed map (see
  * `triggerScopeVar`, below): `buildSymbolTable` indexes `procedure` members only, deliberately,
@@ -576,7 +577,9 @@ function triggerScopeVar(
  * and name alike) rather than by name comparison.
  */
 function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
-  const typeNode = declaration.node.childForFieldName("type");
+  // R323: a named return value's node is its `return_value` identifier; its type is the
+  // `return_type` that follows it in the same parent (for a split member, in the same arm).
+  const typeNode = declaration.node.childForFieldName("type") ?? returnTypeAfter(declaration.node);
   if (typeNode === null) return { kind: "unresolved" };
   const recordType = typeNode.namedChildren.find((c) => c.kind === ALNodeKind.record_type);
   if (recordType === undefined) return { kind: "non-record" };
@@ -824,4 +827,15 @@ function lower(s: string): string {
 
 function equalsIgnoreCase(a: string, b: string): boolean {
   return lower(a) === lower(b);
+}
+
+/** R323: the `return_type` that follows a `return_value` identifier, or `null` for any other node. */
+function returnTypeAfter(node: ALSyntaxNode): ALSyntaxNode | null {
+  if (node.fieldName !== "return_value") return null;
+  const parent = node.parent;
+  if (parent === null) return null;
+  return (
+    parent.children.find((c) => c.fieldName === "return_type" && c.startIndex > node.startIndex) ??
+    null
+  );
 }

@@ -13,12 +13,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
-- **Existing `lethal.equivalent.json` files need `"identityScheme": 2`** (R325). Identity keys now
+- **Identity scheme 3** (R323): keys can move in procedures with a named return value, where the
+  fix adds or removes a typed mutant that shares an identity tuple with another one. Existing marks
+  files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
+  resume from scheme-2 runs are refused by name (R325).
+- **Existing `lethal.equivalent.json` files need an `"identityScheme"` field** (R325), set to the
+  report's own `identityScheme` (3 since R323, see above). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
   so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is
-  applied, until you check each mark against a fresh report and add `"identityScheme": 2` at the top
-  level. For the same reason, `--skip-known-survivors` skips nothing from a run recorded before this
+  applied, until you check each mark against a fresh report and add the current `"identityScheme"` at
+  the top level. For the same reason, `--skip-known-survivors` skips nothing from a run recorded before this
   version, and `--resume` / `--resume-run` refuse such a run by name.
 
 

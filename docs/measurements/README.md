@@ -1142,6 +1142,29 @@ BC version selection failed: no shipped engine variant supports BC 28.5.54151.55
 
 That is filed as R241, not fixed by R235.
 
+**Measured against `al-runner v2.12.0` on 2026-09-29 (R338): `[bc] selected` is verbose-only.**
+On a default one-shot run (the mutant argv, `--output-json`, no `AL_RUNNER_VERBOSE`) stderr carries
+neither `[bc] selected BC <build> (<dir>)` nor `[bc] ... selecting BC <build>`, so R129 recorded no
+`bcBuild` and `itest:alrunner` failed with every verdict unchanged. The same stderr still names the
+selected build twice, and `parseAlRunnerBcBuild` now reads both after `selected`:
+
+```
+[bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.55333, not the selected 28.1.49838.54487 - ...
+al-runner 0.0.0-main · BC 28.1.49838.54487 · 2 apps
+```
+
+The warning prints only when the engine variant's build differs from the selected one; the banner
+(which on 2.11.0 read `al-runner - running 1 bundle(s)` and named no build) prints on every run.
+With `AL_RUNNER_VERBOSE=1`, 2.12.0 prints `[bc] selected` again plus two new lines,
+`[bc] no --bc-version given - selecting BC <build>, the newest version this install ships an engine
+for ...` and `[bc] selecting engine variant <variant> for BC <build> (...) - re-execing.`; the second
+is pinned by test as NOT an announcement. The daemon (`--server`) still prints `[bc] selected` on its
+stderr without verbose. LethAL does NOT request verbose on mutant calls: it adds about a hundred
+lines per invocation, and the daemon keeps only a bounded stderr tail. The R147 pin is unaffected:
+the provisioning call is already verbose (R235) and still gets its `[pkg-cache] ...\platform-apps`
+line. `itest:alrunner` on 2.12.0: PASS, 3 / 12 / 4 on all four legs, identical per mutant, pin
+engaged on both one-shot legs, and both R321 symbol sets 5 / 8 / 0 on every leg.
+
 ### It runs on Windows
 
 R98 recorded that upstream `main` P/Invoked `libc`'s `mprotect` and died before any test ran. On the

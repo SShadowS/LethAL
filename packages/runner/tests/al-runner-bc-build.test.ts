@@ -54,6 +54,108 @@ describe("parseAlRunnerBcBuild (R129)", () => {
   });
 });
 
+/**
+ * R338. al-runner 2.12.0, measured 2026-09-29 on the sandbox-app pair (evidence in
+ * H:/lethal-coord/tasks-evidence/R-338/). Verbatim apart from the home prefix, shortened to `C:\x\`,
+ * and the long warning's tail. `\u2014` and `\u00b7` are the runner's own em dash and middle dot.
+ *
+ * DEFAULT (no AL_RUNNER_VERBOSE), `--output-json`: stderr carries no `[bc] selected` line, only
+ * the warning and the banner. VERBOSE adds `[bc] selected` and two new `[bc]` lines.
+ */
+const V212_WARNING =
+  "[bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.55333, not the selected 28.1.49838.54487 \u2014 different BUILDS of the same minor can still fail to load Microsoft.Dynamics.Nav.CodeAnalysis (it's strong-named per build, not per minor).";
+const V212_BANNER = "al-runner 0.0.0-main \u00b7 BC 28.1.49838.54487 \u00b7 2 apps";
+const V212_SELECTING =
+  "[bc] no --bc-version given \u2014 selecting BC 28.1.49838.54487, the newest version this install ships an engine for (9 engine variant(s) shipped; the matching one is selected automatically below). Override with --bc-version.";
+const V212_VARIANT =
+  "[bc] selecting engine variant 28.1.49838.55333 for BC 28.1.49838.54487 (this process is currently running the 28.5.54151.55364 variant) \u2014 re-execing.";
+const V212_SELECTED = String.raw`[bc] selected BC 28.1.49838.54487 (C:\x\.local/share/al-runner/artifacts\28.1.49838.54487)`;
+const V212_ENGINE = String.raw`[provision] BC 28.1.49838.54487 engine artifacts already complete at C:\x\.local/share/al-runner/artifacts\28.1.49838.54487.`;
+const V212_DEFAULT_STDERR = [
+  V212_WARNING,
+  V212_BANNER,
+  "[layered] cache HIT LethAL Sandbox App 1.0.0.1 \u2192 LethAL_LethAL_Sandbox_App_1_0_0_1.app (src .app + sidecar symbols, 1126 bytes, 0ms)",
+  "[1/2] src \u2014 1 suites",
+  "  \u2192 1P/0F/0E across 1 tests, 0 suite errors (6.8s)",
+].join("\n");
+const V212_VERBOSE = [
+  V212_SELECTING,
+  V212_VARIANT,
+  "[reexec] Re-execing into a shadow runtime dir with the matching BC-minor engine variant",
+  V212_SELECTING,
+  V212_ENGINE,
+  V212_SELECTED,
+  V212_WARNING,
+  V212_BANNER,
+].join("\n");
+
+/** 2.11.0 default stderr, from docs/measurements/README.md "al-runner v2" (R235). */
+const V211_DEFAULT_STDERR = [
+  String.raw`[bc] selected BC 28.1.49838.54487 (C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487)`,
+  "[bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.54368, not the selected 28.1.49838.54487 - ...",
+  "al-runner - running 1 bundle(s)",
+].join("\n");
+
+describe("parseAlRunnerBcBuild on 2.11 and 2.12 output (R338)", () => {
+  test("2.11 default: the `[bc] selected` line, as before", () => {
+    expect(parseAlRunnerBcBuild(V211_DEFAULT_STDERR)).toEqual({
+      build: "28.1.49838.54487",
+      announcement: String.raw`[bc] selected BC 28.1.49838.54487 (C:\Users\SShadowS\.local/share/al-runner/artifacts\28.1.49838.54487)`,
+    });
+  });
+
+  test("2.12 default: read off the warning, the selected build and never the variant's", () => {
+    expect(parseAlRunnerBcBuild(V212_DEFAULT_STDERR)).toEqual({
+      build: "28.1.49838.54487",
+      announcement: V212_WARNING,
+    });
+  });
+
+  test("2.12 default without the warning (variant matches): read off the banner", () => {
+    expect(parseAlRunnerBcBuild(`${V212_BANNER}\n[1/2] src \u2014 1 suites\n`)).toEqual({
+      build: "28.1.49838.54487",
+      announcement: V212_BANNER,
+    });
+  });
+
+  test("2.12 banner with a mangled middle dot still parses", () => {
+    expect(
+      parseAlRunnerBcBuild("al-runner 2.12.0 \u00c2\u00b7 BC 28.1.49838.54487 ? 2 apps")?.build,
+    ).toBe("28.1.49838.54487");
+  });
+
+  test("2.12 verbose: `[bc] selected` still wins", () => {
+    expect(parseAlRunnerBcBuild(V212_VERBOSE)).toEqual({
+      build: "28.1.49838.54487",
+      announcement: V212_SELECTED,
+    });
+  });
+
+  test("2.12 sibling lines are NOT the announcement", () => {
+    // The engine variant line names BC 28.1.49838.54487 after `for BC`, not `selecting BC`; the
+    // engine directory and the server banner name no selection at all.
+    expect(parseAlRunnerBcBuild(V212_VARIANT)).toBeUndefined();
+    expect(parseAlRunnerBcBuild(V212_ENGINE)).toBeUndefined();
+    expect(
+      parseAlRunnerBcBuild("al-runner \u2014 server mode (JSON-RPC over stdin/stdout)"),
+    ).toBeUndefined();
+    expect(parseAlRunnerBcBuild("al-runner v2.12.0")).toBeUndefined();
+    expect(
+      parseAlRunnerBcBuild(
+        String.raw`    [pkg-cache] C:\x\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps`,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("the new lines must open the line, so a test's failure text cannot fake them", () => {
+    expect(
+      parseAlRunnerBcBuild(
+        `Expected: ${V212_BANNER}\nError: x [bc] warning: not the selected 1.2.3.4\n`,
+      ),
+    ).toBeUndefined();
+  });
+});
+
 const CAPS_ALRUNNER = {
   coverage: "none",
   deploy: "none",

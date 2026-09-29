@@ -122,6 +122,9 @@ export interface ProcedureSymbol {
   readonly name: string;
   readonly owner: string;
   readonly parameters: readonly VarSymbol[];
+  /** The member's own `var` declarations and, since R323, its named return value
+   *  (`procedure P() Result: Text`), whose `node` is the `return_value` identifier and whose
+   *  `typeText` is the `return_type`. A local hides a global of its name. */
   readonly locals: readonly VarSymbol[];
   readonly returnType: string | null;
   readonly node: ALSyntaxNode;
@@ -595,6 +598,14 @@ function parseProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol | nu
   const locals = varSection === undefined ? [] : collectVarDeclarations(varSection);
 
   const returnTypeNode = node.childForFieldName("return_type");
+  // R323: a named return value is a local of its procedure. It hides a global of its name.
+  const returnValue = node.childForFieldName("return_value");
+  if (returnValue !== null && returnTypeNode !== null)
+    locals.push({
+      name: stripQuotes(returnValue.text),
+      typeText: returnTypeNode.text,
+      node: returnValue,
+    });
   const returnType = returnTypeNode === null ? null : returnTypeNode.text;
   const ambiguous = conditionallyDeclared(node);
 
@@ -622,7 +633,8 @@ export function enclosingTrigger(node: ALSyntaxNode): ALSyntaxNode | null {
 
 /**
  * R330 (run 002 fix round): the lowercase names a trigger declares in its own header: its
- * parameters, and its locals in a plain `var` section or inside a `#if` region. Type resolution does not index trigger locals, so each
+ * parameters, its named return value (R323), and its locals in a plain `var` section or inside a
+ * `#if` region. Type resolution does not index trigger locals, so each
  * such name is UNKNOWN there: it gets no type and hides a global of the same name (with R322's
  * case-insensitive global lookup, also one whose casing differs). The body is not read.
  */
@@ -636,6 +648,8 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
         const name = c.childForFieldName("name")?.text ?? "";
         if (name !== "") out.add(stripQuotes(name).toLowerCase());
       }
+      // R323: a trigger's named return value is a header name too.
+      if (c.fieldName === "return_value") out.add(stripQuotes(c.text).toLowerCase());
       walk(c);
     }
   };
@@ -672,7 +686,8 @@ function conditionallyDeclared(member: ALSyntaxNode): string[] {
 
 /**
  * R302: a split member (R301's `preproc_split_procedure`, R316's `_preamble`) as one procedure
- * symbol, by the every-arm rule. A parameter or an arm's own local resolves only when EVERY arm
+ * symbol, by the every-arm rule. A parameter, an arm's own local or an arm's named return value
+ * (R323) resolves only when EVERY arm
  * declares it with the same type text; any other name an arm declares is `ambiguous` and resolves
  * to nothing, hiding a global of that name. A shared `var` section after `#endif` belongs to every
  * arm. The name is the agreed one (`procedureLikeNameNode`); a renamed member gets `""`, so it is
@@ -691,7 +706,11 @@ function parseSplitProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol
       m.set(k, { sym, type: norm(sym.typeText), param });
     };
     for (const c of arm) {
-      if (c.kind === ALNodeKind.parameter_list) {
+      if (c.fieldName === "return_value") {
+        // R323: an arm's named return is one more declaration of that arm (every-arm rule).
+        const rt = arm.find((x) => x.fieldName === "return_type" && x.startIndex > c.startIndex);
+        add({ name: stripQuotes(c.text), typeText: rt?.text ?? "", node: c }, false);
+      } else if (c.kind === ALNodeKind.parameter_list) {
         for (const p of collectParameters(c)) add(p, true);
       } else if (
         c.kind === ALNodeKind.var_section ||
