@@ -1511,6 +1511,7 @@ describe("R301: split-header procedures get their manifest fields", () => {
       expect(m.procedureName).not.toBe("AIf");
       expect(m.procedureName).not.toBe("AElse");
       expect(m.procedureName).toBe("");
+      expect(m.coverageArmNames).toEqual(["AIf", "AElse"]);
     }
   });
 
@@ -3648,5 +3649,139 @@ describe("R331: the unparsed-object fallback is conservative", () => {
         "TabExt.TableExt.al": R331_U3_EXT,
       }),
     ).toEqual(WANT);
+  });
+});
+
+/** R318 repros, hand-written. `R318_R1`: a public renamed split member (lines 3-16) and `Plain`.
+ *  `R318_R4`: two renamed members that share `Beta` across builds (lines 3-13 and 15-25). */
+const R318_R1 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := 1;
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob + K);
+    end;
+
+    procedure Plain(X: Integer): Integer
+    begin
+        exit(X + 3);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const R318_R4 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Alpha(X: Integer): Integer
+#else
+    procedure Beta(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+#if R318A
+    procedure Beta(X: Integer): Integer
+#else
+    procedure Gamma(X: Integer): Integer
+#endif
+    var
+        L: Integer;
+    begin
+        L := X + 2;
+        exit(L);
+    end;
+}
+`;
+const R318_R3 = R318_R1.replace(
+  "    procedure Plain(",
+  "#if R318A\n    procedure Choose(T: Text): Integer\n    begin\n        exit(StrLen(T) + 1);\n    end;\n#endif\n\n    procedure Plain(",
+);
+
+describe("R318: a renamed split member carries its coverage names, and no identity key tuple moves", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("r1: the renamed member's mutants list both arm names; Plain's carry none", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    const inMember = manifest.mutants.filter((m) => m.startLine >= 3 && m.startLine <= 16);
+    expect(inMember).toHaveLength(10);
+    for (const m of inMember) {
+      expect(m.procedureName).toBe("");
+      expect(m.coverageArmNames).toEqual(["Pick", "Choose"]);
+    }
+    for (const m of manifest.mutants.filter((x) => x.startLine > 16)) {
+      expect(m.procedureName).toBe("Plain");
+      expect(m.coverageArmNames).toBeUndefined();
+    }
+  });
+
+  test("r4: each member keeps only the name the other never uses", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const got = [...manifest.mutants]
+      .sort((a, b) => a.startIndex - b.startIndex)
+      .map((m) => `L${m.startLine} ${(m.coverageArmNames ?? []).join("/")}`);
+    expect(got).toEqual([
+      "L10 Alpha",
+      "L11 Alpha",
+      "L11 Alpha",
+      "L12 Alpha",
+      "L22 Gamma",
+      "L23 Gamma",
+      "L23 Gamma",
+      "L24 Gamma",
+    ]);
+  });
+
+  // The pre-commitment: exactly HEAD b6562aba's keys (identical to b184dd5d's), measured by the
+  // R-318 plan's dry run. The renamed members stay in the "" group, so r4's second return-value
+  // keeps ordinal 1.
+  test("identity keys are HEAD's, byte for byte", async () => {
+    const keysOf = async (src: string): Promise<string[]> => {
+      const { manifest } = await instrument({ "Repro.Codeunit.al": src });
+      return [...manifest.mutants]
+        .sort((a, b) => a.startIndex - b.startIndex || a.mutantId.localeCompare(b.mutantId))
+        .map((m) => serializeKey(identityKeyOf(m)));
+    };
+    expect(await keysOf(R318_R1)).toEqual([
+      "1bdfa00ed4f9f5b66393ce5fa68726410673f75c945f991bd88595fd5bcc3bef|Repro R||lethal.empty-block|1",
+      "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Repro R||lethal.remove-assignment|1",
+      "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Repro R||lethal.shift-integer|1",
+      "42f3c401fde31149e055dfec5842326f020390b03c7018fe168a642644df6a58|Repro R||lethal.conditional-boundary|1",
+      "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
+      "2f655ef42c7141d41be438ef0a09db0588720672f6a87a7d107927722cfa2e29|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
+      "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Repro R||lethal.return-value|1",
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Repro R||lethal.swap-additive|1",
+      "d1f83cdca147307b5525047ab73ef3b96e89e7d274d898a8a0c3975ef32aa9ca|Repro R|Plain|lethal.empty-block|1",
+      "cf8233fb4c95eb8f641cac7ecd90d8bfc2f40fd8ec1a247b4cc9bbbc601c6528|Repro R|Plain|lethal.return-value|1",
+      "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Repro R|Plain|lethal.swap-additive|1",
+    ]);
+    expect(await keysOf(R318_R4)).toEqual([
+      "13926bb4e72d79aead21ac9263d2735b6aacd45904fbe9b058371f9115262cb2|Repro R||lethal.empty-block|1",
+      "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
+      "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1",
+      "d25d06cde1e1a4a5557adb12f3773916f28b8e80b8c21b4a9f8a158463163c1e|Repro R||lethal.empty-block|1",
+      "37276285a29d8c4a38baf6d602a495db9e97d227b9b18c9b00901b65b1d5e2ab|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
+      "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1|1",
+    ]);
   });
 });
