@@ -101,9 +101,12 @@ export function identityTupleOf(
  * Bump it with any engine or operator change that can move an existing mutant's key for unchanged
  * AL source. `1` is every key made before this constant existed; anything recorded without a
  * scheme is read as `1`. 3: R323, a named return value became a declaration (measured moves in
- * the R-323 plan).
+ * the R-323 plan). 4: R318, a renamed split member's coverage is attributed by position and a
+ * line two members share names nobody, which changes the verdict an unchanged key can carry
+ * (history, `--resume`, `--resume-run`, equivalence marks). No key tuple moves; the bump is for
+ * changed attribution of unchanged keys.
  */
-export const IDENTITY_SCHEME = 3;
+export const IDENTITY_SCHEME = 4;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

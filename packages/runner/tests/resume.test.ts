@@ -445,8 +445,9 @@ describe("sessionFingerprint (R47)", () => {
   // R228: the key is CONDITIONAL, so no exclusions adds nothing to the digest. Pinned by value.
   // The value itself moved once, on purpose: R325 put the identity scheme into EVERY digest (it was
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
-  // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2).
-  const PINNED = "4a8c47ac5cc066d0bac1cdb266019d760a52e4debe2afcf465e76d803c8a288a";
+  // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
+  // it was 4a8c47ac...288a under scheme 3.
+  const PINNED = "25fdc64aa60c2cd08df6e75268d07edf13a9bdc52d6e91f0d0ae257984f3be4f";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1777,8 +1778,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 3 since R323 (named return values).
-    expect(IDENTITY_SCHEME).toBe(3);
+    // Pinned by value so a bump is deliberate: 4 since R318 (changed attribution of unchanged keys).
+    expect(IDENTITY_SCHEME).toBe(4);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -1969,7 +1970,9 @@ const R318_TESTS = `codeunit 79100 "Repro Tests"
 /**
  * R318: a backend whose BASELINE coverage names the renamed member the way a pre-R318 line map
  * did (`pre`: an object-level row, no procedure, which is what an unmapped line becomes) or the way
- * R318's does (`post`: `Pick`). Every mutant run fails (a kill) and attests on the
+ * R318's does (`post`: `Pick`), or as al-runner's server leg did before R318 (`choose`: the
+ * renamed member's statements under `Choose`, the compiled arm's name). Every mutant run returns
+ * `mutantOutcome` (default `fail`, a kill) and attests on the
  * `coverage: "none"` runs, as CountingBackend does (without it the attestation gate discards every
  * verdict). `abortAfter` strands the run the way CountingBackend's does, so it stays resumable.
  */
@@ -1978,8 +1981,9 @@ class R318Backend implements ExecutionBackend {
   mutantRuns = 0;
   private activations: Array<string | null> = [];
   constructor(
-    private readonly naming: "pre" | "post",
+    private readonly naming: "pre" | "post" | "choose",
     private readonly abortAfter?: number,
+    private readonly mutantOutcome: "fail" | "pass" = "fail",
   ) {}
   capabilities(): BackendCapabilities {
     return CAPS;
@@ -2005,7 +2009,11 @@ class R318Backend implements ExecutionBackend {
       const member =
         this.naming === "pre"
           ? { objectType: "Codeunit", objectId: 79000 }
-          : { objectType: "Codeunit", objectId: 79000, procedure: "Pick" };
+          : {
+              objectType: "Codeunit",
+              objectId: 79000,
+              procedure: this.naming === "choose" ? "Choose" : "Pick",
+            };
       return {
         ref,
         outcome: "pass",
@@ -2027,7 +2035,9 @@ class R318Backend implements ExecutionBackend {
         failureMessage: "RunMutant timed out: AbortError",
       };
     }
-    return { ref, ...attest, outcome: "fail", durationMs: 5, failureMessage: "killed" };
+    return this.mutantOutcome === "pass"
+      ? { ref, ...attest, outcome: "pass", durationMs: 5 }
+      : { ref, ...attest, outcome: "fail", durationMs: 5, failureMessage: "killed" };
   }
 }
 
@@ -2101,5 +2111,209 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
       expect(m.coverageAttribution).toBe("exact");
       expect(m.carried).not.toBe(true);
     }
+  });
+});
+
+/** R318: `r3`'s target with the renamed member and the `#if`-wrapped `Choose(T)`, one test. */
+const R318_R3_TARGET = `codeunit 79000 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := 1;
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob + K);
+    end;
+
+#if R318A
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+#endif
+
+    procedure Plain(X: Integer): Integer
+    begin
+        exit(X + 3);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+
+/**
+ * R318: `r3` build `[]` as al-runner's server leg named it BEFORE R318 (`choose`: the renamed
+ * member's statements under `Choose`) or AFTER (`post`: re-keyed by position to `Pick`). Every
+ * mutant run passes, so a covered mutant survives.
+ */
+const r3Backend = (naming: "choose" | "post", abortAfter?: number) =>
+  new R318Backend(naming, abortAfter, "pass");
+
+// R318 (review r2, C2 and I3): R318 moves no key tuple, but it changes the verdict an unchanged key
+// can carry, so it bumps IDENTITY_SCHEME and R325's refusals retire every verdict attributed the
+// old way. The key used throughout is the #if-wrapped Choose(T)'s (lines 19-23): `survived` under
+// the old naming, `no-coverage` under the new one. Each path has a control at the CURRENT scheme,
+// which shows the false verdict the bump prevents. Pinned to IDENTITY_SCHEME and
+// IDENTITY_SCHEME - 1, never to literals, so a later bump does not silently re-aim them.
+describe("R318: the scheme bump retires verdicts attributed the old way", () => {
+  const wrappedOf = (r: {
+    mutants: readonly { line: number; verdict: string; carried?: boolean }[];
+  }) =>
+    r.mutants
+      .filter((m) => m.line >= 19 && m.line <= 23)
+      .map((m) => `${m.line}:${m.verdict}${m.carried === true ? ":carried" : ""}`);
+
+  /** A run under the OLD naming, relabelled to `scheme` with the fingerprint that scheme computes. */
+  async function oldNamingRun(scheme: number, finished: boolean) {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r318-scheme-"));
+    const dirs = {
+      projectDir: join(root, "app"),
+      testDir: join(root, "tests"),
+      instrumentedDir: join(root, "instr"),
+    };
+    await Bun.write(join(dirs.projectDir, "Repro.Codeunit.al"), R318_R3_TARGET);
+    await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(dirs.testDir, "ReproTests.Codeunit.al"), R318_TESTS);
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: r3Backend("choose", finished ? undefined : 2),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(wrappedOf(first)).toEqual(["20:survived", "21:survived"]);
+    const run = store.db.query("SELECT id, backend FROM runs").get() as {
+      id: number;
+      backend: string;
+    };
+    const fingerprint = sessionFingerprint({
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backend: run.backend,
+      skipKnownSurvivors: false,
+      selectorIds,
+      identityScheme: scheme,
+    });
+    store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
+      scheme,
+      fingerprint,
+      run.id,
+    ]);
+    return { dirs, store, first, runId: run.id };
+  }
+
+  test("history: a previous-scheme survivor is executed, and reads no-coverage", async () => {
+    const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, true);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: r3Backend("post"),
+      store,
+      ...dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    expect(wrappedOf(report)).toEqual(["20:no-coverage", "21:no-coverage"]);
+    const warned = events.filter(
+      (e) => e.type === "warning" && e.code === "history-identity-scheme-changed",
+    );
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.type === "warning" ? warned[0].message : "").toContain(`run ${runId}`);
+  });
+
+  test("history control: at the current scheme the old survivor IS skipped (the false verdict)", async () => {
+    const { dirs, store } = await oldNamingRun(IDENTITY_SCHEME, true);
+    const report = await runSession({
+      backend: r3Backend("post"),
+      store,
+      ...dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+    });
+    expect(wrappedOf(report)).toEqual(["20:known-survivor", "21:known-survivor"]);
+  });
+
+  test("--resume-run: a previous-scheme run is refused by name", async () => {
+    const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, false);
+    await expect(
+      runSession({ backend: r3Backend("post"), store, ...dirs, selectorIds, resume: runId }),
+    ).rejects.toThrow(
+      new RegExp(
+        `--resume-run ${runId} was keyed under identity scheme ${IDENTITY_SCHEME - 1}.*scheme ${IDENTITY_SCHEME}.*R325`,
+      ),
+    );
+  });
+
+  test("--resume-run control: at the current scheme the same run resumes", async () => {
+    const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME, false);
+    const report = await runSession({
+      backend: r3Backend("post"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: runId,
+    });
+    expect(report.resumedFrom?.runId).toBe(runId);
+  });
+
+  test("--resume last: a previous-scheme run is named and refused", async () => {
+    const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, false);
+    await expect(
+      runSession({ backend: r3Backend("post"), store, ...dirs, selectorIds, resume: "last" }),
+    ).rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme ${IDENTITY_SCHEME - 1}.*R325`));
+  });
+
+  test("--resume last control: at the current scheme the same run resumes", async () => {
+    const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME, false);
+    const report = await runSession({
+      backend: r3Backend("post"),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(report.resumedFrom?.runId).toBe(runId);
+  });
+
+  test("marks: a previous-scheme mark on the old survivor is stale, not contradicted", async () => {
+    const run = async (identityScheme: number) => {
+      const { dirs, first } = await oldNamingRun(identityScheme, true);
+      const survivor = first.mutants.find((m) => m.line === 20 && m.verdict === "survived");
+      if (survivor === undefined) throw new Error("the old naming must leave Choose(T) surviving");
+      const key = serializeKey({
+        astHash: survivor.astHash,
+        codeunitName: survivor.codeunitName,
+        procedureName: survivor.procedureName ?? "",
+        operatorName: survivor.operatorName,
+        operatorMajor: survivor.operatorMajor,
+        ordinal: survivor.identityOrdinal ?? 0,
+      });
+      const report = await runSession({
+        backend: r3Backend("post"),
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+      });
+      return { key, marked: report.readerMarkedEquivalent };
+    };
+    const old = await run(IDENTITY_SCHEME - 1);
+    expect(old.marked?.stale).toEqual([old.key]);
+    expect(old.marked?.contradicted).toEqual([]);
+    // Control: at the current scheme the same mark is reported CONTRADICTED by a no-coverage,
+    // although no test killed the mutant. That is the false claim the bump prevents.
+    const current = await run(IDENTITY_SCHEME);
+    expect(current.marked?.stale).toEqual([]);
+    expect(current.marked?.contradicted.map((c) => [c.key, c.verdict])).toEqual([
+      [current.key, "no-coverage"],
+    ]);
   });
 });
