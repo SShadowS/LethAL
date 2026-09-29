@@ -70,6 +70,16 @@ describe("R321 symbol fixture tables", () => {
     expect(() => assertSymbolBuild(reportOf(renamed, A), A, "x")).toThrow(/R321/);
   });
 
+  test("an empty report never matches a table", () => {
+    // Empty-vs-something must fail loudly: a leg that scored nothing is not a pass.
+    expect(() => assertSymbolBuild(reportOf([], A), A, "one-shot")).toThrow(
+      /R321 one-shot \[LETHALA\]: per-mutant verdicts differ/,
+    );
+    expect(() => assertSymbolBuild(reportOf([], B), B, "one-shot")).toThrow(
+      /R321 one-shot \[LETHALB\]: per-mutant verdicts differ/,
+    );
+  });
+
   test("a red baseline, other recorded symbols, or another file fails", () => {
     const good = reportOf(rowsOf("[LETHALA]"), A);
     expect(() => assertSymbolBuild({ ...good, baselineGreen: false }, A, "x")).toThrow(/R321/);
