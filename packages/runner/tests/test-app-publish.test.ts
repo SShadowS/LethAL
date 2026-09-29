@@ -71,6 +71,7 @@ async function fixture(
     appBytes: new Uint8Array(targetBytes),
     appJsonText: "{}",
     alSources: [],
+    renamedMemberNames: new Map(),
   };
   return { dir, target, controlPath, out: await temp("c0205-out-") };
 }

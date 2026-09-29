@@ -3985,4 +3985,151 @@ describe("R318: a renamed split member carries its coverage names, and no identi
 `;
     await sharedLineCase(src, { member: 11, shared: 12, after: 16 });
   });
+  test("an emission that re-parses with ERROR leaves a renamed member named on the line legs, as a plain member is (R318, review I1)", async () => {
+    // `Other`'s nested `#if` inside a conditional var section parses in the original but not once
+    // instrumented (grammar issue #30), so the EMITTED object has an ERROR node. A plain member in
+    // that object stays named on both line legs (measured, review fix 1); the renamed member must
+    // too, under the manifest's `coverageArmNames[0]`, since the server leg covers it by `st.scope`.
+    const HEAD_R =
+      "#if R318A\n    procedure Pick(X: Integer): Integer\n#else\n    procedure Choose(X: Integer): Integer\n#endif\n";
+    const HEAD_P = "    procedure Pick(X: Integer): Integer\n";
+    const body = (head: string): string => `codeunit 50100 "Repro R"
+{
+${head}    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Other(X: Integer);
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    for (const [label, src, renamed] of [
+      ["renamed", body(HEAD_R), true],
+      ["plain", body(HEAD_P), false],
+    ] as const) {
+      expect([label, wrapRoot(parseAL(src)).hasError]).toEqual([label, false]);
+      const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
+      const inMember = manifest.mutants.filter((m) => m.procedureName !== "Other");
+      expect(inMember.length).toBeGreaterThan(0);
+      for (const m of inMember) {
+        expect([label, m.coverageArmNames?.[0] ?? m.procedureName]).toEqual([label, "Pick"]);
+      }
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      expect([label, wrapRoot(parseAL(text)).hasError]).toEqual([label, true]);
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-i1-"));
+      try {
+        await writeFile(join(dir, "Repro.Codeunit.al"), text);
+        await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify(manifest));
+        const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        const alr = await buildAlRunnerCoverageIndex(dir);
+        expect(alr.refusedFiles).toEqual([]);
+        const out = text.split("\n");
+        const end = out.findIndex((l) => l.startsWith("    procedure Other("));
+        let checked = 0;
+        for (let n = 1; n <= end; n++) {
+          if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
+          for (const map of [bcdev, alr.lineMap]) {
+            expect([label, n, map.lookup("Codeunit", 50100, n)]).toEqual([label, n, "Pick"]);
+            expect([label, n, map.isNamingGap("Codeunit", 50100, n)]).toEqual([label, n, false]);
+          }
+          expect([label, n, alr.lineMap.renamedMemberAt("Codeunit", 50100, n, "Choose")]).toEqual([
+            label,
+            n,
+            renamed ? "Pick" : undefined,
+          ]);
+          checked++;
+        }
+        expect([label, checked]).toEqual([label, inMember.length]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a line the renamed member shares with a NAMELESS renamed member names nobody (R318, ruling A)", async () => {
+    // The first member's arm names are both taken (`Pick(Text)`, `Choose(Text)`), so it has no
+    // coverage name and no named span. Line 9 closes it and holds all of `Other`.
+    const src = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1); end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure Pick(T: Text): Integer
+    begin
+        exit(StrLen(T));
+    end;
+
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const m = await lineMapFromSources(
+      [{ path: "Repro.Codeunit.al", text: src }],
+      new Set(["codeunit:50100"]),
+    );
+    expect([8, 9, 13].map((n) => m.lookup("Codeunit", 50100, n))).toEqual([
+      undefined, // the nameless member: never named
+      undefined, // shared with it: not `Other`
+      "Pick",
+    ]);
+  });
+
+  test("a line the renamed member shares with a member swallowed by the global var section names nobody (R318, ruling A)", async () => {
+    // Placed after the object's global `var` section, both members parse INSIDE it (R327). Line 12
+    // closes the renamed member and holds all of `Other`.
+    const src = `codeunit 50100 "Repro R"
+{
+    var
+        Glob: Integer;
+
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        Glob := X; end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const m = await lineMapFromSources(
+      [{ path: "Repro.Codeunit.al", text: src }],
+      new Set(["codeunit:50100"]),
+    );
+    expect([11, 12, 16].map((n) => m.lookup("Codeunit", 50100, n))).toEqual([
+      "Pick",
+      undefined,
+      "After",
+    ]);
+    expect(m.renamedMemberAt("Codeunit", 50100, 11, "Choose")).toBe("Pick");
+    expect(m.renamedMemberAt("Codeunit", 50100, 12, "Choose")).toBeUndefined();
+  });
 });

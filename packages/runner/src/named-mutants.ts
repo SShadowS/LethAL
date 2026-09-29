@@ -4,7 +4,7 @@ import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import type { BoundArtifact, TestMethodRef } from "./backend";
 import { describeThrown } from "./describe-error";
-import { readAlSources } from "./line-map";
+import { readAlSources, renamedMemberNamesOf } from "./line-map";
 import { testKeyOf } from "./selection";
 import type { ResultsStore } from "./store";
 
@@ -113,6 +113,7 @@ export async function loadInstalledArtifact(
       appBytes: new Uint8Array(appBytes),
       appJsonText,
       alSources,
+      renamedMemberNames: renamedMemberNamesOf(manifest.mutants),
     },
     manifest,
   };

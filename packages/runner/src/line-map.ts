@@ -151,6 +151,7 @@ export class LineMap {
   constructor(
     entries: readonly LineMapEntry[],
     private readonly declared: ReadonlySet<string>,
+    renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
   ) {
     for (const e of entries) {
       const key = keyOf(e.objectType, e.objectId);
@@ -171,7 +172,7 @@ export class LineMap {
         this.refused.set(key, e.refused);
         continue;
       }
-      this.byObject.set(key, spansOf(e.root, e.baseLine));
+      this.byObject.set(key, spansOf(e.root, e.baseLine, renamedNames.get(key) ?? []));
     }
   }
 
@@ -334,7 +335,11 @@ export class LineMap {
  * was regex-based; it is gone, and the over-credit it produced is exactly what this module
  * must not reintroduce.)
  */
-function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
+function spansOf(
+  objectRoot: ALSyntaxNode,
+  baseLine: number,
+  fromManifest: readonly (readonly string[])[],
+): ObjectLines {
   const procedures: ProcedureSpan[] = [];
   const triggers: ProcedureSpan[] = [];
   /** R318 ruling A: renamed split members with no coverage name. Never named, but counted for `shared`. */
@@ -361,7 +366,7 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
     if (isProcedureLike(n)) {
       const nameNode = procedureLikeNameNode(n);
       const name =
-        nameNode === null ? (renamedMemberCoverageNames(n)[0] ?? null) : stripQuotes(nameNode.text);
+        nameNode === null ? renamedSpanName(n, fromManifest) : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its
         // closing `end;`, so the node's own line extent is exactly the right range.
@@ -384,6 +389,101 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
     renamed: procedures.filter((p) => p.arms !== undefined),
     shared: linesInTwoSpans([...procedures, ...unnamed, ...triggers]),
   };
+}
+
+/**
+ * R318 (review I1): the name a RENAMED split member is spanned under.
+ *
+ * The manifest's `coverageArmNames[0]` first. The manifest was computed on the ORIGINAL source,
+ * and the line map parses the EMITTED source, which can re-parse with an ERROR node the original
+ * did not have (grammar issue #30: a nested `#if` in a conditional var section, measured). An
+ * ERROR anywhere in the object makes `renamedMemberCoverageNames` refuse, and without this the
+ * member would be unnamed on the line legs while a PLAIN member in the same object stays named
+ * (measured) and the server leg covers it by `st.scope`. The manifest entry is matched to this
+ * node by its own arm names. That is unambiguous: a coverage name is, by construction, a name no
+ * other declaration of the object carries in any arm, and instrumentation adds statements, never
+ * declarations. More than one match: no name, the safe direction.
+ *
+ * No manifest entry (a member with no mutant, or a caller with no manifest): the same computation
+ * on the tree this map parsed, as before.
+ */
+function renamedSpanName(
+  member: ALSyntaxNode,
+  fromManifest: readonly (readonly string[])[],
+): string | null {
+  const own = new Set(procedureLikeArmNames(member).map((a) => a.toLowerCase()));
+  const hits = fromManifest.filter((names) => own.has((names[0] ?? "").toLowerCase()));
+  if (hits.length > 1) return null;
+  return hits[0]?.[0] ?? renamedMemberCoverageNames(member)[0] ?? null;
+}
+
+/**
+ * R318 (review I1): per object (`type:id`, lower-cased, as `keyOf`), the distinct
+ * `coverageArmNames` lists of the manifest's renamed members.
+ */
+export type RenamedMemberNames = ReadonlyMap<string, readonly (readonly string[])[]>;
+
+const NO_RENAMED_NAMES: RenamedMemberNames = new Map();
+
+/**
+ * `RenamedMemberNames` from a manifest's mutants (`MutantManifestEntry`: the object is its
+ * `objectType` keyword and `codeunitId`). An entry that carries names but no usable object throws:
+ * keying it under a made-up object would drop the name without a word.
+ */
+export function renamedMemberNamesOf(
+  mutants: readonly {
+    readonly objectType?: unknown;
+    readonly codeunitId?: unknown;
+    readonly coverageArmNames?: readonly string[];
+  }[],
+): RenamedMemberNames {
+  const out = new Map<string, (readonly string[])[]>();
+  const seen = new Set<string>();
+  for (const m of mutants) {
+    const names = m.coverageArmNames;
+    if (names === undefined || names.length === 0) continue;
+    if (typeof m.objectType !== "string" || typeof m.codeunitId !== "number") {
+      throw new Error(
+        `line-map: a manifest entry carries coverageArmNames ${JSON.stringify(names)} but no objectType/codeunitId`,
+      );
+    }
+    const key = keyOf(m.objectType, m.codeunitId);
+    const id = `${key}|${names.join("|").toLowerCase()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const list = out.get(key) ?? [];
+    list.push(names);
+    out.set(key, list);
+  }
+  return out;
+}
+
+/**
+ * R318 (review I1): `RenamedMemberNames` from the `mutant-manifest.json` that
+ * `writeInstrumentedProject` writes beside the instrumented sources. A directory with no manifest
+ * (a hand-built fixture) has none. A manifest that cannot be read or parsed THROWS: an unreadable
+ * one silently dropping renamed members' names is the say-less-on-one-leg bug this exists to fix.
+ */
+export async function readRenamedMemberNames(dir: string): Promise<RenamedMemberNames> {
+  const path = join(dir, "mutant-manifest.json");
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      return NO_RENAMED_NAMES;
+    }
+    throw new Error(
+      `line-map: could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const parsed: unknown = JSON.parse(raw);
+  const mutants =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { mutants?: unknown }).mutants
+      : undefined;
+  if (!Array.isArray(mutants)) throw new Error(`line-map: ${path} has no "mutants" array`);
+  return renamedMemberNamesOf(mutants);
 }
 
 /**
@@ -584,7 +684,11 @@ export async function buildLineMap(
   projectDir: string,
   declared: ReadonlySet<string>,
 ): Promise<LineMap> {
-  return lineMapFromSources(await readAlSources(projectDir), declared);
+  return lineMapFromSources(
+    await readAlSources(projectDir),
+    declared,
+    await readRenamedMemberNames(projectDir),
+  );
 }
 
 /** One `.al` file of a project: its path relative to the project dir, and its text. */
@@ -610,6 +714,7 @@ export async function readAlSources(projectDir: string): Promise<AlSource[]> {
 export async function lineMapFromSources(
   sources: readonly AlSource[],
   declared: ReadonlySet<string>,
+  renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
@@ -618,7 +723,7 @@ export async function lineMapFromSources(
       ...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf, normalizeSlashes(path)),
     );
   }
-  return new LineMap(entries, declared);
+  return new LineMap(entries, declared, renamedNames);
 }
 
 /**

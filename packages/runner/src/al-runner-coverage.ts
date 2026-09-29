@@ -55,6 +55,7 @@ import {
   fileHoldsWrappedObject,
   fileLineMapEntries,
   objectIdentityOf,
+  readRenamedMemberNames,
   refusedObjectsOfFile,
 } from "./line-map";
 
@@ -217,7 +218,7 @@ export async function buildAlRunnerCoverageIndex(
 
   return {
     byFile,
-    lineMap: new LineMap(entries, declared),
+    lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir)),
     multiObjectFiles,
     refusedFiles,
   };

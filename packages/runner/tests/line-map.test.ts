@@ -5,7 +5,13 @@ import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { LineMap, buildLineMap, fileLineMapEntries, lineMapFromSources } from "../src/line-map";
+import {
+  LineMap,
+  buildLineMap,
+  fileLineMapEntries,
+  lineMapFromSources,
+  readRenamedMemberNames,
+} from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 /**
@@ -626,9 +632,42 @@ describe("R301: a split-header procedure has a coverage span", () => {
     // object uses, which the manifest lists first in `coverageArmNames`; a line belongs to the
     // member whichever arm is compiled, so the other arm's name is never returned.
     const m = mapFor(R301_SPLIT("AIf", "AElse"));
-    for (const line of [19, 20]) {
-      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AElse");
-      expect(m.lookup("Codeunit", 50100, line)).toBe("AIf");
+    for (const line of [19, 20]) expect(m.lookup("Codeunit", 50100, line)).toBe("AIf");
+  });
+
+  test("buildLineMap reads the renamed members' names from the manifest beside the sources (R318, review I1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-manifest-"));
+    try {
+      expect((await readRenamedMemberNames(dir)).size).toBe(0); // no manifest: a hand-built dir
+      await writeFile(join(dir, "mutant-manifest.json"), "{ not json");
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow();
+      await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ artifactId: "x" }));
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(/no "mutants" array/);
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [{ objectType: "codeunit", coverageArmNames: ["AElse"] }] }),
+      );
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(/no objectType\/codeunitId/);
+      const entry = { objectType: "codeunit", codeunitId: 50100, coverageArmNames: ["AElse"] };
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [entry, entry] }),
+      );
+      expect([...(await readRenamedMemberNames(dir))]).toEqual([["codeunit:50100", [["AElse"]]]]);
+      // The manifest's first name wins over the tree's own (`AIf`): the manifest is the ORIGINAL.
+      await writeFile(join(dir, "R.Codeunit.al"), R301_SPLIT("AIf", "AElse"));
+      const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect(m.lookup("Codeunit", 50100, 19)).toBe("AElse");
+      // Two manifest lists that both claim this member (not a manifest the writer produces): no
+      // name, never a pick between them.
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [entry, { ...entry, coverageArmNames: ["AIf"] }] }),
+      );
+      const both = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect(both.lookup("Codeunit", 50100, 19)).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
