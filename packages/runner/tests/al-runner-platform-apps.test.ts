@@ -634,3 +634,40 @@ describe("R235: a warm 2.11 run names its platform-app search directory only in 
     });
   });
 });
+
+/**
+ * R338. al-runner 2.12.0, measured 2026-09-29: the provisioning call is already verbose (R235), and
+ * its output keeps both the `[pkg-cache]` search-set line and `[bc] selected`, so the pin is
+ * unchanged. The new `[bc]` lines beside them name no directory and must not disturb it.
+ */
+describe("R338: a warm 2.12 verbose provisioning run pins the [pkg-cache] platform-apps dir", () => {
+  test("R338: 2.12 verbose output pins the same directory as 2.11", () => {
+    const p = parseAlRunnerPlatformAppsDir(
+      [
+        "[bc] no --bc-version given \u2014 selecting BC 28.1.49838.54487, the newest version this install ships an engine for. Override with --bc-version.",
+        "[bc] selecting engine variant 28.1.49838.55333 for BC 28.1.49838.54487 (this process is currently running the 28.5.54151.55364 variant) \u2014 re-execing.",
+        V211_ENGINE,
+        V211_SELECTED,
+        "[bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.55333, not the selected 28.1.49838.54487 \u2014 ...",
+        "al-runner 0.0.0-main \u00b7 BC 28.1.49838.54487 \u00b7 2 apps",
+        "  package caches (final search set): 2 dir(s)",
+        V211_PKG_TEST,
+        V211_PKG_PLATFORM,
+      ].join("\n"),
+    );
+    expect(p).toEqual({
+      kind: "found",
+      dir: String.raw`C:\x\.local/share/al-runner/artifacts\28.1.49838.54368\platform-apps`,
+      appCount: 0,
+      basis: "package-cache",
+    });
+  });
+
+  test("R338: the new 2.12 [bc] lines alone pin nothing", () => {
+    expect(
+      parseAlRunnerPlatformAppsDir(
+        "[bc] selecting engine variant 28.1.49838.55333 for BC 28.1.49838.54487 (this process is currently running the 28.5.54151.55364 variant) \u2014 re-execing.\nal-runner 0.0.0-main \u00b7 BC 28.1.49838.54487 \u00b7 2 apps\n",
+      ),
+    ).toEqual({ kind: "no-completion-line" });
+  });
+});
