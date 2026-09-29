@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**92 of 338 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 339 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -135,7 +135,8 @@ that ordering is the priority.
 - **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · done (7b8409c7, d0a0a9e4)
 - **R331** · The Tier-2 rule-3 guard does not see a `#if`-wrapped procedure, so a table's own procedure of a built-in name can be claimed as the built-in · [R331.md](docs/roadmap/R331.md) · done (84f38b9f)
 - **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29, reported upstream
-- **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that file · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
+- **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
+- **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
 
 ## Product gaps a real project hits
 
