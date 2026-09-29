@@ -706,11 +706,16 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   await writeManifestJson(join(input.targetDir, "mutant-manifest.json"), manifestJson);
 }
 
-/** R311: the manifest, written one row at a time, byte-identical to
- *  `${JSON.stringify(manifest, null, 2)}\n`. One string for a whole-BaseApp manifest exhausts
- *  memory; each row's own stringify is small. JSON strings contain no raw newline, so indenting
- *  every line after the first reproduces the nesting JSON.stringify would produce. `io` exists
- *  only so tests can inject a short-writing handle and a failing rename; product code never passes it. */
+/** R311: the manifest, written one row at a time. Serializes exactly the three named
+ *  `MutantManifest` fields (`selectorIds`, `artifactId`, `mutants`) and nothing else, even an
+ *  extra enumerable field the caller's object happens to carry, and rejects a sparse array or an
+ *  `undefined` element in `mutants`, where `JSON.stringify` would write `null` instead. Within
+ *  that contract, matches `${JSON.stringify(manifest, null, 2)}\n` byte for byte (RUST-03 S4a
+ *  review M2 narrows this from "every input": see manifest-stream.test.ts for the edge values
+ *  this was measured against). One string for a whole-BaseApp manifest exhausts memory; each
+ *  row's own stringify is small. JSON strings contain no raw newline, so indenting every line
+ *  after the first reproduces the nesting JSON.stringify would produce. `io` exists only so
+ *  tests can inject a short-writing handle and a failing rename; product code never passes it. */
 export interface ManifestIo {
   readonly open: typeof open;
   readonly rename: typeof rename;
