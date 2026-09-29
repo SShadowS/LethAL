@@ -405,9 +405,17 @@ export function coverageFilter(
       continue;
     }
     // Member-level first: precise, and correct for every ordinary procedure.
-    let testKeys = index.byMember.get(
-      memberKeyOf(m.objectType, m.codeunitId, m.procedureName, context),
-    );
+    // R318: a split member whose `#if` arms rename it has `procedureName` "" and lists its coverage
+    // names instead; one arm is compiled per build and no other declaration of the object carries
+    // any of them (`MutantManifestEntry.coverageArmNames`), so the union is that build's member
+    // only. Without the field, the "" key below is today's lookup exactly.
+    const memberNames = m.procedureName !== "" ? [m.procedureName] : (m.coverageArmNames ?? [""]);
+    let testKeys: ReadonlySet<string> | undefined;
+    for (const name of memberNames) {
+      const hit = index.byMember.get(memberKeyOf(m.objectType, m.codeunitId, name, context));
+      if (hit === undefined) continue;
+      testKeys = testKeys === undefined ? hit : new Set([...testKeys, ...hit]);
+    }
     // FALLBACK 1 — object-level, for ANY trigger mutant, whatever object kind it lives in.
     //
     // NO trigger has a member-level entry to match: SymbolReference.json does not record triggers
