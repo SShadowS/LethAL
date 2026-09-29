@@ -517,7 +517,8 @@ async function runSymbolLegs(): Promise<void> {
 
 async function main(): Promise<void> {
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
-  // Finding C / I2: BOTH symbol baselines, before either leg runs and before either is written.
+  // Check BOTH symbol baselines before either leg runs: a missing file fails at startup rather
+  // than after a live run, and record mode starts only when both files are in the state it needs.
   for (const symbols of SYMBOL_SETS) {
     preflightFrozenBaseline(
       symbolBaselinePath(symbols),
