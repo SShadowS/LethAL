@@ -509,15 +509,17 @@ function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
 
 /**
  * R318: see `MutantManifestEntry.coverageArmNames`. `[]` outside a renamed split member. `cache`
- * holds one answer per member (keyed by the member's start offset) for the length of ONE file's
- * write: `renamedMemberCoverageNames` walks the whole object, and a member can carry dozens of
- * mutants. An ordinary procedure answers `[]` before any walk, so it is not cached.
+ * holds one answer per member (keyed by the member's start offset), `[]` answers included, for the
+ * length of ONE file's write: `renamedMemberCoverageNames` walks the whole object, and a member can
+ * carry dozens of mutants. `coverageArmNamesComputed` counts the computations, so a test can pin it.
  */
+export const coverageArmNamesComputed = { count: 0 };
 function coverageArmNamesOf(spec: MutationSpec, cache: Map<number, string[]>): string[] {
   const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return [];
   const hit = cache.get(proc.startIndex);
   if (hit !== undefined) return hit;
+  coverageArmNamesComputed.count++;
   const names = renamedMemberCoverageNames(proc);
   cache.set(proc.startIndex, names);
   return names;

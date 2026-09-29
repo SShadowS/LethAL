@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { MutationSpec } from "@lethal/engine";
 import type { MutantManifest } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { coverageArmNamesComputed, writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { buildLineMap, lineMapFromSources } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
@@ -3727,8 +3727,16 @@ describe("R318: a renamed split member carries its coverage names, and no identi
     }
     for (const m of manifest.mutants.filter((x) => x.startLine > 16)) {
       expect(m.procedureName).toBe("Plain");
-      expect(m.coverageArmNames).toBeUndefined();
+      expect("coverageArmNames" in m).toBe(false);
     }
+  });
+
+  test("r1: the arm names are computed once per member, not once per mutant", async () => {
+    coverageArmNamesComputed.count = 0;
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(10);
+    // The renamed member and Plain: two members, ten plus three mutants.
+    expect(coverageArmNamesComputed.count).toBe(2);
   });
 
   test("r4: each member keeps only the name the other never uses", async () => {
