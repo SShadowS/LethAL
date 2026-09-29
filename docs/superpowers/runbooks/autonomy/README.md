@@ -1,6 +1,6 @@
 # LethAL autonomous run: protocol and launch contract
 
-Three Claude Code sessions (an orchestrator and two lanes) work through LethAL's open GitHub issues, coordinated through
+Four Claude Code sessions (an orchestrator and three lanes) work through LethAL's open GitHub issues, coordinated through
 `agent-coord` (`U:\Git\agent-coord`). The same tool coordinates CentralGauge; both projects
 share the BC containers, so they share container leases and the owner's pause.
 
@@ -11,6 +11,7 @@ share the BC containers, so they share container leases and the owner's pause.
 | `lethal-orchestrator` | `U:\Git\LethAL` | `master` | plans per task, `task.md` files, reviews, merges, pushes, closes GitHub issues, asks the owner | writes product code, resolves merge conflicts by writing code, re-records a gate baseline, loosens a hook or rule |
 | `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | the c02 epic (coord lane `code`): implements tasks with TDD and subagents, files roadmap items, runs live gates on Cronus28 under a lease (standing owner authorization) | pushes, edits plans or `task.md`, starts or restarts containers |
 | `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `lethal/lane-bugs` | the standalone `GH-*` issues (coord lane `bugs`), same rules as `lethal-code` | same as `lethal-code` |
+| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `lethal/lane-preproc` | the `#if` preprocessor roadmap family (coord lane `preproc`), same rules as `lethal-code`, COORD-ONLY (another account; see `lane.md`) | same as `lethal-code` |
 
 `CLAUDE.md` in the repo still applies in full: the build/test order (typecheck, then
 `rm -rf packages/*/dist`, then `bun test`), biome on touched files only, `compile:fixtures`

@@ -1,4 +1,4 @@
-# Role: a LethAL lane (`lethal-code` or `lethal-bugs`)
+# Role: a LethAL lane (`lethal-code`, `lethal-bugs` or `lethal-preproc`)
 
 You implement LethAL tasks. Your identity comes from your directory:
 
@@ -6,6 +6,19 @@ You implement LethAL tasks. Your identity comes from your directory:
 | --- | --- | --- | --- | --- |
 | `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | `code` | the c02 epic (`C02-*`) |
 | `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `lethal/lane-bugs` | `bugs` | standalone issues (`GH-*`) |
+| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `lethal/lane-preproc` | `preproc` | the `#if` preprocessor roadmap family (R214, R285, R304 to R308 and relatives) |
+
+**`lethal-preproc` is COORD-ONLY.** It runs on another Claude account and may not be able to
+message the orchestrator, so it never relies on messages:
+
+- Wherever this file says "message the orchestrator" (including `online:`), write that text as the
+  `--note` of a checkpoint instead. Idle with no run: skip `online:`.
+- Submitting is `coord submit` alone. The orchestrator finds submissions and questions on its
+  sweep (`coord overview`, `coord questions`), so expect up to 30 minutes before a reply.
+- Replies come back as `coord answer` or as a revised `task.md`. Read `coord questions` and
+  `coord status --lane preproc` at every checkpoint.
+- It works from `H:`, not `U:`, to spread disk load. Keep its scratch for corpus runs on `H:` too,
+  and run corpus-sized steps (full BaseApp compiles, corpus captures) one at a time.
 
 Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 
@@ -55,5 +68,5 @@ nothing in flight. After a clear, run your start procedure again.
 - Containers: Cronus28 only, always under a lease. Live gates on it need no ask (standing owner
   authorization, README), but a moved frozen figure is reported, never re-recorded.
 - A hook that blocks you: stop and report; never route around it.
-- Two lanes share `master`. Merge `master` before each task, and never touch the other lane's
+- Three lanes share `master`. Merge `master` before each task, and never touch the other lane's
   branch or worktree.
