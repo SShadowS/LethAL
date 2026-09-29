@@ -588,9 +588,18 @@ export class AlRunnerBackend implements ExecutionBackend {
    * `cfg.backendFactory(i)` hands back an already-built instance — so the pin has to be a setter on
    * an instance rather than anything a constructor could carry, and one caller applying it to all of
    * them is what stops the baseline and the mutants running under different argv.
+   *
+   * R242 — returns whether this backend's transport will actually SEND the pin. Only the one-shot
+   * CLI path does (`buildAlRunnerArgv` puts `--package-cache <pin>` in place of `--auto-provision`).
+   * Under `serverMode` the daemon starts with `packagesDir` alone and never sees it, so this backend
+   * declines the pin and returns false, and `runSession` then does not record `platformAppsDir` in
+   * the report: a directory the run never searched is not provenance. Wiring the pin into the daemon
+   * would change what a server run resolves, which needs its own per-mutant evidence (R242).
    */
-  usePlatformAppsDir(dir: string): void {
+  usePlatformAppsDir(dir: string): boolean {
+    if (this.server !== undefined) return false;
     this.platformAppsDir = dir;
+    return true;
   }
 
   /**
