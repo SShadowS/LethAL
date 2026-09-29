@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 324 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 327 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -219,7 +219,7 @@ that ordering is the priority.
 - **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · closed 2026-09-27: superseded by R216
 - **R286** · `isStatementSlot` omits `with_statement.body`, so a call that is the whole body of `with ... do` is not a statement site (DC: 8 sites in app code) · [R286.md](docs/roadmap/R286.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
 - **R287** · `isStatementSlot` omits the split-directive `if` containers (`preproc_split_if_else_statement`, `preproc_split_if_statement`, `preproc_fragmented_else_tail`), so statements there are not sites (BaseApp: 32, all in shipped app code) · [R287.md](docs/roadmap/R287.md) · open, filed 2026-09-27, measured by the issue #6 cross-check; C5 and C6 fixed 2026-09-28…
-- **R292** · Retaining every parse tree exhausts wasm memory on BC.History/BaseApp's 9,620 files: the census script needs it split into halves, and the PRODUCT path (`locate`/`identity-keys`) aborts the same way on a whole-BaseApp run · [R292.md](docs/roadmap/R292.md) · open, filed 2026-09-27; widened to the product path 2026-09-28
+- **R292** · Retaining every parse tree exhausts wasm memory on BC.History/BaseApp's 9,620 files: the census script needs it split into halves, and the PRODUCT path (`locate`/`identity-keys`) aborts the same way on a whole-BaseApp run · [R292.md](docs/roadmap/R292.md) · done (9f7cb5f0)
 - **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
 - **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · open, filed 2026-09-28
@@ -228,7 +228,7 @@ that ordering is the priority.
 - **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · open, filed 2026-09-28
 - **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
 - **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
-- **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · open, filed 2026-09-28
+- **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
 - **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28
 
 ## Backends and tooling
@@ -365,10 +365,13 @@ that ordering is the priority.
 - **R271** · harden, verify, testapp and agreement are not in the agentflow gate table, because LEG_CONTAINER cannot name Cronus28 · [R271.md](docs/roadmap/R271.md) · open
 - **R290** · R-236b's fix has no early readback and no restart recovery: a lost reply still waits the full budget, and a wedge still needs a manual coord ask · [R290.md](docs/roadmap/R290.md) · open
 - **R291** · R-236c: refuse TestPage tests up front instead of dispatching them and risking a lost reply · [R291.md](docs/roadmap/R291.md) · open
-- **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · open, filed 2026-09-28. RUST-02 (2026-09-28) reopened the route with clang and it passed both gates, GO on…
+- **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
 - **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · open, filed 2026-09-28
+- **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · open, filed 2026-09-29
+- **R328** · After RUST-03, the JSC heap still holds 2,230 MB of free capacity after a full GC at the peak of the W8 manifest-row phase, above the 2,000 MB RUST-03 pre-committed · [R328.md](docs/roadmap/R328.md) · open, filed 2026-09-29
+- **R329** · `lethal run --dry-run` on the Base Application takes a median 494 s on the final RUST-03 tree, about 104 s (27%) longer than the native median at RUST-03's S0 (390 s); the cause is not known · [R329.md](docs/roadmap/R329.md) · open, filed 2026-09-29
 
 ---
 

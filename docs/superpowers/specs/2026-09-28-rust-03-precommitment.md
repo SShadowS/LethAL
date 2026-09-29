@@ -69,7 +69,124 @@ shape), its peak median is at least 20% lower, AND W2's peak median is not more 
 AND nodes are equal. Otherwise external stays.
 
 ## OUTCOME
-(filled in by S5)
+Written by S5, 2026-09-29. Every figure below is quoted from AMENDMENTs 1 to 10 above,
+`docs/measurements/2026-09-28-rust-03-s3.md` (S3), `docs/measurements/2026-09-28-rust-02-native-parser-gates.md`
+(RUST-02) or the RUST-01 pre-commitment's baseline table, as each line names.
+
+### Switch gates (S3, switch commit `9f7cb5f0`, S3 base `37190d5`; source: S3 and AMENDMENT 3)
+
+- Q1 structure: **MATCHED**. 0 differing files on every fixture, the grammar probe, the 12 controls,
+  do, dc, sentinel, bcf, sysapp and whole BaseApp (9,620 files, 31,135,464 nodes); kind tables equal.
+  One native difference found on the first run (`childForFieldName` on an ERROR node) was fixed in
+  `443c6d3` before the gate held.
+- Q2 identity: **MATCHED**. Census rows 0 moved on all 12 sets, native against WASM at `37190d5`;
+  identity listings byte-identical on every set; whole BaseApp `eeb5e3e2...`, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Native W2 completed in one pass, sha256 `153bac07...`,
+  equal to RUST-02's.
+- Q3 emission: **MATCHED**. `fixture-emission.test.ts` unchanged and passing on the switched tree
+  (5 pass, 0 fail).
+- Q4 R-236c: **MATCHED**. `testpage-scan.test.ts` 94 pass / 0 fail; the native leak test passed 5 runs
+  in a row and went red (`Received: 3000` against `<= 16`) with every result retained; the ten-corpus
+  census identical on both sides, BaseApp refused 11,179.
+- Q5 unit suite: **MATCHED**. 4,250 / 7 / 1 todo / 0 fail before, 4,251 / 7 / 0 / 0 after (the todo
+  is the no-WASM-in-product test, flipped to a real test by the switch).
+- Q6 live: **MATCHED**, Cronus28 lease 064, control app 1.0.0.20 (the plan named 1.0.0.19; 1.0.0.20
+  is master's `MIN_CONTROL_VERSION`), al-runner v2.11.0. `itest:bcdev` 3 / 12 / 4, with the three
+  figures this line pre-committed at Q6 above also held: `groupedCalls` 15, `warmKills` 0 and the
+  assertion screen `vacuous` (`docs/measurements/2026-09-28-rust-03-s3.md`); `itest:chunked`
+  both legs 17 / 7 / 2, control 9 / 33, chunked 5 / 57; `itest:alrunner` 3 / 12 / 4 on all four legs;
+  `itest:tables` 301 / 68 / 18, per-mutant equal to its frozen figures (not deferred).
+- Q7 release: **MATCHED**. Trial run 36470754962 on `9f7cb5f`: all five `native-parser` jobs, the
+  darwin-x64 Intel load check, `build` and all five `smoke` jobs succeeded; `publish` skipped by
+  design on a non-tag run.
+
+### Transfer-buffer decision (S1.4; AMENDMENT 2 and its clarification)
+
+**"owned" replaced "external".** W1 peak median 1,255 MB against 1,921 (34.7% lower; the bar was
+at least 20%), W2 peak median 9,980 against 9,901 (0.8% higher; the bar was not more than 5%), nodes
+equal (31,135,464) and W2 byte-identical (`153bac07...`) on all six runs. The clarification records
+that `measure-peak.ts` wrapped RUST-02's `gate2.ts`, and the exact commands.
+
+### Ceilings, WASM and native side by side (peak MB, median of 3 unless said)
+
+| workload | ceiling | WASM | native at S0 | native final (`5e8a537d`, AMENDMENT 10) | result |
+| --- | ---: | --- | --- | ---: | --- |
+| W2, census, whole BaseApp | 16,384 | does not complete: aborted after 21.26 s, peak 4,459 MB (RUST-01 baseline table; R292) | 8,957 (RUST-02 clang; S0 took no W2) | **10,112** | **MET** |
+| W4, dry-run, Base Application | 16,384 | 17,235 (AMENDMENT 1), over the ceiling on every run | 5,202 (AMENDMENT 1) | **5,001** | **MET** |
+| W8, spec-level identity capture | 16,384 | 17,847 (AMENDMENT 1), over | 17,161 (AMENDMENT 1), over | **11,798** | **MET** |
+| W9, W8 with the product manifest writer | 16,384 | did not complete: died at 13.0 GB in `JSON.stringify` (AMENDMENT 10, R311) | not taken | **9,969** | **MET**, patch audit PASS, streaming check PASS (1,687,722 rows = deployed) |
+
+**No W8 memory win is claimed.** A win was pre-committed only at or below 8,192 MB; the final
+median is 11,798 MB (AMENDMENT 10). W4's win over WASM is on W4's own runs; W2 is a census result
+only and is never a W4 or product-wide result.
+
+### Speed, recorded, not gating
+
+- W1 parse, whole BaseApp: median 15,378 ms native (AMENDMENT 10), against RUST-02's same-day WASM
+  parse-only 14,910 ms and clang `parseFlat` 13,354 ms (RUST-02).
+- W2 wall: 89.63 s native final (AMENDMENT 10); RUST-02 clang 100.05 s. WASM does not complete.
+- W3a wall (BaseApp/Source): clang 41.93 s against WASM 157.29 s (RUST-02; not re-measured in RUST-03).
+- W4 wall: 493.72 s native final (AMENDMENT 10), against 389.99 s native and 384.87 s WASM at S0
+  (AMENDMENT 1). About 104 s slower than S0 native, cause unknown: filed as R329.
+- W8 wall: 1,573 s to 186 s median with S4.2a, 8.5 times faster (AMENDMENT 5); 182.80 s final
+  (AMENDMENT 10).
+
+### S4 sub-tasks
+
+- S4.1 (R311): the streamed manifest writer `054a9774`; its review's stale-manifest fix, `e1901ccc`,
+  removes any old manifest before a rewrite. W9 above is its measurement.
+- S4.2a (lead E, AMENDMENTs 4 and 5): **MISSED on memory**. W8 median 16,799 MB against at or below
+  13,000; E 5,835 MB against at or below 1,000. W4 unchanged as predicted (5,383, MET). The fix
+  (`167f540c`) stays: it removed B's second row copy and gave the 8.5x W8 wall win.
+- S4.2c (lead A, AMENDMENTs 6 and 7): **all MET**. W8 median 11,778 (at or below 15,850), W4 4,737
+  (at or below 5,030), A 410 MB on W8 (at or below 1,400) and 238 MB on W4 (at or below 550). Fix
+  `7cf75051`.
+- S4.2d (`astSubtreeHash`, AMENDMENTs 8 and 9): the three guards **held** (golden test, corpus
+  differential with 0 differences, identity listing unchanged), but **E (4,377 against at or below
+  2,900) and W8 (12,179 against at or below 10,500) were MISSED**; W4 MET. The fix saved no memory
+  and was **REVERTED** after AMENDMENT 9 (`fdf15987`, `f4062896`); the golden test `815b9db8` is
+  kept. The stub's about 1.8 GB saving did NOT come from building the canonical string, so its
+  source is unknown: filed as R326.
+- S4.2b (lead F, AMENDMENT 10): **MISSED**, F = 2,230 MB against at or below 2,000. No fix inside
+  RUST-03, as pre-committed: filed as R328.
+
+### Roadmap
+
+Closed: R292 (`done (9f7cb5f0)`), R311 (`done (054a9774)`), R314 (closed 2026-09-29, superseded by
+RUST-02/RUST-03). Filed: R326 (the stub's 1.8 GB), R328 (F 2,230 MB), R329 (W4 wall +104 s).
+
+### Scratch inventory (2026-09-29; `du -sh`)
+
+NOTHING WAS DELETED. The owner has not cleared any of these for removal; the plan's Step 4 clean-up
+is replaced by this list. The owner keeps `U:/Git/LethAL-wt/rust-02` and `U:/rust03-s3` until
+RUST-03 is accepted. `$S` is
+`C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-code/a2d0a920-a34b-42d9-8875-ba97d0ae0889/scratchpad/rust03`;
+`$R2` is the same scratchpad's `rust02` (S0.2 report).
+
+| path | size | what it is | status |
+| --- | ---: | --- | --- |
+| `U:/rust03-s3` | 4.9G | S3 gate harness and logs (plain directory) | present; the owner keeps it until RUST-03 is accepted |
+| `U:/rust03-s42a` | 3.6G | S4.2a before/after harness trees | present, awaiting the owner |
+| `U:/rust03-s42c` | 3.3G | S4.2c harness trees | present, awaiting the owner |
+| `U:/rust03-s42d` | 3.5G | S4.2d harness trees | present, awaiting the owner |
+| `U:/rust03-probe-e` | 4.0G | the lead-E probe trees (AMENDMENT 8's evidence) | present, awaiting the owner |
+| `U:/rust03-s43` | 3.8G | S4.3 harness: `marked`, `prod`, `w8`, `w9` (each a standalone clone with its own `.git`, not a registered worktree), the W9 audit | present, awaiting the owner |
+| `$S` | 9.1G | S0.2 and later scratch: diffs, harness copies, logs, `owned.node`, `crate-owned` (38K), heap snapshots; includes `w2-wt` | present, awaiting the owner |
+| `$S/w2-wt` | 165M | S1.4's W2 worktree; deregistered from git, directory left behind (`Filename too long` in `node_modules`) | present (inside `$S`), not registered |
+| `$S/nat-wt`, `$S/wasm-wt`, `$S/wasm-cap-wt` | none | S0.2's three worktrees; their diffs are kept under `$S` (`final-*-wt.diff`) | absent on 2026-09-29 and not in `git worktree list`; removed outside S5 |
+| `$R2/cap-wt`, `$R2/head-wt` | none | RUST-02's two worktrees (RUST-02 concern 6) | absent on 2026-09-29 (`$R2` itself does not exist) and not in `git worktree list` |
+| `U:/Git/LethAL-wt/rust-01` | 0 | empty directory skeleton (`node_modules`, `packages/*`), no files, no `.git` | present, not a registered worktree |
+| `U:/Git/LethAL-wt/rust-02` | 161M | registered worktree, `lethal/rust-02` at `9ec3d21c`, 17 uncommitted paths (RUST-02's carry-in) | present; the owner keeps it until RUST-03 is accepted |
+| `U:/Git/LethAL-wt/rust-03` | 853M | this worktree, `lethal/rust-03` | present, in use |
+| `C:/Users/SShadowS/.cache/lethal-native-target` | 294M | the shared `CARGO_TARGET_DIR` (`clang/`); S1.1's leftover `cl-redcheck` is no longer there | present |
+| `$S/../rust03.diff` | 8.0K | scratchpad-root copy of the switch diff, beside `$S` rather than inside it | present, awaiting the owner |
+| `$S/../rust03-ci-36447370265.log` | 36K | the Q7 trial run's CI log | present, awaiting the owner |
+| `$S/../rust03-du.txt`, `$S/../rust03-du2.txt` | 1.0K each | `du` output captured while writing this inventory | present, awaiting the owner |
+| `$S/../outcome.md`, `$S/../inv.md` | 8.0K, 4.0K | S5 drafts of this OUTCOME and this scratch inventory | present, awaiting the owner |
+
+Also left for the owner, not directories: the local branches `lethal/rust-03-dispatch` and
+`lethal/rust-03-redcheck` (and the remote `lethal/rust-03-redcheck`, S2's red-check), which the
+session's hook would not delete.
 
 ## AMENDMENT 1 (S0 results, before any S4 fix)
 
@@ -260,3 +377,375 @@ placeholders and changes nothing above OUTCOME.
 
 The corpus revisions are re-read after the last native run. A moved corpus voids the comparison,
 and it is re-run.
+
+## AMENDMENT 4 (S4.2a prediction)
+
+Recorded before any S4.2a code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead E, the per-mutant allocation in the manifest-row loop of
+  `writeInstrumentedProject` (`packages/schemata/src/project.ts`). The change: line numbers from one
+  line-start index per file instead of a scan from offset 0 per call; the `local` scope prefix
+  tested without taking a whole procedure's text; each gap block's id computed once per block
+  rather than once per mutant; no child arrays built in the loop's parent walks. B's second copy
+  of the manifest rows (the spread copy in `assignIdentityOrdinals`) is cut in the same loop, as
+  the orchestrator asked; it is not part of the E prediction.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  13,000 MB. Predicted E after the fix: at or below 1,000 MB, read as in AMENDMENT 1 (the p5 phase
+  peak minus the p5 post-GC RSS) on one marked W8 run with the S0.2 phase markers. Both are
+  AMENDMENT 1's figures, unchanged: 17,161 MB minus the 4,120 MB E should lose is about 13,000 MB.
+- Predicted W4 median peak after the fix (3 runs): unchanged, at or below 5,779 MB (AMENDMENT 1's
+  highest native W4 run). Derivation: W4 is `run --dry-run`, which runs `dedupeSpecs` and prints; it
+  never calls `writeInstrumentedProject`, so the loop is not on W4's path, and AMENDMENT 1's W4
+  attribution has no lead E row. The change is confined to `project.ts`, so W4's code path is
+  byte-for-byte the same and the predicted saving on W4 is 0 MB.
+- The before figures are re-measured at `d945e6f` (the native switch, S3.1 and S4.1 have landed
+  since `e5bed71`) with the same harness, 3 runs each, so the before and after sit on one revision
+  of everything except the fix. The verdict is against the bounds above, not against the before runs.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged.
+- Recorded, not gating: the loop is 90% of W8's wall time today; the W8 wall medians before and
+  after are reported next to the peaks.
+
+## AMENDMENT 5 (S4.2a result)
+
+The fix is `167f540c` (AMENDMENT 4's item, and B's second row copy). Before is `d945e6f`, after is
+`167f540c`, each with the S0.2 capture harness (`cap-project.diff`, ported by hand onto the fixed
+tree: the same 18 changed lines, checked with `diff`) and the unmarked `spec-keys.ts`. Native addon
+sha256 `19f5d477...` on both. BC.History `4d61fc58...`, unchanged. One heavy run at a time.
+
+| workload | before, `d945e6f` (peak MB / wall s) | median | after, `167f540c` | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 19,532 / 17,539 / 18,780; 1,573 / 1,571 / 1,704 s | **18,780** (1,573 s) | 16,865 / 16,799 / 15,731; 176 / 189 / 186 s | **16,799** (186 s) | at or below 13,000 | **MISSED** |
+| W4 | 5,316 / 5,302 / 5,386; 465 / 463 / 452 s | **5,316** (463 s) | 5,383 / 5,384 / 5,298; 463 / 481 / 458 s | **5,383** (463 s) | at or below 5,779 | **MET** |
+
+- Lead E, on one marked W8 run at `167f540c` (S0.2 phase markers): p5 phase peak 14,768 MB, p5
+  post-GC RSS 8,933 MB, so E = **5,835 MB** against a predicted 1,000 or less: **MISSED**. It did
+  not shrink (AMENDMENT 1: 5,120). p5 now takes 38 s instead of about 1,350 s, so the loop's
+  CPU cost went, but its transient memory did not.
+- B: from p4 to p5 the `Object` count rises by 1,687,722, one per manifest row (AMENDMENT 1: twice
+  that). The second copy is gone.
+- W8 wall (recorded, not gating): 1,573 s to 186 s median, 8.5 times faster.
+- W4 is unchanged, as predicted: the dry-run does not run the loop. All six W4 outputs are
+  byte-identical (788,619 lines, sha256 `f31530b0...`).
+- Identity listing: all seven W8 listings (3 before, 3 after, 1 marked) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. `fixture-emission.test.ts` passes
+  unchanged, and the fixed tree's listings for the five fixtures, do, sysapp, dc, sentinel and bcf
+  are byte-identical to S3's.
+- A lead, not a measured share (one probe run, not a fix): the same marked W8 run with
+  `astSubtreeHash` replaced by an empty string had a p5 phase peak of 12,287 MB over a post-GC RSS
+  of 9,068 MB, a transient of 3,219 MB. So the per-mutant subtree hash accounts for about 2.6 GB of
+  the remaining E, and about 3.2 GB is still unattributed. The prediction is not revised.
+
+## Clarification to AMENDMENT 5 (2026-09-29)
+
+AMENDMENT 4's fourth item, "no child arrays built in the loop's parent walks", was a measured
+no-op, and `167f540c` changed nothing for it. On the native wrapper (`FlatNode`), `parent` is a
+stored field, so the loop's parent walks (`enclosingProcedureLike`, `triggerNameOf`,
+`enclosingMemberOf`, `gapBlockOf`) build no arrays. The only child-array reads left in the loop
+are the split-header procedure paths (`splitIsLocal`, `procedureLikeNameNode`), which are rare.
+AMENDMENT 5's figures are unchanged by this note.
+
+## AMENDMENT 6 (S4.2c prediction)
+
+Recorded before any S4.2c code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead A, the spec's `after` node. `synthesizeAfter` (one copy in
+  `packages/builtin-tier1/src/mutate-helpers.ts`, one in `packages/builtin-tier2/src/mutate-helpers.ts`)
+  builds a plain object that copies `before.children` and `before.namedChildren` (each read builds a
+  fresh array of fresh `FlatNode` wrappers on the native tree), both position objects and a bound
+  `childForFieldName` closure. The change: the `after` node holds only `before` and its own text and
+  reads every other member through `before` when asked, so a spec site keeps one wrapper (`before`)
+  and pins no child arrays and no closure. Every member of `ALSyntaxNode` reads the same value as
+  before; only `text` differs from `before`, as today.
+- Predicted A after the fix, read as in AMENDMENT 1 (live cells, heap minus extra, at p4 minus p2 on
+  one marked W8 run; at p3 minus p2 on one marked W4 run): at or below 1,400 MB on W8 and at or below
+  550 MB on W4. These are AMENDMENT 1's figures, unchanged. The same-revision A before is read on the
+  S4.2a marked tree (`167f540c`, whose source differs from `b4213f23` only by two `export` keywords):
+  1,629 MB on W8 (AMENDMENT 5's marked run), and one marked W4 run taken for this item.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  15,850 MB. Predicted W4 median peak (3 runs): at or below 5,030 MB. Derivation: the saving A should
+  lose, by AMENDMENT 1 (2,369 to 1,400 on W8, about 970 MB; 900 to 550 on W4, 350 MB), taken off
+  AMENDMENT 5's same-revision medians (W8 16,799, W4 5,383): 16,799 - 950 and 5,383 - 350. A check
+  from the scaled sysapp snapshot gives the same size: per spec site the fix drops about 4.5
+  `FlatNode` wrappers (61 B each), two arrays, one closure (92 B), two position objects and most of
+  a 14-field object, about 600 B, so about 1,000 MB over W8's 1,775,366 raw sites and about 470 MB
+  over W4's 782,940. A lives through both peaks (p5 on W8, the dry-run's printing on W4), so the
+  whole-run peak should fall by about the same amount. The W8 runs spread 1.1 GB at S4.2a, so the W8
+  verdict can be decided by noise; that is recorded, not a reason to widen the bound.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged. The W4 dry-run output unchanged (sha256 `f31530b0...`,
+  788,619 lines).
+
+## AMENDMENT 7 (S4.2c result)
+
+The fix is `7cf75051` (AMENDMENT 6's item): `synthesizeAfter` in both tiers now returns the engine's
+`withText(before, text)`, which holds `before` and the text and reads every other member through
+`before`. After is `7cf75051` with the S0.2 capture harness (`cap-project.diff` ported by the same
+script as S4.2a; the ported `project.ts` differs from S4.2a's only by `167f540c..b4213f23`'s two
+`export` keywords). Before is S4.2a's after tree (`167f540c`), re-run in the same session after the
+after runs. Native addon sha256 `19f5d477...` on both. BC.History `4d61fc58...`. One heavy run at a
+time. Harness under `U:/rust03-s42c/`.
+
+| workload | before, `167f540c` (peak MB) | median | after, `7cf75051` (peak MB) | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 17,669 / 17,264 / 16,962 | **17,264** | 11,202 / 11,778 / 12,207 | **11,778** | at or below 15,850 | **MET** |
+| W4 | 5,360 / 5,304 / 5,387 | **5,360** | 4,737 / 4,524 / 5,043 | **4,737** | at or below 5,030 | **MET** |
+
+- Lead A on W8 (live cells, heap minus extra, p4 minus p2, one marked run each): before 1,629 MB
+  (AMENDMENT 5's marked run at `167f540c`: 1,920 minus 291), after **410 MB** (701 minus 291), against
+  at or below 1,400: **MET**. Objects at p4: 37,964,548 before, 17,989,154 after.
+- Lead A on W4 (live cells, p3 minus p2, one marked run each): before 780 MB (920 minus 140, marked
+  run on the `167f540c` tree taken for this item), after **238 MB** (378 minus 140), against at or
+  below 550: **MET**.
+- The whole-run peaks fell by much more than A's live cells did (W8 median by 5,486 MB, W4 by
+  623 MB). On the marked W8 runs, heap capacity at p5 fell from 7,474 to 4,767 MB and the p5 transient
+  (E) from 5,835 to 4,038 MB. That is recorded, not attributed: the fix removed about 20 million
+  live objects, and both GC-held capacity and the p5 transient move with the live set.
+- Identity listing: all seven W8 listings (3 after, 1 marked, 3 before) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. All eight W4 outputs are sha256
+  `f31530b0...` (788,619 lines). `fixture-emission.test.ts` passes unchanged, and the fixed tree's
+  listings for the five fixtures, do, sysapp, dc, sentinel and bcf are byte-identical to S3's.
+- The W4 after runs spread 519 MB (4,524 to 5,043); the highest is 13 MB above the W4 bound. The
+  verdict is on the median, as committed.
+
+## AMENDMENT 8 (S4.2d prediction)
+
+Recorded before any S4.2d code. It changes nothing above OUTCOME. Evidence:
+`.superpowers/sdd/rust-03/probe-e-report.md` (marked W8 runs at `ccb3350f`, 2026-09-29). Reviewed
+by the orchestrator (`H:/lethal-coord/reviews/RUST-03-A8/review-r1.md`) before commit.
+
+### Item
+
+`astSubtreeHash` (`packages/engine/src/ast/hash.ts`), called once per mutant from the manifest-row
+loop in `writeInstrumentedProject` (`packages/schemata/src/project.ts`, its only product caller).
+Today each level of the walk joins its parts into a new string, the whole subtree's canonical string
+is encoded to UTF-8 and hashed with BLAKE3, and `namedChildren` is read twice per node, each read
+building a fresh array of fresh wrappers (42.8 M wrappers and 23.3 M arrays over 23.1 M visited
+nodes on W8).
+
+The change: one pre-order walk that encodes the same canonical fragments, in the same order, into one
+reusable byte buffer, and feeds full buffers to noble's incremental `blake3.create().update()`. No
+canonical string and no per-level string is built. A fragment is never split across a flush: each
+fragment is encoded whole with `TextEncoder.encodeInto`, and if it does not fit in the space left the
+buffer is flushed first (a fragment larger than the whole buffer is encoded on its own and fed
+directly). So a surrogate pair is never encoded in halves, and the bytes fed to BLAKE3 are the UTF-8
+of the same finished string the current code hashes.
+
+On a native `FlatNode` the walk reads the flat tree by index inside
+`packages/engine/src/ast/syntax-node.ts`, following `childCount` / `nextSibling` and `FLAG_NAMED`,
+and using the same `kind` string, the same text (`source.slice(startIndex, endIndex)`) and the same
+child `fieldName` that `FlatNode` exposes. It does not use a field-target test and does not walk
+anonymous children. Any other node (a `TextOverride` from `withText`, the WASM reference wrapper)
+takes a generic walk over the `ALSyntaxNode` API that reads `namedChildren` once per node and keeps
+each wrapper's `fieldName` and child order. For the current wrappers, whose getters are stable, one
+read is equivalent to two; nothing is claimed for a caller that supplies changing getters.
+
+### The serialization contract (unchanged; the fix must reproduce it byte for byte)
+
+- Only named children are visited, in their existing order. Anonymous children are ignored.
+- An identifier is handled before any child inspection. If its `fieldName` is `member` or
+  `function`, it emits `(name <text>)` and is NOT added to the numbering. Any other identifier emits
+  `(identifier #<n>)`, where `n` is assigned `0, 1, 2, ...` on the first occurrence of each exact,
+  case-sensitive text in pre-order, and a repeated text reuses its number. `n` is written as
+  JavaScript's decimal integer interpolation writes it.
+- An integer, decimal, text or boolean literal emits `(<kind> <text>)`, even if it has named
+  children.
+- Any other node with no named children, including a named operator leaf, emits `(<kind> <text>)`.
+- Any other node emits `(<kind>`, then for each named child a space and that child's serialization,
+  then `)`. Its own text is not used.
+- No normalization of any kind: whitespace, newlines, CRLF, case and Unicode are hashed as they are.
+  `isMissing` and `hasError` are not serialized; ERROR and MISSING nodes follow the rules above.
+- The digest is the lowercase hex of BLAKE3 over the UTF-8 bytes of that string.
+
+### Scope
+
+Nothing else joins S4.2d. No other named cost in the loop reached 15% of the W8 peak: identity
+ordinals about 240 MB and the gap walk none measurable, both inside the 945 MB run-to-run spread of E
+on the unchanged tree. The unattributed remainder (about 2,150 MB) is not one named cost and is not a
+target.
+
+### Predictions
+
+Probe figures (leads, marked W8): E on the unchanged tree 4,064 / 4,197 / 5,009 MB (median 4,197);
+with the hash call stubbed to `""` 2,367 / 2,398 MB (median 2,383). The stub's median saving is
+4,197 - 2,383 = 1,814 MB. The fix cannot remove everything the stub removed: it keeps the live 64-hex
+hash strings, the buffer, the digest objects, and the generic walk where it runs. That is allowed for
+at about 500 MB (an allowance, not a measured cost), so the expected saving is about 1,314 MB.
+
+- E after the fix, read as in AMENDMENT 1 (p5 phase peak minus p5 post-GC RSS, one marked W8 run):
+  at or below 2,900 MB. This is a RISKY prediction: the expected E is 2,383 + 500 = 2,883, 17 MB
+  under the bound, the 500 MB is not measured, and E on the unchanged tree ranged over 945 MB. The
+  result is reported as measured, and the bound is never widened after it.
+  Same-revision before: the probe's 4,197 MB median at `ccb3350f`. The S4.2d base is the master merge
+  `d10f518a`, and `git diff ccb3350f d10f518a` is empty under `packages/engine` and
+  `packages/schemata`.
+- W8 median peak after the fix (3 unmarked runs, `scripts/measure-peak.ts`): at or below 10,500 MB.
+  Derivation: AMENDMENT 7's median 11,778 minus the expected E saving of 1,314 is 10,464, rounded up to
+  10,500. The probe also saw the marked whole-run peak fall by about 2.8 GB with the stub, part of it
+  post-GC RSS; the stub cannot measure that part for this fix, so it is not taken into the bound. The
+  W8 runs spread about 1 GB, so the verdict can be decided by noise; that is recorded, not a reason
+  to widen the bound.
+- W4, an unchanged-path check: the dry-run never reaches `writeInstrumentedProject`, and
+  `astSubtreeHash` has no other product caller. The three-run median (at or below 5,030 MB,
+  AMENDMENT 6's bound, unchanged) and the output hash (sha256 `f31530b0...`, 788,619 lines,
+  unchanged) decide it together. AMENDMENT 7's W4 runs spread 4,524 to 5,043 MB, so a single run
+  above the bound is not a miss.
+- Recorded, not gating: the p5 phase took 13 s with the stub against 35 to 39 s on the unchanged
+  tree.
+
+### Guards
+
+If any guard fails, S4.2d is DROPPED: it is not patched, no new baseline is accepted, and the drop is
+recorded in the S5 OUTCOME (orchestrator ruling, 2026-09-29).
+
+1. A golden test, committed alone before any S4.2d code and shown green on the unchanged
+   implementation. Its values are literal hex hashes captured from the current implementation. It
+   covers both the flat path (native `FlatNode`) and the generic path, with:
+   - identifiers in `member` and in `function` position;
+   - numbering first use and reuse, interleaved with names;
+   - all four literal kinds;
+   - an ordinary named leaf, including an operator;
+   - named versus anonymous children;
+   - a non-leaf whose own text must be ignored;
+   - exact text cases: empty text, CRLF, non-ASCII, a lone surrogate, and a surrogate pair placed
+     exactly across the buffer-flush boundary;
+   - ERROR and MISSING nodes;
+   - a `withText` leaf, so its replacement text is actually hashed.
+   If any pinned literal changes after the fix, S4.2d is dropped.
+2. A corpus differential, run after the fix: the unchanged implementation (kept as a reference
+   function in the test code, not in the product) against the new one on every named node of every
+   `.al` file under `fixtures/` (all fixture projects and their test apps) and of one real corpus
+   (BC.History `4d61fc58...`, the `sysapp` subset), through both the flat and the generic path, with
+   zero differences.
+3. Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+   (1,687,723 lines, header `raw 1775366 deployed 1687722 skippedFiles 73`) byte for byte on the
+   whole BaseApp with the S0.2 capture harness, on every W8 run. The listing includes `astHash`, so
+   one moved byte anywhere drops S4.2d. `fixture-emission.test.ts` unchanged, and
+   `fixtures/sandbox-harden/lethal.equivalent.json`'s mark still matches.
+
+## AMENDMENT 9 (S4.2d result)
+
+The fix is `cd717f60` (AMENDMENT 8's item): `astSubtreeHash` walks the subtree once in pre-order,
+encodes the canonical fragments into one reusable 4,096-byte buffer (text with
+`TextEncoder.encodeInto`, fixed fragments such as kind names and brackets encoded once by the same
+encoder and copied), flushes before a fragment that does not fit, feeds a fragment larger than the
+buffer on its own, and hashes with noble's `blake3.create().update()`. A native `FlatNode` is walked
+by index inside `syntax-node.ts` (`walkNamedFlat`); any other node reads `namedChildren` once. After is
+`9d9495b7` (the fix plus test-only commits) with the S0.2 capture harness, ported by the same
+scripts as S4.2c. Before, as drift control in the same session, is `e71e809f` (the S4.2d base) for
+the unmarked runs and the probe's `base` tree (`ccb3350f`, no product difference) for one marked
+run. Native addon sha256 `19f5d477...` on all. BC.History `4d61fc58...`. One heavy run at a time.
+Harness under `U:/rust03-s42d/`.
+
+### Guards
+
+| guard | result |
+| --- | --- |
+| 1. golden test (`815b9db8`, 45 literal hashes, flat and generic paths) | green on the unchanged code, then green UNCHANGED after the fix; no literal changed |
+| 2. corpus differential, old reference against new, flat, generic and `withText` paths | `fixtures/`: 68 files, 22,535 nodes (14,863 named), 0 differences. BC.History `sysapp` (`System Application`): 1,718 files, 1,574,911 nodes (983,706 named), 0 differences |
+| 3. identity listing on every W8 run | all 8 listings (3 after, 1 marked after, 3 before, 1 marked before) sha256 eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header `raw 1775366 deployed 1687722 skippedFiles 73`. `fixture-emission.test.ts` unchanged and green; `fixtures/sandbox-harden/lethal.equivalent.json`'s mark still matches (`harden-fixture.test.ts` green) |
+
+No guard failed. S4.2d is not dropped.
+
+### Predictions
+
+| prediction | bound (AMENDMENT 8) | measured | result |
+| --- | --- | --- | --- |
+| E, the risky prediction (one marked W8 run: p5 phase peak minus p5 post-GC RSS) | at or below 2,900 MB | **4,377 MB** (10,596 minus 6,219) | **MISSED** |
+| W8 median peak (3 unmarked runs) | at or below 10,500 MB | 14,280 / 11,414 / 12,179: **12,179 MB** | **MISSED** |
+| W4 median peak (3 runs) and output hash | at or below 5,030 MB, sha256 `f31530b0...` | 4,517 / 4,741 / 5,068: **4,741 MB**; all 3 outputs sha256 `f31530b0...`, 788,619 lines | **MET** |
+
+Same-session drift control, recorded, not gating:
+
+| workload | before, unchanged | after, `9d9495b7` |
+| --- | --- | --- |
+| W8 unmarked peaks MB | 11,468 / 13,142 / 12,087 (median **12,087**) | 14,280 / 11,414 / 12,179 (median **12,179**) |
+| W8 marked: p5 phase peak / p5 post-GC RSS / E MB | 10,328 / 6,449 / **3,879** | 10,596 / 6,219 / **4,377** |
+| W8 marked: heap capacity at p5 MB | 5,222 | 5,195 |
+| W8 marked: p4 to p5 duration s | 36 | 32 |
+
+- The fix did not move E or the W8 peak. Before and after differ by less than their own run-to-run
+  spread (the unmarked W8 runs spread 2,866 MB after and 1,674 MB before; E on the unchanged tree
+  was 4,064 to 5,009 in the probe and 3,879 here). The probe's stub, which removed the hash call,
+  its live 64-hex strings and the digests, lowered E to about 2,383 MB; removing only the canonical
+  string, the per-level strings and the child wrappers and arrays does not reproduce that. What the
+  stub removed beyond this fix is not attributed here.
+- The p5 phase got about 4 s faster (36 to 32 s), far less than the stub's 13 s.
+- W4's third run (5,068 MB) is above the W4 bound; the verdict is on the median, as committed.
+
+## AMENDMENT 10 (S4.2b gate and S4.3 ceilings)
+
+Measured on the final S4 tree, `5e8a537d` (S4.2a and S4.2c in, S4.2d reverted). Native addon
+sha256 `19f5d477c475df3126791fec516d0a9ed8151f9fd8a1b9d96f3fb425e36aa767`, a release build (the
+build script always passes `--release`) with clang 23.1.2 (`x86_64-pc-windows-msvc`), built at
+`95d31e6a`; `packages/engine/native` and its `Cargo.lock` are unchanged from there to `5e8a537d`.
+BC.History `4d61fc58...`. One heavy run at a time, nothing else heavy on the machine. Every peak is
+`scripts/measure-peak.ts`; every verdict is on the median of 3 runs, as committed. Harness under
+`U:/rust03-s43/`; evidence in `.superpowers/sdd/rust-03/s4-3-report.md`.
+
+### S4.2b: lead F, re-read
+
+One marked W8 run, the same phase markers as S0.2 (a full GC at each marker). At p5: heap capacity
+5,267 MB, heap size 3,037 MB, so **F = 2,230 MB**, against the pre-committed bound of at or below
+2,000 MB: **MISSED**. S4.2b grows no fix inside RUST-03; the miss is recorded here and in the S5
+OUTCOME, and filed as a roadmap item by the controller. The p5 figures, for that item: p5 phase peak
+10,663 MB, p5 post-GC RSS 6,454 MB (so E = 4,209 MB), external memory 1,658 MB, 25,518,099 objects;
+the marked run's whole peak 10,664 MB. For context only: S4.2c's marked run read F at 1,728 MB and
+S4.2d's marked runs at 2,157 (fixed tree, since reverted) and 2,205 (unfixed tree) MB. The listing of
+the marked run is the identity listing below.
+
+### S4.3 ceilings
+
+| workload | peaks MB (3 runs) | median peak MB | ceiling MB | result | median wall s |
+| --- | --- | ---: | ---: | --- | ---: |
+| W2, census over whole BaseApp, one pass | 10,112 / 10,217 / 9,300 | **10,112** | 16,384 | **MET** | 89.63 |
+| W4, product dry-run on the Base Application | 4,549 / 5,001 / 5,045 | **5,001** | 16,384 | **MET** | 493.72 |
+| W8, spec-level identity capture | 11,798 / 11,300 / 11,936 | **11,798** | 16,384 | **MET** | 182.80 |
+| W9, W8's harness with the product manifest writer on | 10,209 / 9,969 / 9,910 | **9,969** | 16,384 | **MET** | 158.56 |
+
+- Every run exits 0. No run crashed.
+- **No W8 memory win is claimed.** The W8 median, 11,798 MB, is above the 8,192 MB a win needs. It
+  is under the ceiling, and it is 5,363 MB below S0's native median (17,161) and 6,049 MB below S0's
+  WASM median (17,847), but a win was pre-committed only at 8,192 MB or below.
+- W4 is judged on W4's own runs, not on W2 or W8. W2 is a census result only and is never a W4 or
+  product-wide result.
+- W9 is judged on W9's own runs. It completes where WASM died at 13.0 GB in `JSON.stringify` (R311).
+- Speed, recorded, not gating: W1 parse 15,051 / 15,378 / 15,435 ms (median **15,378 ms**, 9,620
+  files, 31,135,464 nodes, peak about 934 MB); W2 wall median 89.63 s; W4 wall median 493.72 s.
+  W4's wall is about 104 s above S0's native median (389.99 s); that is recorded, not explained here.
+
+### W9 audit and streaming check
+
+- **Patch audit: PASS**, before any W9 number (`U:/rust03-s43/w9-patch-audit.txt`). The harness
+  differs from product code in `project.ts` only, by four hunks: W8's three SPEC_ONLY switches
+  (they turn off the object-mix refusal, the instrumented AL and its file write, and the reach
+  grain, so rows carry no `reachGrain`), one line printing `W9: deployed <n>` after the rows are built
+  (instrumentation, outside the writer), and the one EXEMPT marker line as the first statement of
+  `writeManifestJson`. With the marker removed, the harness's `writeManifestJson` and its call site
+  are byte-identical to `5e8a537d` (`cmp`, exit 0 on both). W8's NDJSON substitute is not present
+  (`grep -in ndjson` over the harness diff prints nothing). Each W9 run's stderr holds the marker
+  exactly once, naming `<target>\mutant-manifest.json`.
+- **Streaming check: PASS on all 3 W9 manifests.** `@streamparser/json` 0.0.26 (`JSONParser`,
+  `paths: ["$.mutants.*"]`, `keepStack: false`, fed from `fs.createReadStream`), installed only in
+  scratch. Each manifest: 1,512,104,535 bytes, the parser reaches the end with no error and no
+  trailing data, top-level keys `selectorIds`, `artifactId`, `mutants` in that order, 1,687,722 rows
+  equal to the run's own `deployed` 1,687,722, and no `mutant-manifest.json.partial` left. Before
+  BaseApp, the check passed the sandbox-app manifest (19 rows) and failed all five broken copies:
+  truncated by one byte, a comma removed between two rows, a trailing comma after the last row, a bad
+  token `tru`, and an extra `}` appended. The sandbox-app manifest holds no `true`, so the bad token
+  replaced a number (`"identityOrdinal": 0` became `tru`). Truncating the last byte removes only the
+  final newline, which is still valid JSON; the check fails it on its end-of-file test (the product
+  writes `JSON.stringify(...)` plus a newline, so the file must end `\n}\n`), not in the parser.
+
+### Identity
+
+All 4 W8 listings (3 unmarked, 1 marked) are sha256
+eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+`raw 1775366 deployed 1687722 skippedFiles 73`, byte-identical to each other. All 3 W4 outputs are
+sha256 `f31530b0521ddfc15df717586313b2b354ffb3b7f94cd4b1d21e7d8443acd2c9`, 788,619 lines. All 3 W2
+outputs are sha256 `153bac07df02e98f...`, equal to RUST-02's and S3's W2. The harness smoke (the
+`System Application` listing) is byte-identical to S3's. Unchanged throughout.
