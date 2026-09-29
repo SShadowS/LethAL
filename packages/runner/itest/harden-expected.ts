@@ -1,5 +1,5 @@
 import type { MutantOutcome, SessionReport } from "../src/report";
-import { assertMatchesBaseline } from "./baseline-guard";
+import { assertGateBaseline } from "./baseline-guard";
 
 /**
  * C02-03: the pre-committed per-mutant table for `fixtures/sandbox-harden`, and the three checks
@@ -385,15 +385,16 @@ export function assertHardenAnswers(report: SessionReport, expected = EXPECTED):
 }
 
 /**
- * Writes the baseline (via assertMatchesBaseline) only after legB() resolved. A leg-B throw
- * propagates and leaves no file behind. When the file already exists, leg A compared against it,
- * and this compares the same report again, which cannot differ.
+ * Compares or records the baseline only after legB() resolved. A leg-B throw propagates and leaves
+ * no file behind. R332: recording happens only when `LETHAL_ITEST_RECORD_BASELINE` names the file,
+ * and then this throws `BaselineRecordedError`, so a record run never passes.
  */
 export async function recordAfterBothLegs(
   reportA: SessionReport,
   legB: () => Promise<void>,
   baselinePath: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   await legB();
-  await assertMatchesBaseline(reportA, baselinePath, "harden itest");
+  await assertGateBaseline(reportA, baselinePath, "harden itest", env);
 }
