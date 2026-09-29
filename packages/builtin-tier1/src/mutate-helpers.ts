@@ -1,15 +1,6 @@
 import { withText } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/operator-sdk";
 
-/**
- * Produce a synthetic "after" node that reuses every structural field of
- * `before` but swaps `text`. The schemata compiler only reads `.text` from
- * `after`, so the rest of the shape exists to keep TypeScript + downstream
- * consumers from choking on a partial object.
- *
- * Intentionally a thin adapter — operators that need richer synthesis should
- * go through `build.*` in the SDK and wrap the result here.
- */
 /** A binary expression's own operator token, in node-relative offsets. */
 export interface OperatorToken {
   readonly text: string;
@@ -68,6 +59,12 @@ export function replaceOperatorToken(
   return `${text.slice(0, op.start)}${replacement}${text.slice(op.end)}`;
 }
 
+/**
+ * Produce a synthetic "after" node: `before` with only `text` swapped. Every
+ * other member reads through `before` on demand (`withText`, RUST-03 S4.2c), so
+ * a spec pins no copied child arrays or closure. The schemata compiler only
+ * reads `.text` from `after`.
+ */
 export function synthesizeAfter(before: ALSyntaxNode, text: string): ALSyntaxNode {
   return withText(before, text);
 }
