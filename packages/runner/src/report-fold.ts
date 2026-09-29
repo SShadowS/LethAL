@@ -158,7 +158,7 @@ export interface FoldedReport {
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
   readonly unplaceableCount: number;
-  /** R175 — R231 `<batchIndex>/<mutantCode>` ids of those, sorted by batch then code. See
+  /** R175: R231 `<batchIndex>/<mutantCode>` ids of those, sorted by batch then code. See
    *  `SessionReport.unplaceableMutants`. */
   readonly unplaceableMutants: readonly string[];
   /** C02-02: one entry per batch this run published an artifact identity for, sorted by

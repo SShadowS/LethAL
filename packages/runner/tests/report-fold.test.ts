@@ -1006,7 +1006,7 @@ describe("R-236c: tests refused before sending, as their own category", () => {
  * name an `M0001`. The fold used to add bare codes to a Set, which collapsed them into ONE entry
  * while `unplaceableCount` still counted two. Each entry is now `<batchIndex>/<mutantCode>`.
  */
-describe("foldEvents — R231, unplaceable mutants are qualified by batch", () => {
+describe("foldEvents, R231: unplaceable mutants are qualified by batch", () => {
   test("two batches that both name M0001 give two entries, matching the count", () => {
     const pass = [{ name: "T.T1", outcome: "pass" as const, classification: [] }];
     const split = (batchIndex: number): RunEventInput => ({

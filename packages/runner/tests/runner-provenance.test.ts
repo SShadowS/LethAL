@@ -73,7 +73,7 @@ describe("REPORT_SCHEMA_VERSION (R69 Phase 2 Task 5)", () => {
     // what this pin is about.
     expect(REPORT_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
   });
-  test("is bumped to 3 — R231's run-level lists name a mutant by batch AND code", () => {
+  test("is bumped to 3: R231's run-level lists name a mutant by batch AND code", () => {
     expect(REPORT_SCHEMA_VERSION).toBe(3);
   });
 });

@@ -96,7 +96,7 @@ describe("planArtifacts — guard budget (R44)", () => {
   });
 });
 
-describe("planArtifacts — a file never spans two batches (R231)", () => {
+describe("planArtifacts: a file never spans two batches (R231)", () => {
   // `SessionReport.survivorsByProcedure[].survivorCodes` stays bare-coded (R231 ruling 3). That is
   // safe only because one procedure lives in one file and one file lands whole in ONE batch, so a
   // group's `file` names its batch. If a later change splits a file's specs across batches, those
