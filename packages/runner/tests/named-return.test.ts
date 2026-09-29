@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -506,8 +506,15 @@ class SurvivingBackend implements ExecutionBackend {
   }
 }
 
+// Every project root this file makes, removed once all its tests are done.
+const runRoots: string[] = [];
+afterAll(async () => {
+  for (const root of runRoots) await rm(root, { recursive: true, force: true });
+});
+
 async function makeN14Project() {
   const root = await mkdtemp(join(tmpdir(), "lethal-r323-run-"));
+  runRoots.push(root);
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
