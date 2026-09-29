@@ -368,10 +368,10 @@ const UNVERIFIED_MOVES: readonly string[] = [
  * Since R332 every gate refuses a missing baseline and records one only in record mode. This
  * guard refuses that record mode too while moves are unverified. Recording would be wrong here:
  * the environment expired and was deleted 2026-08-26, the constants above were updated from
- * PREDICTIONS twice, and the documented remedy for
- * a per-mutant mismatch is "delete the baseline and re-run" — which would turn two unreviewed
- * predictions into a committed measurement in one step. That reflex is exactly how a gate stops
- * being evidence, so it is blocked here rather than warned about in a comment.
+ * PREDICTIONS twice, and the documented remedy for a per-mutant mismatch is "delete the
+ * baseline and re-run", which would turn two unreviewed predictions into a committed
+ * measurement in one step. That reflex is exactly how a gate stops being evidence, so it is
+ * blocked here rather than warned about in a comment.
  */
 function refuseSelfRecordWhileUnverified(): void {
   if (UNVERIFIED_MOVES.length === 0) return;
