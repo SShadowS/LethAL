@@ -509,3 +509,53 @@ recorded in the S5 OUTCOME (orchestrator ruling, 2026-09-29).
    whole BaseApp with the S0.2 capture harness, on every W8 run. The listing includes `astHash`, so
    one moved byte anywhere drops S4.2d. `fixture-emission.test.ts` unchanged, and
    `fixtures/sandbox-harden/lethal.equivalent.json`'s mark still matches.
+
+## AMENDMENT 9 (S4.2d result)
+
+The fix is `cd717f60` (AMENDMENT 8's item): `astSubtreeHash` walks the subtree once in pre-order,
+encodes the canonical fragments into one reusable 4,096-byte buffer (text with
+`TextEncoder.encodeInto`, fixed fragments such as kind names and brackets encoded once by the same
+encoder and copied), flushes before a fragment that does not fit, feeds a fragment larger than the
+buffer on its own, and hashes with noble's `blake3.create().update()`. A native `FlatNode` is walked
+by index inside `syntax-node.ts` (`walkNamedFlat`); any other node reads `namedChildren` once. After is
+`9d9495b7` (the fix plus test-only commits) with the S0.2 capture harness, ported by the same
+scripts as S4.2c. Before, as drift control in the same session, is `e71e809f` (the S4.2d base) for
+the unmarked runs and the probe's `base` tree (`ccb3350f`, no product difference) for one marked
+run. Native addon sha256 `19f5d477...` on all. BC.History `4d61fc58...`. One heavy run at a time.
+Harness under `U:/rust03-s42d/`.
+
+### Guards
+
+| guard | result |
+| --- | --- |
+| 1. golden test (`815b9db8`, 45 literal hashes, flat and generic paths) | green on the unchanged code, then green UNCHANGED after the fix; no literal changed |
+| 2. corpus differential, old reference against new, flat, generic and `withText` paths | `fixtures/`: 68 files, 22,535 nodes (14,863 named), 0 differences. BC.History `sysapp` (`System Application`): 1,718 files, 1,574,911 nodes (983,706 named), 0 differences |
+| 3. identity listing on every W8 run | all 8 listings (3 after, 1 marked after, 3 before, 1 marked before) sha256 eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header `raw 1775366 deployed 1687722 skippedFiles 73`. `fixture-emission.test.ts` unchanged and green; `fixtures/sandbox-harden/lethal.equivalent.json`'s mark still matches (`harden-fixture.test.ts` green) |
+
+No guard failed. S4.2d is not dropped.
+
+### Predictions
+
+| prediction | bound (AMENDMENT 8) | measured | result |
+| --- | --- | --- | --- |
+| E, the risky prediction (one marked W8 run: p5 phase peak minus p5 post-GC RSS) | at or below 2,900 MB | **4,377 MB** (10,596 minus 6,219) | **MISSED** |
+| W8 median peak (3 unmarked runs) | at or below 10,500 MB | 14,280 / 11,414 / 12,179: **12,179 MB** | **MISSED** |
+| W4 median peak (3 runs) and output hash | at or below 5,030 MB, sha256 `f31530b0...` | 4,517 / 4,741 / 5,068: **4,741 MB**; all 3 outputs sha256 `f31530b0...`, 788,619 lines | **MET** |
+
+Same-session drift control, recorded, not gating:
+
+| workload | before, unchanged | after, `9d9495b7` |
+| --- | --- | --- |
+| W8 unmarked peaks MB | 11,468 / 13,142 / 12,087 (median **12,087**) | 14,280 / 11,414 / 12,179 (median **12,179**) |
+| W8 marked: p5 phase peak / p5 post-GC RSS / E MB | 10,328 / 6,449 / **3,879** | 10,596 / 6,219 / **4,377** |
+| W8 marked: heap capacity at p5 MB | 5,222 | 5,195 |
+| W8 marked: p4 to p5 duration s | 36 | 32 |
+
+- The fix did not move E or the W8 peak. Before and after differ by less than their own run-to-run
+  spread (the unmarked W8 runs spread 2,866 MB after and 1,674 MB before; E on the unchanged tree
+  was 4,064 to 5,009 in the probe and 3,879 here). The probe's stub, which removed the hash call,
+  its live 64-hex strings and the digests, lowered E to about 2,383 MB; removing only the canonical
+  string, the per-level strings and the child wrappers and arrays does not reproduce that. What the
+  stub removed beyond this fix is not attributed here.
+- The p5 phase got about 4 s faster (36 to 32 s), far less than the stub's 13 s.
+- W4's third run (5,068 MB) is above the W4 bound; the verdict is on the median, as committed.
