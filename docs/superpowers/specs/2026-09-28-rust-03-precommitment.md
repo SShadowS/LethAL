@@ -394,3 +394,118 @@ time. Harness under `U:/rust03-s42c/`.
   listings for the five fixtures, do, sysapp, dc, sentinel and bcf are byte-identical to S3's.
 - The W4 after runs spread 519 MB (4,524 to 5,043); the highest is 13 MB above the W4 bound. The
   verdict is on the median, as committed.
+
+## AMENDMENT 8 (S4.2d prediction)
+
+Recorded before any S4.2d code. It changes nothing above OUTCOME. Evidence:
+`.superpowers/sdd/rust-03/probe-e-report.md` (marked W8 runs at `ccb3350f`, 2026-09-29). Reviewed
+by the orchestrator (`H:/lethal-coord/reviews/RUST-03-A8/review-r1.md`) before commit.
+
+### Item
+
+`astSubtreeHash` (`packages/engine/src/ast/hash.ts`), called once per mutant from the manifest-row
+loop in `writeInstrumentedProject` (`packages/schemata/src/project.ts`, its only product caller).
+Today each level of the walk joins its parts into a new string, the whole subtree's canonical string
+is encoded to UTF-8 and hashed with BLAKE3, and `namedChildren` is read twice per node, each read
+building a fresh array of fresh wrappers (42.8 M wrappers and 23.3 M arrays over 23.1 M visited
+nodes on W8).
+
+The change: one pre-order walk that encodes the same canonical fragments, in the same order, into one
+reusable byte buffer, and feeds full buffers to noble's incremental `blake3.create().update()`. No
+canonical string and no per-level string is built. A fragment is never split across a flush: each
+fragment is encoded whole with `TextEncoder.encodeInto`, and if it does not fit in the space left the
+buffer is flushed first (a fragment larger than the whole buffer is encoded on its own and fed
+directly). So a surrogate pair is never encoded in halves, and the bytes fed to BLAKE3 are the UTF-8
+of the same finished string the current code hashes.
+
+On a native `FlatNode` the walk reads the flat tree by index inside
+`packages/engine/src/ast/syntax-node.ts`, following `childCount` / `nextSibling` and `FLAG_NAMED`,
+and using the same `kind` string, the same text (`source.slice(startIndex, endIndex)`) and the same
+child `fieldName` that `FlatNode` exposes. It does not use a field-target test and does not walk
+anonymous children. Any other node (a `TextOverride` from `withText`, the WASM reference wrapper)
+takes a generic walk over the `ALSyntaxNode` API that reads `namedChildren` once per node and keeps
+each wrapper's `fieldName` and child order. For the current wrappers, whose getters are stable, one
+read is equivalent to two; nothing is claimed for a caller that supplies changing getters.
+
+### The serialization contract (unchanged; the fix must reproduce it byte for byte)
+
+- Only named children are visited, in their existing order. Anonymous children are ignored.
+- An identifier is handled before any child inspection. If its `fieldName` is `member` or
+  `function`, it emits `(name <text>)` and is NOT added to the numbering. Any other identifier emits
+  `(identifier #<n>)`, where `n` is assigned `0, 1, 2, ...` on the first occurrence of each exact,
+  case-sensitive text in pre-order, and a repeated text reuses its number. `n` is written as
+  JavaScript's decimal integer interpolation writes it.
+- An integer, decimal, text or boolean literal emits `(<kind> <text>)`, even if it has named
+  children.
+- Any other node with no named children, including a named operator leaf, emits `(<kind> <text>)`.
+- Any other node emits `(<kind>`, then for each named child a space and that child's serialization,
+  then `)`. Its own text is not used.
+- No normalization of any kind: whitespace, newlines, CRLF, case and Unicode are hashed as they are.
+  `isMissing` and `hasError` are not serialized; ERROR and MISSING nodes follow the rules above.
+- The digest is the lowercase hex of BLAKE3 over the UTF-8 bytes of that string.
+
+### Scope
+
+Nothing else joins S4.2d. No other named cost in the loop reached 15% of the W8 peak: identity
+ordinals about 240 MB and the gap walk none measurable, both inside the 945 MB run-to-run spread of E
+on the unchanged tree. The unattributed remainder (about 2,150 MB) is not one named cost and is not a
+target.
+
+### Predictions
+
+Probe figures (leads, marked W8): E on the unchanged tree 4,064 / 4,197 / 5,009 MB (median 4,197);
+with the hash call stubbed to `""` 2,367 / 2,398 MB (median 2,383). The stub's median saving is
+4,197 - 2,383 = 1,814 MB. The fix cannot remove everything the stub removed: it keeps the live 64-hex
+hash strings, the buffer, the digest objects, and the generic walk where it runs. That is allowed for
+at about 500 MB (an allowance, not a measured cost), so the expected saving is about 1,314 MB.
+
+- E after the fix, read as in AMENDMENT 1 (p5 phase peak minus p5 post-GC RSS, one marked W8 run):
+  at or below 2,900 MB. This is a RISKY prediction: the expected E is 2,383 + 500 = 2,883, 17 MB
+  under the bound, the 500 MB is not measured, and E on the unchanged tree ranged over 945 MB. The
+  result is reported as measured, and the bound is never widened after it.
+  Same-revision before: the probe's 4,197 MB median at `ccb3350f`. The S4.2d base is the master merge
+  `d10f518a`, and `git diff ccb3350f d10f518a` is empty under `packages/engine` and
+  `packages/schemata`.
+- W8 median peak after the fix (3 unmarked runs, `scripts/measure-peak.ts`): at or below 10,500 MB.
+  Derivation: AMENDMENT 7's median 11,778 minus the expected E saving of 1,314 is 10,464, rounded up to
+  10,500. The probe also saw the marked whole-run peak fall by about 2.8 GB with the stub, part of it
+  post-GC RSS; the stub cannot measure that part for this fix, so it is not taken into the bound. The
+  W8 runs spread about 1 GB, so the verdict can be decided by noise; that is recorded, not a reason
+  to widen the bound.
+- W4, an unchanged-path check: the dry-run never reaches `writeInstrumentedProject`, and
+  `astSubtreeHash` has no other product caller. The three-run median (at or below 5,030 MB,
+  AMENDMENT 6's bound, unchanged) and the output hash (sha256 `f31530b0...`, 788,619 lines,
+  unchanged) decide it together. AMENDMENT 7's W4 runs spread 4,524 to 5,043 MB, so a single run
+  above the bound is not a miss.
+- Recorded, not gating: the p5 phase took 13 s with the stub against 35 to 39 s on the unchanged
+  tree.
+
+### Guards
+
+If any guard fails, S4.2d is DROPPED: it is not patched, no new baseline is accepted, and the drop is
+recorded in the S5 OUTCOME (orchestrator ruling, 2026-09-29).
+
+1. A golden test, committed alone before any S4.2d code and shown green on the unchanged
+   implementation. Its values are literal hex hashes captured from the current implementation. It
+   covers both the flat path (native `FlatNode`) and the generic path, with:
+   - identifiers in `member` and in `function` position;
+   - numbering first use and reuse, interleaved with names;
+   - all four literal kinds;
+   - an ordinary named leaf, including an operator;
+   - named versus anonymous children;
+   - a non-leaf whose own text must be ignored;
+   - exact text cases: empty text, CRLF, non-ASCII, a lone surrogate, and a surrogate pair placed
+     exactly across the buffer-flush boundary;
+   - ERROR and MISSING nodes;
+   - a `withText` leaf, so its replacement text is actually hashed.
+   If any pinned literal changes after the fix, S4.2d is dropped.
+2. A corpus differential, run after the fix: the unchanged implementation (kept as a reference
+   function in the test code, not in the product) against the new one on every named node of every
+   `.al` file under `fixtures/` (all fixture projects and their test apps) and of one real corpus
+   (BC.History `4d61fc58...`, the `sysapp` subset), through both the flat and the generic path, with
+   zero differences.
+3. Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+   (1,687,723 lines, header `raw 1775366 deployed 1687722 skippedFiles 73`) byte for byte on the
+   whole BaseApp with the S0.2 capture harness, on every W8 run. The listing includes `astHash`, so
+   one moved byte anywhere drops S4.2d. `fixture-emission.test.ts` unchanged, and
+   `fixtures/sandbox-harden/lethal.equivalent.json`'s mark still matches.
