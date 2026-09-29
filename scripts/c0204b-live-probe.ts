@@ -15,7 +15,6 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
 import { itestConfigPath } from "../packages/runner/itest/config-path";
 import { diffMutants, normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
@@ -36,6 +35,7 @@ import {
 import type { MutantOutcome } from "../packages/runner/src/report";
 import { RunMutantTransport } from "../packages/runner/src/run-mutant-transport";
 import { ResultsStore } from "../packages/runner/src/store";
+import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
