@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**91 of 344 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 346 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -138,6 +138,7 @@ that ordering is the priority.
 - **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
 - **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
+- **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · open, filed 2026-09-30
 
 ## Product gaps a real project hits
 
@@ -388,6 +389,7 @@ that ordering is the priority.
 - **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
 - **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · open, filed 2026-09-29
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
+- **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · open, filed 2026-09-29
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · open, filed 2026-09-30
 
 ---
