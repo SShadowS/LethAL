@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 328 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 328 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -132,7 +132,7 @@ that ordering is the priority.
 - **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · done (db641338)
 - **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · done (f10a1051)
 - **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29 (engine guarded; the grammar defect stays)
-- **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · open, filed 2026-09-29
+- **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · done (7b8409c7)
 
 ## Product gaps a real project hits
 
