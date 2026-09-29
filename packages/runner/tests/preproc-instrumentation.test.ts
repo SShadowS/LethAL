@@ -28,7 +28,11 @@ const APP_JSON = {
 async function instrument(
   files: Record<string, string>,
   appJsonExtra?: Record<string, unknown>,
-): Promise<{ manifest: MutantManifest; emitted: Map<string, string> }> {
+): Promise<{
+  manifest: MutantManifest;
+  emitted: Map<string, string>;
+  declarativeSites: Awaited<ReturnType<typeof generateMutationSet>>["declarativeSites"];
+}> {
   const src = await mkdtemp(join(tmpdir(), "lethal-preproc-src-"));
   const out = await mkdtemp(join(tmpdir(), "lethal-preproc-out-"));
   try {
@@ -47,9 +51,12 @@ async function instrument(
       await readFile(join(out, "mutant-manifest.json"), "utf8"),
     ) as MutantManifest;
     const emitted = new Map<string, string>();
-    for (const name of Object.keys(files))
-      emitted.set(name, await readFile(join(out, name), "utf8"));
-    return { manifest, emitted };
+    // A file with no mutant (a table with only an empty procedure) is not written.
+    for (const name of Object.keys(files)) {
+      const text = await readFile(join(out, name), "utf8").catch(() => undefined);
+      if (text !== undefined) emitted.set(name, text);
+    }
+    return { manifest, emitted, declarativeSites: set.declarativeSites };
   } finally {
     await rm(src, { recursive: true, force: true });
     await rm(out, { recursive: true, force: true });
@@ -1507,17 +1514,26 @@ describe("R301: split-header procedures get their manifest fields", () => {
     }
   });
 
-  test("c-split: the site set is unchanged by the manifest fixes (operator multiset)", async () => {
-    const { manifest } = await instrument({ "Split.Codeunit.al": C_SPLIT });
-    const ops = manifest.mutants
-      .filter(inSplit)
-      .map((m) => `${m.startLine} ${m.operatorName}`)
-      .sort();
-    expect(ops).toEqual(SPLIT_SITES);
+  // R302 flipped this pin. It was a literal list of the sites HEAD found, which pinned the
+  // blindness (the split body had no `empty-block`). The oracle is now the member's twin: the same
+  // text with the markers and the `#else` arm blanked, every line kept.
+  test("c-split: the split body's site set equals its twin's (line and operator multiset)", async () => {
+    const twin = C_SPLIT.replace("#if CLEAN27", "").replace(
+      "#else\n    internal procedure A(X: Integer)\n#endif",
+      "\n\n",
+    );
+    expect(twin.split("\n")).toHaveLength(C_SPLIT.split("\n").length);
+    expect(twin).not.toContain("#");
+    const ops = async (src: string) =>
+      (await instrument({ "Split.Codeunit.al": src })).manifest.mutants
+        .filter(inSplit)
+        .map((m) => `${m.startLine} ${m.operatorName}`)
+        .sort();
+    const want = await ops(twin);
+    expect(want).toContain("18 lethal.empty-block");
+    expect(await ops(C_SPLIT)).toEqual(want);
   });
 });
-/** Captured after R301's latch fix (Step 4a), before the manifest fixes; see the test above. */
-const SPLIT_SITES: string[] = ["19 lethal.remove-assignment", "20 lethal.void-method-call"];
 
 describe("R303: a member whose var section is split by #if gets a latch, or is refused by name", () => {
   beforeAll(async () => {
@@ -2320,5 +2336,1317 @@ ${b}
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// R327: a split member placed after the object's global `var` section parses INSIDE that section,
+// so the symbol table does not index it. Before the fix its names typed by the object's GLOBALS
+// (swap-call-arguments at the Show call failed `alc` with AL0133 in both builds), a swallowed
+// overload left the plain one "unique" (swap-additive on Text failed `alc` with AL0175), and a
+// swallowed `SetRange` did not stop a Tier-2 claim. The repros are hand-written; `alc` of each
+// instrumented project passes under [] and [CLEAN27] (logged in the R-302 task report).
+const R327_SWALLOW = `codeunit 50100 "Repro R327"
+{
+    var
+        Glob: Integer;
+        X: Integer;
+        Y: Integer;
+
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Text): Integer
+#else
+    procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        Show(X, Y);
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+}
+`;
+const R327_OVERLOAD = `codeunit 50100 "Repro R327O"
+{
+    var
+        Glob: Integer;
+
+#if CLEAN27
+    procedure Foo(T: Text): Text
+#else
+    procedure Foo(T: Text): Text
+#endif
+    begin
+        exit(T);
+    end;
+
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Caller(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+}
+`;
+const R327_TABLE = `table 50100 "Repro Tab"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    var
+        Glob: Integer;
+
+#if CLEAN27
+    procedure SetRange(F: Code[20]; V: Code[20])
+#else
+    procedure SetRange(F: Code[20]; V: Code[20])
+#endif
+    begin
+        Glob := 1;
+    end;
+}
+`;
+const R327_CALLER = `codeunit 50101 "Repro R327S"
+{
+    procedure Pick(C: Code[20])
+    var
+        R: Record "Repro Tab";
+    begin
+        R.SetRange(Code, C);
+    end;
+}
+`;
+
+describe("R327: a split member swallowed by the global var section gets no site typed by a global", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const sites = (m: MutantManifest) =>
+    m.mutants.map((x) => `${x.file} L${x.startLine} ${x.operatorName}`).sort();
+
+  // The whole-body `empty-block` (L15) needs no type, so Task 2's body walks admit it; `alc`
+  // passes on it in both builds (scratch, logged in the R-302 task report).
+  test("swallow: no swap at Show(X, Y), no swap-additive on X + 1", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R327_SWALLOW });
+    expect(sites(manifest)).toEqual([
+      "Repro.Codeunit.al L15 lethal.empty-block",
+      "Repro.Codeunit.al L16 lethal.void-method-call",
+      "Repro.Codeunit.al L17 lethal.remove-assignment",
+      "Repro.Codeunit.al L18 lethal.return-value",
+      "Repro.Codeunit.al L22 lethal.empty-block",
+      "Repro.Codeunit.al L23 lethal.remove-assignment",
+    ]);
+  });
+
+  test("overload: no swap-additive at the call a swallowed overload makes ambiguous", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R327_OVERLOAD });
+    expect(sites(manifest)).not.toContain("Repro.Codeunit.al L22 lethal.swap-additive");
+    expect(sites(manifest)).toContain("Repro.Codeunit.al L21 lethal.empty-block");
+  });
+
+  test("setrange: a swallowed SetRange stops the Tier-2 claim; the Tier-1 site stays", async () => {
+    const { manifest } = await instrument({
+      "Tab.Table.al": R327_TABLE,
+      "Repro.Codeunit.al": R327_CALLER,
+    });
+    const got = sites(manifest);
+    expect(got).not.toContain("Repro.Codeunit.al L7 lethal.remove-setrange");
+    expect(got).toContain("Repro.Codeunit.al L7 lethal.void-method-call");
+  });
+});
+
+// R-302 Task 3: runner-level pins, through the real pipeline (generate, instrument, manifest).
+// Each source is copied byte for byte from the named scratch repro (hand-written, invented names),
+// whose rows were pre-committed before any fix existed.
+const T3_Q2 = `codeunit 50100 "Repro P"
+{
+    procedure Twin(X: Integer): Integer
+    var
+        K: Integer;
+    begin
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Pick(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const T3_D1 = `codeunit 50100 "Repro D1"
+{
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Integer): Integer
+#else
+    procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        Show(X, Y);
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Y: Integer;
+}
+`;
+const T3_D3 = `codeunit 50100 "Repro D3"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        N: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+#endif
+    begin
+#if CLEAN27
+        N := X;
+        Glob := N + 1;
+#endif
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+        N: Text;
+}
+`;
+const T3_D7 = `codeunit 50100 "Repro D7"
+{
+#if CLEAN27
+    procedure Same(X: Integer): Integer
+#else
+    procedure Same(X: Integer): Integer
+#endif
+    begin
+    end;
+
+#if CLEAN27
+    procedure Differs(X: Integer): Decimal
+#else
+    procedure Differs(X: Integer): Integer
+#endif
+    begin
+    end;
+
+    procedure Caller()
+    begin
+        Glob := Same(1) + 1;
+        Glob := Differs(1) + 1;
+    end;
+
+    var
+        Glob: Decimal;
+}
+`;
+const T3_D6_CU = `codeunit 50100 "Repro D6"
+{
+    procedure Pick(C: Code[20])
+    var
+        R: Record "Repro Tab S";
+    begin
+        R.SetRange(Code, C);
+    end;
+}
+`;
+const T3_D6_TAB = `table 50101 "Repro Tab S"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+#if CLEAN27
+    procedure SetRange(F: Code[20]; V: Code[20])
+#else
+    procedure SetRangeOld(F: Code[20]; V: Code[20])
+#endif
+    begin
+    end;
+}
+`;
+const T3_A1 = `codeunit 50100 "Repro A1"
+{
+#if CLEAN27
+    [Obsolete('Old.', '27.0')]
+    procedure Pick(X: Integer): Boolean
+#else
+    procedure Pick(X: Integer): Boolean
+#endif
+    var
+        T: Text;
+    begin
+        T := 'abc';
+        exit(X > 1);
+    end;
+
+#if CLEAN27
+    [IntegrationEvent(false, false)]
+    local procedure OnPick(var Handled: Boolean)
+#else
+    [IntegrationEvent(true, false)]
+    local procedure OnPick(var Handled: Boolean)
+#endif
+    begin
+    end;
+}
+`;
+const T3_HANG = `codeunit 50112 "Hang C"
+{
+#if CLEAN27
+    procedure A()
+#else
+    internal procedure A()
+#endif
+    var
+        I: Integer;
+        Done: Boolean;
+    begin
+        while I < 10 do
+            I := I + 1;
+        repeat
+            Done := true;
+        until Done;
+    end;
+}
+`;
+const T3_C3 = `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    procedure Pick(X: Text): Integer
+    begin
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const T3_C1 = `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Integer
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        M: Integer;
+#endif
+    begin
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+#if CLEAN27
+    procedure AIf(X: Integer): Integer
+#else
+    procedure AElse(X: Integer): Integer
+#endif
+    var
+        S: Integer;
+    begin
+        Glob := Glob + 2;
+        exit(Glob);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const T3_O1 = `codeunit 50100 "Repro O1"
+{
+#if CLEAN27
+    procedure Foo(X: Integer): Integer
+#else
+    procedure Foo(X: Integer): Integer
+#endif
+    begin
+        exit(X);
+    end;
+
+    procedure Foo(T: Text): Text
+    begin
+        exit(T);
+    end;
+
+    procedure Caller(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+}
+`;
+const T3_O2 = `codeunit 50100 "Repro O2"
+{
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Foo(T: Text): Text
+    begin
+        exit(T);
+    end;
+
+    procedure Caller(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+}
+`;
+const T3_O3 = `codeunit 50100 "Repro O3"
+{
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Caller(): Integer
+    begin
+        exit(FOO(1) + 1);
+    end;
+}
+`;
+const T3_E1 = `codeunit 50100 "Repro E1"
+{
+    procedure Pick(X: Integer; y: Text): Integer
+    var
+        K: Integer;
+    begin
+        Show(X, Y);
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Y: Integer;
+}
+`;
+const T3_E2 = `codeunit 50100 "Repro E2"
+{
+#if CLEAN27
+    procedure Pick(X: Integer; y: Text): Integer
+#else
+    procedure Pick(X: Integer; y: Text): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        Show(X, Y);
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Y: Integer;
+}
+`;
+const T3_E3 = `codeunit 50100 "Repro E3"
+{
+    procedure Total(amount: Decimal): Decimal
+    var
+        Rate: Decimal;
+    begin
+        Rate := 2;
+        exit(Amount + rate);
+    end;
+}
+`;
+
+describe("R302: split-member sites through the real pipeline", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const rows = (m: MutantManifest, file = "Repro.Codeunit.al") =>
+    m.mutants.filter((x) => x.file === file).map((x) => `L${x.startLine} ${x.operatorName}`);
+  const one = async (src: string) => (await instrument({ "Repro.Codeunit.al": src })).manifest;
+  const keyAt = (m: MutantManifest, line: number, op: string): string => {
+    const hits = m.mutants.filter((x) => x.startLine === line && x.operatorName === op);
+    const [hit] = hits;
+    if (hit === undefined || hits.length !== 1) throw new Error(`not one ${op} at L${line}`);
+    return serializeKey(identityKeyOf(hit));
+  };
+
+  test("q2: the split member's (relative line, operator) multiset equals its plain twin's, and every one names it", async () => {
+    const m = await one(T3_Q2);
+    const twin = m.mutants.filter((x) => x.procedureName === "Twin");
+    const pick = m.mutants.filter((x) => x.startLine >= 13 && x.startLine <= 25);
+    expect(pick.length).toBe(7);
+    for (const x of pick) expect(x.procedureName).toBe("Pick");
+    const rel = (xs: typeof twin, base: number) =>
+      xs.map((x) => `${x.startLine - base} ${x.operatorName}`).sort();
+    expect(rel(pick, 20)).toEqual(rel(twin, 6));
+  });
+
+  test("d1: no swap-call-arguments at Show(X, Y), where Y is ambiguous and a global Y exists", async () => {
+    const got = rows(await one(T3_D1));
+    expect(got).not.toContain("L11 lethal.swap-call-arguments");
+    expect(got).toContain("L12 lethal.swap-additive");
+  });
+
+  test("d3: no swap-additive on a name only one arm declares", async () => {
+    const got = rows(await one(T3_D3));
+    expect(got).not.toContain("L13 lethal.swap-additive");
+    expect(got).toContain("L15 lethal.return-value");
+  });
+
+  test("d7: swap-additive on the call whose arms agree on the return type, not on the other", async () => {
+    const got = rows(await one(T3_D7));
+    expect(got).toContain("L21 lethal.swap-additive");
+    expect(got).not.toContain("L22 lethal.swap-additive");
+  });
+
+  test("d6: a SetRange one arm declares stops the Tier-2 claim; void-method-call stays", async () => {
+    const { manifest } = await instrument({
+      "Repro.Codeunit.al": T3_D6_CU,
+      "Tab.Table.al": T3_D6_TAB,
+    });
+    const got = rows(manifest);
+    expect(got).toContain("L7 lethal.void-method-call");
+    expect(got).not.toContain("L7 lethal.remove-setrange");
+  });
+
+  test("a1: no mutant on an attribute inside an arm, and no site dropped as not executable", async () => {
+    const { manifest, declarativeSites } = await instrument({ "Repro.Codeunit.al": T3_A1 });
+    const lines = new Set(manifest.mutants.map((x) => x.startLine));
+    for (const attr of [4, 17, 20]) expect(lines.has(attr)).toBe(false);
+    expect(rows(manifest).sort()).toEqual(
+      [
+        "L11 lethal.empty-block",
+        "L12 lethal.remove-assignment",
+        "L12 lethal.toggle-blank-string",
+        "L13 lethal.conditional-boundary",
+        "L13 lethal.return-value",
+      ].sort(),
+    );
+    expect(declarativeSites).toEqual([]);
+  });
+
+  test("t5-hang: both remove-assignment mutants carry the loop hang tag", async () => {
+    const { manifest } = await instrument({ "H.Codeunit.al": T3_HANG });
+    const ra = manifest.mutants.filter((x) => x.operatorName === "lethal.remove-assignment");
+    expect(ra.map((x) => [x.startLine, x.hangCapable])).toEqual([
+      [13, "loop-condition-target"],
+      [15, "loop-condition-target"],
+    ]);
+  });
+
+  test("c3: the overload after the preamble takes ordinal 1; the preamble's keys have none", async () => {
+    const m = await one(T3_C3);
+    expect(keyAt(m, 12, "lethal.empty-block").endsWith("|1|1")).toBe(false);
+    expect(keyAt(m, 14, "lethal.return-value").endsWith("|1|1")).toBe(false);
+    expect(keyAt(m, 18, "lethal.empty-block")).toBe(`${keyAt(m, 12, "lethal.empty-block")}|1`);
+    expect(keyAt(m, 20, "lethal.return-value")).toBe(`${keyAt(m, 14, "lethal.return-value")}|1`);
+  });
+
+  test("c1: the renamed member's new mutants name no procedure", async () => {
+    const m = await one(T3_C1);
+    const renamed = m.mutants.filter((x) => x.startLine >= 24 && x.startLine <= 26);
+    expect(renamed.map((x) => `L${x.startLine} ${x.operatorName}`).sort()).toContain(
+      "L24 lethal.empty-block",
+    );
+    for (const x of renamed) expect(x.procedureName).toBe("");
+  });
+
+  test("o1: no swap-additive at the overloaded call; the plain overload's empty-block takes ordinal 1", async () => {
+    const m = await one(T3_O1);
+    expect(rows(m)).not.toContain("L19 lethal.swap-additive");
+    expect(keyAt(m, 13, "lethal.empty-block")).toBe(`${keyAt(m, 8, "lethal.empty-block")}|1`);
+  });
+
+  test("o2: no swap-additive at a call to an overloaded plain procedure (R324)", async () => {
+    expect(rows(await one(T3_O2))).not.toContain("L15 lethal.swap-additive");
+  });
+
+  test("e1 and e2: no swap-call-arguments where the parameter is spelled in other casing (R322)", async () => {
+    expect(rows(await one(T3_E1))).not.toContain("L7 lethal.swap-call-arguments");
+    expect(rows(await one(T3_E2))).not.toContain("L11 lethal.swap-call-arguments");
+  });
+
+  test("o3 and e3: the sites a case-insensitive name adds", async () => {
+    expect(rows(await one(T3_O3))).toContain("L10 lethal.swap-additive");
+    expect(rows(await one(T3_E3))).toContain("L8 lethal.swap-additive");
+  });
+});
+
+// R330, run 002: a name declared in a `#if` region the symbol table does not index is UNKNOWN.
+// Sources copied byte for byte from the scratch repros pre-committed in the plan's run 002 addendum.
+// Before the fix each emitted a `swap-additive` in `Bar` that fails `alc` with AL0175 (i1 under
+// [X] and [X,Y]; i2 under []; p1, master's older plain form, under [X]).
+const R330_I1 = `codeunit 50100 "Repro R330A"
+{
+#if Y
+    procedure Foo(A: Integer): Integer
+#else
+    procedure Foo(A: Integer): Integer
+#endif
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+
+    procedure Bar(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+#endif
+}
+`;
+const R330_I2 = `codeunit 50100 "Repro R330B"
+{
+    var
+        AMT: Integer;
+
+    procedure Bar()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Message('%1', Amt + Amt);
+    end;
+}
+`;
+const R330_P1 = `codeunit 50100 "Repro R330P"
+{
+    procedure Foo(A: Integer): Integer
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+
+    procedure Bar(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+#endif
+}
+`;
+
+describe("R330: no typed site from a name declared in an unindexed #if region", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (src: string) =>
+    (await instrument({ "Repro.Codeunit.al": src })).manifest.mutants
+      .map((x) => `${x.procedureName} ${x.operatorName}`)
+      .sort();
+
+  test("i1: a split member beside a #if-wrapped overload gives Bar no swap-additive", async () => {
+    expect(await ops(R330_I1)).toEqual([
+      "Bar lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.return-value",
+    ]);
+  });
+
+  test("i2: a #if var-block local hides the differently-cased global", async () => {
+    expect(await ops(R330_I2)).toEqual(["Bar lethal.empty-block", "Bar lethal.void-method-call"]);
+  });
+
+  test("p1: master's older plain form gives Bar no swap-additive either", async () => {
+    expect(await ops(R330_P1)).toEqual([
+      "Bar lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.return-value",
+    ]);
+  });
+});
+
+// R330, run 002 fix round: a trigger's own locals hide the globals. Sources copied byte for byte
+// from the repros pre-committed in the plan's addendum 2. Before the fix each emitted a
+// `swap-additive` on `Amt + Amt` that fails `alc` with AL0175 (t3s is master's older same-case form).
+const R330_T1C = `codeunit 50100 "Repro R330T1"
+{
+    trigger OnRun()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        AMT: Integer;
+}
+`;
+const R330_T3 = `codeunit 50100 "Repro R330T3"
+{
+    trigger OnRun()
+    var
+        Amt: Text;
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        AMT: Integer;
+}
+`;
+const R330_T3S = `codeunit 50100 "Repro R330T3S"
+{
+    trigger OnRun()
+    var
+        Amt: Text;
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        Amt: Integer;
+}
+`;
+const R330_T2 = `table 50100 "Repro R330T2"
+{
+    fields
+    {
+        field(1; Code; Code[20])
+        {
+            trigger OnValidate()
+#if not CLEAN27
+            var
+                Amt: Text;
+#endif
+            begin
+                Message('%1', Amt + Amt);
+            end;
+        }
+    }
+
+    var
+        AMT: Integer;
+}
+`;
+
+describe("R330: no typed site from a name a trigger declares in its own header", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (file: string, src: string) =>
+    (await instrument({ [file]: src })).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+
+  test("t1c: a #if trigger local hides the differently-cased global", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T1C)).toEqual(WANT);
+  });
+  test("t3: a plain trigger local hides the differently-cased global", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T3)).toEqual(WANT);
+  });
+  test("t3s: a plain trigger local hides the same-cased global (master's older form)", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T3S)).toEqual(WANT);
+  });
+  test("t2: a #if local of a field's OnValidate hides the global", async () => {
+    expect(await ops("Tab.Table.al", R330_T2)).toEqual(WANT);
+  });
+});
+
+// R331 (run 003): unindexed means unknown, for every member shape and for rule 3. Sources copied
+// byte for byte from the repros pre-committed in the plan's addendum 3. Before the fix: c1 and c1s
+// emitted a `swap-additive` failing `alc` with AL0175 under [X]; c2, c2o and c2x emitted a
+// `validate-to-assign` that assigns a field that does not exist (AL0132) in every build.
+const R331_C1 = `codeunit 50100 "Repro R331C1"
+{
+#if X
+    procedure Foo(V: Text): Text
+    begin
+        exit(V + V);
+    end;
+#endif
+
+    var
+        v: Integer;
+}
+`;
+const R331_C1S = `codeunit 50100 "Repro R331C1S"
+{
+#if X
+    procedure Foo(V: Text): Text
+    begin
+        exit(V + V);
+    end;
+#endif
+
+    var
+        V: Integer;
+}
+`;
+const R331_C2_CU = `codeunit 50100 "Repro R331C2"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_C2_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+#if X
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+#else
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+#endif
+}
+`;
+const R331_C2O_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_C2X_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_C2X_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+
+describe("R331: no typed site in an unindexed member, and rule 3 sees #if-wrapped declarations", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+
+  test("c1: no swap-additive inside a #if-wrapped plain procedure (global in other casing)", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C1 })).toEqual(["lethal.empty-block"]);
+  });
+  test("c1s: nor with the global in the same casing", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C1S })).toEqual(["lethal.empty-block"]);
+  });
+  const C2_WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("c2: a #if-wrapped table Validate stops validate-to-assign", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C2_CU, "Tab.Table.al": R331_C2_TAB })).toEqual(
+      C2_WANT,
+    );
+  });
+  test("c2o: so does a table wrapped whole in #if", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C2_CU, "Tab.Table.al": R331_C2O_TAB })).toEqual(
+      C2_WANT,
+    );
+  });
+  test("c2x: so does a #if-wrapped tableextension", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_C2_CU,
+        "Tab.Table.al": R331_C2X_TAB,
+        "TabExt.TableExt.al": R331_C2X_EXT,
+      }),
+    ).toEqual(C2_WANT);
+  });
+});
+
+// R330 (run 003 fix round): a trigger's parameters hide the globals. Sources copied byte for byte
+// from the scratch repros r330-tp1 and r330-tp1s. Before the fix each emitted `Which - Which`,
+// which fails `alc` with AL0175 (tp1s, the same-case form, on master too).
+const R330_TP1 = `page 50100 "Repro R330TP1"
+{
+    PageType = List;
+    SourceTable = "Repro Tab TP";
+
+    trigger OnFindRecord(Which: Text): Boolean
+    begin
+        Message('%1', Which + Which);
+        exit(Rec.Find(Which));
+    end;
+
+    var
+        WHICH: Integer;
+}
+`;
+const R330_TP1S = `page 50100 "Repro R330TP1S"
+{
+    PageType = List;
+    SourceTable = "Repro Tab TP";
+
+    trigger OnFindRecord(Which: Text): Boolean
+    begin
+        Message('%1', Which + Which);
+        exit(Rec.Find(Which));
+    end;
+
+    var
+        Which: Integer;
+}
+`;
+const R330_TP_TAB = `table 50101 "Repro Tab TP"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+
+describe("R330: no typed site from a trigger's parameter", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (page: string) =>
+    (await instrument({ "Repro.Page.al": page, "Tab.Table.al": R330_TP_TAB })).manifest.mutants
+      .map((x) => x.operatorName)
+      .sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("tp1: a page trigger parameter hides the differently-cased global", async () => {
+    expect(await ops(R330_TP1)).toEqual(WANT);
+  });
+  test("tp1s: and the same-cased one", async () => {
+    expect(await ops(R330_TP1S)).toEqual(WANT);
+  });
+});
+
+// R331 (run 004): a table's id and name are aliases for rule 3, whether the table is indexed or
+// wrapped whole in `#if`. Sources copied byte for byte from the scratch repros r331-n1 to n4.
+// Before the fix n1, n1w, n2 and n4 emitted a `validate-to-assign` assigning a field that does not
+// exist (AL0132); n3 is the control that already refused.
+const R331_N1_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N1_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N1_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N1W_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N1W_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N1W_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_N2_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N2_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N2_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N3_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N3_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_N3_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N4_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N4_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_N4_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+
+describe("R331: the table's id and name are one table for rule 3", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("n1: a numeric receiver of a #if-wrapped table extended by name", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N1_CU,
+        "Tab.Table.al": R331_N1_TAB,
+        "TabExt.TableExt.al": R331_N1_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n1w: the same with the extension wrapped in #if too", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N1W_CU,
+        "Tab.Table.al": R331_N1W_TAB,
+        "TabExt.TableExt.al": R331_N1W_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n2: a named receiver of a #if-wrapped table extended by number", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N2_CU,
+        "Tab.Table.al": R331_N2_TAB,
+        "TabExt.TableExt.al": R331_N2_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n3 (control): a numeric receiver of an indexed table extended by name", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N3_CU,
+        "Tab.Table.al": R331_N3_TAB,
+        "TabExt.TableExt.al": R331_N3_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n4: a named receiver of an indexed table extended by number", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N4_CU,
+        "Tab.Table.al": R331_N4_TAB,
+        "TabExt.TableExt.al": R331_N4_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+});
+
+// R331 (run 005): the unparsed fallback reads any ERROR node, at any depth, by identifier token with
+// comments stripped. Sources copied byte for byte from the scratch repros r331-u1 to u3; before the
+// fix each emitted a `validate-to-assign` assigning a field that does not exist (AL0132).
+const R331_U1_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure /* note */ Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_U2_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_U3_EXT = `// an extension that extends its table by number
+tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure // the custom one
+        Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_U_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_U_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+
+describe("R331: the unparsed-object fallback is conservative", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("u1: a block comment inside an unparsed extension's procedure header", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U1_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("u2: an unparsed extension wrapped whole in #if", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U2_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("u3: a line comment inside the header, and a leading comment line", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_U_CU,
+        "Tab.Table.al": R331_U_TAB,
+        "TabExt.TableExt.al": R331_U3_EXT,
+      }),
+    ).toEqual(WANT);
   });
 });

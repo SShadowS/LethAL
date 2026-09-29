@@ -17,7 +17,9 @@ import {
   type SemanticContext,
   findAll,
   initParser,
+  parseAL,
   visit,
+  wrapRoot,
 } from "@lethal/engine";
 import { claimsRecordMethod } from "@lethal/engine";
 import { contextFor, parseClean, projectContextFor } from "./parse-clean";
@@ -1081,5 +1083,277 @@ describe("a plain page's implicit Rec (R67)", () => {
 }`;
     const root = parseClean(src);
     expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+});
+
+// R302: a split member is a member of its object. Rule 3 (does the table declare a procedure of
+// that name) reads ANY arm's name, since a refusal that read every arm would re-open the wrong
+// claim in the build where that arm is compiled. A receiver resolves inside a split member only
+// when every arm declares it with the same type.
+describe("claimsRecordMethod: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const splitTable = (elseName: string, ifName = "SetRange") => `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+#if CLEAN27
+    procedure ${ifName}(A: Integer; B: Integer)
+#else
+    procedure ${elseName}(A: Integer; B: Integer)
+#endif
+    begin
+    end;
+}`;
+  const cu = () =>
+    parseClean(codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }));
+
+  // R327: a split member after the table's global var section parses inside that section. It is
+  // still a member of the table, so it still shadows the built-in.
+  it("REFUSES it when the split member sits after the table's global var section", () => {
+    const root = cu();
+    const table = splitTable("SetRange").replace(
+      "#if CLEAN27",
+      "    var\n        G: Integer;\n\n#if CLEAN27",
+    );
+    expect(table).toContain("G: Integer;");
+    const ctx = projectContextFor([root, parseClean(table)]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+  });
+
+  it("REFUSES a call on a table that declares that name as a split member", () => {
+    const root = cu();
+    const ctx = projectContextFor([root, parseClean(splitTable("SetRange"))]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+  });
+
+  it("REFUSES it when only ONE arm has that name, whichever arm it is", () => {
+    for (const [ifName, elseName] of [
+      ["SetRange", "SetRangeOld"],
+      ["SetRangeOld", "SetRange"],
+    ] as const) {
+      const root = cu();
+      const ctx = projectContextFor([root, parseClean(splitTable(elseName, ifName))]);
+      expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+    }
+  });
+
+  const preamble = (typeB: string, global = "") => `codeunit 50000 "My Cu"
+{
+#if CLEAN27
+    procedure P()
+    var
+        R: Record "Tab A";
+#else
+    procedure P()
+    var
+        R: ${typeB};
+#endif
+    begin
+        R.SetRange("No.", 'X');
+    end;
+${global}}`;
+
+  it("claims a receiver every arm declares with the same record type", () => {
+    const root = parseClean(preamble('Record "Tab A"'));
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
+  });
+
+  // A record global `R` is added here: an ambiguous local must HIDE it, not fall through to it.
+  it("REFUSES a receiver declared as a different type per arm, despite a record global of its name", () => {
+    const root = parseClean(preamble('Record "Tab B"', '\n    var\n        R: Record "Tab A";\n'));
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+
+  // Place 11: when the positional lookup misses (here the symbols come from another parse of the
+  // object, so no start offset matches), the fallback looks the member up by NAME. A renamed split
+  // member has no name, so it must not borrow the locals of a plain procedure named like one arm.
+  it("a renamed split member does not fall back to a same-named plain procedure's locals", () => {
+    const site = parseClean(`codeunit 50000 "My Cu"
+{
+#if CLEAN27
+    procedure Pick()
+#else
+    procedure PickOld()
+#endif
+    begin
+        R.SetRange("No.", 'X');
+    end;
+}`);
+    const other = parseClean(`codeunit 50000 "My Cu"
+{
+    procedure Pick()
+    var
+        R: Record "Tab A";
+    begin
+    end;
+}`);
+    const ctx = projectContextFor([other]);
+    expect(claimsRecordMethod(onlyCall(site), ctx, "SetRange")).toBe(false);
+  });
+});
+
+// R331 (run 003): rule 3 reads every declaration of the project, wherever `#if` put it. A table
+// procedure wrapped in `#if`, a whole table wrapped in `#if`, and a wrapped `tableextension` each
+// shadow the built-in; claiming `Validate` there let `validate-to-assign` assign a field that does
+// not exist (AL0132).
+describe("claimsRecordMethod: #if-wrapped declarations shadow the built-in (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"
+{
+    procedure P()
+    var
+        R: Record "Other Table";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}`;
+  const PROC = "    procedure Validate(A: Integer; B: Integer)\n    begin\n    end;\n";
+  const TABLE = (body: string) =>
+    `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n\n${body}}\n`;
+  const claims = (...files: string[]) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, ...files.map((f) => parseClean(f))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+
+  it("control: a table without that procedure is claimed", () => {
+    expect(claims(TABLE(""))).toBe(true);
+  });
+  it("REFUSES when the table's procedure is wrapped in #if", () => {
+    expect(claims(TABLE(`#if X\n${PROC}#else\n${PROC}#endif\n`))).toBe(false);
+  });
+  it("REFUSES when the whole table is wrapped in #if", () => {
+    const t = TABLE(PROC);
+    expect(claims(`#if X\n${t}#else\n${t}#endif\n`)).toBe(false);
+  });
+  it("REFUSES when a #if-wrapped tableextension declares it", () => {
+    const ext = `tableextension 50002 "Other Ext" extends "Other Table"\n{\n${PROC}}\n`;
+    expect(claims(TABLE(""), `#if X\n${ext}#else\n${ext}#endif\n`)).toBe(false);
+  });
+});
+
+// R331 (run 004): the table's id and name are aliases. A receiver typed `Record 50001` must be
+// refused when an extension that extends the table BY NAME declares the procedure, and the other
+// way round, whether the table is indexed or wrapped whole in `#if`.
+describe("claimsRecordMethod: table id and name are one table (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const cu = (ref: string) => `codeunit 50000 "My Cu"
+{
+    procedure P()
+    var
+        R: Record ${ref};
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const WRAPPED_TABLE = `#if X\n${TABLE}#else\n${TABLE}#endif\n`;
+  const ext = (base: string) =>
+    `tableextension 50002 "Other Ext" extends ${base}\n{\n    procedure Validate(A: Integer; B: Integer)\n    begin\n    end;\n}\n`;
+  const claims = (ref: string, ...files: string[]) => {
+    const root = parseClean(cu(ref));
+    // Not `parseClean` for the other files: `extends 50001` (by number) is valid AL that the grammar
+    // does not parse, and the guard's handling of that unparsed object is what two cases test.
+    const ctx = projectContextFor([root, ...files.map((f) => wrapRoot(parseAL(f)))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+
+  it("REFUSES a numeric receiver of a #if-wrapped table extended by name", () => {
+    expect(claims("50001", WRAPPED_TABLE, ext('"Other Table"'))).toBe(false);
+  });
+  it("REFUSES it when the extension is wrapped in #if too", () => {
+    const e = ext('"Other Table"');
+    expect(claims("50001", WRAPPED_TABLE, `#if X\n${e}#else\n${e}#endif\n`)).toBe(false);
+  });
+  it("REFUSES a named receiver of a #if-wrapped table extended by number", () => {
+    expect(claims('"Other Table"', WRAPPED_TABLE, ext("50001"))).toBe(false);
+  });
+  it("REFUSES a named receiver of an indexed table extended by number", () => {
+    expect(claims('"Other Table"', TABLE, ext("50001"))).toBe(false);
+  });
+  it("control: a numeric receiver of an indexed table extended by name is refused (as before)", () => {
+    expect(claims("50001", TABLE, ext('"Other Table"'))).toBe(false);
+  });
+  it("control: with no extension at all the numeric receiver is claimed", () => {
+    expect(claims("50001", WRAPPED_TABLE)).toBe(true);
+  });
+});
+
+// R331 (run 004): an object the grammar could not parse is read by its text. The refusal must not
+// fire for a procedure of ANOTHER name, or for an unparsed object that is not a table or extension.
+describe("claimsRecordMethod: unparsed objects (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"\n{\n    procedure P()\n    var\n        R: Record "Other Table";\n        N: Integer;\n    begin\n        R.Validate(N, 5);\n    end;\n}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const claims = (unparsed: string) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, parseClean(TABLE), wrapRoot(parseAL(unparsed))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+  it("control: an unparsed extension declaring another procedure does not refuse", () => {
+    expect(
+      claims(
+        `tableextension 50002 "Other Ext" extends 50001\n{\n    procedure Check(A: Integer)\n    begin\n    end;\n}\n`,
+      ),
+    ).toBe(true);
+  });
+});
+
+// R331 (run 005): the unparsed-object fallback is conservative. It reads any ERROR node, at any
+// depth, and matches the called name as an identifier token with comments stripped.
+describe("claimsRecordMethod: the unparsed fallback is conservative (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"\n{\n    procedure P()\n    var\n        R: Record "Other Table";\n        N: Integer;\n    begin\n        R.Validate(N, 5);\n    end;\n}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const EXT = (header: string) =>
+    `tableextension 50002 "Other Ext" extends 50001\n{\n    ${header}(A: Integer; B: Integer)\n    begin\n    end;\n}\n`;
+  const claims = (unparsed: string) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, parseClean(TABLE), wrapRoot(parseAL(unparsed))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+  it("REFUSES with a block comment between procedure and the name", () => {
+    expect(claims(EXT("procedure /* note */ Validate"))).toBe(false);
+  });
+  it("REFUSES with a line comment between procedure and the name", () => {
+    expect(claims(EXT("procedure // the custom one\n        Validate"))).toBe(false);
+  });
+  it("REFUSES when the unparsed extension is wrapped whole in #if", () => {
+    const e = EXT("procedure Validate");
+    expect(claims(`#if X\n${e}#else\n${e}#endif\n`)).toBe(false);
+  });
+  // No valid every-build program isolates this shape through the pipeline: every build that calls
+  // the custom `Validate` needs one, and the other arm's is then visible to the guard as well. So it
+  // is pinned here, on the parse alone.
+  it("REFUSES when the unparsed extension sits BELOW a #if split declaration", () => {
+    const e = EXT("procedure Validate");
+    const other = `table 50004 "Plain"
+{
+    fields { field(1; F; Integer) { } }
+}
+`;
+    const src = `#if X
+${e}#else
+${other}#endif
+`;
+    const tree = wrapRoot(parseAL(src));
+    const [top] = tree.namedChildren;
+    expect(top?.rawKind).toBe("preproc_split_declaration");
+    expect(claims(src)).toBe(false);
+  });
+  it("control: the name only inside a comment does not refuse", () => {
+    expect(claims(EXT("procedure /* Validate */ Check"))).toBe(true);
   });
 });

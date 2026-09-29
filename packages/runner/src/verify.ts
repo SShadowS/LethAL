@@ -11,7 +11,10 @@ import {
   type EquivalenceMark,
   EquivalenceMarksError,
   loadEquivalenceMarks,
+  marksSchemeWarning,
+  marksUnderOtherScheme,
 } from "./equivalence-marks";
+import { createEmitter } from "./events";
 import { type GapRow, tallyGaps } from "./gaps";
 import {
   type InstalledArtifactRef,
@@ -217,6 +220,9 @@ export interface VerifySource {
   readonly artifactSha256: string;
   readonly sourceSha256: string;
   readonly installed: InstalledArtifactRef;
+  /** R325: the identity scheme the source run's manifest keys were made under. A reader mark is
+   *  applied only when it was made under the same one. */
+  readonly identityScheme: number;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -482,6 +488,12 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     );
   }
 
+  const run = store.getRun(rec.runId);
+  if (run === null) {
+    throw new Error(
+      `verify.ts: artifact ${req.artifactId} names run ${rec.runId}, which the store does not hold (a corrupt store)`,
+    );
+  }
   return {
     runId: rec.runId,
     // Carried item 1: stored as typed, so possibly relative. Resolved once, here.
@@ -489,6 +501,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     artifactSha256: rec.artifactSha256,
     sourceSha256,
     installed,
+    identityScheme: run.identityScheme,
     targets,
   };
 }
@@ -563,6 +576,8 @@ export interface VerifyPlan {
   readonly notRun: ReadonlyMap<string, readonly string[]>;
   /** R-236c: mutant codes with no method left once the refused ones are taken out. */
   readonly allRefused: ReadonlySet<string>;
+  /** R325: marks made under an identity scheme other than the source run's. None is applied. */
+  readonly marksUnderOtherScheme: readonly EquivalenceMark[];
 }
 
 /**
@@ -599,8 +614,12 @@ export async function planVerify(a: {
   }
 
   // Decision 6. A missing file is no marks; a malformed or unreadable one throws.
+  // R325: a mark made under another identity scheme may name another mutant; it is not applied.
   const marks = (await loadEquivalenceMarks(source.projectPath)) ?? [];
-  const markByKey = new Map(marks.map((m) => [m.key, m] as const));
+  const staleMarks = marksUnderOtherScheme(marks, source.identityScheme);
+  const markByKey = new Map(
+    marks.filter((m) => !staleMarks.includes(m)).map((m) => [m.key, m] as const),
+  );
   const skipped: Array<VerifyPlan["skipped"][number]> = [];
   const running: Array<VerifySource["targets"][number]> = [];
   for (const t of source.targets) {
@@ -619,6 +638,7 @@ export async function planVerify(a: {
       testPageRefused: new Map(),
       notRun: new Map(),
       allRefused: new Set(),
+      marksUnderOtherScheme: staleMarks,
     };
   }
 
@@ -727,7 +747,16 @@ export async function planVerify(a: {
       `no covering test and no new test for: ${noTests.join(", ")}; add a test that reaches the mutated code`,
     );
   }
-  return { requests, newTests, skipped, entries, testPageRefused, notRun, allRefused };
+  return {
+    requests,
+    newTests,
+    skipped,
+    entries,
+    testPageRefused,
+    notRun,
+    allRefused,
+    marksUnderOtherScheme: staleMarks,
+  };
 }
 
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons. */
@@ -1048,6 +1077,14 @@ export async function runVerify(
       testDir: args.testDir,
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
+    const marksWarning = marksSchemeWarning(plan.marksUnderOtherScheme, source.identityScheme);
+    if (marksWarning !== undefined && deps.emit !== undefined) {
+      createEmitter(deps.emit)({
+        type: "warning",
+        code: "equivalence-marks-identity-scheme",
+        message: marksWarning,
+      });
+    }
 
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
     if (plan.requests.length > 0) {
@@ -1056,6 +1093,8 @@ export async function runVerify(
       const compiled: CompiledTestApp = await backend.compileTestApp(args.testDir, artifact);
       compileMs = now() - tc;
       verifyRunId = store.createRun({
+        // R325: the rows this run records carry the SOURCE run's manifest keys.
+        identityScheme: source.identityScheme,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",

@@ -120,7 +120,9 @@ export function gapBlockOf(node: ALSyntaxNode): ALSyntaxNode {
  * Narrowest ancestor that the grammar treats as a statement.
  *
  * Includes the statement kinds plus two positional cases:
- *   - a `code_block` whose parent is a procedure, trigger, or branch
+ *   - a `code_block` whose parent is a procedure, trigger, or branch, or a split member's shared
+ *     body (R302: the prototype found this one; without it a split body's whole-body mutant was
+ *     generated and then dropped as not executable)
  *   - a `call_expression` in statement position (expression-statement quirk;
  *     see `isStatementPosition` for the container-skipping detail)
  *
@@ -138,7 +140,7 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
     if (
       current.kind === ALNodeKind.block &&
       current.parent !== null &&
-      BRANCH_PARENT_KINDS.has(current.parent.kind)
+      (BRANCH_PARENT_KINDS.has(current.parent.kind) || isProcedureLike(current.parent))
     ) {
       return current;
     }
@@ -152,8 +154,11 @@ export function findEnclosingStatement(node: ALSyntaxNode): ALSyntaxNode | null 
  * `preproc_split_procedure` has one header per `#if` arm, then ONE shared `var` section and body
  * as direct children. A `preproc_split_procedure_preamble` has one header AND one optional `var`
  * section per arm, then one shared body; every arm's header and var section are direct children
- * too. The manifest, latch and line-map walks own both shapes through this.
- * `findEnclosingProcedure` and the semantic walks deliberately do NOT use it yet (R302).
+ * too. The manifest, latch and line-map walks own both shapes through this, and since R302 so do
+ * `findEnclosingProcedure`, the symbol table and the semantic walks. A body walk must not treat the
+ * WHOLE split node as a procedure body: an arm's header region can hold an attribute (an
+ * `[Obsolete(...)]` inside `#if`), which a plain procedure keeps as a sibling. `inMemberBody`
+ * states that once.
  */
 export function isProcedureLike(n: ALSyntaxNode): boolean {
   return (
@@ -180,14 +185,69 @@ export function procedureLikeNameNode(n: ALSyntaxNode): ALSyntaxNode | null {
   return names.every((x) => key(x) === key(first)) ? first : null;
 }
 
-/** Narrowest `procedure` ancestor, or `null` if the node is outside any procedure. */
+/** R302: narrowest procedure-like ancestor (`isProcedureLike`), or `null` outside any. */
 export function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null) {
-    if (current.kind === ALNodeKind.procedure) return current;
+    if (isProcedureLike(current)) return current;
     current = current.parent;
   }
   return null;
+}
+
+const ARM_MARKERS: ReadonlySet<string> = new Set(["preproc_if", "preproc_elif", "preproc_else"]);
+
+/**
+ * R302: a split member's arms, each as the node's children between two `#if`/`#elif`/`#else`
+ * markers (the header, and for a preamble its own `var` section). The shared body after `#endif`
+ * belongs to no arm. A plain procedure is one arm: its own children.
+ */
+export function memberArms(n: ALSyntaxNode): ALSyntaxNode[][] {
+  if (n.kind === ALNodeKind.procedure) return [[...n.children]];
+  const arms: ALSyntaxNode[][] = [];
+  let cur: ALSyntaxNode[] | null = null;
+  for (const c of n.children) {
+    if (ARM_MARKERS.has(c.rawKind)) {
+      cur = [];
+      arms.push(cur);
+    } else if (c.rawKind === "preproc_endif") {
+      cur = null;
+    } else if (cur !== null) {
+      cur.push(c);
+    }
+  }
+  return arms;
+}
+
+/**
+ * R302: the return type text every arm declares (whitespace-normalised), or `null` when any arm
+ * declares none or two arms differ. Which arm compiles depends on symbols the engine never sees, so
+ * a type only some builds use is no type (the `exit(0.0)` against `exit(0)` case).
+ */
+export function procedureLikeReturnType(n: ALSyntaxNode): string | null {
+  let agreed: string | null = null;
+  for (const arm of memberArms(n)) {
+    const rt = arm.find((c) => c.fieldName === "return_type");
+    if (rt === undefined) return null;
+    const t = rt.text.replace(/\s+/g, " ").trim();
+    if (agreed !== null && agreed !== t) return null;
+    agreed = t;
+  }
+  return agreed;
+}
+
+/**
+ * R302: whether `node` sits in the executable body of its member: anywhere under a `procedure` or
+ * a trigger, and under a split member only through its shared `code_block`. The header region of a
+ * split member is its arms, and an arm can hold an attribute whose literals are not code.
+ */
+export function inMemberBody(node: ALSyntaxNode): boolean {
+  let child: ALSyntaxNode = node;
+  for (let p: ALSyntaxNode | null = node.parent; p !== null; child = p, p = p.parent) {
+    if (p.rawKind === "procedure" || p.rawKind === "trigger_declaration") return true;
+    if (isProcedureLike(p)) return child.kind === ALNodeKind.block;
+  }
+  return false;
 }
 
 /** Narrowest `code_block` ancestor (strictly upward — excludes `node` itself). */
@@ -232,6 +292,44 @@ export function varDeclarations(varSection: ALSyntaxNode): readonly ALSyntaxNode
 export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
   const inner = objectNode.namedChildren.find((c) => c.kind === ALNodeKind.declaration_body);
   return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
+}
+
+/**
+ * R327: split members the grammar placed INSIDE an object-level `var` section. A split member that
+ * follows the object's global `var` section parses as a child of that section's `var_body`, where
+ * a plain procedure in the same place is a member of the object. They are still members of the
+ * object, so every "does the object declare this name" question must count them; the symbol table
+ * does not index them, so their own names resolve to nothing (see `buildSymbolTable`).
+ */
+export function swallowedSplitMembers(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const member of declarationMembers(objectNode)) {
+    if (member.kind !== ALNodeKind.var_section) continue;
+    for (const c of varDeclarations(member)) if (isProcedureLike(c)) out.push(c);
+  }
+  return out;
+}
+
+/**
+ * R330: every procedure-like declaration of an object, wherever the grammar put it: a direct member,
+ * one inside a `#if` region (`preproc_conditional`), or one swallowed by the global `var` section
+ * (R327). The symbol table indexes only the direct ones; this list is what "does the object declare
+ * a procedure of this name" must be answered against, so an unindexed declaration still counts.
+ * Walks down to each procedure-like node and not into it.
+ */
+export function allProcedureLikes(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (isProcedureLike(c)) {
+        if (c.children.some((x) => x.fieldName === "name")) out.push(c);
+      } else {
+        walk(c);
+      }
+    }
+  };
+  walk(objectNode);
+  return out;
 }
 
 /**

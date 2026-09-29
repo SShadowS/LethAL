@@ -87,6 +87,23 @@ export function identityTupleOf(
 }
 
 /**
+ * R325: the version of the rules that turn AL source into identity keys.
+ *
+ * An identity key carries no version of its own. So when an engine or operator change moves an
+ * existing mutant's key for UNCHANGED source (a new same-tuple mutant earlier in an object takes
+ * ordinal 0 and pushes the old one to 1, R193), a key recorded before the change can name a
+ * different mutant after it. Measured on System Application under R-302: a new site at one line
+ * carries exactly the key an older site further down held before. Every consumer that carries a
+ * verdict across sessions (the known-survivor history, resume, equivalence marks) therefore
+ * refuses a key made under a different scheme.
+ *
+ * Bump it with any engine or operator change that can move an existing mutant's key for unchanged
+ * AL source. `1` is every key made before this constant existed; anything recorded without a
+ * scheme is read as `1`.
+ */
+export const IDENTITY_SCHEME = 2;
+
+/**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
  * then mutant id as the last resort). Returns new entries; a mutant with no twin gets 0, so a
  * manifest with no collisions is unchanged apart from the field being present.

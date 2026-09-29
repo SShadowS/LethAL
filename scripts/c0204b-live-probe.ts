@@ -35,6 +35,7 @@ import {
 import type { MutantOutcome } from "../packages/runner/src/report";
 import { RunMutantTransport } from "../packages/runner/src/run-mutant-transport";
 import { ResultsStore } from "../packages/runner/src/store";
+import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
@@ -237,6 +238,7 @@ async function main(): Promise<void> {
 
     // 3. A NEW unfinished run row, then the named call against the installed artifact.
     const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
       projectPath: PROJECT_DIR,
       backend: "c0204b-live-probe",
       appVersion: "0.0.0.0",

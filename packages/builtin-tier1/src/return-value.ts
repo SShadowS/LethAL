@@ -1,3 +1,4 @@
+import { procedureLikeReturnType } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -105,9 +106,9 @@ function exitArgument(node: ALSyntaxNode): ALSyntaxNode | null {
 function resolveReturnType(exitNode: ALSyntaxNode): string | null {
   const proc = findEnclosingProcedure(exitNode);
   if (proc === null) return null;
-  const rtNode = proc.childForFieldName("return_type");
-  if (rtNode === null) return null;
-  const raw = rtNode.text.replace(/^\s*:\s*/, "").trim();
+  const rt = procedureLikeReturnType(proc);
+  if (rt === null) return null;
+  const raw = rt.replace(/^\s*:\s*/, "").trim();
   const first = raw.split(/\s+/)[0] ?? raw;
   return first;
 }

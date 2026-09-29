@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { createEmitter } from "../src/events";
 import type { RunEmitter, RunEvent } from "../src/events";
@@ -62,7 +63,12 @@ const DIRECT_VERDICT_KINDS: readonly MutantVerdict[] = [
 function driveRecordOverFakeStore(emit: RunEmitter): readonly MutantManifestEntry[] {
   const store = new ResultsStore(":memory:");
   try {
-    const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     const outcomes: SessionOutcome[] = [];
     const recorded: MutantManifestEntry[] = [];
     DIRECT_VERDICT_KINDS.forEach((verdict, i) => {
@@ -109,7 +115,12 @@ function driveRecordOverFakeStore(emit: RunEmitter): readonly MutantManifestEntr
 function driveOneCarriedRecord(emit: RunEmitter): void {
   const store = new ResultsStore(":memory:");
   try {
-    const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
     const outcomes: SessionOutcome[] = [];
     const m = mutantEntry("M0001");
     record(
@@ -199,7 +210,12 @@ describe("emitted mutant events agree with recorded outcomes", () => {
     const KILL_TEXT =
       "The length of the string is 18, but it must be less than or equal to 10 characters";
     try {
-      const runId = store.createRun({ projectPath: "/p", backend: "bcdev", appVersion: "1.0.0.0" });
+      const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
+        projectPath: "/p",
+        backend: "bcdev",
+        appVersion: "1.0.0.0",
+      });
       record(
         store,
         runId,

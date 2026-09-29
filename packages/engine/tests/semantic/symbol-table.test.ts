@@ -289,3 +289,229 @@ page 50000 "CDO Setup"
     }
   });
 });
+
+// R302: a split member (R301's shared-body shape, R316's per-arm preamble) is a member of its
+// object. A name inside it resolves only when EVERY arm declares it with the same type; any other
+// name the arms declare is ambiguous and resolves to nothing.
+describe("buildSymbolTable: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+  const build = (src: string) => buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+  const startOf = (src: string, marker: string) => src.indexOf(marker);
+
+  const SPLIT = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Integer): Integer
+#else
+    internal procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    var
+        Shared: Decimal;
+    begin
+        exit(X);
+    end;
+}
+`;
+  const PREAMBLE = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Decimal
+    var
+        N: Integer;
+        Both: Code[20];
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        Both: Code[20];
+#endif
+    begin
+        exit(X);
+    end;
+}
+`;
+
+  it("a split member is found by its own start, with the every-arm rule applied", () => {
+    const t = build(SPLIT);
+    const p = t.resolveProcedureAt(KEY, startOf(SPLIT, "#if CLEAN27"));
+    expect(p?.name).toBe("Pick");
+    expect(p?.parameters.map((v) => v.name)).toEqual(["X"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Shared"]);
+    expect(p?.ambiguous).toEqual(["y"]);
+    expect(p?.returnType).toBe("Integer");
+  });
+
+  it("a preamble's agreeing arm local is listed; an arm-only local and a disagreeing return are not", () => {
+    const t = build(PREAMBLE);
+    const p = t.resolveProcedureAt(KEY, startOf(PREAMBLE, "#if CLEAN27"));
+    expect(p?.parameters.map((v) => v.name)).toEqual(["X"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Both"]);
+    expect(p?.ambiguous).toEqual(["n"]);
+    expect(p?.returnType).toBeNull();
+  });
+
+  it("a renamed member is indexed by position only, with the name ''", () => {
+    const renamed = SPLIT.replace("internal procedure Pick(", "internal procedure PickOld(");
+    const t = build(renamed);
+    expect(t.resolveProcedureAt(KEY, startOf(renamed, "#if CLEAN27"))?.name).toBe("");
+    expect(t.resolveProcedure(KEY, "")).toBeNull();
+    expect(t.resolveProcedure(KEY, "Pick")).toBeNull();
+  });
+
+  // R324: a call is typed only when its name names exactly one procedure of the owner. A split
+  // member counts under every arm's name, so a renamed member makes both names non-unique.
+  it("uniqueProcedure: one of a name, null for two, a renamed member under each arm's name", () => {
+    const two = `${SPLIT.slice(0, SPLIT.lastIndexOf("}"))}
+    procedure Pick(T: Text): Text
+    begin
+        exit(T);
+    end;
+
+    procedure Other(): Integer
+    begin
+        exit(1);
+    end;
+}
+`;
+    const t = build(two);
+    expect(t.uniqueProcedure(KEY, "Pick")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "OTHER")?.name).toBe("Other");
+    const renamed = two.replace("internal procedure Pick(", "internal procedure Other(");
+    const r = build(renamed);
+    expect(r.uniqueProcedure(KEY, "Other")).toBeNull();
+    // `Pick` is now arm 1's name and the plain overload's: two again.
+    expect(r.uniqueProcedure(KEY, "Pick")).toBeNull();
+    const single = build(SPLIT);
+    expect(single.uniqueProcedure(KEY, '"pick"')?.name).toBe("Pick");
+  });
+});
+
+// R327: a split member swallowed by the global var section is not indexed, but its names still
+// count, so `uniqueProcedure` never answers with another procedure of the same name.
+describe("buildSymbolTable: a swallowed split member still counts by name (R327)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+  const src = (plain: string) => `codeunit 50100 "Repro S"
+{
+    var
+        G: Integer;
+
+#if CLEAN27
+    procedure Foo(T: Text): Text
+#else
+    procedure FooOld(T: Text): Text
+#endif
+    begin
+        exit(T);
+    end;
+${plain}}
+`;
+
+  it("a plain overload after a swallowed one is not unique", () => {
+    const t = buildSymbolTable([
+      {
+        path: "s.al",
+        root: wrapRoot(
+          parseAL(
+            src(
+              "\n    procedure Foo(X: Integer): Integer\n    begin\n        exit(X);\n    end;\n",
+            ),
+          ),
+        ),
+      },
+    ]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+  });
+
+  it("a name only a swallowed member declares, under any arm, is not unique either", () => {
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src(""))) }]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "FooOld")).toBeNull();
+  });
+});
+
+// Review M3, Decision 2: a call by either name of a RENAMED split member does not resolve to it,
+// even when no other procedure has that name. Which arm compiles is decided by symbols the engine
+// never sees, so neither name is the member's name.
+describe("buildSymbolTable: a renamed split member is never a call's target (R302, Decision 2)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("uniqueProcedure answers null for either arm's name", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure AIf(X: Integer): Integer
+#else
+    procedure AElse(X: Integer): Integer
+#endif
+    begin
+        exit(X);
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    const key = objectScopeKey("codeunit", "Repro S");
+    expect(t.uniqueProcedure(key, "AIf")).toBeNull();
+    expect(t.uniqueProcedure(key, "AElse")).toBeNull();
+  });
+});
+
+// R330: every procedure-like declaration counts by name, wherever the grammar put it; a local in a
+// `#if` var block is ambiguous.
+describe("buildSymbolTable: #if-wrapped declarations (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+
+  it("uniqueProcedure is null for a name a #if-wrapped procedure also declares", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+    procedure Foo(A: Integer): Integer
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+#endif
+
+    procedure Other(): Integer
+    begin
+        exit(1);
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "Other")?.name).toBe("Other");
+  });
+
+  it("a local declared in a #if var block is ambiguous; a plain local is not", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+    procedure P()
+    var
+        Kept: Integer;
+#if not CLEAN27
+        Amt: Text;
+#endif
+    begin
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    const p = t.resolveProcedure(KEY, "P");
+    expect(p?.ambiguous).toEqual(["amt"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Kept"]);
+  });
+});

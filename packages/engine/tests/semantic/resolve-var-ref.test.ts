@@ -163,3 +163,154 @@ describe("resolveVarRef across overloaded procedure names (R210)", () => {
     expect(resolved?.typeText).toContain("Integer");
   });
 });
+
+// R302: `lookupVar` walks to the nearest procedure-like node, so a split member's own names
+// resolve; a name its arms disagree on resolves to nothing, never to a global of the same name.
+describe("resolveVarRef: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SRC = `codeunit 50202 "R"
+{
+    var
+        Amount: Text;
+
+#if CLEAN27
+    procedure P()
+    var
+        Amount: Decimal;
+        Count: Integer;
+#else
+    procedure P()
+    var
+        Amount: Integer;
+        Count: Integer;
+#endif
+    begin
+        Count := 1;
+        Amount := 2;
+    end;
+}
+`;
+
+  it("an agreeing split-member local resolves", () => {
+    const { root, ctx } = load(SRC);
+    const sym = resolveVarRef(useOf(root, "Count"), ctx);
+    expect(sym?.typeText).toBe("Integer");
+  });
+
+  it("a disagreeing name resolves to null, not to the global", () => {
+    const { root, ctx } = load(SRC);
+    expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
+  });
+});
+
+// R327: a split member swallowed by the global var section is not indexed; its own names resolve
+// to nothing, never to a global of the same name.
+describe("resolveVarRef: a swallowed split member (R327)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("a name in the swallowed member resolves to null, not to the global", () => {
+    const { root, ctx } = load(`codeunit 50203 "R"
+{
+    var
+        Amount: Text;
+
+#if CLEAN27
+    procedure P(Amount: Decimal)
+#else
+    procedure P(Amount: Decimal)
+#endif
+    begin
+        Amount := 2;
+    end;
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
+  });
+});
+
+// R330: a local declared in a `#if` var block is not indexed; it resolves to nothing, never to a
+// global of the same name.
+describe("resolveVarRef: a #if var-block local (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("resolves to null, not to the differently-cased global", () => {
+    const { root, ctx } = load(`codeunit 50204 "R"
+{
+    var
+        AMT: Integer;
+
+    procedure P()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Amt := 'x';
+    end;
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+});
+
+// R330, run 002 fix round: a trigger local inside a `#if` block resolves to nothing, never to a
+// global; a plain trigger local still resolves to its own declaration (R68).
+describe("resolveVarRef: trigger locals (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (local: string) => `codeunit 50205 "R"
+{
+    var
+        AMT: Integer;
+
+    trigger OnRun()
+${local}
+    begin
+        Amt := 'x';
+    end;
+}
+`;
+
+  it("a #if trigger local resolves to null, not to the global", () => {
+    const { root, ctx } = load(src("#if not CLEAN27\n    var\n        Amt: Text;\n#endif"));
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+
+  it("control: a plain trigger local resolves to its own declaration", () => {
+    const { root, ctx } = load(src("    var\n        Amt: Text;"));
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)?.typeText).toBe("Text");
+  });
+});
+
+// R331 (run 003): a local of a plain procedure wrapped whole in `#if` resolves to nothing, never
+// to the global.
+describe("resolveVarRef: a #if-wrapped plain procedure (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  it("its local resolves to null, not to the global", () => {
+    const { root, ctx } = load(`codeunit 50206 "R"
+{
+    var
+        AMT: Integer;
+
+#if X
+    procedure P()
+    var
+        Amt: Text;
+    begin
+        Amt := 'x';
+    end;
+#endif
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+});

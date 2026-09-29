@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
-import type { MutantManifestEntry } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import {
   DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
@@ -1083,6 +1083,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
         return String(v);
       });
     const file = JSON.stringify({
+      identityScheme: IDENTITY_SCHEME,
       marks: survivors.map((m) => ({ key: keyOf(m), reason: "equivalent" })),
     });
     const marks = parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME);
@@ -1096,6 +1097,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     const result = applyEquivalenceMarks(
       marks,
       rows.map((m) => ({ mutantCode: m.mutantCode, identity: identity(m), verdict: m.verdict })),
+      IDENTITY_SCHEME,
     );
     expect(result.stale).toEqual([]);
     expect(result.contradicted).toEqual([]);

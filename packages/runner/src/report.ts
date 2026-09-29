@@ -1,5 +1,6 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
@@ -1246,6 +1247,17 @@ export interface SessionReport {
    * answer it at all.
    */
   readonly preprocessorSymbols: readonly string[];
+  /**
+   * R325: the identity scheme (`IDENTITY_SCHEME`, `@lethal/schemata`) every identity key in this
+   * report was made under. A key read from another report, a store or a marks file is comparable
+   * with these only under the same scheme: an engine change that renumbers ordinals can hand an old
+   * key to a different mutant with the source unchanged.
+   *
+   * Always written. OPTIONAL in the type, and so in the published schema, only because reports
+   * archived before R325 do not carry it (R157: an added required field is a new shape). Absent
+   * reads as scheme 1.
+   */
+  readonly identityScheme?: number;
   readonly untargetedTriggerCount: number;
   /**
    * R175. How many `no-coverage` verdicts in this run are LethAL's limitation rather than a
@@ -2180,6 +2192,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         identity: markIdentityOf(m),
         verdict: m.verdict,
       })),
+      // R325: this report's keys are made by this build.
+      IDENTITY_SCHEME,
     );
     readerMarkedEquivalent = {
       matched: [...marked.matched]
@@ -2565,6 +2579,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     notInstrumented,
     declarativeSites,
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
+    identityScheme: IDENTITY_SCHEME,
     untargetedTriggerCount: input.untargetedTriggerCount,
     groupedCalls: input.groupedCalls,
     artifacts: input.artifacts,

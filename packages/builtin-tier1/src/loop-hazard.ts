@@ -3,6 +3,7 @@ import {
   type ALSyntaxNode,
   type HangCapableReason,
   type SemanticContext,
+  isProcedureLike,
   resolveVarRef,
 } from "@lethal/engine";
 
@@ -43,6 +44,12 @@ const LOOP_KINDS: ReadonlySet<string> = new Set([
  * variable each iteration, and this repository has NOT measured that. Unmeasured, so unclassified.
  */
 const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKind.trigger]);
+/** R302: a walk stops at a `SCOPE_KINDS` node or a split-header member (`isProcedureLike`). Nothing
+ *  encloses a member, so no test can tell the split-member stop from its absence (red-checked:
+ *  the hang tag inside a split member rests on `resolveVarRef`, i.e. `findEnclosingProcedure`). */
+function isScope(n: ALSyntaxNode): boolean {
+  return SCOPE_KINDS.has(n.kind) || isProcedureLike(n);
+}
 
 /**
  * Does `node` sit inside any enclosing `while`/`repeat`, stopping at the enclosing procedure or
@@ -53,7 +60,7 @@ const SCOPE_KINDS: ReadonlySet<string> = new Set([ALNodeKind.procedure, ALNodeKi
  */
 export function hasEnclosingLoop(node: ALSyntaxNode): boolean {
   let cur: ALSyntaxNode | null = node.parent;
-  while (cur !== null && !SCOPE_KINDS.has(cur.kind)) {
+  while (cur !== null && !isScope(cur)) {
     if (LOOP_KINDS.has(cur.kind)) return true;
     cur = cur.parent;
   }
@@ -87,7 +94,7 @@ export function isIdentifierLike(node: ALSyntaxNode): boolean {
  *  `isIdentifierLike`). */
 export function assignmentTargetOf(node: ALSyntaxNode): ALSyntaxNode | null {
   let cur: ALSyntaxNode | null = node;
-  while (cur !== null && !SCOPE_KINDS.has(cur.kind)) {
+  while (cur !== null && !isScope(cur)) {
     if (cur.kind === ALNodeKind.assignment_statement) {
       const target = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
       if (target === null) return null;
@@ -176,7 +183,7 @@ export function classifyHangCapable(
   if (targetSym === null) return null;
 
   let cur: ALSyntaxNode | null = node.parent;
-  while (cur !== null && !SCOPE_KINDS.has(cur.kind)) {
+  while (cur !== null && !isScope(cur)) {
     if (LOOP_KINDS.has(cur.kind)) {
       const cond = conditionOf(cur);
       if (cond !== null) {
@@ -232,7 +239,7 @@ export function hangCapableForMutatedNode(
     // `sameDeclaration`'s docstring gives (above) for `classifyHangCapable`'s identically shaped
     // walk. Without this line the loop would keep climbing to the file root and return the same
     // null, just after more hops. No test in this file can tell its presence from its absence.
-    if (SCOPE_KINDS.has(cur.kind)) return null;
+    if (isScope(cur)) return null;
     cur = cur.parent;
   }
   return null;

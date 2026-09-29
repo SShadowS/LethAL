@@ -2,6 +2,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { type RunCliConfig, runFromCli } from "../src/cli";
 import { changedLinesSince, parseUnifiedDiffAdded } from "../src/line-filter";
@@ -120,6 +121,7 @@ test("a clean tree reproduces the three-dot ranges; an uncommitted edit changes 
         testDir: "t",
         backend: "bcdev",
         skipKnownSurvivors: false,
+        identityScheme: IDENTITY_SCHEME,
         selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
         lines,
       });

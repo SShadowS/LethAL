@@ -33,6 +33,7 @@ export {
   clipMutationText,
   identityTupleOf,
   assignIdentityOrdinals,
+  IDENTITY_SCHEME,
   gapIdOf,
 } from "./project";
 export type {

@@ -11,6 +11,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Changed
+
+- **Existing `lethal.equivalent.json` files need `"identityScheme": 2`** (R325). Identity keys now
+  carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
+  a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
+  so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is
+  applied, until you check each mark against a fresh report and add `"identityScheme": 2` at the top
+  level. For the same reason, `--skip-known-survivors` skips nothing from a run recorded before this
+  version, and `--resume` / `--resume-run` refuse such a run by name.
+
 
 ## [0.1.0-alpha.3] — 2026-08-27
 

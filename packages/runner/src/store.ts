@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -215,6 +216,9 @@ export interface RunRow {
   readonly backend: string;
   readonly configFingerprint: string | null;
   readonly finished: boolean;
+  /** R325: the identity scheme the run's keys were made under. A row recorded before the column
+   *  existed reads as 1. */
+  readonly identityScheme: number;
 }
 
 const SCHEMA = `
@@ -231,7 +235,8 @@ CREATE TABLE IF NOT EXISTS runs (
   artifact_id TEXT,
   artifact_sha256 TEXT,
   config_fingerprint TEXT,
-  source_sha256 TEXT
+  source_sha256 TEXT,
+  identity_scheme INTEGER
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -456,6 +461,8 @@ export class ResultsStore {
       ["batch_artifacts", "instrumented_dir TEXT", baCols],
       ["mutants", "carried INTEGER", cols],
       ["runs", "source_sha256 TEXT", runCols],
+      // R325: NULL on an older row, and read as scheme 1, the only scheme there was.
+      ["runs", "identity_scheme INTEGER", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
@@ -477,13 +484,25 @@ export class ResultsStore {
     backend: string;
     appVersion: string;
     configFingerprint?: string;
+    /** R325: the identity scheme the run's mutant rows are keyed under. Required, so a caller
+     *  that records keys made by another build (verify records the SOURCE run's manifest keys)
+     *  must say so rather than inherit this build's `IDENTITY_SCHEME`. */
+    identityScheme: number;
   }): number {
+    // R325: every run records the identity scheme its keys are made under, so no later session
+    // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint) " +
-          "VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme) " +
+          "VALUES (?, ?, ?, ?, ?) RETURNING id",
       )
-      .get(info.projectPath, info.backend, info.appVersion, info.configFingerprint ?? null) as {
+      .get(
+        info.projectPath,
+        info.backend,
+        info.appVersion,
+        info.configFingerprint ?? null,
+        info.identityScheme,
+      ) as {
       id: number;
     };
     return r.id;
@@ -519,12 +538,40 @@ export class ResultsStore {
     const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
     const row = this.db
       .query(
-        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+        `SELECT id FROM runs WHERE project_path = ? AND backend = ? AND config_fingerprint = ? AND COALESCE(identity_scheme, 1) = ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
       )
-      .get(q.projectPath, q.backend, q.configFingerprint, ...q.carryableVerdicts) as {
+      .get(
+        q.projectPath,
+        q.backend,
+        q.configFingerprint,
+        IDENTITY_SCHEME,
+        ...q.carryableVerdicts,
+      ) as {
       id: number;
     } | null;
     return row === null ? null : row.id;
+  }
+
+  /**
+   * R325: the most recent unfinished run for this project and backend that holds something to
+   * carry but was keyed under ANOTHER identity scheme. `--resume` never resumes it; this exists so
+   * the refusal can name it instead of reporting that no run was found.
+   */
+  unfinishedRunUnderOtherScheme(q: {
+    projectPath: string;
+    backend: string;
+    carryableVerdicts: readonly string[];
+  }): { runId: number; identityScheme: number } | null {
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
+    const row = this.db
+      .query(
+        `SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) <> ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+      )
+      .get(q.projectPath, q.backend, IDENTITY_SCHEME, ...q.carryableVerdicts) as {
+      id: number;
+      scheme: number;
+    } | null;
+    return row === null ? null : { runId: row.id, identityScheme: row.scheme };
   }
 
   /** R47: one run row by id, or `null`. Used to explain WHY an explicitly named `--resume-run`
@@ -533,7 +580,7 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme FROM runs WHERE id = ?",
       )
       .get(runId) as {
       id: number;
@@ -541,6 +588,7 @@ export class ResultsStore {
       backend: string;
       config_fingerprint: string | null;
       finished_at: string | null;
+      identity_scheme: number;
     } | null;
     if (row === null) return null;
     return {
@@ -549,6 +597,7 @@ export class ResultsStore {
       backend: row.backend,
       configFingerprint: row.config_fingerprint,
       finished: row.finished_at !== null,
+      identityScheme: row.identity_scheme,
     };
   }
 
@@ -1131,13 +1180,25 @@ export class ResultsStore {
   /** A prior "known-survivor" verdict counts exactly like "survived" here (I4) — it means the
    *  identity key was skipped rather than re-tested, so it must remain skippable/filterable in
    *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass. */
-  priorSurvivorKeys(projectPath: string): Set<string> {
+  priorSurvivorKeys(
+    projectPath: string,
+    /**
+     * R325: called when the latest finished run was keyed under another identity scheme. Its keys
+     * then name nothing reliable in this build (a renumbering can hand one to a different mutant),
+     * so NO key is returned and nothing is skipped; the caller says so.
+     */
+    onSchemeChanged?: (info: { runId: number; identityScheme: number }) => void,
+  ): Set<string> {
     const run = this.db
       .query(
-        "SELECT id FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
-      .get(projectPath) as { id: number } | null;
+      .get(projectPath) as { id: number; scheme: number } | null;
     if (!run) return new Set();
+    if (run.scheme !== IDENTITY_SCHEME) {
+      onSchemeChanged?.({ runId: run.id, identityScheme: run.scheme });
+      return new Set();
+    }
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal FROM mutants " +

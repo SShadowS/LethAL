@@ -16,6 +16,7 @@ import { ALNodeKind } from "../ast/node-kinds";
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
+import { isProcedureLike, procedureLikeNameNode } from "../ast/tree-walks";
 import { objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
@@ -110,8 +111,8 @@ function resolveCallTarget(
 function enclosingProcedureName(node: ALSyntaxNode): string | null {
   let current: ALSyntaxNode | null = node;
   while (current !== null) {
-    if (current.kind === ALNodeKind.procedure) {
-      return current.childForFieldName("name")?.text ?? null;
+    if (isProcedureLike(current)) {
+      return procedureLikeNameNode(current)?.text ?? null;
     }
     current = current.parent;
   }

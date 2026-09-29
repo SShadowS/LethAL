@@ -27,6 +27,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { hashPackage } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
@@ -598,6 +599,7 @@ async function main(): Promise<void> {
             throw new Error("step 9: the resident manifest has no mutant");
           const compiled = await backend.compileTestApp(TEST_DIR, artifact);
           const runId = store.createRun({
+            identityScheme: IDENTITY_SCHEME,
             projectPath: PROJECT_DIR,
             backend: "itest-verify-scale-restore",
             appVersion: "0.0.0.0",

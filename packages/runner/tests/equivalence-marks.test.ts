@@ -28,8 +28,33 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
       "marks.json",
     );
     expect(got).toEqual([
-      { key: KEY_A, reason: "self-assignment, nothing reads it", markedBy: "tll" },
+      {
+        key: KEY_A,
+        reason: "self-assignment, nothing reads it",
+        markedBy: "tll",
+        identityScheme: 1,
+      },
     ]);
+  });
+
+  // R325: a file without `identityScheme` was written before the field existed, so its keys were
+  // made under scheme 1. One with it states its scheme; anything else is refused.
+  test("the file's identityScheme is read, absent reads as 1, and a bad one is refused", () => {
+    const [plain] = parseEquivalenceMarks(file([{ key: KEY_A, reason: "r" }]), "m.json");
+    expect(plain?.identityScheme).toBe(1);
+    const [stated] = parseEquivalenceMarks(
+      JSON.stringify({ identityScheme: 2, marks: [{ key: KEY_A, reason: "r" }] }),
+      "m.json",
+    );
+    expect(stated?.identityScheme).toBe(2);
+    for (const bad of [0, 1.5, "2", null]) {
+      expect(() =>
+        parseEquivalenceMarks(
+          JSON.stringify({ identityScheme: bad, marks: [{ key: KEY_A, reason: "r" }] }),
+          "m.json",
+        ),
+      ).toThrow(/"identityScheme" must be a positive integer/);
+    }
   });
 
   test("a mark with NO reason is refused, not defaulted", () => {
@@ -73,15 +98,39 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
 
 describe("applyEquivalenceMarks separates matched, stale and contradicted", () => {
   const marks: EquivalenceMark[] = [
-    { key: KEY_A, reason: "self-assignment" },
-    { key: KEY_B, reason: "returns 3 from either start" },
+    { key: KEY_A, reason: "self-assignment", identityScheme: 2 },
+    { key: KEY_B, reason: "returns 3 from either start", identityScheme: 2 },
   ];
 
+  // R325: a mark made under another scheme may name another mutant, so it is stale even when its
+  // key equals a mutant's identity, and it is never matched or contradicted.
+  test("a mark made under another identity scheme is stale, even on a matching key", () => {
+    const old: EquivalenceMark[] = [
+      { key: KEY_A, reason: "self-assignment", identityScheme: 1 },
+      { key: KEY_B, reason: "returns 3 from either start", identityScheme: 1 },
+    ];
+    const r = applyEquivalenceMarks(
+      old,
+      [
+        { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
+        { mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
+      ],
+      2,
+    );
+    expect(r.matched).toEqual([]);
+    expect(r.contradicted).toEqual([]);
+    expect(r.stale.map((m) => m.key)).toEqual([KEY_A, KEY_B]);
+  });
+
   test("a mark on a survivor matches", () => {
-    const r = applyEquivalenceMarks(marks, [
-      { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-      { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
-    ]);
+    const r = applyEquivalenceMarks(
+      marks,
+      [
+        { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
+        { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
+      ],
+      2,
+    );
     expect(r.matched.map((m) => m.mutantCode)).toEqual(["M0001", "M0002"]);
     expect(r.stale).toEqual([]);
     expect(r.contradicted).toEqual([]);
@@ -90,19 +139,25 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
   test("a mark matching nothing is STALE, not silently dropped", () => {
     // The identity carries the mutated subtree's hash, so editing the code retires the mark. That
     // is safe, but a ruling nobody is told they lost is not.
-    const r = applyEquivalenceMarks(marks, [
-      { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-    ]);
+    const r = applyEquivalenceMarks(
+      marks,
+      [{ mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
+      2,
+    );
     expect(r.stale.map((s) => s.key)).toEqual([KEY_B]);
   });
 
   test("a mark on a KILLED mutant is CONTRADICTED — the reader was wrong and the kill stands", () => {
     // The only decidable check this feature can make: someone said no test could distinguish this
     // mutant, and a test did.
-    const r = applyEquivalenceMarks(marks, [
-      { mutantCode: "M0001", identity: KEY_A, verdict: "killed" },
-      { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
-    ]);
+    const r = applyEquivalenceMarks(
+      marks,
+      [
+        { mutantCode: "M0001", identity: KEY_A, verdict: "killed" },
+        { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
+      ],
+      2,
+    );
     expect(r.contradicted).toEqual([
       { key: KEY_A, reason: "self-assignment", mutantCode: "M0001", verdict: "killed" },
     ]);
@@ -114,6 +169,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
       [{ mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
+      2,
     );
     expect(r.matched).toHaveLength(1);
     expect(r.contradicted).toEqual([]);
@@ -125,6 +181,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
       [{ mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
+      2,
     );
     expect(r.contradicted.map((c) => c.verdict)).toEqual(["no-coverage"]);
   });

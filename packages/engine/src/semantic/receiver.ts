@@ -41,7 +41,12 @@
  */
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
+import {
+  allProcedureLikes,
+  declarationMembers,
+  findEnclosingProcedure,
+  isProcedureLike,
+} from "../ast/tree-walks";
 import type { SemanticContext } from "./context";
 import {
   type ObjectSymbol,
@@ -49,8 +54,10 @@ import {
   type SymbolTable,
   type VarSymbol,
   collectVarDeclarations,
+  enclosingTrigger,
   extensionScopeKey,
   objectScopeKeyOfNode,
+  triggerLocalNames,
 } from "./symbol-table";
 
 /**
@@ -489,6 +496,10 @@ export function lookupVar(
   // same way a procedure local does below.
   const triggerLocal = triggerScopeVar(name, callNode, matches);
   if (triggerLocal !== null) return triggerLocal;
+  // R330 (run 002 fix round): a name the enclosing trigger declares elsewhere in its header (inside
+  // a `#if` region, which `triggerScopeVar` does not read) is unknown, never a global.
+  const trigger = enclosingTrigger(callNode);
+  if (trigger !== null && triggerLocalNames(trigger).has(name.toLowerCase())) return null;
 
   const procedure = findEnclosingProcedure(callNode);
   if (procedure !== null) {
@@ -502,10 +513,15 @@ export function lookupVar(
     // The name lookup is kept as a fallback for the case the positional one cannot serve: a
     // procedure whose declaration node is not in this scope's index at all. That answers exactly
     // what it answered before, so the fallback cannot regress a project that has no overloads.
-    const symbol =
-      symbols.resolveProcedureAt(objectName, procedure.startIndex) ??
-      nameOf(procedure, symbols, objectName);
-    if (symbol !== null) {
+    // R327: an unindexed split member (swallowed into the global var section) resolves nothing,
+    // neither by name nor through the globals below. See `resolveIdentifierType` (types.ts).
+    // R331 (run 003): an unindexed member of ANY shape resolves nothing, neither by name nor
+    // through the globals below. See `resolveIdentifierType` (types.ts).
+    const symbol = symbols.resolveProcedureAt(objectName, procedure.startIndex);
+    if (symbol === null) return null;
+    {
+      // R302: an ambiguous name resolves to nothing, and never to a global of that name.
+      if (symbol.ambiguous?.includes(name.toLowerCase())) return null;
       const local = symbol.locals.find(matches);
       if (local !== undefined) return local;
       const parameter = symbol.parameters.find(matches);
@@ -576,11 +592,13 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
  * — a hand-rolled `namedChildren` walk silently matches nothing here.
  */
 function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
-  for (const member of declarationMembers(objectNode)) {
-    if (member.kind !== ALNodeKind.procedure) continue;
-    const nameNode = member.childForFieldName("name");
-    if (nameNode === null) continue;
-    if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
+  // R327: a split member swallowed into the global var section is still a member of the object.
+  // R327, R331: every procedure-like declaration counts, wherever the grammar put it: a direct
+  // member, one swallowed by the global var section, or one wrapped whole in `#if`.
+  for (const member of allProcedureLikes(objectNode)) {
+    if (!isProcedureLike(member)) continue;
+    for (const nameNode of member.children.filter((c) => c.fieldName === "name"))
+      if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
   }
   return false;
 }
@@ -619,12 +637,73 @@ function projectDeclaresProcedureOnTable(
   tableRef: string,
   procName: string,
 ): boolean {
-  const table = resolveTable(symbols, tableRef);
-  if (table !== null && declaresProcedure(table.node, procName)) return true;
-  // Match extensions on the table's resolved NAME when we have one (so the `Record 50004` id
-  // spelling still finds `extends "The Table"`), and on the raw reference otherwise.
-  if (table !== null && extensionDeclaresProcedure(symbols, table.name, procName)) return true;
-  return extensionDeclaresProcedure(symbols, tableRef, procName);
+  // R331 (run 004): every spelling of the table, gathered BEFORE any extension is compared. A
+  // receiver may name the table by id (`Record 50101`) and an extension may extend it by name, or
+  // the other way round; the table itself may be indexed or wrapped whole in a `#if` object region
+  // (R298). So the aliases are the reference itself, plus the name and id of every project table it
+  // matches, indexed or not. Comparing only the reference missed a numeric receiver of a wrapped
+  // table extended by name, and `validate-to-assign` assigned a field that does not exist (AL0132).
+  const idOf = (o: ALSyntaxNode): string => o.childForFieldName("object_id")?.text ?? "";
+  const nameOf = (o: ALSyntaxNode): string =>
+    stripQuotes(o.childForFieldName("object_name")?.text ?? "");
+  const aliases = new Set<string>([tableRef.toLowerCase()]);
+  const matches = (name: string, id: string): boolean =>
+    aliases.has(name.toLowerCase()) || (id !== "" && aliases.has(id));
+  const tables: ALSyntaxNode[] = [];
+  const indexed = resolveTable(symbols, tableRef);
+  if (indexed !== null) tables.push(indexed.node);
+  for (const o of symbols.unindexedObjects)
+    if (o.kind === ALNodeKind.table && matches(nameOf(o), idOf(o))) tables.push(o);
+  for (const t of tables) {
+    aliases.add(nameOf(t).toLowerCase());
+    if (idOf(t) !== "") aliases.add(idOf(t));
+  }
+  if (tables.some((t) => declaresProcedure(t, procName))) return true;
+  for (const o of symbols.unindexedObjects) {
+    const base = stripQuotes(o.childForFieldName("base_object")?.text ?? "").toLowerCase();
+    if (o.kind === ALNodeKind.tableextension && aliases.has(base) && declaresProcedure(o, procName))
+      return true;
+  }
+  if ([...aliases].some((a) => extensionDeclaresProcedure(symbols, a, procName))) return true;
+  // R331 (run 005): a CONSERVATIVE fallback for source the grammar could not parse, not a parser.
+  // Any ERROR node, at any depth (under a `#if` wrapper too), that could be a table or
+  // `tableextension` and that holds the called name as an identifier token once comments are
+  // stripped, refuses the claim. Measured: `tableextension ... extends 50101` (by number) does not
+  // parse (R336), and a claim there let `validate-to-assign` assign a field that does not exist
+  // (AL0132). Over-refusal costs one site; a wrong claim costs the build.
+  const wanted = procName.toLowerCase();
+  return symbols.unparsedObjects.some((o) => {
+    const tokens = identifierTokens(o.text);
+    const tableLike =
+      tokens.has("table") ||
+      tokens.has("tableextension") ||
+      hasAncestor(
+        o,
+        (a) =>
+          a.kind === ALNodeKind.table ||
+          a.kind === ALNodeKind.tableextension ||
+          // A header the grammar split across `#if` arms keeps its keyword as a direct child.
+          a.children.some(
+            (c) => c.rawKind === "table_keyword" || c.rawKind === "tableextension_keyword",
+          ),
+      );
+    return tableLike && tokens.has(wanted);
+  });
+}
+
+/** R331 (run 005): the lowercase identifier tokens of `text`, comments stripped. A quoted
+ *  identifier counts as its inner text. Strings are not stripped: a false match only refuses. */
+function identifierTokens(text: string): ReadonlySet<string> {
+  const code = text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  const out = new Set<string>();
+  for (const m of code.matchAll(/"([^"\n]*)"|[A-Za-z_][A-Za-z0-9_]*/g))
+    out.add((m[1] ?? m[0]).toLowerCase());
+  return out;
+}
+
+function hasAncestor(node: ALSyntaxNode, test: (n: ALSyntaxNode) => boolean): boolean {
+  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) if (test(p)) return true;
+  return false;
 }
 
 /**
@@ -745,18 +824,4 @@ function lower(s: string): string {
 
 function equalsIgnoreCase(a: string, b: string): boolean {
   return lower(a) === lower(b);
-}
-
-/**
- * The legacy name-keyed lookup, kept only as `lookupVar`'s fallback. See the R210 comment there for
- * why the positional lookup is tried first and why this cannot be removed outright.
- */
-function nameOf(
-  procedure: ALSyntaxNode,
-  symbols: SymbolTable,
-  objectName: string,
-): ProcedureSymbol | null {
-  const nameNode = procedure.childForFieldName("name");
-  if (nameNode === null) return null;
-  return symbols.resolveProcedure(objectName, stripQuotes(nameNode.text));
 }

@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { type MutantManifest, type MutantManifestEntry, gapIdOf } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type MutantManifest,
+  type MutantManifestEntry,
+  gapIdOf,
+} from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
@@ -79,7 +84,12 @@ function oneBatchRun(
   rows: ReturnType<typeof mutantRow>[],
   projectPath = "P",
 ): number {
-  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.0" });
+  const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
+    projectPath,
+    backend: "bcdev",
+    appVersion: "0.0.0.0",
+  });
   store.recordArtifact(runId, artifact(0, artifactId));
   store.recordSourceHash(runId, "5".repeat(64));
   for (const r of rows) store.recordMutant(runId, r);
@@ -162,7 +172,12 @@ describe("resolveVerifySource", () => {
 
   test("verify refuses an artifact that is not its run's highest batch", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A1));
     store.recordArtifact(runId, artifact(1, A2));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -174,7 +189,12 @@ describe("resolveVerifySource", () => {
 
   test("an id from another batch of the same artifact's run is wrong-batch, even when that batch has the same code", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A2));
     store.recordArtifact(runId, artifact(1, A1));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -240,7 +260,12 @@ describe("resolveVerifySource", () => {
     // must come first.
     for (const over of [{ appPath: undefined }, { instrumentedDir: undefined }, {}]) {
       const store = new ResultsStore(":memory:");
-      const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+      const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
+        projectPath: "P",
+        backend: "bcdev",
+        appVersion: "0.0.0.0",
+      });
       store.recordArtifact(runId, artifact(0, A1, over));
       if (Object.keys(over).length > 0) store.recordSourceHash(runId, "5".repeat(64));
       store.recordMutant(runId, mutantRow("M0001", "survived", { coveringTests: undefined }));
@@ -252,7 +277,12 @@ describe("resolveVerifySource", () => {
 
   test("source-predates-verify names all four reasons a run records no source hash", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A1));
     const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
     expect(e.reason).toBe("source-predates-verify");
@@ -298,7 +328,12 @@ describe("resolveVerifySource", () => {
 
   test("a request mixing a wrong-batch id and a carried id refuses as wrong-batch and names both", () => {
     const store = new ResultsStore(":memory:");
-    const runId = store.createRun({ projectPath: "P", backend: "bcdev", appVersion: "0.0.0.0" });
+    const runId = store.createRun({
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
     store.recordArtifact(runId, artifact(0, A2));
     store.recordArtifact(runId, artifact(1, A1));
     store.recordSourceHash(runId, "5".repeat(64));
@@ -351,6 +386,7 @@ describe("assertSourceUnchanged", () => {
       artifactSha256: "0".repeat(64),
       sourceSha256: await hashTargetSource(dir, SYMBOLS),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+      identityScheme: IDENTITY_SCHEME,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
     return { dir, source };
@@ -480,6 +516,7 @@ describe("planVerify", () => {
       artifactSha256: "0".repeat(64),
       sourceSha256: "5".repeat(64),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+      identityScheme: IDENTITY_SCHEME,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
   }
@@ -646,6 +683,7 @@ describe("planVerify", () => {
 
   test("a reader-marked survivor is skipped and gets no request in the plan", async () => {
     const marks = {
+      identityScheme: IDENTITY_SCHEME,
       marks: [
         { key: "hash-M0001|Logic|Post|lethal.negate-conditional|1", reason: "same either way" },
       ],
@@ -658,6 +696,18 @@ describe("planVerify", () => {
     const all = await markedPlan(marks, [entry("M0001")]);
     expect(all.requests).toEqual([]);
     expect(all.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+  });
+
+  // R325: the manifest's keys were made under the source run's identity scheme. A mark made under
+  // another may name a different mutant, so it is not applied: the survivor runs.
+  test("a mark made under another identity scheme is not applied", async () => {
+    const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
+    const plan = await markedPlan({ marks: [{ key, reason: "same either way" }] }, [
+      entry("M0001"),
+    ]);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
+    expect(plan.marksUnderOtherScheme.map((m) => [m.key, m.identityScheme])).toEqual([[key, 1]]);
   });
 
   // Review r1 item 3: an empty target list must not come back looking like "every target was
@@ -685,7 +735,10 @@ describe("planVerify", () => {
 
   test("a trigger mutant's mark matches by triggerName", async () => {
     const plan = await markedPlan(
-      { marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }] },
+      {
+        identityScheme: IDENTITY_SCHEME,
+        marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }],
+      },
       [entry("M0001", { procedureName: "", triggerName: "OnInsert" })],
     );
     expect(plan.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
@@ -935,7 +988,12 @@ function installedRun(
   writeFileSync(join(dir, "app.json"), "{}");
   const appBytes = new TextEncoder().encode(`app-${artifactId}`);
   writeFileSync(join(dir, "x.app"), appBytes);
-  const runId = store.createRun({ projectPath, backend: "bcdev", appVersion: "0.0.0.0" });
+  const runId = store.createRun({
+    identityScheme: IDENTITY_SCHEME,
+    projectPath,
+    backend: "bcdev",
+    appVersion: "0.0.0.0",
+  });
   store.recordArtifact(
     runId,
     artifact(0, artifactId, {
@@ -1233,7 +1291,10 @@ describe("C02-09: gap ids", () => {
       .filter((s) => markCodes.includes(s.entry.mutantId))
       .map((s) => ({ key: serializeKey(identityKeyOf(s.entry)), reason: "same either way" }));
     if (marks.length > 0) {
-      writeFileSync(join(projectDir, "lethal.equivalent.json"), JSON.stringify({ marks }));
+      writeFileSync(
+        join(projectDir, "lethal.equivalent.json"),
+        JSON.stringify({ identityScheme: IDENTITY_SCHEME, marks }),
+      );
     }
     const testDir = over.testDir ?? mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
     if (over.testDir === undefined) {

@@ -28,6 +28,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
@@ -752,6 +753,7 @@ async function main(): Promise<void> {
       );
       const compiled = await backend.compileTestApp(TEST_DIR, artifact);
       const runId = store.createRun({
+        identityScheme: IDENTITY_SCHEME,
         projectPath: PROJECT_DIR,
         backend: "itest-agreement-restore",
         appVersion: "0.0.0.0",

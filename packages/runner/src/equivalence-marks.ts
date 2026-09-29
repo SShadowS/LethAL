@@ -26,8 +26,11 @@ import { join } from "node:path";
  * - **matched** — the mark names a mutant in this run, and that mutant survived. The ordinary case.
  * - **stale** — the mark names nothing in this run. The identity key includes [[R166]]'s
  *   `astSubtreeHash`, so editing the mutated code changes the hash and the mark stops matching.
- *   That is the SAFE direction (a mark can never drift onto a different mutant), but it must be
- *   reported: a ruling that silently evaporated is a ruling nobody knows they lost.
+ *   That is the safe direction, but it must be reported: a ruling that silently evaporated is a
+ *   ruling nobody knows they lost. A mark is also stale when it was made under another identity
+ *   scheme ([[R325]]). An earlier version of this comment said a mark "can never drift onto a
+ *   different mutant". It could: an engine change that renumbers ordinals (R193) hands an old key
+ *   to a different mutant with the source unchanged. The scheme check is what closes that.
  * - **contradicted** — the mark names a mutant that this run KILLED. Someone stated that no test
  *   could distinguish this mutant, and a test just did. **That is a decidable check on a human
  *   claim, and it is the only part of this feature that can prove anything.** It is reported
@@ -52,6 +55,13 @@ export interface EquivalenceMark {
   readonly reason: string;
   readonly markedBy?: string;
   readonly markedOn?: string;
+  /**
+   * R325: the identity scheme (`IDENTITY_SCHEME`, `@lethal/schemata`) the key was made under. Read
+   * from the marks file's top-level `identityScheme`; a file without one was written before the
+   * field existed and reads as 1. A mark whose scheme is not the one its mutants were keyed under
+   * is reported stale and never matched or contradicted.
+   */
+  readonly identityScheme: number;
 }
 
 /** The minimum a caller must know about a mutant to match marks against it. Deliberately
@@ -112,6 +122,13 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
   if (!Array.isArray(marksRaw)) {
     throw new EquivalenceMarksError(`${sourceName}: missing required "marks" array`);
   }
+  const schemeRaw = (raw as { identityScheme?: unknown }).identityScheme;
+  if (schemeRaw !== undefined && !(Number.isInteger(schemeRaw) && (schemeRaw as number) >= 1)) {
+    throw new EquivalenceMarksError(
+      `${sourceName}: "identityScheme" must be a positive integer when present, got ${JSON.stringify(schemeRaw)}`,
+    );
+  }
+  const identityScheme = schemeRaw === undefined ? 1 : (schemeRaw as number);
   const seen = new Set<string>();
   return marksRaw.map((entry, i) => {
     const at = `${sourceName}: marks[${i}]`;
@@ -148,16 +165,40 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
     return {
       key,
       reason: reason.trim(),
+      identityScheme,
       ...(typeof markedBy === "string" && markedBy.trim() !== "" ? { markedBy } : {}),
       ...(typeof markedOn === "string" && markedOn.trim() !== "" ? { markedOn } : {}),
     };
   });
 }
 
+/**
+ * R325: the marks made under an identity scheme other than `identityScheme`, the one the mutants
+ * they are matched against were keyed under. Every consumer of marks reads this one rule.
+ */
+export function marksUnderOtherScheme(
+  marks: readonly EquivalenceMark[],
+  identityScheme: number,
+): EquivalenceMark[] {
+  return marks.filter((m) => m.identityScheme !== identityScheme);
+}
+
+/** R325: the warning for `marksUnderOtherScheme`'s result, or `undefined` when it is empty. */
+export function marksSchemeWarning(
+  stale: readonly EquivalenceMark[],
+  identityScheme: number,
+): string | undefined {
+  if (stale.length === 0) return undefined;
+  const schemes = [...new Set(stale.map((m) => m.identityScheme))].sort((a, b) => a - b);
+  return `[lethal] ${stale.length} equivalence mark(s) were made under identity scheme ${schemes.join(", ")}, and this run's mutants are keyed under identity scheme ${identityScheme}. A key can name a different mutant across schemes (an engine change can renumber ordinals), so each is reported stale and none is matched or contradicted. Re-check each mark against this run's report, then set "identityScheme": ${identityScheme} in ${EQUIVALENCE_MARKS_FILENAME} (R325).`;
+}
+
 /** Match a set of marks against this run's mutants. Pure; the caller decides what to print. */
 export function applyEquivalenceMarks(
   marks: readonly EquivalenceMark[],
   mutants: readonly MarkableMutant[],
+  /** R325: the identity scheme `mutants` were keyed under. A mark made under another is stale. */
+  identityScheme: number,
 ): EquivalenceMarkReport {
   const byIdentity = new Map<string, MarkableMutant>();
   for (const m of mutants) byIdentity.set(m.identity, m);
@@ -167,6 +208,10 @@ export function applyEquivalenceMarks(
   const contradicted: ContradictedMark[] = [];
 
   for (const mark of marks) {
+    if (mark.identityScheme !== identityScheme) {
+      stale.push(mark);
+      continue;
+    }
     const hit = byIdentity.get(mark.key);
     if (hit === undefined) {
       stale.push(mark);
