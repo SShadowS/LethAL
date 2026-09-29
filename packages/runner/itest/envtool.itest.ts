@@ -123,6 +123,7 @@ import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_ENVTOOL) {
@@ -130,7 +131,8 @@ if (!process.env.LETHAL_ITEST_ENVTOOL) {
     "skipped (set LETHAL_ITEST_ENVTOOL=1 and populate the gitignored " +
       "fixtures/sandbox-app/lethal.config.envtool.json to run against a real environment)",
   );
-  process.exit(0);
+  const challenged = await emitSkipped("envtool", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -403,9 +405,13 @@ async function main(): Promise<void> {
   }
 
   console.log("envtool itest: PASS");
+  await emitPassed("envtool", { sublegs: ["envtool"], artifacts: { reported: false } });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  await emitFailed("envtool", err instanceof Error ? err.message : String(err));
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

@@ -408,6 +408,21 @@ describe("R332 wiring: real call sites, not text", () => {
     ).toBe(true);
   });
 
+  test("R337: envtool writes a receipt on skip, pass and failure, and prints the failure before any await", () => {
+    const sf = parse(join(ITEST, "envtool.itest.ts"));
+    const R = "./gate-receipt";
+    const leg = (c: ts.CallExpression): string | undefined => c.arguments[0]?.getText(sf);
+    expect(calls(sf, sf, "emitSkipped", R).map(leg)).toEqual(['"envtool"']);
+    expect(calls(mainOf(sf), sf, "emitPassed", R).map(leg)).toEqual(['"envtool"']);
+    const failed = calls(sf, sf, "emitFailed", R);
+    expect(failed.map(leg)).toEqual(['"envtool"']);
+    // The catch handler prints (console.error) before its first await, the emitFailed.
+    const handler = failed[0]?.parent?.parent?.parent;
+    const stmts = handler !== undefined && ts.isBlock(handler) ? [...handler.statements] : [];
+    expect(stmts[0]?.getText(sf).startsWith("console.error(")).toBe(true);
+    expect(stmts[1]?.getText(sf).startsWith("await emitFailed(")).toBe(true);
+  });
+
   test("al-runner: SYMBOL_SETS names exactly the registered symbol baselines", () => {
     const sf = parse(join(ITEST, "al-runner.itest.ts"));
     const fn = sf.statements.find(
