@@ -13,14 +13,14 @@
  * itest was run: two runs of a silently-broken build could still agree with each other. This
  * closes that gap by diffing against a file committed to the repo.
  *
- * No committed baseline yet at `baselinePath` -> this run's normalized report BECOMES the new
- * baseline (written to disk; the caller must `git add`/commit it — see fixtures/README.md
- * "Integration scripts"). A committed baseline present -> `diffMutants` must be empty or the
- * itest throws, naming every differing mutant — a per-mutant difference fails the itest, exactly
- * like a per-mutant-count mismatch already does.
+ * R332: an itest never records a frozen baseline silently. `assertGateBaseline` refuses a missing
+ * file and records only when `LETHAL_ITEST_RECORD_BASELINE` names it; every write is exclusive
+ * (`wx`), so nothing is ever overwritten; a record run always fails, with exit 3 in the gate.
+ * `assertMatchesBaseline` still records an absent file, which is `campaign freeze`'s job alone.
  */
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { SessionReport } from "../src/report";
 import { canonical, diffMutants, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
@@ -40,11 +40,26 @@ function sortedForDisk(mutants: readonly NormalizedMutant[]): NormalizedMutant[]
   );
 }
 
+/** Throws when `actual` differs from the committed baseline text. Never writes. */
+function throwOnDiff(
+  actual: readonly NormalizedMutant[],
+  baselineRaw: string,
+  baselinePath: string,
+  label: string,
+  remedy: string,
+): void {
+  const baseline = JSON.parse(baselineRaw) as NormalizedMutant[];
+  const diffs = diffMutants(baseline, actual);
+  if (diffs.length > 0) {
+    throw new Error(
+      `${label}: per-mutant regression against the committed baseline at ${baselinePath} (${diffs.length} mutant(s) differ):\n${diffs.map((d) => `  - ${d}`).join("\n")}\n${remedy}`,
+    );
+  }
+}
+
 /**
- * Compares `report` against the committed baseline at `baselinePath`, recording a fresh baseline
- * when none exists yet. Throws (never returns a "differences" value the caller could accidentally
- * ignore) when a committed baseline exists and at least one mutant differs — a per-mutant
- * regression must fail the itest exactly as loudly as an aggregate-count mismatch does.
+ * Record-or-diff. `campaign freeze` ONLY, where writing an absent `<stage>.baseline.json` is the
+ * verb's job. R332: no itest may call it; `tests/baseline-wiring.test.ts` enforces that.
  */
 export async function assertMatchesBaseline(
   report: SessionReport,
@@ -61,27 +76,179 @@ export async function assertMatchesBaseline(
   if (baselineRaw === undefined) {
     await writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`, "utf8");
     console.log(
-      `${label}: no committed baseline at ${baselinePath} — recorded this run's per-mutant verdicts as the new baseline. Review and commit this file.`,
+      `${label}: no committed baseline at ${baselinePath}, recorded this run's per-mutant verdicts as the new baseline. Review and commit this file.`,
     );
     return;
   }
-  const baseline = JSON.parse(baselineRaw) as NormalizedMutant[];
-  const diffs = diffMutants(baseline, actual);
-  if (diffs.length > 0) {
-    throw new Error(
-      `${label}: per-mutant regression against the committed baseline at ${baselinePath} (${diffs.length} mutant(s) differ):\n${diffs.map((d) => `  - ${d}`).join("\n")}\n` +
-        `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`,
-    );
+  throwOnDiff(
+    actual,
+    baselineRaw,
+    baselinePath,
+    label,
+    `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`,
+  );
+}
+
+/** R332: lists the gate baselines a record run may write, by basename, comma-separated. */
+export const RECORD_BASELINE_ENV = "LETHAL_ITEST_RECORD_BASELINE";
+
+const gateHow = (enable: string, name: string, script: string): string =>
+  `${enable} ${RECORD_BASELINE_ENV}=${name} bun run ${script}`;
+
+/**
+ * R332: every gate baseline, by basename, and the command that records it. The basename is the
+ * whole contract: all frozen baselines live in `packages/runner/itest/`, so a basename names one
+ * file, and `tests/baseline-wiring.test.ts` pins every gate's path to `join(HERE, <this key>)`.
+ */
+export const GATE_BASELINES: Readonly<Record<string, string>> = {
+  "al-runner.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
+    "al-runner.baseline.json",
+    "itest:alrunner",
+  ),
+  "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
+  "envtool.baseline.json": gateHow(
+    "LETHAL_ITEST_ENVTOOL=1",
+    "envtool.baseline.json",
+    "itest:envtool",
+  ),
+  "harden.baseline.json": gateHow("LETHAL_ITEST_HARDEN=1", "harden.baseline.json", "itest:harden"),
+  "tables.baseline.json": gateHow("LETHAL_ITEST_TABLES=1", "tables.baseline.json", "itest:tables"),
+};
+
+/** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
+export const SYMBOL_BASELINES: readonly string[] = [
+  "al-runner.symbols-lethala.baseline.json",
+  "al-runner.symbols-lethalb.baseline.json",
+];
+const SYMBOL_HOW =
+  "LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe> bun run itest:alrunner";
+
+/** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
+export class BaselineRecordedError extends Error {}
+
+/** The command that records this baseline. Throws for a file that is not registered. */
+export function recordHowFor(baselinePath: string): string {
+  const name = basename(baselinePath);
+  const gate = GATE_BASELINES[name];
+  if (gate !== undefined) return gate;
+  if (SYMBOL_BASELINES.includes(name)) return SYMBOL_HOW;
+  throw new Error(
+    `${baselinePath} is not a registered frozen baseline. Register its basename in GATE_BASELINES or SYMBOL_BASELINES (baseline-guard.ts).`,
+  );
+}
+
+/** True when `LETHAL_ITEST_RECORD_BASELINE` lists this file's basename. Any unknown entry throws. */
+export function recordRequested(
+  baselinePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[RECORD_BASELINE_ENV];
+  if (raw === undefined || raw === "") return false;
+  const listed = raw.split(",").map((s) => s.trim());
+  for (const entry of listed) {
+    if (GATE_BASELINES[entry] === undefined) {
+      throw new Error(
+        `${RECORD_BASELINE_ENV} lists ${JSON.stringify(entry)}, which is not a gate baseline. It takes exact basenames from: ${Object.keys(GATE_BASELINES).join(", ")}. The symbol baselines use LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1.`,
+      );
+    }
+  }
+  return listed.includes(basename(baselinePath));
+}
+
+function overwriteRefusal(baselinePath: string, label: string): Error {
+  return new Error(
+    `${label}: record mode refuses to overwrite the committed baseline at ${baselinePath}. Recording is one-time: a change needs a new pre-commitment, then the file deleted deliberately, then one record run.`,
+  );
+}
+
+function missingRefusal(baselinePath: string, label: string): Error {
+  return new Error(
+    `${label}: no committed baseline at ${baselinePath}. This gate never records one silently; after a pre-commitment, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the file and commit it.`,
+  );
+}
+
+/** Startup check shared by every preflight: missing (record off) or present (record on) throws. */
+export function preflightFrozenBaseline(
+  baselinePath: string,
+  label: string,
+  record: boolean,
+): void {
+  recordHowFor(baselinePath);
+  const exists = existsSync(baselinePath);
+  if (record && exists) throw overwriteRefusal(baselinePath, label);
+  if (!record && !exists) throw missingRefusal(baselinePath, label);
+}
+
+/** First line of every writing gate's `main()`: fails in seconds, before any live work. */
+export function preflightGateBaseline(
+  baselinePath: string,
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  preflightFrozenBaseline(baselinePath, label, recordRequested(baselinePath, env));
+}
+
+/** First line of every READER's `main()`. Readers never record, so record mode is ignored. */
+export function preflightReadOnlyBaseline(baselinePath: string, label: string): void {
+  preflightFrozenBaseline(baselinePath, label, false);
+}
+
+/** The ONLY baseline write an itest performs. `wx`: the OS refuses if the file exists. */
+async function writeBaselineOnce(
+  actual: readonly NormalizedMutant[],
+  baselinePath: string,
+  label: string,
+): Promise<void> {
+  try {
+    await writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST")
+      throw overwriteRefusal(baselinePath, label);
+    throw err;
   }
 }
 
+async function compareWithCommitted(
+  actual: readonly NormalizedMutant[],
+  baselinePath: string,
+  label: string,
+): Promise<void> {
+  if (!existsSync(baselinePath)) throw missingRefusal(baselinePath, label);
+  throwOnDiff(
+    actual,
+    await readFile(baselinePath, "utf8"),
+    baselinePath,
+    label,
+    `If this difference is EXPECTED, write a pre-commitment, delete ${baselinePath}, record once with:\n  ${recordHowFor(baselinePath)}\nthen re-run without the record variable to confirm a pass, review the diff and commit it.`,
+  );
+}
+
+/** R332: compare, or (record mode naming this file) write once and throw BaselineRecordedError. */
+export async function assertGateBaseline(
+  report: SessionReport,
+  baselinePath: string,
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  recordHowFor(baselinePath);
+  const actual = sortedForDisk(normalizeForComparison(report));
+  if (!recordRequested(baselinePath, env)) {
+    await compareWithCommitted(actual, baselinePath, label);
+    return;
+  }
+  await writeBaselineOnce(actual, baselinePath, label);
+  throw new BaselineRecordedError(
+    `${label}: RECORDED ${baselinePath}; NOT a pass. Review it against the pre-commitment, re-run without ${RECORD_BASELINE_ENV} to confirm it passes, then commit it.`,
+  );
+}
+
 /**
- * R321: like `assertMatchesBaseline`, but an absent baseline is REFUSED rather than recorded.
- *
- * `assertMatchesBaseline` writes an absent file and returns, so deleting a frozen baseline makes the
- * gate pass on whatever it measured next. For a baseline that was pre-committed and frozen, recording
- * must be a deliberate, one-time act: `record` is true only when the caller's explicit record mode
- * is on, and then an EXISTING file is refused, so record mode can never overwrite a frozen table.
+ * R321's symbol legs. Same refusals, exclusive write (finding C). Recording returns instead of
+ * throwing, so one record run writes BOTH symbol files; al-runner.itest.ts then exits 3.
  */
 export async function assertMatchesFrozenBaseline(
   report: SessionReport,
@@ -89,16 +256,14 @@ export async function assertMatchesFrozenBaseline(
   label: string,
   record: boolean,
 ): Promise<void> {
-  const exists = existsSync(baselinePath);
-  if (record && exists) {
-    throw new Error(
-      `${label}: record mode refuses to overwrite the committed baseline at ${baselinePath}. Recording is one-time: a change needs a new pre-commitment, then the file deleted deliberately, then one record run.`,
-    );
+  recordHowFor(baselinePath);
+  const actual = sortedForDisk(normalizeForComparison(report));
+  if (!record) {
+    await compareWithCommitted(actual, baselinePath, label);
+    return;
   }
-  if (!record && !exists) {
-    throw new Error(
-      `${label}: no committed baseline at ${baselinePath}. This gate never records one silently; after a pre-commitment, record once with LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 and commit the file.`,
-    );
-  }
-  await assertMatchesBaseline(report, baselinePath, label);
+  await writeBaselineOnce(actual, baselinePath, label);
+  console.log(
+    `${label}: recorded ${baselinePath}. Review it against the pre-commitment and commit it.`,
+  );
 }
