@@ -1777,6 +1777,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
+    // Pinned by value so a bump is deliberate: 3 since R323 (named return values).
+    expect(IDENTITY_SCHEME).toBe(3);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
