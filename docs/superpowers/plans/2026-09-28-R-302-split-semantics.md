@@ -352,7 +352,7 @@ In `q1` and `q2`, each of `Pick`'s 7 mutants (the 3 new ones included) has the s
 - Every fix is red-checked: revert the specific line, confirm the specific test goes red, restore, report both outputs (or use the `mutation-red-checker` subagent).
 - Every scratch shell block runs under `set -euo pipefail`, sources `$S/setup.sh`, never filters a command's output through `grep -v`, writes an "expect nothing" grep as `if grep ...; then exit 1; fi`, and keeps raw logs under `$S/logs/`.
 - Probes run SERIALLY, one at a time, never beside another probe or a live gate. Any al-runner probe failure is a STOP (the R-303 rule): report it; the fix is its own designed task. A repeat of R-316's `exit 82` wire-contract throw on a serial run is filed as its own roadmap item.
-- No container is used. If Task 4's STOP rule fires (Decision 5), the orchestrator decides on a Cronus28 gate under `coord lease Cronus28 bugs`, never Cronus281 to 283.
+- One container, one task: Task 5's gate, on Cronus28 ONLY (never Cronus281 to 283). The CONTROLLER holds `coord lease Cronus28 bugs` and heartbeats it; the implementer never takes or releases it. `lethal doctor` after every run; never restart the container or its server; an orphaned lease is recovered with `lethal force-reset-lease` (R201). Every other task is offline.
 - Tests assert only what their task owns: Task 1's engine tests assert symbol-table and type answers, never operator sites; Task 2's operator tests assert sites, never identity keys; Task 3 owns the runner-level site sets, the ordinals and the hang tag.
 
 ## Review Focus
@@ -363,7 +363,8 @@ In `q1` and `q2`, each of `Pick`'s 7 mutants (the 3 new ones included) has the s
 4. **Refusal guards read any arm, resolution reads every arm.** `d5`, `d6` (any) and `d1` to `d4`, `d7` (every).
 5. **A renamed member stays unnamed.** `c1`, `c2`: its new mutants carry `procedureName` `""`; no call by name resolves to it.
 6. **Keys.** Only the rows in the pre-commitment (and the corrections) move; fixtures, System Application and BusinessFoundation 0.
-7. **Emission.** Place 12 changes which node is the statement for a split member's body, so it is on the emission path. Every new mutant's emission compiles under every subset (Task 4), and its `reachGrain`, member lines and gap block equal its twin's.
+7. **Emission.** Place 12 changes which node is the statement for a split member's body, so it is on the emission path. Every new mutant's emission compiles under every subset (Task 4), its emitted guard branch equals its twin's (`twin-parity.ts`, Task 4), and the Cronus28 gate (Task 5) shows a split body's marker firing in the test that enters it and not in the one that only covers it.
+8. **C1 and C2 (review r1).** A call is typed only when its name is unique in its owner (`o1`, `o2`); variable names compare case-insensitively (`e1`, `e2`). Both are red-checked through `alc`.
 
 ## File structure
 
@@ -460,7 +461,7 @@ Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) pr
 
 ---
 
-### Task 1: The engine resolves inside a split member, and `return-value` reads the agreed return type (places 1 to 4, 9 to 12)
+### Task 1: The engine resolves inside a split member, `return-value` reads the agreed return type, a call is typed only by a unique name, and names compare case-insensitively (places 1 to 4, 9 to 12; C1, C2)
 
 **Files:**
 - Modify: `packages/engine/src/ast/tree-walks.ts`, `packages/engine/src/index.ts`, `packages/engine/src/semantic/symbol-table.ts`, `packages/engine/src/semantic/types.ts`, `packages/engine/src/semantic/receiver.ts`, `packages/engine/src/semantic/callers.ts`, `packages/builtin-tier1/src/return-value.ts`
@@ -471,15 +472,16 @@ Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) pr
 - [ ] **Step 1: Write the failing tests, and flip the engine pin.** The test "findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)" in `tree-walks.test.ts` pins HEAD's blindness and is R302's to change: it becomes "returns the split node". Then, each on hand-written inline AL, one per place, asserting only an engine answer (and, for `return-value`, its sites):
   - `tree-walks.test.ts`: `findEnclosingProcedure` from a body statement returns the split node for both shapes (place 3); `memberArms` gives one arm per `#if`/`#elif`/`#else` with the arm's own children; `procedureLikeReturnType` is the agreed text, `null` when arms disagree or one arm has none; `inMemberBody` is true for a body literal and FALSE for a string inside an `[Obsolete(...)]` attribute inside an arm; `findEnclosingStatement` of a split member's body block is that block (place 12).
   - `symbol-table.test.ts`: a split member is found by `resolveProcedureAt` at its own start (place 1); agreeing parameters and a shared var section's locals are listed; a parameter with different types per arm, and an arm-only local, are in `ambiguous` and in neither list; `returnType` agrees or is `null`; a renamed member has name `""` and `resolveProcedure(scope, "")` is `null`.
-  - `types.test.ts`: an identifier that is an agreeing parameter types; an ambiguous one is `null` even when a global of the same name exists (place 2); a call to an agreeing split member types by its return type, a call to a disagreeing one is `null`.
+  - `types.test.ts`: an identifier that is an agreeing parameter types; an ambiguous one is `null` even when a global of the same name exists (place 2); a call to an agreeing split member types by its return type, a call to a disagreeing one is `null`; C1: a call to a name with two overloads (plain, and split-then-plain) is `null`, and a unique name called in other casing types; C2: a parameter `y: Text` referenced as `Y` beside a global `Y: Integer` types `Text`, in a plain procedure and in an agreeing split member.
+  - `symbol-table.test.ts` also: `uniqueProcedure` is the one procedure of a name, `null` for two, and counts a renamed split member under each arm's name.
   - `resolve-var-ref.test.ts`: `resolveVarRef` finds an agreeing split-member local; an ambiguous name returns `null`, not the global (place 3).
   - `receiver.test.ts`: `claimsRecordMethod` refuses `R.SetRange(...)` on a table that declares `SetRange` as a split member, and on one where only ONE arm has that name (place 10); a receiver declared differently per arm is not claimed; a renamed member is not a name fallback (place 11).
   - `callers.test.ts`: a call inside an agreeing split member names it as the caller (place 9).
   - `return-value.test.ts`: `exit(<expr>)` in a split member whose arms agree on `Integer` is mutated as in its twin; nothing when the arms disagree (place 4).
 - [ ] **Step 2: Run them, expect red.** `bun test packages/engine packages/builtin-tier2/tests/receiver.test.ts`: each new test fails at HEAD for the reason named, and nothing else fails.
-- [ ] **Step 3: Implement.** The prototype's engine hunks are the reference (`$S/proto-r2.patch`, the `packages/engine` files): `findEnclosingProcedure` walks `isProcedureLike`; `memberArms`, `procedureLikeReturnType`, `inMemberBody` next to `isProcedureLike`, each with an R302 doc comment; `findEnclosingStatement`'s block case also admits a procedure-like parent; `parseSplitProcedure` with Decision 2's rule; `ProcedureSymbol.ambiguous` (lowercase names; absent on a plain procedure); `types.ts` deletes its private walk and imports the engine's; `lookupVar` and `resolveIdentifierType` return `null` for an ambiguous name before the global fall-through; `declaresProcedure` reads every `name`-field child; `nameOf` and `callers.ts` use `procedureLikeNameNode`. Update the doc comment on `isProcedureLike` (it no longer says the semantic walks skip it).
+- [ ] **Step 3: Implement.** The prototype's engine hunks are the reference (`$S/proto-r3.patch`, the `packages/engine` files; r2 added `uniqueProcedure` in `symbol-table.ts`, `callType` reading it, `sameName` in `types.ts`, and the private walk deleted): `findEnclosingProcedure` walks `isProcedureLike`; `memberArms`, `procedureLikeReturnType`, `inMemberBody` next to `isProcedureLike`, each with an R302 doc comment; `findEnclosingStatement`'s block case also admits a procedure-like parent; `parseSplitProcedure` with Decision 2's rule; `ProcedureSymbol.ambiguous` (lowercase names; absent on a plain procedure); `types.ts` deletes its private walk and imports the engine's; `lookupVar` and `resolveIdentifierType` return `null` for an ambiguous name before the global fall-through; `declaresProcedure` reads every `name`-field child; `nameOf` and `callers.ts` use `procedureLikeNameNode`. Update the doc comment on `isProcedureLike` (it no longer says the semantic walks skip it).
 - [ ] **Step 4: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test packages/engine packages/builtin-tier1/tests/return-value.test.ts packages/builtin-tier2`.
-- [ ] **Step 5: Red-check each place.** Revert one hunk at a time, run only its test, confirm red, restore, confirm green. Record the nine outputs (places 1 to 4, 9 to 12, and the hiding) in `$S/logs/t1-redcheck.txt`. The hiding (place 2 and 3) is reverted by deleting the `ambiguous` check alone, so the red test is the one with the global.
+- [ ] **Step 5: Red-check each place.** Revert one hunk at a time, run only its test, confirm red, restore, confirm green. Record the eleven outputs (places 1 to 4, 9 to 12, the hiding, C1 and C2) in `$S/logs/t1-redcheck.txt`. C1 is reverted by putting `resolveProcedure` back in `callType`, C2 by putting `p.name === node.text` back; on the prototype each turned its repros' checker and `alc` red ("Revision r2 prototype check"). The hiding (place 2 and 3) is reverted by deleting the `ambiguous` check alone, so the red test is the one with the global.
 - [ ] **Step 6: Commit.** `bunx biome check <touched files>`, then `git commit -m "fix(R302): the engine resolves locals, parameters and the return type inside a split member, by the every-arm rule"`.
 
 ### Task 2: The body walks find their sites inside a split member (places 5 to 8)
@@ -505,8 +507,9 @@ Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) pr
   - `d6`: `void-method-call`, not `remove-setrange`, at the plain caller;
   - `a1`: no mutant on an attribute line inside an arm, AND no dropped-site warning for the file (without Decision 3 the attribute booleans are claimed and then dropped as non-executable, which leaves the mutants right and the warning and its count wrong);
   - `t5-hang`-shaped: both `remove-assignment` mutants carry `hangCapable: "loop-condition-target"`;
-  - `c3`-shaped: the overload's `empty-block` and `return-value` keys carry ordinal 1, the preamble's none; `c1`-shaped: the renamed member's new mutants have `procedureName` `""`.
-- [ ] **Step 2: Red-check** the `d1`, `d6` and `a1` tests against the Task 1 and 2 hunks they pin (hiding, any-arm guard, `inMemberBody`).
+  - `c3`-shaped: the overload's `empty-block` and `return-value` keys carry ordinal 1, the preamble's none; `c1`-shaped: the renamed member's new mutants have `procedureName` `""`;
+  - `o1` and `o2`: no `swap-additive` at the overloaded call, and in `o1` the plain overload's `empty-block` key carries ordinal 1; `e1` and `e2`: no `swap-call-arguments` at `Show(X, Y)`; `o3` and `e3`: the added `swap-additive`.
+- [ ] **Step 2: Red-check** the `d1`, `d6`, `a1`, `o1` and `e2` tests against the hunks they pin (hiding, any-arm guard, `inMemberBody`, `uniqueProcedure`, `sameName`).
 - [ ] **Step 3: Commit.** `test(R302): runner-level pins for split-member sites, the per-arm rule, the hang tag and the ordinals`.
 
 ### Task 4: Offline proof: the checker, alc on every subset, the manifest STOP rule, and al-runner (serial)
@@ -519,26 +522,35 @@ Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) pr
 set -euo pipefail
 source C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-bugs/01994069-c6e6-468b-ad23-4e5aa5c0d94f/scratchpad/r302/setup.sh
 "$S/capture.sh" after "$S/sites.ts"
-EXPECT="$S/expect-final" "$S/check-all.sh" after | tee "$S/logs/check-after.txt"
+EXPECT="$S/expect-r2-final" "$S/check-all.sh" after | tee "$S/logs/check-after.txt"
 for n in $(ls "$S/cap/before" | grep '\.err$'); do cmp "$S/cap/before/$n" "$S/cap/after/$n"; done
 echo "sites match the pre-commitment (with the listed corrections)"
 ```
 
-Run it as `EXPECT=$S/expect-final "$S/check-all.sh" after`: the pre-commitment plus the one correction under "Prototype check" (`d4` L15), kept as a separate file set so the committed rows stay as they were. Expected: `checks: 23 pass, 0 fail`, and every `.err` identical, which says no site was dropped as non-executable.
+`$S/expect-r2-final/` is the r2 pre-commitment (`$S/expect-r2/`) plus the corrections recorded under the two prototype checks (`d4` L15 in r1; the `o1` and System Application ordinals in r2), kept as a separate file set so the committed rows stay as they were. Expected: `checks: 33 pass, 0 fail` (every file's raw and deployed totals included), and every `.err` identical, which says no site was dropped as non-executable.
 
-- [ ] **Step 2: alc, every repro, every subset:** `"$S/alc-proto.sh" "$S"` (the same script with the r302 tools instead of `$S/pt`). 18 repros, `t5-lit-split` as its local-table copy: 37 subsets. Expected: `alc: 37 of 37 subsets PASS`. Any FAIL is a STOP.
-- [ ] **Step 3: The manifest STOP rule (Decision 5).** `bun "$S/pt/grain-vs-twin.ts" U:/Git/LethAL-wt/r302/packages "$S/repro/<name>" "$S/twin/<name>-a1"` for the 15 repros with split-member mutants (all but `d5`, `d6`, `d7`, whose split members have empty bodies). Expected: every line `same`, each run ending `PASS`, 128 mutants in all. Any `DIFF` is a STOP.
-- [ ] **Step 4: al-runner, local, serial.** `"$S/run-ar.sh" after "$S" q1-twin-body q2-split-twin k1-dc-shape k2-baseapp-shape a1-attribute-in-arm d1-arg-type-differs` (each with its `$S/repro-tests-<name>` app, coverage on then off, every subset, one session at a time). Expected, as on the prototype ("Prototype check"): every session ends `<name> PASS`, and in `q1` and `q2` each `Pick` mutant has the same verdict as the `Twin` mutant of the same operator on the same relative line. Any failure is a STOP.
+- [ ] **Step 2: alc, every repro, every subset:** `"$S/alc-proto.sh" "$S"` (the same script with the r302 tools instead of `$S/pt`). 25 projects (every repro except `n1`, which is R323's evidence and still fails by design; `t5-lit-split` as its local-table copy; the gate target with its selector ids widened in a scratch copy): 47 subsets. Expected: `alc: 47 of 47 subsets PASS`. Any FAIL is a STOP.
+- [ ] **Step 3: Twin parity (Decision 5, review I1).** `bun "$S/twin-parity.ts" U:/Git/LethAL-wt/r302/packages <split> <twin> <count> [<allow>]` for every row of the r2 table "Twin parity, now mechanical": 18 repro runs, the gate target (version 2: 11), DC/Cloud, and BaseApp against both arm-twins, each with its pre-committed count and `d4`'s two allowed rows. Expected: every run ends `PASS`. A `NO-TWIN`, `DIFF`, `COUNT` or `ALLOWED-BUT-NOT-SEEN` line is a STOP.
+- [ ] **Step 4: al-runner, local, serial.** `"$S/run-ar.sh" after "$S" q1-twin-body q2-split-twin k1-dc-shape k2-baseapp-shape a1-attribute-in-arm d1-arg-type-differs r302-gate` (7 projects, NOT every repro; each with its tests app, coverage on then off, every subset, one session at a time). Expected, as on the prototype: every session ends `<name> PASS`; in `q1` and `q2` each `Pick` mutant has the same verdict as the `Twin` mutant of the same operator on the same relative line; the gate target's verdicts equal the version 2 gate rows' verdicts. al-runner reports no reach, so this step proves compile, run and verdicts only. Any failure is a STOP.
 
-### Task 5: Prove nothing else moved
+### Task 5: Live gate on Cronus28: a split member's whole-body block reached by one test and not by another (review I1)
 
-- [ ] **Step 1: Fixtures, System Application, BusinessFoundation.** The AFTER hashes, identity keys and emitted targets (Task 0 Step 3's loop into `*-after-*`) are byte-identical to BEFORE (`diff -r --exclude=app.json`, `maxRSS_KB` dropped).
-- [ ] **Step 2: DC/Cloud and BaseApp** already pass the checker in Task 4 Step 1 (19 `+`, 7 `-` on DC; 31 `+` on BaseApp; every other key unchanged).
+**Files:** scratch only (`$S/gate/`). Runs on the r302 worktree with Tasks 1 to 3 committed locally and Task 4 green. Nothing is merged, and R302 is not closed, unless it passes; the gate itself commits nothing.
+
+- [ ] **Step 1: Offline, before asking for the lease.** The target and rows are VERSION 2 ("the gate, version 2"). `bash "$S/gate/build-pair.sh"` (both `.app` files, sha256 printed), `bun "$S/gate/redcheck-gate.ts"` (24 cases, expected `redcheck PASS`), and `bun "$S/gate/gate-config.ts"` for `cfg-none.json` (`""`) and `cfg-r302a.json` (`R302A`).
+- [ ] **Step 2: Ask the controller.** The controller takes `coord lease Cronus28 bugs` and heartbeats it for the whole run; the implementer does not.
+- [ ] **Step 3: One driver.** From the r302 worktree: `bash "$S/gate/run-gate.sh" fix`. It takes the full app inventory, runs the preflight (no scratch name or id may exist), requires doctor's lease check green, publishes the pair, runs `lethal run --backend bcdev` once per configuration with `lethal doctor` after each, and checks each report with `check-gate.ts` against `expect-gate.json` (the r2 pre-committed rows). Its EXIT trap removes the pair by app id AND publisher once doctor's lease check is green, then diffs the inventory. Expected: `gate [fix]: GATE PASS in both configurations`, and an empty inventory diff.
+- [ ] **Step 4: On a FAIL,** stop: nothing is merged, the evidence goes to the controller, and the cause is designed as its own task. On a PASS, the controller releases the lease, and the evidence (reports, check logs, doctor logs, inventories and their diff, the removal log, `check-gate.ts`, `expect-gate.json`, the red-check outputs) is archived at `H:/lethal-coord/tasks/R-302/gate-evidence/`.
+
+### Task 6: Prove nothing else moved
+
+- [ ] **Step 1: Fixtures and BusinessFoundation.** The AFTER hashes, identity keys and emitted targets (Task 0 Step 3's loop into `*-after-*`) are byte-identical to BEFORE (`diff -r --exclude=app.json`, `maxRSS_KB` dropped). System Application is NOT byte-identical any more (C2 adds 5 mutants and renumbers one key); it is held by the checker in Task 4 Step 1 instead.
+- [ ] **Step 2: DC/Cloud, BaseApp and System Application** already pass the checker in Task 4 Step 1 (DC 102603 raw, 97144 deployed, 19 `+`, 7 `-`; BaseApp 1568, 1540, 31 `+`; System Application 77291, 75832, 5 `+`, 1 `k`; every other key unchanged).
 - [ ] **Step 3: Whole suite.** `bun run typecheck`, `rm -rf packages/*/dist`, `bun test` from the root. Expected: green. `bun run compile:fixtures` is not needed (no fixture AL changes) and is not run.
 
-### Task 6: Roadmap
+### Task 7: Roadmap
 
-- [ ] Mark `docs/roadmap/R302.md` `done (<first>..<last>)`, with a closing section: the 12 places, the per-arm rule (and its strict reading), the pre-committed counts and the measured result for each repro, DC/Cloud (+12 deployed) and BaseApp scratch (+31), the prototype's corrections, and that the hang tag is back. Add one line to `R301.md` and `R316.md` pointing at the closing. Re-check the next free id across every worktree before filing anything new (R-316's Task 0 Step 5 loop). Then `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, and commit: `roadmap(R302): done`.
+- [ ] Mark `docs/roadmap/R302.md` `done (<first>..<last>)`, with a closing section: the 12 places, the per-arm rule (and its strict reading), the pre-committed counts and the measured result for each repro, DC/Cloud (+12 deployed) and BaseApp scratch (+31), the prototypes' corrections, the hang tag back, and the Cronus28 gate's archived evidence. Mark `R322.md` and `R324.md` done with the Task 1 commit and their red-checks. `R323.md` stays open (named return values, out of R-302's scope). Add one line to `R301.md` and `R316.md` pointing at the closing. Re-check the next free id across every worktree before filing anything new (R-316's Task 0 Step 5 loop). Then `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, and commit: `roadmap(R302): done`.
 
 ---
 
@@ -718,3 +730,45 @@ Tests: `PickEnters` (`Pick(5)` must be 6), `PickSkips` (`Pick(1)` must be 2), `O
 For a `killer` row without a named killer, `check-gate.ts` now requires the killing test to be a covering test and to be in `reachedBy` (either covering test may run first, R197). Red-checked offline (`$S/gate/redcheck-gate.ts`, `redcheck-v2.out`): 24 of 24 cases as wanted: the good report passes in both configurations, and eleven edits each fail in both (the control block also reached by PickSkips, not reached at all, killed; `Note`'s whole body reached by one test only; `Pick`'s whole body missing; an extra mutant; `unplaced`; attribution `object`; the wrong killer; a red baseline; the wrong symbols).
 
 Everything else in the gate is as `afe11fca` states: Cronus28 only, the CONTROLLER holds `coord lease Cronus28 bugs` and heartbeats it, R-316's cleanup rules, ids 91700 to 91799, and it commits nothing unless it passes.
+
+### Revision r2 prototype check (written AFTER the r2 pre-commitment commit `afe11fca`)
+
+The prototype is `$S/proto` again: r1's code (`$S/proto-r2.patch`) plus `$S/proto-patch-r2.py`, which adds `uniqueProcedure` to the symbol table, makes `callType` read it (C1), compares variable names with a case-insensitive `sameName` (C2), and deletes `types.ts`'s private procedure walk in favour of the engine's `findEnclosingProcedure` (the Minor). The whole diff is `$S/proto-r3.patch`. The rows committed at `afe11fca` are not edited; the disagreements are recorded here.
+
+**The checker: 31 of 33 pre-committed checks matched** (`$S/logs/check-p3.txt`), totals included: every repro, DC/Cloud (102603 raw, 97144 deployed, r1's 19 and 7 rows exactly), BaseApp scratch (1568, 1540, 31 rows), BusinessFoundation (unchanged), the gate target (version 2: 13, 13, its 5 rows; the version 1 target's 10, 10 matched too before it was replaced), and all C1 and C2 site rows, System Application's 5 included (77291, 75832). Every runner warning (`.err`) is byte-identical to HEAD's.
+
+**The two disagreements, both an existing mutant's key moving by ordinal, and both my error:**
+
+- `o1-overload-split-first`: the plain overload `Foo(T: Text)`'s `empty-block` (L13) gains ordinal 1. The split `Foo` before it now has an `empty-block` too, with the same procedure name and the same AST hash. The AST hash is identifier-blind (R166: a variable becomes a positional id), so `exit(X)` and `exit(T)` hash alike. It is Decision 4's third mechanism, exactly `c3`'s, and the pre-commitment should have listed it; `o1` is a same-named overload after a split member.
+- System Application, `SFTPClient.Codeunit.al` L56: an existing `swap-call-arguments` in an overload of `Initialize` gains ordinal 1, because the new L42 site, in the other `Initialize`, has the same identifier-blind hash. The pre-commitment called the case twin's key move at L56 "an artifact of rewriting source, which a fix that changes no source cannot cause". That was wrong: the twin's other 8 key moves ARE artifacts (a case variant is a different positional id), but L56's comes from the new site itself, and the real fix causes it.
+
+Both corrections go in `$S/expect-r2-final/` as `k` rows; with them, **33 of 33 checks PASS**. No other key moved on any project.
+
+**Twin parity: every pre-committed count matched** (`$S/logs/tp-*.txt`): `q1` 7, `q2` 7, `t5-loss-split` 29, `t5-lit-split` 10, `t5-hang-split` 8, `k1` 15, `k2` 14, `a1` 5, `c1` 8, `c2` 8, `c3` 4, `d1` 5, `d2` 3, `d3` 2, `d4` 3 with its two allowed rows, `e2` 5, `o1` 2, the gate target 11 (version 2; version 1's 8 also matched), DC/Cloud 29, BaseApp 68 against each arm-twin. Every compared mutant has an equal emitted guard branch (mutated text and marker placement), equal grain, gap block, member end and name. Red-checked: a count of 8 where 7 is due FAILS (`COUNT`); `d4` without its allow list FAILS with 2 `NO-TWIN`; a twin whose body differs by one character FAILS with 5 `DIFF` (every branch that holds that line).
+
+**alc, every repro, every subset: 47 of 47 PASS** (25 projects; `n1` excluded, as pre-committed). **Red-checks of C1 and C2**, one line reverted at a time in `types.ts`, then restored (the restored diff is byte-identical to `proto-r3.patch`):
+
+| reverted | repro | checker | alc |
+| --- | --- | --- | --- |
+| C1 (`callType` back to `resolveProcedure`) | `o1-overload-split-first` | FAIL (a new `swap-additive` L19, totals 5, 5) | FAIL, AL0175 |
+| C1 | `o2-overload-plain` | FAIL (the `-` row not seen, totals 5, 5) | FAIL, AL0175 |
+| C2 (the parameter compare back to `===`) | `e1-case-plain` | FAIL (the `-` row not seen, totals 10, 10) | FAIL, AL0133 |
+| C2 | `e2-case-split` | FAIL (a new `swap-call-arguments` L11, totals 10, 10) | FAIL, AL0133 |
+| restored | all four | PASS | PASS |
+
+**The gate checker, red-checked offline** (`$S/gate/redcheck-gate.ts`): for version 2, 24 of 24 cases as wanted (`redcheck-v2.out`).
+
+**The whole suite on the prototype:** 4268 pass, 2 fail, 7 skip; the same two R302-owned pins as in r1, nothing new.
+
+**al-runner, local, serial, 7 projects** (the six of r1 plus the gate target; NOT every repro), coverage on and off, every subset: every session PASS, every baseline green, 0 `error` verdicts; the six repros' counts are r1's exactly. The version 1 gate target's run is what exposed the attribution error (every `Note` mutant `exact`, one covering test); see "the gate, version 2". The version 2 target (`$S/logs/ar-p3g-r302-gate-cov<1|0>.log`), both subsets: 5 killed, 8 survived, 0 no-coverage, and all 13 verdicts equal the version 2 rows; with coverage on every `Pick` and `Note` mutant is `exact` with 2 covering tests and each `Other` mutant `exact` with 1, as pre-committed. al-runner reports no reach, so the `reachedBy` column (the control) is for the live gate alone. `alc` of the version 2 target: PASS under both configurations; the full alc run stays 47 of 47.
+
+**Result against the r2 pre-commitment, in one line:** C1 and C2 matched every site and every total (DC 102603 raw and 97144 deployed, BaseApp 1568 and 1540, System Application 77291 and 75832, BusinessFoundation and the fixtures unchanged); two ordinal renumberings were missed (`o1`, System Application `SFTPClient` L56); the version 1 gate rows were wrong on attribution and were replaced by version 2 before it ran; every twin-parity count matched.
+
+### Revision r2: open questions for the orchestrator
+
+1. **The gate ids** 91700 to 91799 are proposed (R-316 used 91600 to 91699). Confirm.
+2. **The version 2 control** sits on a block inside a split body, because a whole-body block cannot have a covering-but-not-reaching test on fenced coverage (see "the gate, version 2"). The whole-body blocks are proven reached by every covering test (`Pick` L8, `Note` L21). Is that the control you want, or do you want a HUB-path run as well, where R63's object grain would give a whole-body control?
+3. **R324** was filed beyond the ruling's list (C1 is pre-existing in plain procedures). Keep it separate from R302, or fold it in? The plan closes R322 and R324 with Task 1's commit.
+4. **R323 stays open.** The split rule copies the plain procedure's behaviour for named return values; `n1` is its evidence and is excluded from the alc set.
+
+Task count: 8 (Task 0 to Task 7; the gate is Task 5).
