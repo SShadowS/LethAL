@@ -15,6 +15,14 @@ import { join } from "node:path";
  */
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 
+/**
+ * Every test below spawns a real `bun` subprocess through `runCli`, which passes alone in well
+ * under a second but can push past Bun's 5 s default test timeout when something else is loading
+ * the machine (a full `bun test` run, or a live itest at the same time). See HOOK_TIMEOUT_MS in
+ * campaign-subcommands.test.ts (R335) for the measured shape of this failure.
+ */
+const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
 async function runCli(
   args: readonly string[],
   env: Record<string, string> = {},
@@ -29,40 +37,60 @@ async function runCli(
 }
 
 describe("how the CLI renders a refusal", () => {
-  test("a missing config is a named refusal, not a stack trace", async () => {
-    const { code, stderr } = await runCli(["doctor", "--config", "definitely-not-here.json"]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("definitely-not-here.json");
-    // The specific regression: `at loadLethalConfigFile (...)` frames in a user's face.
-    expect(stderr).not.toMatch(/^\s+at /m);
-  });
+  test(
+    "a missing config is a named refusal, not a stack trace",
+    async () => {
+      const { code, stderr } = await runCli(["doctor", "--config", "definitely-not-here.json"]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("definitely-not-here.json");
+      // The specific regression: `at loadLethalConfigFile (...)` frames in a user's face.
+      expect(stderr).not.toMatch(/^\s+at /m);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("a usage mistake is a named refusal too", async () => {
-    const { code, stderr } = await runCli(["run", "--project", "p", "--backend", "bcdev"]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("--tests");
-    expect(stderr).not.toMatch(/^\s+at /m);
-  });
+  test(
+    "a usage mistake is a named refusal too",
+    async () => {
+      const { code, stderr } = await runCli(["run", "--project", "p", "--backend", "bcdev"]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("--tests");
+      expect(stderr).not.toMatch(/^\s+at /m);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("it SAYS where the detail went, rather than just withholding it", async () => {
-    // An unexplained absence of detail is its own problem when someone is filing a bug.
-    const { stderr } = await runCli(["doctor", "--config", "nope.json"]);
-    expect(stderr).toContain("LETHAL_DEBUG=1");
-  });
+  test(
+    "it SAYS where the detail went, rather than just withholding it",
+    async () => {
+      // An unexplained absence of detail is its own problem when someone is filing a bug.
+      const { stderr } = await runCli(["doctor", "--config", "nope.json"]);
+      expect(stderr).toContain("LETHAL_DEBUG=1");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("LETHAL_DEBUG=1 restores the full stack", async () => {
-    const { code, stderr } = await runCli(["doctor", "--config", "nope.json"], {
-      LETHAL_DEBUG: "1",
-    });
-    expect(code).toBe(1);
-    expect(stderr).toMatch(/^\s+at /m);
-  });
+  test(
+    "LETHAL_DEBUG=1 restores the full stack",
+    async () => {
+      const { code, stderr } = await runCli(["doctor", "--config", "nope.json"], {
+        LETHAL_DEBUG: "1",
+      });
+      expect(code).toBe(1);
+      expect(stderr).toMatch(/^\s+at /m);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
-  test("an unknown subcommand still names every valid one", async () => {
-    // The refusal that a first-time typo actually hits; it must keep carrying the list.
-    const { stderr } = await runCli(["explian", "report.json"]);
-    expect(stderr).toContain("expected one of:");
-    expect(stderr).toContain("init");
-    expect(stderr).not.toMatch(/^\s+at /m);
-  });
+  test(
+    "an unknown subcommand still names every valid one",
+    async () => {
+      // The refusal that a first-time typo actually hits; it must keep carrying the list.
+      const { stderr } = await runCli(["explian", "report.json"]);
+      expect(stderr).toContain("expected one of:");
+      expect(stderr).toContain("init");
+      expect(stderr).not.toMatch(/^\s+at /m);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 });

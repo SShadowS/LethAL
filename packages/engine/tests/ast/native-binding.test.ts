@@ -64,20 +64,30 @@ describe("native parser binding", () => {
     }
   });
 
-  it("a compiled binary without its embedded addon names the key it embeds, not the host's", () => {
-    // `bun build --compile` defines __LETHAL_NATIVE_KEY__; defining one with no .node on disk is a
-    // release binary that shipped without its addon.
-    const loader = join(import.meta.dir, "..", "..", "src", "ast", "native-parser.ts");
-    const r = Bun.spawnSync([
-      "bun",
-      "--define",
-      '__LETHAL_NATIVE_KEY__="linux-riscv64"',
-      "-e",
-      `const { loadBindingFor } = require(${JSON.stringify(loader)});
+  // Spawns a real `bun` subprocess, which passes alone in well under a second but can push past
+  // Bun's 5 s default test timeout when something else is loading the machine (a full `bun test`
+  // run, or a live itest at the same time). See HOOK_TIMEOUT_MS in campaign-subcommands.test.ts
+  // (R335) for the measured shape of this failure.
+  const SPAWN_TEST_TIMEOUT_MS = 60_000;
+
+  it(
+    "a compiled binary without its embedded addon names the key it embeds, not the host's",
+    () => {
+      // `bun build --compile` defines __LETHAL_NATIVE_KEY__; defining one with no .node on disk is a
+      // release binary that shipped without its addon.
+      const loader = join(import.meta.dir, "..", "..", "src", "ast", "native-parser.ts");
+      const r = Bun.spawnSync([
+        "bun",
+        "--define",
+        '__LETHAL_NATIVE_KEY__="linux-riscv64"',
+        "-e",
+        `const { loadBindingFor } = require(${JSON.stringify(loader)});
        try { loadBindingFor("win32-x64"); } catch (e) { console.log(e.name, e.platformKey); }`,
-    ]);
-    expect(r.stdout.toString().trim()).toBe("NativeParserMissingError linux-riscv64");
-  });
+      ]);
+      expect(r.stdout.toString().trim()).toBe("NativeParserMissingError linux-riscv64");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
 
   it("parses after init", async () => {
     await initNativeParser();
