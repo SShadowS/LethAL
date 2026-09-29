@@ -444,8 +444,9 @@ describe("sessionFingerprint (R47)", () => {
 
   // R228: the key is CONDITIONAL, so no exclusions adds nothing to the digest. Pinned by value.
   // The value itself moved once, on purpose: R325 put the identity scheme into EVERY digest (it was
-  // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed.
-  const PINNED = "9604b7d7987ab876007d8eb32d8d342afee7a63d40cf06e102d7b0818083b2d5";
+  // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
+  // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2).
+  const PINNED = "4a8c47ac5cc066d0bac1cdb266019d760a52e4debe2afcf465e76d803c8a288a";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1776,8 +1777,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    expect(IDENTITY_SCHEME).toBe(2);
-    expect(report.identityScheme).toBe(2);
+    expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
   test("history: an old-scheme survivor is executed, not skipped as a known survivor", async () => {
@@ -1830,7 +1830,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
         resume: runId,
       }),
     ).rejects.toThrow(
-      new RegExp(`--resume-run ${runId} was keyed under identity scheme 1.*scheme 2.*R325`),
+      new RegExp(
+        `--resume-run ${runId} was keyed under identity scheme 1.*scheme ${IDENTITY_SCHEME}.*R325`,
+      ),
     );
   });
 

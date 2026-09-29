@@ -13,6 +13,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Identity scheme 3** (R323): keys move for procedures with a named return value. Existing marks
+  files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
+  resume from scheme-2 runs are refused by name (R325).
 - **Existing `lethal.equivalent.json` files need `"identityScheme": 2`** (R325). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
