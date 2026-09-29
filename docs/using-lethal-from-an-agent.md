@@ -203,7 +203,7 @@ code.
 
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
-- the report: [../schemas/report-v2.schema.json](../schemas/report-v2.schema.json)
+- the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
 - `lethal explain`: [../schemas/explain-v6.schema.json](../schemas/explain-v6.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
@@ -229,13 +229,18 @@ enforced.
 
 ### `--out report.json`: the record (checked)
 
-`schemaVersion: 2`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
+`schemaVersion: 3`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
 `validity` carries `reliability`, `scoreDescribes` and `caveats`.
 
 #### Report notes (guidance)
 
 The report is the full result: every mutant with its verdict, location, operator, covering tests
 and coverage attribution. This is the artifact to archive.
+
+Mutant codes restart in every batch, so a code alone names a mutant only together with its
+`batchIndex`. The run-level lists therefore name each mutant as `<batchIndex>/<mutantCode>`, the
+same id `lethal verify --survivors` takes, and a reader-mark entry carries `batchIndex` beside its
+code.
 
 **Read `validity` before quoting `mutationScore`.** `validity.reliability`,
 `validity.scoreDescribes` and `validity.caveats` say what the number covers. A score from a
