@@ -15,7 +15,7 @@ Open work, measured-but-unclosed correctness risks, and known product gaps live 
 - Check it before starting new work: what you are about to build may already be filed, or blocked on something that is.
 
 ## Packages (workspaces under `packages/`)
-- `engine` — AST (tree-sitter-al), `MutationSpec`, semantic layer, `astSubtreeHash`.
+- `engine` — AST (tree-sitter-al, parsed by the native addon in `packages/engine/native`; the WASM parser is kept only as a reference for comparisons), `MutationSpec`, semantic layer, `astSubtreeHash`.
 - `operator-sdk` — operator interfaces.
 - `builtin-tier1` — Tier-1 mutation operators.
 - `schemata` — compiler: instrument a project with all mutations behind runtime guards, one artifact (`selector.ts`, `project.ts`, `compile.ts`).
@@ -24,6 +24,7 @@ Open work, measured-but-unclosed correctness risks, and known product gaps live 
 AL extension: `extensions/lethal-control` (the `LethAL Control` BC extension, runtime 16).
 
 ## Build / test loop (order matters — the dist trap bites every session)
+0. `LLVM_BIN="C:/Program Files/LLVM/bin" bun scripts/build-native-parser.ts` — on a fresh checkout or worktree, and after any change under `packages/engine/native/` (needs Rust 1.96 and clang/LLVM 23.1.2, installed on this machine; elsewhere `bash scripts/install-llvm.sh <platform-key>`). The unit tests parse through the addon, and the loader refuses a missing or stale one (`NativeParserMissingError`, `NativeParserStaleError`); there is no WASM fallback. The built `.node` is gitignored.
 1. `bun run typecheck` — `tsc --build --force`. SEPARATE from tests; run explicitly.
 2. `rm -rf packages/*/dist` — **AFTER typecheck, BEFORE any `bun test`**. `tsc --build` regenerates `packages/*/dist`, whose stale compiled `*.test.js` get picked up by `bun test` and cause ~21 phantom failures. (A PostToolUse hook auto-cleans dist after a typecheck — see `.claude/settings.json`.)
 3. `bun test` (or `bun test packages/<pkg>`) — full unit suite; does NOT type-check. Run it from the repo root: the root `bunfig.toml` preloads `scripts/test-preload.ts`, which hides the real home directory from every unit test (R264), and `real-home-guard.test.ts` fails if it did not load.
