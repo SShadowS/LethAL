@@ -106,3 +106,11 @@ the builder); confirm each test goes red; restore; report both runs.
 3. **Live** on Cronus28: regenerate the two sample reports; run `itest:tables` and the harden and
    verify-agreement gates whose assertions changed; per-mutant equality.
 4. **Roadmap**: R231 `done (<commit>)`, `bun scripts/roadmap-index.ts`.
+
+## Approved 2026-09-30 (54c9683f), with rulings
+
+1. `lethal explain` accepts report versions 2 and 3, because it reads none of the changed lists. A test pins it: a v2 report explains exactly as before, and an unknown or older version is still refused by name. A later change that makes explain read one of these lists must revisit this.
+2. Both sample reports (gift-card rehearsal, credit-limit demo) are regenerated LIVE on Cronus28 under a lease, never rewritten offline, in the same session as `itest:tables`, harden and verify-agreement. The only allowed differences in a regenerated report: the list shape, `schemaVersion`, and run-specific fields (timestamps, ids, durations). Any verdict, count or `killingTest` difference is a STOP, reported and not committed. Check that gift-card and credit-limit are published on Cronus28 first; if one is not, ask before publishing anything.
+3. `survivorsByProcedure` stays bare-coded. Its doc comment says why that is safe (batches split at file level), and a test fails if a procedure's mutants ever span two batches.
+4. Both live defects are fixed here, each with its own failing test first: the by-code joins in `mutation-elements.ts` and `verify-agreement.ts`, and the `unplaceableMutants` Set collapse.
+5. DO rung2 stays a frozen v2 report; the v2 schema stays frozen, and `schemas.test.ts` keeps validating it against v2.
