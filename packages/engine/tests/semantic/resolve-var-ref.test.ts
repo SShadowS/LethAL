@@ -231,3 +231,30 @@ describe("resolveVarRef: a swallowed split member (R327)", () => {
     expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
   });
 });
+
+// R330: a local declared in a `#if` var block is not indexed; it resolves to nothing, never to a
+// global of the same name.
+describe("resolveVarRef: a #if var-block local (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("resolves to null, not to the differently-cased global", () => {
+    const { root, ctx } = load(`codeunit 50204 "R"
+{
+    var
+        AMT: Integer;
+
+    procedure P()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Amt := 'x';
+    end;
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+});

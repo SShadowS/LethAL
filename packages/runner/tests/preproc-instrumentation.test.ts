@@ -2943,3 +2943,99 @@ describe("R302: split-member sites through the real pipeline", () => {
     expect(rows(await one(T3_E3))).toContain("L8 lethal.swap-additive");
   });
 });
+
+// R330, run 002: a name declared in a `#if` region the symbol table does not index is UNKNOWN.
+// Sources copied byte for byte from the scratch repros pre-committed in the plan's run 002 addendum.
+// Before the fix each emitted a `swap-additive` in `Bar` that fails `alc` with AL0175 (i1 under
+// [X] and [X,Y]; i2 under []; p1, master's older plain form, under [X]).
+const R330_I1 = `codeunit 50100 "Repro R330A"
+{
+#if Y
+    procedure Foo(A: Integer): Integer
+#else
+    procedure Foo(A: Integer): Integer
+#endif
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+
+    procedure Bar(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+#endif
+}
+`;
+const R330_I2 = `codeunit 50100 "Repro R330B"
+{
+    var
+        AMT: Integer;
+
+    procedure Bar()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Message('%1', Amt + Amt);
+    end;
+}
+`;
+const R330_P1 = `codeunit 50100 "Repro R330P"
+{
+    procedure Foo(A: Integer): Integer
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+
+    procedure Bar(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+#endif
+}
+`;
+
+describe("R330: no typed site from a name declared in an unindexed #if region", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (src: string) =>
+    (await instrument({ "Repro.Codeunit.al": src })).manifest.mutants
+      .map((x) => `${x.procedureName} ${x.operatorName}`)
+      .sort();
+
+  test("i1: a split member beside a #if-wrapped overload gives Bar no swap-additive", async () => {
+    expect(await ops(R330_I1)).toEqual([
+      "Bar lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.return-value",
+    ]);
+  });
+
+  test("i2: a #if var-block local hides the differently-cased global", async () => {
+    expect(await ops(R330_I2)).toEqual(["Bar lethal.empty-block", "Bar lethal.void-method-call"]);
+  });
+
+  test("p1: master's older plain form gives Bar no swap-additive either", async () => {
+    expect(await ops(R330_P1)).toEqual([
+      "Bar lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.empty-block",
+      "Foo lethal.return-value",
+    ]);
+  });
+});

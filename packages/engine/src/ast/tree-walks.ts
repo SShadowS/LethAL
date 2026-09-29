@@ -311,6 +311,28 @@ export function swallowedSplitMembers(objectNode: ALSyntaxNode): readonly ALSynt
 }
 
 /**
+ * R330: every procedure-like declaration of an object, wherever the grammar put it: a direct member,
+ * one inside a `#if` region (`preproc_conditional`), or one swallowed by the global `var` section
+ * (R327). The symbol table indexes only the direct ones; this list is what "does the object declare
+ * a procedure of this name" must be answered against, so an unindexed declaration still counts.
+ * Walks down to each procedure-like node and not into it.
+ */
+export function allProcedureLikes(objectNode: ALSyntaxNode): readonly ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (isProcedureLike(c)) {
+        if (c.children.some((x) => x.fieldName === "name")) out.push(c);
+      } else {
+        walk(c);
+      }
+    }
+  };
+  walk(objectNode);
+  return out;
+}
+
+/**
  * R298: the nodes whose children are AL object declarations. A `#if`-wrapped object sits under a
  * `preproc_conditional_object` (one declaration per arm), never directly under `source_file`, so
  * a walk that stops at `source_file`'s children misses it or names the wrapper as the object.

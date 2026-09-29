@@ -25,11 +25,11 @@ import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
 import {
+  allProcedureLikes,
   declarationMembers,
   memberArms,
   procedureLikeNameNode,
   procedureLikeReturnType,
-  swallowedSplitMembers,
   varDeclarations,
 } from "../ast/tree-walks";
 
@@ -151,8 +151,9 @@ export interface SymbolTable {
    */
   resolveProcedureAt(ownerName: string, declStartIndex: number): ProcedureSymbol | null;
   /** R302/R324: the procedure of that name when the owner declares EXACTLY ONE (names compared as
-   *  AL compares them; a split member counts under every arm's name, including one the grammar
-   *  swallowed into the global var section, R327), else null. Never a renamed split member
+   *  AL compares them; a split member counts under every arm's name; a declaration the table does
+   *  not index, swallowed into the global var section (R327) or inside a `#if` region (R330),
+   *  still counts), else null. Never a renamed split member
    *  (Decision 2). */
   uniqueProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
@@ -385,7 +386,12 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
       for (const nm of names) byName.set(nm, [...(byName.get(nm) ?? []), p]);
     };
     for (const p of procs) count(p.node, p);
-    for (const swallowed of swallowedSplitMembers(objectNode)) count(swallowed, null);
+    // R327, R330: a declaration the table did not index (swallowed by the global var section, or
+    // inside a `#if` region) still counts under its names, as `null`, so no other procedure of the
+    // same name is "unique" and a call to that name gets no type.
+    const indexed = new Set(procs.map((p) => p.node.startIndex));
+    for (const other of allProcedureLikes(objectNode))
+      if (!indexed.has(other.startIndex)) count(other, null);
     procedureNames.set(ownerName, byName);
   };
 
@@ -562,6 +568,7 @@ function parseProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol | nu
 
   const returnTypeNode = node.childForFieldName("return_type");
   const returnType = returnTypeNode === null ? null : returnTypeNode.text;
+  const ambiguous = conditionallyDeclared(node);
 
   return {
     name: stripQuotes(nameNode.text),
@@ -570,7 +577,35 @@ function parseProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol | nu
     locals,
     returnType,
     node,
+    ...(ambiguous.length > 0 ? { ambiguous } : {}),
   };
+}
+
+/**
+ * R330: the lowercase names a member's HEADER declares inside a `#if` region of its own (a
+ * `preproc_conditional_var_block`, R303's shape, or a conditional parameter). Neither parser
+ * indexes them as locals or parameters, and which of them exists depends on symbols the engine
+ * never sees, so each such name is unknown: it resolves to nothing and hides a global of the same
+ * name, exactly as an ambiguous split-member name does. The body is not read.
+ */
+function conditionallyDeclared(member: ALSyntaxNode): string[] {
+  const out = new Set<string>();
+  const walk = (n: ALSyntaxNode, inPreproc: boolean): void => {
+    for (const c of n.namedChildren) {
+      if (c.kind === ALNodeKind.block) continue;
+      const under = inPreproc || c.rawKind.startsWith("preproc_");
+      if (
+        under &&
+        (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter)
+      ) {
+        const name = c.childForFieldName("name")?.text ?? "";
+        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+      }
+      walk(c, under);
+    }
+  };
+  walk(member, false);
+  return [...out];
 }
 
 /**
@@ -630,6 +665,7 @@ function parseSplitProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol
     else if (e0.param) parameters.push(e0.sym);
     else locals.push(e0.sym);
   }
+  for (const k of conditionallyDeclared(node)) if (!ambiguous.includes(k)) ambiguous.push(k);
   const inArm = new Set(arms.flat().map((c) => c.startIndex));
   for (const c of node.namedChildren)
     if (c.kind === ALNodeKind.var_section && !inArm.has(c.startIndex))

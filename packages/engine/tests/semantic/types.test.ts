@@ -524,3 +524,62 @@ describe("buildTypeTable: a split member swallowed by the global var section (R3
     expect(typeAt(src, "Foo", true)).toBeNull();
   });
 });
+
+// R330: a declaration inside a `#if` region that the symbol table does not index still makes its
+// name UNKNOWN. A call to a name an unindexed `#if`-wrapped procedure also declares is untyped, and
+// a local declared in a `#if` var block hides a global even when only the casing differs.
+describe("buildTypeTable: names declared in an unindexed #if region are unknown (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const WRAPPED = (first: string) => `codeunit 50100 "Repro R330"
+{
+${first}
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+
+    procedure Bar(): Text
+    begin
+        exit(Foo('x') + Foo('y'));
+    end;
+#endif
+}
+`;
+
+  it("I1: a split member is not unique beside a #if-wrapped overload", () => {
+    const src = WRAPPED(
+      "#if Y\n    procedure Foo(A: Integer): Integer\n#else\n    procedure Foo(A: Integer): Integer\n#endif",
+    );
+    expect(typeAt(src, "Foo", true)).toBeNull();
+  });
+
+  it("the older plain form: a direct procedure is not unique beside a #if-wrapped overload", () => {
+    expect(typeAt(WRAPPED("    procedure Foo(A: Integer): Integer"), "Foo", true)).toBeNull();
+  });
+
+  it("I2: a #if var-block local hides a global whose name differs only in case", () => {
+    const src = `codeunit 50100 "Repro R330B"
+{
+    procedure Bar()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        AMT: Integer;
+}
+`;
+    expect(typeAt(src, "Amt")).toBeNull();
+  });
+});

@@ -461,3 +461,57 @@ describe("buildSymbolTable: a renamed split member is never a call's target (R30
     expect(t.uniqueProcedure(key, "AElse")).toBeNull();
   });
 });
+
+// R330: every procedure-like declaration counts by name, wherever the grammar put it; a local in a
+// `#if` var block is ambiguous.
+describe("buildSymbolTable: #if-wrapped declarations (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+
+  it("uniqueProcedure is null for a name a #if-wrapped procedure also declares", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+    procedure Foo(A: Integer): Integer
+    begin
+        exit(A);
+    end;
+
+#if X
+    procedure Foo(A: Text): Text
+    begin
+        exit(A);
+    end;
+#endif
+
+    procedure Other(): Integer
+    begin
+        exit(1);
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    expect(t.uniqueProcedure(KEY, "Foo")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "Other")?.name).toBe("Other");
+  });
+
+  it("a local declared in a #if var block is ambiguous; a plain local is not", () => {
+    const src = `codeunit 50100 "Repro S"
+{
+    procedure P()
+    var
+        Kept: Integer;
+#if not CLEAN27
+        Amt: Text;
+#endif
+    begin
+    end;
+}
+`;
+    const t = buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+    const p = t.resolveProcedure(KEY, "P");
+    expect(p?.ambiguous).toEqual(["amt"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Kept"]);
+  });
+});

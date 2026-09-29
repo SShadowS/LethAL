@@ -29,6 +29,7 @@ export {
   inMemberBody,
   memberArms,
   swallowedSplitMembers,
+  allProcedureLikes,
   procedureLikeReturnType,
   procedureLikeNameNode,
   declarationMembers,
