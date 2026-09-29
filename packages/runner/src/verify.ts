@@ -28,7 +28,7 @@ import {
   qualifiedTestName,
   runNamedMutants,
 } from "./orchestrator";
-import type { SessionOutcome } from "./report";
+import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
 import {
@@ -387,7 +387,7 @@ export async function expandGapIds(
       ).length;
       const noCov =
         t.noCoverage > 0
-          ? `; its no-coverage mutants (${t.noCoverageMembers.map((c) => `${rec.batchIndex}/${c}`).join(", ")}) are in lethal explain's noCoverageBlocks and can be named one by one`
+          ? `; its no-coverage mutants (${t.noCoverageMembers.map((c) => mutantRef(rec.batchIndex, c)).join(", ")}) are in lethal explain's noCoverageBlocks and can be named one by one`
           : "";
       return [
         `${g} (gap-has-no-survivor: survived 0, killed ${t.killed}, no-coverage ${t.noCoverage}, other ${t.other}${unmeasured > 0 ? `, not measured ${unmeasured}` : ""}${noCov})`,
@@ -405,7 +405,7 @@ export async function expandGapIds(
     );
   }
 
-  const direct = new Set(req.ids.map((i) => `${i.batchIndex}/${i.mutantCode}`));
+  const direct = new Set(req.ids.map((i) => mutantRef(i.batchIndex, i.mutantCode)));
   const expanded = req.gapIds.flatMap((g) =>
     (tallies.get(g)?.members ?? []).map((mutantCode) => ({
       gapId: g,
@@ -413,7 +413,7 @@ export async function expandGapIds(
       mutantCode,
     })),
   );
-  const twice = expanded.filter((e) => direct.has(`${e.batchIndex}/${e.mutantCode}`));
+  const twice = expanded.filter((e) => direct.has(mutantRef(e.batchIndex, e.mutantCode)));
   if (twice.length > 0) {
     throw new VerifyError(
       "malformed-request",
@@ -451,7 +451,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
   const offending: Array<{ id: string; reason: VerifyRefusal; why: string }> = [];
   const targets: Array<VerifySource["targets"][number]> = [];
   for (const { batchIndex, mutantCode } of req.ids) {
-    const id = `${batchIndex}/${mutantCode}`;
+    const id = mutantRef(batchIndex, mutantCode);
     const refuse = (reason: VerifyRefusal, why: string) => {
       offending.push({ id, reason, why });
     };
@@ -730,7 +730,7 @@ export async function planVerify(a: {
     if (methods.length === 0) {
       // Every test that reaches it was refused: a structured result, not an empty refusal.
       if (notRunHere.length > 0) allRefused.add(t.mutantCode);
-      else noTests.push(`${t.batchIndex}/${t.mutantCode}`);
+      else noTests.push(mutantRef(t.batchIndex, t.mutantCode));
       continue;
     }
     requests.push({ mutantId: t.mutantCode, methods });
@@ -1144,7 +1144,7 @@ export async function runVerify(
       const entry = plan.entries.get(t.mutantCode);
       if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} has no entry`);
       const base = {
-        id: `${t.batchIndex}/${t.mutantCode}`,
+        id: mutantRef(t.batchIndex, t.mutantCode),
         batchIndex: t.batchIndex,
         mutantCode: t.mutantCode,
         file: entry.file,

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutantOutcome, SessionReport } from "./report";
+import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
 
 /**
  * R178: project a `SessionReport` into `mutation-testing-report-schema`, the interchange format the
@@ -124,10 +124,14 @@ export function describe(
   ctx: {
     readonly unplaceable: ReadonlySet<string>;
     readonly likelyEquivalent: ReadonlySet<string>;
+    /** How the two sets name a mutant: R231's `<batchIndex>/<mutantCode>` on a v3 report. Absent:
+     *  the bare code, as an archived v2 report wrote it. */
+    readonly refOf?: (m: MutantOutcome) => string;
   },
 ): string | undefined {
   const parts: string[] = [];
-  if (ctx.unplaceable.has(m.mutantCode)) {
+  const ref = ctx.refOf?.(m) ?? m.mutantCode;
+  if (ctx.unplaceable.has(ref)) {
     parts.push(
       "ATTRIBUTION COULD NOT PLACE THIS (R175). It is shown as NoCoverage because the schema has no " +
         "other status, but that is NOT a statement that your tests miss this code: coverage saw its " +
@@ -135,7 +139,7 @@ export function describe(
         'coverageMode "none" to score it.',
     );
   }
-  if (ctx.likelyEquivalent.has(m.mutantCode)) {
+  if (ctx.likelyEquivalent.has(ref)) {
     parts.push(
       "LIKELY EQUIVALENT (R172). This operator rewrites a value or bounds a loop, so where nothing " +
         "downstream depends on the change the mutant cannot be killed by any test. Read it as a lead " +
@@ -196,6 +200,12 @@ export async function toMutationElements(
 ): Promise<ElementsProjection> {
   const read = opts.readSource ?? ((p: string) => readFile(p, "utf8"));
   const unplaceable = new Set(report.unplaceableMutants ?? []);
+  // R231: v3 lists name a mutant as `<batchIndex>/<mutantCode>`, because ids restart per batch.
+  // An archived v2 report holds bare codes, joined the old way (correct only on one batch).
+  const refOf =
+    report.schemaVersion >= 3
+      ? (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode)
+      : (m: MutantOutcome) => m.mutantCode;
   const likelyEquivalent = new Set(
     (report.likelyEquivalentSurvivors?.byRisk ?? []).flatMap((g) => [...g.mutants]),
   );
@@ -225,7 +235,7 @@ export async function toMutationElements(
       mutants: mutants.map((m) => {
         const status = STATUS[m.verdict];
         if (status === undefined) unmapped.add(m.verdict);
-        const description = describe(m, { unplaceable, likelyEquivalent });
+        const description = describe(m, { unplaceable, likelyEquivalent, refOf });
         return {
           id: m.mutantCode,
           // Short name: the renderers group and filter by this, and `lethal.` on every row is noise.

@@ -290,3 +290,48 @@ describe("R184: refusals are carried as Ignored rather than dropped silently", (
     expect(lossesFor(report([mutant()])).some((l) => l.includes("refused site"))).toBe(false);
   });
 });
+
+describe("R231: run-level lists are joined by batch AND code", () => {
+  // Mutant ids restart per batch. Batch 0's M0001 (file A) survived under an operator with no
+  // risk; batch 1's M0001 (file B) survived under a `value-rewrite` operator. A join by bare code
+  // would call file A's mutant likely equivalent too.
+  const A = mutant({ batchIndex: 0, file: "src/A.Codeunit.al" } as never);
+  const B = mutant({
+    batchIndex: 1,
+    file: "src/B.Codeunit.al",
+    operatorName: "lethal.remove-assignment",
+  } as never);
+  const r = report([A, B], {
+    schemaVersion: 3,
+    unplaceableMutants: [],
+    likelyEquivalentSurvivors: {
+      count: 1,
+      byRisk: [{ risk: "value-rewrite", mutants: ["1/M0001"], meaning: "" }],
+    },
+  } as never);
+  const describedIn = async (file: string) => {
+    const { report: out } = await toMutationElements(r, OPTS);
+    const f = out.files[file] as { mutants: { description?: string }[] } | undefined;
+    return f?.mutants[0]?.description ?? "";
+  };
+
+  test("only batch 1's M0001 is described as likely equivalent", async () => {
+    expect(await describedIn("src/B.Codeunit.al")).toMatch(/LIKELY EQUIVALENT/);
+    expect(await describedIn("src/A.Codeunit.al")).not.toMatch(/LIKELY EQUIVALENT/);
+  });
+
+  test("an unplaceable token names only its own batch's mutant", async () => {
+    const both = [
+      mutant({ batchIndex: 0, file: "src/A.Codeunit.al", verdict: "no-coverage" } as never),
+      mutant({ batchIndex: 1, file: "src/B.Codeunit.al", verdict: "no-coverage" } as never),
+    ];
+    const { report: out } = await toMutationElements(
+      report(both, { schemaVersion: 3, unplaceableMutants: ["1/M0001"] } as never),
+      OPTS,
+    );
+    const d = (file: string) =>
+      (out.files[file] as { mutants: { description?: string }[] }).mutants[0]?.description ?? "";
+    expect(d("src/B.Codeunit.al")).toMatch(/R175/);
+    expect(d("src/A.Codeunit.al")).not.toMatch(/R175/);
+  });
+});

@@ -612,14 +612,15 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     test("run-level lists are unchanged by C02-01", () => {
       // Both objects are LITERALS captured from `buildReport` at fd72825, before C02-01 Task 2
       // touched report.ts. Never derive them from the new rows: that would compare the change
-      // with itself.
+      // with itself. R231 (v3) changed exactly the list shape: each code became its
+      // `<batchIndex>/<mutantCode>` id and each mark entry gained `batchIndex`.
       const report = buildReport({ ...STATICS, equivalenceMarks: MARKS }, TWO_BATCH_EVENTS);
       expect(report.likelyEquivalentSurvivors).toEqual({
         count: 2,
         byRisk: [
           {
             risk: "value-rewrite",
-            mutants: ["M0001", "M0002"],
+            mutants: ["0/M0001", "1/M0002"],
             meaning:
               "This operator rewrites a written or compared VALUE. Where nothing downstream reads that value, the mutant is equivalent and no source-derived layer can see it without dataflow. Read these survivors as leads only after checking that something actually depends on the value.",
           },
@@ -628,11 +629,13 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       expect(report.readerMarkedEquivalent).toEqual({
         matched: [
           {
+            batchIndex: 1,
             mutantCode: "M0001",
             key: "hash-b1|Sales Helper|ComputeTotal|lethal.negate-conditional|1",
             reason: "R-b1",
           },
           {
+            batchIndex: 1,
             mutantCode: "M0002",
             // R229 changed this one literal: before it the trigger's member was blank.
             key: "hash-trg|Sales Helper|OnInsert|lethal.remove-assignment|1",
@@ -642,6 +645,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         stale: ["hash-gone|Sales Helper|ComputeTotal|lethal.remove-assignment|1"],
         contradicted: [
           {
+            batchIndex: 0,
             mutantCode: "M0003",
             key: "hash-killed|Sales Helper|ComputeTotal|lethal.remove-assignment|1",
             reason: "R-killed",
@@ -656,11 +660,12 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       const rowMarked = report.mutants
         .filter((m) => m.readerMark !== undefined)
         .map((m) => ({
+          batchIndex: m.batchIndex,
           mutantCode: m.mutantCode,
           key: m.readerMark?.key,
           reason: m.readerMark?.reason,
         }))
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+        .sort((a, b) => a.batchIndex - b.batchIndex || a.mutantCode.localeCompare(b.mutantCode));
       const matched = report.readerMarkedEquivalent?.matched ?? [];
       // Non-empty on both sides, so an empty-vs-empty "agreement" cannot pass.
       expect(matched.length).toBe(2);
@@ -708,6 +713,82 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         expect(survivorOf(report).readerMark).toEqual({ key: KEY_SHARED, reason: "R-shared" });
         expect(report.mutants.filter((m) => m.readerMark !== undefined)).toHaveLength(1);
       });
+    });
+
+    // R231: two batches both hold an M0001 and an M0002. Only batch 1's pair belongs on the
+    // run-level lists, and every list entry must name exactly one row, and it must be batch 1's.
+    test("every run-level list entry resolves to exactly one row, the batch-1 row (R231)", () => {
+      const SURV_1 = mutant("M0001", { astHash: "hash-s1" }); // remove-assignment: value-rewrite
+      const KILL_1 = mutant("M0002", {
+        astHash: "hash-k1",
+        platformKillMechanism: "write-txn-codeunit-run",
+      });
+      const KEY_S1 = serializeKey(identityKeyOf(SURV_1));
+      const KEY_K1 = serializeKey(identityKeyOf(KILL_1));
+      const report = buildReport(
+        {
+          ...STATICS,
+          equivalenceMarks: [
+            { key: KEY_S1, reason: "R-s1", identityScheme: IDENTITY_SCHEME },
+            { key: KEY_K1, reason: "R-k1", identityScheme: IDENTITY_SCHEME },
+          ],
+        },
+        seq([
+          setGenerated(4),
+          { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+          scored(
+            mutant("M0001", { astHash: "hash-s0", operatorName: "lethal.negate-conditional" }),
+            0,
+            "survived",
+          ),
+          {
+            ...scored(mutant("M0002", { astHash: "hash-k0" }), 0, "killed"),
+            killingTestFailure: "Assert.AreEqual failed. Expected:<1> Actual:<0>",
+          } as RunEventInput,
+          { type: "baseline-batch-finished", batchIndex: 1, verdicts: [] },
+          scored(SURV_1, 1, "survived"),
+          {
+            ...scored(KILL_1, 1, "killed"),
+            killingTestFailure: "The transaction was aborted.",
+          } as RunEventInput,
+          { type: "session-finished", elapsedMs: 2_000 },
+        ]),
+      );
+      const rowsFor = (ref: string) => {
+        const [b, code] = ref.split("/");
+        return report.mutants.filter((m) => `${m.batchIndex}` === b && m.mutantCode === code);
+      };
+      const lists: Record<string, readonly string[]> = {
+        platformArtifactKills: (report.platformArtifactKills?.byMechanism ?? []).flatMap((g) => [
+          ...g.mutants,
+        ]),
+        likelyEquivalentSurvivors: (report.likelyEquivalentSurvivors?.byRisk ?? []).flatMap((g) => [
+          ...g.mutants,
+        ]),
+        flaggedMutants: report.assertionScreen?.flaggedMutants ?? [],
+        matched: (report.readerMarkedEquivalent?.matched ?? []).map(
+          (m) => `${m.batchIndex}/${m.mutantCode}`,
+        ),
+        contradicted: (report.readerMarkedEquivalent?.contradicted ?? []).map(
+          (m) => `${m.batchIndex}/${m.mutantCode}`,
+        ),
+      };
+      expect(lists).toEqual({
+        platformArtifactKills: ["1/M0002"],
+        likelyEquivalentSurvivors: ["1/M0001"],
+        flaggedMutants: ["1/M0002"],
+        matched: ["1/M0001"],
+        contradicted: ["1/M0002"],
+      });
+      for (const ref of Object.values(lists).flat()) {
+        const rows = rowsFor(ref);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.batchIndex).toBe(1);
+      }
+      // The banner names the same qualified ids, so a reader can act on a printed line.
+      const banner = renderConsole(report);
+      expect(banner).toContain("  1/M0002 is killed");
+      expect(banner).toContain("  1/M0001: R-s1");
     });
   });
 

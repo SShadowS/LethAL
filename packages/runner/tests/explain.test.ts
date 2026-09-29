@@ -332,7 +332,7 @@ describe("explain — the plan's own four tests", () => {
   test("the header records BOTH schema versions", () => {
     const out = explain(reportFixture());
     expect(out.explainSchemaVersion).toBe(EXPLAIN_SCHEMA_VERSION);
-    expect(out.derivedFromReportSchemaVersion).toBe(2);
+    expect(out.derivedFromReportSchemaVersion).toBe(3);
     expect(out.derivedFromReportSchemaVersion).toBe(REPORT_SCHEMA_VERSION);
   });
 
@@ -1045,10 +1045,10 @@ describe("explain — the admissibility rule, made executable", () => {
       mutants: [row],
       likelyEquivalentSurvivors: {
         count: 1,
-        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+        byRisk: [{ risk: "value-rewrite", mutants: ["0/M0001"], meaning: "m" }],
       },
       readerMarkedEquivalent: {
-        matched: [{ mutantCode: "M0001", key: "K", reason: "R" }],
+        matched: [{ batchIndex: 0, mutantCode: "M0001", key: "K", reason: "R" }],
         stale: [],
         contradicted: [],
       },
@@ -2095,6 +2095,24 @@ describe("assertExplainableReport — a foreign report is refused, never silentl
     expect(() => explain(bad)).toThrow(MalformedReportError);
     expect(() => explain(bad)).toThrow(/\b1\b/);
     expect(() => explain(bad)).toThrow(new RegExp(`\\b${REPORT_SCHEMA_VERSION}\\b`));
+  });
+
+  // R231 ruling 1: explain reads none of the lists v3 changed, so it accepts v2 and v3. A later
+  // change that makes explain read one of those lists must revisit this.
+  test("R231: a v2 report explains exactly as a v3 one, and other versions are still refused", () => {
+    const v2 = explain(reportFixture({ schemaVersion: 2 }));
+    const v3 = explain(reportFixture({ schemaVersion: 3 }));
+    expect(v2.derivedFromReportSchemaVersion).toBe(2);
+    expect(v3.derivedFromReportSchemaVersion).toBe(3);
+    expect({ ...v2, derivedFromReportSchemaVersion: 0 }).toEqual({
+      ...v3,
+      derivedFromReportSchemaVersion: 0,
+    });
+    for (const v of [1, 4, "3", undefined]) {
+      const bad = reportFixture({ schemaVersion: v as number });
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/schemaVersion is/);
+    }
   });
 
   test("non-report JSON is refused rather than projected into an empty answer", () => {

@@ -126,7 +126,7 @@ describe("SessionReport.assertionScreen (R121)", () => {
     expect(r.assertionScreen?.kills).toBe(2);
     expect(r.assertionScreen?.killsWithText).toBe(2);
     expect(r.assertionScreen?.flagged).toBe(1);
-    expect(r.assertionScreen?.flaggedMutants).toEqual(["M0001"]);
+    expect(r.assertionScreen?.flaggedMutants).toEqual(["0/M0001"]);
     expect(r.assertionScreen?.discrimination).toBe("partial");
     expect(r.validity.caveats).toContain("kills-without-assertion");
   });
@@ -183,7 +183,7 @@ describe("SessionReport.assertionScreen (R121)", () => {
     ]);
     expect(r.assertionScreen?.flagged).toBe(2);
     expect(r.assertionScreen?.runnerRefusals).toBe(1);
-    expect(r.assertionScreen?.runnerRefusalMutants).toEqual(["M0001"]);
+    expect(r.assertionScreen?.runnerRefusalMutants).toEqual(["0/M0001"]);
   });
 
   test("does not move a verdict, a count, or the score", () => {

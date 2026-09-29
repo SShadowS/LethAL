@@ -182,7 +182,35 @@ export interface DeclarativeSiteFile {
  * as having two shapes, the schema describes the one this build writes, and the rule applies from
  * here.
  */
-export const REPORT_SCHEMA_VERSION = 2;
+export const REPORT_SCHEMA_VERSION = 3;
+
+/**
+ * R231, and why the version above is 3. Mutant ids restart at `M0001` in every batch
+ * (`assignMutantIds`), so on a multi-batch run a bare `mutantCode` does not name one mutant. v2's
+ * run-level lists (`platformArtifactKills`, `assertionScreen`, `unplaceableMutants`,
+ * `likelyEquivalentSurvivors`) held bare codes, so a reader could join one batch's fact to another
+ * batch's row. v3 writes each entry as this token, and the `readerMarkedEquivalent` entries carry
+ * `batchIndex` beside `mutantCode`. Every list element changed MEANING, so the version bumped.
+ *
+ * It is the exact id `lethal verify --survivors` parses, so a list entry can be pasted into verify.
+ * `survivorsByProcedure[].survivorCodes` is the one list left bare: see `SurvivorGroup`.
+ */
+export function mutantRef(batchIndex: number, mutantCode: string): string {
+  return `${batchIndex}/${mutantCode}`;
+}
+
+/** R231: a run-level list's entries, as `mutantRef` ids sorted by batch then code. */
+function refsOf(rows: readonly MutantOutcome[]): string[] {
+  return [...rows].sort(byBatchThenCode).map((m) => mutantRef(m.batchIndex, m.mutantCode));
+}
+
+/** R231: the order every batch-qualified list is written in, batch first, then code. */
+function byBatchThenCode(
+  a: { readonly batchIndex: number; readonly mutantCode: string },
+  b: { readonly batchIndex: number; readonly mutantCode: string },
+): number {
+  return a.batchIndex - b.batchIndex || a.mutantCode.localeCompare(b.mutantCode);
+}
 
 /**
  * The closed set of reasons `buildReport` can attach to a run — see the 11 `caveats.push(...)`
@@ -845,7 +873,12 @@ export interface SurvivorGroup {
   readonly survived: number;
   readonly noCoverage: number;
   readonly killed: number;
-  /** `mutantCode`s of the survivors here — references into `mutants[]`, not copies. */
+  /**
+   * `mutantCode`s of the survivors here: references into `mutants[]`, not copies. Deliberately
+   * BARE, unlike the R231 lists: a procedure lives in one file and `planArtifacts` puts each file
+   * whole into ONE batch, so this group's `file` already names its batch and the codes cannot
+   * collide. `batch-budget.test.ts` fails if a file's specs ever span two batches.
+   */
   readonly survivorCodes: readonly string[];
 }
 
@@ -1094,7 +1127,8 @@ export interface SessionReport {
     readonly killedCount: number;
     readonly byMechanism: ReadonlyArray<{
       readonly mechanism: string;
-      /** `mutantCode`s, sorted — a stable list a gate can assert on. */
+      /** R231 `<batchIndex>/<mutantCode>` ids (`mutantRef`), sorted by batch then code: a
+       *  stable list a gate can assert on. */
       readonly mutants: readonly string[];
       /** What this mechanism IS, from `PLATFORM_KILL_MECHANISM_EXPLANATIONS`, or a bare marker when
        *  the run's manifest carried a tag this build has no explanation for (an older/newer engine
@@ -1135,7 +1169,7 @@ export interface SessionReport {
     readonly killsWithoutText: number;
     /** Kills whose failure text carries no `Assert.` prefix. */
     readonly flagged: number;
-    /** `mutantCode`s of those, sorted. */
+    /** R231 `<batchIndex>/<mutantCode>` ids of those, sorted by batch then code. */
     readonly flaggedMutants: readonly string[];
     readonly discrimination: AssertionScreenDiscrimination;
     /** What `discrimination` means here, so a reader who has only this block still knows. */
@@ -1148,6 +1182,7 @@ export interface SessionReport {
      * not the answer.
      */
     readonly runnerRefusals: number;
+    /** R231 `<batchIndex>/<mutantCode>` ids of those, sorted by batch then code. */
     readonly runnerRefusalMutants: readonly string[];
     /** The hedge and the instruction, stated once rather than per mutant. */
     readonly diagnosis: string;
@@ -1329,7 +1364,9 @@ export interface SessionReport {
    */
   readonly warmKills?: number;
   /**
-   * R175. WHICH mutants those are, as `mutantCode`s, sorted.
+   * R175. WHICH mutants those are, as R231 `<batchIndex>/<mutantCode>` ids, sorted by batch then
+   * code. Before v3 these were bare codes collected in a Set, so two batches' `M0001` collapsed
+   * into one entry while `unplaceableCount` counted both.
    *
    * The count alone says a report is partly ours rather than the project's; only these say which
    * rows to re-run under `coverageMode: "none"`. Without them a reader who wants to act has to
@@ -1353,7 +1390,8 @@ export interface SessionReport {
     readonly count: number;
     readonly byRisk: ReadonlyArray<{
       readonly risk: string;
-      /** `mutantCode`s, sorted — a stable list a gate can assert on. */
+      /** R231 `<batchIndex>/<mutantCode>` ids (`mutantRef`), sorted by batch then code: a
+       *  stable list a gate can assert on. */
       readonly mutants: readonly string[];
       readonly meaning: string;
     }>;
@@ -1376,6 +1414,9 @@ export interface SessionReport {
   readonly readerMarkedEquivalent?: {
     /** Marks that matched a surviving mutant in this run. */
     readonly matched: ReadonlyArray<{
+      /** R231: the batch `mutantCode` belongs to, since ids restart per batch. Sorted by
+       *  `(batchIndex, mutantCode)`. */
+      readonly batchIndex: number;
       readonly mutantCode: string;
       readonly key: string;
       readonly reason: string;
@@ -1386,6 +1427,8 @@ export interface SessionReport {
     readonly stale: readonly string[];
     /** Marks this run REFUTED: the mutant did not survive. */
     readonly contradicted: ReadonlyArray<{
+      /** R231: as in `matched`. */
+      readonly batchIndex: number;
       readonly mutantCode: string;
       readonly key: string;
       readonly reason: string;
@@ -1607,8 +1650,8 @@ export interface MutantOutcome {
   readonly blockEndLine?: number;
   /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
    *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
-   *  mutant ids restart per batch and that list's bare `mutantCode`s cannot say which batch
-   *  (R231). Absent: not recorded, which never means "not equivalent". */
+   *  mutant ids restart per batch and that list held bare `mutantCode`s until R231 (v3).
+   *  Absent: not recorded, which never means "not equivalent". */
   readonly equivalenceRisk?: string;
   /** C02-01. The reader's mark whose key equals this row's R166 identity, on a `survived` or
    *  `known-survivor` row (the rule `readerMarkedEquivalent.matched` uses). Absent: no mark
@@ -2177,8 +2220,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.mutant.blockStartLine !== undefined ? { blockStartLine: o.mutant.blockStartLine } : {}),
       ...(o.mutant.blockEndLine !== undefined ? { blockEndLine: o.mutant.blockEndLine } : {}),
     };
-    // C02-01: decided per ROW, by this row's operator, because mutant ids restart per batch and
-    // the run-level lists below are keyed by bare `mutantCode` (R231). Same rule as that list:
+    // C02-01: decided per ROW, by this row's operator, because mutant ids restart per batch (the
+    // run-level lists below were keyed by bare `mutantCode` until R231). Same rule as that list:
     // risk on `survived` only. The row's `readerMark` is added below, from the run-level result.
     const risk =
       row.verdict === "survived" ? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName) : undefined;
@@ -2194,6 +2237,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     const marked: EquivalenceMarkReport = applyEquivalenceMarks(
       marks,
       mutants.map((m) => ({
+        batchIndex: m.batchIndex,
         mutantCode: m.mutantCode,
         identity: markIdentityOf(m),
         verdict: m.verdict,
@@ -2202,18 +2246,20 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       IDENTITY_SCHEME,
     );
     readerMarkedEquivalent = {
-      matched: [...marked.matched]
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
-        .map((m) => ({ mutantCode: m.mutantCode, key: m.key, reason: m.reason })),
+      matched: [...marked.matched].sort(byBatchThenCode).map((m) => ({
+        batchIndex: m.batchIndex,
+        mutantCode: m.mutantCode,
+        key: m.key,
+        reason: m.reason,
+      })),
       stale: marked.stale.map((m) => m.key).sort(),
-      contradicted: [...marked.contradicted]
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode))
-        .map((c) => ({
-          mutantCode: c.mutantCode,
-          key: c.key,
-          reason: c.reason,
-          verdict: c.verdict,
-        })),
+      contradicted: [...marked.contradicted].sort(byBatchThenCode).map((c) => ({
+        batchIndex: c.batchIndex,
+        mutantCode: c.mutantCode,
+        key: c.key,
+        reason: c.reason,
+        verdict: c.verdict,
+      })),
     };
   }
   // C02-01: ONE source of truth for a row's `readerMark`: the run-level classification above. A row
@@ -2345,32 +2391,32 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.untargetedTriggerCount > 0) caveats.push("untargeted-triggers");
   if (input.unplaceableCount > 0) caveats.push("attribution-unplaceable");
   // R72 — see CAVEAT_INTERPRETATIONS["platform-artifact-kills"]. Built from the mutant rows just
-  // assembled rather than from `input.outcomes`, so the codes it lists are the same strings the
-  // report's own `mutants` array carries and a reader can join the two without a second lookup.
+  // assembled rather than from `input.outcomes`, so each id it lists (R231 `mutantRef`) names
+  // exactly one row of the report's own `mutants` array, by `batchIndex` and `mutantCode`.
   //
   // KILLED only, and `timeout-killed` deliberately not included: a timeout is already its own
   // qualified outcome (design §6.7) and folding a second hedge into it would say nothing new.
-  const platformKillsByMechanism = new Map<string, string[]>();
+  const platformKillsByMechanism = new Map<string, MutantOutcome[]>();
   for (const m of mutants) {
     if (m.verdict !== "killed") continue;
     const mechanism = m.platformKillMechanism;
     if (mechanism === undefined) continue;
     const list = platformKillsByMechanism.get(mechanism);
-    if (list === undefined) platformKillsByMechanism.set(mechanism, [m.mutantCode]);
-    else list.push(m.mutantCode);
+    if (list === undefined) platformKillsByMechanism.set(mechanism, [m]);
+    else list.push(m);
   }
   if (platformKillsByMechanism.size > 0) caveats.push("platform-artifact-kills");
   // R172: survivors whose OPERATOR declares an elevated equivalence risk. Looked up by operator NAME
   // against the registry rather than carried per mutant, because the risk is a property of the
   // operator and duplicating it into every manifest entry would let the two drift.
-  const equivalentByRisk = new Map<string, string[]>();
+  const equivalentByRisk = new Map<string, MutantOutcome[]>();
   for (const m of mutants) {
     if (m.verdict !== "survived") continue;
     const risk = EQUIVALENCE_RISK_BY_OPERATOR.get(m.operatorName);
     if (risk === undefined) continue;
     const list = equivalentByRisk.get(risk);
-    if (list === undefined) equivalentByRisk.set(risk, [m.mutantCode]);
-    else list.push(m.mutantCode);
+    if (list === undefined) equivalentByRisk.set(risk, [m]);
+    else list.push(m);
   }
   const likelyEquivalentSurvivors =
     equivalentByRisk.size === 0
@@ -2381,7 +2427,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([risk, list]) => ({
               risk,
-              mutants: [...list].sort(),
+              mutants: refsOf(list),
               meaning: EQUIVALENCE_RISK_EXPLANATIONS[risk] ?? risk,
             })),
         };
@@ -2394,7 +2440,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([mechanism, list]) => ({
               mechanism,
-              mutants: [...list].sort(),
+              mutants: refsOf(list),
               // A tag with no explanation in THIS build is named rather than dropped: the manifest
               // may have been written by a different engine version, and silently un-screening a
               // mutant because a string is unrecognised is the empty-vs-empty failure this repo is
@@ -2438,11 +2484,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           killsWithText: killsWithText.length,
           killsWithoutText: screenedKills.length - killsWithText.length,
           flagged: flaggedKills.length,
-          flaggedMutants: flaggedKills.map((m) => m.mutantCode).sort(),
+          flaggedMutants: refsOf(flaggedKills),
           discrimination,
           discriminationNote: ASSERTION_SCREEN_DISCRIMINATION_NOTES[discrimination],
           runnerRefusals: runnerRefusals.length,
-          runnerRefusalMutants: runnerRefusals.map((m) => m.mutantCode).sort(),
+          runnerRefusalMutants: refsOf(runnerRefusals),
           diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
         };
   const narrowed =
@@ -2820,7 +2866,9 @@ export function renderConsole(r: SessionReport): string {
         `EQUIVALENCE MARK CONTRADICTED: ${e.contradicted.length} mutant(s) marked as equivalent did NOT survive this run. Someone recorded that no test could distinguish them and this run says otherwise: the VERDICT stands and the mark is wrong. Revise or remove each (R172):`,
       );
       for (const c of e.contradicted) {
-        lines.push(`  ${c.mutantCode} is ${c.verdict} — marked "${c.reason}"`);
+        lines.push(
+          `  ${mutantRef(c.batchIndex, c.mutantCode)} is ${c.verdict} — marked "${c.reason}"`,
+        );
       }
     }
     if (e.stale.length > 0) {
@@ -2833,7 +2881,8 @@ export function renderConsole(r: SessionReport): string {
       lines.push(
         `EQUIVALENCE MARKS: ${e.matched.length} survivor(s) carry a reader's recorded ruling that they cannot be killed. They are STILL survivors and STILL in the mutation score: a mark records a human's reasoning, it does not change a measurement (R172).`,
       );
-      for (const m of e.matched) lines.push(`  ${m.mutantCode}: ${m.reason}`);
+      for (const m of e.matched)
+        lines.push(`  ${mutantRef(m.batchIndex, m.mutantCode)}: ${m.reason}`);
     }
   }
   if (r.platformArtifactKills !== undefined) {
@@ -2955,7 +3004,7 @@ export function renderConsole(r: SessionReport): string {
       lines.push(
         `UNEXERCISED SURVIVORS: ${unobserved.length} mutant(s) reported survived had NO instrumented guard fire during their runs — the mutated code was never reached, so they were never given a chance to fail. Treat them as no-coverage, not as test-suite gaps: ${unobserved
           .slice(0, 8)
-          .map((m) => m.mutantCode)
+          .map((m) => mutantRef(m.batchIndex, m.mutantCode))
           .join(", ")}${unobserved.length > 8 ? ", ..." : ""}`,
       );
     }

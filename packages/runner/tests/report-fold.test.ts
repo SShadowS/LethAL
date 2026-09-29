@@ -1000,3 +1000,39 @@ describe("R-236c: tests refused before sending, as their own category", () => {
     expect(report.testPageUnsupported?.tests).toEqual(["Data Tests.OpensPage"]);
   });
 });
+
+/**
+ * R231. Mutant ids restart at M0001 in every batch, so two batches' coverage-split events can both
+ * name an `M0001`. The fold used to add bare codes to a Set, which collapsed them into ONE entry
+ * while `unplaceableCount` still counted two. Each entry is now `<batchIndex>/<mutantCode>`.
+ */
+describe("foldEvents — R231, unplaceable mutants are qualified by batch", () => {
+  test("two batches that both name M0001 give two entries, matching the count", () => {
+    const pass = [{ name: "T.T1", outcome: "pass" as const, classification: [] }];
+    const split = (batchIndex: number): RunEventInput => ({
+      type: "coverage-split",
+      batchIndex,
+      untargetedTriggerCount: 0,
+      coveredCount: 0,
+      noCoverageCount: 1,
+      unplaceableCount: 1,
+      unplaceableMutants: ["M0001"],
+    });
+    const [generated] = baseEvents();
+    if (generated === undefined) throw new Error("baseEvents is empty");
+    const folded = foldEvents(
+      STATICS,
+      seq([
+        generated,
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: pass },
+        split(0),
+        { type: "baseline-batch-finished", batchIndex: 1, verdicts: pass },
+        split(1),
+        { type: "session-finished", elapsedMs: 1 },
+      ]),
+    );
+    expect(folded.unplaceableMutants).toEqual(["0/M0001", "1/M0001"]);
+    expect(folded.unplaceableMutants.length).toBe(folded.unplaceableCount);
+    expect(folded.unplaceableCount).toBe(2);
+  });
+});

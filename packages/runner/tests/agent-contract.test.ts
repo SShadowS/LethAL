@@ -845,6 +845,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
 const ART = "0123456789abcdef0123456789abcdef";
 
 type ReportRow = {
+  readonly batchIndex: number;
   readonly mutantCode: string;
   readonly verdict: string;
   readonly astHash: string;
@@ -1096,7 +1097,12 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       );
     const result = applyEquivalenceMarks(
       marks,
-      rows.map((m) => ({ mutantCode: m.mutantCode, identity: identity(m), verdict: m.verdict })),
+      rows.map((m) => ({
+        batchIndex: m.batchIndex,
+        mutantCode: m.mutantCode,
+        identity: identity(m),
+        verdict: m.verdict,
+      })),
       IDENTITY_SCHEME,
     );
     expect(result.stale).toEqual([]);

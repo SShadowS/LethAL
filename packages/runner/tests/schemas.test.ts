@@ -735,7 +735,10 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
  * committed data.
  */
 describe("generated JSON Schemas — report and stream (R152)", () => {
-  const reportSchema = loadSchema("report-v2.schema.json");
+  const reportSchema = loadSchema(`report-v${REPORT_SCHEMA_VERSION}.schema.json`);
+  /** R231: v2 is a frozen archive once v3 exists, kept so an archived v2 report is still checked
+   *  against the shape it was written under. */
+  const reportV2Schema = loadSchema("report-v2.schema.json");
   const streamSchema = loadSchema("stream-v1.schema.json");
 
   /**
@@ -792,7 +795,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "utf8",
       ),
     );
-    const missing = conformsTo(reportSchema, older)
+    // R231: checked against the FROZEN v2 file, the version this report declares.
+    const missing = conformsTo(reportV2Schema, older)
       .filter((v) => v.problem === "required but absent")
       .map((v) => v.path)
       .sort();
@@ -869,6 +873,27 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "report-v2.schema.json": [
+        "authoritative",
+        "backend",
+        "baselineGreen",
+        "batches",
+        "counts",
+        "declarativeSites",
+        "mutants",
+        "mutationScore",
+        "notInstrumented",
+        "preprocessorSymbols",
+        "schemaVersion",
+        "survivorsByProcedure",
+        "testFiles",
+        "timings",
+        "unplaceableCount",
+        "unplaceableMutants",
+        "unsupportedTests",
+        "untargetedTriggerCount",
+        "validity",
+      ],
+      "report-v3.schema.json": [
         "authoritative",
         "backend",
         "baselineGreen",

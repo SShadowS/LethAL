@@ -4,7 +4,12 @@ import type { RunEvent } from "./events";
 import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { DeclarativeSiteFile, NotInstrumentedFile, SessionOutcome } from "./report";
+import {
+  type DeclarativeSiteFile,
+  type NotInstrumentedFile,
+  type SessionOutcome,
+  mutantRef,
+} from "./report";
 import type { BatchArtifact } from "./store";
 
 /**
@@ -153,7 +158,8 @@ export interface FoldedReport {
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
   readonly unplaceableCount: number;
-  /** R175 — `mutantId`s of those, sorted. See `SessionReport.unplaceableMutants`. */
+  /** R175 — R231 `<batchIndex>/<mutantCode>` ids of those, sorted by batch then code. See
+   *  `SessionReport.unplaceableMutants`. */
   readonly unplaceableMutants: readonly string[];
   /** C02-02: one entry per batch this run published an artifact identity for, sorted by
    *  `batchIndex`. See `SessionReport.artifacts`. Required here (unlike on `SessionReport`) and
@@ -267,7 +273,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let groupedCalls = 0;
   let warmKills = 0;
   let unplaceableCount = 0;
-  const unplaceableMutants = new Set<string>();
+  // R231: qualified by the event's batch here, because ids restart per batch. A Set of bare codes
+  // collapsed two batches' `M0001` into one entry while `unplaceableCount` counted both.
+  const unplaceableMutants: { batchIndex: number; mutantCode: string }[] = [];
   // C02-02: every batchIndex `batch-published` has named, to catch a duplicate publish of the
   // same batch regardless of whether either carried an identity: checked first, before the
   // identity fields are even looked at. `artifactsByBatch` holds only the entries that DID carry
@@ -395,7 +403,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         sawCoverageSplit = true;
         untargetedTriggerCount += e.untargetedTriggerCount;
         unplaceableCount += e.unplaceableCount ?? 0;
-        for (const id of e.unplaceableMutants ?? []) unplaceableMutants.add(id);
+        for (const mutantCode of e.unplaceableMutants ?? []) {
+          unplaceableMutants.push({ batchIndex: e.batchIndex, mutantCode });
+        }
         break;
       case "permission-canary":
         permissionCanary = e.result;
@@ -636,7 +646,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     groupedCalls,
     warmKills,
     unplaceableCount,
-    unplaceableMutants: [...unplaceableMutants].sort(),
+    unplaceableMutants: unplaceableMutants
+      .sort((a, b) => a.batchIndex - b.batchIndex || a.mutantCode.localeCompare(b.mutantCode))
+      .map((m) => mutantRef(m.batchIndex, m.mutantCode)),
     artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),

@@ -69,7 +69,12 @@ function build(outcomes: SessionOutcome[], over: Record<string, unknown> = {}) {
 
 describe("REPORT_SCHEMA_VERSION (R69 Phase 2 Task 5)", () => {
   test("is bumped to 2 — executionContext -> executionContexts is not backward compatible", () => {
-    expect(REPORT_SCHEMA_VERSION).toBe(2);
+    // R231 later bumped it again, to 3 (batch-qualified mutant lists). Still past 2, which is
+    // what this pin is about.
+    expect(REPORT_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
+  });
+  test("is bumped to 3 — R231's run-level lists name a mutant by batch AND code", () => {
+    expect(REPORT_SCHEMA_VERSION).toBe(3);
   });
 });
 
