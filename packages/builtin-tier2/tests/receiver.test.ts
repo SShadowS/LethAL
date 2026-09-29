@@ -1357,3 +1357,68 @@ ${other}#endif
     expect(claims(EXT("procedure /* Validate */ Check"))).toBe(true);
   });
 });
+
+// R323: a named return value is a declaration of its member, and a receiver declared that way is
+// classified by the member's return_type.
+describe("claimsRecordMethod: a named return value (R323)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  it("the receiver hunk: a named record return is classified by its return_type", () => {
+    const root = parseClean(`codeunit 50100 "Repro N13"
+{
+    procedure Load() R: Record "Repro N13 Tab"
+    begin
+        R.SetRange(Code, 'A');
+        Glob := R.Amt + Glob;
+    end;
+
+    var
+        Glob: Integer;
+}
+`);
+    const table = parseClean(`table 50100 "Repro N13 Tab"
+{
+    fields { field(1; Code; Code[20]) { } field(2; Amt; Integer) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+`);
+    const ctx = projectContextFor([root, table]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(true);
+  });
+  it("n12: a named codeunit return beside a record global is NOT claimed", () => {
+    const root = parseClean(`codeunit 50100 "Repro N12"
+{
+    procedure Make() R: Codeunit "Repro N12 Helper"
+    var
+        N: Integer;
+    begin
+        N := 1;
+        R.Validate(N, 5);
+    end;
+
+    var
+        R: Record "Repro N12 Tab";
+}
+`);
+    const helper = parseClean(`codeunit 50101 "Repro N12 Helper"
+{
+    procedure Validate(F: Integer; V: Integer)
+    begin
+        Glob := F + V;
+    end;
+
+    var
+        Glob: Integer;
+}
+`);
+    const table = parseClean(`table 50100 "Repro N12 Tab"
+{
+    fields { field(1; Code; Code[20]) { } field(2; N; Integer) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+`);
+    const ctx = projectContextFor([root, helper, table]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "Validate")).toBe(false);
+  });
+});
