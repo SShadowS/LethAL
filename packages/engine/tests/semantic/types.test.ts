@@ -583,3 +583,38 @@ ${first}
     expect(typeAt(src, "Amt")).toBeNull();
   });
 });
+
+// R330, run 002 fix round: inside a trigger, a name the trigger declares in its own header (plain
+// `var` section or `#if` region) is unknown; it never reaches a global, whatever the global's casing.
+describe("buildTypeTable: a trigger's own locals hide the globals (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (local: string, global: string) => `codeunit 50100 "Repro T"
+{
+    trigger OnRun()
+${local}
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        ${global}: Integer;
+}
+`;
+  const PLAIN = "    var\n        Amt: Text;";
+  const WRAPPED = "#if not CLEAN27\n    var\n        Amt: Text;\n#endif";
+
+  it("a plain trigger local, global in other casing", () => {
+    expect(typeAt(src(PLAIN, "AMT"), "Amt")).toBeNull();
+  });
+  it("a plain trigger local, global in the same casing (master's older form)", () => {
+    expect(typeAt(src(PLAIN, "Amt"), "Amt")).toBeNull();
+  });
+  it("a #if trigger local, global in other casing", () => {
+    expect(typeAt(src(WRAPPED, "AMT"), "Amt")).toBeNull();
+  });
+  it("control: with no trigger local the global still types", () => {
+    expect(typeAt(src("", "AMT"), "Amt")).toBe("Integer");
+  });
+});

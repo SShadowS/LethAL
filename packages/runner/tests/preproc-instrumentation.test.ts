@@ -3039,3 +3039,91 @@ describe("R330: no typed site from a name declared in an unindexed #if region", 
     ]);
   });
 });
+
+// R330, run 002 fix round: a trigger's own locals hide the globals. Sources copied byte for byte
+// from the repros pre-committed in the plan's addendum 2. Before the fix each emitted a
+// `swap-additive` on `Amt + Amt` that fails `alc` with AL0175 (t3s is master's older same-case form).
+const R330_T1C = `codeunit 50100 "Repro R330T1"
+{
+    trigger OnRun()
+#if not CLEAN27
+    var
+        Amt: Text;
+#endif
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        AMT: Integer;
+}
+`;
+const R330_T3 = `codeunit 50100 "Repro R330T3"
+{
+    trigger OnRun()
+    var
+        Amt: Text;
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        AMT: Integer;
+}
+`;
+const R330_T3S = `codeunit 50100 "Repro R330T3S"
+{
+    trigger OnRun()
+    var
+        Amt: Text;
+    begin
+        Message('%1', Amt + Amt);
+    end;
+
+    var
+        Amt: Integer;
+}
+`;
+const R330_T2 = `table 50100 "Repro R330T2"
+{
+    fields
+    {
+        field(1; Code; Code[20])
+        {
+            trigger OnValidate()
+#if not CLEAN27
+            var
+                Amt: Text;
+#endif
+            begin
+                Message('%1', Amt + Amt);
+            end;
+        }
+    }
+
+    var
+        AMT: Integer;
+}
+`;
+
+describe("R330: no typed site from a name a trigger declares in its own header", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (file: string, src: string) =>
+    (await instrument({ [file]: src })).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+
+  test("t1c: a #if trigger local hides the differently-cased global", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T1C)).toEqual(WANT);
+  });
+  test("t3: a plain trigger local hides the differently-cased global", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T3)).toEqual(WANT);
+  });
+  test("t3s: a plain trigger local hides the same-cased global (master's older form)", async () => {
+    expect(await ops("Repro.Codeunit.al", R330_T3S)).toEqual(WANT);
+  });
+  test("t2: a #if local of a field's OnValidate hides the global", async () => {
+    expect(await ops("Tab.Table.al", R330_T2)).toEqual(WANT);
+  });
+});

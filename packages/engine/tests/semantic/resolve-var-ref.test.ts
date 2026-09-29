@@ -258,3 +258,33 @@ describe("resolveVarRef: a #if var-block local (R330)", () => {
     expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
   });
 });
+
+// R330, run 002 fix round: a trigger local inside a `#if` block resolves to nothing, never to a
+// global; a plain trigger local still resolves to its own declaration (R68).
+describe("resolveVarRef: trigger locals (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (local: string) => `codeunit 50205 "R"
+{
+    var
+        AMT: Integer;
+
+    trigger OnRun()
+${local}
+    begin
+        Amt := 'x';
+    end;
+}
+`;
+
+  it("a #if trigger local resolves to null, not to the global", () => {
+    const { root, ctx } = load(src("#if not CLEAN27\n    var\n        Amt: Text;\n#endif"));
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+
+  it("control: a plain trigger local resolves to its own declaration", () => {
+    const { root, ctx } = load(src("    var\n        Amt: Text;"));
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)?.typeText).toBe("Text");
+  });
+});

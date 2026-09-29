@@ -17,7 +17,12 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findEnclosingProcedure, procedureLikeNameNode } from "../ast/tree-walks";
-import { enclosingObjectScopeKey, objectScopeKey } from "./symbol-table";
+import {
+  enclosingObjectScopeKey,
+  enclosingTrigger,
+  objectScopeKey,
+  triggerLocalNames,
+} from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
 export interface TypeTable {
@@ -235,6 +240,14 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   const scope = enclosingObjectScopeKey(node);
   if (scope === null) return null;
   const proc = findEnclosingProcedure(node);
+  // R330 (run 002 fix round): inside a trigger, a name the trigger declares in its own header is
+  // unknown. Without this it fell through to the object's globals, and since R322 also to a global
+  // whose casing differs: an `alc`-failing swap (AL0175).
+  if (proc === null) {
+    const trigger = enclosingTrigger(node);
+    if (trigger !== null && triggerLocalNames(trigger).has(stripQuotes(node.text).toLowerCase()))
+      return null;
+  }
   // A member-level declaration wins over an object-level one, which is AL's own shadowing rule:
   // a procedure's local or parameter hides a global of the same name.
   if (proc !== null) {

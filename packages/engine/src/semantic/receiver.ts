@@ -55,8 +55,10 @@ import {
   type SymbolTable,
   type VarSymbol,
   collectVarDeclarations,
+  enclosingTrigger,
   extensionScopeKey,
   objectScopeKeyOfNode,
+  triggerLocalNames,
 } from "./symbol-table";
 
 /**
@@ -495,6 +497,10 @@ export function lookupVar(
   // same way a procedure local does below.
   const triggerLocal = triggerScopeVar(name, callNode, matches);
   if (triggerLocal !== null) return triggerLocal;
+  // R330 (run 002 fix round): a name the enclosing trigger declares elsewhere in its header (inside
+  // a `#if` region, which `triggerScopeVar` does not read) is unknown, never a global.
+  const trigger = enclosingTrigger(callNode);
+  if (trigger !== null && triggerLocalNames(trigger).has(name.toLowerCase())) return null;
 
   const procedure = findEnclosingProcedure(callNode);
   if (procedure !== null) {

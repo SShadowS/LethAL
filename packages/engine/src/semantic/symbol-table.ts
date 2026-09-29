@@ -582,6 +582,39 @@ function parseProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol | nu
 }
 
 /**
+ * R330 (run 002 fix round): the nearest enclosing trigger of `node`, or `null`. Triggers are not in
+ * the symbol table (their names repeat across an object), so their locals are found from the node.
+ */
+export function enclosingTrigger(node: ALSyntaxNode): ALSyntaxNode | null {
+  for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
+    if (p.kind === ALNodeKind.trigger) return p;
+  }
+  return null;
+}
+
+/**
+ * R330 (run 002 fix round): the lowercase names a trigger declares in its own header, in a plain
+ * `var` section or inside a `#if` region. Type resolution does not index trigger locals, so each
+ * such name is UNKNOWN there: it gets no type and hides a global of the same name (with R322's
+ * case-insensitive global lookup, also one whose casing differs). The body is not read.
+ */
+export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
+  const out = new Set<string>();
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (c.kind === ALNodeKind.block) continue;
+      if (c.kind === ALNodeKind.variable_declaration) {
+        const name = c.childForFieldName("name")?.text ?? "";
+        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+      }
+      walk(c);
+    }
+  };
+  walk(trigger);
+  return out;
+}
+
+/**
  * R330: the lowercase names a member's HEADER declares inside a `#if` region of its own (a
  * `preproc_conditional_var_block`, R303's shape, or a conditional parameter). Neither parser
  * indexes them as locals or parameters, and which of them exists depends on symbols the engine
