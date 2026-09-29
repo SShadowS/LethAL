@@ -2,6 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r3.** Corrects r2's task instructions and tests per the orchestrator's ruling "Orchestrator, 2026-09-30: plan r2 reviewed" in `H:/lethal-coord/tasks/R-214/task.md` (binding) and its review `H:/lethal-coord/reviews/R-214-plan/review-r2.md`. The design r2 set out is accepted and is not re-opened. r2 is commit `f069033d` of this file (frozen copy: `H:/lethal-coord/reviews/R-214-plan/plan-r2.md`). Every code fact r3 touches was re-read on this branch at `f0fe038a` (master `17ac3388` merged in): `IDENTITY_SCHEME = 3` on both, the report schema is v3 (`schemas/report-v3.schema.json`, `REPORT_SCHEMA_VERSION = 3`, v2 frozen), the explain schema is v6. r3's probes live in `H:/lethal-scratch/R-214/plan-r3/` (`$T` below): `scheme-race.sh` (C1's check, run against this branch: `pre` prints `OK: Task 2 sets N=4`, `post` prints `RACE`, as it must before Task 2) and `r321-key-diff.txt` (I8's diff, read from the committed baselines).
+
+## Revision r3: what changed, correction by correction
+
+| correction (task.md, 2026-09-30) | where r3 addresses it |
+| --- | --- |
+| **C1** scheme race, blocking, before product code and before handoff | Decision 4 ("The scheme race"); Global Constraints (the check after every master merge from Task 2 on); Task 2 Step 0 (`pre`, before the first product commit); Task 2 Step 6 (the re-bump procedure: constant, CHANGELOG, harden marks file, agent guide together, then the transition, capture and gate re-runs); Task 11 Step 4 (`post`, blocking, before `coord submit`). The exact commands are in Task 2 Step 0 |
+| **I2** transition tests on the OLD engine's L13 key; red-check against the pre-committed starting scheme | Decision 4 ("The transition tests"); Task 1 Step 5b (commits `before/fixture-sandbox-symbols.txt`, master's own capture, and `before/scheme.json`, the starting scheme); Task 8 Step 1 (`oldEngineKey`, `oldEngineRun`: a record written through the store API with master's L13 key and line, never a relabelled new-engine run; `storedRun` no longer takes a scheme); Task 8 Step 7 (f) and Task 2 Step 4 (revert to the starting scheme `S`, not `IDENTITY_SCHEME - 1`); Global Constraints (the literal rule) |
+| **I3** fresh full twin and fresh `presence.ts` from the AFTER capture; `UNCLASSIFIED = EXTRA = 0`; that result to `--listing` | Task 9 Step 4 (the full command block); Task 1 Step 2 (`presence.ts` always prints both counts); Decision 6 ("The committed corpus listing", last paragraph) |
+| **I4** after-change RSS with exactly master's flags, its own run | Task 9 Step 4 (run (1), output discarded) and Step 5 (reads that run only); Decision 6 ("Peak memory gate") |
+| **I5** zero-site undecidable file keeps a `preproc-undecided` row, `sites: 0`, pinned apart from `p12-refused` | Decision 2 (refusal paragraph); Task 6 Step 3 (no `specs.length > 0` condition); Task 6 Step 1 (test "a refused file with NO site still gets its row"); Task 6 Step 8 (h); Task 7 Step 1 (Run 1 exact rows, Run 2) and Step 5 (e) |
+| **I6** project-relative paths `src/Refused.Codeunit.al`, `src/Plain.Codeunit.al` | Task 6 Step 1 and Task 7 Step 1 (exact assertions, after normalising `\` to `/`, because `readdir` on Windows returns `src\...`, measured) |
+| **I7** `schemas/report-v3.schema.json` only; v2 frozen | File structure; Task 7 Files and Step 3.7 (the expected generated diff, and `git diff --exit-code schemas/report-v2.schema.json`) |
+| **I8** pre-committed NORMALIZED-KEY diff of both R321 baselines | Decision 7 ("The baseline diff, by key"); Task 1 Step 10 (the spec pins it); Task 10 Step 4 (checked key by key; the per-line table check stays in Step 2) |
+| **Minor a** a named Caveat for a refused file, with its interpretation and count updates | Decision 9; Task 7 (Files, Step 1 runs 1 to 3, Step 3.11, Step 5 (d) and (e)): `preproc-files-refused`, `CAVEAT_INTERPRETATIONS`, `interpretation.test.ts` and `report.test.ts` 20 to 21 (both measured at 20 today), and the explain schema v6 to v7 that R233's pin requires (precedent: R-236c, `87faa6ac`) |
+| **Minor b** runner-level test for legal bare `#if and` | Task 6 Step 1 (test "a legal bare `#if and` refuses its file", red-checked by Step 8 (i)) and Task 7 Step 1 (run 1: `unparsed-condition at line 5`, no mutant from the file, its counted report row) |
+| **Minor c** no "before any backend call" claim for the marks warning | Task 8 Step 4, last bullet (the warning is computed after `buildSymbols`, which is after `backend.status()`; the symbol read is not moved earlier) |
+| Approvals (1) to (4) | Recorded, no change needed: (1) Decision 6 with I3's fresh computation; (2) Decision 2 with minor b's test; (3) and (4) Decision 5. r2's two open questions are answered, so that section now says so |
+
+---
+
 **Revision r2 (2026-09-29).** Written by `lethal-preproc` (coord-only lane) on `lethal/lane-preproc` at `ba4ebabe` (master merged in). r1 is frozen at `H:/lethal-coord/reviews/R-214-plan/plan-r1.md`; its review is `H:/lethal-coord/reviews/R-214-plan/review-r1.md`; the rulings are in `H:/lethal-coord/tasks/R-214/task.md` ("Orchestrator, 2026-09-29" and its Addendum). No product code was written or prototyped. r1's tools live in `H:/lethal-scratch/R-214/plan/` (`$P` below); r2's new probes live in `H:/lethal-scratch/R-214/plan-r2/` (`$Q` below). Task 1 turns the predictions into the committed PRE-COMMITMENT, alone, before any product code.
 
 ## Revision r2: what changed, finding by finding
@@ -322,7 +343,7 @@ These are not assumed to be the only gaps. Decision 6's full twin finds every ac
 - `#define` / `#undef` are applied only in an active region (row 40), in order (row 41), case-sensitively (row 39).
 - Returns the inactive byte ranges, from the end of the marker that closes the active region to the start of the marker that reopens it.
 
-**Undecided means the whole file is refused.** The evaluator returns `{ kind: "undecided", reason }`, where `reason` is a code plus a line number and NEVER source text: `unparsed-condition at line <n>` (rows 21, 23 to 27: a bare keyword, `!`, `&&`, `||`, `==`, an incomplete or doubled expression, a leading digit); `unbalanced at line <n>` (rows 30, 31: an `#elif` / `#else` after `#else`, an `#elif` / `#else` / `#endif` with no open `#if`, an `#if` never closed); `bad-define at line <n>` (row 45); `marker-mismatch (<t> directive lines, <m> markers)` (row 49). Then `generateMutationSet` generates NO mutant in that file (the file is still copied into the build uninstrumented), warns `preproc-arms-undecided` naming the file and the reason, and records the file's pre-filter site count under the `preproc-undecided` reason in `excludedSites` (Decision 9).
+**Undecided means the whole file is refused.** The evaluator returns `{ kind: "undecided", reason }`, where `reason` is a code plus a line number and NEVER source text: `unparsed-condition at line <n>` (rows 21, 23 to 27: a bare keyword, `!`, `&&`, `||`, `==`, an incomplete or doubled expression, a leading digit); `unbalanced at line <n>` (rows 30, 31: an `#elif` / `#else` after `#else`, an `#elif` / `#else` / `#endif` with no open `#if`, an `#if` never closed); `bad-define at line <n>` (row 45); `marker-mismatch (<t> directive lines, <m> markers)` (row 49). Then `generateMutationSet` generates NO mutant in that file (the file is still copied into the build uninstrumented), warns `preproc-arms-undecided` naming the file and the reason, and records the file's pre-filter site count under the `preproc-undecided` reason in `excludedSites` (Decision 9). **The row is recorded even when that count is 0** (r3, I5): a valid, otherwise empty codeunit with `#if` text in a block comment has no site, and without its row the report would read as if every file had been checked.
 
 Why the whole file, not "keep every arm" (r1): keeping every arm plants mutants in code alc drops, and the R321 measurement shows such a mutant scores `survived` (review C2). Why not throw: every case alc rejects (rows 23 to 31, 34, 35, 45, 46) fails the compile anyway, so no mutant would be scored; the two alc accepts (rows 21 and 49) are legal source, and a throw would stop a run that works today. Refusing one file by name is R303's pattern. The corpora refuse 0 files (measured above), and Task 1 pins that.
 
@@ -354,9 +375,11 @@ Every caller of `generateMutationSet`, and what it passes:
 
 ### 4. The next identity scheme (R325's rule, numbered by merge order)
 
-R325's rule: bump the scheme with any change that can move an existing mutant's key for unchanged source. Measured three ways (above). The Addendum rules that R-214 and R-318 both bump, and whichever merges first takes 4. So this plan never writes a number into a test: the new scheme is "the next scheme", `IDENTITY_SCHEME` after Task 2, and the scheme before it is `IDENTITY_SCHEME - 1`. Only three places carry the literal, because they must: the constant itself, the CHANGELOG entry and the harden marks file. Task 2 Step 1 reads the current value on the merged branch and writes the next; if master moves the scheme before this merges, the merge takes the next number again and those three places change with it (Task 11 Step 4 checks).
+R325's rule: bump the scheme with any change that can move an existing mutant's key for unchanged source. Measured three ways (above). The Addendum rules that R-214 and R-318 both bump, and whichever merges first takes 4. So this plan never writes the new number into a test: the new scheme is "the next scheme", `IDENTITY_SCHEME` after Task 2. Four places carry the literal, because they must: the constant itself, the CHANGELOG entry, the harden marks file and the agent guide's marks example (`docs/using-lethal-from-an-agent.md:490`). Task 2 Step 1 reads the current value on the merged branch and writes the next.
 
-**The transition tests (I4).** On the measured same-text key (`sandbox-symbols`, `[LETHALB]`, L15 `return-value`, whose key text under the new scheme is the text master gave L13 under the old), for each of the four cross-session paths: a record or mark relabelled to `IDENTITY_SCHEME - 1` is refused by name, and the same record relabelled to `IDENTITY_SCHEME` is carried (the control). Task 8 Step 1.
+**The scheme race (r3, C1).** Two lanes that each bump `3` to `4` make the SAME one-line edit, so `git merge` joins them silently, and an R-318 scheme-4 key could then match an R-214 scheme-4 key made by a different pipeline. So a blocking check, `scheme-race`, compares master's `IDENTITY_SCHEME` with this branch's: once before the first product commit (Task 2 Step 0, mode `pre`: the branch must equal master, and Task 2 writes master's value plus one), after every later `git merge master` (mode `post`), and once more before handoff (Task 11 Step 4, mode `post`). In mode `post`, if master's value is equal to or above the branch's, the branch bumps again to master's value plus one, changing the four literals together, and re-runs the transition, capture and gate checks (Task 2 Step 6). It is never left to a handoff note.
+
+**The transition tests (I4, corrected by r3 I2).** For each of the four cross-session paths (history, `--resume-run`, `--resume last`, marks), the OLD record is one the old engine actually made: master's own L13 `return-value` key and line from the committed BEFORE capture (`packages/runner/tests/fixtures/r214/before/fixture-sandbox-symbols.txt`), under the starting scheme `S` the pre-commitment recorded (`before/scheme.json`). It is written through the store API, not by running the new engine and relabelling its run: the new engine's L15 has ordinal 0 where the old L15 had ordinal 1, so a relabelled run is not an old record (review r2, I2). Its key text equals the new engine's L15 key under `[LETHALB]` (measured; a pin test asserts it), which is exactly the collision a carry would exploit. Each path is refused by name; each has a current-scheme control made by a real current-engine run. The constant red-check sets `IDENTITY_SCHEME` to `S`, read from the committed file, never to `IDENTITY_SCHEME - 1`, which would move with the revert and, after a re-bump, name R-318's scheme rather than one any old record was made under. Task 8 Step 1.
 
 ### 5. History, resume and marks are scoped to the identical effective symbol set (C1)
 
@@ -399,9 +422,11 @@ The rule it encodes is the product rule stated independently: "a site starting i
 - `<c>.<i>.rows.tsv.gz`: every expected row of every file WITH a directive line, in the capture's format, plus one `EXCLUDED <reason>` row per classified exclusion (the full-twin row's `file:line`, operator and `start-end`, no key) and one `INACTIVE <file> <startLine>-<endLine>` row per inactive range. So presence (the rows, and the exclusions by reason) and absence (the inactive ranges) are both in the file.
 - A header line in each: corpus name, the set, `hashTargetSource(root, [])` of the corpus (the SHA-256 over every `.al` and `app.json`, `packages/runner/src/baseline-snapshot.ts`), and `git -C <root> rev-parse HEAD` or `none`. A reviewer with the same source reproduces the check from the repo alone.
 
+**How the after-change listing is made (r3, I3).** Task 9 never feeds the committed `EXCLUDED` or `INACTIVE` rows back in, which would make their comparison circular. It regenerates the regions and the full twin from the corpus text with `pp.ts`, captures the full twin with the branch engine, runs `presence.ts` on the AFTER capture against that fresh full-twin capture, requires `UNCLASSIFIED 0` and `EXTRA 0`, and only then writes the listing from the AFTER capture, that fresh presence result and those fresh regions. The committed files are read only by the final `cmp`.
+
 No source text is in any of them (the ruling of 2026-09-09: paths, object, procedure and test names are fine to publish, source is not). **Size ceiling:** the four corpora's `rows.tsv.gz` files together must be at most 20 MB; above that is a STOP and a question (the fallback would be rows only for members holding a directive), never a silent trim.
 
-**Peak memory gate (I7).** Each capture records `maxRSS_KB`. Task 1 Step 7 measures master's peak for each corpus and set with `r214-capture.ts` at the pre-commitment commit, sequentially, nothing else heavy running, and commits the numbers in the spec. Task 9 Step 5 measures the branch the same way. **Gate: every capture exits 0, and every after-change peak is at most 110% of master's for the same corpus and set.** A crash or a breach is a STOP: report the numbers, do not tune in the same step. r1's plan-time reference: full BaseApp took 391 s and a 480 MB capture (R-323).
+**Peak memory gate (I7).** Each capture records `maxRSS_KB`. Task 1 Step 7 measures master's peak for each corpus and set with `r214-capture.ts` at the pre-commitment commit, sequentially, nothing else heavy running, and commits the numbers in the spec. Task 9 measures the branch the same way: the SAME command (`r214-capture.ts <root> --symbols <set>`, stdout to `/dev/null`), in its own run, before and apart from the capture that writes the listing (r3, I4). The listing run builds extra structures in the capture tool, so its peak is not comparable with master's and is never read by the gate; it is only a no-crash and equality check. **Gate: every capture exits 0, and every after-change peak is at most 110% of master's for the same corpus and set.** A crash or a breach is a STOP: report the numbers, do not tune in the same step. r1's plan-time reference: full BaseApp took 391 s and a 480 MB capture (R-323).
 
 **Sets.** For each corpus, `S0 = []` (DC's effective set is then its `app.json`'s `BC20` to `BC27`) and `S1` = every symbol its conditions name that starts with `CLEAN` (DC: `CLEAN27, CLEAN28`; System Application: `CLEAN26, CLEAN27, CLEAN28, CLEANSCHEMA27, CLEANSCHEMA29, CLEANSCHEMA31`; BusinessFoundation: `CLEAN27, CLEAN28, CLEANSCHEMA27`; BaseApp: `CLEAN26, CLEAN27, CLEAN28, CLEAN29, CLEANSCHEMA25, CLEANSCHEMA26, CLEANSCHEMA27, CLEANSCHEMA28, CLEANSCHEMA29, CLEANSCHEMA30, CLEANSCHEMA31`). The spec pins per corpus and set: raw and deployed totals, removed, added, key moves, the `ATTR` rulings, `undecidedFiles` (must be 0), `approxKeys` (must be 0 or ruled per row), the exclusion counts per reason, the listing files' SHA-256, and master's peak memory.
 
@@ -428,9 +453,18 @@ The frozen symbol legs contain compiled-out mutants scored `survived` (audit fin
 
 `K` is killed by `Symbol Tests.RateSmall`, `S` is survived with no killing test. Codes are the dry run's order: M0001 to M0007 as before, then M0008 / M0009 are the build's own arm pair.
 
+**The baseline diff, by key (r3, I8).** The committed baselines hold neither a source line nor a grain: each row is a normalized identity key, a verdict and a killing test (`packages/runner/itest/mutant-equality.ts:26-32,64-73`). Read at `f0fe038a` (`$T/r321-key-diff.txt`), with `SA` = `78d263bd173e364a976eff1b96889af14e53935f69c469b7e16442192ca2f93e|Symbol Logic|Rate|lethal.swap-additive|1` and `RV` = `c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1`: the old engine gave the three arm pairs ordinals 0 (L13), 1 (L15) and 2 (L17), written `SA`, `SA|1`, `SA|2` and the same for `RV`. After R214 each build keeps only its own pair, at ordinal 0. So the expected diff of each re-recorded baseline against the deleted one is exactly:
+
+| baseline | keys removed | keys whose row changes | keys unchanged |
+| --- | --- | --- | --- |
+| `al-runner.symbols-lethala.baseline.json` (13 to 9 rows) | `SA\|1`, `SA\|2`, `RV\|1`, `RV\|2` | none (`SA` and `RV` were L13, killed by `RateSmall`, and still are) | the other 9, verdict and killing test identical |
+| `al-runner.symbols-lethalb.baseline.json` (13 to 9 rows) | `SA\|1`, `SA\|2`, `RV\|1`, `RV\|2` | `SA` and `RV`: `survived` / `null` becomes `killed` / `RateSmall`, because the key that named the compiled-out L13 now names the built L15 | the other 7, verdict and killing test identical |
+
+The `[LETHALB]` change at `SA` and `RV` is a predicted verdict change at an unchanged key, not a regression; any other added, removed or changed key is a STOP. Task 1's spec pins this table with the full keys, and Task 10 Step 4 checks it key by key.
+
 **The red-checks, re-predicted.** (a) Dropping the daemon's `--define` (`AlRunnerServer.start`): LethAL still generates the configured arm, the daemon compiles `#else`, and both server legs print L8 K, L9 S S, L10 S S, L11 K K, the arm pair S S: 3 killed / 6 survived, failing the four named equality assertions. (b) Dropping `buildAlRunnerArgv`'s `--define`: the one-shot leg prints the same 3 / 6 and fails `R321 one-shot [<set>]: per-mutant verdicts differ from the pre-committed table (...)`; six failures in all. Both are now caught by the COUNT too.
 
-**Recording (Q4).** This moves a frozen figure (CLAUDE.md: killed 5 / survived 8 / no-coverage 0 over 13). The lane may not re-record on its own authority. So Task 10 transcribes the tables (a unit-tested change), runs the gate in normal mode to show it fails only on the baseline comparison of the two symbol sets, then checkpoints `--wait owner --note "R321 re-freeze ready"`. Only after the owner approves, through a `coord answer` or a `task.md` revision, are the two baselines deleted, recorded with `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1` (exit 3 by design), each nine-row diff inspected against the table above, and the gate re-run normally to a pass. Never a hand edit. CLAUDE.md's figure moves to 5 / 4 / 0 over 9; the orchestrator edits CLAUDE.md, not the lane.
+**Recording (Q4).** This moves a frozen figure (CLAUDE.md: killed 5 / survived 8 / no-coverage 0 over 13). The lane may not re-record on its own authority. So Task 10 transcribes the tables (a unit-tested change), runs the gate in normal mode to show it fails only on the baseline comparison of the two symbol sets, then checkpoints `--wait owner --note "R321 re-freeze ready"`. Only after the owner approves, through a `coord answer` or a `task.md` revision, are the two baselines deleted, recorded with `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1` (exit 3 by design), each re-recorded baseline checked key by key against the pre-committed key diff (below, r3 I8), and the gate re-run normally to a pass. Never a hand edit. CLAUDE.md's figure moves to 5 / 4 / 0 over 9; the orchestrator edits CLAUDE.md, not the lane.
 
 ### 8. alc proof per build
 
@@ -438,7 +472,9 @@ For each repro and `sandbox-symbols`, per set, on the branch after Task 7: (1) t
 
 ### 9. Observability: a warning AND a counted report reason (Q1)
 
-Two warnings, as r1: `compiled-out-sites` once per run (total, file count, the effective symbols, the first five files with counts) and `preproc-arms-undecided` once per refused file (file, reason code). Plus the durable record: `ExclusionReason` gains `"compiled-out"` and `"preproc-undecided"`, each file a row in `excludedSites.files` with its pre-filter site count (the rule `declarative` already uses) and `detail` set to `symbols: <sorted list or none>` for `compiled-out` and to the reason code for `preproc-undecided`. `detail` never carries source text (`excluded-sites.ts`'s own rule). The report banner prints one line per reason when its count is above 0. The ripple follows CLAUDE.md's list in order (Task 7). No `Caveat` is added: a compiled-out site is the correct build, and an undecided file is named in the banner and the warning; a caveat can be added later with its own interpretation text.
+Two warnings, as r1: `compiled-out-sites` once per run (total, file count, the effective symbols, the first five files with counts) and `preproc-arms-undecided` once per refused file (file, reason code). Plus the durable record: `ExclusionReason` gains `"compiled-out"` and `"preproc-undecided"`, each file a row in `excludedSites.files` with its pre-filter site count (the rule `declarative` already uses) and `detail` set to `symbols: <sorted list or none>` for `compiled-out` and to the reason code for `preproc-undecided`. `detail` never carries source text (`excluded-sites.ts`'s own rule). The report banner prints one line per reason when its count is above 0. The ripple follows CLAUDE.md's list in order (Task 7).
+
+**One caveat, for refused files only (r3, minor a).** `validity.reliability` depends on filters and baseline errors, not on `excludedSites` (`packages/runner/src/report.ts`, `reliability`), so a consumer reading only `validity` would miss a refused file. So a new `Caveat`, `preproc-files-refused`, is pushed when `excludedSites` has at least one `preproc-undecided` row. It is pushed on the FILE count, not the site count, because a refused file can have 0 sites (I5). Like `uninstrumentable-files` and `declarative-sites-dropped`, it does not change `reliability`. A `compiled-out` row gets no caveat: it is the correct build, not a gap. Adding a `Caveat` grows the explain schema's `caveat` value domain, which R233's literal pin (`packages/runner/tests/schemas.test.ts`, "every enum value set in the published explain schema is pinned") only accepts with an explain version bump, so `EXPLAIN_SCHEMA_VERSION` moves from 6 to 7 exactly as R-236c moved it from 5 to 6 for one caveat (`87faa6ac`). The report schema v3 grows its enums in place, as report v2 did in `87faa6ac`.
 
 ### 10. Live gates: which run, which do not (I8)
 
@@ -463,7 +499,8 @@ So the claim this plan can make is: byte-identical site captures for every named
 - Build loop, in this order: `LLVM_BIN="C:/Program Files/LLVM/bin" bun scripts/build-native-parser.ts` on a fresh worktree or after any change under `packages/engine/native/` (none planned); `bun run typecheck`; `rm -rf packages/*/dist` AFTER typecheck and BEFORE any `bun test`; `bun test` from the repo root (the preload hides the real home, R264). R335's known 5 s timeouts (`campaign-subcommands.test.ts`, `gate-receipt.test.ts`) must pass when run alone.
 - `bunx biome check <touched files>` only; never `biome check .`.
 - No `!` non-null assertions; `exactOptionalPropertyTypes` (`...(v !== undefined ? { k: v } : {})`); a typed error class extends `Error` directly; fail loudly on a caller-contract violation (a malformed or unreadable `app.json` throws; `createRun` requires `buildSymbols`).
-- No new test pins a scheme NUMBER: new tests use `IDENTITY_SCHEME` and `IDENTITY_SCHEME - 1` (Addendum). Only the constant, the CHANGELOG line and `fixtures/sandbox-harden/lethal.equivalent.json` carry the literal.
+- No new test writes a scheme NUMBER (Addendum). New tests use `IDENTITY_SCHEME` for the current scheme and, for the old one, the starting scheme `S` read from the committed `packages/runner/tests/fixtures/r214/before/scheme.json` (r3, I2); never `IDENTITY_SCHEME - 1`. Only the constant, the CHANGELOG line, `fixtures/sandbox-harden/lethal.equivalent.json` and the agent guide's example carry the new number, and `before/scheme.json` carries `S`, which never changes.
+- **Scheme race, blocking (r3, C1).** Before Task 2's first product edit, run the check in mode `pre` (Task 2 Step 0). After every later `git merge master`, and before handoff (Task 11 Step 4), run it in mode `post`; exit 2 means do Task 2 Step 6 now, before any other step.
 - The pre-commitment (Task 1) is committed alone before any product code. A capture that differs from it is a STOP and a report, never an edit of the expectation.
 - Corpus captures run on `H:` (outputs under `H:/lethal-scratch/R-214/`), one at a time, nothing else heavy running, peak memory recorded. Full BaseApp runs alone. No crash, then memory (the 110% gate), then speed.
 - No source text in anything committed: listings hold paths, lines, offsets, operator names, object and procedure names and AST hashes only. `excludedSites.detail` and warnings hold symbols and reason codes only.
@@ -479,7 +516,8 @@ So the claim this plan can make is: byte-identical site captures for every named
 3. **Same key, different site, across two builds** (`sandbox-symbols` L13 under `[LETHALA]`, L15 under `[LETHALB]`). Expected: no history skip, no resume, no mark carries across; each refused by name; the same record under the same set is carried. Pinned by Task 8 Steps 1 and 6, red-checked in Step 7.
 4. **A project whose `app.json` declares symbols** (DC). Expected: those arms are the build, and an unreadable `app.json` throws instead of reading as none. Pinned by `p7-appjson`, Task 3's `EACCES` test and DC's `S0` listing.
 5. **An active site the fix still misses.** Expected: every one is in exactly one named exclusion, counted per corpus; an unclassified one stops Task 1. Pinned by `presence.ts` and `p13-exclusions`.
-6. **Memory.** Expected: no corpus capture crashes, and no after-change peak exceeds 110% of master's. Pinned by Task 9 Step 5 against Task 1 Step 7's committed numbers.
+6. **Memory.** Expected: no corpus capture crashes, and no after-change peak exceeds 110% of master's, measured with the identical command. Pinned by Task 9 Step 5 against Task 1 Step 7's committed numbers.
+7. **Two lanes bump to the same scheme** (r3). Expected: the branch never hands off, and never builds on, a scheme number master already holds. Pinned by the `scheme-race` check (Task 2 Step 0, after each merge, Task 11 Step 4).
 
 ---
 
@@ -491,10 +529,11 @@ So the claim this plan can make is: byte-identical site captures for every named
 - Modify `packages/runner/src/orchestrator.ts`: `MutationSetOptions.preprocessorSymbols`, the filter and refusal in `generateMutationSet`, `MutationSetResult.preprocExcluded`, the two warnings, `runSession` (effective symbols, fingerprint, `createRun`, history, both statics assemblies, marks warning), `resolveResume`.
 - Modify `packages/runner/src/cli.ts`: `validatePreprocessorSymbols` delegates; `printDryRun`'s `paths.preprocessorSymbols` and its caller.
 - Modify `packages/runner/src/store.ts` (column, `createRun`, `getRun`, `RunRow`, `priorSurvivorKeys`, `unfinishedRunUnderOtherSymbols`), `packages/runner/src/resume.ts` (doc comment only), `packages/runner/src/equivalence-marks.ts`, `packages/runner/src/verify.ts`, `packages/runner/src/report.ts`, `packages/runner/src/report-fold.ts`, `packages/runner/src/events.ts`, `packages/runner/src/excluded-sites.ts`, `packages/runner/src/mutation-elements.ts`.
-- Modify `packages/schemata/src/project.ts:105` (`IDENTITY_SCHEME`), `CHANGELOG.md`, `fixtures/sandbox-harden/lethal.equivalent.json`, `docs/using-lethal-from-an-agent.md`, `schemas/report-v2.schema.json` (generated).
+- Modify `packages/schemata/src/project.ts:105` (`IDENTITY_SCHEME`), `CHANGELOG.md`, `fixtures/sandbox-harden/lethal.equivalent.json`, `docs/using-lethal-from-an-agent.md`, `schemas/report-v3.schema.json` and `schemas/stream-v1.schema.json` (both generated; `schemas/report-v2.schema.json` is frozen and must not change).
+- Minor a: modify `packages/runner/src/report.ts` (`Caveat`, `CAVEAT_INTERPRETATIONS`, the push), `packages/runner/src/explain.ts` (`EXPLAIN_SCHEMA_VERSION` 6 to 7 and its doc line), `schemas/README.md` (the v7 row; v6 becomes a kept row); create `schemas/explain-v7.schema.json` (hand-written: v6 plus the caveat value; v6 stays as published).
 - Modify `packages/runner/itest/symbol-fixture.ts` (tables, header, failure message), `fixtures/README.md` (§ sandbox-symbols).
-- Tests: create `packages/engine/tests/ast/preproc-arms.test.ts`, `packages/runner/tests/r214-compiled-out.test.ts`, `packages/runner/tests/r214-history.test.ts`; modify `packages/engine/tests/ast/tree-walks.test.ts`, `packages/runner/tests/reach-grain-fixtures.test.ts`, `packages/runner/tests/cli.test.ts`, `packages/runner/tests/preprocessor-symbols.test.ts`, `packages/runner/tests/symbol-fixture.test.ts`, `packages/runner/tests/schemas.test.ts`, `packages/runner/itest/harden-fixture.test.ts`, and the scheme and preproc tests Tasks 2 and 6 name.
-- Test data and listings: `packages/runner/tests/fixtures/r214/<repro>/` (13 repros), `packages/runner/tests/fixtures/r214/expected/<name>.<i>.txt`, `docs/superpowers/specs/r214-corpus/`, `scripts/r214-capture.ts`.
+- Tests: create `packages/engine/tests/ast/preproc-arms.test.ts`, `packages/runner/tests/r214-compiled-out.test.ts`, `packages/runner/tests/r214-history.test.ts`; modify `packages/engine/tests/ast/tree-walks.test.ts`, `packages/runner/tests/reach-grain-fixtures.test.ts`, `packages/runner/tests/cli.test.ts`, `packages/runner/tests/preprocessor-symbols.test.ts`, `packages/runner/tests/symbol-fixture.test.ts`, `packages/runner/tests/schemas.test.ts`, `packages/runner/tests/interpretation.test.ts`, `packages/runner/tests/report.test.ts`, `packages/runner/itest/harden-fixture.test.ts`, and the scheme and preproc tests Tasks 2 and 6 name.
+- Test data and listings: `packages/runner/tests/fixtures/r214/<repro>/` (13 repros), `packages/runner/tests/fixtures/r214/expected/<name>.<i>.txt`, `packages/runner/tests/fixtures/r214/before/fixture-sandbox-symbols.txt` and `before/scheme.json` (r3, I2), `docs/superpowers/specs/r214-corpus/`, `scripts/r214-capture.ts`.
 
 ---
 
@@ -504,6 +543,7 @@ So the claim this plan can make is: byte-identical site captures for every named
 - Create: `docs/superpowers/specs/2026-09-29-r214-precommitment.md`
 - Create: `packages/runner/tests/fixtures/r214/{p-r214,p-r285,p-r306,p-r306b,p5-elif-nested,p6-define,p7-appjson,p8-slot,p9-precedence,p10-case,p11-tier2,p12-refused,p13-exclusions}/` (each with `app.json`, its `.al` files and `symbol-sets.json`)
 - Create: `packages/runner/tests/fixtures/r214/expected/<name>.<i>.txt` (one per repro and set, plus `fixture-sandbox-symbols.0.txt`, `.1.txt`, `.2.txt`)
+- Create: `packages/runner/tests/fixtures/r214/before/fixture-sandbox-symbols.txt` (master's own capture of the R321 fixture) and `packages/runner/tests/fixtures/r214/before/scheme.json` (the starting scheme), r3 I2
 - Create: `docs/superpowers/specs/r214-corpus/<c>.<i>.files.tsv`, `<c>.<i>.rows.tsv.gz` for `c` in `dc sysapp bcf baseapp`, `i` in `0 1`
 - Create: `scripts/r214-capture.ts`
 
@@ -514,7 +554,7 @@ So the claim this plan can make is: byte-identical site captures for every named
 
 - [ ] **Step 1: Merge master, set up.** `git merge master`. `P=H:/lethal-scratch/R-214/plan; Q=H:/lethal-scratch/R-214/plan-r2`. Confirm the r1 tools' SHA-256 prefixes (`sites.ts 6f95c8b1`, `pp.ts b012da98`, `predict.ts 8a56b31a`, `poison.ts ab3f70cf`, `keymoves.ts 92d3bdf4`, `run-predict.sh 174d89d2`, `before.sh 50dc5da1`, `prove.sh a1e78e2c`); a tool that moved is re-reviewed before use. Re-read `IDENTITY_SCHEME` in `packages/schemata/src/project.ts` and record it in the spec as "the scheme this pre-commitment was made on".
 
-- [ ] **Step 2: Build the r2 predictor.** Copy `pp.ts` to `$Q/pp.ts` and make exactly Decision 6's three changes: (a) replace its condition parser with the grammar in "alc's precedence, measured" (no `not`-over-binary refusal; `true` / `false` literals; a bare keyword as an operand, `!`, `&&`, `||`, `==`, any other character, or leftover tokens refuse as `unparsed-condition`); (b) strip a leading `\uFEFF` before matching directive lines; (c) `--full <dir>` writes the full twin. Write `$Q/presence.ts` per Decision 6 item 4. Copy `$P/sites.ts` to `scripts/r214-capture.ts` and add `--symbols` and `--listing` per Decision 6. Then check the new parser against every row of the measured table: `bun $Q/pp.ts --self-test $Q/prec/battery.txt $Q/prec/battery2.txt` evaluates each probe's condition under its defines and must agree with the built arm on every row alc compiled, and must refuse every row alc rejected, plus row 21. Any disagreement is a STOP. Record every tool's SHA-256 in the spec.
+- [ ] **Step 2: Build the r2 predictor.** Copy `pp.ts` to `$Q/pp.ts` and make exactly Decision 6's three changes: (a) replace its condition parser with the grammar in "alc's precedence, measured" (no `not`-over-binary refusal; `true` / `false` literals; a bare keyword as an operand, `!`, `&&`, `||`, `==`, any other character, or leftover tokens refuse as `unparsed-condition`); (b) strip a leading `\uFEFF` before matching directive lines; (c) `--full <dir>` writes the full twin. Write `$Q/presence.ts` per Decision 6 item 4; its output always ends with the two lines `UNCLASSIFIED <n>` and `EXTRA <n>`, printed even when `<n>` is 0, so Task 9 Step 4 can check them mechanically (r3, I3). Copy `$P/sites.ts` to `scripts/r214-capture.ts` and add `--symbols` and `--listing` per Decision 6. Then check the new parser against every row of the measured table: `bun $Q/pp.ts --self-test $Q/prec/battery.txt $Q/prec/battery2.txt` evaluates each probe's condition under its defines and must agree with the built arm on every row alc compiled, and must refuse every row alc rejected, plus row 21. Any disagreement is a STOP. Record every tool's SHA-256 in the spec.
 
 - [ ] **Step 3: Lift the repros.** Copy each r1 `$P/repro/<name>/` (not `p9-undecided`) into `packages/runner/tests/fixtures/r214/<name>/` without `.alpackages` or build output. Create `p9-precedence`, `p12-refused` and `p13-exclusions` from the AL above, each with the r1 `app.json` shape (runtime `16.0`, no dependency, id range `50000..50100`, a fresh GUID) and `symbol-sets.json` (`[[],["UA"],["UB"],["UA","UB"],["UB","UC"]]`, `[[],["R12SYM"]]`, `[[],["P13SYM"]]`). Run `bash $P/alc-plain.sh <dir>` on every lifted directory. Expected: 32 builds, `errors=0` each. A repro that does not compile is a STOP (fix the repro, never the expectation).
 
@@ -538,6 +578,22 @@ bash "$P/prove.sh" fixture-sandbox-symbols "$R/fixtures/sandbox-symbols" >> "$Q/
 Expected: every r1 repro's totals and changes equal r1's plan-time table (for `sandbox-symbols`, 9 / 9 per set); `approxKeys 0` everywhere; `undecidedFiles 1` for `p12-refused` in both sets and 0 elsewhere; the one `ATTR` pair in `p11-tier2`; exclusions `slot` 1 in `p8-slot` (the active arm's `Helper(...)`), and in `p13-exclusions` `R287-C7` (the two tail assignments, in both sets), `R304` (in both sets) and `R343` (`swap-additive` at `exit(A + B)`, under `[]` only; under `[P13SYM]` the object is inactive and has no rows); `UNCLASSIFIED 0` and `EXTRA 0` everywhere; `prove-t1.txt` has every `dropped ... COMPILES` and every `control` REJECTED. Any other result is a STOP: report it, do not tune a tool to it.
 
 - [ ] **Step 5: Write the expected files.** For each `$Q/out/expect/<name>.<i>[<set>].txt`, copy to `packages/runner/tests/fixtures/r214/expected/<name>.<i>.txt`. Apply the one ruling by hand: in both `p11-tier2` files, L10 `lethal.remove-commit`'s last column `plat=write-txn-codeunit-run` becomes `plat=-`. Record every file's SHA-256 (after the ruling).
+
+- [ ] **Step 5b: Commit the old engine's own record (r3, I2).** Task 8's transition tests need an old record that the OLD engine made, not a relabelled new-engine run. So:
+
+```bash
+set -euo pipefail
+P=H:/lethal-scratch/R-214/plan; R=$(pwd); D="$R/packages/runner/tests/fixtures/r214/before"
+mkdir -p "$D"
+cp "$P/cap/before/fixture-sandbox-symbols.txt" "$D/fixture-sandbox-symbols.txt"
+S=$(sed -n 's/^export const IDENTITY_SCHEME = \([0-9][0-9]*\);$/\1/p' packages/schemata/src/project.ts)
+printf '{ "identityScheme": %s, "engineCommit": "%s" }\n' "$S" "$(git rev-parse HEAD)" > "$D/scheme.json"
+# The L13 return-value row is master's; its key must be the frozen [LETHALB] baseline's survived RV row.
+grep -c $'^src/SymbolLogic.Codeunit.al:13\tlethal.return-value\t' "$D/fixture-sandbox-symbols.txt"
+grep -c 'c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1"' packages/runner/itest/al-runner.symbols-lethalb.baseline.json
+```
+
+Expected: `before.sh` ran in Step 4 at THIS commit, on master's engine (so the file is master's capture now, not r1's); its header is `raw 13 deployed 13 skippedFiles 0`; `S` is the value Step 1 recorded; both counts print `1`; and the L13 row's key field is `c9159b46...|Symbol Logic|Rate|lethal.return-value|1` with no ordinal, the key the frozen `[LETHALB]` baseline scores `survived`. Master ignores the symbols, so one BEFORE capture serves every set. Any other result is a STOP.
 
 - [ ] **Step 6: The six gate fixtures and the two examples, BEFORE captures.** For `sandbox-app sandbox-data sandbox-hang sandbox-harden sandbox-coverage-probe` under `fixtures/`, and `gift-card credit-limit` under `examples/`: `bun scripts/r214-capture.ts <dir> > $Q/cap/gate/<name>.txt`, `bun scripts/probe-fixture-hashes.ts <dir>/src > $Q/cap/gate/<name>.hashes`, and confirm `grep -rlE '^\s*#\s*(if|define|undef)' <dir>` is empty. Expected: empty for all seven, so the expected capture of each IS its BEFORE capture. Record each header line.
 
@@ -567,7 +623,7 @@ Record per corpus and set: BEFORE's header, the expected header, `removed`, `add
 
 - [ ] **Step 9: Write the corpus listings.** For each corpus and set: `bun scripts/r214-capture.ts --listing docs/superpowers/specs/r214-corpus --label $c.$i --from-expected $O/expect-$c-$i.txt --presence $O/presence-$c-$i.txt --regions $O/regions-$c-$i.json --root "$root"` writes `$c.$i.files.tsv` and `$c.$i.rows.tsv.gz` (Decision 6) from the ruled expected capture, the classified exclusions and the inactive ranges. Then check: `du -cb docs/superpowers/specs/r214-corpus/*.gz | tail -1` at most 20000000 (else STOP and ask); `zcat docs/superpowers/specs/r214-corpus/*.gz | grep -ciE 'begin|:=|exit\('` is 0 (no source text leaked); record each file's SHA-256.
 
-- [ ] **Step 10: Write the spec.** `docs/superpowers/specs/2026-09-29-r214-precommitment.md`, sections: "What is pre-committed" (Decision 6's rule in five lines); "Symbols" (the measured table, by reference to this plan plus the grammar); "Repros" (the repro table, each expected file and its SHA-256, the `p11-tier2` ruling, each exclusion row by reason); "Gate fixtures" (the seven headers, byte-identical, and `sandbox-symbols` per set); "R321, new tables" (Decision 7's table, codes, killing test, re-predicted red-checks); "Corpora" (Step 7's numbers per corpus and set, the `ATTR` rulings, exclusion counts by reason, the listing files' SHA-256, each corpus's `hashTargetSource` and git head); "Memory" (master's `maxRSS_KB` per corpus and set, and the 110% gate); "Identity scheme" (the scheme it was made on, the next one, the measured key moves); "What would count as a finding" (any capture not byte-identical to its expected file; any listing mismatch; any verdict or killing test off Decision 7's table; any gate-fixture byte that moves; a peak above 110%; a crash; a red-check red anywhere else, or not red); "Tools" (paths and SHA-256 of each tool, `$P` and `$Q`). No corpus source text.
+- [ ] **Step 10: Write the spec.** `docs/superpowers/specs/2026-09-29-r214-precommitment.md`, sections: "What is pre-committed" (Decision 6's rule in five lines); "Symbols" (the measured table, by reference to this plan plus the grammar); "Repros" (the repro table, each expected file and its SHA-256, the `p11-tier2` ruling, each exclusion row by reason); "Gate fixtures" (the seven headers, byte-identical, and `sandbox-symbols` per set); "R321, new tables" (Decision 7's table, codes, killing test, re-predicted red-checks, and "The baseline diff, by key" with the full `SA` and `RV` keys, per baseline: removed, changed with old and new verdict and killing test, and the count unchanged); "Corpora" (Step 7's numbers per corpus and set, the `ATTR` rulings, exclusion counts by reason, the listing files' SHA-256, each corpus's `hashTargetSource` and git head); "Memory" (master's `maxRSS_KB` per corpus and set, and the 110% gate); "Identity scheme" (the scheme it was made on, `S`, as committed in `before/scheme.json`; "the next scheme", numbered by the scheme-race rule; the measured key moves; and the old-engine record Task 8 uses: the L13 row of `before/fixture-sandbox-symbols.txt`); "What would count as a finding" (any capture not byte-identical to its expected file; any listing mismatch; `UNCLASSIFIED` or `EXTRA` above 0 after the change; any verdict or killing test off Decision 7's table; any R321 baseline key diff other than the pre-committed one; any gate-fixture byte that moves; a peak above 110%; a crash; a red-check red anywhere else, or not red); "Tools" (paths and SHA-256 of each tool, `$P` and `$Q`). No corpus source text.
 
 - [ ] **Step 11: Commit ALONE, and checkpoint.**
 
@@ -591,7 +647,36 @@ Then `coord checkpoint --task R-214 --wait review --note "pre-commitment <sha>"`
 **Interfaces:**
 - Produces: `IDENTITY_SCHEME` one above its value on the merged branch (call it `N`), read by `store.ts`, `resume.ts`, `report.ts`, `equivalence-marks.ts`, `verify.ts` as today.
 
-- [ ] **Step 1: Know what the bump touches.** Merge master. Read the current value `N - 1` from `project.ts`. Set the constant to `N`, then `bun run typecheck && rm -rf packages/*/dist && bun test > $Q/logs/t2-scheme.txt 2>&1`. Expected failures, and nothing else: `resume.test.ts` (the `PINNED` fingerprint, and `expect(IDENTITY_SCHEME).toBe(3)` at line 1781 while master holds 3); `named-return.test.ts` (the guards `expect(IDENTITY_SCHEME).toBe(3)` at lines 561 and 663, and the controls that relabel a record to scheme 3 and expect it carried); `report-equality` (the snapshot's `"identityScheme"`); `packages/runner/itest/harden-fixture.test.ts` ("the committed mark names exactly the planted equivalent": the marks file still says `N - 1`). A failure anywhere else is a STOP: something reads the scheme as a literal.
+- [ ] **Step 0: Scheme race check, mode `pre` (r3, C1, blocking).** Merge master, then, from the worktree root:
+
+```bash
+set -euo pipefail
+scheme_of() { sed -n 's/^export const IDENTITY_SCHEME = \([0-9][0-9]*\);$/\1/p'; }
+M=$(git show master:packages/schemata/src/project.ts | scheme_of)
+B=$(scheme_of < packages/schemata/src/project.ts)
+echo "master $(git rev-parse --short master) IDENTITY_SCHEME=$M; branch $(git rev-parse --short HEAD) IDENTITY_SCHEME=$B"
+[ -n "$M" ] && [ -n "$B" ] || { echo "STOP: IDENTITY_SCHEME line not found"; exit 1; }
+[ "$B" = "$M" ] || { echo "STOP: the branch is not at master's scheme before the bump"; exit 1; }
+echo "OK: Task 2 sets N=$((M + 1))"
+```
+
+(`master` is the local branch the orchestrator merges into; the lane never reads `origin/master` for this.) Expected: `OK`. `N` is `M + 1`. A `STOP` is reported, not worked around.
+
+**The mode `post` check**, run after every later `git merge master`, and in Task 11 Step 4 (the same first four lines, then):
+
+```bash
+if [ "$M" -ge "$B" ]; then echo "RACE: master holds $M, branch holds $B: re-bump to $((M + 1)) (Task 2 Step 6)"; exit 2; fi
+fail=0
+[ "$(grep -c "^- \*\*Identity scheme $B\*\* (R214)" CHANGELOG.md)" = 1 ] || { echo "MISMATCH: CHANGELOG has no 'Identity scheme $B (R214)' entry"; fail=1; }
+grep -q "\"identityScheme\": $B," fixtures/sandbox-harden/lethal.equivalent.json || { echo "MISMATCH: harden marks file is not at $B"; fail=1; }
+grep -q "\"identityScheme\": $B," docs/using-lethal-from-an-agent.md || { echo "MISMATCH: agent guide example is not at $B"; fail=1; }
+[ "$fail" = 0 ] || exit 1
+echo "OK: branch scheme $B is above master's $M, and the literals agree"
+```
+
+Both modes are `$T/scheme-race.sh pre|post`, run against this branch at plan time (`pre` gives `OK: Task 2 sets N=4`; `post` gives `RACE`, correctly, since nothing is bumped yet). Exit 2 means Step 6 now, before any other step. Exit 1 is a STOP.
+
+- [ ] **Step 1: Know what the bump touches.** Read the current value `N - 1` from `project.ts` (Step 0's `M`). Set the constant to `N`, then `bun run typecheck && rm -rf packages/*/dist && bun test > $Q/logs/t2-scheme.txt 2>&1`. Expected failures, and nothing else: `resume.test.ts` (the `PINNED` fingerprint, and `expect(IDENTITY_SCHEME).toBe(3)` at line 1781 while master holds 3); `named-return.test.ts` (the guards `expect(IDENTITY_SCHEME).toBe(3)` at lines 561 and 663, and the controls that relabel a record to scheme 3 and expect it carried); `report-equality` (the snapshot's `"identityScheme"`); `packages/runner/itest/harden-fixture.test.ts` ("the committed mark names exactly the planted equivalent": the marks file still says `N - 1`). A failure anywhere else is a STOP: something reads the scheme as a literal.
 
 - [ ] **Step 2: Update each by meaning.**
   - `project.ts`: the value is `N`; the doc comment gains `N: R214, a mutant in an #if arm the build compiles out is no longer generated, a file whose directives cannot be evaluated as alc does is not mutated, and a statement directly inside a statement-level #if became a statement position (measured moves in the R-214 plan).`
@@ -616,9 +701,19 @@ Then `coord checkpoint --task R-214 --wait review --note "pre-commitment <sha>"`
 
 - [ ] **Step 3: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test`. `bunx biome check packages/schemata/src/project.ts packages/runner/tests/resume.test.ts packages/runner/tests/named-return.test.ts`.
 
-- [ ] **Step 4: Red-check.** Revert the constant alone to `N - 1`: `resume.test.ts`'s `PINNED` test, the snapshot and the harden mark test go red; restore: green. Record in `$Q/logs/t2-redcheck.txt`. (The same-text transitions are pinned in Task 8, where the moved keys exist.)
+- [ ] **Step 4: Red-check.** Revert the constant alone to the starting scheme `S` (the value `before/scheme.json` holds, which is `N - 1` only on this first bump): `resume.test.ts`'s `PINNED` test, the snapshot and the harden mark test go red; restore: green. Record in `$Q/logs/t2-redcheck.txt`. (The same-text transitions are pinned in Task 8, where the moved keys exist.)
 
-- [ ] **Step 5: Commit.** `git commit -m "fix(R214): the next identity scheme; dropping compiled-out arms, refusing undecidable files and lifting in-arm statements move keys for unchanged source (R325's rule)"`.
+- [ ] **Step 5: Commit.** `git commit -m "fix(R214): the next identity scheme; dropping compiled-out arms, refusing undecidable files and lifting in-arm statements move keys for unchanged source (R325's rule)"`. Then run the mode `post` check (Step 0): expected `OK: branch scheme N is above master's N - 1`.
+
+- [ ] **Step 6: The re-bump, only when a mode `post` check exits 2 (r3, C1).** Master now holds `M >= B`: another lane (R-318) took this branch's number. Set `N' = M + 1`, and in ONE commit:
+  - `packages/schemata/src/project.ts`: `IDENTITY_SCHEME = N'`; the R214 doc line's number becomes `N'`, placed after master's own line for `M` (keep that line as master wrote it).
+  - `CHANGELOG.md`: this branch's entry heading becomes `**Identity scheme N'** (R214)`, with `N'` also in its body, and it sits ABOVE master's entry for `M`.
+  - `fixtures/sandbox-harden/lethal.equivalent.json` and `docs/using-lethal-from-an-agent.md:490`: `"identityScheme": N'`.
+  - `resume.test.ts`'s `PINNED` fingerprint and the `report-equality` snapshot: re-derived exactly as Step 2 did (the red output, then `--update-snapshots`; the diff is the one line).
+  - `before/scheme.json` does NOT change: `S` is the scheme the pre-commitment was made on.
+  - Commit `fix(R214): identity scheme N', since master took M (R-318); keys of the two pipelines must never share a scheme`.
+
+  Then re-run, in order, and record each in `$Q/logs/rebump-<N'>.txt`: the mode `post` check (expected `OK`); `bun run typecheck && rm -rf packages/*/dist && bun test` (the whole suite, which holds the transition tests of Task 8 and Task 2's pins); Task 2 Step 4's red-check against `S`; and, if the tasks exist yet, Task 8 Step 7 (f), Task 9 Steps 1, 3 and 6 (the captures), and Task 10 Steps 2 and 6 (the live gates, since master's engine changed under them). A capture that no longer equals its pre-committed file after merging R-318's engine is a STOP and a question to the orchestrator (the pre-commitment may need an amendment), never an edit of the expectation.
 
 ---
 
@@ -1395,6 +1490,29 @@ import { identityKeyOf, serializeKey } from "../src/selection";
 const HERE = import.meta.dir;
 const R214 = join(HERE, "fixtures", "r214");
 const REPO = resolve(HERE, "../../..");
+const norm = (p: string): string => p.replaceAll("\\", "/");
+
+/** r3, I5: a valid codeunit with no site whose one directive-looking line is in a block comment. */
+export const EMPTY_REFUSED = 'codeunit 50018 "P12 Empty"\n{\n/*\n#if R12SYM\n*/\n}\n';
+
+/** r3, minor b: `#if and` compiles (alc builds ARM2, measured row 21), and its meaning is unknown,
+ *  so the file is refused. Line 5 is the `#if`. */
+export const BARE_AND = `codeunit 50017 "P12 Bare And"
+{
+    procedure Run(X: Integer)
+    begin
+#if and
+        Helper(X);
+#else
+        Helper(X + 1);
+#endif
+    end;
+
+    local procedure Helper(V: Integer)
+    begin
+    end;
+}
+`;
 
 async function capture(projectDir: string, symbols: readonly string[]) {
   const warnings: { code: string; message: string }[] = [];
@@ -1454,7 +1572,7 @@ beforeAll(async () => {
 // Listed at module load (top-level await), so each repro is its own named test.
 const CASES: [string, string][] = [
   ...(await readdir(R214))
-    .filter((n) => n !== "expected")
+    .filter((n) => n !== "expected" && n !== "before")
     .map((n): [string, string] => [n, join(R214, n)]),
   ["fixture-sandbox-symbols", join(REPO, "fixtures", "sandbox-symbols")],
 ];
@@ -1491,18 +1609,56 @@ describe("R214: every drop is named and counted", () => {
 
   test("an undecidable file gets NO mutant, one warning, one counted row; its sibling is untouched", async () => {
     const { warnings, set, text } = await capture(join(R214, "p12-refused"), ["R12SYM"]);
-    expect(text).not.toContain("Refused.Codeunit.al");
-    expect(text).toContain("Plain.Codeunit.al:6\tlethal.void-method-call");
+    // Project-relative paths (r3, I6). `readdir` on Windows spells them `src\...` (measured), so
+    // the actual path is normalised before an EXACT comparison; the capture text already is.
+    expect(text).not.toContain("src/Refused.Codeunit.al");
+    expect(text).toContain("src/Plain.Codeunit.al:6\tlethal.void-method-call");
     const w = warnings.filter((x) => x.code === "preproc-arms-undecided");
     expect(w).toHaveLength(1);
-    expect(w[0]?.message).toContain("Refused.Codeunit.al");
+    expect(norm(w[0]?.message ?? "")).toContain("src/Refused.Codeunit.al: ");
     expect(w[0]?.message).toContain("marker-mismatch (2 directive lines, 0 markers)");
     expect(w[0]?.message).not.toContain("Helper(");
     const refused = set.preprocExcluded.filter((f) => f.reason === "preproc-undecided");
-    expect(refused.map((f) => [f.file, f.detail])).toEqual([
-      ["Refused.Codeunit.al", "marker-mismatch (2 directive lines, 0 markers)"],
+    expect(refused.map((f) => [norm(f.file), f.detail])).toEqual([
+      ["src/Refused.Codeunit.al", "marker-mismatch (2 directive lines, 0 markers)"],
     ]);
     expect(refused[0]?.sites).toBeGreaterThan(0);
+  });
+
+  test("a refused file with NO site still gets its row, sites 0 (r3, I5)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r214-empty-"));
+    try {
+      await Bun.write(join(dir, "app.json"), JSON.stringify({ name: "p" }));
+      // A valid, otherwise empty codeunit: the directive-looking line sits in a block comment.
+      await Bun.write(join(dir, "src", "Empty.Codeunit.al"), EMPTY_REFUSED);
+      const warnings: string[] = [];
+      const set = await generateMutationSet(dir, {
+        emit: (e) => {
+          if (e.type === "warning" && e.code === "preproc-arms-undecided") warnings.push(e.message);
+        },
+      });
+      expect(set.preprocExcluded.map((f) => [norm(f.file), f.sites, f.reason, f.detail])).toEqual([
+        ["src/Empty.Codeunit.al", 0, "preproc-undecided", "marker-mismatch (1 directive lines, 0 markers)"],
+      ]);
+      expect(warnings).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a legal bare `#if and` refuses its file: unparsed-condition, no mutant, one row (r3, minor b)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r214-and-"));
+    try {
+      await Bun.write(join(dir, "app.json"), JSON.stringify({ name: "p" }));
+      await Bun.write(join(dir, "src", "BareAnd.Codeunit.al"), BARE_AND);
+      const set = await generateMutationSet(dir);
+      expect(set.files.flatMap((f) => f.specs)).toHaveLength(0);
+      const rows = set.preprocExcluded.map((f) => [norm(f.file), f.reason, f.detail]);
+      expect(rows).toEqual([["src/BareAnd.Codeunit.al", "preproc-undecided", "unparsed-condition at line 5"]]);
+      expect(set.preprocExcluded[0]?.sites).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("app.json's own preprocessorSymbols count", async () => {
@@ -1525,7 +1681,7 @@ describe("R214: every drop is named and counted", () => {
 });
 ```
 
-(The expected `kinds` string is what `describeObjectKinds` returns for a lone codeunit; if Step 2's red output shows a different spelling for that function, the test takes that spelling, since it is existing product output and not a prediction.)
+(The expected `kinds` string is what `describeObjectKinds` returns for a lone codeunit; if Step 2's red output shows a different spelling for that function, the test takes that spelling, since it is existing product output and not a prediction. If `generateMutationSet` refuses a project with no site at all, the two r3 tests each add `p12-refused/src/Plain.Codeunit.al` as a sibling and filter `preprocExcluded` to `preproc-undecided` before the exact comparison; the assertions on the refused file do not change. `EMPTY_REFUSED` and `BARE_AND` are exported for Task 7's report test.)
 
 In `cli.test.ts`'s C02-06 describe, a second test built exactly like the first (same `PassingBackend`, same `app.json`), whose `Logic.Codeunit.al` is:
 
@@ -1602,15 +1758,14 @@ After the R144 `declarativeInThisFile` block (so a refused file's declarative si
         "preproc-arms-undecided",
         `[lethal] ${rel}: a preprocessor directive could not be evaluated exactly as alc does (${arms.reason}), so no mutant is generated in this file (${specs.length} site(s)). It is still compiled and published unchanged. R214.`,
       );
-      if (specs.length > 0) {
-        preprocExcluded.push({
-          file: rel,
-          kinds: describeObjectKinds(root),
-          sites: specs.length,
-          reason: "preproc-undecided",
-          detail: arms.reason,
-        });
-      }
+      // r3, I5: recorded even at 0 sites, so a refused file never vanishes from the report.
+      preprocExcluded.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: specs.length,
+        reason: "preproc-undecided",
+        detail: arms.reason,
+      });
       continue;
     }
     if (compiledOutHere > 0) {
@@ -1666,7 +1821,7 @@ Import `existsSync` from `node:fs`. Expected: `sandbox-symbols` logs 9 mutants a
 
 - [ ] **Step 7: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test`. `bunx biome check` on every touched file.
 
-- [ ] **Step 8: Red-check each hunk alone**, in `$Q/logs/t6-redcheck.txt`: (a) the `startsInInactiveArm` drop removed: every repro case goes red (inactive rows back); (b) the undecided `continue` removed (the file's specs kept): `p12-refused` and its drop test go red; (c) `effectiveBuildSymbols` replaced by `options.preprocessorSymbols ?? []`: `p7-appjson` and the `app.json` test go red; (d) `runSession`'s `preprocessorSymbols: sourceSymbols` removed: the new `cli.test.ts` session test goes red; (e) the dry-run threading removed: the dry-run test goes red; (f) the undecided warning removed: its test goes red; (g) the compiled-out warning removed: its test goes red.
+- [ ] **Step 8: Red-check each hunk alone**, in `$Q/logs/t6-redcheck.txt`: (a) the `startsInInactiveArm` drop removed: every repro case goes red (inactive rows back); (b) the undecided `continue` removed (the file's specs kept): `p12-refused` and its drop test go red; (c) `effectiveBuildSymbols` replaced by `options.preprocessorSymbols ?? []`: `p7-appjson` and the `app.json` test go red; (d) `runSession`'s `preprocessorSymbols: sourceSymbols` removed: the new `cli.test.ts` session test goes red; (e) the dry-run threading removed: the dry-run test goes red; (f) the undecided warning removed: its test goes red; (g) the compiled-out warning removed: its test goes red; (h) the undecided row pushed only when `specs.length > 0` (r2's condition, r3 I5): "a refused file with NO site still gets its row" goes red while the `p12-refused` test stays green, which shows the two are pinned apart; (i) the bare-keyword refusal removed (in `primary`, drop the `OPERATOR_WORDS` condition, so `and` reads as an undefined symbol and the file is decided and mutated): the bare `#if and` test goes red (minor b; Task 4's (d) is the same revert seen from the engine).
 
 - [ ] **Step 9: Commit.** `git commit -m "fix(R214): generateMutationSet drops sites in #if arms the build compiles out and refuses files it cannot evaluate as alc does (config plus app.json symbols, per-file #define/#undef); named warnings; symbols threaded through runSession and --dry-run"`.
 
@@ -1681,32 +1836,59 @@ Import `existsSync` from `node:fs`. Expected: `sandbox-symbols` logs 9 mutants a
 - Modify: `packages/runner/src/report.ts` (banner)
 - Modify: `packages/runner/src/mutation-elements.ts` (description per reason)
 - Modify: `packages/runner/src/orchestrator.ts` (the event's new field)
-- Generate: `schemas/report-v2.schema.json` (`bun scripts/generate-schemas.ts`)
-- Test: `packages/runner/tests/r214-compiled-out.test.ts`, `packages/runner/tests/schemas.test.ts`, `packages/runner/tests/__snapshots__/report-equality.test.ts.snap`
+- Modify (minor a): `packages/runner/src/report.ts` (`Caveat`, `CAVEAT_INTERPRETATIONS`, the push in `buildReport`), `packages/runner/src/explain.ts` (`EXPLAIN_SCHEMA_VERSION`), `schemas/README.md`, `docs/using-lethal-from-an-agent.md` (the explain link and `explainSchemaVersion`)
+- Create (minor a): `schemas/explain-v7.schema.json` (hand-written; `explain-v6.schema.json` stays as published)
+- Generate: `schemas/report-v3.schema.json` and `schemas/stream-v1.schema.json` (`bun scripts/generate-schemas.ts`); `schemas/report-v2.schema.json` is frozen and must not change (r3, I7)
+- Test: `packages/runner/tests/r214-compiled-out.test.ts`, `packages/runner/tests/schemas.test.ts`, `packages/runner/tests/interpretation.test.ts`, `packages/runner/tests/report.test.ts`, `packages/runner/tests/__snapshots__/report-equality.test.ts.snap`
 
 **Interfaces:**
-- Produces: `ExclusionReason = "not-instrumentable" | "declarative" | "compiled-out" | "preproc-undecided"`; `mutation-set-generated.preprocExcludedFiles: readonly PreprocExcludedFile[]` (required, empty when none); `FoldStatics.buildSymbols?: readonly string[]` (consumed by Task 8's marks, never written to the report).
+- Produces: `ExclusionReason = "not-instrumentable" | "declarative" | "compiled-out" | "preproc-undecided"`; `mutation-set-generated.preprocExcludedFiles: readonly PreprocExcludedFile[]` (required, empty when none); `FoldStatics.buildSymbols?: readonly string[]` (consumed by Task 8's marks, never written to the report); `Caveat` gains `"preproc-files-refused"` (r3, minor a).
 
-- [ ] **Step 1: Write the failing test.** Append to `r214-compiled-out.test.ts` a describe that runs `runSession` (the `SurvivingBackend` pattern of `named-return.test.ts`, coverage entry `{ objectType: "Codeunit", objectId: 50013, procedure: "Run" }`) over a temp copy of `p12-refused` with `preprocessorSymbols: ["R12SYM"]`, and asserts:
+- [ ] **Step 1: Write the failing test.** Append to `r214-compiled-out.test.ts` a describe that runs `runSession` (the `SurvivingBackend` pattern of `named-return.test.ts`, coverage entry `{ objectType: "Codeunit", objectId: 50013, procedure: "Run" }`) with `preprocessorSymbols: ["R12SYM"]` over three temp copies of `p12-refused`:
+
+  - **Run 1**, the copy plus `src/BareAnd.Codeunit.al` (`BARE_AND`) and `src/Empty.Codeunit.al` (`EMPTY_REFUSED`), both written by the test:
 
 ```ts
-    const rows = report.excludedSites?.files.filter(
-      (f) => f.reason === "compiled-out" || f.reason === "preproc-undecided",
-    );
-    expect(rows?.map((f) => [f.file, f.reason, f.detail])).toEqual([
-      ["Plain.Codeunit.al", "compiled-out", "symbols: R12SYM"],
-      ["Refused.Codeunit.al", "preproc-undecided", "marker-mismatch (2 directive lines, 0 markers)"],
+    const norm = (p: string) => p.replaceAll("\\", "/");
+    const rows = (report.excludedSites?.files ?? [])
+      .filter((f) => f.reason === "compiled-out" || f.reason === "preproc-undecided")
+      .map((f) => [norm(f.file), f.reason, f.detail])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    // Project-relative paths (r3, I6); the bare `#if and` file's own row (r3, minor b); the
+    // zero-site refused file's row (r3, I5).
+    expect(rows).toEqual([
+      ["src/BareAnd.Codeunit.al", "preproc-undecided", "unparsed-condition at line 5"],
+      ["src/Empty.Codeunit.al", "preproc-undecided", "marker-mismatch (1 directive lines, 0 markers)"],
+      ["src/Plain.Codeunit.al", "compiled-out", "symbols: R12SYM"],
+      ["src/Refused.Codeunit.al", "preproc-undecided", "marker-mismatch (2 directive lines, 0 markers)"],
     ]);
+    const empty = report.excludedSites?.files.find((f) => norm(f.file) === "src/Empty.Codeunit.al");
+    expect(empty?.sites).toBe(0);
     expect(report.excludedSites?.siteCount).toBe(
       report.excludedSites?.files.reduce((n, f) => n + f.sites, 0),
     );
+    expect(report.excludedSites?.fileCount).toBe(
+      new Set(report.excludedSites?.files.map((f) => f.file)).size,
+    );
+    // No mutant from any refused file (minor b: the bare `#if and` file included).
+    const refusedFiles = ["src/BareAnd.Codeunit.al", "src/Empty.Codeunit.al", "src/Refused.Codeunit.al"];
+    expect(report.mutants.filter((m) => refusedFiles.includes(norm(m.file)))).toEqual([]);
+    // Minor a: a consumer reading only `validity` sees the refusal.
+    expect(report.validity.caveats).toContain("preproc-files-refused");
     // No source text in the durable record.
     expect(JSON.stringify(report.excludedSites)).not.toMatch(/Helper|begin|:=/);
 ```
 
-And in `schemas.test.ts`, one assertion that the published schema's `excludedSites.files.items.properties.reason.enum` equals `["not-instrumentable", "declarative", "compiled-out", "preproc-undecided"]`.
+  - **Run 2**, the copy with `src/Refused.Codeunit.al` deleted and `src/Empty.Codeunit.al` added: every `preproc-undecided` row has 0 sites, and `report.validity.caveats` still contains `"preproc-files-refused"` (the caveat counts files, not sites).
+  - **Run 3**, the control, the copy with `src/Refused.Codeunit.al` deleted and nothing added: the `compiled-out` row for `src/Plain.Codeunit.al` is present, and `report.validity.caveats` does NOT contain `"preproc-files-refused"` (a compiled-out site is the correct build, not a refusal).
 
-- [ ] **Step 2: Run, expect red.** `bun test packages/runner/tests/r214-compiled-out.test.ts packages/runner/tests/schemas.test.ts`. Expected: both FAIL (the reasons do not exist).
+(If `report.mutants[]` names its path field other than `file`, use that field; it is existing product output.)
+
+And in `schemas.test.ts`: one assertion that the published report schema's `excludedSites.files.items.properties.reason.enum` equals `["not-instrumentable", "declarative", "compiled-out", "preproc-undecided"]`; and, per the explain schema bump in Step 3.11, its R233 pinned list for `#/properties/caveats/items/properties/caveat` gains `"preproc-files-refused"` after `"session-warm"`, loaded from `explain-v7.schema.json`.
+
+In `interpretation.test.ts`, "every caveat has an interpretation" moves from `toBe(20)` to `toBe(21)`; in `report.test.ts`'s "Caveat union", the `all` object gains `"preproc-files-refused": true` and the count moves from `toBe(20)` to `toBe(21)` (both read 20 today, `interpretation.test.ts:44` and `report.test.ts:277`, re-read at `f0fe038a`).
+
+- [ ] **Step 2: Run, expect red.** `bun test packages/runner/tests/r214-compiled-out.test.ts packages/runner/tests/schemas.test.ts packages/runner/tests/interpretation.test.ts packages/runner/tests/report.test.ts`. Expected: every new assertion FAILS (the reasons, the caveat and `explain-v7.schema.json` do not exist), and `interpretation.test.ts`'s count fails at 20. `report.test.ts`'s `all` object is a compile-time pin (`Record<Caveat, true>`): its red is `bun run typecheck` naming the unknown key `"preproc-files-refused"`, while `bun test` passes it; both are recorded.
 
 - [ ] **Step 3: Implement, in the ripple's order.**
   1. `events.ts`, in `mutation-set-generated` after `declarativeSiteFiles`: `/** R214: files whose sites the build's symbols decided (compiled out) or that were refused because their directives could not be evaluated as alc does. Required, and empty on a project with neither: an absent list and a measured zero must not look alike. */ readonly preprocExcludedFiles: readonly PreprocExcludedFile[];`
@@ -1747,16 +1929,34 @@ And in `schemas.test.ts`, one assertion that the published schema's `excludedSit
 
    (`lines` is the banner's own accumulator at that point; use its existing name there.)
   6. `mutation-elements.ts`: the `description` becomes reason-aware: `row.reason === "compiled-out" ? \`${row.sites} mutation site(s) in this ${row.kinds} are in #if arms this build does not compile (${row.detail ?? ""}). They are not in the program under test.\` : <the existing sentence>`.
-  7. `bun scripts/generate-schemas.ts`; the schema diff must be the enum and nothing else.
-  8. `schemas.test.ts`: the pinned root-required list does not change (`excludedSites` is optional and its shape is unchanged apart from the enum); the older-reports expectation does not change (an older report never holds the new values). Add Step 1's enum assertion.
+  7. `bun scripts/generate-schemas.ts` (after item 11, so the caveat is in the type). It writes `schemas/report-v3.schema.json` (the current `REPORT_SCHEMA_VERSION`) and `schemas/stream-v1.schema.json`, never v2 (r3, I7). The expected diff, and nothing else: in `report-v3.schema.json`, `excludedSites.files.items.properties.reason.enum` gains `"compiled-out"` and `"preproc-undecided"`, and `validity.caveats.items.enum` gains `"preproc-files-refused"`; in `stream-v1.schema.json`, the `mutation-set-generated` event gains the required `preprocExcludedFiles` array (a field added to an event, which `schemas/README.md` says does not bump a version; R-236c's `87faa6ac` changed `stream-v1` the same way). Then `git diff --exit-code schemas/report-v2.schema.json` must exit 0, and `bun scripts/generate-schemas.ts --check` must pass.
+  8. `schemas.test.ts`: the pinned root-required list does not change (`excludedSites` is optional and its shape is unchanged apart from the enum); the older-reports expectation does not change (an older report never holds the new values). Add Step 1's enum assertion. Every `loadSchema("explain-v6.schema.json")` that reads the CURRENT explain schema (today lines 232 and 1051) reads `explain-v7.schema.json`; the per-file required-list map (today line 864) gains an `"explain-v7.schema.json"` entry equal to v6's; v6's own entries stay, since v6 is kept.
   9. `bun test packages/runner/tests/report-equality.test.ts --update-snapshots` only if it goes red; its fixtures hold no directive, so the expected diff is none.
   10. Sample reports: `examples/credit-limit/demo.report.json` and gift-card's hold no directive and still validate against a superset enum, so they are NOT regenerated; `bun test packages/runner/tests/schemas.test.ts` proves it. If it goes red, that is a STOP (it would mean the change is not a superset).
+  11. **The caveat (r3, minor a)**, done BEFORE item 7 so the generator sees it. In `report.ts`: `Caveat` gains `| "preproc-files-refused"` after `"session-warm"`; `CAVEAT_INTERPRETATIONS` gains
+
+```ts
+  "preproc-files-refused": {
+    meaning:
+      "At least one file holds a preprocessor directive LethAL cannot evaluate exactly as alc " +
+      "does, so NO mutant was generated anywhere in that file. It is still compiled and " +
+      "published unchanged. `excludedSites.files` names each such file with the reason " +
+      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files.",
+    entailedNegative:
+      "Not a gap in the target's tests and not a failed run: the refused files were never " +
+      "measured, in either direction. A refused file can have 0 sites, so count its rows, not " +
+      "its `sites`.",
+    basis: "R214",
+  },
+```
+
+   and `buildReport` pushes it next to the `declarative-sites-dropped` push: `// R214 - see CAVEAT_INTERPRETATIONS["preproc-files-refused"]. Pushed on the FILE count: a refused file can have 0 sites (r3, I5).` then `if (input.excludedSites.files.some((f) => f.reason === "preproc-undecided")) caveats.push("preproc-files-refused");` (`input.excludedSites` is the value `buildReport` already reads for `notInstrumentedView` and `declarativeSitesView`, `report.ts:2125-2126`). `reliability` is not changed. In `explain.ts`: `EXPLAIN_SCHEMA_VERSION = 7`, and its doc comment gains `7: R214 added the caveat value preproc-files-refused.` Create `schemas/explain-v7.schema.json` as a copy of `explain-v6.schema.json` with its `$id` and `explainSchemaVersion` const set to 7 and `"preproc-files-refused"` appended to the `caveat` enum; `explain-v6.schema.json` is not edited. `schemas/README.md`: a v7 row as the current explain schema, and v6 moves to a kept row ("from builds before R214; kept so a stored v6 document stays checkable (v7 added the caveat `preproc-files-refused`)"), with the file count in the paragraph below it updated to match. `docs/using-lethal-from-an-agent.md`: the explain link (line 207) and `explainSchemaVersion: 6` (line 252) read 7. This is the precedent R-236c set for one caveat (`87faa6ac`), step for step.
 
 - [ ] **Step 4: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test`. `bunx biome check` on every touched file.
 
-- [ ] **Step 5: Red-check**, in `$Q/logs/t7-redcheck.txt`: (a) `preproc: preprocExcludedFiles` replaced by `preproc: []` in the fold: the `runSession` test goes red; (b) the event's `preprocExcludedFiles` emitted as `[]`: the same test goes red; (c) the schema regenerated without the two enum values (revert `ExclusionReason` alone and regenerate): the schema test goes red.
+- [ ] **Step 5: Red-check**, in `$Q/logs/t7-redcheck.txt`: (a) `preproc: preprocExcludedFiles` replaced by `preproc: []` in the fold: the `runSession` test goes red; (b) the event's `preprocExcludedFiles` emitted as `[]`: the same test goes red; (c) the schema regenerated without the two enum values (revert `ExclusionReason` alone and regenerate): the schema test goes red; (d) the caveat push removed: Run 1's and Run 2's caveat assertions go red, Run 3 stays green; (e) the push made on the site count (`siteCount` of the `preproc-undecided` rows above 0) instead of the file count: Run 2 goes red while Runs 1 and 3 stay green, which is the I5 case seen from `validity`.
 
-- [ ] **Step 6: Commit.** `git commit -m "feat(R214): excludedSites counts compiled-out and preproc-undecided files, with symbols or a reason code and no source text; banner and schema"`.
+- [ ] **Step 6: Commit.** `git commit -m "feat(R214): excludedSites counts compiled-out and preproc-undecided files, with symbols or a reason code and no source text; a refused file raises the preproc-files-refused caveat (explain schema v7); banner and report schema v3"`.
 
 ---
 
@@ -1828,27 +2028,87 @@ function armOf(report: SessionReport, line: 13 | 15): ReportMutant {
   return hits[0];
 }
 
-/** A run under `symbols`, then relabelled to `scheme` (and its fingerprint recomputed the way that
- *  build computes it); `finished: false` clears its finish so it is resumable. */
-async function storedRun(opts: { symbols: string[]; scheme: number; finished: boolean }) {
+/** A real CURRENT-engine run under `symbols`, at the current scheme, as it was recorded;
+ *  `finished: false` clears its finish so it is resumable. It never takes a scheme: an old-scheme
+ *  record is `oldEngineRun`'s, never a relabelled current-engine run (r3, I2). */
+async function storedRun(opts: { symbols: string[]; finished: boolean }) {
   const dirs = await makeSymbolsProject();
   const store = new ResultsStore(":memory:");
   await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: opts.symbols });
-  const run = store.db.query("SELECT id, backend FROM runs").get() as { id: number; backend: string };
-  const fingerprint = sessionFingerprint({
-    projectDir: dirs.projectDir,
-    testDir: dirs.testDir,
-    backend: run.backend,
-    skipKnownSurvivors: false,
-    selectorIds,
-    identityScheme: opts.scheme,
-    ...(opts.symbols.length > 0 ? { preprocessorSymbols: opts.symbols } : {}),
-  });
-  store.db.run(
-    `UPDATE runs SET identity_scheme = ?, config_fingerprint = ?${opts.finished ? "" : ", finished_at = NULL"} WHERE id = ?`,
-    [opts.scheme, fingerprint, run.id],
-  );
+  const run = store.db.query("SELECT id FROM runs").get() as { id: number };
+  if (!opts.finished) store.db.run("UPDATE runs SET finished_at = NULL WHERE id = ?", [run.id]);
   return { dirs, store, runId: run.id };
+}
+
+/** The OLD engine's record, from committed files only (Task 1 Step 5b): master's own L13
+ *  `return-value` key and line from the BEFORE capture, and the starting scheme `S`. Neither is
+ *  derived from IDENTITY_SCHEME, so reverting the constant cannot move both sides (r3, I2). */
+async function oldEngineKey(): Promise<{ scheme: number; key: string; line: number }> {
+  const { identityScheme } = JSON.parse(
+    await readFile(join(R214, "before", "scheme.json"), "utf8"),
+  ) as { identityScheme: number };
+  const text = await readFile(join(R214, "before", "fixture-sandbox-symbols.txt"), "utf8");
+  const row = text
+    .split("\n")
+    .find((l) => l.startsWith("src/SymbolLogic.Codeunit.al:13\tlethal.return-value\t"));
+  const key = row?.split("\t")[4];
+  if (key === undefined) throw new Error("no L13 return-value row in the BEFORE capture");
+  return { scheme: identityScheme, key, line: 13 };
+}
+
+/**
+ * A run the OLD engine made under [LETHALB]: one row, master's L13 `return-value` key and line,
+ * verdict `survived` (the frozen R321 [LETHALB] baseline scores that compiled-out mutant exactly
+ * so). Written through the store API, beside one real current-engine run whose project path and
+ * backend it copies, so it is found as the same project. It is created AFTER that run, so it is
+ * the latest. `buildSymbols` is B by default, so the scheme is its ONLY difference from the
+ * current-scheme control; `null` is the shape a real pre-R214 row has.
+ */
+async function oldEngineRun(opts: { finished: boolean; buildSymbols?: readonly string[] | null }) {
+  const old = await oldEngineKey();
+  const dirs = await makeSymbolsProject();
+  const store = new ResultsStore(":memory:");
+  await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B });
+  const real = store.db.query("SELECT project_path, backend FROM runs").get() as {
+    project_path: string;
+    backend: string;
+  };
+  const buildSymbols = opts.buildSymbols === undefined ? B : opts.buildSymbols;
+  const runId = store.createRun({
+    projectPath: real.project_path,
+    backend: real.backend,
+    appVersion: "1.0.0.0",
+    identityScheme: old.scheme,
+    buildSymbols: buildSymbols ?? [],
+    configFingerprint: sessionFingerprint({
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backend: real.backend,
+      skipKnownSurvivors: false,
+      selectorIds,
+      identityScheme: old.scheme,
+      preprocessorSymbols: B,
+    }),
+  });
+  if (buildSymbols === null) store.db.run("UPDATE runs SET build_symbols = NULL WHERE id = ?", [runId]);
+  const [astHash = "", codeunitName = "", procedureName = "", operatorName = "", major = ""] =
+    old.key.split("|");
+  store.recordMutant(runId, {
+    mutantCode: "M0010",
+    astHash,
+    codeunitName,
+    procedureName,
+    operatorName,
+    operatorMajor: Number(major),
+    identityOrdinal: 0,
+    file: "src/SymbolLogic.Codeunit.al",
+    line: old.line,
+    verdict: "survived",
+    durationMs: 1,
+    batchIndex: 0,
+  });
+  if (opts.finished) store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+  return { dirs, store, runId, old };
 }
 
 const B = ["LETHALB"];
@@ -1859,7 +2119,7 @@ describe("R214 C1: the same key text names a different site in another build", (
   });
 
   test("history: a [LETHALA] survivor is not skipped in a [LETHALB] run, and the run says why", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], scheme: IDENTITY_SCHEME, finished: true });
+    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], finished: true });
     const events: RunEvent[] = [];
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, skipKnownSurvivors: true, emit: [(e) => events.push(e)] });
     expect(armOf(report, 15).verdict).toBe("survived");
@@ -1871,31 +2131,31 @@ describe("R214 C1: the same key text names a different site in another build", (
   });
 
   test("history control: a [LETHALB] survivor IS skipped in a [LETHALB] run", async () => {
-    const { dirs, store } = await storedRun({ symbols: B, scheme: IDENTITY_SCHEME, finished: true });
+    const { dirs, store } = await storedRun({ symbols: B, finished: true });
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, skipKnownSurvivors: true });
     expect(armOf(report, 15).verdict).toBe("known-survivor");
   });
 
   test("--resume-run of a [LETHALA] run is refused by name in a [LETHALB] session", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], scheme: IDENTITY_SCHEME, finished: false });
+    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], finished: false });
     await expect(runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: runId }))
       .rejects.toThrow(new RegExp(`--resume-run ${runId} was built with preprocessor symbols LETHALA.*LETHALB.*R214`));
   });
 
   test("--resume-run control: the same set resumes", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: B, scheme: IDENTITY_SCHEME, finished: false });
+    const { dirs, store, runId } = await storedRun({ symbols: B, finished: false });
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: runId });
     expect(armOf(report, 15).verdict).toBe("survived");
   });
 
   test("--resume last names the [LETHALA] run instead of reporting none found", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], scheme: IDENTITY_SCHEME, finished: false });
+    const { dirs, store, runId } = await storedRun({ symbols: ["LETHALA"], finished: false });
     await expect(runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: "last" }))
       .rejects.toThrow(new RegExp(`run ${runId}, .*preprocessor symbols LETHALA.*LETHALB.*R214`));
   });
 
   test("--resume last control: the same set resumes", async () => {
-    const { dirs, store } = await storedRun({ symbols: B, scheme: IDENTITY_SCHEME, finished: false });
+    const { dirs, store } = await storedRun({ symbols: B, finished: false });
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: "last" });
     expect(armOf(report, 15).verdict).toBe("survived");
   });
@@ -1929,42 +2189,55 @@ describe("R214 C1: the same key text names a different site in another build", (
   });
 });
 
-describe("R214 I4: a previous-scheme record never reaches a current-scheme mutant with the same key text", () => {
-  // Pinned to IDENTITY_SCHEME and IDENTITY_SCHEME - 1, never to numbers (task.md Addendum).
-  const OLD = IDENTITY_SCHEME - 1;
+describe("R214 I4: an old-engine record never reaches a current-scheme mutant with the same key text", () => {
+  // The old side is master's own record (oldEngineKey); the new side is IDENTITY_SCHEME. No number
+  // is written here (task.md Addendum), and IDENTITY_SCHEME - 1 is never used (r3, I2).
 
-  test("history: a previous-scheme survivor is executed, and the run names the scheme", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: B, scheme: OLD, finished: true });
+  test("pin: the old engine's L13 key is the text the new engine gives L15 under [LETHALB]; the scheme moved", async () => {
+    const old = await oldEngineKey();
+    expect(old.key).toBe(await armKey(2));
+    expect(IDENTITY_SCHEME).toBeGreaterThan(old.scheme);
+  });
+
+  test("history: the old L13 survivor is not skipped at the new L15, and the run names the scheme", async () => {
+    const { dirs, store, runId, old } = await oldEngineRun({ finished: true });
     const events: RunEvent[] = [];
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, skipKnownSurvivors: true, emit: [(e) => events.push(e)] });
     expect(armOf(report, 15).verdict).toBe("survived");
     const w = events.flatMap((e) => (e.type === "warning" && e.code === "history-identity-scheme-changed" ? [e.message] : []));
     expect(w).toHaveLength(1);
     expect(w[0]).toContain(`run ${runId}`);
-    expect(w[0]).toContain(`identity scheme ${OLD}`);
+    expect(w[0]).toContain(`identity scheme ${old.scheme}`);
   });
 
-  test("history control: the current scheme is skipped (the key collides)", async () => {
-    const { dirs, store } = await storedRun({ symbols: B, scheme: IDENTITY_SCHEME, finished: true });
+  test("history: the real pre-R214 row shape (build_symbols NULL) is not skipped either", async () => {
+    const { dirs, store } = await oldEngineRun({ finished: true, buildSymbols: null });
+    const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, skipKnownSurvivors: true });
+    expect(armOf(report, 15).verdict).toBe("survived");
+  });
+
+  test("history control: a current-engine, current-scheme survivor IS skipped (the key collides)", async () => {
+    const { dirs, store } = await storedRun({ symbols: B, finished: true });
     const report = await runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, skipKnownSurvivors: true });
     expect(armOf(report, 15).verdict).toBe("known-survivor");
   });
 
-  test("--resume-run of a previous-scheme run is refused, naming both schemes and R325", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: B, scheme: OLD, finished: false });
+  test("--resume-run of the old run is refused, naming both schemes and R325", async () => {
+    const { dirs, store, runId, old } = await oldEngineRun({ finished: false });
     await expect(runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: runId }))
-      .rejects.toThrow(new RegExp(`--resume-run ${runId} was keyed under identity scheme ${OLD}.*scheme ${IDENTITY_SCHEME}.*R325`));
+      .rejects.toThrow(new RegExp(`--resume-run ${runId} was keyed under identity scheme ${old.scheme}.*scheme ${IDENTITY_SCHEME}.*R325`));
   });
 
-  test("--resume last names the previous-scheme run", async () => {
-    const { dirs, store, runId } = await storedRun({ symbols: B, scheme: OLD, finished: false });
+  test("--resume last names the old run", async () => {
+    const { dirs, store, runId, old } = await oldEngineRun({ finished: false });
     await expect(runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, preprocessorSymbols: B, resume: "last" }))
-      .rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme ${OLD}.*scheme ${IDENTITY_SCHEME}.*R325`));
+      .rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme ${old.scheme}.*scheme ${IDENTITY_SCHEME}.*R325`));
   });
 
-  test("marks: a previous-scheme mark on the key is stale; control: the current scheme marks it", async () => {
+  test("marks: an old-scheme mark on the old key is stale; control: the current scheme marks it", async () => {
     const dirs = await makeSymbolsProject();
-    const key = await armKey(2);
+    const old = await oldEngineKey();
+    const key = old.key;
     const run = (identityScheme: number) =>
       runSession({
         backend: new SurvivingBackend(),
@@ -1974,15 +2247,15 @@ describe("R214 I4: a previous-scheme record never reaches a current-scheme mutan
         preprocessorSymbols: B,
         equivalenceMarks: [{ key, reason: "same either way", identityScheme, preprocessorSymbols: B }],
       });
-    expect(armOf(await run(OLD), 15).readerMark).toBeUndefined();
+    expect(armOf(await run(old.scheme), 15).readerMark).toBeUndefined();
     expect(armOf(await run(IDENTITY_SCHEME), 15).readerMark).toBeDefined();
   });
 });
 ```
 
-(The `--resume-run` and `--resume last` controls for I4 are the C1 describe's controls, which already run at `IDENTITY_SCHEME` on the same key; they are not duplicated.)
+(The `--resume-run` and `--resume last` controls for I4 are the C1 describe's controls, which are real current-engine runs at `IDENTITY_SCHEME` on the same key text; they are not duplicated. `oldEngineRun` fills `recordMutant`'s row from the BEFORE key's five fields; if the typecheck names a further required `MutantRow` field, it takes the value `recordMutant`'s existing test callers give it, and the key fields, `file`, `line` and `verdict` stay as written. Why the old row is `survived` at L13: that is what the old engine's own `[LETHALB]` run scored there, in the committed baseline Task 1 Step 5b checks.)
 
-- [ ] **Step 2: Run, expect red.** `bun test packages/runner/tests/r214-history.test.ts`. Expected: the pin passes (it reads committed files); every C1 refusal test FAILS (history skips L15; resume carries; the `LETHALA` mark matches); the I4 tests PASS already (R325's checks exist) and serve as the controls that this task keeps them passing.
+- [ ] **Step 2: Run, expect red.** `bun test packages/runner/tests/r214-history.test.ts`. Expected: both pins pass (they read committed files, and Task 2 already moved the scheme); every C1 refusal test FAILS (history skips L15; resume carries; the `LETHALA` mark matches); the I4 tests on the old record PASS already (R325's scheme checks exist, and `createRun` ignores the not-yet-typed `buildSymbols` at run time), except "the real pre-R214 row shape", which FAILS because the `build_symbols` column does not exist yet. `bun run typecheck` fails on `createRun`'s unknown `buildSymbols` until Step 3.
 
 - [ ] **Step 3: Implement in `store.ts`.** In `migrate`'s C02-06 column list, after `identity_scheme`: `// R214: NULL on an older row, and read as "unknown", which matches no build. ["runs", "build_symbols TEXT", runCols],`. In `createRun`'s info: `/** R214: the effective preprocessor symbols (config plus app.json) the run's keys were made under. Required for the reason identityScheme is. */ buildSymbols: readonly string[];`, inserted as `JSON.stringify([...new Set(info.buildSymbols)].sort())` into a new `build_symbols` column of the INSERT. `RunRow` gains `readonly buildSymbols: readonly string[] | null;` and `getRun` selects `build_symbols` and parses it (`null` stays `null`). `priorSurvivorKeys`:
 
@@ -2076,7 +2349,7 @@ Import `sameBuildSymbols` from `./preprocessor-symbols`.
    with, at module level, `const symbolList = (s: readonly string[] | null): string => (s === null ? "(not recorded)" : s.length === 0 ? "(none)" : s.join(", "));`.
   - The history call becomes `cfg.store.priorSurvivorKeys(cfg.projectDir, buildSymbols, { schemeChanged: <the existing callback>, symbolsChanged: (old) => { ... } })`, where `symbolsChanged` warns once per session (a `historySymbolsWarned` flag, like `historySchemeWarned`), only under `--skip-known-survivors`, code `history-build-symbols-changed`, message `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}. An identity key names a site within one build, so a key can name a different site in another, and no survivor from it is skipped: every mutant is executed (R214).`
   - Both statics assemblies (the one at `:5440` and the quarantine/early-report one) gain `buildSymbols`.
-  - Beside the R325 marks warning (`:3886`): `const symbolsWarning = marksSymbolsWarning(marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols), buildSymbols); if (symbolsWarning !== undefined) emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });`. That block runs before `buildSymbols` exists today; move it below the new computation, or compute the warning where `buildSymbols` is in scope, whichever keeps it before any backend call.
+  - Beside the R325 marks warning (`:3886`): `const symbolsWarning = marksSymbolsWarning(marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols), buildSymbols); if (symbolsWarning !== undefined) emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });`. That block runs before `buildSymbols` exists today, so the new warning is computed just below the `buildSymbols` line, where it is in scope. That point is after `backend.status()` and any al-runner provisioning (`orchestrator.ts:3914-3971`), and this plan does not move the source read earlier, so the plan makes no claim about when, relative to backend calls, the warning appears; it is emitted once per run (r3, minor c). The existing R325 marks warning stays where it is.
 
 - [ ] **Step 5: Implement marks and verify.** In `equivalence-marks.ts`: `EquivalenceMark` gains
 
@@ -2109,7 +2382,7 @@ Import `sameBuildSymbols` from `./preprocessor-symbols`.
 
 - [ ] **Step 6: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test`. Add one assertion to `r214-history.test.ts`: after a `runSession` under `[LETHALB]`, `store.getRun(id)?.buildSymbols` equals `["LETHALB"]` (the row records the effective set, not NULL). `bunx biome check` on every touched file.
 
-- [ ] **Step 7: Red-check each hunk alone**, in `$Q/logs/t8-redcheck.txt`: (a) `priorSurvivorKeys`'s symbol check removed: "history: a [LETHALA] survivor is not skipped" goes red (L15 is `known-survivor`), its control stays green; (b) `--resume-run`'s symbol check removed: its test goes red (the fingerprint refuses with the generic "scoped differently" message, which the regex does not accept); (c) the fingerprint fed `cfg.preprocessorSymbols` again and `unfinishedRunUnderOtherSymbols` returning `null`: "--resume last names the [LETHALA] run" goes red; (d) `applyEquivalenceMarks`'s symbol condition removed: "marks: a mark made under [LETHALA]" goes red, its control green; (e) `preprocessorSymbols ?? []` in the mark check replaced by `buildSymbols` (absent matches anything): "a mark with no symbols" goes red; (f) `IDENTITY_SCHEME` set back to `IDENTITY_SCHEME - 1` alone: the I4 history and resume-run tests go red while their current-scheme controls stay green (the same-text transition red-check the review asked for); (g) `createRun` inserting `build_symbols` as NULL: the history control and the `getRun` assertion go red; (h) the harden test's new block with `[]` replaced by `["X"]`: it goes red, which shows it reads the symbol rule rather than passing either way.
+- [ ] **Step 7: Red-check each hunk alone**, in `$Q/logs/t8-redcheck.txt`: (a) `priorSurvivorKeys`'s symbol check removed: "history: a [LETHALA] survivor is not skipped" goes red (L15 is `known-survivor`), its control stays green; (b) `--resume-run`'s symbol check removed: its test goes red (the fingerprint refuses with the generic "scoped differently" message, which the regex does not accept); (c) the fingerprint fed `cfg.preprocessorSymbols` again and `unfinishedRunUnderOtherSymbols` returning `null`: "--resume last names the [LETHALA] run" goes red; (d) `applyEquivalenceMarks`'s symbol condition removed: "marks: a mark made under [LETHALA]" goes red, its control green; (e) `preprocessorSymbols ?? []` in the mark check replaced by `buildSymbols` (absent matches anything): "a mark with no symbols" goes red; (f) `IDENTITY_SCHEME` set, alone, to the starting scheme `S` that `before/scheme.json` holds (r3, I2; never "one less than the constant", which moves with the revert): the I4 pin, "history: the old L13 survivor", "--resume-run of the old run", "--resume last names the old run" and the old-scheme half of the marks test go red, because the old record now matches on scheme and symbols; "the real pre-R214 row shape" stays green (its NULL symbols still refuse, which shows the two guards are independent), and the current-scheme controls stay green; (g) `createRun` inserting `build_symbols` as NULL: the history control and the `getRun` assertion go red; (h) the harden test's new block with `[]` replaced by `["X"]`: it goes red, which shows it reads the symbol rule rather than passing either way.
 
 - [ ] **Step 8: Commit.** `git commit -m "fix(R214): runs record their effective build symbols; history, --resume last, --resume-run, marks and verify apply only within the same set, refused by name; scheme transitions pinned on the same-text key"`.
 
@@ -2125,9 +2398,34 @@ Import `sameBuildSymbols` from `./preprocessor-symbols`.
 
 - [ ] **Step 3: Gate fixtures byte-identical.** For the seven of Task 1 Step 6: the AFTER capture equals the BEFORE capture (`cmp`), `probe-fixture-hashes.ts` equals, and `diff -r` of the instrumented targets (built with the capture's settings into two directories) is empty apart from `app.json`. Expected: all identical. This is what stands in for the gates Decision 10 does not run.
 
-- [ ] **Step 4: Corpora against the committed listings, one at a time.** For each corpus and set: `bun scripts/r214-capture.ts "$root" --symbols "$s" --listing $O/after --label $c.$i --regions <regenerated with $Q/pp.ts> --root "$root" > $O/after-$c-$i.txt 2> $O/after-$c-$i.err`, then `cmp docs/superpowers/specs/r214-corpus/$c.$i.files.tsv $O/after/$c.$i.files.tsv` and `cmp <(zcat docs/superpowers/specs/r214-corpus/$c.$i.rows.tsv.gz) <(zcat $O/after/$c.$i.rows.tsv.gz)`. Before either, confirm the corpus is the pre-committed one: the header's `hashTargetSource` and git head equal the committed ones (else STOP: the corpus moved, not the engine). Expected: every `cmp` silent. The exclusion rows and inactive ranges are part of that equality, so presence and absence are both checked by it. Full BaseApp alone.
+- [ ] **Step 4: Corpora against the committed listings, one at a time (r3, I3 and I4).** First confirm the corpus is the pre-committed one: `hashTargetSource` of `$root` and `git -C "$root" rev-parse HEAD` equal the committed listing header's (else STOP: the corpus moved, not the engine). Then, for each corpus `c` and set `i`, with `$root` and `$s` as in Task 1 Step 7, nothing else heavy running, full BaseApp alone:
 
-- [ ] **Step 5: The memory gate.** For each corpus and set, read `maxRSS_KB` from `$O/after-$c-$i.err` and the committed master peak from the spec's "Memory" section. Expected: every capture exited 0 and every after peak is at most 110% of master's. A crash or a breach is a STOP: report the numbers per corpus and set; do not change code in this step.
+```bash
+set -euo pipefail
+Q=H:/lethal-scratch/R-214/plan-r2; O=H:/lethal-scratch/R-214/corpus; A="$O/after"; R=$(pwd)
+mkdir -p "$A"
+# (1) The memory run: EXACTLY master's command from Task 1 Step 7, in its own run, output discarded (I4).
+bun "$R/scripts/r214-capture.ts" "$root" --symbols "$s" > /dev/null 2> "$A/peak-$c-$i.err"
+# (2) The AFTER capture, a separate run.
+bun "$R/scripts/r214-capture.ts" "$root" --symbols "$s" > "$A/after-$c-$i.txt" 2> "$A/after-$c-$i.err"
+# (3) Fresh regions and a fresh full twin from the corpus text, and the full twin captured by THIS engine.
+rm -rf "$A/twin-$c-$i" "$A/full-$c-$i"
+bun "$Q/pp.ts" "$root" "$s" "$A/twin-$c-$i" "$A/regions-$c-$i.json" --full "$A/full-$c-$i"
+bun "$R/scripts/r214-capture.ts" "$A/full-$c-$i" > "$A/full-$c-$i.txt" 2> "$A/full-$c-$i.err"
+# (4) A fresh presence result from the AFTER capture; both counts must be 0 (I3).
+bun "$Q/presence.ts" "$A/after-$c-$i.txt" "$A/full-$c-$i.txt" "$A/regions-$c-$i.json" "$root" > "$A/presence-$c-$i.txt"
+u=$(sed -n 's/^UNCLASSIFIED //p' "$A/presence-$c-$i.txt"); x=$(sed -n 's/^EXTRA //p' "$A/presence-$c-$i.txt")
+[ "$u" = 0 ] && [ "$x" = 0 ] || { echo "STOP: $c.$i UNCLASSIFIED=$u EXTRA=$x"; exit 1; }
+# (5) The listing from THAT result and those regions; the committed rows are never an input.
+bun "$R/scripts/r214-capture.ts" --listing "$A/listing" --label "$c.$i" --from-expected "$A/after-$c-$i.txt" --presence "$A/presence-$c-$i.txt" --regions "$A/regions-$c-$i.json" --root "$root"
+# (6) Only now are the committed files read.
+cmp "docs/superpowers/specs/r214-corpus/$c.$i.files.tsv" "$A/listing/$c.$i.files.tsv"
+cmp <(zcat "docs/superpowers/specs/r214-corpus/$c.$i.rows.tsv.gz") <(zcat "$A/listing/$c.$i.rows.tsv.gz")
+```
+
+Expected: every command exits 0, both counts are 0, and both `cmp` are silent. The `EXCLUDED` rows (from the fresh presence result) and the `INACTIVE` rows (from the fresh regions) are part of that equality, so presence and absence are both checked independently of what Task 1 committed. The full twin holds no directive, so both engines should read it alike; if Task 1's `$O/full-$c-$i.txt` is still on `H:`, `cmp` it with `$A/full-$c-$i.txt` too, and a difference is a STOP.
+
+- [ ] **Step 5: The memory gate.** For each corpus and set, read `maxRSS_KB` from `$A/peak-$c-$i.err` ONLY (run (1): master's exact command) and the committed master peak from the spec's "Memory" section. Runs (2) to (5) are no-crash and equality checks; their peaks are recorded in the log but never compared (r3, I4). Expected: every run of Step 4 exited 0, and every `peak` is at most 110% of master's. A crash or a breach is a STOP: report the numbers per corpus and set; do not change code in this step.
 
 - [ ] **Step 6: Whole suite.** `bun run typecheck`, `rm -rf packages/*/dist`, `bun test` from the root. Green (R335's timeouts aside, each passing alone).
 
@@ -2183,7 +2481,7 @@ Add one assertion to the same file that the failure message names `2026-09-29-r2
 
 - [ ] **Step 3: Owner checkpoint (Q4).** `coord checkpoint --task R-214 --wait owner --note "R321 re-freeze ready: frozen 5/8/0 over 13 moves to 5/4/0 over 9 per set as pre-committed (<spec sha>); the gate run shows only the two symbol baselines' comparison failing (<log>); approve deleting and re-recording al-runner.symbols-lethala.baseline.json and al-runner.symbols-lethalb.baseline.json?"`. Nothing below runs, and neither baseline is touched, until an approving `coord answer` or `task.md` revision.
 
-- [ ] **Step 4: Re-record, inspect, then pass.** `git rm packages/runner/itest/al-runner.symbols-lethala.baseline.json packages/runner/itest/al-runner.symbols-lethalb.baseline.json`; `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe" bun run itest:alrunner` (exits 3 by design, a failed receipt, never a pass). Inspect each new baseline's nine rows against Decision 7 one by one (`git diff --no-index` against the deleted version, saved in `$Q/logs/t10-baseline-diff-lethala.txt` and `-lethalb.txt`): the seven shared rows' verdicts and killing tests unchanged, the other two arms' four rows gone, grain the only other change. Re-run without the variable: PASS. Commit: `test(R214, R321): re-record the two symbol baselines per the R214 pre-commitment (owner-approved <ref>)`.
+- [ ] **Step 4: Re-record, inspect, then pass.** `git rm packages/runner/itest/al-runner.symbols-lethala.baseline.json packages/runner/itest/al-runner.symbols-lethalb.baseline.json`; `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="C:/Users/SShadowS/.dotnet/tools/al-runner.exe" bun run itest:alrunner` (exits 3 by design, a failed receipt, never a pass). Inspect each new baseline against Decision 7's pre-committed key diff ("The baseline diff, by key"), key by key (r3, I8): `git diff --no-index <(git show HEAD:packages/runner/itest/al-runner.symbols-lethala.baseline.json) packages/runner/itest/al-runner.symbols-lethala.baseline.json > $Q/logs/t10-baseline-diff-lethala.txt`, and the same for `-lethalb`. The baselines hold keys, verdicts and killing tests only, no line and no grain, so the check is by key: under `[LETHALA]`, exactly the four keys `SA|1`, `SA|2`, `RV|1`, `RV|2` are gone and the other nine rows are byte-identical; under `[LETHALB]`, the same four keys are gone, the rows at `SA` and `RV` change from `survived` / `null` to `killed` / `RateSmall` (the key now names L15, which is built, instead of the compiled-out L13; predicted, not a regression), and the other seven rows are byte-identical. Any other added, removed or changed key is a STOP, even if the gate's per-line table check (Step 2, which runs before recording) passed. Re-run without the variable: PASS. Commit: `test(R214, R321): re-record the two symbol baselines per the R214 pre-commitment (owner-approved <ref>)`.
 
 - [ ] **Step 5: The red-checks of R321, re-run** (Decision 7): (a) delete the daemon's `--define` line in `AlRunnerServer.start`, run the gate, expect the server legs to print 3 killed / 6 survived and fail the four equality assertions; restore. (b) delete `buildAlRunnerArgv`'s `--define` loop, run in normal mode, expect the one-shot legs to fail against the table with 3 / 6, six failures in all; restore. Record both in `$Q/logs/t10-r321-redcheck.txt`.
 
@@ -2205,14 +2503,27 @@ Add one assertion to the same file that the failure message names `2026-09-29-r2
   5. Upstream: tree-sitter-al scopes `not` over a following `and` / `or` (the note below; LethAL no longer depends on it, since it reads condition text).
   6. `SessionReport` records the config symbols but not the effective set; `excludedSites` carries the effective set only when a site was compiled out.
 - [ ] **Step 3: Regenerate and commit.** `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, commit `roadmap(R214): narrowed, not done; R285, R342 done; R306 narrowed; exclusions cross-linked; follow-ups filed`.
-- [ ] **Step 4: Report to the orchestrator** in the submit note: (a) the scheme number this branch holds and whether master moved it since Task 2 (if it did, the merge takes the next number and the constant, CHANGELOG line and harden marks file change with it; every test reads `IDENTITY_SCHEME`, so none does); (b) CLAUDE.md's `itest:alrunner` paragraph moves from "killed 5 / survived 8 / no-coverage 0 over 13" to "5 / 4 / 0 over 9 per set, since R214", and its sentence "R214's fix will need a new pre-commitment and a re-freeze here" is now history; (c) the prose sweep of `README.md`, `docs/measurements/README.md` and `.claude/skills/live-gate/SKILL.md` for the old figure (`grep -rn "5 / 8\|5/8\|over 13" README.md docs/measurements/README.md .claude/skills`), listed for the orchestrator where the lane may not edit; (d) the gates NOT run (Decision 10). Then `coord submit`.
+- [ ] **Step 4: Scheme race check before handoff (r3, C1, blocking), then report.** `git merge master`, then run Task 2 Step 0's mode `post` check. Exit 2: do Task 2 Step 6 now (re-bump, re-run the transition, capture and gate checks), then run this step again from the merge. Exit 1: STOP. Only on `OK` does the lane write the submit note and call `coord submit`; a race is never left for someone else to resolve. The note reports: (a) the check's `OK` line, naming master's scheme and this branch's, and every re-bump made (from which number to which, and the logs of the re-runs); (b) CLAUDE.md's `itest:alrunner` paragraph moves from "killed 5 / survived 8 / no-coverage 0 over 13" to "5 / 4 / 0 over 9 per set, since R214", and its sentence "R214's fix will need a new pre-commitment and a re-freeze here" is now history; (c) the prose sweep of `README.md`, `docs/measurements/README.md` and `.claude/skills/live-gate/SKILL.md` for the old figure (`grep -rn "5 / 8\|5/8\|over 13" README.md docs/measurements/README.md .claude/skills`), listed for the orchestrator where the lane may not edit; (d) the gates NOT run (Decision 10). Then `coord submit`.
 
 ---
 
 ## Self-review
 
-- **task.md, "Orchestrator, 2026-09-29".** C1: Decision 5, Task 8 (history, `--resume last`, `--resume-run`, marks, verify), each with a control on the measured L13/L15 key, red-checked in Task 8 Step 7 (a) to (e). C2: the measured table (49 rows, 99 compiles), Decision 2, Task 4 (the table as test data), Task 6 (whole-file refusal), Task 7 (counted); no arm the evaluator is unsure of is ever kept. I3: the Goal, Decision 1's six exclusions, R214 `open, narrowed` in Task 11. I4: Task 8 Step 1's second describe, pinned to `IDENTITY_SCHEME` and `IDENTITY_SCHEME - 1`, red-checked in Step 7 (f). I5: Decision 6's committed listing, Task 1 Steps 9 to 11, Task 9 Step 4. I6: Decision 3, Task 3, red-checked in Task 3 Step 5 (c) and (d). I7: Task 4's fast path and its test, Decision 6's 110% gate, Task 1 Step 7, Task 9 Step 5. I8: Decision 10, Task 8 Step 5's harden test, Task 10 Step 6. Minors: Task 10 Step 1 (message), Task 3 Step 5 and Task 8 Step 7 (f) (red-checks). Q1: Decision 9, Task 7 in the ripple's order. Q2: Decision 3. Q3: Decision 1. Q4: Decision 7, Task 10 Steps 3 and 4.
-- **Addendum.** "The next scheme" throughout; three files carry the literal because they must; every new test reads `IDENTITY_SCHEME`; Task 11 Step 4 reports a moved master.
+- **task.md, "Orchestrator, 2026-09-29".** C1: Decision 5, Task 8 (history, `--resume last`, `--resume-run`, marks, verify), each with a control on the measured L13/L15 key, red-checked in Task 8 Step 7 (a) to (e). C2: the measured table (49 rows, 99 compiles), Decision 2, Task 4 (the table as test data), Task 6 (whole-file refusal), Task 7 (counted); no arm the evaluator is unsure of is ever kept. I3: the Goal, Decision 1's six exclusions, R214 `open, narrowed` in Task 11. I4: Task 8 Step 1's second describe, on the old engine's own record since r3 (below), red-checked in Step 7 (f). I5: Decision 6's committed listing, Task 1 Steps 9 to 11, Task 9 Step 4. I6: Decision 3, Task 3, red-checked in Task 3 Step 5 (c) and (d). I7: Task 4's fast path and its test, Decision 6's 110% gate, Task 1 Step 7, Task 9 Step 5. I8: Decision 10, Task 8 Step 5's harden test, Task 10 Step 6. Minors: Task 10 Step 1 (message), Task 3 Step 5 and Task 8 Step 7 (f) (red-checks). Q1: Decision 9, Task 7 in the ripple's order. Q2: Decision 3. Q3: Decision 1. Q4: Decision 7, Task 10 Steps 3 and 4.
+- **Addendum.** "The next scheme" throughout; four files carry the new number because they must (constant, CHANGELOG, harden marks file, agent guide example), and `before/scheme.json` carries the starting one; every new test reads `IDENTITY_SCHEME` or that file; since r3 a moved master is handled by the blocking scheme-race check, not reported.
+- **task.md, "Orchestrator, 2026-09-30" (r3), item by item.**
+  - C1: the check's exact commands are in Task 2 Step 0 (both modes, tested at plan time as `$T/scheme-race.sh`); it blocks before the first product commit (Step 0, `pre`), after every later merge (Global Constraints), and before handoff (Task 11 Step 4); a race triggers Task 2 Step 6, which changes the constant, CHANGELOG, harden marks file (and the agent guide) in one commit and re-runs the transition tests (whole suite), Task 8 Step 7 (f), the captures (Task 9 Steps 1, 3, 6) and the live gates (Task 10 Steps 2, 6). No step leaves the bump to a note.
+  - I2: no test builds an old record by relabelling a new-engine run (`storedRun` lost its `scheme` option; `oldEngineRun` writes master's L13 key and line through the store API). All four paths use it (history, `--resume-run`, `--resume last`, marks). The constant red-check (Task 8 Step 7 (f), Task 2 Step 4) targets `S` from `before/scheme.json`, which Task 1 commits; no test or step uses `IDENTITY_SCHEME - 1`.
+  - I3: Task 9 Step 4 regenerates regions, the full twin, its capture and `presence.ts` from the AFTER capture, requires both counts 0, and only then writes the listing; the committed rows enter only at `cmp`.
+  - I4: Task 9 Step 4 run (1) is master's command byte for byte, output discarded, its own run; Step 5 reads only it.
+  - I5: Task 6 Step 3 pushes the row unconditionally; the zero-site test (Task 6) and Run 2 (Task 7) pin it apart from `p12-refused`, red-checked by Task 6 Step 8 (h) and Task 7 Step 5 (e).
+  - I6: every exact assertion on a `p12-refused` path says `src/...`, after normalising separators, which is needed on Windows (`readdir` returns `src\SymbolLogic.Codeunit.al` for `fixtures/sandbox-symbols`, measured on this machine).
+  - I7: the report schema touched is `report-v3.schema.json` only; Task 7 Step 3.7 asserts v2 unchanged with `git diff --exit-code`.
+  - I8: Decision 7's key-diff table, pinned by Task 1's spec, checked in Task 10 Step 4; the `[LETHALB]` verdict change at `SA` and `RV` is predicted.
+  - Minor a: `preproc-files-refused`, its interpretation, the push on the file count, the two counts 20 to 21, and the explain v7 that R233's pin forces, all in Task 7.
+  - Minor b: Task 6's generation-level test and Task 7's Run 1 (report row, no mutant from the file).
+  - Minor c: Task 8 Step 4's last bullet makes no timing claim.
+  - Approvals: nothing in r2's design changed; no approved point was re-opened.
 - **task.md step 2 (the original plan requirements).** Pre-commitment committed alone (Task 1); repros, gate fixtures and corpora as exact counts and now per-file listings (Task 1); the scheme decision (Decision 4); the R321 re-freeze through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`, never a hand edit (Task 10); alc proof per build (Decision 8, Task 9 Step 2); red-checks per hunk (every product task).
 - **Placeholder scan.** Values left open are ones a run produces and the spec then pins (repro and corpus counts for the three new repros and the corpora, the new fingerprint, SHA-256s, master's peaks, the scheme number `N`); each has the command that produces it and a STOP rule for a surprise. The `kinds` string in Task 6's test is existing product output, taken from the red run.
 - **Type consistency.** `evaluateArms(root, source, symbols)` / `startsInInactiveArm` / `ArmEvaluation` (Task 4) are what Task 6 calls; `effectiveBuildSymbols`, `sameBuildSymbols`, `validateSymbolList` (Task 3) are what Tasks 6 and 8 call; `PreprocExcludedFile` (Task 6) is what Task 7's event, fold and `buildExcludedSites` carry; `buildSymbols` is the name on `MutationSetResult`, `createRun`, `RunRow`, `priorSurvivorKeys`, `FoldStatics`, `VerifySource` and `resolveResume`; the mark's field is `preprocessorSymbols`, like the config's.
@@ -2224,5 +2535,4 @@ tree-sitter-al 4.4.1: `preproc_not_expression` is `seq('not', _preproc_expressio
 
 ## Open questions for the orchestrator
 
-1. Decision 5 keeps R325's "latest finished run" shape for history, so a project that alternates symbol sets never skips a survivor. Is that acceptable, or should history pick the latest finished run WITH the same set (one more condition in the query)?
-2. Decision 5 makes an absent mark `preprocessorSymbols` mean `[]`, as proposed. For DC (`app.json` declares `BC20` to `BC27`) every existing mark then goes stale until it names those symbols. The scheme bump already forces a re-check of every mark, so this adds no second migration. Confirm.
+None. r2's two questions were answered on 2026-09-30: history keeps the latest-finished-run shape, scoped to an identical effective symbol set (approval 3), and an absent mark `preprocessorSymbols` means `[]`, so DC's marks go stale until re-checked and labelled with `BC20` to `BC27` (approval 4).
