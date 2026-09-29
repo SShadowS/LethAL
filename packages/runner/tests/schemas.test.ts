@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type MutantManifest, type MutantManifestEntry } from "@lethal/schemata";
 import { Glob } from "bun";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import {
@@ -498,6 +498,7 @@ async function buildVerifyHappyPathOutput() {
     writeFileSync(
       join(projectDir, "lethal.equivalent.json"),
       JSON.stringify({
+        identityScheme: IDENTITY_SCHEME,
         marks: [{ key: serializeKey(identityKeyOf(entry)), reason: "same either way" }],
       }),
     );
@@ -788,6 +789,9 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       "$.unplaceableCount",
       "$.unplaceableMutants",
     ]);
+    // R325: `identityScheme` is absent from every report written before it and is OPTIONAL in the
+    // schema, so it is not in the list above. Absent reads as scheme 1.
+    expect("identityScheme" in older).toBe(false);
   });
 
   /**

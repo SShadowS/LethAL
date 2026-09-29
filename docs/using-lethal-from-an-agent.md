@@ -482,10 +482,14 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 2, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
-`reason` is required. Build the key from the survivor's row in `report.json`:
+`reason` is required. Set `identityScheme` to the report's own `identityScheme`. A file without it
+was written before the field existed and reads as scheme 1, and a mark made under a scheme other than
+the one the run keys under is reported stale and never applied, because a key can name a different
+mutant after an engine change renumbers its twins (R325). Build the key from the survivor's row in
+`report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>

@@ -1012,6 +1012,9 @@
         "type": "string"
       }
     },
+    "identityScheme": {
+      "type": "number"
+    },
     "untargetedTriggerCount": {
       "type": "number"
     },

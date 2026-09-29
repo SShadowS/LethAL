@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
@@ -29,6 +30,7 @@ import {
   wasStranded,
 } from "../src/resume";
 import type { SessionFingerprintInput } from "../src/resume";
+import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
@@ -411,6 +413,7 @@ describe("sessionFingerprint (R47)", () => {
     testDir: "/t",
     backend: "bcdev",
     skipKnownSurvivors: false,
+    identityScheme: IDENTITY_SCHEME,
     selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
   };
 
@@ -439,13 +442,12 @@ describe("sessionFingerprint (R47)", () => {
     );
   });
 
-  // R228: the key is CONDITIONAL, so a run recorded with no exclusions keeps its digest and a
-  // half-finished run still resumes after this build ships. Pinned by value, measured before the
-  // fix landed.
-  test("a run with no exclusions keeps the digest it had before R228", () => {
-    expect(sessionFingerprint(base)).toBe(
-      "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307",
-    );
+  // R228: the key is CONDITIONAL, so no exclusions adds nothing to the digest. Pinned by value.
+  // The value itself moved once, on purpose: R325 put the identity scheme into EVERY digest (it was
+  // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed.
+  const PINNED = "9604b7d7987ab876007d8eb32d8d342afee7a63d40cf06e102d7b0818083b2d5";
+  test("a run with no exclusions adds nothing to the digest", () => {
+    expect(sessionFingerprint(base)).toBe(PINNED);
   });
 
   // C02-06 review r1 item 2: `#if` branches compile differently under other symbols, and R192's
@@ -459,10 +461,9 @@ describe("sessionFingerprint (R47)", () => {
   });
 
   // The key is conditional like `exclude`'s, so a run with no symbols keeps the digest pinned
-  // above and every store recorded before this change still resumes.
+  // above.
   test("no preprocessor symbols, or an empty list, keeps the pre-symbol digest", () => {
-    const pinned = "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307";
-    expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(pinned);
+    expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(PINNED);
   });
 
   test("--tests-only changes it — that narrowing CAN change a verdict", () => {
@@ -1690,5 +1691,195 @@ describe("C02-04 characterization", () => {
       ),
     ).toBe(true);
     expect(characterize(trace, store, report)).toMatchSnapshot();
+  });
+});
+
+// R325: an identity key carries no version of its own, so a renumbering (R193 ordinals) can hand an
+// old key to a different mutant with the AL source unchanged. Every consumer that carries a verdict
+// across sessions must refuse a key made under another identity scheme. The "old" run below is made
+// by this build and then rewritten to look like one recorded before the scheme existed: its
+// `identity_scheme` is NULL (read as 1) and its fingerprint is the one a scheme-1 build computes.
+describe("R325: no verdict crosses an identity-scheme change", () => {
+  async function oldSchemeRun(opts: { finished: boolean }) {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", opts.finished ? undefined : 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    const run = store.db.query("SELECT id, backend FROM runs").get() as {
+      id: number;
+      backend: string;
+    };
+    const oldFingerprint = sessionFingerprint({
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backend: run.backend,
+      skipKnownSurvivors: false,
+      selectorIds,
+      identityScheme: 1,
+    });
+    store.db.run("UPDATE runs SET identity_scheme = NULL, config_fingerprint = ? WHERE id = ?", [
+      oldFingerprint,
+      run.id,
+    ]);
+    return { dirs, store, first, runId: run.id };
+  }
+
+  test("the report carries the identity scheme it was keyed under", async () => {
+    const dirs = await makeProject();
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(IDENTITY_SCHEME).toBe(2);
+    expect(report.identityScheme).toBe(2);
+  });
+
+  test("history: an old-scheme survivor is executed, not skipped as a known survivor", async () => {
+    const { dirs, store, first, runId } = await oldSchemeRun({ finished: true });
+    expect(first.counts.survived).toBeGreaterThan(0);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    expect(report.counts.survived).toBe(first.counts.survived);
+    const warned = events.filter(
+      (e) => e.type === "warning" && e.code === "history-identity-scheme-changed",
+    );
+    expect(warned).toHaveLength(1);
+    const [w] = warned;
+    const message = w?.type === "warning" ? w.message : "";
+    expect(message).toContain(`run ${runId}`);
+    expect(message).toContain("identity scheme 1");
+  });
+
+  test("history control: the same run under the current scheme IS skipped", async () => {
+    const { dirs, store, first, runId } = await oldSchemeRun({ finished: true });
+    store.db.run("UPDATE runs SET identity_scheme = ? WHERE id = ?", [IDENTITY_SCHEME, runId]);
+    const report = await runSession({
+      backend: new CountingBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      skipKnownSurvivors: true,
+    });
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toHaveLength(
+      first.counts.survived,
+    );
+  });
+
+  test("--resume-run of an old-scheme run is refused by name", async () => {
+    const { dirs, store, runId } = await oldSchemeRun({ finished: false });
+    await expect(
+      runSession({
+        backend: new CountingBackend("pass"),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: runId,
+      }),
+    ).rejects.toThrow(
+      new RegExp(`--resume-run ${runId} was keyed under identity scheme 1.*scheme 2.*R325`),
+    );
+  });
+
+  test("no verdict is carried from an old-scheme run, by any resume path", async () => {
+    const { dirs, store, runId } = await oldSchemeRun({ finished: false });
+    for (const resume of [runId, "last" as const]) {
+      await expect(
+        runSession({ backend: new CountingBackend("pass"), store, ...dirs, selectorIds, resume }),
+      ).rejects.toThrow();
+    }
+  });
+
+  test("--resume last names the old-scheme run instead of reporting none found", async () => {
+    const { dirs, store, runId } = await oldSchemeRun({ finished: false });
+    await expect(
+      runSession({
+        backend: new CountingBackend("pass"),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      }),
+    ).rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme 1.*R325`));
+  });
+
+  test("the fingerprint always carries the scheme", () => {
+    const base: SessionFingerprintInput = {
+      projectDir: "/p",
+      testDir: "/t",
+      backend: "bcdev",
+      skipKnownSurvivors: false,
+      selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+      identityScheme: 2,
+    };
+    expect(sessionFingerprint(base)).not.toBe(sessionFingerprint({ ...base, identityScheme: 1 }));
+    // The digest every store recorded before R325 for this input. A scheme-2 build must never
+    // produce it, even with every optional input absent.
+    expect(sessionFingerprint(base)).not.toBe(
+      "16c632acfe397d6df9ac6b53795b6361a861c285c6c079bd73f6e79819929307",
+    );
+  });
+
+  test("marks: a mark made under another scheme is stale, never matched", async () => {
+    const dirs = await makeProject();
+    const first = await runSession({
+      backend: new CountingBackend("pass"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    const survivor = first.mutants.find((m) => m.verdict === "survived");
+    if (survivor === undefined) throw new Error("the fixture must produce a survivor");
+    const key = serializeKey({
+      astHash: survivor.astHash,
+      codeunitName: survivor.codeunitName,
+      procedureName: survivor.procedureName ?? "",
+      operatorName: survivor.operatorName,
+      operatorMajor: survivor.operatorMajor,
+      ordinal: survivor.identityOrdinal ?? 0,
+    });
+    const run = async (identityScheme: number) => {
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend: new CountingBackend("pass"),
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+        emit: [(e) => events.push(e)],
+      });
+      return { report, events };
+    };
+    const old = await run(1);
+    expect(old.report.readerMarkedEquivalent?.matched).toEqual([]);
+    expect(old.report.readerMarkedEquivalent?.contradicted).toEqual([]);
+    expect(old.report.readerMarkedEquivalent?.stale).toEqual([key]);
+    expect(old.report.mutants.some((m) => m.readerMark !== undefined)).toBe(false);
+    expect(
+      old.events.filter(
+        (e) => e.type === "warning" && e.code === "equivalence-marks-identity-scheme",
+      ),
+    ).toHaveLength(1);
+    // Control: the same mark under the current scheme matches.
+    const current = await run(IDENTITY_SCHEME);
+    expect(current.report.readerMarkedEquivalent?.matched.map((m) => m.key)).toEqual([key]);
+    expect(
+      current.events.some(
+        (e) => e.type === "warning" && e.code === "equivalence-marks-identity-scheme",
+      ),
+    ).toBe(false);
   });
 });

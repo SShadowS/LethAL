@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import type { InstrumentedFile, MutantManifestEntry } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   AlcCompileError,
@@ -12283,6 +12283,7 @@ describe("C02-06 Task 5.4: runVerify", () => {
     await Bun.write(
       join(fx.dirs.projectDir, "lethal.equivalent.json"),
       JSON.stringify({
+        identityScheme: IDENTITY_SCHEME,
         marks: [
           { key: keyOf("M0001"), reason: "same either way" },
           { key: keyOf("M0002"), reason: "also equivalent" },

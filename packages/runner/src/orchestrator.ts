@@ -19,6 +19,7 @@ import {
 } from "@lethal/engine";
 import {
   CARRIER_KINDS,
+  IDENTITY_SCHEME,
   type InstrumentedFile,
   type MutantManifest,
   type MutantManifestEntry,
@@ -66,7 +67,11 @@ import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
-import type { EquivalenceMark } from "./equivalence-marks";
+import {
+  type EquivalenceMark,
+  marksSchemeWarning,
+  marksUnderOtherScheme,
+} from "./equivalence-marks";
 import {
   type BaselineClassification,
   type EventSubscriber,
@@ -2965,6 +2970,18 @@ function resolveResume(
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     });
     if (found === null) {
+      // R325: an unfinished run keyed under another identity scheme has a different fingerprint,
+      // so the search above cannot find it. Name it rather than claim there is none.
+      const other = cfg.store.unfinishedRunUnderOtherScheme({
+        projectPath: cfg.projectDir,
+        backend: backendName,
+        carryableVerdicts: [...CARRYABLE_VERDICTS],
+      });
+      if (other !== null) {
+        throw new Error(
+          `--resume found an unfinished run for this project and backend, run ${other.runId}, but it was keyed under identity scheme ${other.identityScheme} and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume to run from scratch.`,
+        );
+      }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
       );
@@ -2981,6 +2998,13 @@ function resolveResume(
     if (row.backend !== backendName) {
       throw new Error(
         `--resume-run ${cfg.resume} ran on backend ${row.backend}, but this session uses ${backendName} — verdicts are not interchangeable across backends (al-runner is not authoritative)`,
+      );
+    }
+    // R325: checked BEFORE the fingerprint, so the refusal names the real reason. The fingerprint
+    // carries the scheme too and would refuse this run anyway, as "scoped differently".
+    if (row.identityScheme !== IDENTITY_SCHEME) {
+      throw new Error(
+        `--resume-run ${cfg.resume} was keyed under identity scheme ${row.identityScheme}, but this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume-run to run from scratch.`,
       );
     }
     if (row.configFingerprint !== configFingerprint) {
@@ -3846,6 +3870,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { equivalenceMarks: cfg.equivalenceMarks }
       : {}),
   });
+  // R325: a mark made under another identity scheme is reported stale by `buildReport`; this is
+  // the one line that says why, before anything runs.
+  const marksWarning = marksSchemeWarning(
+    marksUnderOtherScheme(cfg.equivalenceMarks ?? [], IDENTITY_SCHEME),
+    IDENTITY_SCHEME,
+  );
+  if (marksWarning !== undefined) {
+    emit({ type: "warning", code: "equivalence-marks-identity-scheme", message: marksWarning });
+  }
   // Layer 5C-B1 (design §6): an authoritative backend that CAN be fenced — it exposes `setLease`,
   // as bcdev does — MUST be given a lease. Without one every RunMutant runs unfenced, and a
   // `lease-lost` answer could then only be latched, never scoped: the current batch's
@@ -4047,6 +4080,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     testDir: cfg.testDir,
     backend: backendName,
     skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
+    // R325: always in the digest, so a run keyed under another scheme never matches.
+    identityScheme: IDENTITY_SCHEME,
     selectorIds: cfg.selectorIds,
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
@@ -4264,6 +4299,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // stay strictly increasing within one session even when the clock doesn't advance (or a
   // conflict retry re-stamped above something newer than the clock would produce).
   let lastIssuedVersion: string | undefined;
+  // R325: the history filter runs per batch; its scheme warning is said once per session.
+  let historySchemeWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -4572,7 +4609,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const soleBatchFile = perFileGuards.size === 1 ? [...perFileGuards.keys()][0] : undefined;
 
       // 2. history filter
-      const prior = cfg.store.priorSurvivorKeys(cfg.projectDir);
+      // R325: a latest finished run keyed under another identity scheme yields no keys, so nothing
+      // is skipped on a verdict that may belong to another mutant. Said once per session.
+      const prior = cfg.store.priorSurvivorKeys(cfg.projectDir, (old) => {
+        if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+        historySchemeWarned = true;
+        emit({
+          type: "warning",
+          code: "history-identity-scheme-changed",
+          message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
+        });
+      });
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
       });

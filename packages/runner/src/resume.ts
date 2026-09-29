@@ -314,6 +314,12 @@ export interface SessionFingerprintInput {
    *  would carry measurements made under the old ones. */
   readonly preprocessorSymbols?: readonly string[];
   readonly skipKnownSurvivors: boolean;
+  /**
+   * R325: the identity scheme this session's keys are made under (`IDENTITY_SCHEME`). ALWAYS in
+   * the digest, unlike R127's conditional keys: those were added so an old store kept resuming,
+   * and this one exists so an old store CANNOT be resumed, since its keys may name other mutants.
+   */
+  readonly identityScheme: number;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -350,6 +356,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
       ? { preprocessorSymbols: [...input.preprocessorSymbols].sort() }
       : {}),
     skipKnownSurvivors: input.skipKnownSurvivors,
+    identityScheme: input.identityScheme,
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

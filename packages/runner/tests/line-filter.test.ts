@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dedupeSpecs } from "@lethal/schemata";
+import { IDENTITY_SCHEME, dedupeSpecs } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -308,6 +308,7 @@ describe("the report and the fingerprint", () => {
       testDir: "t",
       backend: "bcdev",
       skipKnownSurvivors: false,
+      identityScheme: IDENTITY_SCHEME,
       selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
     };
     const a = sessionFingerprint({ ...base, lines: [{ file: FILE, start: 5, end: 5 }] });

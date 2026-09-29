@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
-import { type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
 import { parseEquivalenceMarks } from "../src/equivalence-marks";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
@@ -125,6 +125,9 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
     const [mark] = marks;
     if (mark === undefined) throw new Error("no mark");
     expect(mark.reason.trim().length).toBeGreaterThan(0);
+    // R325: a mark made under another identity scheme is stale and never applied, so the harden
+    // gate would lose its planted equivalent silently. The file must state this build's scheme.
+    expect(mark.identityScheme).toBe(IDENTITY_SCHEME);
     const hits = m.mutants.filter((e) => serializeKey(identityKeyOf(e)) === mark.key);
     expect(
       hits.map((e) => siteOf(e.file, e.startLine, e.operatorName)),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { MutantManifestEntry } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { HANG_CAPABLE_EXPLANATIONS } from "../src/hang-capable";
@@ -508,10 +508,10 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     const LEGACY_R229_TRIGGER_KEY = serializeKey({ ...identityKeyOf(TRIGGER), procedureName: "" });
     const STALE_KEY = serializeKey(identityKeyOf(mutant("M0009", { astHash: "hash-gone" })));
     const MARKS = [
-      { key: KEY_B1, reason: "R-b1" },
-      { key: LEGACY_R229_TRIGGER_KEY, reason: "R-trg" },
-      { key: KEY_KILLED, reason: "R-killed" },
-      { key: STALE_KEY, reason: "R-stale" },
+      { key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME },
+      { key: LEGACY_R229_TRIGGER_KEY, reason: "R-trg", identityScheme: IDENTITY_SCHEME },
+      { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME },
+      { key: STALE_KEY, reason: "R-stale", identityScheme: IDENTITY_SCHEME },
     ];
 
     function scored(
@@ -560,7 +560,10 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
 
     test("two batches reusing M0001 keep their own risk and mark (C02-01)", () => {
       const report = buildReport(
-        { ...STATICS, equivalenceMarks: [{ key: KEY_B1, reason: "R-b1" }] },
+        {
+          ...STATICS,
+          equivalenceMarks: [{ key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME }],
+        },
         TWO_BATCH_EVENTS,
       );
       const row = (b: number) =>
@@ -580,8 +583,8 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         {
           ...STATICS,
           equivalenceMarks: [
-            { key: KEY_KILLED, reason: "R-killed" },
-            { key: KEY_KS, reason: "R-ks" },
+            { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME },
+            { key: KEY_KS, reason: "R-ks", identityScheme: IDENTITY_SCHEME },
           ],
         },
         seq([
@@ -673,7 +676,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     describe("two rows sharing one identity, one survived and one killed (C02-01)", () => {
       const SITE = { astHash: "hash-shared" };
       const KEY_SHARED = serializeKey(identityKeyOf(mutant("M0001", SITE)));
-      const marks = [{ key: KEY_SHARED, reason: "R-shared" }];
+      const marks = [{ key: KEY_SHARED, reason: "R-shared", identityScheme: IDENTITY_SCHEME }];
       const run = (first: "survived" | "killed", second: "survived" | "killed") =>
         buildReport(
           { ...STATICS, equivalenceMarks: marks },

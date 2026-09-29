@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { type MutantManifest, type MutantManifestEntry, gapIdOf } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type MutantManifest,
+  type MutantManifestEntry,
+  gapIdOf,
+} from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
@@ -351,6 +356,7 @@ describe("assertSourceUnchanged", () => {
       artifactSha256: "0".repeat(64),
       sourceSha256: await hashTargetSource(dir, SYMBOLS),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+      identityScheme: IDENTITY_SCHEME,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
     return { dir, source };
@@ -480,6 +486,7 @@ describe("planVerify", () => {
       artifactSha256: "0".repeat(64),
       sourceSha256: "5".repeat(64),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+      identityScheme: IDENTITY_SCHEME,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
   }
@@ -646,6 +653,7 @@ describe("planVerify", () => {
 
   test("a reader-marked survivor is skipped and gets no request in the plan", async () => {
     const marks = {
+      identityScheme: IDENTITY_SCHEME,
       marks: [
         { key: "hash-M0001|Logic|Post|lethal.negate-conditional|1", reason: "same either way" },
       ],
@@ -658,6 +666,18 @@ describe("planVerify", () => {
     const all = await markedPlan(marks, [entry("M0001")]);
     expect(all.requests).toEqual([]);
     expect(all.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
+  });
+
+  // R325: the manifest's keys were made under the source run's identity scheme. A mark made under
+  // another may name a different mutant, so it is not applied: the survivor runs.
+  test("a mark made under another identity scheme is not applied", async () => {
+    const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
+    const plan = await markedPlan({ marks: [{ key, reason: "same either way" }] }, [
+      entry("M0001"),
+    ]);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
+    expect(plan.marksUnderOtherScheme.map((m) => [m.key, m.identityScheme])).toEqual([[key, 1]]);
   });
 
   // Review r1 item 3: an empty target list must not come back looking like "every target was
@@ -685,7 +705,10 @@ describe("planVerify", () => {
 
   test("a trigger mutant's mark matches by triggerName", async () => {
     const plan = await markedPlan(
-      { marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }] },
+      {
+        identityScheme: IDENTITY_SCHEME,
+        marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }],
+      },
       [entry("M0001", { procedureName: "", triggerName: "OnInsert" })],
     );
     expect(plan.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
@@ -1233,7 +1256,10 @@ describe("C02-09: gap ids", () => {
       .filter((s) => markCodes.includes(s.entry.mutantId))
       .map((s) => ({ key: serializeKey(identityKeyOf(s.entry)), reason: "same either way" }));
     if (marks.length > 0) {
-      writeFileSync(join(projectDir, "lethal.equivalent.json"), JSON.stringify({ marks }));
+      writeFileSync(
+        join(projectDir, "lethal.equivalent.json"),
+        JSON.stringify({ identityScheme: IDENTITY_SCHEME, marks }),
+      );
     }
     const testDir = over.testDir ?? mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
     if (over.testDir === undefined) {
