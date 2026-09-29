@@ -55,6 +55,7 @@ import type { PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
 import { runVerify } from "../src/verify";
 import type { VerifyOutput } from "../src/verify";
+import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { type NormalizedMutant, keyOf } from "./mutant-equality";
@@ -79,7 +80,7 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
 const ALPACKAGES = join(TEST_DIR, ".alpackages");
-/** Read only. `assertMatchesBaseline` is never called: it WRITES a missing file. */
+/** Read only, and refused at startup when missing (R332). This gate never writes it. */
 const BASELINE_PATH = join(HERE, "tables.baseline.json");
 /** The ids `tables.itest.ts` uses; verify reads them from the temp config (R261). */
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
@@ -198,6 +199,7 @@ function lastRecorded(path: string): { artifactId: string; appId: string } | und
 }
 
 async function main(): Promise<void> {
+  preflightReadOnlyBaseline(BASELINE_PATH, "verify-scale itest");
   const outPath = process.env.LETHAL_VERIFY_SCALE_OUT;
   if (outPath === undefined || outPath === "") {
     throw new Error("LETHAL_VERIFY_SCALE_OUT=<path> is required: it receives every number");

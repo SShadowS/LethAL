@@ -47,6 +47,7 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
+import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
@@ -176,6 +177,7 @@ LeaseClient.prototype.acquire = function (
 };
 
 async function main(): Promise<void> {
+  preflightReadOnlyBaseline(BASELINE_PATH, "verify itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
   if (!symbols.some((n) => n.toLowerCase().endsWith(".app"))) {
