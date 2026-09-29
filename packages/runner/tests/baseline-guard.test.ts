@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertMatchesBaseline, assertMatchesFrozenBaseline } from "../itest/baseline-guard";
+import {
+  BaselineRecordedError,
+  GATE_BASELINES,
+  RECORD_BASELINE_ENV,
+  assertGateBaseline,
+  assertMatchesBaseline,
+  assertMatchesFrozenBaseline,
+  preflightFrozenBaseline,
+  preflightGateBaseline,
+  preflightReadOnlyBaseline,
+  recordRequested,
+} from "../itest/baseline-guard";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 function outcome(
@@ -183,7 +194,7 @@ describe("assertMatchesFrozenBaseline (R321)", () => {
     report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "RateSmall" })]);
 
   test("no committed baseline and no record mode: refuses, and writes nothing", async () => {
-    const path = join(dir, "frozen.json");
+    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
     await expect(assertMatchesFrozenBaseline(r(), path, "t", false)).rejects.toThrow(
       /never records one silently/,
     );
@@ -191,13 +202,13 @@ describe("assertMatchesFrozenBaseline (R321)", () => {
   });
 
   test("record mode with no baseline: records it", async () => {
-    const path = join(dir, "frozen.json");
+    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
     await assertMatchesFrozenBaseline(r(), path, "t", true);
     expect(existsSync(path)).toBe(true);
   });
 
   test("record mode with a baseline present: refuses to overwrite it", async () => {
-    const path = join(dir, "frozen.json");
+    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
     await assertMatchesFrozenBaseline(r(), path, "t", true);
     const before = await readFile(path, "utf8");
     await expect(assertMatchesFrozenBaseline(r(), path, "t", true)).rejects.toThrow(
@@ -207,12 +218,241 @@ describe("assertMatchesFrozenBaseline (R321)", () => {
   });
 
   test("a committed baseline is compared, and a difference throws", async () => {
-    const path = join(dir, "frozen.json");
+    const path = join(dir, "al-runner.symbols-lethala.baseline.json");
     await assertMatchesFrozenBaseline(r(), path, "t", true);
     await assertMatchesFrozenBaseline(r(), path, "t", false);
     const moved = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
     await expect(assertMatchesFrozenBaseline(moved, path, "t", false)).rejects.toThrow(
       /per-mutant regression/,
     );
+  });
+});
+
+describe("R332: a frozen baseline never records itself", () => {
+  const NAME = "bcdev.baseline.json"; // a registered gate basename, placed in a temp dir
+  const r = () =>
+    report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "RateSmall" })]);
+  const arm = (v: string): NodeJS.ProcessEnv => ({ [RECORD_BASELINE_ENV]: v });
+  const none: NodeJS.ProcessEnv = {};
+
+  test("recordRequested: exact registered basenames only; slash direction does not matter", () => {
+    const p = join(dir, NAME);
+    expect(recordRequested(p, none)).toBe(false);
+    expect(recordRequested(p, arm(""))).toBe(false);
+    expect(recordRequested(p, arm(NAME))).toBe(true);
+    expect(recordRequested(p, arm(`tables.baseline.json, ${NAME}`))).toBe(true);
+    expect(recordRequested(p, arm("tables.baseline.json"))).toBe(false);
+    expect(recordRequested(`${dir.replace(/\\/g, "/")}/${NAME}`, arm(NAME))).toBe(true);
+    expect(recordRequested(`${dir.replace(/\//g, "\\")}\\${NAME}`, arm(NAME))).toBe(true);
+  });
+
+  test("recordRequested throws on =1, a typo, a wrong case, a path, or a symbol file", () => {
+    const p = join(dir, NAME);
+    for (const bad of [
+      "1",
+      "bcdev.json",
+      "BCDEV.baseline.json",
+      "packages/runner/itest/bcdev.baseline.json",
+      "al-runner.symbols-lethala.baseline.json",
+    ]) {
+      expect(() => recordRequested(p, arm(bad))).toThrow(/not a gate baseline/);
+    }
+  });
+
+  test("the registry names five gate baselines and their record commands", () => {
+    expect(Object.keys(GATE_BASELINES).sort()).toEqual([
+      "al-runner.baseline.json",
+      "bcdev.baseline.json",
+      "envtool.baseline.json",
+      "harden.baseline.json",
+      "tables.baseline.json",
+    ]);
+    for (const [name, how] of Object.entries(GATE_BASELINES)) {
+      expect(how).toContain(`${RECORD_BASELINE_ENV}=${name} bun run itest:`);
+    }
+  });
+
+  test("an unregistered basename is refused, not guessed", async () => {
+    await expect(
+      assertGateBaseline(r(), join(dir, "stray.baseline.json"), "t", none),
+    ).rejects.toThrow(/not a registered frozen baseline/);
+  });
+
+  test("missing, record off: refused, names the command, writes nothing", async () => {
+    const p = join(dir, NAME);
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/never records one silently/);
+    expect((err as Error).message).toContain(GATE_BASELINES[NAME] ?? "unreachable");
+    expect(existsSync(p)).toBe(false);
+  });
+
+  test("arming another file does not arm this one", async () => {
+    const p = join(dir, NAME);
+    await expect(assertGateBaseline(r(), p, "t", arm("tables.baseline.json"))).rejects.toThrow(
+      /never records one silently/,
+    );
+    expect(existsSync(p)).toBe(false);
+  });
+
+  test("missing, record on: writes once, byte-identical to the old writer, then BaselineRecordedError", async () => {
+    const p = join(dir, NAME);
+    const ref = join(dir, "reference.json");
+    await assertMatchesBaseline(r(), ref, "ref");
+    const err = await assertGateBaseline(r(), p, "t", arm(NAME)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BaselineRecordedError);
+    expect((err as Error).message).toMatch(/NOT a pass/);
+    expect(await readFile(p, "utf8")).toBe(await readFile(ref, "utf8"));
+  });
+
+  test("present, record on: the write itself refuses (wx), bytes unchanged", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "sentinel\n", "utf8");
+    await expect(assertGateBaseline(r(), p, "t", arm(NAME))).rejects.toThrow(
+      /refuses to overwrite/,
+    );
+    expect(await readFile(p, "utf8")).toBe("sentinel\n");
+  });
+
+  test("present, match, record off: passes", async () => {
+    const p = join(dir, NAME);
+    await assertMatchesBaseline(r(), p, "seed");
+    await expect(assertGateBaseline(r(), p, "t", none)).resolves.toBeUndefined();
+  });
+
+  test("present, mismatch: throws, names the command and the pre-commitment, never re-records", async () => {
+    const p = join(dir, NAME);
+    await assertMatchesBaseline(r(), p, "seed");
+    const before = await readFile(p, "utf8");
+    const moved = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
+    const err = await assertGateBaseline(moved, p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/per-mutant regression/);
+    expect((err as Error).message).toMatch(/pre-commitment/);
+    expect((err as Error).message).toContain(GATE_BASELINES[NAME] ?? "unreachable");
+    expect(await readFile(p, "utf8")).toBe(before);
+  });
+
+  test("preflightGateBaseline: refuses missing (off) and present (on); allows the other two", async () => {
+    const p = join(dir, NAME);
+    expect(() => preflightGateBaseline(p, "t", none)).toThrow(/never records one silently/);
+    expect(() => preflightGateBaseline(p, "t", arm(NAME))).not.toThrow();
+    await writeFile(p, "[]\n", "utf8");
+    expect(() => preflightGateBaseline(p, "t", none)).not.toThrow();
+    expect(() => preflightGateBaseline(p, "t", arm(NAME))).toThrow(/refuses to overwrite/);
+  });
+
+  test("preflightReadOnlyBaseline: refuses a missing file with the OWNING gate's command, ignores record mode", async () => {
+    const p = join(dir, NAME);
+    expect(() => preflightReadOnlyBaseline(p, "verify itest")).toThrow(
+      GATE_BASELINES[NAME] ?? "unreachable",
+    );
+    await writeFile(p, "[]\n", "utf8");
+    expect(() => preflightReadOnlyBaseline(p, "verify itest")).not.toThrow();
+  });
+
+  test("preflightFrozenBaseline refuses an unregistered path in record mode too, naming it", () => {
+    const p = join(dir, "stray.baseline.json");
+    expect(() => preflightFrozenBaseline(p, "t", false)).toThrow(
+      /not a registered frozen baseline/,
+    );
+    expect(() => preflightFrozenBaseline(p, "t", true)).toThrow(/not a registered frozen baseline/);
+    expect(() => preflightFrozenBaseline(p, "t", true)).toThrow(p);
+  });
+
+  test("a baseline of [] never matches, even a zero-mutant report (empty-vs-empty)", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "[]\n", "utf8");
+    const empty = report([]);
+    const err = await assertGateBaseline(empty, p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("a baseline of {} is refused, naming the file", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "{}\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("a baseline of null is refused, naming the file", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "null\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("malformed JSON in the baseline is refused, naming the file and the record command", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "{not valid json\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/not valid JSON/);
+    expect((err as Error).message).toContain(p);
+    expect((err as Error).message).toContain(GATE_BASELINES[NAME] ?? "unreachable");
+  });
+
+  test("record armed for a different registered gate prints a stderr warning naming both; verdict unchanged", async () => {
+    const p = join(dir, NAME);
+    await assertMatchesBaseline(r(), p, "seed");
+    const originalError = console.error;
+    const seen: string[] = [];
+    console.error = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      await expect(
+        assertGateBaseline(r(), p, "t", arm("tables.baseline.json")),
+      ).resolves.toBeUndefined();
+    } finally {
+      console.error = originalError;
+    }
+    const warned = seen.join("\n");
+    expect(warned).toContain("tables.baseline.json");
+    expect(warned).toContain(NAME);
+  });
+
+  test("BaselineRecordedError sets this.name, not just its constructor", async () => {
+    const p = join(dir, NAME);
+    const ref = join(dir, "reference2.json");
+    await assertMatchesBaseline(r(), ref, "ref");
+    const err = await assertGateBaseline(r(), p, "t", arm(NAME)).catch((e: unknown) => e);
+    expect((err as Error).name).toBe("BaselineRecordedError");
+  });
+});
+
+describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
+  const SYM = "al-runner.symbols-lethala.baseline.json";
+  const r = () => report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "T" })]);
+
+  test("record mode never overwrites a symbol file, even with no preflight in front of it", async () => {
+    const p = join(dir, SYM);
+    await writeFile(p, "sentinel\n", "utf8");
+    await expect(assertMatchesFrozenBaseline(r(), p, "t", true)).rejects.toThrow(
+      /refuses to overwrite/,
+    );
+    expect(await readFile(p, "utf8")).toBe("sentinel\n");
+  });
+
+  test("preflightFrozenBaseline covers both symbol files before either is written", async () => {
+    const a = join(dir, SYM);
+    const b = join(dir, "al-runner.symbols-lethalb.baseline.json");
+    await writeFile(b, "[]\n", "utf8");
+    // record run, a absent, b present: the preflight must stop it before a is written
+    expect(() => {
+      for (const p of [a, b]) preflightFrozenBaseline(p, "t", true);
+    }).toThrow(/refuses to overwrite/);
+    expect(existsSync(a)).toBe(false);
+    expect(() => preflightFrozenBaseline(a, "t", false)).toThrow(
+      /LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1/,
+    );
+  });
+
+  test("assertMatchesFrozenBaseline refuses a gate basename, even though it is registered somewhere", async () => {
+    const p = join(dir, "bcdev.baseline.json");
+    await expect(assertMatchesFrozenBaseline(r(), p, "t", true)).rejects.toThrow(
+      /not a registered symbol baseline/,
+    );
+    expect(existsSync(p)).toBe(false);
   });
 });

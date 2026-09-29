@@ -18,7 +18,7 @@
  * and both test apps must be published to that container (R56: publishing a test app is the
  * user's own workflow).
  */
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,12 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline } from "./baseline-guard";
+import {
+  BaselineRecordedError,
+  assertGateBaseline,
+  preflightGateBaseline,
+  recordRequested,
+} from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -196,13 +201,9 @@ function assertBaselineGreen(label: string, report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightGateBaseline(BASELINE_PATH, "harden itest");
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-harden-itest-"));
   try {
-    const baselineExisted = await access(BASELINE_PATH).then(
-      () => true,
-      () => false,
-    );
-
     const a = await runLeg(scratchRoot, "a", TESTS_DIR);
     dump("leg A, sandbox-harden-tests", a);
     assertBaselineGreen("leg A", a);
@@ -210,9 +211,9 @@ async function main(): Promise<void> {
     assertSingleBatch(a);
     assertHardenVerdicts(a);
     assertHardenMarks(a);
-    // Only when committed: assertMatchesBaseline WRITES a missing file, and it must not exist
-    // until leg B has passed too. The table checks ran first so a failure names a mutant.
-    if (baselineExisted) await assertMatchesBaseline(a, BASELINE_PATH, "harden itest");
+    // Compare early so a mismatch names a mutant before leg B. In record mode the file is absent
+    // (preflight) and is written only after leg B, by recordAfterBothLegs.
+    if (!recordRequested(BASELINE_PATH)) await assertGateBaseline(a, BASELINE_PATH, "harden itest");
 
     await recordAfterBothLegs(
       a,
@@ -240,7 +241,9 @@ async function main(): Promise<void> {
 try {
   await main();
 } catch (err) {
-  await emitFailed("harden", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  process.exit(1);
+  await emitFailed("harden", err instanceof Error ? err.message : String(err));
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 }

@@ -37,7 +37,7 @@ import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src
 import type { SessionReport } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline } from "./baseline-guard";
+import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
@@ -676,6 +676,7 @@ function assertVerdictTable(report: SessionReport): void {
 }
 
 async function main(): Promise<void> {
+  preflightGateBaseline(BASELINE_PATH, "bcdev itest");
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
   assert.equal(
@@ -693,7 +694,7 @@ async function main(): Promise<void> {
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
     // verdict counts assertVerdictTable already checked. A per-mutant difference fails the
     // itest even when killed/survived/no-coverage totals still match (Task 15, design spec §14).
-    await assertMatchesBaseline(first.report, BASELINE_PATH, "bcdev itest");
+    await assertGateBaseline(first.report, BASELINE_PATH, "bcdev itest");
 
     const second = await runOnce(scratchB);
     assertVerdictTable(second.report);
@@ -721,7 +722,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await emitFailed("bcdev", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  process.exit(1);
+  await emitFailed("bcdev", err instanceof Error ? err.message : String(err));
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

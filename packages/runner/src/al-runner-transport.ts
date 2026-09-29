@@ -90,6 +90,18 @@ export interface AlRunnerBcBuild {
  * `selected` wins when both are present: it is the runner's statement of what it actually used,
  * where `selecting` is its statement of intent.
  *
+ * MEASURED 2026-09-29 on al-runner 2.12.0 (R338): `[bc] selected` and `[bc] ... selecting BC` now
+ * print ONLY under `AL_RUNNER_VERBOSE=1`. A default one-shot run's stderr names the build in two
+ * other lines, read after `selected` and before `selecting`:
+ *
+ *     [bc] warning: the shipped 28.1 engine variant was built against 28.1.49838.55333, not the
+ *          selected 28.1.49838.54487 - different BUILDS of the same minor can still fail ...
+ *     al-runner 0.0.0-main · BC 28.1.49838.54487 · 2 apps
+ *
+ * The daemon (`--server`) still prints `[bc] selected` without verbose on 2.12.0. Verbose is NOT
+ * requested on mutant calls: it adds about a hundred lines per invocation, and the daemon keeps
+ * only a bounded stderr tail, which verbose output would push the announcement out of.
+ *
  * WHY READ IT RATHER THAN PIN IT. Passing `--bc-version` ourselves would make the choice LethAL's,
  * and R125 measured that failure mode: a project whose symbols do not match the pin fails loudly
  * for a reason we introduced, and `--auto-provision` resolving the version is exactly what cured
@@ -148,8 +160,16 @@ export function parseAlRunnerMissingImplementation(
 export function parseAlRunnerBcBuild(output: string): AlRunnerBcBuild | undefined {
   // Anchored on `[bc] ` at line start so a version number appearing in a test's own failure text
   // can never be mistaken for the runner's announcement.
-  const selected = /^\[bc\] selected BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output);
-  const chosen = selected ?? /^\[bc\][^\n]*\bselecting BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output);
+  const chosen =
+    /^\[bc\] selected BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output) ??
+    // R338: al-runner 2.12.0 prints `[bc] selected` only under AL_RUNNER_VERBOSE. Its DEFAULT
+    // output names the selected build in two other lines, read here. The warning appears only
+    // when the engine variant's build differs, and its FIRST build (`built against <variant>`) is
+    // the variant's, never read. The banner appears on every run. Its separators are `\S+`
+    // because a console code page can mangle the middle dot (R147 saw that happen to an arrow).
+    /^\[bc\] warning:[^\n]*\bnot the selected ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output) ??
+    /^al-runner \S+ \S+ BC ([0-9]+(?:\.[0-9]+)+) \S+ \d+ apps?\b.*$/m.exec(output) ??
+    /^\[bc\][^\n]*\bselecting BC ([0-9]+(?:\.[0-9]+)+)\b.*$/m.exec(output);
   if (chosen === null) return undefined;
   const [line, build] = chosen;
   if (build === undefined) return undefined;

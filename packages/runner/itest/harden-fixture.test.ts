@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
@@ -9,6 +9,7 @@ import { parseEquivalenceMarks } from "../src/equivalence-marks";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { BaselineRecordedError, RECORD_BASELINE_ENV } from "./baseline-guard";
 import {
   ANSWER_KILLERS,
   EXPECTED,
@@ -284,18 +285,21 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
   });
 });
 
-describe("C02-03: the baseline is written only after leg B passes", () => {
+describe("C02-03 + R332: written only after leg B passes, and only in record mode", () => {
   const exists = (p: string) =>
     access(p).then(
       () => true,
       () => false,
     );
+  const NAME = "harden.baseline.json";
+  const armed: NodeJS.ProcessEnv = { [RECORD_BASELINE_ENV]: NAME };
 
-  test("C02-03: the baseline is written only after leg B passes", async () => {
+  test("record mode: a leg-B failure leaves no file; a leg-B pass writes it and is NOT a pass", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-harden-baseline-"));
     try {
       const reportA = reportFrom(EXPECTED);
-      const failPath = join(dir, "fail.baseline.json");
+      await mkdir(join(dir, "fail"));
+      const failPath = join(dir, "fail", NAME);
       await expect(
         recordAfterBothLegs(
           reportA,
@@ -303,23 +307,40 @@ describe("C02-03: the baseline is written only after leg B passes", () => {
             throw new Error("leg B failed");
           },
           failPath,
+          armed,
         ),
       ).rejects.toThrow("leg B failed");
       expect(await exists(failPath)).toBe(false);
 
-      const okPath = join(dir, "ok.baseline.json");
+      await mkdir(join(dir, "ok"));
+      const okPath = join(dir, "ok", NAME);
       let legBRan = false;
-      await recordAfterBothLegs(
+      const err = await recordAfterBothLegs(
         reportA,
         async () => {
           legBRan = true;
         },
         okPath,
-      );
+        armed,
+      ).catch((e: unknown) => e);
       expect(legBRan).toBe(true);
+      expect(err).toBeInstanceOf(BaselineRecordedError);
       const written = JSON.parse(await readFile(okPath, "utf8")) as NormalizedMutant[];
       expect(written.length).toBe(EXPECTED.length);
       expect(diffMutants(written, normalizeForComparison(reportA))).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("record mode off: a missing baseline is refused after leg B and nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-harden-baseline-"));
+    try {
+      const p = join(dir, NAME);
+      await expect(
+        recordAfterBothLegs(reportFrom(EXPECTED), async () => {}, p, {}),
+      ).rejects.toThrow(/never records one silently/);
+      expect(await exists(p)).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
