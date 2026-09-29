@@ -20,6 +20,8 @@
  *
  *     LETHAL_RERECORD_BASELINE=1 <command>
  *
+ * That variable only lets a hand edit through this hook. A gate records only under R332's LETHAL_ITEST_RECORD_BASELINE.
+ *
  * Exits 2 (blocking) only for that file class. Exits 0 for everything else, and for any unexpected
  * input: a hook that breaks the session is worse than a hook that misses one edit.
  */
@@ -59,9 +61,10 @@ console.error(
     "If a gate is red, the verdict differing IS the finding. Read it before touching this file.",
     "",
     "If re-recording is genuinely correct (a new operator or a Tier-2 change that legitimately",
-    "moves verdicts — R30/R33 will), re-run the gate and record it deliberately:",
+    "moves verdicts, as R30/R33 did), write a pre-commitment, delete the file, and record it",
+    "once through the gate (R332; a record run always exits 3, never a pass):",
     "",
-    "    LETHAL_RERECORD_BASELINE=1 bun run itest:<gate>",
+    "    LETHAL_ITEST_RECORD_BASELINE=<gate>.baseline.json <the gate's enable var>=1 bun run itest:<gate>",
     "",
     "and then PROVE the new file compares against itself on a subsequent run (R29's lesson: a",
     "baseline nobody re-ran is not a baseline).",

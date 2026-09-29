@@ -122,7 +122,8 @@ import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline } from "./baseline-guard";
+import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
+import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertReachEvidence } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_ENVTOOL) {
@@ -130,7 +131,8 @@ if (!process.env.LETHAL_ITEST_ENVTOOL) {
     "skipped (set LETHAL_ITEST_ENVTOOL=1 and populate the gitignored " +
       "fixtures/sandbox-app/lethal.config.envtool.json to run against a real environment)",
   );
-  process.exit(0);
+  const challenged = await emitSkipped("envtool", "the leg's env var is unset");
+  process.exit(challenged ? 1 : 0);
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -138,9 +140,9 @@ const REPO_ROOT = join(HERE, "..", "..", "..");
 const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-app");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-tests");
 const CONFIG_PATH = join(PROJECT_DIR, "lethal.config.envtool.json");
-// Committed per-mutant baseline — see baseline-guard.ts. Absent on the first run: the guard
-// RECORDS it and says so (Task 8 Step 2/3 of the plan). Never hand-write this file; it must come
-// from a live run, which this task deliberately does not perform.
+// Committed per-mutant baseline, see baseline-guard.ts. R332: a missing file is REFUSED at
+// startup, and it is recorded only with LETHAL_ITEST_RECORD_BASELINE=envtool.baseline.json, never
+// over an existing file, in a run that exits 3.
 const BASELINE_PATH = join(HERE, "envtool.baseline.json");
 
 // See Task 8 Step 4's doc comment above — unexercised by this commit's own verification.
@@ -154,8 +156,8 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // Same fixture as bcdev.itest.ts, same coverage mode ("procedure" — see the header comment above),
 // so the same table is expected. NOT hard-coded per-mutant here (unlike tables.itest.ts): which
 // mutant lands on which verdict cannot be known without a live run against this specific
-// environment, and this task is scoped to never perform one — `assertMatchesBaseline` below is
-// what pins the per-mutant table down, on whatever the human's first real run records.
+// environment, and this task is scoped to never perform one: `assertGateBaseline` below is
+// what pins the per-mutant table down, against the file a deliberate record run wrote.
 const EXPECTED = {
   // MEASURED 2026-08-28 on a restored environment, and no longer inferred. These figures spent
   // 2026-08-26 to 2026-08-28 as PREDICTIONS carried over from `itest:bcdev` because this gate's
@@ -365,12 +367,13 @@ const UNVERIFIED_MOVES: readonly string[] = [
 /**
  * Refuse to let a missing baseline be silently re-recorded while moves are unconfirmed.
  *
- * `assertMatchesBaseline` RECORDS a baseline when the file is absent, which is right for a gate
- * whose fixture legitimately grew. It is wrong here: the environment expired and was deleted
- * 2026-08-26, the constants above were updated from PREDICTIONS twice, and the documented remedy for
- * a per-mutant mismatch is "delete the baseline and re-run" — which would turn two unreviewed
- * predictions into a committed measurement in one step. That reflex is exactly how a gate stops
- * being evidence, so it is blocked here rather than warned about in a comment.
+ * Since R332 every gate refuses a missing baseline and records one only in record mode. This
+ * guard refuses that record mode too while moves are unverified. Recording would be wrong here:
+ * the environment expired and was deleted 2026-08-26, the constants above were updated from
+ * PREDICTIONS twice, and the documented remedy for a per-mutant mismatch is "delete the
+ * baseline and re-run", which would turn two unreviewed predictions into a committed
+ * measurement in one step. That reflex is exactly how a gate stops being evidence, so it is
+ * blocked here rather than warned about in a comment.
  */
 function refuseSelfRecordWhileUnverified(): void {
   if (UNVERIFIED_MOVES.length === 0) return;
@@ -381,6 +384,8 @@ function refuseSelfRecordWhileUnverified(): void {
 }
 
 async function main(): Promise<void> {
+  refuseSelfRecordWhileUnverified();
+  preflightGateBaseline(BASELINE_PATH, "envtool itest");
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
   const total = files.reduce((n, f) => n + f.specs.length, 0);
   assert.equal(
@@ -393,19 +398,20 @@ async function main(): Promise<void> {
   try {
     const report = await runOnce(scratch);
     assertVerdictTable(report);
-    // Per-mutant regression guard against the committed baseline, keyed on semantic identity
-    // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code. Absent on the
-    // first real run — it RECORDS one instead of failing (baseline-guard.ts).
-    refuseSelfRecordWhileUnverified();
-    await assertMatchesBaseline(report, BASELINE_PATH, "envtool itest");
+    // Per-mutant regression guard against the committed baseline, keyed on semantic identity.
+    await assertGateBaseline(report, BASELINE_PATH, "envtool itest");
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 
   console.log("envtool itest: PASS");
+  await emitPassed("envtool", { sublegs: ["envtool"], artifacts: { reported: false } });
 }
 
-main().catch((err: unknown) => {
+main().catch(async (err: unknown) => {
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  process.exit(1);
+  await emitFailed("envtool", err instanceof Error ? err.message : String(err));
+  process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

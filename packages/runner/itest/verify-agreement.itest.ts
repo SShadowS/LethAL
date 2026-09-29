@@ -57,6 +57,7 @@ import type { PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
 import { VERIFY_EXIT } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
+import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -100,7 +101,7 @@ const ANSWERS_FILE = join(
   "HardenAnswerKey.Codeunit.al",
 );
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
-/** Read only. `assertMatchesBaseline` is never called: it WRITES a missing file. */
+/** Read only, and refused at startup when missing (R332). This gate never writes it. */
 const BASELINE_PATH = join(HERE, "harden.baseline.json");
 /** R261: verify reads the config's selector ids, the full runs read this; asserted equal first. */
 const SELECTOR_IDS = { selectorId: 79547, controlId: 79548, tableId: 79549 };
@@ -199,6 +200,7 @@ BcDevMcpBackend.prototype.publishTestApp = function (
 };
 
 async function main(): Promise<void> {
+  preflightReadOnlyBaseline(BASELINE_PATH, "agreement itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
   if (!symbols.some((n) => n.toLowerCase().endsWith(".app"))) {
@@ -805,7 +807,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await emitFailed("agreement", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  await emitFailed("agreement", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

@@ -47,6 +47,7 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
+import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
@@ -176,6 +177,7 @@ LeaseClient.prototype.acquire = function (
 };
 
 async function main(): Promise<void> {
+  preflightReadOnlyBaseline(BASELINE_PATH, "verify itest");
   const alpackages = join(TEST_DIR, ".alpackages");
   const symbols = await readdir(alpackages).catch(() => [] as string[]);
   if (!symbols.some((n) => n.toLowerCase().endsWith(".app"))) {
@@ -637,7 +639,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await emitFailed("verify", err instanceof Error ? err.message : String(err));
+  // R332: print the reason before any await, so an operator sees it on the console even when
+  // the following receipt write is slow or the process is killed before it finishes.
   console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  await emitFailed("verify", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
