@@ -5,6 +5,7 @@
  * `:memory:` results store. NOT a `bun:test` file — it is a standalone
  * script invoked via `bun run itest:alrunner` (root package.json), never
  * picked up by `bun test`.
+ * R321: also runs fixtures/sandbox-symbols under [LETHALA] and [LETHALB], all three transports (symbol-fixture.ts).
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -41,13 +42,14 @@ import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
-import { assertMatchesBaseline } from "./baseline-guard";
+import { assertMatchesBaseline, assertMatchesFrozenBaseline } from "./baseline-guard";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   assertEveryMutantHasReachGrain,
   assertNoReachAttestation,
   printReachSummary,
 } from "./reach-evidence";
+import { SYMBOL_SETS, assertSymbolBuild, printSymbolTable, symbolSetLabel } from "./symbol-fixture";
 
 if (!process.env.LETHAL_ITEST_ALRUNNER) {
   console.log("skipped (set LETHAL_ITEST_ALRUNNER=1 and LETHAL_ALRUNNER_PATH=<path> to run)");
@@ -80,6 +82,34 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.
 const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
+
+// R321: the symbol fixture pair, its own app and id range (79600-79699), so no other gate moves;
+// selector ids at the top of the target's range, per the `pickSelectorIds` convention.
+const SYMBOL_PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-symbols");
+const SYMBOL_TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-symbols-tests");
+const SYMBOL_SELECTOR_IDS = { selectorId: 79649, controlId: 79648, tableId: 79647 };
+/** R321 Decision 6: the ONLY way a symbol baseline is ever written. A record run is never a pass. */
+const RECORD_SYMBOL_BASELINES = process.env.LETHAL_ITEST_RECORD_SYMBOL_BASELINES === "1";
+
+/** `al-runner.symbols-lethala.baseline.json`, `al-runner.symbols-lethalb.baseline.json`. */
+function symbolBaselinePath(symbols: readonly string[]): string {
+  if (symbols.length === 0) throw new Error("R321: the symbol legs never run the empty set");
+  return join(HERE, `al-runner.symbols-${symbols.join("-").toLowerCase()}.baseline.json`);
+}
+
+interface GateFixture {
+  readonly projectDir: string;
+  readonly testDir: string;
+  readonly selectorIds: typeof SELECTOR_IDS;
+  readonly symbols: readonly string[];
+}
+
+const SANDBOX: GateFixture = {
+  projectDir: PROJECT_DIR,
+  testDir: TEST_DIR,
+  selectorIds: SELECTOR_IDS,
+  symbols: [],
+};
 
 // Hand-computed against fixtures/sandbox-app/src (see fixtures/README.md §Expected verdict table).
 // al-runner reports coverage:"none", so the orchestrator never emits a "no-coverage" verdict —
@@ -136,10 +166,17 @@ const EXPECTED = {
  */
 const EXPECTED_NO_COVERAGE_FILE = "SandboxPricing.Codeunit.al";
 
+/** What two legs must agree on, per mutant. */
+const shape = (r: SessionReport) =>
+  [...r.mutants]
+    .map((m) => ({ mutantCode: m.mutantCode, verdict: m.verdict, killingTest: m.killingTest }))
+    .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
+
 async function runOnce(
   scratchRoot: string,
   serverMode = false,
   selectorMode: "static" | "resource" = "static",
+  fixture: GateFixture = SANDBOX,
 ): Promise<SessionReport> {
   const store = new ResultsStore(":memory:");
   // `cfg.backend` is CALLER-owned and `runSession` never closes it -- see the ownership note on
@@ -152,7 +189,7 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
-    const support = await alRunnerCoverageSupport(PROJECT_DIR);
+    const support = await alRunnerCoverageSupport(fixture.projectDir);
     if (!support.supported) {
       throw new Error(
         `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
@@ -161,20 +198,24 @@ async function runOnce(
     const backend = new AlRunnerBackend({
       alRunnerPath,
       instrumentedDir: join(scratchRoot, "instrumented"),
-      testDir: TEST_DIR,
-      selectorObjectId: SELECTOR_IDS.selectorId,
+      testDir: fixture.testDir,
+      selectorObjectId: fixture.selectorIds.selectorId,
       coverage: "al-runner",
       ...(serverMode ? { serverMode: true } : {}),
       ...(selectorMode === "resource" ? { selectorMode } : {}),
+      // R321: the one-shot argv (`buildAlRunnerArgv`) and the daemon's start argv (R319) read this.
+      ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
     });
     backendRef = backend;
     return await runSession({
       backend,
       store,
-      projectDir: PROJECT_DIR,
-      testDir: TEST_DIR,
+      projectDir: fixture.projectDir,
+      testDir: fixture.testDir,
       instrumentedDir: join(scratchRoot, "instrumented"),
-      selectorIds: SELECTOR_IDS,
+      selectorIds: fixture.selectorIds,
+      // R321: compiles nothing; it is only what `SessionReport.preprocessorSymbols` records.
+      ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
     });
   } finally {
     store.close();
@@ -384,6 +425,90 @@ async function stampRunnerVersion(): Promise<void> {
   console.log(`  al-runner build under test: ${line}`);
 }
 
+/**
+ * R321: the symbol fixture under `[LETHALA]` and `[LETHALB]`, through all three transports.
+ *
+ * Every check is COLLECTED and the gate fails once at the end, so a run shows every leg that saw a
+ * wrong build rather than the first. A session that crashes still throws at once. Per leg: the table
+ * is printed first, then the server legs are compared with the one-shot leg per mutant, then every
+ * leg with the pre-committed table. The one-shot leg alone is compared with the frozen baseline,
+ * AFTER its table check, so record mode can never record a leg that disagrees with the table.
+ *
+ * These legs do not assert the R147 platform pin; only the sandbox one-shot legs do.
+ */
+async function runSymbolLegs(): Promise<void> {
+  const failures: string[] = [];
+  const check = async (what: string, fn: () => void | Promise<void>): Promise<void> => {
+    try {
+      await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED ${what}: ${message}`);
+      failures.push(message);
+    }
+  };
+  for (const symbols of SYMBOL_SETS) {
+    const label = symbolSetLabel(symbols);
+    const fixture: GateFixture = {
+      projectDir: SYMBOL_PROJECT_DIR,
+      testDir: SYMBOL_TEST_DIR,
+      selectorIds: SYMBOL_SELECTOR_IDS,
+      symbols,
+    };
+    const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-oneshot-"));
+    const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-server-"));
+    const resourceDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-sym-resource-"));
+    try {
+      const oneShot = await runOnce(oneShotDir, false, "static", fixture);
+      printSymbolTable(oneShot, symbols, "one-shot");
+      await check(`one-shot ${label}`, async () => {
+        assertSymbolBuild(oneShot, symbols, "one-shot");
+        await assertMatchesFrozenBaseline(
+          oneShot,
+          symbolBaselinePath(symbols),
+          `al-runner itest ${label}`,
+          RECORD_SYMBOL_BASELINES,
+        );
+      });
+
+      const viaServer = await runOnce(serverDir, true, "static", fixture);
+      printSymbolTable(viaServer, symbols, "--server");
+      await check(`--server ${label}`, () => {
+        assert.deepEqual(
+          shape(viaServer),
+          shape(oneShot),
+          `R321 ${label}: the --server transport must reach the SAME per-mutant verdicts as the one-shot one`,
+        );
+        assertSymbolBuild(viaServer, symbols, "--server");
+      });
+
+      const viaResource = await runOnce(resourceDir, true, "resource", fixture);
+      printSymbolTable(viaResource, symbols, "resource");
+      await check(`resource ${label}`, () => {
+        assert.deepEqual(
+          shape(viaResource),
+          shape(oneShot),
+          `R321 ${label}: the resource selector must reach the SAME per-mutant verdicts as the one-shot one`,
+        );
+        assertSymbolBuild(viaResource, symbols, "resource");
+      });
+
+      console.log(
+        `  symbol set ${label}: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}`,
+      );
+    } finally {
+      await rm(oneShotDir, { recursive: true, force: true });
+      await rm(serverDir, { recursive: true, force: true });
+      await rm(resourceDir, { recursive: true, force: true });
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `R321: ${failures.length} symbol-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   await stampRunnerVersion();
   const { files } = await generateMutationSet(join(PROJECT_DIR, "src"));
@@ -411,10 +536,6 @@ async function main(): Promise<void> {
     assertVerdictTable(second);
     assertPlatformAppsPinned(second);
 
-    const shape = (r: SessionReport) =>
-      [...r.mutants]
-        .map((m) => ({ mutantCode: m.mutantCode, verdict: m.verdict, killingTest: m.killingTest }))
-        .sort((a, b) => a.mutantCode.localeCompare(b.mutantCode));
     assert.deepEqual(
       shape(first),
       shape(second),
@@ -461,6 +582,16 @@ async function main(): Promise<void> {
     await rm(scratchB, { recursive: true, force: true });
     await rm(scratchC, { recursive: true, force: true });
     await rm(scratchD, { recursive: true, force: true });
+  }
+
+  await runSymbolLegs();
+  if (RECORD_SYMBOL_BASELINES) {
+    // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
+    console.log(
+      "al-runner itest: RECORDED the symbol baselines; NOT a pass. Review them against the pre-commitment, commit, and re-run without LETHAL_ITEST_RECORD_SYMBOL_BASELINES.",
+    );
+    await emitFailed("alrunner", "record mode: symbol baselines recorded, not a pass");
+    process.exit(3);
   }
 
   console.log("al-runner itest: PASS");

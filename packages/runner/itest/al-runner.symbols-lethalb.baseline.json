@@ -1,0 +1,93 @@
+[
+  {
+    "key": "3639fdd4c7a91572386bf27ae14fdf74064b1cc62f4371893d4a84d3878cda38|Symbol Logic|Rate|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "5c45f9a610538da2efbfc5f509ff2b04b6b8b68980383adafcf53d9b58de6a96|Symbol Logic|Rate|lethal.shift-integer|1",
+    "verdict": "killed",
+    "killingTest": "RateSmall",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "758da28b173e364a976eff1b96889af14e53935f69c469b7e16442192ca2f93e|Symbol Logic|Rate|lethal.remove-assignment|1",
+    "verdict": "killed",
+    "killingTest": "RateSmall",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1|1",
+    "verdict": "killed",
+    "killingTest": "RateSmall",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1|2",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Symbol Logic|Rate|lethal.remove-assignment|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "b0f4101cecb0db49fbb114da27e514484c17ada9cb4d1f3872bda2154ca828d9|Symbol Logic|Rate|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Symbol Logic|Rate|lethal.shift-integer|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1|1",
+    "verdict": "killed",
+    "killingTest": "RateSmall",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1|2",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e38e94a34bd5df4305a6c8eb7018c2daa722c554777002232103720d75f3058e|Symbol Logic|Rate|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "RateSmall",
+    "coverageFiltered": false,
+    "errorClass": null
+  }
+]

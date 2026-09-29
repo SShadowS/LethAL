@@ -1,0 +1,28 @@
+{
+  "id": "fda67638-2fee-4a1c-94bd-bc37c357f0d9",
+  "name": "LethAL Sandbox Symbols",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R321 fixture: a target whose three builds differ by preprocessor symbol.",
+  "description": "One procedure with an #if LETHALA / #elif LETHALB / #else split. Run by itest:alrunner under [LETHALA] and [LETHALB] so a transport that compiles the wrong build moves a per-mutant verdict. Deliberately its OWN app and id range so no other frozen baseline moves. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79600,
+      "to": 79649
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
