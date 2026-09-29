@@ -40,7 +40,8 @@ import { join } from "node:path";
 /** One reader's ruling about one mutant, as it appears in the marks file. */
 export interface EquivalenceMark {
   /**
-   * [[R166]]'s serialized identity — `astHash|codeunitName|procedureName|operatorName|operatorMajor`.
+   * [[R166]]'s serialized identity — `astHash|codeunitName|procedureName|operatorName|operatorMajor`,
+   * plus `|<identityOrdinal>` for a twin after the first (R193, R230).
    * Built with `serializeKey(identityKeyOf(entry))` so a mark and a run agree by construction; a
    * second spelling of the same key is how the two would drift apart.
    */
@@ -143,11 +144,9 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
         `${at}: "key" is required and must be a non-empty string. It is the R166 identity: astHash|codeunitName|procedureName|operatorName|operatorMajor`,
       );
     }
-    if (key.split("|").length !== 5) {
-      throw new EquivalenceMarksError(
-        `${at}: "key" has ${key.split("|").length} field(s), expected 5 ` +
-          `(astHash|codeunitName|procedureName|operatorName|operatorMajor). Got: ${key}`,
-      );
+    const keyShapeError = identityKeyShapeError(key);
+    if (keyShapeError !== undefined) {
+      throw new EquivalenceMarksError(`${at}: "key" ${keyShapeError}. Got: ${key}`);
     }
     if (typeof reason !== "string" || reason.trim() === "") {
       throw new EquivalenceMarksError(
@@ -170,6 +169,25 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
       ...(typeof markedOn === "string" && markedOn.trim() !== "" ? { markedOn } : {}),
     };
   });
+}
+
+/**
+ * R230: why `key` is not a shape `serializeKey` (selection.ts) can write, or `undefined` when it
+ * is one. It writes the five-field tuple, plus `|<ordinal>` for a twin after the first (R193),
+ * where the ordinal is a positive integer rendered by a template string: `1`, `2`, ... never `0`,
+ * never a leading zero or sign. Accepting only that keeps a malformed key failing loudly.
+ */
+function identityKeyShapeError(key: string): string | undefined {
+  const fields = key.split("|");
+  if (fields.length === 5) return undefined;
+  const expected =
+    "expected 5 (astHash|codeunitName|procedureName|operatorName|operatorMajor), or 6 for a twin after the first, whose sixth field is its identityOrdinal (a positive integer)";
+  if (fields.length !== 6) return `has ${fields.length} field(s), ${expected}`;
+  const ordinal = fields[5] ?? "";
+  if (!/^[1-9][0-9]*$/.test(ordinal)) {
+    return `has a sixth field "${ordinal}" that is not a positive integer: ${expected}`;
+  }
+  return undefined;
 }
 
 /**
