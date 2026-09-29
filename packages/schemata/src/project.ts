@@ -728,6 +728,12 @@ export async function writeManifestJson(
 ): Promise<void> {
   const nest = (v: unknown, pad: string): string =>
     JSON.stringify(v, null, 2).replaceAll("\n", `\n${pad}`);
+  // RUST-03 S4a review I1: drop any manifest already sitting at the real name BEFORE writing the
+  // .partial. A caller (writeInstrumentedProject) does not require an empty target directory, so
+  // without this a failed rewrite left the OLD manifest under the real name looking complete and
+  // valid to a later reader. Removing it up front means every failure path below now leaves NO
+  // manifest at `path`, whether or not one was there before this call.
+  await rm(path, { force: true });
   // Written to a .partial file and renamed only when whole, so a crash, a throw or a short write
   // never leaves a truncated mutant-manifest.json that a later reader could take for a whole one.
   const partial = `${path}.partial`;

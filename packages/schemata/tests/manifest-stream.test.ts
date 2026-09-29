@@ -1,5 +1,5 @@
 import { afterAll, expect, it } from "bun:test";
-import { mkdtemp, open, readFile, readdir, rename, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { writeManifestJson } from "../src/project";
@@ -157,6 +157,23 @@ it("a failing close after a whole write rethrows it and leaves nothing", async (
   await expect(
     writeManifestJson(join(d, "m.json"), m, { open: closeFailOpen, rename }),
   ).rejects.toThrow("close refused");
+  expect(await readdir(d)).toEqual([]);
+});
+
+// RUST-03 S4a review I1: writeInstrumentedProject does not require an empty target directory, so a
+// directory reused after a failed rewrite could still hold the OLD real-name manifest, looking
+// complete. A failed rewrite must remove it, not just the .partial.
+it("a failed write removes an existing manifest already at the real name", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
+  dirs.push(d);
+  const target = join(d, "m.json");
+  await writeFile(target, "stale manifest from a previous run");
+  const m = {
+    selectorIds,
+    artifactId: "0".repeat(32),
+    mutants: [{ mutantId: 1, bad: 1n }], // BigInt: stringify throws late
+  } as never;
+  await expect(writeManifestJson(target, m)).rejects.toThrow();
   expect(await readdir(d)).toEqual([]);
 });
 
