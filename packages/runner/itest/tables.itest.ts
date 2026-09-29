@@ -69,8 +69,9 @@ const PROJECT_DIR = join(REPO_ROOT, "fixtures", "sandbox-data");
 const TEST_DIR = join(REPO_ROOT, "fixtures", "sandbox-data-tests");
 const LAUNCH_LOCAL_PATH = join(PROJECT_DIR, ".vscode", "launch.local.json");
 const CONFIG_LOCAL_PATH = itestConfigPath(PROJECT_DIR);
-// Committed per-mutant baseline — see baseline-guard.ts. Absent on the first run: the guard
-// RECORDS it and says so. Never hand-write this file; it must come from a live run.
+// Committed per-mutant baseline, see baseline-guard.ts. Since R332 a missing file is refused at
+// startup; record it only with LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json (a record run
+// exits 3, never a pass). Never hand-write this file; it must come from a live run.
 const BASELINE_PATH = join(HERE, "tables.baseline.json");
 // GH-24's reach baseline probes drive `RunMutantTransport` directly, as bcdev's protocol probes do.
 // `fixtures/sandbox-data/app.json` "id", and `codeunit 79310 "Data Tests"`.
@@ -118,7 +119,8 @@ const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
  * regression guard for THIS fixture is `assertGateBaseline` against the committed
  * `tables.baseline.json` (semantic-identity keyed; since R332 a missing file is refused, never
  * recorded silently).
- * The file IS committed; delete it to re-record after a deliberate fixture change, and review the
+ * The file IS committed. To re-record after a deliberate fixture change, delete it, run once with
+ * `LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json`, then run again without it, and review the
  * diff before committing — a re-record is the one operation that can silently bless a regression.
  * `assertTriggerKillAndSurvive` below independently pins the trigger claim.
  */
