@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertMatchesBaseline } from "../itest/baseline-guard";
+import { assertMatchesBaseline, assertMatchesFrozenBaseline } from "../itest/baseline-guard";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 function outcome(
@@ -172,6 +173,45 @@ describe("assertMatchesBaseline", () => {
       outcome({ mutantCode: "M0002", astHash: "hash-B", verdict: "killed", killingTest: "T1" }),
     ]);
     await expect(assertMatchesBaseline(second, path, "test itest")).rejects.toThrow(
+      /per-mutant regression/,
+    );
+  });
+});
+
+describe("assertMatchesFrozenBaseline (R321)", () => {
+  const r = () =>
+    report([outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "RateSmall" })]);
+
+  test("no committed baseline and no record mode: refuses, and writes nothing", async () => {
+    const path = join(dir, "frozen.json");
+    await expect(assertMatchesFrozenBaseline(r(), path, "t", false)).rejects.toThrow(
+      /never records one silently/,
+    );
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("record mode with no baseline: records it", async () => {
+    const path = join(dir, "frozen.json");
+    await assertMatchesFrozenBaseline(r(), path, "t", true);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("record mode with a baseline present: refuses to overwrite it", async () => {
+    const path = join(dir, "frozen.json");
+    await assertMatchesFrozenBaseline(r(), path, "t", true);
+    const before = await readFile(path, "utf8");
+    await expect(assertMatchesFrozenBaseline(r(), path, "t", true)).rejects.toThrow(
+      /refuses to overwrite/,
+    );
+    expect(await readFile(path, "utf8")).toBe(before);
+  });
+
+  test("a committed baseline is compared, and a difference throws", async () => {
+    const path = join(dir, "frozen.json");
+    await assertMatchesFrozenBaseline(r(), path, "t", true);
+    await assertMatchesFrozenBaseline(r(), path, "t", false);
+    const moved = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
+    await expect(assertMatchesFrozenBaseline(moved, path, "t", false)).rejects.toThrow(
       /per-mutant regression/,
     );
   });

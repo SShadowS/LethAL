@@ -17,6 +17,9 @@
  *
  * Usage:  bun scripts/compile-fixtures.ts
  *         bun scripts/compile-fixtures.ts --inventory <out.json>
+ *         bun scripts/compile-fixtures.ts --require-symbol-sets
+ *           R321: a project that declares symbol sets (symbol-sets.json) may not be skipped for
+ *           missing symbols.
  * Exit 0 = every fixture compiles; exit 1 = at least one does not (errors printed).
  *
  * ## Inventory mode, and why exit 0 is not enough for a program
@@ -39,6 +42,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { sourceHash } from "./lib/source-hash.ts";
+import { readSymbolSets } from "./lib/symbol-sets.ts";
 
 /**
  * Every root holding AL projects that must keep compiling. `examples/` joined `fixtures/` when the
@@ -100,6 +104,11 @@ interface InventoryProject {
   readonly version: string;
   readonly sourceHash: string;
   readonly status: "compiled" | "no-symbols" | "failed";
+  /** R321: present only for a project with a `symbol-sets.json`, one entry per declared build. */
+  readonly builds?: readonly {
+    readonly symbols: readonly string[];
+    readonly status: "compiled" | "failed";
+  }[];
 }
 
 const inventoryIdx = process.argv.indexOf("--inventory");
@@ -109,6 +118,13 @@ if (inventoryIdx >= 0 && (inventoryPath === undefined || inventoryPath.startsWit
   process.exit(1);
 }
 const inventory: InventoryProject[] = [];
+
+/**
+ * R321. Off by default: the fixture edit hook runs this script in every worktree, and a project's
+ * `.alpackages` is gitignored, so refusing a skip by default would block every fixture edit where
+ * nobody staged this pair's symbols. The R321 check always passes it.
+ */
+const requireSymbolSets = process.argv.includes("--require-symbol-sets");
 
 function appVersion(project: string): string {
   const raw = readFileSync(join(project, "app.json"), "utf8").replace(/^﻿/, "");
@@ -150,8 +166,20 @@ for (const project of projects) {
   const name = projectLabel(project);
   const packageCache = join(project, ".alpackages");
   const version = appVersion(project);
+  // R321: a project that declares symbol sets is compiled once per set, because an `#if` arm that
+  // only one set compiles is otherwise never compiled at all, and a broken one passes.
+  const declaredSets = readSymbolSets(project);
   if (!existsSync(packageCache)) {
-    console.error(`  SKIP  ${name} — no .alpackages (symbols are gitignored; download them first)`);
+    if (declaredSets !== undefined && requireSymbolSets) {
+      failed += 1;
+      console.error(
+        `  FAIL  ${name}: declares symbol sets but has no .alpackages, and --require-symbol-sets refuses a skip`,
+      );
+    } else {
+      console.error(
+        `  SKIP  ${name}: no .alpackages (symbols are gitignored; download them first)`,
+      );
+    }
     inventory.push({
       project: name,
       version,
@@ -160,38 +188,55 @@ for (const project of projects) {
     });
     continue;
   }
-  // Output to a scratch path, never into the fixture: a stray `.app` beside the source is exactly
-  // what makes a stale published build hard to notice, which is the bug this script exists for.
-  //
-  // The separator in `name` (`examples/gift-card`) is flattened, because a `/` here would aim the
-  // compiler at a subdirectory of the temp dir that nothing creates. A failure to WRITE is not a
-  // compile error, so the run could end up reporting OK for a compile whose output went nowhere —
-  // the "passes for the wrong reason" shape this repository keeps finding.
-  const out = join(tmpdir(), `lethal-fixture-compile-${name.replace(/[\\/]/g, "-")}.app`);
-  const r = spawnSync(
-    alc,
-    [`/project:${project}`, `/packagecachepath:${packageCache}`, `/out:${out}`],
-    {
-      encoding: "utf8",
-    },
-  );
-  const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-  const errors = output.split(/\r?\n/).filter((l) => /: error [A-Z]{2}\d+:/.test(l));
-  try {
-    rmSync(out, { force: true });
-  } catch {
-    // A leftover scratch artifact is not worth failing the check over.
+  const builds: { symbols: readonly string[]; status: "compiled" | "failed" }[] = [];
+  for (const symbols of declaredSets ?? [[]]) {
+    const label = declaredSets !== undefined ? `${name} [${symbols.join(",")}]` : name;
+    // Output to a scratch path, never into the fixture: a stray `.app` beside the source is exactly
+    // what makes a stale published build hard to notice, which is the bug this script exists for.
+    // The separator in `name` is flattened, because a `/` here would aim the compiler at a
+    // subdirectory of the temp dir that nothing creates.
+    const suffix = symbols.length > 0 ? `-${symbols.join("-")}` : "";
+    const out = join(
+      tmpdir(),
+      `lethal-fixture-compile-${name.replace(/[\\/]/g, "-")}${suffix}.app`,
+    );
+    const r = spawnSync(
+      alc,
+      [
+        `/project:${project}`,
+        `/packagecachepath:${packageCache}`,
+        // Omitted for the empty set, as `ArtifactCompiler` does: `/define:` with no value is a
+        // different thing to say to a compiler than not saying it.
+        ...(symbols.length > 0 ? [`/define:${symbols.join(",")}`] : []),
+        `/out:${out}`,
+      ],
+      { encoding: "utf8" },
+    );
+    const output = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    const errors = output.split(/\r?\n/).filter((l) => /: error [A-Z]{2}\d+:/.test(l));
+    try {
+      rmSync(out, { force: true });
+    } catch {
+      // A leftover scratch artifact is not worth failing the check over.
+    }
+    if (r.status === 0 && errors.length === 0) {
+      console.log(`  OK    ${label}`);
+      builds.push({ symbols, status: "compiled" });
+      continue;
+    }
+    builds.push({ symbols, status: "failed" });
+    failed += 1;
+    console.error(`  FAIL  ${label}: ${errors.length} error(s)`);
+    for (const e of errors.slice(0, 15)) console.error(`          ${e.trim()}`);
+    if (errors.length > 15) console.error(`          ... ${errors.length - 15} more`);
   }
-  if (r.status === 0 && errors.length === 0) {
-    console.log(`  OK    ${name}`);
-    inventory.push({ project: name, version, sourceHash: sourceHash(project), status: "compiled" });
-    continue;
-  }
-  inventory.push({ project: name, version, sourceHash: sourceHash(project), status: "failed" });
-  failed += 1;
-  console.error(`  FAIL  ${name} — ${errors.length} error(s)`);
-  for (const e of errors.slice(0, 15)) console.error(`          ${e.trim()}`);
-  if (errors.length > 15) console.error(`          ... ${errors.length - 15} more`);
+  inventory.push({
+    project: name,
+    version,
+    sourceHash: sourceHash(project),
+    status: builds.some((b) => b.status === "failed") ? "failed" : "compiled",
+    ...(declaredSets !== undefined ? { builds } : {}),
+  });
 }
 
 if (inventoryPath !== undefined) {
@@ -207,7 +252,7 @@ if (inventoryPath !== undefined) {
 
 if (failed > 0) {
   console.error(
-    `\ncompile-fixtures: ${failed} fixture project(s) do not compile. A fixture that does not compile cannot be republished, and a live gate that keeps passing against the previously published build is measuring something nobody can rebuild (R56).`,
+    `\ncompile-fixtures: ${failed} fixture build(s) do not compile. A fixture that does not compile cannot be republished, and a live gate that keeps passing against the previously published build is measuring something nobody can rebuild (R56).`,
   );
   process.exit(1);
 }

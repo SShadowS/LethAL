@@ -19,6 +19,7 @@
  * itest throws, naming every differing mutant — a per-mutant difference fails the itest, exactly
  * like a per-mutant-count mismatch already does.
  */
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import type { SessionReport } from "../src/report";
 import { canonical, diffMutants, normalizeForComparison } from "./mutant-equality";
@@ -72,4 +73,32 @@ export async function assertMatchesBaseline(
         `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`,
     );
   }
+}
+
+/**
+ * R321: like `assertMatchesBaseline`, but an absent baseline is REFUSED rather than recorded.
+ *
+ * `assertMatchesBaseline` writes an absent file and returns, so deleting a frozen baseline makes the
+ * gate pass on whatever it measured next. For a baseline that was pre-committed and frozen, recording
+ * must be a deliberate, one-time act: `record` is true only when the caller's explicit record mode
+ * is on, and then an EXISTING file is refused, so record mode can never overwrite a frozen table.
+ */
+export async function assertMatchesFrozenBaseline(
+  report: SessionReport,
+  baselinePath: string,
+  label: string,
+  record: boolean,
+): Promise<void> {
+  const exists = existsSync(baselinePath);
+  if (record && exists) {
+    throw new Error(
+      `${label}: record mode refuses to overwrite the committed baseline at ${baselinePath}. Recording is one-time: a change needs a new pre-commitment, then the file deleted deliberately, then one record run.`,
+    );
+  }
+  if (!record && !exists) {
+    throw new Error(
+      `${label}: no committed baseline at ${baselinePath}. This gate never records one silently; after a pre-commitment, record once with LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 and commit the file.`,
+    );
+  }
+  await assertMatchesBaseline(report, baselinePath, label);
 }

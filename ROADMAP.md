@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**91 of 331 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 334 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -134,6 +134,7 @@ that ordering is the priority.
 - **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29 (engine guarded; the grammar defect stays)
 - **R330** · The symbol table does not index declarations inside a `#if` region, so name resolution reads through them: a call is typed as unique and a local fails to hide a global · [R330.md](docs/roadmap/R330.md) · done (7b8409c7, d0a0a9e4)
 - **R331** · The Tier-2 rule-3 guard does not see a `#if`-wrapped procedure, so a table's own procedure of a built-in name can be claimed as the built-in · [R331.md](docs/roadmap/R331.md) · done (84f38b9f)
+- **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29
 
 ## Product gaps a real project hits
 
@@ -372,10 +373,12 @@ that ordering is the priority.
 - **R314** · A native Rust tree-sitter-al parser (RUST-01 spike) parsed BaseApp 1.8x SLOWER than the WASM path; the Rust route stopped at its pre-committed bar · [R314.md](docs/roadmap/R314.md) · closed 2026-09-29: superseded by RUST-02/RUST-03 (clang build; native switch landed 9f7cb5f0)
 - **R317** · OData V4 throttling (event 705) was seen sharing a BC user with the gate; a per-user concurrency limit is not measured · [R317.md](docs/roadmap/R317.md) · open, filed 2026-09-28
 - **R320** · GitHub Actions in ci.yml and release.yml are pinned by mutable version tags, not commit SHAs · [R320.md](docs/roadmap/R320.md) · done (e413175)
-- **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · open, filed 2026-09-28
+- **R321** · `itest:alrunner` has no fixture that defines a preprocessor symbol, so no frozen gate can catch a transport that measures the wrong build · [R321.md](docs/roadmap/R321.md) · done (a7105681..5ccd9a60)
 - **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · open, filed 2026-09-29
 - **R328** · After RUST-03, the JSC heap still holds 2,230 MB of free capacity after a full GC at the peak of the W8 manifest-row phase, above the 2,000 MB RUST-03 pre-committed · [R328.md](docs/roadmap/R328.md) · open, filed 2026-09-29
 - **R329** · `lethal run --dry-run` on the Base Application takes a median 494 s on the final RUST-03 tree, about 104 s (27%) longer than the native median at RUST-03's S0 (390 s); the cause is not known · [R329.md](docs/roadmap/R329.md) · open, filed 2026-09-29
+- **R332** · A deleted live-gate baseline re-records itself on the next run and the gate passes, for every gate but R321's symbol legs · [R332.md](docs/roadmap/R332.md) · open, filed 2026-09-29
+- **R335** · Two spawning tests in `campaign-subcommands.test.ts` time out at Bun's 5 s default under a full `bun test` run and pass when the file runs alone · [R335.md](docs/roadmap/R335.md) · open, filed 2026-09-29
 
 ---
 

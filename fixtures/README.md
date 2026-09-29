@@ -15,6 +15,8 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Harden Entry` (table) | 79501 | `sandbox-harden` | The target's one table. Its `Amount` field's `OnValidate` gives `lethal.validate-to-assign` something to skip (S4). |
 | `Harden Tests` | 79550 | `sandbox-harden-tests` | `Subtype = Test` codeunit, `TestPermissions = Disabled;`. Asserts via `Error()`, no Library Assert. Kills every mutant except the five planted survivors. |
 | `Harden Answer Key` | 79575 | `sandbox-harden-answers` | Separate answer-key app: four tests that kill S1 to S4, plus one that tries and is expected to fail against the equivalent S5. |
+| `Symbol Logic` | 79600 | `sandbox-symbols` | R321 target: one procedure with an `#if LETHALA` / `#elif LETHALB` / `#else` split. `itest:alrunner` runs it under `[LETHALA]` and `[LETHALB]`. |
+| `Symbol Tests` | 79650 | `sandbox-symbols-tests` | One test, `RateSmall`, asserting each build's own value (11, 101, or 2 with no symbol). Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -26,9 +28,10 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 **The convention, in one line: the highest range the app declares, counting DOWN from its top.**
 `pickSelectorIds` (`packages/schemata/src/id-ranges.ts`) implements it and `lethal init` writes it;
 `validateSelectorIds` refuses an id outside every declared range, a duplicate among the three, or one
-the project already declares. Every fixture here follows it against its own ranges — `sandbox-app`
+the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
-`gift-card` 90197-90199 — and two fixtures must never share the three ids, which is R169.
+`gift-card` 90197-90199, `sandbox-symbols` 79647-79649), and two fixtures must never share the three
+ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
 verified against a real BC server 2026-07-18. al-runner's compiler simply doesn't enforce
@@ -324,6 +327,30 @@ non-planted mutants the answer key does not target and so does not kill (`IsLarg
   79575), holding the five answer-key methods. C02-08 publishes that copy, runs `lethal verify`,
   restores the committed suite in a `finally`, and runs `itest:harden` around the whole sequence to
   confirm nothing drifted.
+
+## sandbox-symbols (R321)
+
+A target and test app whose builds differ by preprocessor symbol: `#if LETHALA` / `#elif LETHALB` /
+`#else`. Each project lists its builds in `symbol-sets.json` (`[[], ["LETHALA"], ["LETHALB"]]`), and
+`compile:fixtures` compiles every one; `--require-symbol-sets` makes a missing `.alpackages` a
+failure for these two instead of a skip. `itest:alrunner` runs `[LETHALA]` and `[LETHALB]` through
+the one-shot, `--server` and server+resource transports. The `#else` build is what a transport that
+lost its defines would run, so it is compiled and pre-committed, but no gate leg runs it on purpose.
+Neither `app.json` defines a symbol: al-runner reads a bundle's own `app.json` symbols, which would
+define one on every transport.
+
+All three builds score 5 killed / 8 survived / 0 no-coverage over 13 mutants, and every pair of
+builds disagrees on 8 of the 13. Only a per-mutant comparison can tell them apart. The tables were
+pre-committed in `docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
+
+Six of the 13 sit in `#if` arms, and any one build compiles out four of them (the R214 shape). The
+six assignment mutants outside the arms discriminate the builds without depending on that. When R214 is fixed, this
+gate needs a new pre-commitment and a re-freeze.
+
+`.alpackages` is gitignored. Copy `Microsoft_*.app` from `sandbox-tests/.alpackages` into both
+projects, and `alc` the target into `sandbox-symbols-tests/.alpackages`, from current source, before
+compiling. The test app compiles against that staged package, so its compile proves nothing about the
+package being fresh; re-stage before checking. al-runner compiles both from source and needs neither.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 

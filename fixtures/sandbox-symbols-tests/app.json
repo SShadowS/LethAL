@@ -1,0 +1,35 @@
+{
+  "id": "b747fe5d-4601-4a26-8242-9b88dd4bac0a",
+  "name": "LethAL Sandbox Symbols Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R321 fixture: tests for the symbol-dependent target.",
+  "description": "One test that asserts each build's own value of Symbol Logic.Rate. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "fda67638-2fee-4a1c-94bd-bc37c357f0d9",
+      "name": "LethAL Sandbox Symbols",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79650,
+      "to": 79699
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
