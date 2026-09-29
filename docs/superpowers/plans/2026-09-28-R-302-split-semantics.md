@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Revision r3 (2026-09-29), final.** Review r2 (`H:/lethal-coord/reviews/R-302-plan/review-r2.md`) closed C1, C2, I1 and I2 and found one new Critical: identity reuse across an engine change. There is no round 3; the orchestrator verifies this change. What changed: Task 1A (the identity-scheme version, R325, filed in `d3941580`); the checker pins the EXACT old and new keys of every renumbering; the gate checker requires a whole-body row to be reached by its covering tests; the earlier "no live gate" and "System Application unchanged" passages are marked SUPERSEDED, not deleted. See "Revision r3" at the end. Task count: 9 (Task 0, Task 1A, Tasks 1 to 7).
+
 **Revision r1, second commit (2026-09-29).** Adds "Prototype check" (measured after the pre-commitment commit `d0e094ac`: 22 of 23 checks matched on the second round, DC/Cloud and BaseApp exactly; one pre-committed row was wrong, `d4`, and one place was missing, `findEnclosingStatement`), then Global Constraints, Review Focus, File structure, Tasks 0 to 6, Self-review, Notes and Open questions. Nothing above "Prototype check" was edited.
 
 **Revision r1 (2026-09-29), draft for the orchestrator's review.** Written in two commits on purpose. The first commit holds the measurements, the decisions and the PRE-COMMITMENT (the expected mutants per repro and per corpus, by member, operator and line). The prototype check and the tasks are added by a second commit, so git history shows the pre-commitment was written before any prototype fix existed.
@@ -156,7 +158,7 @@ A new mutant in a named split member gets that member's name, as every existing 
 
 And the one reverse change: `d5` and `d6` lose a wrong `remove-setrange` claim and get the `void-method-call` HEAD should have given.
 
-### 5. Live gate: not needed, with a stated STOP
+### 5. Live gate: not needed, with a stated STOP (SUPERSEDED by revision r2: Task 5 is a mandatory Cronus28 gate)
 
 The change decides which specs exist; it changes no emission code (the wrapper, the reach latch, the markers, the line maps and the manifest walks are untouched, and R301 and R316 already made them see both shapes). What each kind of evidence proves here:
 
@@ -164,7 +166,7 @@ The change decides which specs exist; it changes no emission code (the wrapper, 
 - al-runner, local, one-shot, coverage on and off, every subset, serially: each new mutant runs and gets a verdict, and each split member's verdicts equal its twin's (R-316's `verdict-diff.ts`).
 - The manifest, offline: each new mutant in a split member has the same `reachGrain`, member lines and gap block as its twin's mutant at the same span (Task 4). The marker is placed by the same code for both.
 
-What a bcdev gate would add is live proof that a marker in a split member fires per test. R-316's Cronus28 gate proved that for the preamble's body statements, on both symbol configurations, with a negative control, and nothing here changes marker placement. So no live gate is planned. **STOP rule:** if Task 4 finds any new split-member mutant whose `reachGrain` differs from its twin's, or a mutant kind whose marker lands anywhere but inside the shared body, stop and ask the orchestrator for a Cronus28 gate before merging.
+**SUPERSEDED by revision r2** (Task 5 is a mandatory Cronus28 gate; kept for the record, not the decision). What a bcdev gate would add is live proof that a marker in a split member fires per test. R-316's Cronus28 gate proved that for the preamble's body statements, on both symbol configurations, with a negative control, and nothing here changes marker placement. So no live gate is planned. **STOP rule:** if Task 4 finds any new split-member mutant whose `reachGrain` differs from its twin's, or a mutant kind whose marker lands anywhere but inside the shared body, stop and ask the orchestrator for a Cronus28 gate before merging.
 
 ---
 
@@ -260,7 +262,7 @@ Expected: deployed 1509 to **1540** (+31), raw 1537 to **1568** (+31): 31 `+` ro
 
 ### Everything else
 
-- System Application and BusinessFoundation: no split node, so identity keys, manifests and emitted targets byte-identical to HEAD.
+- **SUPERSEDED by revision r2 for System Application** (C2 adds 5 mutants there and renumbers one key; BusinessFoundation stays byte-identical). Original text: System Application and BusinessFoundation: no split node, so identity keys, manifests and emitted targets byte-identical to HEAD.
 - Every fixture (`sandbox-app`, `sandbox-data`, `sandbox-hang`, `sandbox-harden`, `sandbox-coverage-probe`): no `#if` line and no split node, so hashes, identity keys, manifests and emitted targets byte-identical to HEAD. No frozen itest figure can move. If Task 0's census finds a split node in a fixture, that is a STOP: this plan's "fixtures stay byte-identical" premise is gone and the orchestrator decides.
 - The three plain twins (`t5-*-twin`): unchanged.
 
@@ -333,7 +335,7 @@ In `q1` and `q2`, each of `Pick`'s 7 mutants (the 3 new ones included) has the s
 ### Corrections to the text at `d0e094ac` (the counts are not touched)
 
 1. The places are 12, not 11: `findEnclosingStatement`'s block case (place 12). Tasks below include it.
-2. Decision 5: the change DOES touch the emission path, through place 12, which decides the statement a split member's body mutant is wrapped as. The decision stands, for the reasons measured above: the wrapped statement is the one a plain procedure's body gets (alc 37/37, grain and gap equal to the twin's), and nothing else on that path changes. Review may overrule this; if it does, a Cronus28 gate on `q2`-shaped and `k1`-shaped members is the natural scope.
+2. **SUPERSEDED by revision r2** (Task 5 is a mandatory Cronus28 gate; kept for the record, not the decision). Decision 5: the change DOES touch the emission path, through place 12, which decides the statement a split member's body mutant is wrapped as. The decision stands, for the reasons measured above: the wrapped statement is the one a plain procedure's body gets (alc 37/37, grain and gap equal to the twin's), and nothing else on that path changes. Review may overrule this; if it does, a Cronus28 gate on `q2`-shaped and `k1`-shaped members is the natural scope.
 3. Decision 3's example was overstated (see Controls).
 4. `d4` expects 5, not 4 (see Round 2).
 5. `t5-lit-split` (R-297's repro) does NOT compile un-instrumented offline: it declares `Record Customer`, which needs BaseApp symbols. The sentence at `d0e094ac` that every split repro compiles except `k1` missed it. Its site rows stand (the pipeline does not need symbols); alc runs its local-table copy, `$S/repro-alc/t5-lit-split-local`.
@@ -368,6 +370,7 @@ In `q1` and `q2`, each of `Pick`'s 7 mutants (the 3 new ones included) has the s
 
 ## File structure
 
+- Task 1A (R325): `packages/schemata/src/project.ts` (`IDENTITY_SCHEME`), `packages/runner/src/resume.ts` (`sessionFingerprint`), `packages/runner/src/store.ts` (runs column, `priorSurvivorKeys`, `getRun`), `packages/runner/src/orchestrator.ts` (the history and resume refusals, the report field), `packages/runner/src/equivalence-marks.ts` and `verify.ts`, and the `SessionReport` ripple chain (`events.ts`, `report-fold.ts`, `report.ts`, the generated schemas).
 - Modify `packages/engine/src/ast/tree-walks.ts`: `findEnclosingProcedure`, `findEnclosingStatement`'s block case; new `memberArms`, `procedureLikeReturnType`, `inMemberBody` (Task 1).
 - Modify `packages/engine/src/index.ts`: export the three new helpers (Task 1).
 - Modify `packages/engine/src/semantic/symbol-table.ts`: `ProcedureSymbol.ambiguous`, `indexMembers`, a new `parseSplitProcedure`, `resolveProcedure`'s empty-name guard (Task 1).
@@ -461,6 +464,31 @@ Expected: the last line. `cmp` against `$S/cap/head/` (the plan-time capture) pr
 
 ---
 
+### Task 1A: An identity-scheme version, so no verdict crosses a renumbering (R325; before Task 1)
+
+**Why here.** Task 1 and Task 2 add mutants that can take an existing mutant's identity key (measured: System Application `SFTPClient` L42 takes L56's key; `o1` L8 takes L13's; `c3` L12 and L14 take the overload's keys). Every cross-session consumer must refuse to match keys made under a different scheme BEFORE that change lands, so this task commits first.
+
+**Design.** `IDENTITY_SCHEME` (an integer, `packages/schemata/src/project.ts`, beside `assignIdentityOrdinals`, exported from `@lethal/schemata`) names the rules that turn source into identity keys. It is `2` from this commit; `1` means every key made before it, and anything recorded without a scheme is read as `1`. Its doc comment says when to bump it: any engine or operator change that can move an existing mutant's key for unchanged AL source. The serialized key itself does NOT change, so no mutant count and no key in any capture moves because of this task (nothing to pre-commit beyond that sentence). What changes is the fingerprint digest and one new field.
+
+**Every cross-session consumer of identity keys, and what it does:**
+
+| consumer | carries across sessions | change |
+| --- | --- | --- |
+| `priorSurvivorKeys` (`store.ts`) and `filterHistory` (`selection.ts`): the known-survivor skip | yes | runs table gains `identity_scheme` (a migration adds it nullable; `createRun` records the current one; NULL reads as 1). When the latest finished run's scheme differs, it returns no keys and the session emits warning `history-identity-scheme-changed` naming the run id and both schemes; nothing is skipped |
+| `buildResumeIndex` via `--resume-run` / `--resume` (`orchestrator.ts`, `resume.ts`) | yes | before the fingerprint compare, a run whose scheme differs is refused with a named error (the run id, both schemes, R325). `sessionFingerprint` also gains an ALWAYS-present `identityScheme` key: unlike R127's conditional keys this is meant to change every digest, so a store from before this build can never be resumed by it. The automatic `--resume` search, which selects by fingerprint, names the old-scheme unfinished run when one exists instead of reporting "none found" |
+| equivalence marks (`equivalence-marks.ts`, applied in `verify.ts` and the session) | yes (a human-kept file) | the marks file gains an optional `identityScheme`; absent reads as 1. On a mismatch every mark is reported `stale` with warning `equivalence-marks-identity-scheme`, and none is matched or contradicted. The module doc's "a mark can never drift onto a different mutant" is corrected: it could, across a renumbering |
+| `SessionReport` (`report.ts`) | as a file | gains `identityScheme`, always written. Optional in the schema, so the committed sample reports still validate and are not regenerated; the ripple chain of CLAUDE.md's Conventions applies otherwise: `events.ts`, `report-fold.ts`'s accumulator, `report.ts`'s type, builder and banner, `bun scripts/generate-schemas.ts`, `tests/schemas.test.ts` (the root-required list stays as it is; the older-reports expectation gains the field as absent), `bun test <file> --update-snapshots` for report-equality |
+| committed baselines: `assertMatchesBaseline` (`packages/runner/itest/baseline-guard.ts`), the itest baselines and `campaign freeze` / `compare` | compared, never carried | SAFE as is: they never carry a verdict into a run or a score. They compare verdicts per key as a multiset; a renumbering that matters shows as a loud per-key difference (a key present on one side, or a group whose size changed), and `campaign compare` already refuses an uncommitted baseline. Every fixture's keys are byte-identical under this change (measured), so no frozen baseline is invalidated |
+| `report.ts`'s own keys, `scripts/c0204b-live-probe.ts`, the report-equality tests | no (one session, or one build) | SAFE: they compare keys made by the same build in the same process |
+
+**Steps.**
+
+- [ ] **Step 1: Failing tests.** (a) History: a store holding a finished run recorded with `identity_scheme` NULL whose survivor key equals a mutant's key in this session; with `--skip-known-survivors` the mutant is EXECUTED, not `known-survivor`, and the named warning is emitted. (b) Resume: `--resume-run` of that run throws the named scheme error. (c) Fingerprint: the digest for scheme 1 and scheme 2 inputs differs, and the key is present when every optional input is absent. (d) Marks: a marks file without `identityScheme` against a surviving mutant with that key: the mark is `stale`, the warning is named, the mutant is not marked equivalent. (e) The report carries `identityScheme: 2`.
+- [ ] **Step 2: Implement** as the design says.
+- [ ] **Step 3: Red-checks,** each reverted alone: remove the history scheme check (test (a) goes red: the mutant is skipped on the old verdict); remove the named resume check (test (b) goes red on the message; then also drop the key from the fingerprint and a test asserting "no verdict carried" goes red); remove the marks check (test (d) goes red: the mark matches). Record in `$S/logs/t1a-redcheck.txt`.
+- [ ] **Step 4: Wiring.** Run the `wiring-completeness` subagent on `identityScheme` (every run-row construction, every report builder, every fingerprint input) and on `IDENTITY_SCHEME` (every cross-session reader in the table above); any site it names that the table does not cover is added to it or fixed.
+- [ ] **Step 5: Green and commit.** Typecheck, `rm -rf packages/*/dist`, `bun test` from the root; `bunx biome check <touched files>`; `git commit -m "fix(R325): an identity-scheme version on runs, fingerprints, reports and marks; no verdict crosses a renumbering"`.
+
 ### Task 1: The engine resolves inside a split member, `return-value` reads the agreed return type, a call is typed only by a unique name, and names compare case-insensitively (places 1 to 4, 9 to 12; C1, C2)
 
 **Files:**
@@ -550,7 +578,7 @@ echo "sites match the pre-commitment (with the listed corrections)"
 
 ### Task 7: Roadmap
 
-- [ ] Mark `docs/roadmap/R302.md` `done (<first>..<last>)`, with a closing section: the 12 places, the per-arm rule (and its strict reading), the pre-committed counts and the measured result for each repro, DC/Cloud (+12 deployed) and BaseApp scratch (+31), the prototypes' corrections, the hang tag back, and the Cronus28 gate's archived evidence. Mark `R322.md` and `R324.md` done with the Task 1 commit and their red-checks. `R323.md` stays open (named return values, out of R-302's scope). Add one line to `R301.md` and `R316.md` pointing at the closing. Re-check the next free id across every worktree before filing anything new (R-316's Task 0 Step 5 loop). Then `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, and commit: `roadmap(R302): done`.
+- [ ] Mark `docs/roadmap/R325.md` done with Task 1A's commit and its red-checks. Mark `docs/roadmap/R302.md` `done (<first>..<last>)`, recording as POST-PROTOTYPE EXCEPTIONS (found by the r2 prototype, not predicted at `afe11fca`) the two exact key transitions pinned in "Revision r3" (`o1` L13 and System Application `SFTPClient` L56, each with the new site that takes its old key), with a closing section: the 12 places, the per-arm rule (and its strict reading), the pre-committed counts and the measured result for each repro, DC/Cloud (+12 deployed) and BaseApp scratch (+31), the prototypes' corrections, the hang tag back, and the Cronus28 gate's archived evidence. Mark `R322.md` and `R324.md` done with the Task 1 commit and their red-checks. `R323.md` stays open (named return values, out of R-302's scope). Add one line to `R301.md` and `R316.md` pointing at the closing. Re-check the next free id across every worktree before filing anything new (R-316's Task 0 Step 5 loop). Then `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, and commit: `roadmap(R302): done`.
 
 ---
 
@@ -772,3 +800,33 @@ Both corrections go in `$S/expect-r2-final/` as `k` rows; with them, **33 of 33 
 4. **R323 stays open.** The split rule copies the plain procedure's behaviour for named return values; `n1` is its evidence and is excluded from the alc set.
 
 Task count: 8 (Task 0 to Task 7; the gate is Task 5).
+
+---
+
+## Revision r3: review r2
+
+Review: `H:/lethal-coord/reviews/R-302-plan/review-r2.md`. It closed C1, C2, I1 and I2 (subject to the planned gates passing) and found one new Critical. The orchestrator's answers to r2's questions: the ids 91700 to 91799 are fine; the inner-block control is valid, and the whole-body rows must be reached by their covering tests; R322 and R324 stay separate and Task 1 closes them; the implementer removes the prototype worktree once building starts.
+
+### Critical: identity reuse across an engine change (R325, Task 1A)
+
+The renumberings are inherent in R193's source-order ordinals: a new same-tuple mutant earlier in an object takes ordinal 0 and moves the old one to 1. Measured on the r2 prototype, System Application: the NEW `swap-call-arguments` at `SFTPClient.Codeunit.al` L42 (span 1811-1882) carries exactly the key the OLD L56 site (span 2639-2712) held at HEAD. Since nothing in history, resume or marks records the scheme a key was made under, an old L56 verdict could be credited to L42 with the AL source unchanged. Filed as R325 (`d3941580`, next free id after R324, checked across every worktree under `U:/Git/LethAL-wt/` and every local branch), and closed by the new Task 1A, which lands before Task 1's engine change. It changes no mutant count and no key; only the fingerprint digest and one report field, so there is nothing further to pre-commit.
+
+### Important: every key transition pinned exactly
+
+`check-sites.ts` now reads `k <site>\t<op>\t<old key>\t<new key>` (the exact transition, not "some key changed") and `a <site>\t<op>\t<key>` (the key a new mutant must carry). `$S/expect-r2-final/` pins, and the r2 prototype capture passes (33 of 33):
+
+| project | mutant | old key (HEAD) | new key | new mutant that takes the old key | status |
+| --- | --- | --- | --- | --- | --- |
+| System Application | `SFTPClient.Codeunit.al` L56, `swap-call-arguments`, `Initialize` (overload 2) | `373c5b11...8b83\|SFTP Client\|Initialize\|lethal.swap-call-arguments\|1` | the same plus `\|1` | L42, `Initialize` (overload 1) | POST-PROTOTYPE EXCEPTION (not predicted at `afe11fca`) |
+| `o1-overload-split-first` | `Repro.Codeunit.al` L13, `empty-block`, plain `Foo` | `d36581a9...d79f\|Repro O1\|Foo\|lethal.empty-block\|1` | the same plus `\|1` | L8, the split `Foo`'s body | POST-PROTOTYPE EXCEPTION |
+| `c3-preamble-then-overload` | L18 `empty-block` and L20 `return-value`, the plain overload `Pick` | `5ebb7c9c...35fe\|Repro P\|Pick\|lethal.empty-block\|1` and `40277aa1...57f5\|Repro P\|Pick\|lethal.return-value\|1` | each plus `\|1` | L12 and L14, the preamble `Pick` | pre-committed at `d0e094ac` as "some key changes"; now exact |
+
+(Full 64-character hashes are in the expectation files; they are abbreviated here only.) Red-checked: a wrong new key (`|1|2`) and a wrong pinned after-key each FAIL on the real capture. Task 7's closing record lists the first two as post-prototype exceptions.
+
+### Minor: the gate's whole-body rows must be reached
+
+`expect-gate.json` marks `Pick` L8 and `Note` L21 `wholeBody`, and `check-gate.ts` requires such a row to be reached by its covering tests: survived, `reachedBy` equals the covering set exactly; killed, `reachedBy` non-empty and only covering tests. The offline red-check is 24 of 24 as wanted (`redcheck-v3.out`), and the rule is load-bearing on its own: with `Note` L21's expected `reachedBy` weakened to `PickEnters` alone, a report reached only by `PickEnters` still FAILS on the whole-body rule.
+
+### Superseded, kept
+
+Decision 5 ("Live gate: not needed") and its later restatement in r1's corrections, and the pre-commitment's "System Application and BusinessFoundation ... byte-identical" bullet, are labelled SUPERSEDED in place. Their text is kept; the committed rows are unchanged.
