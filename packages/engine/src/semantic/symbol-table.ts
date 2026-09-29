@@ -606,8 +606,8 @@ export function enclosingTrigger(node: ALSyntaxNode): ALSyntaxNode | null {
 }
 
 /**
- * R330 (run 002 fix round): the lowercase names a trigger declares in its own header, in a plain
- * `var` section or inside a `#if` region. Type resolution does not index trigger locals, so each
+ * R330 (run 002 fix round): the lowercase names a trigger declares in its own header: its
+ * parameters, and its locals in a plain `var` section or inside a `#if` region. Type resolution does not index trigger locals, so each
  * such name is UNKNOWN there: it gets no type and hides a global of the same name (with R322's
  * case-insensitive global lookup, also one whose casing differs). The body is not read.
  */
@@ -616,7 +616,8 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
   const walk = (n: ALSyntaxNode): void => {
     for (const c of n.namedChildren) {
       if (c.kind === ALNodeKind.block) continue;
-      if (c.kind === ALNodeKind.variable_declaration) {
+      // R330 (run 003 fix round): a trigger's PARAMETERS are its header's names too.
+      if (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter) {
         const name = c.childForFieldName("name")?.text ?? "";
         if (name !== "") out.add(stripQuotes(name).toLowerCase());
       }

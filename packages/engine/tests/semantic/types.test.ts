@@ -651,3 +651,27 @@ ${overload}#if X
     expect(typeAt(src("G", direct), "V")).toBeNull();
   });
 });
+
+// R330 (run 003 fix round): a trigger's PARAMETERS hide the globals too.
+describe("buildTypeTable: a trigger's parameters hide the globals (R330)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (global: string) => `page 50100 "Repro TP"
+{
+    trigger OnFindRecord(Which: Text): Boolean
+    begin
+        Message('%1', Which + Which);
+    end;
+
+    var
+        ${global}: Integer;
+}
+`;
+  it("a trigger parameter, global in other casing", () => {
+    expect(typeAt(src("WHICH"), "Which")).toBeNull();
+  });
+  it("a trigger parameter, global in the same casing (master's older form)", () => {
+    expect(typeAt(src("Which"), "Which")).toBeNull();
+  });
+});

@@ -3272,3 +3272,62 @@ describe("R331: no typed site in an unindexed member, and rule 3 sees #if-wrappe
     ).toEqual(C2_WANT);
   });
 });
+
+// R330 (run 003 fix round): a trigger's parameters hide the globals. Sources copied byte for byte
+// from the scratch repros r330-tp1 and r330-tp1s. Before the fix each emitted `Which - Which`,
+// which fails `alc` with AL0175 (tp1s, the same-case form, on master too).
+const R330_TP1 = `page 50100 "Repro R330TP1"
+{
+    PageType = List;
+    SourceTable = "Repro Tab TP";
+
+    trigger OnFindRecord(Which: Text): Boolean
+    begin
+        Message('%1', Which + Which);
+        exit(Rec.Find(Which));
+    end;
+
+    var
+        WHICH: Integer;
+}
+`;
+const R330_TP1S = `page 50100 "Repro R330TP1S"
+{
+    PageType = List;
+    SourceTable = "Repro Tab TP";
+
+    trigger OnFindRecord(Which: Text): Boolean
+    begin
+        Message('%1', Which + Which);
+        exit(Rec.Find(Which));
+    end;
+
+    var
+        Which: Integer;
+}
+`;
+const R330_TP_TAB = `table 50101 "Repro Tab TP"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+
+describe("R330: no typed site from a trigger's parameter", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (page: string) =>
+    (await instrument({ "Repro.Page.al": page, "Tab.Table.al": R330_TP_TAB })).manifest.mutants
+      .map((x) => x.operatorName)
+      .sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("tp1: a page trigger parameter hides the differently-cased global", async () => {
+    expect(await ops(R330_TP1)).toEqual(WANT);
+  });
+  test("tp1s: and the same-cased one", async () => {
+    expect(await ops(R330_TP1S)).toEqual(WANT);
+  });
+});
