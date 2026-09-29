@@ -45,7 +45,8 @@ function agreeWith(r: VerifyResult, f: MutantOutcome, full: SessionReport): bool
         f.verdict === "survived" &&
         f.readerMark?.key === key &&
         (full.readerMarkedEquivalent?.matched ?? []).some(
-          (m) => m.mutantCode === f.mutantCode && m.key === key,
+          // R231: ids restart per batch, so the code alone can name another batch's mutant.
+          (m) => m.batchIndex === f.batchIndex && m.mutantCode === f.mutantCode && m.key === key,
         )
       );
     }

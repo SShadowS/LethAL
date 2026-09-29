@@ -1,4 +1,4 @@
-import type { MutantOutcome, SessionReport } from "../src/report";
+import { type MutantOutcome, type SessionReport, mutantRef } from "../src/report";
 import { assertGateBaseline } from "./baseline-guard";
 
 /**
@@ -332,12 +332,12 @@ export function assertHardenVerdicts(report: SessionReport, expected = EXPECTED)
     rest.length !== 0 ||
     group.risk !== "value-rewrite" ||
     typeof group.meaning !== "string" ||
-    JSON.stringify(group.mutants) !== JSON.stringify([s5.mutantCode]) ||
+    JSON.stringify(group.mutants) !== JSON.stringify([mutantRef(s5.batchIndex, s5.mutantCode)]) ||
     JSON.stringify(Object.keys(les).sort()) !== JSON.stringify(["byRisk", "count"]) ||
     JSON.stringify(Object.keys(group).sort()) !== JSON.stringify(["meaning", "mutants", "risk"])
   ) {
     throw new HardenGateError(
-      `likelyEquivalentSurvivors must list exactly S5 (${s5.mutantCode}) under value-rewrite, got ${JSON.stringify(les ?? null)}`,
+      `likelyEquivalentSurvivors must list exactly S5 (${mutantRef(s5.batchIndex, s5.mutantCode)}) under value-rewrite, got ${JSON.stringify(les ?? null)}`,
     );
   }
 }
@@ -352,10 +352,12 @@ export function assertHardenMarks(report: SessionReport, expected = EXPECTED): v
       "readerMarkedEquivalent is absent: the run was not given lethal.equivalent.json",
     );
   }
-  const matched = rme.matched.map((m) => m.mutantCode);
-  if (JSON.stringify(matched) !== JSON.stringify([s5.mutantCode])) {
+  // R231: a mark entry names its mutant by batch AND code.
+  const matched = rme.matched.map((m) => mutantRef(m.batchIndex, m.mutantCode));
+  const s5Ref = mutantRef(s5.batchIndex, s5.mutantCode);
+  if (JSON.stringify(matched) !== JSON.stringify([s5Ref])) {
     throw new HardenGateError(
-      `readerMarkedEquivalent.matched is [${matched.join(", ")}], expected [${s5.mutantCode}] (S5)`,
+      `readerMarkedEquivalent.matched is [${matched.join(", ")}], expected [${s5Ref}] (S5)`,
     );
   }
   if (rme.stale.length !== 0 || rme.contradicted.length !== 0) {

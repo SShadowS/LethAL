@@ -45,7 +45,8 @@ function mutant(overrides: Overrides & { mutantCode: string }): MutantOutcome {
 }
 
 interface Extra {
-  readonly matched?: readonly string[]; // mutant codes the mark matched
+  /** The mutants the mark matched: a bare code (batch 0) or an R231 `<batchIndex>/<mutantCode>`. */
+  readonly matched?: readonly string[];
   readonly stale?: readonly string[];
   readonly resumedFrom?: { runId: number; carriedMutants: number };
   readonly caveats?: readonly string[];
@@ -58,11 +59,10 @@ function report(mutants: readonly MutantOutcome[], extra: Extra = {}): SessionRe
     validity: { caveats: extra.caveats ?? [] },
     ...(extra.resumedFrom !== undefined ? { resumedFrom: extra.resumedFrom } : {}),
     readerMarkedEquivalent: {
-      matched: (extra.matched ?? []).map((mutantCode) => ({
-        mutantCode,
-        key: MARK.key,
-        reason: MARK.reason,
-      })),
+      matched: (extra.matched ?? []).map((ref) => {
+        const [batch, code] = ref.includes("/") ? ref.split("/") : ["0", ref];
+        return { batchIndex: Number(batch), mutantCode: code, key: MARK.key, reason: MARK.reason };
+      }),
       stale: extra.stale ?? [],
       contradicted: [],
     },
@@ -395,6 +395,21 @@ describe("C02-08: compareVerifyToFullRun", () => {
     expect(diffs[0]).toContain("0/M0005");
     expect(agreeOf(rows)["0/M0005"]).toBe(false);
     expect(rows.filter((r) => !r.agree)).toHaveLength(1);
+  });
+});
+
+describe("R231: the skipped-row join matches batchIndex, not only the code", () => {
+  test("(q) matched names ANOTHER batch's M0012 with the same key: one diff; agree false", () => {
+    // Mutant ids restart per batch. B's S5 is batch 1's M0012; the list names batch 0's M0012. A
+    // join by code alone would read that as this survivor's mark.
+    const b = report(bMutants({ 5: bMutant(5, { batchIndex: 1 }) }), { matched: ["0/M0012"] });
+    const { rows, diffs } = compareVerifyToFullRun(OUT, A, b);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toContain("0/M0005");
+    expect(agreeOf(rows)["0/M0005"]).toBe(false);
+    // The control: the same list naming batch 1 agrees.
+    const ok = report(bMutants({ 5: bMutant(5, { batchIndex: 1 }) }), { matched: ["1/M0012"] });
+    expect(compareVerifyToFullRun(OUT, A, ok).diffs).toEqual([]);
   });
 });
 
