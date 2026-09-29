@@ -251,7 +251,12 @@ describe("R332 wiring: real call sites, not text", () => {
   });
 
   test("no source anywhere writes a baseline except baseline-guard.ts", () => {
-    const roots = [ITEST, join(ROOT, "packages", "runner", "src"), join(ROOT, "scripts")];
+    // Each root with one file the walk must reach, so the scan can never pass by visiting nothing.
+    const roots: Record<string, string> = {
+      [ITEST]: "bcdev.itest.ts",
+      [join(ROOT, "packages", "runner", "src")]: "campaign-subcommands.ts",
+      [join(ROOT, "scripts")]: "roadmap-index.ts",
+    };
     const files: string[] = [];
     const walk = (d: string): void => {
       for (const e of readdirSync(d, { withFileTypes: true })) {
@@ -267,7 +272,16 @@ describe("R332 wiring: real call sites, not text", () => {
         }
       }
     };
-    for (const r of roots) walk(r);
+    for (const [root, known] of Object.entries(roots)) {
+      const before = files.length;
+      walk(root);
+      const seen = files.slice(before);
+      expect({ root, visited: seen.length > 0, known: seen.includes(join(root, known)) }).toEqual({
+        root,
+        visited: true,
+        known: true,
+      });
+    }
     const found = files.flatMap((f) =>
       writeViolations(
         parse(f),
