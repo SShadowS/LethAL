@@ -1015,3 +1015,207 @@ These are in `$S/repro/r330-t*` and `$S/expect-r002/`. Each loses exactly its `s
 | prototype with the rule | no swap, PASS | no swap, PASS | no swap, PASS | no swap, PASS |
 
 With these four files added, `$S/expect-r002/` passes on the prototype.
+
+---
+
+## ADDENDUM 3, run 003: unindexed plain members and the rule-3 guard (PRE-COMMITMENT, committed before the branch code)
+
+Review R-302-002 r1 found two Critical defects. Both emit a mutant that does not compile.
+
+- **C1.** A PLAIN procedure wrapped whole in `#if` is not indexed. Inside it, type resolution tried
+  the name fallback (another procedure of the same name) and then the object's globals, and since
+  R322 it also matched a global in other casing.
+- **C2.** `validate-to-assign` relies on `declaresProcedure`, which did not see a `#if`-wrapped
+  table procedure. So a custom `R.Validate(N, 5)` became `R.N := 5`, where no field `N` exists.
+
+The committed rows and addenda 1 and 2 are not edited.
+
+### The rule, and the sweep it came with
+
+The run 003 rule is "unindexed means unknown", for every member shape and every name question.
+
+1. **C1.** `resolveIdentifierType` and `lookupVar` resolve a member ONLY by its position in the
+   index. A member the index does not hold, of ANY shape (plain, split, swallowed or wrapped), types
+   nothing and resolves nothing. The name fallback is removed: it answered with a DIFFERENT
+   procedure's declarations.
+2. **C2.** `declaresProcedure` reads `allProcedureLikes`, which covers direct members, members
+   inside `#if` and members swallowed by the var section.
+3. **Sweep.** A table or `tableextension` wrapped whole in a `#if` object region (R298's
+   `preproc_conditional_object`) is not in the index. Rule 3 now also reads those objects through a
+   new `SymbolTable.unindexedObjects`. The same `R.Validate(N, 5)` shape against a wrapped table,
+   and against a wrapped `tableextension`, failed `alc` on the branch and on master alike.
+
+### Where the numbers come from
+
+Everything below was measured on a scratch prototype: `$S/proto4`, detached at `f4d59ae4`, with
+`$S/run003-patch.py` applied. It was compared with the branch at `f4d59ae4` (`$S/cap/r003`).
+
+| scope | branch (raw, deployed) | with the rule | change |
+| --- | --- | --- | --- |
+| DC/Cloud | 102603, 97144 | **102584, 97126** | 19 removed, 1 added, 14 keys renumbered (rows below) |
+| BaseApp scratch project | 1568, 1540 | 1568, 1540 | 0 |
+| System Application | 77291, 75832 | 77291, 75832 | 0 |
+| BusinessFoundation | 3639, 3573 | 3639, 3573 | 0 |
+| Every earlier repro, and the gate target (version 2) | as pinned | identical | 0 |
+| Every fixture: identity keys and emitted targets | byte-identical to BEFORE | byte-identical | 0 |
+| All of `BC.History/BaseApp`, raw specs | 1775409 | **1775366** | 43 removed, 8 added, 4 keys renumbered (rows below) |
+
+Every runner warning is byte-identical.
+
+**The DC deployed total** falls by 18, not 19. One removed row was a Tier-2 claim (`remove-calcfields`
+in `CreateTableRow`), and the Tier-1 `void-method-call` it had displaced comes back at the same span.
+
+**Which rule caused each change.** A scratch walk over the removed rows (`$S/wrapped-of.ts`) puts
+every one of them, 19 in DC and 43 in BaseApp, inside a procedure the index does not hold:
+
+- 60 are inside a `preproc_conditional`: a plain overload wrapped whole in `#if not CLEAN27`, next
+  to a direct procedure of the same name.
+- 2 are inside a `preproc_conditional_var` region.
+
+So every corpus change comes from C1. C2 and the wrapped-object sweep change no corpus count; they
+matter only for the new repros.
+
+**Every renumbered key is in a DIRECT member.** It loses the `|1` ordinal it had while the wrapped
+twin's identical site existed.
+
+**Every added row is a `void-method-call`** that returns where a Tier-2 claim (`remove-setrange` or
+`remove-calcfields`) is no longer made. A receiver inside a wrapped member no longer resolves.
+
+**Reason for the removals.** At `f4d59ae4`, a site inside a wrapped overload was typed through the
+name fallback: by the declarations of the direct procedure with the same name, which is a different
+member. In DC, for example, the direct overloads take a different XML Document codeunit or a Text
+where the wrapped ones take a BigString codeunit. So those types were not the member's own.
+
+Whether each removed swap compiles was not established: DC and BaseApp cannot be compiled offline
+here. Removing them is the fail-safe direction. Some of them may have been valid mutants typed right
+by accident.
+
+### The new repros (`$S/repro/r331-*`, `$S/expect-r003/`)
+
+| repro | shape | branch | expected | row |
+| --- | --- | --- | --- | --- |
+| `r331-c1` | `#if X` wraps a plain `Foo(V: Text): Text` returning `V + V`; global `v: Integer` | 2, 2 | **1, 1** | `-` `swap-additive` in `Foo` |
+| `r331-c1s` | the same with the global spelled `V` (the older same-case form) | 2, 2 | **1, 1** | `-` `swap-additive` in `Foo` |
+| `r331-c2` | a table declaring `Validate(A: Integer; B: Integer)` in both arms of `#if X ... #else ... #endif`; a codeunit calls `R.Validate(N, 5)` on it | 3, 3 | **2, 2** | `-` `validate-to-assign` in `Pick` |
+| `r331-c2o` | the same, with the WHOLE table wrapped in `#if X ... #else ... #endif` (R298's object region) | 3, 3 | **2, 2** | `-` `validate-to-assign` in `Pick` |
+| `r331-c2x` | a plain table, plus a `tableextension` declaring `Validate` wrapped whole in `#if`/`#else` | 3, 3 | **2, 2** | `-` `validate-to-assign` in `Pick` |
+
+**`alc`, every subset of `[X]`.** The logs are `$S/logs/p004-alc-<tool>-<repro>.log`.
+
+| emission | `r331-c1` | `r331-c1s` | `r331-c2` | `r331-c2o` | `r331-c2x` |
+| --- | --- | --- | --- | --- | --- |
+| branch at `f4d59ae4` | AL0175 under `[X]` | AL0175 under `[X]` | AL0132 under both | AL0132 under both | AL0132 under both |
+| `master` at `9680dad9` | no swap, PASS | **AL0175 under `[X]`** | **AL0132 under both** | **AL0132 under both** | **AL0132 under both** |
+| prototype with the rule | PASS both | PASS both | PASS both | PASS both | PASS both |
+
+AL0132 is "Record ... does not contain a definition": the mutant assigns a field that does not exist.
+
+**What exists on master:**
+
+- C1 in its different-cased form (`r331-c1`) is a regression on this branch.
+- C1's same-case form (`r331-c1s`), and all three C2 shapes, already emit the failing mutant on
+  master.
+
+**The checker.** Against `$S/expect-r003/` (every earlier row plus this addendum's), with BEFORE
+at `$S/cap/head002/`: **45 of 45 pass** on the prototype.
+
+### The rows
+
+**DC/Cloud (a committed corpus).**
+
+| row | file:line | operator | member | identity key |
+| --- | --- | --- | --- | --- |
+| `-` | `.dependencies\DC\Codeunit\CDCCaptureRTCLibrary.Codeunit.al:500` | `swap-call-arguments` | BuildStartScanningCommand | `c0b669bc93493eb324ce187e6da1c051e693cb8efe0d3c2a0fb8a4600684fb34\|CDC Capture RTC Library\|BuildStartScanningCommand\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCCaptureRTCLibrary.Codeunit.al:589` | `swap-call-arguments` | BuildSetSignParametersCommand | `1c058142c8f383328189a22c22b7eee06ac461797cc45331c64bd7f271aae706\|CDC Capture RTC Library\|BuildSetSignParametersCommand\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCCaptureRTCLibrary.Codeunit.al:625` | `swap-call-arguments` | BuildSetCertificateDataCommand | `8932fb09d565e1e400da8c03ea371cdf437e1edacc8bab1d4d0fa880ff2834e2\|CDC Capture RTC Library\|BuildSetCertificateDataCommand\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCCaptureRTCLibrary.Codeunit.al:661` | `swap-call-arguments` | BuildMatchInfoBarCommand | `769f8dd97415b7211e95e27ce413feac3bfdfb4c29844329b5db2d18684b2c81\|CDC Capture RTC Library\|BuildMatchInfoBarCommand\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCCaptureRTCLibrary.Codeunit.al:870` | `swap-call-arguments` | BuildDocHeaderFieldListCommand | `324fcd2caa612747a78347d50eb5c480d08749b74a6053f1421fdc52f9c25dd4\|CDC Capture RTC Library\|BuildDocHeaderFieldListCommand\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:515` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:516` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:517` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|2` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:518` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|3` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:519` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|4` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:520` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|5` |
+| `-` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:521` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|6` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:154` | `swap-call-arguments` | CreateTableHeaderRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:155` | `swap-call-arguments` | CreateTableHeaderRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:205` | `swap-call-arguments` | CreateTableRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:206` | `swap-call-arguments` | CreateTableRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:208` | `swap-call-arguments` | CreateTableRow | `fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:209` | `swap-call-arguments` | CreateTableRow | `fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:212` | `remove-calcfields` | CreateTableRow | `a3dabdcf07058f5836ffbaad6affb0f01835df0490aa11ff646f0ac3009f0184\|CDC Review E-mail\|CreateTableRow\|lethal.remove-calcfields\|1` |
+| `+` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:212` | `void-method-call` | CreateTableRow | `a3dabdcf07058f5836ffbaad6affb0f01835df0490aa11ff646f0ac3009f0184\|CDC Review E-mail\|CreateTableRow\|lethal.void-method-call\|1` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:547` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|7 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:548` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|8 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|1` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:549` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|9 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|2` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:550` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|10 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|3` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:551` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|11 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|4` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:552` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|12 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|5` |
+| `k` | `.dependencies\DC\Codeunit\CDCPurchApprovalEMail.Codeunit.al:553` | `swap-call-arguments` | CreateTableHeaderRow | `ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|13 to ab77a65efb963feb79236f2ba9859a3040057c1b8fb22b6c44c186e199354448\|CDC Purch. Approval E-Mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|6` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:246` | `swap-call-arguments` | CreateTableRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|2 to 249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:247` | `swap-call-arguments` | CreateTableRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|3 to 249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:249` | `swap-call-arguments` | CreateTableRow | `fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|2 to fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:250` | `swap-call-arguments` | CreateTableRow | `fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|3 to fe3c85f1d932041fb5dfb8b9ab888323a562b376a7c66b2827ac502e8adfa4f7\|CDC Review E-mail\|CreateTableRow\|lethal.swap-call-arguments\|1\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:253` | `remove-calcfields` | CreateTableRow | `a3dabdcf07058f5836ffbaad6affb0f01835df0490aa11ff646f0ac3009f0184\|CDC Review E-mail\|CreateTableRow\|lethal.remove-calcfields\|1\|1 to a3dabdcf07058f5836ffbaad6affb0f01835df0490aa11ff646f0ac3009f0184\|CDC Review E-mail\|CreateTableRow\|lethal.remove-calcfields\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:178` | `swap-call-arguments` | CreateTableHeaderRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|2 to 249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1` |
+| `k` | `Modules\Purchase Contracts\Base\src\Codeunits\CDCReviewEmail.Codeunit.al:179` | `swap-call-arguments` | CreateTableHeaderRow | `249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|3 to 249767cb6894295170b85e9f33fb51d8020603a3bcc71233d8c809cdb0330fa7\|CDC Review E-mail\|CreateTableHeaderRow\|lethal.swap-call-arguments\|1\|1` |
+
+**All of `BC.History/BaseApp` (not a committed corpus). Keys were measured by generating the whole project, then instrumenting only the 18 affected files. Ordinals are per object, so each of those files keeps its full-run keys.**
+
+| row | file:line | operator | member | identity key |
+| --- | --- | --- | --- | --- |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:277` | `swap-call-arguments` | EmailFile | `db28ee3ff4c5abe44203b1acc9248a2664d341a3405ce78118c4d623f6a85c4b\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:362` | `swap-call-arguments` | EmailFileWithSubjectAndReportUsage | `9b5b677098dd61a8fb423f29a0866d06627c4e65259c7d38969e615b15b0dce6\|Document-Mailing\|EmailFileWithSubjectAndReportUsage\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:395` | `swap-call-arguments` | EmailFileWithSubjectAndReportUsage | `001e1bcb1747e223f16a3c199d2970ad907c277cafb38c07e0085273fb1c1346\|Document-Mailing\|EmailFileWithSubjectAndReportUsage\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:433` | `swap-call-arguments` | EmailFileWithSubjectAndReportUsage | `5b578dadb138b17a19f42a62829f78d8d8f0074da04ab24a4c20607374d1de66\|Document-Mailing\|EmailFileWithSubjectAndReportUsage\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:73` | `swap-call-arguments` | EmailFile | `4ddb7dd9c18373f0c813bebd71e3ca20093a12cdcdcd5384ef06ca15ea643f3c\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:107` | `swap-call-arguments` | EmailFile | `4c886b9ba5f0003a704412cebaf18b71e467e0a3b1a31b6a44b82229d7e50361\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:141` | `swap-call-arguments` | EmailFile | `4c886b9ba5f0003a704412cebaf18b71e467e0a3b1a31b6a44b82229d7e50361\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:178` | `swap-call-arguments` | EmailFile | `839d7935160550094d363031717e23adf51d1f995d8ab9d0657d3c78c93a7827\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\DocumentMailing.Codeunit.al:213` | `swap-call-arguments` | EmailFile | `90b02b8bd4d9149bd15fa312b1dd605955068588662411e5fd8de646880561fe\|Document-Mailing\|EmailFile\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Foundation\Reporting\ReportSelections.Table.al:830` | `swap-call-arguments` | GetEmailBodyTextForCust | `5c83eaca70fb74a28fb045744606a755358a802a15940394e85dc34e99d4b7f4\|Report Selections\|GetEmailBodyTextForCust\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Inventory\Item\Catalog\ItemReference.Table.al:285` | `swap-call-arguments` | FindItemDescription | `6a2dbb2325480effa9aac0945f108aa73fd6df828d661e5a16f74224a0b34404\|Item Reference\|FindItemDescription\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Inventory\Item\Substitution\ItemSubst.Codeunit.al:268` | `swap-call-arguments` | PrepareSubstList | `21d01233c86413a14f6b55e7336cf9fa7c4ea2f237601950be414e8991a3342a\|Item Subst.\|PrepareSubstList\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Inventory\Item\Substitution\ItemSubst.Codeunit.al:594` | `swap-call-arguments` | RunOnGetCompSubstOnAfterCheckPrepareSubstList | `3341c1652ebf920683226426d8dcbcaf850a4c8f60e2326e93d387f7c845deec\|Item Subst.\|RunOnGetCompSubstOnAfterCheckPrepareSubstList\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Inventory\Posting\ItemJnlPostLine.Codeunit.al:6976` | `swap-call-arguments` | RunOnPostOutputOnAfterInsertCostValueEntries | `a7a88132dabd5732a031998f39c73ffe03d86de48589752fd5a71cecd610d9dd\|Item Jnl.-Post Line\|RunOnPostOutputOnAfterInsertCostValueEntries\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Inventory\Tracking\InventoryProfileOffsetting.Codeunit.al:105` | `swap-call-arguments` | CalculatePlanFromWorksheet | `3e0f6a92afa0d3451fc51ea3d5a4c16c3955d21621af556e8dbc6bf19eef01d4\|Inventory Profile Offsetting\|CalculatePlanFromWorksheet\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Invoicing\O365HTMLTemplMgt.Codeunit.al:39` | `swap-call-arguments` | CreateEmailBodyFromReportSelections | `89a28e3a80b5dc6da7f1928f2b2e81b4604212c270f6cb8e5f46a4fcf23e02f9\|O365 HTML Templ. Mgt.\|CreateEmailBodyFromReportSelections\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Manufacturing\ProductionBOM\ProductionBOMCheck.Codeunit.al:124` | `swap-call-arguments` | CheckBOMStructure | `54bbc6d63bd3826d5f55b1b25ef91dc32ba0691cff03133c9d307c95e70b02d0\|Production BOM-Check\|CheckBOMStructure\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Purchases\Posting\PurchPostInvoiceEvents.Codeunit.al:411` | `swap-call-arguments` | RunOnPrepareLineOnAfterFillInvoicePostingBuffer | `498d44de1e896c9c1a16a049e1e38cc18edd93d65430e1fd134232b277ff99bb\|Purch. Post Invoice Events\|RunOnPrepareLineOnAfterFillInvoicePostingBuffer\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Source\Base Application\Sales\Pricing\SalesPriceCalcMgt.Codeunit.al:2027` | `swap-call-arguments` | RunOnBeforeFindSalesPrice | `b4d4b7e9f5a59ac4601ba0f9cc01d6f5bba28b4996825d3832890fdefe809d10\|Sales Price Calc. Mgt.\|RunOnBeforeFindSalesPrice\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Sales\Pricing\SalesPriceCalcMgt.Codeunit.al:1790` | `swap-call-arguments` | RunOnAfterFindSalesPrice | `1ee6f1cba6045169b98de6963669e98d43189ff85f1dcbb32261b8253a217546\|Sales Price Calc. Mgt.\|RunOnAfterFindSalesPrice\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Service\Posting\ServicePostInvoiceEvents.Codeunit.al:232` | `swap-call-arguments` | RunOnPostLedgerEntryOnBeforeGenJnlPostLine | `fa75cbb275bb28965006c6864ba824a7e490d7c0855a83dad4a76155efefd6d4\|Service Post Invoice Events\|RunOnPostLedgerEntryOnBeforeGenJnlPostLine\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Service\Posting\ServicePostInvoiceEvents.Codeunit.al:123` | `swap-call-arguments` | RunOnPrepareLineOnAfterFillInvoicePostingBuffer | `d48253772d4e8259f47dc0cc801af6f7dcd83add5765f06e127135e6fffb96d1\|Service Post Invoice Events\|RunOnPrepareLineOnAfterFillInvoicePostingBuffer\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:199` | `remove-setrange` | CreditMemoPEPPOL21_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL21_OnGetTotals\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:282` | `remove-setrange` | InvoicePEPPOL20_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL20_OnInitializeOnSetSourceDocument\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:304` | `remove-setrange` | InvoicePEPPOL20_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL20_OnGetTotals\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:328` | `remove-setrange` | InvoicePEPPOL21_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL21_OnInitializeOnSetSourceDocument\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:350` | `remove-setrange` | InvoicePEPPOL21_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL21_OnGetTotals\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:131` | `remove-setrange` | CreditMemoPEPPOL20_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL20_OnInitializeOnSetSourceDocument\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:153` | `remove-setrange` | CreditMemoPEPPOL20_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL20_OnGetTotals\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:177` | `remove-setrange` | CreditMemoPEPPOL21_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL21_OnInitializeOnSetSourceDocument\|lethal.remove-setrange\|1` |
+| `-` | `Source\Base Application\Warehouse\Activity\CreateInventoryPutaway.Codeunit.al:631` | `swap-call-arguments` | SetFilterProdOrderLine | `005b2e5ac8b84c8922fb2615fba1edee0259b515b0fbe5b5c589cd9c3c5ac1ef\|Create Inventory Put-away\|SetFilterProdOrderLine\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Warehouse\Activity\CreatePutaway.Codeunit.al:1098` | `swap-call-arguments` | RunOnAfterSetValues | `38546c1aa5a3f6791fee05a4a74cb8dc2e1246db3ea7e0c65dcd030c28898686\|Create Put-away\|RunOnAfterSetValues\|lethal.swap-call-arguments\|1` |
+| `-` | `Source\Base Application\Warehouse\Activity\CreatePutaway.Codeunit.al:1130` | `swap-call-arguments` | RunOnBeforeAssignQtyToPutAwayForBinMandatory | `4ffe08a503a871678a4504e2f6301b49f99cb38f2fb4c7d5ab14e7521a4cad75\|Create Put-away\|RunOnBeforeAssignQtyToPutAwayForBinMandatory\|lethal.swap-call-arguments\|1` |
+| `-` | `Test\Tests-ERM\ERMInvDiscountbyCurrency.Codeunit.al:462` | `swap-additive` | VariousVATAmountsOnSalesOrderStatistics | `78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89\|ERM Inv Discount by Currency\|VariousVATAmountsOnSalesOrderStatistics\|lethal.swap-additive\|1` |
+| `-` | `Test\Tests-ERM\ERMInvDiscountbyCurrency.Codeunit.al:464` | `swap-additive` | VariousVATAmountsOnSalesOrderStatistics | `78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89\|ERM Inv Discount by Currency\|VariousVATAmountsOnSalesOrderStatistics\|lethal.swap-additive\|1\|1` |
+| `-` | `Test\Tests-Misc\ReportSelectionsTests.Codeunit.al:3049` | `validate-to-assign` | GetEmailItem | `af7438e4405a331160bef6203826947b43964b9d260aa2a9761362300f732f8c\|Report Selections Tests\|GetEmailItem\|lethal.validate-to-assign\|1` |
+| `-` | `Test\Tests-Misc\ReportSelectionsTests.Codeunit.al:3050` | `validate-to-assign` | GetEmailItem | `5a4540cffd29b33069a439076f0c8b3abc6802722cec1210a6320b9dbbc3a05a\|Report Selections Tests\|GetEmailItem\|lethal.validate-to-assign\|1` |
+| `-` | `Test\Tests-Misc\ReportSelectionsTests.Codeunit.al:3051` | `validate-to-assign` | GetEmailItem | `b6a63d0971c9bf988795d80ea0a69f1fd816f7c0180f93880397c197969baa1d\|Report Selections Tests\|GetEmailItem\|lethal.validate-to-assign\|1` |
+| `-` | `Test\Tests-Prepayment\ERMPrepaymentIII.Codeunit.al:878` | `swap-additive` | PrepmtValuesOnSalesLine | `78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89\|ERM Prepayment III\|PrepmtValuesOnSalesLine\|lethal.swap-additive\|1` |
+| `-` | `Test\Tests-SCM\SCMInventoryBatchJobs.Codeunit.al:2428` | `swap-call-arguments` | ServiceOrderStatisticsPageHandler | `7ade6c5ad83465038d84c1f3b9a18fb5b31a5fd63b8dd99e725e5711dd0c2161\|SCM Inventory Batch Jobs\|ServiceOrderStatisticsPageHandler\|lethal.swap-call-arguments\|1` |
+| `-` | `Test\Tests-SCM\SCMInventoryBatchJobs.Codeunit.al:2431` | `swap-call-arguments` | ServiceOrderStatisticsPageHandler | `7ade6c5ad83465038d84c1f3b9a18fb5b31a5fd63b8dd99e725e5711dd0c2161\|SCM Inventory Batch Jobs\|ServiceOrderStatisticsPageHandler\|lethal.swap-call-arguments\|1\|1` |
+| `-` | `Test\Tests-SCM\SCMInventoryBatchJobs.Codeunit.al:2444` | `swap-call-arguments` | PostedServiceInvoiceStatisticsPageHandler | `7ade6c5ad83465038d84c1f3b9a18fb5b31a5fd63b8dd99e725e5711dd0c2161\|SCM Inventory Batch Jobs\|PostedServiceInvoiceStatisticsPageHandler\|lethal.swap-call-arguments\|1` |
+| `-` | `Test\Tests-SCM\SCMInventoryBatchJobs.Codeunit.al:2447` | `swap-call-arguments` | PostedServiceInvoiceStatisticsPageHandler | `7ade6c5ad83465038d84c1f3b9a18fb5b31a5fd63b8dd99e725e5711dd0c2161\|SCM Inventory Batch Jobs\|PostedServiceInvoiceStatisticsPageHandler\|lethal.swap-call-arguments\|1\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:199` | `void-method-call` | CreditMemoPEPPOL21_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL21_OnGetTotals\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:282` | `void-method-call` | InvoicePEPPOL20_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL20_OnInitializeOnSetSourceDocument\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:304` | `void-method-call` | InvoicePEPPOL20_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL20_OnGetTotals\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:328` | `void-method-call` | InvoicePEPPOL21_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL21_OnInitializeOnSetSourceDocument\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:350` | `void-method-call` | InvoicePEPPOL21_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|InvoicePEPPOL21_OnGetTotals\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:131` | `void-method-call` | CreditMemoPEPPOL20_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL20_OnInitializeOnSetSourceDocument\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:153` | `void-method-call` | CreditMemoPEPPOL20_OnGetTotals | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL20_OnGetTotals\|lethal.void-method-call\|1` |
+| `+` | `Source\Base Application\Service\Sales\Peppol\ServPEPPOLManagement.Codeunit.al:177` | `void-method-call` | CreditMemoPEPPOL21_OnInitializeOnSetSourceDocument | `cb714f7d71d006fc4363968c98fd7c46ac07406da07d8821f9c91b8b41652ce3\|Serv. PEPPOL Management\|CreditMemoPEPPOL21_OnInitializeOnSetSourceDocument\|lethal.void-method-call\|1` |
+| `k` | `Source\Base Application\Foundation\Reporting\ReportSelections.Table.al:915` | `swap-call-arguments` | GetEmailBodyTextForCust | `5c83eaca70fb74a28fb045744606a755358a802a15940394e85dc34e99d4b7f4\|Report Selections\|GetEmailBodyTextForCust\|lethal.swap-call-arguments\|1\|1 to 5c83eaca70fb74a28fb045744606a755358a802a15940394e85dc34e99d4b7f4\|Report Selections\|GetEmailBodyTextForCust\|lethal.swap-call-arguments\|1` |
+| `k` | `Source\Base Application\Invoicing\O365HTMLTemplMgt.Codeunit.al:59` | `swap-call-arguments` | CreateEmailBodyFromReportSelections | `89a28e3a80b5dc6da7f1928f2b2e81b4604212c270f6cb8e5f46a4fcf23e02f9\|O365 HTML Templ. Mgt.\|CreateEmailBodyFromReportSelections\|lethal.swap-call-arguments\|1\|1 to 89a28e3a80b5dc6da7f1928f2b2e81b4604212c270f6cb8e5f46a4fcf23e02f9\|O365 HTML Templ. Mgt.\|CreateEmailBodyFromReportSelections\|lethal.swap-call-arguments\|1` |
+| `k` | `Source\Base Application\Service\Posting\ServicePostInvoiceEvents.Codeunit.al:238` | `swap-call-arguments` | RunOnPostLedgerEntryOnBeforeGenJnlPostLine | `fa75cbb275bb28965006c6864ba824a7e490d7c0855a83dad4a76155efefd6d4\|Service Post Invoice Events\|RunOnPostLedgerEntryOnBeforeGenJnlPostLine\|lethal.swap-call-arguments\|1\|1 to fa75cbb275bb28965006c6864ba824a7e490d7c0855a83dad4a76155efefd6d4\|Service Post Invoice Events\|RunOnPostLedgerEntryOnBeforeGenJnlPostLine\|lethal.swap-call-arguments\|1` |
+| `k` | `Test\Tests-Misc\ReportSelectionsTests.Codeunit.al:3057` | `validate-to-assign` | GetEmailItem | `5a4540cffd29b33069a439076f0c8b3abc6802722cec1210a6320b9dbbc3a05a\|Report Selections Tests\|GetEmailItem\|lethal.validate-to-assign\|1\|1 to 5a4540cffd29b33069a439076f0c8b3abc6802722cec1210a6320b9dbbc3a05a\|Report Selections Tests\|GetEmailItem\|lethal.validate-to-assign\|1` |
