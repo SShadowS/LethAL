@@ -3080,7 +3080,7 @@ function resolveResume(
  * bcdev session never sees this function at all.
  */
 function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string): boolean {
-  const pinnable = backend as { usePlatformAppsDir?: (d: string) => boolean };
+  const pinnable = backend as { usePlatformAppsDir?: (d: string) => unknown };
   if (typeof pinnable.usePlatformAppsDir !== "function") {
     throw new Error(
       `runSession: this session pinned al-runner's platform-app directory (${dir}) but ${who} does ` +
@@ -3091,7 +3091,15 @@ function pinPlatformAppsDir(backend: ExecutionBackend, dir: string, who: string)
   }
   // R242: true only when the backend's transport will SEND the pin. The report records
   // `platformAppsDir` only then, since a directory the run never searched is not provenance.
-  return pinnable.usePlatformAppsDir(dir) === true;
+  // Anything but a boolean is an invalid answer, never read as "declined": a setter that still
+  // sends the pin but answers nothing would otherwise lose its provenance silently.
+  const consumed = pinnable.usePlatformAppsDir(dir);
+  if (typeof consumed !== "boolean") {
+    throw new Error(
+      `runSession: ${who} was handed al-runner's platform-app directory (${dir}) but its usePlatformAppsDir answered ${String(consumed)} instead of a boolean, so this run cannot tell whether its transport sends --package-cache, and the report cannot say which directory the verdicts ran against. Refusing rather than guessing (R242).`,
+    );
+  }
+  return consumed;
 }
 
 /**
@@ -3961,17 +3969,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // every invocation, so a run that starts on ...53655 can finish on ...53671 with nothing
     // recording that it did. Frozen at session start, it cannot.
     if (provisioned.platformAppsDir !== undefined) {
+      // R242: a `--server` backend declines the pin (the daemon never receives it), and then the
+      // absent `platformAppsDir` in the report is the whole statement. That is normal operation.
       if (pinPlatformAppsDir(cfg.backend, provisioned.platformAppsDir, "the session backend")) {
         platformAppsDir = provisioned.platformAppsDir;
         emit({ type: "al-runner-platform-apps", dir: provisioned.platformAppsDir });
-      } else {
-        // R242: the `--server` transport never sends the pin, so the report must not claim it.
-        // Still said, never silent: provisioning found a directory and this run did not use it.
-        emit({
-          type: "warning",
-          code: "al-runner-platform-apps-not-consumed",
-          message: `runSession: al-runner's provisioning reported ${provisioned.platformAppsDir}, but this backend's transport (--server) does not send --package-cache, so the directory is not pinned and not recorded in the report (R242).`,
-        });
       }
       // R149 — re-measure the wire contract UNDER THE PIN.
       //

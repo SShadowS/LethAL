@@ -8993,8 +8993,9 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
     // JavaScript DEFAULT and would silently give this stub a pin the test was written to withhold.
     constructor(
       private readonly pin: string | null = PIN,
-      // R242: what `AlRunnerBackend.usePlatformAppsDir` answers. False is the `--server` shape.
-      private readonly consumes = true,
+      // R242: what `AlRunnerBackend.usePlatformAppsDir` answers. False is the `--server` shape;
+      // anything but a boolean is an invalid answer that `runSession` must refuse.
+      private readonly consumes: unknown = true,
     ) {
       super(caps, (mutant) => (mutant === null ? "pass" : "fail"));
     }
@@ -9009,7 +9010,7 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
           : { platformAppsRefusal: "measured nothing, on purpose" }),
       };
     }
-    usePlatformAppsDir(dir: string): boolean {
+    usePlatformAppsDir(dir: string): unknown {
       this.pins.push(dir);
       return this.consumes;
     }
@@ -9052,7 +9053,7 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
     store.close();
   });
 
-  test("R242 server: a transport that does NOT send the pin leaves platformAppsDir absent, and says so", async () => {
+  test("R242 server: a transport that does NOT send the pin leaves platformAppsDir absent", async () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
@@ -9065,15 +9066,34 @@ describe("runSession propagates al-runner's pinned platform-app directory (R147)
       emit: [createEmitter([(e) => events.push(e)])],
     });
     expect(backend.pins).toEqual([PIN]);
-    expect(report.validity.executionContexts.length).toBeGreaterThan(0);
+    // A MEASURED context, not the zero-verdict placeholder an empty report also carries: the
+    // absence below must be a statement about a run that scored mutants.
+    const measured = report.validity.executionContexts.filter((c) => c.verdictCount > 0);
+    expect(measured.length).toBeGreaterThan(0);
     expect(report.validity.executionContexts.every((c) => c.platformAppsDir === undefined)).toBe(
       true,
     );
     expect(events.some((e) => e.type === "al-runner-platform-apps")).toBe(false);
-    expect(
-      events.some((e) => e.type === "warning" && e.code === "al-runner-platform-apps-not-consumed"),
-    ).toBe(true);
+    // Normal server operation: no warning of any kind about the pin.
+    expect(events.some((e) => e.type === "warning" && /platform-app/.test(e.code))).toBe(false);
     store.close();
+  });
+
+  test("R242: a pin setter that answers anything but a boolean REFUSES the session", async () => {
+    // `undefined` is what a pre-R242 setter returns. Reading it as "declined" would silently drop
+    // the provenance of a transport that still sends the pin.
+    for (const answer of [undefined, "yes", 1]) {
+      const dirs = await makeProject();
+      const store = new ResultsStore(":memory:");
+      // Overridden rather than passed to the constructor: an explicit `undefined` argument would
+      // take the constructor's DEFAULT and test `true` instead.
+      const backend = new PinnableStub();
+      backend.usePlatformAppsDir = (_dir: string): unknown => answer;
+      await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+        /usePlatformAppsDir answered .* instead of a boolean/,
+      );
+      store.close();
+    }
   });
 
   test("every worker backend is pinned too, with the SAME directory", async () => {
