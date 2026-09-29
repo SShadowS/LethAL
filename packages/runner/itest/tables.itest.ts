@@ -40,7 +40,7 @@ import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
-import type { SessionReport } from "../src/report";
+import { type SessionReport, mutantRef } from "../src/report";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
@@ -1041,9 +1041,10 @@ function assertVerdictTable(report: SessionReport): void {
     assert.ok(g !== undefined, `no ${mechanism} group in the screen`);
     return g;
   };
-  const mutantOf = (code: string) => {
-    const m = report.mutants.find((x) => x.mutantCode === code);
-    assert.ok(m !== undefined, `screened mutant ${code} is not in the report's own mutant list`);
+  // R231: a list entry is `<batchIndex>/<mutantCode>`, so it names exactly one row.
+  const mutantOf = (ref: string) => {
+    const m = report.mutants.find((x) => mutantRef(x.batchIndex, x.mutantCode) === ref);
+    assert.ok(m !== undefined, `screened mutant ${ref} is not in the report's own mutant list`);
     return m;
   };
   // Mechanism 1, R72 — unchanged by R138, and asserted as such rather than assumed.
@@ -1411,7 +1412,7 @@ function assertBlankStringScreenSeparates(
     assert.ok(m !== undefined, `${procedureName}: mutant missing`);
     assert.equal(m.verdict, "killed", `${procedureName}: verdict`);
     assert.equal(
-      flagged.has(m.mutantCode),
+      flagged.has(mutantRef(m.batchIndex, m.mutantCode)),
       mustBeFlagged,
       `${procedureName} is killed by ${how}, so the assertion screen must ${mustBeFlagged ? "" : "NOT "}flag it. Both directions must hold or the screen separated nothing here. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,
     );
@@ -1463,7 +1464,7 @@ function assertShiftScreenTwinPair(report: SessionReport, flaggedMutants: readon
         `${procedureName}/${operatorName}: every mutant of this pair must be killed. A survivor here makes the screen evidence worthless, because a screen difference could then be a verdict difference.`,
       );
       assert.equal(
-        flagged.has(m.mutantCode),
+        flagged.has(mutantRef(m.batchIndex, m.mutantCode)),
         mustBeFlagged,
         `${procedureName}/${operatorName} is killed through ${how}, so the screen must ${mustBeFlagged ? "" : "NOT "}flag it. Both directions must hold across all four operators, or the screen is reading something other than the assertion style. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,
       );
@@ -1492,7 +1493,7 @@ function assertAssertionScreenTwinPair(
     for (const m of mutants) {
       assert.equal(m.verdict, "killed", `${procedureName} (${m.operatorName}): verdict`);
       assert.equal(
-        flagged.has(m.mutantCode),
+        flagged.has(mutantRef(m.batchIndex, m.mutantCode)),
         mustBeFlagged,
         `${procedureName} (${m.operatorName}) is killed by a test raising through ${style}, so the ` +
           `assertion screen must ${mustBeFlagged ? "" : "NOT "}flag it. killingTestFailure: ${JSON.stringify(m.killingTestFailure ?? null)}`,

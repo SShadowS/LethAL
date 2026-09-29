@@ -28,6 +28,7 @@ import {
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
+  mutantRef,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
 import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
@@ -332,7 +333,7 @@ describe("explain — the plan's own four tests", () => {
   test("the header records BOTH schema versions", () => {
     const out = explain(reportFixture());
     expect(out.explainSchemaVersion).toBe(EXPLAIN_SCHEMA_VERSION);
-    expect(out.derivedFromReportSchemaVersion).toBe(2);
+    expect(out.derivedFromReportSchemaVersion).toBe(3);
     expect(out.derivedFromReportSchemaVersion).toBe(REPORT_SCHEMA_VERSION);
   });
 
@@ -1045,10 +1046,10 @@ describe("explain — the admissibility rule, made executable", () => {
       mutants: [row],
       likelyEquivalentSurvivors: {
         count: 1,
-        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+        byRisk: [{ risk: "value-rewrite", mutants: ["0/M0001"], meaning: "m" }],
       },
       readerMarkedEquivalent: {
-        matched: [{ mutantCode: "M0001", key: "K", reason: "R" }],
+        matched: [{ batchIndex: 0, mutantCode: "M0001", key: "K", reason: "R" }],
         stale: [],
         contradicted: [],
       },
@@ -2095,6 +2096,81 @@ describe("assertExplainableReport — a foreign report is refused, never silentl
     expect(() => explain(bad)).toThrow(MalformedReportError);
     expect(() => explain(bad)).toThrow(/\b1\b/);
     expect(() => explain(bad)).toThrow(new RegExp(`\\b${REPORT_SCHEMA_VERSION}\\b`));
+  });
+
+  // R231 ruling 1: explain reads none of the lists v3 changed, so it accepts v2 and v3. A later
+  // change that makes explain read one of those lists must revisit this.
+  test("R231: a v2 report explains exactly as a v3 one, and other versions are still refused", () => {
+    // The same rows under both versions, two batches that both hold an M0001, with every list R231
+    // changed written the way that version wrote it: v2 bare-coded, v3 as `<batchIndex>/<mutantCode>`
+    // with `batchIndex` on mark entries. If explain ever reads one of them the outputs differ.
+    const mutants = [
+      survivorMutant("M0001", "exact", true),
+      { ...survivorMutant("M0001", "object", true), batchIndex: 1 },
+      errorMutant("M0003", "deadline-exceeded"),
+    ];
+    const lists = (
+      schemaVersion: number,
+      ref: (b: number, c: string) => string,
+      batch: (b: number) => object,
+    ) =>
+      ({
+        schemaVersion,
+        mutants,
+        unplaceableMutants: [ref(0, "M0003")],
+        likelyEquivalentSurvivors: {
+          count: 2,
+          byRisk: [
+            { risk: "value-rewrite", mutants: [ref(0, "M0001"), ref(1, "M0001")], meaning: "m" },
+          ],
+        },
+        platformArtifactKills: {
+          killedCount: 1,
+          byMechanism: [
+            { mechanism: "write-txn-codeunit-run", mutants: [ref(0, "M0003")], explanation: "e" },
+          ],
+          diagnosis: "d",
+        },
+        assertionScreen: {
+          kills: 1,
+          killsWithText: 1,
+          killsWithoutText: 0,
+          flagged: 1,
+          flaggedMutants: [ref(0, "M0003")],
+          discrimination: "vacuous",
+          discriminationNote: "n",
+          runnerRefusals: 1,
+          runnerRefusalMutants: [ref(0, "M0003")],
+          diagnosis: "d",
+        },
+        readerMarkedEquivalent: {
+          matched: [{ ...batch(1), mutantCode: "M0001", key: "K1", reason: "R1" }],
+          stale: [],
+          contradicted: [
+            { ...batch(0), mutantCode: "M0003", key: "K3", reason: "R3", verdict: "error" },
+          ],
+        },
+      }) as unknown as Partial<SessionReport>;
+    const bare = (_b: number, c: string) => c;
+    const v2Report = reportFixture(lists(2, bare, () => ({})));
+    const v3Report = reportFixture(lists(3, mutantRef, (b) => ({ batchIndex: b })));
+    expect(v2Report.schemaVersion).toBe(2);
+    expect(v3Report.schemaVersion).toBe(3);
+    expect(v2Report.likelyEquivalentSurvivors?.byRisk[0]?.mutants).toEqual(["M0001", "M0001"]);
+    expect(v3Report.likelyEquivalentSurvivors?.byRisk[0]?.mutants).toEqual(["0/M0001", "1/M0001"]);
+    const v2 = explain(v2Report);
+    const v3 = explain(v3Report);
+    expect(v2.derivedFromReportSchemaVersion).toBe(2);
+    expect(v3.derivedFromReportSchemaVersion).toBe(3);
+    expect({ ...v2, derivedFromReportSchemaVersion: 0 }).toEqual({
+      ...v3,
+      derivedFromReportSchemaVersion: 0,
+    });
+    for (const v of [1, 4, "3", undefined]) {
+      const bad = reportFixture({ schemaVersion: v as number });
+      expect(() => explain(bad)).toThrow(MalformedReportError);
+      expect(() => explain(bad)).toThrow(/schemaVersion is/);
+    }
   });
 
   test("non-report JSON is refused rather than projected into an empty answer", () => {

@@ -96,6 +96,26 @@ describe("planArtifacts — guard budget (R44)", () => {
   });
 });
 
+describe("planArtifacts: a file never spans two batches (R231)", () => {
+  // `SessionReport.survivorsByProcedure[].survivorCodes` stays bare-coded (R231 ruling 3). That is
+  // safe only because one procedure lives in one file and one file lands whole in ONE batch, so a
+  // group's `file` names its batch. If a later change splits a file's specs across batches, those
+  // bare codes become ambiguous (ids restart per batch) and this test must go red first.
+  test("every file's specs land whole in exactly one batch, oversized ones included", () => {
+    const files = [file("a.al", 300), file("huge.al", 2000), file("b.al", 500), file("c.al", 10)];
+    for (const budget of [1, 250, 700, 800, 10_000]) {
+      const batches = planArtifacts(files, { maxGuardsPerBatch: budget });
+      for (const f of files) {
+        const holding = batches.filter((b) => b.some((x) => x.path === f.path));
+        expect(holding).toHaveLength(1);
+        const placed = (holding[0] ?? []).filter((x) => x.path === f.path);
+        expect(placed).toHaveLength(1);
+        expect(placed[0]?.specs.length).toBe(f.specs.length);
+      }
+    }
+  });
+});
+
 describe("parseCliConfig — --max-guards-per-batch (R44)", () => {
   const RUN_ARGS = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner"] as const;
 

@@ -888,8 +888,10 @@ describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
       return t;
     };
     const TESTS = "Credit Limit Demo Tests";
-    // A bare Error(...) in the test, whose first frame is in the test app itself.
-    const bare = find("Expected an order of 400, got 0.");
+    // An error whose first frame is in the test app itself (a failed Get in the test body). Since
+    // the R231 re-freeze the demo's killers moved (R197 killer-first order), and this is the
+    // measured test-app-frame shape it now carries.
+    const bare = find("The Credit Order does not exist.");
     expect(bare.split("\n")[1]).toStartWith("Credit Limit Tests(CodeUnit 90250)");
     expect(killedByOf(bare, TESTS)).toBe("other");
     // The test's own asserterror expectation failed.
@@ -898,7 +900,7 @@ describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
     ).toBe("assertion");
     // An error raised in the TARGET app (Credit Limit Demo), measured in the same report. The
     // brief allowed this shape to be constructed; the demo has a measured one, so it is used.
-    const target = find("An order of 400 would take customer C-10000 over their credit limit.");
+    const target = find("An order of 600 would take customer C-10000 over their credit limit.");
     expect(target.split("\n")[1]).toStartWith(
       "Credit Limit Mgt(CodeUnit 90204).CheckCreditLimit line",
     );

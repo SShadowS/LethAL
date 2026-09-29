@@ -102,7 +102,7 @@ Prints JSON. Reads only that file: no server, no database, no config.
   fact is already a field.
 
 For the full record rather than the interpretation, read `report.json` itself
-(`schemaVersion: 2`), and read its `validity` block before quoting anything.
+(`schemaVersion: 3`), and read its `validity` block before quoting anything.
 
 ## 5. Harden a survivor
 

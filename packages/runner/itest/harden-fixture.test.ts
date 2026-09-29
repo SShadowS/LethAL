@@ -92,10 +92,11 @@ function withCounts(report: SessionReport, s5: ExpectedMutant): SessionReport {
     },
     likelyEquivalentSurvivors: {
       count: 1,
-      byRisk: [{ risk: "value-rewrite", mutants: [s5m?.mutantCode ?? ""], meaning: "m" }],
+      // R231 (v3): list entries are `<batchIndex>/<mutantCode>`; mark entries carry `batchIndex`.
+      byRisk: [{ risk: "value-rewrite", mutants: [`0/${s5m?.mutantCode ?? ""}`], meaning: "m" }],
     },
     readerMarkedEquivalent: {
-      matched: [{ mutantCode: s5m?.mutantCode ?? "", key: "k", reason: "r" }],
+      matched: [{ batchIndex: 0, mutantCode: s5m?.mutantCode ?? "", key: "k", reason: "r" }],
       stale: [],
       contradicted: [],
     },
@@ -220,7 +221,7 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
       ...good,
       likelyEquivalentSurvivors: {
         count: 2,
-        byRisk: [{ risk: "value-rewrite", mutants: ["M0001", "M0016"], meaning: "m" }],
+        byRisk: [{ risk: "value-rewrite", mutants: ["0/M0001", "0/M0016"], meaning: "m" }],
       },
     } as SessionReport;
     expect(() => assertHardenVerdicts(twoLikely)).toThrow("likelyEquivalentSurvivors");
@@ -265,10 +266,10 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
       // What a live report would then say: S5 is M0001, the same code batch 0's first mutant has.
       likelyEquivalentSurvivors: {
         count: 1,
-        byRisk: [{ risk: "value-rewrite", mutants: ["M0001"], meaning: "m" }],
+        byRisk: [{ risk: "value-rewrite", mutants: ["1/M0001"], meaning: "m" }],
       },
       readerMarkedEquivalent: {
-        matched: [{ mutantCode: "M0001", key: "k", reason: "r" }],
+        matched: [{ batchIndex: 1, mutantCode: "M0001", key: "k", reason: "r" }],
         stale: [],
         contradicted: [],
       },
