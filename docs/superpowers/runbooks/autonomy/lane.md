@@ -17,6 +17,10 @@ message the orchestrator, so it never relies on messages:
   sweep (`coord overview`, `coord questions`), so expect up to 30 minutes before a reply.
 - Replies come back as `coord answer` or as a revised `task.md`. Read `coord questions` and
   `coord status --lane preproc` at every checkpoint.
+- **Never go idle while waiting** (a review, the owner, a paused machine): nothing can wake you.
+  Wait with `/loop` (self-paced, about 20 minutes per tick), and on each tick re-read
+  `H:\lethal-coord\tasks\<id>\task.md` for a new `## Orchestrator` section, `coord questions`,
+  and `coord status --lane preproc`. Continue as soon as one of them answers you.
 - It works from `H:`, not `U:`, to spread disk load. Keep its scratch for corpus runs on `H:` too,
   and run corpus-sized steps (full BaseApp compiles, corpus captures) one at a time.
 
