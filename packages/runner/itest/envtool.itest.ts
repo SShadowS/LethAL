@@ -119,6 +119,7 @@ import {
   withEnvTeardown,
 } from "../src/cli";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
+import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
@@ -411,7 +412,7 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   await emitFailed("envtool", err instanceof Error ? err.message : String(err));
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });

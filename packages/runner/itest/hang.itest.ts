@@ -49,6 +49,7 @@ import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import type { EventSubscriber } from "../src/events";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { runSession } from "../src/orchestrator";
@@ -677,6 +678,6 @@ try {
   // hang runs main() at top level rather than through main().catch, so without this a failure
   // exits non-zero with no receipt, which the executor cannot tell from a crashed process.
   await emitFailed("hang", err instanceof Error ? err.message : String(err));
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   process.exit(1);
 }

@@ -65,6 +65,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { runSession } from "../src/orchestrator";
@@ -520,6 +521,6 @@ async function main(): Promise<void> {
 
 main().catch(async (err) => {
   await emitFailed("chunked", err instanceof Error ? err.message : String(err));
-  console.error(err);
+  console.error(formatFailure(err));
   process.exit(1);
 });
