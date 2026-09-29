@@ -40,6 +40,31 @@ function sortedForDisk(mutants: readonly NormalizedMutant[]): NormalizedMutant[]
   );
 }
 
+/**
+ * Parses a committed baseline's raw JSON. Refuses a baseline that is not a non-empty array: an
+ * empty (or non-array) baseline would silently match an empty-mutant report, which is this
+ * project's signature bug (empty-vs-empty "matches"). A parse failure is also wrapped with the
+ * file's path and the remedy, instead of surfacing a bare, unlabelled SyntaxError.
+ */
+function parseBaseline(
+  baselineRaw: string,
+  baselinePath: string,
+  remedy: string,
+): NormalizedMutant[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(baselineRaw);
+  } catch (err) {
+    throw new Error(`${baselinePath} is not valid JSON (${(err as Error).message}).\n${remedy}`);
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error(
+      `${baselinePath} holds no mutant rows. A committed baseline must be a non-empty array of mutant rows.\n${remedy}`,
+    );
+  }
+  return parsed as NormalizedMutant[];
+}
+
 /** Throws when `actual` differs from the committed baseline text. Never writes. */
 function throwOnDiff(
   actual: readonly NormalizedMutant[],
@@ -48,7 +73,7 @@ function throwOnDiff(
   label: string,
   remedy: string,
 ): void {
-  const baseline = JSON.parse(baselineRaw) as NormalizedMutant[];
+  const baseline = parseBaseline(baselineRaw, baselinePath, remedy);
   const diffs = diffMutants(baseline, actual);
   if (diffs.length > 0) {
     throw new Error(
@@ -125,7 +150,12 @@ const SYMBOL_HOW =
   "LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe> bun run itest:alrunner";
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
-export class BaselineRecordedError extends Error {}
+export class BaselineRecordedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BaselineRecordedError";
+  }
+}
 
 /** The command that records this baseline. Throws for a file that is not registered. */
 export function recordHowFor(baselinePath: string): string {
@@ -153,7 +183,14 @@ export function recordRequested(
       );
     }
   }
-  return listed.includes(basename(baselinePath));
+  const name = basename(baselinePath);
+  const armed = listed.includes(name);
+  if (!armed) {
+    console.error(
+      `${RECORD_BASELINE_ENV}=${raw} does not name ${name}; this gate still compares ${baselinePath} against its committed baseline as usual (verdict unchanged). Named instead: ${listed.join(", ")}.`,
+    );
+  }
+  return armed;
 }
 
 function overwriteRefusal(baselinePath: string, label: string): Error {
@@ -256,7 +293,12 @@ export async function assertMatchesFrozenBaseline(
   label: string,
   record: boolean,
 ): Promise<void> {
-  recordHowFor(baselinePath);
+  const name = basename(baselinePath);
+  if (!SYMBOL_BASELINES.includes(name)) {
+    throw new Error(
+      `${baselinePath} is not a registered symbol baseline (SYMBOL_BASELINES: ${SYMBOL_BASELINES.join(", ")}). A gate baseline belongs to assertGateBaseline instead.`,
+    );
+  }
   const actual = sortedForDisk(normalizeForComparison(report));
   if (!record) {
     await compareWithCommitted(actual, baselinePath, label);

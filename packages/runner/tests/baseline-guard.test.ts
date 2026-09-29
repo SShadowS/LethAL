@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -348,6 +348,77 @@ describe("R332: a frozen baseline never records itself", () => {
     await writeFile(p, "[]\n", "utf8");
     expect(() => preflightReadOnlyBaseline(p, "verify itest")).not.toThrow();
   });
+
+  test("preflightFrozenBaseline refuses an unregistered path in record mode too, naming it", () => {
+    const p = join(dir, "stray.baseline.json");
+    expect(() => preflightFrozenBaseline(p, "t", false)).toThrow(
+      /not a registered frozen baseline/,
+    );
+    expect(() => preflightFrozenBaseline(p, "t", true)).toThrow(/not a registered frozen baseline/);
+    expect(() => preflightFrozenBaseline(p, "t", true)).toThrow(p);
+  });
+
+  test("a baseline of [] never matches, even a zero-mutant report (empty-vs-empty)", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "[]\n", "utf8");
+    const empty = report([]);
+    const err = await assertGateBaseline(empty, p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("a baseline of {} is refused, naming the file", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "{}\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("a baseline of null is refused, naming the file", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "null\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/non-empty array/);
+    expect((err as Error).message).toContain(p);
+  });
+
+  test("malformed JSON in the baseline is refused, naming the file and the record command", async () => {
+    const p = join(dir, NAME);
+    await writeFile(p, "{not valid json\n", "utf8");
+    const err = await assertGateBaseline(r(), p, "t", none).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/not valid JSON/);
+    expect((err as Error).message).toContain(p);
+    expect((err as Error).message).toContain(GATE_BASELINES[NAME] ?? "unreachable");
+  });
+
+  test("record armed for a different registered gate prints a stderr warning naming both; verdict unchanged", async () => {
+    const p = join(dir, NAME);
+    await assertMatchesBaseline(r(), p, "seed");
+    const originalError = console.error;
+    const seen: string[] = [];
+    console.error = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      await expect(
+        assertGateBaseline(r(), p, "t", arm("tables.baseline.json")),
+      ).resolves.toBeUndefined();
+    } finally {
+      console.error = originalError;
+    }
+    const warned = seen.join("\n");
+    expect(warned).toContain("tables.baseline.json");
+    expect(warned).toContain(NAME);
+  });
+
+  test("BaselineRecordedError sets this.name, not just its constructor", async () => {
+    const p = join(dir, NAME);
+    const ref = join(dir, "reference2.json");
+    await assertMatchesBaseline(r(), ref, "ref");
+    const err = await assertGateBaseline(r(), p, "t", arm(NAME)).catch((e: unknown) => e);
+    expect((err as Error).name).toBe("BaselineRecordedError");
+  });
 });
 
 describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
@@ -375,5 +446,13 @@ describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
     expect(() => preflightFrozenBaseline(a, "t", false)).toThrow(
       /LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1/,
     );
+  });
+
+  test("assertMatchesFrozenBaseline refuses a gate basename, even though it is registered somewhere", async () => {
+    const p = join(dir, "bcdev.baseline.json");
+    await expect(assertMatchesFrozenBaseline(r(), p, "t", true)).rejects.toThrow(
+      /not a registered symbol baseline/,
+    );
+    expect(existsSync(p)).toBe(false);
   });
 });
