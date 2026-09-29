@@ -637,30 +637,46 @@ function projectDeclaresProcedureOnTable(
   tableRef: string,
   procName: string,
 ): boolean {
-  const table = resolveTable(symbols, tableRef);
-  if (table !== null && declaresProcedure(table.node, procName)) return true;
-  // R331 (run 003): a table or `tableextension` wrapped whole in a `#if` object region (R298) is not
-  // in the index, but it is still the project's. Its procedures shadow the built-in too.
-  const names = [tableRef, ...(table !== null ? [table.name, String(table.id)] : [])];
-  for (const o of symbols.unindexedObjects) {
-    const own =
-      o.kind === ALNodeKind.table &&
-      names.some(
-        (n) =>
-          equalsIgnoreCase(stripQuotes(o.childForFieldName("object_name")?.text ?? ""), n) ||
-          (o.childForFieldName("object_id")?.text ?? "") === n,
-      );
-    const ext =
-      o.kind === ALNodeKind.tableextension &&
-      names.some((n) =>
-        equalsIgnoreCase(stripQuotes(o.childForFieldName("base_object")?.text ?? ""), n),
-      );
-    if ((own || ext) && declaresProcedure(o, procName)) return true;
+  // R331 (run 004): every spelling of the table, gathered BEFORE any extension is compared. A
+  // receiver may name the table by id (`Record 50101`) and an extension may extend it by name, or
+  // the other way round; the table itself may be indexed or wrapped whole in a `#if` object region
+  // (R298). So the aliases are the reference itself, plus the name and id of every project table it
+  // matches, indexed or not. Comparing only the reference missed a numeric receiver of a wrapped
+  // table extended by name, and `validate-to-assign` assigned a field that does not exist (AL0132).
+  const idOf = (o: ALSyntaxNode): string => o.childForFieldName("object_id")?.text ?? "";
+  const nameOf = (o: ALSyntaxNode): string =>
+    stripQuotes(o.childForFieldName("object_name")?.text ?? "");
+  const aliases = new Set<string>([tableRef.toLowerCase()]);
+  const matches = (name: string, id: string): boolean =>
+    aliases.has(name.toLowerCase()) || (id !== "" && aliases.has(id));
+  const tables: ALSyntaxNode[] = [];
+  const indexed = resolveTable(symbols, tableRef);
+  if (indexed !== null) tables.push(indexed.node);
+  for (const o of symbols.unindexedObjects)
+    if (o.kind === ALNodeKind.table && matches(nameOf(o), idOf(o))) tables.push(o);
+  for (const t of tables) {
+    aliases.add(nameOf(t).toLowerCase());
+    if (idOf(t) !== "") aliases.add(idOf(t));
   }
-  // Match extensions on the table's resolved NAME when we have one (so the `Record 50004` id
-  // spelling still finds `extends "The Table"`), and on the raw reference otherwise.
-  if (table !== null && extensionDeclaresProcedure(symbols, table.name, procName)) return true;
-  return extensionDeclaresProcedure(symbols, tableRef, procName);
+  if (tables.some((t) => declaresProcedure(t, procName))) return true;
+  for (const o of symbols.unindexedObjects) {
+    const base = stripQuotes(o.childForFieldName("base_object")?.text ?? "").toLowerCase();
+    if (o.kind === ALNodeKind.tableextension && aliases.has(base) && declaresProcedure(o, procName))
+      return true;
+  }
+  if ([...aliases].some((a) => extensionDeclaresProcedure(symbols, a, procName))) return true;
+  // R331 (run 004): a table or `tableextension` the grammar could not parse at all (a root-level
+  // ERROR node; measured: `tableextension ... extends 50101`, by number, which `alc` accepts) has
+  // no structure to read, so which table it extends is unknown. If its text declares a procedure of
+  // this name, refuse: under-claiming costs one site, over-claiming can cost the build (AL0132).
+  const declares = new RegExp(`\\bprocedure\\s+"?${escapeRegExp(procName)}"?\\s*\\(`, "i");
+  return symbols.unparsedObjects.some(
+    (o) => /^\s*(table|tableextension)\b/i.test(o.text) && declares.test(o.text),
+  );
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

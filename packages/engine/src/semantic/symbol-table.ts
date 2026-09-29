@@ -165,6 +165,11 @@ export interface SymbolTable {
    * them here, or it answers "no" for an object that exists in some build.
    */
   readonly unindexedObjects: readonly ALSyntaxNode[];
+  /**
+   * R331 (run 004): root-level ERROR nodes, i.e. objects the grammar could not parse at all. Rule 3
+   * reads their TEXT, since they have no structure; see `projectDeclaresProcedureOnTable`.
+   */
+  readonly unparsedObjects: readonly ALSyntaxNode[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
    * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
@@ -404,7 +409,9 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   };
 
   const unindexedObjects: ALSyntaxNode[] = [];
+  const unparsedObjects: ALSyntaxNode[] = [];
   for (const file of files) {
+    for (const c of file.root.children) if (c.rawKind === "ERROR") unparsedObjects.push(c);
     for (const c of file.root.namedChildren)
       if (c.rawKind === "preproc_conditional_object")
         unindexedObjects.push(...objectDeclarationsOf(c));
@@ -493,6 +500,7 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     resolveProcedure,
     resolveProcedureAt,
     unindexedObjects,
+    unparsedObjects,
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;

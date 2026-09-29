@@ -3331,3 +3331,231 @@ describe("R330: no typed site from a trigger's parameter", () => {
     expect(await ops(R330_TP1S)).toEqual(WANT);
   });
 });
+
+// R331 (run 004): a table's id and name are aliases for rule 3, whether the table is indexed or
+// wrapped whole in `#if`. Sources copied byte for byte from the scratch repros r331-n1 to n4.
+// Before the fix n1, n1w, n2 and n4 emitted a `validate-to-assign` assigning a field that does not
+// exist (AL0132); n3 is the control that already refused.
+const R331_N1_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N1_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N1_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N1W_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N1W_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N1W_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_N2_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N2_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+#endif
+`;
+const R331_N2_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N3_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record 50101;
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N3_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_N3_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+const R331_N4_CU = `codeunit 50100 "Repro R331N"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_N4_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_N4_EXT = `tableextension 50102 "Repro Tab C2 Ext" extends 50101
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+`;
+
+describe("R331: the table's id and name are one table for rule 3", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+  const WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("n1: a numeric receiver of a #if-wrapped table extended by name", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N1_CU,
+        "Tab.Table.al": R331_N1_TAB,
+        "TabExt.TableExt.al": R331_N1_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n1w: the same with the extension wrapped in #if too", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N1W_CU,
+        "Tab.Table.al": R331_N1W_TAB,
+        "TabExt.TableExt.al": R331_N1W_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n2: a named receiver of a #if-wrapped table extended by number", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N2_CU,
+        "Tab.Table.al": R331_N2_TAB,
+        "TabExt.TableExt.al": R331_N2_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n3 (control): a numeric receiver of an indexed table extended by name", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N3_CU,
+        "Tab.Table.al": R331_N3_TAB,
+        "TabExt.TableExt.al": R331_N3_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+  test("n4: a named receiver of an indexed table extended by number", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_N4_CU,
+        "Tab.Table.al": R331_N4_TAB,
+        "TabExt.TableExt.al": R331_N4_EXT,
+      }),
+    ).toEqual(WANT);
+  });
+});

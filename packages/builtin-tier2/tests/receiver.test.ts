@@ -17,7 +17,9 @@ import {
   type SemanticContext,
   findAll,
   initParser,
+  parseAL,
   visit,
+  wrapRoot,
 } from "@lethal/engine";
 import { claimsRecordMethod } from "@lethal/engine";
 import { contextFor, parseClean, projectContextFor } from "./parse-clean";
@@ -1232,5 +1234,77 @@ describe("claimsRecordMethod: #if-wrapped declarations shadow the built-in (R331
   it("REFUSES when a #if-wrapped tableextension declares it", () => {
     const ext = `tableextension 50002 "Other Ext" extends "Other Table"\n{\n${PROC}}\n`;
     expect(claims(TABLE(""), `#if X\n${ext}#else\n${ext}#endif\n`)).toBe(false);
+  });
+});
+
+// R331 (run 004): the table's id and name are aliases. A receiver typed `Record 50001` must be
+// refused when an extension that extends the table BY NAME declares the procedure, and the other
+// way round, whether the table is indexed or wrapped whole in `#if`.
+describe("claimsRecordMethod: table id and name are one table (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const cu = (ref: string) => `codeunit 50000 "My Cu"
+{
+    procedure P()
+    var
+        R: Record ${ref};
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const WRAPPED_TABLE = `#if X\n${TABLE}#else\n${TABLE}#endif\n`;
+  const ext = (base: string) =>
+    `tableextension 50002 "Other Ext" extends ${base}\n{\n    procedure Validate(A: Integer; B: Integer)\n    begin\n    end;\n}\n`;
+  const claims = (ref: string, ...files: string[]) => {
+    const root = parseClean(cu(ref));
+    // Not `parseClean` for the other files: `extends 50001` (by number) is valid AL that the grammar
+    // does not parse, and the guard's handling of that unparsed object is what two cases test.
+    const ctx = projectContextFor([root, ...files.map((f) => wrapRoot(parseAL(f)))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+
+  it("REFUSES a numeric receiver of a #if-wrapped table extended by name", () => {
+    expect(claims("50001", WRAPPED_TABLE, ext('"Other Table"'))).toBe(false);
+  });
+  it("REFUSES it when the extension is wrapped in #if too", () => {
+    const e = ext('"Other Table"');
+    expect(claims("50001", WRAPPED_TABLE, `#if X\n${e}#else\n${e}#endif\n`)).toBe(false);
+  });
+  it("REFUSES a named receiver of a #if-wrapped table extended by number", () => {
+    expect(claims('"Other Table"', WRAPPED_TABLE, ext("50001"))).toBe(false);
+  });
+  it("REFUSES a named receiver of an indexed table extended by number", () => {
+    expect(claims('"Other Table"', TABLE, ext("50001"))).toBe(false);
+  });
+  it("control: a numeric receiver of an indexed table extended by name is refused (as before)", () => {
+    expect(claims("50001", TABLE, ext('"Other Table"'))).toBe(false);
+  });
+  it("control: with no extension at all the numeric receiver is claimed", () => {
+    expect(claims("50001", WRAPPED_TABLE)).toBe(true);
+  });
+});
+
+// R331 (run 004): an object the grammar could not parse is read by its text. The refusal must not
+// fire for a procedure of ANOTHER name, or for an unparsed object that is not a table or extension.
+describe("claimsRecordMethod: unparsed objects (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"\n{\n    procedure P()\n    var\n        R: Record "Other Table";\n        N: Integer;\n    begin\n        R.Validate(N, 5);\n    end;\n}`;
+  const TABLE = `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n}\n`;
+  const claims = (unparsed: string) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, parseClean(TABLE), wrapRoot(parseAL(unparsed))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+  it("control: an unparsed extension declaring another procedure does not refuse", () => {
+    expect(
+      claims(
+        `tableextension 50002 "Other Ext" extends 50001\n{\n    procedure Check(A: Integer)\n    begin\n    end;\n}\n`,
+      ),
+    ).toBe(true);
   });
 });
