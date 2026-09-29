@@ -216,7 +216,7 @@ export function renamedMemberCoverageNames(member: ALSyntaxNode): string[] {
     for (const c of n.namedChildren) {
       if (c.kind === ALNodeKind.trigger) {
         const name = c.childForFieldName("name");
-        if (name !== null) taken.add(key(name.text));
+        if (name !== null) taken.add(key(name.text.replace(/^"|"$/g, "")));
       } else if (!isProcedureLike(c)) {
         walk(c);
       }

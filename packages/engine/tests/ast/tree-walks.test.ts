@@ -755,6 +755,15 @@ ${split("OnRun2", "OnRun")}`);
     expect(namesOf(src)).toEqual([["OnRun2"]]);
   });
 
+  it("a quoted trigger name is taken", () => {
+    const src = obj(`    trigger "OnRun"()
+    begin
+    end;
+
+${split("OnRun2", "OnRun")}`);
+    expect(namesOf(src)).toEqual([["OnRun2"]]);
+  });
+
   it("an object that did not parse cleanly gives no names", () => {
     const src = obj(`${split("Pick", "Choose")}
     procedure Broken(
