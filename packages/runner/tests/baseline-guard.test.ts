@@ -456,3 +456,53 @@ describe("R332 finding C: the R321 symbol writer is exclusive too", () => {
     expect(existsSync(p)).toBe(false);
   });
 });
+
+describe("R296: a baseline mismatch reaches stderr with its difference lines", () => {
+  // Bun drops an async-thrown Error's message from `.stack` when a GC runs before the first read
+  // (oven-sh/bun#34398). A live gate collects plenty; here `Bun.gc(true)` forces it. The child
+  // prints exactly as every gate's catch does, `err.stack ?? err.message`, and is a separate
+  // process so stderr is captured the way a gate's is.
+  test("the per-mutant line survives a GC between the throw and the gate's print", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r296-"));
+    try {
+      const baselinePath = join(dir, "tables.baseline.json");
+      await writeFile(
+        baselinePath,
+        JSON.stringify([
+          {
+            key: "h1|CU|P|lethal.empty-block|1",
+            verdict: "killed",
+            killingTest: "T",
+            coverageFiltered: false,
+            errorClass: null,
+          },
+        ]),
+      );
+      const guard = join(import.meta.dir, "..", "itest", "baseline-guard.ts");
+      const child = join(dir, "gate.ts");
+      await writeFile(
+        child,
+        `import { assertGateBaseline } from ${JSON.stringify(guard)};
+const report = { mutants: [{ astHash: "h1", codeunitName: "CU", procedureName: "P", triggerName: "", operatorName: "lethal.empty-block", operatorMajor: 1, identityOrdinal: 0, verdict: "survived", mutantCode: "M0001" }] };
+async function main() {
+  await assertGateBaseline(report as never, ${JSON.stringify(baselinePath)}, "tables itest", {});
+}
+main().catch((err: unknown) => {
+  Bun.gc(true);
+  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  process.exit(1);
+});
+`,
+      );
+      const run = Bun.spawnSync([process.execPath, child], { cwd: dir });
+      const stderr = run.stderr.toString();
+      expect(run.exitCode).toBe(1);
+      expect(stderr).toContain("tables itest: per-mutant regression");
+      expect(stderr).toContain(
+        "  - mutant h1|CU|P|lethal.empty-block|1: verdict killed -> survived; killingTest T -> null",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

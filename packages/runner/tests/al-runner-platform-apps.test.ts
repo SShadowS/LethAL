@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import type { ServerSpawnFn } from "../src/al-runner-server";
 import {
   buildAlRunnerArgv,
   isChildChosenExit,
@@ -376,6 +377,45 @@ describe("AlRunnerBackend.usePlatformAppsDir reaches the argv of every later run
     const argv = calls[0] ?? [];
     expect(argv).not.toContain("--auto-provision");
     expect(argv).toContain("C:/cache/pa");
+  });
+});
+
+/**
+ * R242 — `usePlatformAppsDir` answers whether the transport will SEND the pin, and `runSession`
+ * records `executionContexts[].platformAppsDir` only when it does. Only the one-shot CLI path sends
+ * it; the `--server` daemon (used by the server leg AND the resource leg) starts with `packagesDir`
+ * alone.
+ */
+describe("R242: only the one-shot transport consumes the platform-app pin", () => {
+  async function backendFor(mode: "one-shot" | "server" | "resource"): Promise<AlRunnerBackend> {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r242-"));
+    const neverSpawn: ServerSpawnFn = () => {
+      throw new Error("the daemon must not start just to answer the pin question");
+    };
+    return new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: dir,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        ...(mode !== "one-shot" ? { serverMode: true } : {}),
+        ...(mode === "resource" ? { selectorMode: "resource" as const } : {}),
+      },
+      spyingSpawn({ exitCode: 0, stdout: "", stderr: "" }).spawn,
+      neverSpawn,
+    );
+  }
+
+  test("one-shot: the pin is consumed", async () => {
+    expect((await backendFor("one-shot")).usePlatformAppsDir("C:/cache/pa")).toBe(true);
+  });
+
+  test("server: the pin is declined", async () => {
+    expect((await backendFor("server")).usePlatformAppsDir("C:/cache/pa")).toBe(false);
+  });
+
+  test("resource (a --server session): the pin is declined", async () => {
+    expect((await backendFor("resource")).usePlatformAppsDir("C:/cache/pa")).toBe(false);
   });
 });
 

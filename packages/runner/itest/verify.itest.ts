@@ -39,6 +39,7 @@ import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { explain } from "../src/explain";
 import type { ExplainGap } from "../src/explain";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { defaultQuarantineDir, runSession } from "../src/orchestrator";
@@ -588,7 +589,7 @@ async function main(): Promise<void> {
       }
     }
     if (step3Err !== undefined || step4Err !== undefined || step4bErr !== undefined) {
-      const describe = (e: unknown) => (e instanceof Error ? (e.stack ?? e.message) : String(e));
+      const describe = (e: unknown) => formatFailure(e);
       throw new Error(
         [
           step3Err !== undefined ? `step 3 FAILED: ${describe(step3Err)}` : "step 3 passed",
@@ -641,7 +642,7 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   await emitFailed("verify", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

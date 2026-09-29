@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 341 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 346 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -90,8 +90,8 @@ that ordering is the priority.
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
 - **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · open, filed 2026-09-18, MECHANISM SHARPENED the same day: the budget is marginal on its own…
 - **R228** · `--exclude` never reaches the resume fingerprint, so `--resume` can carry verdicts across a change of exclusions · [R228.md](docs/roadmap/R228.md) · done (this commit) — `SessionFingerprintInput.exclude`, a conditional key; digests of runs with no exclusions…
-- **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · open
-- **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · open
+- **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · done (f352d68c)
+- **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · done (d00ce37f)
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · open
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · done (e431fdb)
 - **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
@@ -114,7 +114,7 @@ that ordering is the priority.
 - **R289** · itest:hang M0004 is sometimes not stopped (StopHungRunAt flake), second recurrence · [R289.md](docs/roadmap/R289.md) · closed 2026-09-28, ruling: not reproducible on a restarted server with a separate probe user; P1 3/3 PASS…
 - **R294** · `resolveVarRef` returns null for every member-expression receiver: `isMemberName` compares rebuilt wrapper nodes by reference · [R294.md](docs/roadmap/R294.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
 - **R295** · `collectVarDeclarations` keeps only the first name of `A, B: T`: every later name is invisible to scope resolution · [R295.md](docs/roadmap/R295.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
-- **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · open
+- **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · done (b2085e51)
 - **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · done (0185b3a); whole BaseApp UNMET (parser and manifest-serialization limits, see [[R292]] and [[R311]])
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open; writer fixed 2026-09-28 (dd14626), coverage refused pending R300
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
@@ -139,6 +139,7 @@ that ordering is the priority.
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
 - **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · open, filed 2026-09-29
 - **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
+- **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
 
 ## Product gaps a real project hits
 
@@ -364,7 +365,7 @@ that ordering is the priority.
 - **R236** · `itest:tables` once quarantined its whole run on a fresh Cronus28: the TestPage baseline test came back in-flight-unknown instead of failing · [R236.md](docs/roadmap/R236.md) · done (b068f01)
 - **R237** · An env-tool command that fails to START is read as an uncertain publish, so a missing tool quarantines the tier · [R237.md](docs/roadmap/R237.md) · open
 - **R241** · al-runner v2.11.0 fails on an EMPTY cache before any platform app is provisioned: the CDN's latest 28.x has no shipped engine variant, so every mutant would score `error` · [R241.md](docs/roadmap/R241.md) · open
-- **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · open
+- **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · done (f7c46702)
 - **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · open
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · open
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
@@ -386,6 +387,10 @@ that ordering is the priority.
 - **R335** · Two spawning tests in `campaign-subcommands.test.ts` time out at Bun's 5 s default under a full `bun test` run and pass when the file runs alone · [R335.md](docs/roadmap/R335.md) · done (31d95e8a)
 - **R337** · `itest:envtool` writes no gate receipt, so a challenged caller cannot tell its pass from a skip or a refusal · [R337.md](docs/roadmap/R337.md) · done (73327d05)
 - **R338** · al-runner 2.12.0 prints its `[bc] selected BC <build> (<dir>)` line only under AL_RUNNER_VERBOSE=1, so LethAL records no `bcBuild` and itest:alrunner fails · [R338.md](docs/roadmap/R338.md) · done (01230c5c)
+- **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
+- **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · open, filed 2026-09-29
+- **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
+- **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · open, filed 2026-09-29
 
 ---
 

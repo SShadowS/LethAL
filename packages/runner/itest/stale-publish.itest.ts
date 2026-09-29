@@ -61,6 +61,7 @@ import type { LethalConfigFile } from "../src/cli";
 import { odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
+import { formatFailure } from "../src/format-failure";
 import { CONTROL_APP_ID, HarnessVerifier } from "../src/harness";
 import { LeaseClient, MAX_TTL_SECONDS } from "../src/lease";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
@@ -757,7 +758,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
+  // R346: print the reason before any await, as R332 does, so a kill during the receipt write
+  // cannot hide it.
+  console.error(formatFailure(err));
   await emitFailed("stale-publish", err instanceof Error ? err.message : String(err));
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
   process.exit(1);
 });

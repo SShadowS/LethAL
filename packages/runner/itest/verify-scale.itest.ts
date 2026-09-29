@@ -42,6 +42,7 @@ import {
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import { discoverTests } from "../src/discovery";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { loadInstalledArtifact } from "../src/named-mutants";
@@ -549,7 +550,7 @@ async function main(): Promise<void> {
       }
     }
     if (gateErr !== undefined || restoreErr !== undefined) {
-      const describe = (e: unknown) => (e instanceof Error ? (e.stack ?? e.message) : String(e));
+      const describe = (e: unknown) => formatFailure(e);
       throw new Error(
         [
           gateErr !== undefined
@@ -650,7 +651,7 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   await emitFailed("verify-scale", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

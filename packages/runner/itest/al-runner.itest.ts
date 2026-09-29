@@ -39,6 +39,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
+import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
@@ -233,7 +234,8 @@ async function runOnce(
  * R147 pin check, called ONLY on the one-shot legs (R235). Only the one-shot CLI path sends the pin
  * (`--package-cache <pin>` in place of `--auto-provision`); `--server` starts the daemon with
  * `packagesDir` alone and never receives it, so asserting it on the server and resource legs would
- * check a value that was recorded but not used.
+ * check a value that was recorded but not used. Since R242 it is not recorded there at all, which
+ * `assertPlatformAppsNotRecorded` pins on those two legs.
  */
 function assertPlatformAppsPinned(report: SessionReport): void {
   // R147: this run must have PINNED the Microsoft platform-app directory its own provisioning run
@@ -262,6 +264,19 @@ function assertPlatformAppsPinned(report: SessionReport): void {
       "matched a line it should not have",
   );
   console.log(`  platform apps pinned at: ${pinned.platformAppsDir}`);
+}
+
+/**
+ * R242: the `--server` and resource legs must NOT record `platformAppsDir`. The daemon never
+ * receives the pin, so a recorded directory there would be one the run never searched.
+ */
+function assertPlatformAppsNotRecorded(report: SessionReport, leg: string): void {
+  const recorded = report.validity.executionContexts.filter((c) => c.platformAppsDir !== undefined);
+  assert.equal(
+    recorded.length,
+    0,
+    `R242: the ${leg} leg recorded platformAppsDir (${recorded.map((c) => c.platformAppsDir).join(", ")}), but --server never sends --package-cache`,
+  );
 }
 
 function assertVerdictTable(report: SessionReport): void {
@@ -569,6 +584,7 @@ async function main(): Promise<void> {
     // a suite run that silently reused a previous compile would show up the same way.
     const viaServer = await runOnce(scratchC, true);
     assertVerdictTable(viaServer);
+    assertPlatformAppsNotRecorded(viaServer, "--server");
     assert.deepEqual(
       shape(viaServer),
       shape(first),
@@ -587,6 +603,7 @@ async function main(): Promise<void> {
     // what catches that; a matching killed/survived/no-coverage count would not.
     const viaResource = await runOnce(scratchD, true, "resource");
     assertVerdictTable(viaResource);
+    assertPlatformAppsNotRecorded(viaResource, "resource");
     assert.deepEqual(
       shape(viaResource),
       shape(first),
@@ -620,7 +637,7 @@ async function main(): Promise<void> {
 main().catch(async (err: unknown) => {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   await emitFailed("alrunner", err instanceof Error ? err.message : String(err));
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 });
