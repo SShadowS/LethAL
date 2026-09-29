@@ -133,8 +133,8 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     const r = applyEquivalenceMarks(
       old,
       [
-        { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-        { mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
+        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
+        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
       ],
       2,
     );
@@ -147,8 +147,8 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     const r = applyEquivalenceMarks(
       marks,
       [
-        { mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-        { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
+        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
+        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
     );
@@ -162,7 +162,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // is safe, but a ruling nobody is told they lost is not.
     const r = applyEquivalenceMarks(
       marks,
-      [{ mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
+      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
       2,
     );
     expect(r.stale.map((s) => s.key)).toEqual([KEY_B]);
@@ -174,13 +174,19 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     const r = applyEquivalenceMarks(
       marks,
       [
-        { mutantCode: "M0001", identity: KEY_A, verdict: "killed" },
-        { mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
+        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "killed" },
+        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
     );
     expect(r.contradicted).toEqual([
-      { key: KEY_A, reason: "self-assignment", mutantCode: "M0001", verdict: "killed" },
+      {
+        key: KEY_A,
+        reason: "self-assignment",
+        batchIndex: 0,
+        mutantCode: "M0001",
+        verdict: "killed",
+      },
     ]);
     expect(r.matched.map((m) => m.mutantCode)).toEqual(["M0002"]);
   });
@@ -189,7 +195,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // It is a survivor carried from a prior run, so it does not refute the mark.
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
-      [{ mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
+      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
       2,
     );
     expect(r.matched).toHaveLength(1);
@@ -201,7 +207,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // confusion R175 exists to prevent.
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
-      [{ mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
+      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
       2,
     );
     expect(r.contradicted.map((c) => c.verdict)).toEqual(["no-coverage"]);
@@ -211,7 +217,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
 describe("equivalenceMarkWarnings", () => {
   test("says the score is NOT changed, so a mark cannot read as a subtraction", () => {
     const lines = equivalenceMarkWarnings({
-      matched: [{ key: KEY_A, reason: "r", mutantCode: "M0001" }],
+      matched: [{ key: KEY_A, reason: "r", batchIndex: 0, mutantCode: "M0001" }],
       stale: [],
       contradicted: [],
     }).join(" ");
@@ -224,11 +230,17 @@ describe("equivalenceMarkWarnings", () => {
       matched: [],
       stale: [],
       contradicted: [
-        { key: KEY_A, reason: "self-assignment", mutantCode: "M0001", verdict: "killed" },
+        {
+          key: KEY_A,
+          reason: "self-assignment",
+          batchIndex: 0,
+          mutantCode: "M0001",
+          verdict: "killed",
+        },
       ],
     }).join(" ");
     expect(lines).toMatch(/CONTRADICTED/);
-    expect(lines).toMatch(/M0001 is killed/);
+    expect(lines).toMatch(/0\/M0001 is killed/);
   });
 
   test("nothing to say produces no lines", () => {

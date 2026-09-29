@@ -11,14 +11,16 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
 | [`verify-v2.schema.json`](verify-v2.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 2 |
 | [`verify-v1.schema.json`](verify-v1.schema.json) | the same, from builds before C02-09; kept so a stored v1 document stays checkable (v2 added the refusal reasons `unknown-gap` and `gap-has-no-survivor`) | `VERIFY_SCHEMA_VERSION` = 1 |
-| [`report-v2.schema.json`](report-v2.schema.json) | the JSON report written with `--out` | `REPORT_SCHEMA_VERSION` = 2 |
+| [`report-v3.schema.json`](report-v3.schema.json) | the JSON report written with `--out` | `REPORT_SCHEMA_VERSION` = 3 |
+| [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the eight files, six are hand-written and two are generated, and the split is about SIZE
+**Of the nine files, six are hand-written and three were generated, and the split is about SIZE
 rather than principle.** `explain` (a few dozen leaves; v6 and the kept v5 and v4), `doctor` (8) and
 `verify` (small, like `doctor`; v2 and the kept v1) are hand-written; explain v6, `doctor` and
 verify v2 are pinned against their declarations, and explain v5, explain v4 and verify v1 are
-frozen as they were published. `report` and `stream` are generated.
+frozen as they were published. `report` and `stream` are generated; report v2 is frozen as the
+generator last wrote it.
 `SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
 forgets, so `bun scripts/generate-schemas.ts` emits both, and `--check` fails when a committed file

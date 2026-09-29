@@ -1,8 +1,9 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "validity": {
     "reliability": "full",
     "caveats": [
+      "session-warm",
       "kills-without-assertion"
     ],
     "scoreDescribes": "31 scored mutant(s) in 5 .al file(s)",
@@ -24,35 +25,47 @@
       }
     ]
   },
+  "likelyEquivalentSurvivors": {
+    "count": 1,
+    "byRisk": [
+      {
+        "risk": "value-rewrite",
+        "mutants": [
+          "0/M0009"
+        ],
+        "meaning": "This operator rewrites a written or compared VALUE. Where nothing downstream reads that value, the mutant is equivalent and no source-derived layer can see it without dataflow. Read these survivors as leads only after checking that something actually depends on the value."
+      }
+    ]
+  },
   "assertionScreen": {
     "kills": 23,
     "killsWithText": 23,
     "killsWithoutText": 0,
     "flagged": 23,
     "flaggedMutants": [
-      "M0003",
-      "M0004",
-      "M0006",
-      "M0007",
-      "M0008",
-      "M0011",
-      "M0012",
-      "M0013",
-      "M0014",
-      "M0015",
-      "M0016",
-      "M0017",
-      "M0018",
-      "M0019",
-      "M0020",
-      "M0022",
-      "M0023",
-      "M0024",
-      "M0025",
-      "M0031",
-      "M0033",
-      "M0034",
-      "M0035"
+      "0/M0003",
+      "0/M0004",
+      "0/M0006",
+      "0/M0007",
+      "0/M0008",
+      "0/M0011",
+      "0/M0012",
+      "0/M0013",
+      "0/M0014",
+      "0/M0015",
+      "0/M0016",
+      "0/M0017",
+      "0/M0018",
+      "0/M0019",
+      "0/M0020",
+      "0/M0022",
+      "0/M0023",
+      "0/M0024",
+      "0/M0025",
+      "0/M0031",
+      "0/M0033",
+      "0/M0034",
+      "0/M0035"
     ],
     "discrimination": "vacuous",
     "discriminationNote": "EVERY kill carrying failure text was flagged, so this screen separated nothing on this suite. That is a property of the suite's assertion style, not of the mutants: a suite that raises via bare `Error(...)` has no assertion prefix for the rule to find. Treat the count as 'not measured here', not as a finding.",
@@ -140,12 +153,12 @@
       "codeunitName": "Credit Customer",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 451,
+      "durationMs": 206,
       "procedureName": "",
       "startIndex": 689,
       "endIndex": 728,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "begin\n        TestField(\"No.\");\n    end",
+      "mutatedText": "begin end",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -155,7 +168,21 @@
       ],
       "coverageAttribution": "object",
       "guardObserved": true,
-      "triggerName": "OnInsert"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.OrderOverLimitIsBlocked",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "triggerName": "OnInsert",
+      "procedureStartLine": 33,
+      "procedureEndLine": 36,
+      "gapId": "Gd945eaccdb6f",
+      "blockStartLine": 34,
+      "blockEndLine": 36
     },
     {
       "mutantCode": "M0002",
@@ -168,11 +195,11 @@
       "codeunitName": "Credit Customer",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 516,
+      "durationMs": 241,
       "procedureName": "",
       "startIndex": 703,
       "endIndex": 719,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "TestField(\"No.\")",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -183,7 +210,21 @@
       ],
       "coverageAttribution": "object",
       "guardObserved": true,
-      "triggerName": "OnInsert"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.OrderOverLimitIsBlocked",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "triggerName": "OnInsert",
+      "procedureStartLine": 33,
+      "procedureEndLine": 36,
+      "gapId": "Gd945eaccdb6f",
+      "blockStartLine": 34,
+      "blockEndLine": 36
     },
     {
       "mutantCode": "M0003",
@@ -196,12 +237,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 87,
+      "durationMs": 92,
       "procedureName": "RegisterOrder",
       "startIndex": 334,
       "endIndex": 638,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "begin\n        CheckCreditLimit(CustomerNo, Amount);\n\n        CreditOrder.Init();\n        CreditOrder.\"No.\" := OrderNo;\n        CreditOrder.\"Customer No.\" := CustomerNo;\n        CreditOrder.Amount := Amount;\n        CreditOrder.Status := CreditOrder.Status::Open;\n        CreditOrder.Insert(true);\n    end",
+      "mutatedText": "begin end",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -211,8 +252,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "The order was not registered.\nCredit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 9 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.InvoicedOrdersStopCounting"
+      ],
+      "killingTest": "InvoicedOrdersStopCounting",
+      "killingTestFailure": "The Credit Order does not exist. Identification fields and values: No.='SO-1006'\nCredit Limit Tests(CodeUnit 90250).InvoicedOrdersStopCounting line 7 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0004",
@@ -225,11 +278,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 174,
+      "durationMs": 127,
       "procedureName": "RegisterOrder",
       "startIndex": 348,
       "endIndex": 384,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CheckCreditLimit(CustomerNo, Amount)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -240,8 +293,21 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 3,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0005",
@@ -254,11 +320,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 429,
+      "durationMs": 240,
       "procedureName": "RegisterOrder",
       "startIndex": 395,
       "endIndex": 413,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.Init()",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -268,7 +334,20 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0006",
@@ -281,11 +360,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 93,
+      "durationMs": 47,
       "procedureName": "RegisterOrder",
       "startIndex": 423,
       "endIndex": 451,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.\"No.\" := OrderNo",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -296,8 +375,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "The order was not registered.\nCredit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 9 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting"
+      ],
+      "killingTest": "InvoicedOrdersStopCounting",
+      "killingTestFailure": "The Credit Order does not exist. Identification fields and values: No.='SO-1006'\nCredit Limit Tests(CodeUnit 90250).InvoicedOrdersStopCounting line 7 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0007",
@@ -310,11 +400,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 339,
+      "durationMs": 83,
       "procedureName": "RegisterOrder",
       "startIndex": 461,
       "endIndex": 501,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.\"Customer No.\" := CustomerNo",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -325,8 +415,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
       "killingTest": "OpenOrdersCountTowardTheLimit",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0008",
@@ -339,11 +441,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 88,
+      "durationMs": 82,
       "procedureName": "RegisterOrder",
       "startIndex": 511,
       "endIndex": 539,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.Amount := Amount",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -354,8 +456,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "Expected an order of 400, got 0.\nCredit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 11 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0009",
@@ -368,11 +482,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 470,
+      "durationMs": 203,
       "procedureName": "RegisterOrder",
       "startIndex": 549,
       "endIndex": 595,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.Status := CreditOrder.Status::Open",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -382,7 +496,21 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18,
+      "equivalenceRisk": "value-rewrite"
     },
     {
       "mutantCode": "M0010",
@@ -395,12 +523,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 429,
+      "durationMs": 189,
       "procedureName": "RegisterOrder",
       "startIndex": 605,
       "endIndex": 629,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.Insert(true)",
+      "mutatedText": "CreditOrder.Insert(false)",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -409,7 +537,20 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0011",
@@ -422,11 +563,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 90,
+      "durationMs": 44,
       "procedureName": "RegisterOrder",
       "startIndex": 605,
       "endIndex": 629,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.Insert(true)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -437,8 +578,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "The order was not registered.\nCredit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 9 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 6,
+      "procedureEndLine": 18,
+      "gapId": "G02ac86b72f2e",
+      "blockStartLine": 9,
+      "blockEndLine": 18
     },
     {
       "mutantCode": "M0012",
@@ -451,12 +603,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 165,
+      "durationMs": 126,
       "procedureName": "CheckCreditLimit",
       "startIndex": 723,
       "endIndex": 858,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "begin\n        if WouldExceedLimit(CustomerNo, NewOrderAmount) then\n            Error(OverLimitErr, NewOrderAmount, CustomerNo);\n    end",
+      "mutatedText": "begin end",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -466,8 +618,21 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 3,
+      "procedureStartLine": 20,
+      "procedureEndLine": 24,
+      "gapId": "Gdfb17d6c0775",
+      "blockStartLine": 21,
+      "blockEndLine": 24
     },
     {
       "mutantCode": "M0013",
@@ -480,12 +645,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 89,
+      "durationMs": 40,
       "procedureName": "CheckCreditLimit",
       "startIndex": 740,
       "endIndex": 784,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "WouldExceedLimit(CustomerNo, NewOrderAmount)",
+      "mutatedText": "not (WouldExceedLimit(CustomerNo, NewOrderAmount))",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -495,8 +660,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "An order of 400 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 12 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "An order of 600 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 12 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 20,
+      "procedureEndLine": 24,
+      "gapId": "Gdfb17d6c0775",
+      "blockStartLine": 21,
+      "blockEndLine": 24
     },
     {
       "mutantCode": "M0014",
@@ -509,11 +685,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 163,
+      "durationMs": 39,
       "procedureName": "CheckCreditLimit",
       "startIndex": 802,
       "endIndex": 849,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "Error(OverLimitErr, NewOrderAmount, CustomerNo)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -524,8 +700,15 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "enclosing",
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 20,
+      "procedureEndLine": 24,
+      "gapId": "G115367e7594a",
+      "blockStartLine": 23,
+      "blockEndLine": 23
     },
     {
       "mutantCode": "M0015",
@@ -538,12 +721,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 178,
+      "durationMs": 126,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1037,
       "endIndex": 1366,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "begin\n        CreditCustomer.Get(CustomerNo);\n\n        if CreditCustomer.\"Credit Limit\" = 0 then\n            exit(false);\n\n        CreditCustomer.CalcFields(Balance);\n        Exposure := CreditCustomer.Balance + OutstandingOrderAmount(CustomerNo) + NewOrderAmount;\n\n        exit(Exposure > CreditCustomer.\"Credit Limit\");\n    end",
+      "mutatedText": "begin end",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -553,8 +736,21 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 3,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0016",
@@ -567,11 +763,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 165,
+      "durationMs": 40,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1051,
       "endIndex": 1081,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditCustomer.Get(CustomerNo)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -582,8 +778,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0017",
@@ -596,12 +803,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 166,
+      "durationMs": 58,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1095,
       "endIndex": 1128,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditCustomer.\"Credit Limit\" = 0",
+      "mutatedText": "CreditCustomer.\"Credit Limit\" <> 0",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -611,8 +818,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0018",
@@ -625,12 +843,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 279,
+      "durationMs": 83,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1127,
       "endIndex": 1128,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "0",
+      "mutatedText": "1",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -640,8 +858,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock"
+      ],
       "killingTest": "NoCreditLimitMeansNoBlock",
-      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0019",
@@ -654,12 +884,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 250,
+      "durationMs": 82,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1146,
       "endIndex": 1157,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "exit(false)",
+      "mutatedText": "exit(not (false))",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -669,8 +899,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock"
+      ],
       "killingTest": "NoCreditLimitMeansNoBlock",
-      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "G13e9843da30e",
+      "blockStartLine": 34,
+      "blockEndLine": 34
     },
     {
       "mutantCode": "M0020",
@@ -683,12 +924,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 250,
+      "durationMs": 83,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1151,
       "endIndex": 1156,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "false",
+      "mutatedText": "true",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -698,8 +939,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.NoCreditLimitMeansNoBlock"
+      ],
       "killingTest": "NoCreditLimitMeansNoBlock",
-      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "An order of 999,999 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).NoCreditLimitMeansNoBlock line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "G13e9843da30e",
+      "blockStartLine": 34,
+      "blockEndLine": 34
     },
     {
       "mutantCode": "M0021",
@@ -712,11 +964,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 437,
+      "durationMs": 216,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1168,
       "endIndex": 1202,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditCustomer.CalcFields(Balance)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -726,7 +978,20 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OrderOverLimitIsBlocked",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0022",
@@ -739,11 +1004,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 177,
+      "durationMs": 77,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1212,
       "endIndex": 1300,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "Exposure := CreditCustomer.Balance + OutstandingOrderAmount(CustomerNo) + NewOrderAmount",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -754,8 +1019,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0023",
@@ -768,12 +1044,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 175,
+      "durationMs": 41,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1224,
       "endIndex": 1300,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditCustomer.Balance + OutstandingOrderAmount(CustomerNo) + NewOrderAmount",
+      "mutatedText": "CreditCustomer.Balance + OutstandingOrderAmount(CustomerNo) - NewOrderAmount",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -783,8 +1059,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderOverLimitIsBlocked",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OrderOverLimitIsBlocked()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OrderOverLimitIsBlocked line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0024",
@@ -797,12 +1084,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 339,
+      "durationMs": 40,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1224,
       "endIndex": 1283,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditCustomer.Balance + OutstandingOrderAmount(CustomerNo)",
+      "mutatedText": "CreditCustomer.Balance - OutstandingOrderAmount(CustomerNo)",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -812,8 +1099,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
       "killingTest": "OpenOrdersCountTowardTheLimit",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0025",
@@ -826,12 +1124,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 87,
+      "durationMs": 40,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1311,
       "endIndex": 1357,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "exit(Exposure > CreditCustomer.\"Credit Limit\")",
+      "mutatedText": "exit(not (Exposure > CreditCustomer.\"Credit Limit\"))",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -841,8 +1139,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
-      "killingTest": "OrderUnderLimitIsAllowed",
-      "killingTestFailure": "An order of 400 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).OrderUnderLimitIsAllowed line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
+      "killingTest": "OpenOrdersCountTowardTheLimit",
+      "killingTestFailure": "An order of 600 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 4 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0026",
@@ -855,12 +1164,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 436,
+      "durationMs": 199,
       "procedureName": "WouldExceedLimit",
       "startIndex": 1316,
       "endIndex": 1356,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "Exposure > CreditCustomer.\"Credit Limit\"",
+      "mutatedText": "Exposure >= CreditCustomer.\"Credit Limit\"",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -869,7 +1178,20 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OrderOverLimitIsBlocked",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 26,
+      "procedureEndLine": 40,
+      "gapId": "Gaf01a3983398",
+      "blockStartLine": 30,
+      "blockEndLine": 40
     },
     {
       "mutantCode": "M0027",
@@ -886,9 +1208,15 @@
       "procedureName": "PostInvoice",
       "startIndex": 1438,
       "endIndex": 1490,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
-      "coveringTests": []
+      "originalText": "begin\n        PostEntry(CustomerNo, Amount);\n    end",
+      "mutatedText": "begin end",
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 42,
+      "procedureEndLine": 45,
+      "gapId": "Gd524932172ca",
+      "blockStartLine": 43,
+      "blockEndLine": 45
     },
     {
       "mutantCode": "M0028",
@@ -905,9 +1233,15 @@
       "procedureName": "PostInvoice",
       "startIndex": 1452,
       "endIndex": 1481,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "PostEntry(CustomerNo, Amount)",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 42,
+      "procedureEndLine": 45,
+      "gapId": "Gd524932172ca",
+      "blockStartLine": 43,
+      "blockEndLine": 45
     },
     {
       "mutantCode": "M0029",
@@ -924,9 +1258,15 @@
       "procedureName": "PostPayment",
       "startIndex": 1562,
       "endIndex": 1615,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
-      "coveringTests": []
+      "originalText": "begin\n        PostEntry(CustomerNo, -Amount);\n    end",
+      "mutatedText": "begin end",
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 47,
+      "procedureEndLine": 50,
+      "gapId": "G763ef0dd8fc5",
+      "blockStartLine": 48,
+      "blockEndLine": 50
     },
     {
       "mutantCode": "M0030",
@@ -943,9 +1283,15 @@
       "procedureName": "PostPayment",
       "startIndex": 1576,
       "endIndex": 1606,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "PostEntry(CustomerNo, -Amount)",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 47,
+      "procedureEndLine": 50,
+      "gapId": "G763ef0dd8fc5",
+      "blockStartLine": 48,
+      "blockEndLine": 50
     },
     {
       "mutantCode": "M0031",
@@ -958,12 +1304,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 267,
+      "durationMs": 83,
       "procedureName": "OutstandingOrderAmount",
       "startIndex": 1748,
       "endIndex": 1955,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "begin\n        CreditOrder.SetRange(\"Customer No.\", CustomerNo);\n        CreditOrder.SetRange(Status, CreditOrder.Status::Open);\n        CreditOrder.CalcSums(Amount);\n        exit(CreditOrder.Amount);\n    end",
+      "mutatedText": "begin end",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -972,8 +1318,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
       "killingTest": "OpenOrdersCountTowardTheLimit",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 52,
+      "procedureEndLine": 60,
+      "gapId": "G64210270cf0b",
+      "blockStartLine": 55,
+      "blockEndLine": 60
     },
     {
       "mutantCode": "M0032",
@@ -986,11 +1344,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 374,
+      "durationMs": 166,
       "procedureName": "OutstandingOrderAmount",
       "startIndex": 1762,
       "endIndex": 1810,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.SetRange(\"Customer No.\", CustomerNo)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -999,7 +1357,20 @@
         "Credit Limit Tests.InvoicedOrdersStopCounting"
       ],
       "coverageAttribution": "exact",
-      "guardObserved": true
+      "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OrderOverLimitIsBlocked",
+        "Credit Limit Tests.OrderUnderLimitIsAllowed"
+      ],
+      "procedureStartLine": 52,
+      "procedureEndLine": 60,
+      "gapId": "G64210270cf0b",
+      "blockStartLine": 55,
+      "blockEndLine": 60
     },
     {
       "mutantCode": "M0033",
@@ -1012,11 +1383,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 344,
+      "durationMs": 136,
       "procedureName": "OutstandingOrderAmount",
       "startIndex": 1820,
       "endIndex": 1874,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.SetRange(Status, CreditOrder.Status::Open)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -1026,8 +1397,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit",
+        "Credit Limit Tests.InvoicedOrdersStopCounting"
+      ],
       "killingTest": "InvoicedOrdersStopCounting",
-      "killingTestFailure": "An order of 600 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20691.24727;Credit Limit Tests(CodeUnit 90250).InvoicedOrdersStopCounting line 11 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "An order of 600 would take customer C-10000 over their credit limit.\nCredit Limit Mgt(CodeUnit 90204).CheckCreditLimit line 17 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Mgt(CodeUnit 90204).RegisterOrder line 96 - Credit Limit Demo by LethAL version 1.0.20725.37769;Credit Limit Tests(CodeUnit 90250).InvoicedOrdersStopCounting line 11 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 52,
+      "procedureEndLine": 60,
+      "gapId": "G64210270cf0b",
+      "blockStartLine": 55,
+      "blockEndLine": 60
     },
     {
       "mutantCode": "M0034",
@@ -1040,11 +1423,11 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 255,
+      "durationMs": 83,
       "procedureName": "OutstandingOrderAmount",
       "startIndex": 1884,
       "endIndex": 1912,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditOrder.CalcSums(Amount)",
       "mutatedText": "",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
@@ -1054,8 +1437,20 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.InvoicedOrdersStopCounting",
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
       "killingTest": "OpenOrdersCountTowardTheLimit",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 2,
+      "procedureStartLine": 52,
+      "procedureEndLine": 60,
+      "gapId": "G64210270cf0b",
+      "blockStartLine": 55,
+      "blockEndLine": 60
     },
     {
       "mutantCode": "M0035",
@@ -1068,12 +1463,12 @@
       "codeunitName": "Credit Limit Mgt",
       "operatorMajor": 1,
       "runner": "fenced",
-      "durationMs": 245,
+      "durationMs": 44,
       "procedureName": "OutstandingOrderAmount",
       "startIndex": 1922,
       "endIndex": 1946,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "exit(CreditOrder.Amount)",
+      "mutatedText": "exit(0.0)",
       "coveringTests": [
         "Credit Limit Tests.OrderUnderLimitIsAllowed",
         "Credit Limit Tests.OrderOverLimitIsBlocked",
@@ -1082,8 +1477,19 @@
       ],
       "coverageAttribution": "exact",
       "guardObserved": true,
+      "reachGrain": "statement",
+      "guardReached": true,
+      "reachedBy": [
+        "Credit Limit Tests.OpenOrdersCountTowardTheLimit"
+      ],
       "killingTest": "OpenOrdersCountTowardTheLimit",
-      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunAllTests line 9 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Method(CodeUnit 91007).RunOneMethod line 41 - LethAL Control by LethAL version 1.0.0.16;LC Run Method(CodeUnit 91007).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.16;LC Control API(CodeUnit 91003).RunMutant line 31 - LethAL Control by LethAL version 1.0.0.16;"
+      "killingTestFailure": "Microsoft.Dynamics.Nav.Types.Exceptions.NavNCLAssertErrorException: An error was expected inside an ASSERTERROR statement.\\   at Microsoft.Dynamics.Nav.Runtime.NavMethodScope.AssertErrorAsync(Func`1 body)\\   at Microsoft.Dynamics.Nav.BusinessApplication.Codeunit90250.OpenOrdersCountTowardTheLimit()\\   at Microsoft.Dynamics.Nav.Runtime.NavTestCodeunit.ExecuteTestMethodAsync(MethodInfo method, TestTransactionModel transactionModel, Boolean isAsync)\nCredit Limit Tests(CodeUnit 90250).OpenOrdersCountTowardTheLimit line 6 - Credit Limit Demo Tests by LethAL version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;",
+      "killPosition": 1,
+      "procedureStartLine": 52,
+      "procedureEndLine": 60,
+      "gapId": "G64210270cf0b",
+      "blockStartLine": 55,
+      "blockEndLine": 60
     },
     {
       "mutantCode": "M0036",
@@ -1100,9 +1506,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2096,
       "endIndex": 2339,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
-      "coveringTests": []
+      "originalText": "begin\n        CreditLedgerEntry.Init();\n        CreditLedgerEntry.\"Customer No.\" := CustomerNo;\n        CreditLedgerEntry.Amount := Amount;\n        CreditLedgerEntry.\"Posting Date\" := WorkDate();\n        CreditLedgerEntry.Insert(true);\n    end",
+      "mutatedText": "begin end",
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0037",
@@ -1119,9 +1531,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2110,
       "endIndex": 2134,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditLedgerEntry.Init()",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0038",
@@ -1138,9 +1556,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2144,
       "endIndex": 2190,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditLedgerEntry.\"Customer No.\" := CustomerNo",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0039",
@@ -1157,9 +1581,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2200,
       "endIndex": 2234,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditLedgerEntry.Amount := Amount",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0040",
@@ -1176,9 +1606,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2244,
       "endIndex": 2290,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditLedgerEntry.\"Posting Date\" := WorkDate()",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0041",
@@ -1195,9 +1631,15 @@
       "procedureName": "PostEntry",
       "startIndex": 2300,
       "endIndex": 2330,
-      "originalText": "[redacted: third-party source, see this directory's README]",
-      "mutatedText": "[redacted: third-party source, see this directory's README]",
-      "coveringTests": []
+      "originalText": "CreditLedgerEntry.Insert(true)",
+      "mutatedText": "CreditLedgerEntry.Insert(false)",
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     },
     {
       "mutantCode": "M0042",
@@ -1214,12 +1656,24 @@
       "procedureName": "PostEntry",
       "startIndex": 2300,
       "endIndex": 2330,
-      "originalText": "[redacted: third-party source, see this directory's README]",
+      "originalText": "CreditLedgerEntry.Insert(true)",
       "mutatedText": "",
-      "coveringTests": []
+      "coveringTests": [],
+      "reachGrain": "statement",
+      "procedureStartLine": 62,
+      "procedureEndLine": 71,
+      "gapId": "G1b2d3999bc26",
+      "blockStartLine": 65,
+      "blockEndLine": 71
     }
   ],
   "unsupportedTests": [],
+  "excludedSites": {
+    "totalFiles": 5,
+    "siteCount": 0,
+    "fileCount": 0,
+    "files": []
+  },
   "notInstrumented": {
     "totalFiles": 5,
     "fileCount": 0,
@@ -1232,19 +1686,32 @@
     "files": []
   },
   "preprocessorSymbols": [],
+  "identityScheme": 3,
   "untargetedTriggerCount": 0,
+  "groupedCalls": 44,
+  "artifacts": [
+    {
+      "batchIndex": 0,
+      "artifactId": "2725ce96943dbb192dad4a148b8d4c8e",
+      "sha256": "51926957d8bc5601e2d517ebe4ed5971eb9f2a1fc46f28ea2b8eb0b5fea326ea",
+      "appVersion": "1.0.20725.37769"
+    }
+  ],
+  "warmKills": 13,
+  "unplaceableCount": 0,
+  "unplaceableMutants": [],
   "timings": {
-    "totalMs": 15476,
-    "generateMutationSetMs": 50,
-    "deployMs": 4284,
-    "baselineMs": 515,
-    "mutantsMs": 8007,
+    "totalMs": 13858,
+    "generateMutationSetMs": 12,
+    "deployMs": 4896,
+    "baselineMs": 533,
+    "mutantsMs": 3356,
     "perMutant": {
       "count": 31,
-      "meanMs": 258,
-      "medianMs": 250,
-      "p95Ms": 470,
-      "maxMs": 516
+      "meanMs": 108,
+      "medianMs": 83,
+      "p95Ms": 240,
+      "maxMs": 241
     }
   },
   "permissionCanary": {

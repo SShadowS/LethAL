@@ -68,6 +68,8 @@ export interface EquivalenceMark {
 /** The minimum a caller must know about a mutant to match marks against it. Deliberately
  *  structural: this module must not import the report, because the report imports this. */
 export interface MarkableMutant {
+  /** R231: ids restart per batch, so `mutantCode` names a mutant only with its batch. */
+  readonly batchIndex: number;
   readonly mutantCode: string;
   /** `serializeKey(identityKeyOf(...))` for this mutant. */
   readonly identity: string;
@@ -77,12 +79,14 @@ export interface MarkableMutant {
 export interface MatchedMark {
   readonly key: string;
   readonly reason: string;
+  readonly batchIndex: number;
   readonly mutantCode: string;
 }
 
 export interface ContradictedMark {
   readonly key: string;
   readonly reason: string;
+  readonly batchIndex: number;
   readonly mutantCode: string;
   /** The verdict that contradicts the mark — a kill, or anything else that is not a survival. */
   readonly verdict: string;
@@ -236,12 +240,18 @@ export function applyEquivalenceMarks(
       continue;
     }
     if (SURVIVING_VERDICTS.has(hit.verdict)) {
-      matched.push({ key: mark.key, reason: mark.reason, mutantCode: hit.mutantCode });
+      matched.push({
+        key: mark.key,
+        reason: mark.reason,
+        batchIndex: hit.batchIndex,
+        mutantCode: hit.mutantCode,
+      });
       continue;
     }
     contradicted.push({
       key: mark.key,
       reason: mark.reason,
+      batchIndex: hit.batchIndex,
       mutantCode: hit.mutantCode,
       verdict: hit.verdict,
     });
@@ -257,7 +267,8 @@ export function equivalenceMarkWarnings(report: EquivalenceMarkReport): string[]
       `EQUIVALENCE MARK CONTRADICTED: ${report.contradicted.length} mutant(s) marked as equivalent were NOT survivors in this run. A reader stated no test could distinguish them and this run says otherwise, the verdict stands and the mark is wrong. Remove or revise each:`,
     );
     for (const c of report.contradicted) {
-      lines.push(`  ${c.mutantCode} is ${c.verdict} — marked "${c.reason}"`);
+      // R231's `<batchIndex>/<mutantCode>` (report.ts `mutantRef`; this module must not import it).
+      lines.push(`  ${c.batchIndex}/${c.mutantCode} is ${c.verdict} — marked "${c.reason}"`);
     }
   }
   if (report.stale.length > 0) {

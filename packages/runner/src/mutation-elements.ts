@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutantOutcome, SessionReport } from "./report";
+import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
 
 /**
  * R178: project a `SessionReport` into `mutation-testing-report-schema`, the interchange format the
@@ -124,10 +124,14 @@ export function describe(
   ctx: {
     readonly unplaceable: ReadonlySet<string>;
     readonly likelyEquivalent: ReadonlySet<string>;
+    /** How the two sets name a mutant: R231's `<batchIndex>/<mutantCode>` on a v3 report. Absent:
+     *  the bare code, as an archived v2 report wrote it. */
+    readonly refOf?: (m: MutantOutcome) => string;
   },
 ): string | undefined {
   const parts: string[] = [];
-  if (ctx.unplaceable.has(m.mutantCode)) {
+  const ref = ctx.refOf?.(m) ?? m.mutantCode;
+  if (ctx.unplaceable.has(ref)) {
     parts.push(
       "ATTRIBUTION COULD NOT PLACE THIS (R175). It is shown as NoCoverage because the schema has no " +
         "other status, but that is NOT a statement that your tests miss this code: coverage saw its " +
@@ -135,7 +139,7 @@ export function describe(
         'coverageMode "none" to score it.',
     );
   }
-  if (ctx.likelyEquivalent.has(m.mutantCode)) {
+  if (ctx.likelyEquivalent.has(ref)) {
     parts.push(
       "LIKELY EQUIVALENT (R172). This operator rewrites a value or bounds a loop, so where nothing " +
         "downstream depends on the change the mutant cannot be killed by any test. Read it as a lead " +
@@ -195,10 +199,34 @@ export async function toMutationElements(
   opts: ElementsOptions,
 ): Promise<ElementsProjection> {
   const read = opts.readSource ?? ((p: string) => readFile(p, "utf8"));
-  const unplaceable = new Set(report.unplaceableMutants ?? []);
-  const likelyEquivalent = new Set(
+  // R231: ids restart per batch, so every mutant is named `<batchIndex>/<mutantCode>`, built from
+  // the row itself. v3 lists already hold that form. An archived v2 report's lists hold bare codes:
+  // each is resolved to a row here, and one that names more than one row attaches to NONE (a guess
+  // at the first match could put a warning on the wrong mutant) and is reported by name.
+  const ambiguities: string[] = [];
+  const qualify = (list: string, entries: readonly string[]): Set<string> => {
+    if (report.schemaVersion >= 3) return new Set(entries);
+    const out = new Set<string>();
+    for (const code of new Set(entries)) {
+      const refs = report.mutants
+        .filter((m) => m.mutantCode === code)
+        .map((m) => mutantRef(m.batchIndex, m.mutantCode));
+      const [only] = refs;
+      if (refs.length === 1 && only !== undefined) out.add(only);
+      else if (refs.length > 1) {
+        ambiguities.push(
+          `ambiguous-v2-list-entry (R231): ${list}: ${code} names ${refs.length} mutants (${refs.join(", ")}); this schema-v2 report's bare code cannot say which, so the export attaches it to none of them. Re-run to get a v3 report.`,
+        );
+      }
+    }
+    return out;
+  };
+  const unplaceable = qualify("unplaceableMutants", report.unplaceableMutants ?? []);
+  const likelyEquivalent = qualify(
+    "likelyEquivalentSurvivors",
     (report.likelyEquivalentSurvivors?.byRisk ?? []).flatMap((g) => [...g.mutants]),
   );
+  const refOf = (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode);
 
   const byFile = new Map<string, MutantOutcome[]>();
   for (const m of report.mutants) {
@@ -225,9 +253,11 @@ export async function toMutationElements(
       mutants: mutants.map((m) => {
         const status = STATUS[m.verdict];
         if (status === undefined) unmapped.add(m.verdict);
-        const description = describe(m, { unplaceable, likelyEquivalent });
+        const description = describe(m, { unplaceable, likelyEquivalent, refOf });
         return {
-          id: m.mutantCode,
+          // R231: ids restart per batch, so the id is `<batchIndex>/<mutantCode>`, from the row, and
+          // stays unique as the schema requires, on a v2 report as on v3.
+          id: refOf(m),
           // Short name: the renderers group and filter by this, and `lethal.` on every row is noise.
           mutatorName: m.operatorName.replace(/^lethal\./, ""),
           location: {
@@ -269,7 +299,7 @@ export async function toMutationElements(
     }
     const entry = files[rel] as { mutants?: unknown[] } | undefined;
     const ignored = {
-      // Unique against every mutant id, which are `M####`, and against each other: one row per
+      // Unique against every mutant id, which are `<batchIndex>/M####`, and against each other: one row per
       // (file, reason), which is exactly what `excludedSites` holds.
       id: `ignored:${row.reason}:${rel}`,
       // The renderers GROUP and filter by this, so naming it for the reason makes every refusal of
@@ -310,6 +340,6 @@ export async function toMutationElements(
         },
       },
     },
-    losses: lossesFor(report),
+    losses: [...ambiguities, ...lossesFor(report)],
   };
 }
