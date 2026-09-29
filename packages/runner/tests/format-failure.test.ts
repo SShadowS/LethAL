@@ -166,6 +166,10 @@ function handlers(sf: ts.SourceFile): Array<[string, ts.Node]> {
 function handlerViolations(caught: string, body: ts.Node): string[] {
   const out: string[] = [];
   let routed = 0;
+  // R346 follow-up (R332's rule): the first formatted print must come before any await and any
+  // receipt write, so a kill during the receipt cannot hide the reason.
+  let firstPrint: number | undefined;
+  let firstAwaitOrReceipt: number | undefined;
   const mentions = (n: ts.Node): boolean =>
     (ts.isIdentifier(n) && n.text === caught) ||
     (ts.forEachChild(n, (c) => mentions(c) || undefined) ?? false);
@@ -186,14 +190,31 @@ function handlerViolations(caught: string, body: ts.Node): string[] {
           a.arguments[0] !== undefined &&
           ts.isIdentifier(a.arguments[0]) &&
           a.arguments[0].text === caught;
-        if (ok) routed++;
-        else out.push(`prints ${a.getText()} without formatFailure`);
+        if (ok) {
+          routed++;
+          firstPrint ??= n.getStart();
+        } else out.push(`prints ${a.getText()} without formatFailure`);
       }
+    }
+    if (
+      ts.isAwaitExpression(n) ||
+      (ts.isCallExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        n.expression.text === "emitFailed")
+    ) {
+      firstAwaitOrReceipt ??= n.getStart();
     }
     ts.forEachChild(n, visit);
   };
   visit(body);
   if (routed === 0) out.push("never prints formatFailure(<caught>)");
+  else if (
+    firstPrint !== undefined &&
+    firstAwaitOrReceipt !== undefined &&
+    firstAwaitOrReceipt < firstPrint
+  ) {
+    out.push("prints formatFailure(<caught>) after an await or the receipt write");
+  }
   return out;
 }
 
@@ -260,6 +281,28 @@ main().catch(async (err: unknown) => {
       expect(v.some((x) => x.includes("reads .stack"))).toBe(true);
       expect(v.some((x) => x.includes("without formatFailure"))).toBe(true);
       expect(v).toContain("never prints formatFailure(<caught>)");
+    } finally {
+      rmSync(file, { force: true });
+    }
+  });
+
+  test("the checker catches a gate that prints after the receipt write", () => {
+    const file = join(tmpdir(), `lethal-r346-order-${process.pid}.itest.ts`);
+    writeFileSync(
+      file,
+      `import { formatFailure } from "../src/format-failure";
+async function main() {}
+main().catch(async (err: unknown) => {
+  await emitFailed("x", String(err));
+  console.error(formatFailure(err));
+  process.exit(1);
+});
+`,
+    );
+    try {
+      expect(wiringViolations(file)).toEqual([
+        "prints formatFailure(<caught>) after an await or the receipt write",
+      ]);
     } finally {
       rmSync(file, { force: true });
     }

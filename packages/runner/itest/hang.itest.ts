@@ -677,7 +677,9 @@ try {
 } catch (err) {
   // hang runs main() at top level rather than through main().catch, so without this a failure
   // exits non-zero with no receipt, which the executor cannot tell from a crashed process.
-  await emitFailed("hang", err instanceof Error ? err.message : String(err));
+  // R346: print the reason before any await, as R332 does, so a kill during the receipt write
+  // cannot hide it.
   console.error(formatFailure(err));
+  await emitFailed("hang", err instanceof Error ? err.message : String(err));
   process.exit(1);
 }

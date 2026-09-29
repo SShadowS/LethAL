@@ -758,7 +758,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(async (err: unknown) => {
-  await emitFailed("stale-publish", err instanceof Error ? err.message : String(err));
+  // R346: print the reason before any await, as R332 does, so a kill during the receipt write
+  // cannot hide it.
   console.error(formatFailure(err));
+  await emitFailed("stale-publish", err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
