@@ -151,3 +151,54 @@ describe("R230: a twin after the first can be reader-marked, through the real re
     expect(marked[0]?.identityOrdinal).toBe(1);
   });
 });
+
+describe("R229: a trigger mutant can be reader-marked, through the real report path", () => {
+  const TABLE = `table 50101 "Trig Tab"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+        field(2; Amount; Integer) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Amount := 10;
+    end;
+}
+`;
+
+  test("a mark on an OnInsert mutant matches it and is not stale", async () => {
+    const { projectDir, entries } = await mutate({ "TrigTab.Table.al": TABLE });
+    const target = entries.find(
+      (m) => m.triggerName === "OnInsert" && m.operatorName === "lethal.remove-assignment",
+    );
+    if (target === undefined) throw new Error("the fixture must produce an OnInsert mutant");
+    // The shape R229 is about: the member is named by `triggerName`, and `procedureName` is "".
+    expect(target.procedureName).toBe("");
+
+    const key = serializeKey(identityKeyOf(target));
+    expect(key.split("|")[2]).toBe("OnInsert");
+    const report = await reportWithMark(projectDir, entries, key);
+    // The agent reference builds the key from the report row, taking `triggerName` when
+    // `procedureName` is empty; that spelling is the same key.
+    const row = report.mutants.find((m) => m.mutantCode === target.mutantId);
+    if (row === undefined) throw new Error("buildReport dropped the mutant");
+    expect(
+      [
+        row.astHash,
+        row.codeunitName,
+        row.procedureName || row.triggerName,
+        row.operatorName,
+        row.operatorMajor,
+      ].join("|"),
+    ).toBe(key);
+
+    expect(report.readerMarkedEquivalent).toEqual({
+      matched: [{ mutantCode: target.mutantId, key, reason: "reader ruling" }],
+      stale: [],
+      contradicted: [],
+    });
+    expect(row.readerMark).toEqual({ key, reason: "reader ruling" });
+  });
+});
