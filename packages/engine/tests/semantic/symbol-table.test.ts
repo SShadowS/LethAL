@@ -515,3 +515,79 @@ describe("buildSymbolTable: #if-wrapped declarations (R330)", () => {
     expect(p?.locals.map((v) => v.name)).toEqual(["Kept"]);
   });
 });
+
+// R323: a named return value (`procedure P() Result: Text`) is a local of its member. A split
+// member lists it only when every arm declares it with the same type (the every-arm rule).
+describe("buildSymbolTable: a named return value is a local (R323)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro N");
+  const build = (src: string) => buildSymbolTable([{ path: "n.al", root: wrapRoot(parseAL(src)) }]);
+  const split = (a: string, b: string) => `codeunit 50100 "Repro N"
+{
+#if not CLEAN27
+    procedure Pick(X: Integer)${a}
+#else
+    procedure Pick(X: Integer)${b}
+#endif
+    begin
+        Glob := X;
+    end;
+
+    var
+        Glob: Integer;
+        Result: Integer;
+}
+`;
+  const at = (src: string) => build(src).resolveProcedureAt(KEY, src.indexOf("#if not CLEAN27"));
+
+  it("a plain procedure lists its named return in locals, typed by its return type", () => {
+    const src = `codeunit 50100 "Repro N"
+{
+    procedure Pick(X: Integer) Result: Text
+    begin
+        Result := 'a';
+    end;
+
+    var
+        Result: Integer;
+}
+`;
+    const p = build(src).resolveProcedure(KEY, "Pick");
+    expect(p?.locals.map((v) => [v.name, v.typeText])).toEqual([["Result", "Text"]]);
+    expect(p?.ambiguous).toBeUndefined();
+  });
+
+  it("a split member whose arms both declare Result: Text lists it", () => {
+    const p = at(split(" Result: Text", " Result: Text"));
+    expect(p?.locals.map((v) => [v.name, v.typeText])).toEqual([["Result", "Text"]]);
+    expect(p?.ambiguous).toEqual([]);
+  });
+
+  it("a named return in one arm only (n7) is ambiguous and in no list", () => {
+    const p = at(split(" Result: Text", ": Text"));
+    expect(p?.ambiguous).toEqual(["result"]);
+    expect(p?.locals).toEqual([]);
+    expect(p?.parameters.map((v) => v.name)).toEqual(["X"]);
+  });
+
+  it("arms whose named returns differ in type (n8) are ambiguous and in no list", () => {
+    const p = at(split(" Result: Text", " Result: Integer"));
+    expect(p?.ambiguous).toEqual(["result"]);
+    expect(p?.locals).toEqual([]);
+  });
+
+  it("arms Result: Text and RESULT: Text agree: a local of type Text", () => {
+    const p = at(split(" Result: Text", " RESULT: Text"));
+    expect(p?.locals.map((v) => v.typeText)).toEqual(["Text"]);
+    expect(p?.locals.map((v) => v.name.toLowerCase())).toEqual(["result"]);
+    expect(p?.ambiguous).toEqual([]);
+  });
+
+  it("arms Result: Text and Res: Text put both names in ambiguous and neither in locals", () => {
+    const p = at(split(" Result: Text", " Res: Text"));
+    expect([...(p?.ambiguous ?? [])].sort()).toEqual(["res", "result"]);
+    expect(p?.locals).toEqual([]);
+  });
+});

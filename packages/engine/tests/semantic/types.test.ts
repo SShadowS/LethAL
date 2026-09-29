@@ -675,3 +675,203 @@ describe("buildTypeTable: a trigger's parameters hide the globals (R330)", () =>
     expect(typeAt(src("Which"), "Which")).toBeNull();
   });
 });
+
+// R323: a named return value is a local of its member. It hides a same-named global (names compare
+// case-insensitively) and types by its own declaration. A split member's types only when every arm
+// agrees; a trigger's is unknown, like every other trigger header name (R330).
+describe("buildTypeTable: R323: a named return value", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SHOW = `    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Text)
+    begin
+        Glob := A;
+    end;
+`;
+  const plain = (ret: string, body: string, globals: string) => `codeunit 50100 "Repro N"
+{
+    procedure Pick(X: Integer) Result: ${ret}
+    begin
+${body}
+    end;
+
+${SHOW}
+    var
+        Glob: Integer;
+${globals}}
+`;
+  const split = (a: string, b: string, body: string) => `codeunit 50100 "Repro N"
+{
+#if not CLEAN27
+    procedure Pick(X: Integer)${a}
+#else
+    procedure Pick(X: Integer)${b}
+#endif
+    begin
+${body}
+    end;
+
+${SHOW}
+    var
+        Glob: Integer;
+        Result: Integer;
+}
+`;
+
+  it("n1: types Text with a global Result: Integer", () => {
+    const src = plain(
+      "Text",
+      "        Result := 'a';\n        Show(X, Result);",
+      "        Result: Integer;\n",
+    );
+    expect(typeAt(src, "Result")).toBe("Text");
+  });
+
+  it("n2: types Text with the global spelled result", () => {
+    const src = plain(
+      "Text",
+      "        Result := 'a';\n        Show(X, Result);",
+      "        result: Integer;\n",
+    );
+    expect(typeAt(src, "Result")).toBe("Text");
+  });
+
+  it("n3: types Integer with a global of the same type", () => {
+    const src = plain(
+      "Integer",
+      "        Result := X;\n        Show(X, Result);",
+      "        Result: Integer;\n",
+    );
+    expect(typeAt(src, "Result")).toBe("Integer");
+  });
+
+  it("n4: types Integer with no global", () => {
+    const src = plain(
+      "Integer",
+      "        Result := X + 1;\n        Glob := Result + X;\n        Show(X, Result);",
+      "",
+    );
+    expect(typeAt(src, "Result")).toBe("Integer");
+  });
+
+  it("n5: a split member whose arms both declare Result: Text types Text", () => {
+    const src = split(
+      " Result: Text",
+      " Result: Text",
+      "        Result := 'a';\n        Show(X, Result);",
+    );
+    expect(typeAt(src, "Result")).toBe("Text");
+  });
+
+  it("n6: a preamble split member whose arms both declare Result: Text types Text", () => {
+    const src = `codeunit 50100 "Repro N6"
+{
+#if not CLEAN27
+    procedure Pick(X: Integer) Result: Text
+    var
+        K: Integer;
+#else
+    procedure Pick(X: Integer) Result: Text
+    var
+        K: Integer;
+#endif
+    begin
+        K := X;
+        Result := 'a';
+        Show(K, Result);
+    end;
+
+${SHOW}
+    var
+        Glob: Integer;
+        Result: Integer;
+}
+`;
+    expect(typeAt(src, "Result")).toBe("Text");
+  });
+
+  it("n7: a named return in one arm only is null with the global present", () => {
+    expect(
+      typeAt(split(" Result: Text", ": Text", "        Show(X, Result);"), "Result"),
+    ).toBeNull();
+  });
+
+  it("n8: arms whose named returns differ in type are null with the global present", () => {
+    expect(
+      typeAt(split(" Result: Text", " Result: Integer", "        Show(X, Result);"), "Result"),
+    ).toBeNull();
+  });
+
+  it("n9: a trigger's named return Found is null with a global Found: Integer", () => {
+    const src = `page 50100 "Repro N9"
+{
+    SourceTable = "Repro N9 Tab";
+    layout { area(Content) { field(Code; Rec.Code) { } } }
+
+    trigger OnFindRecord(Which: Text) Found: Boolean
+    begin
+        Found := Rec.Find(Which);
+        Show(Glob, Found);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Boolean)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Found: Integer;
+}
+
+table 50100 "Repro N9 Tab"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+`;
+    expect(typeAt(src, "Found")).toBeNull();
+  });
+
+  it("n13: R.Amt types Integer through a named record return", () => {
+    const src = `codeunit 50100 "Repro N13"
+{
+    procedure Load() R: Record "Repro N13 Tab"
+    begin
+        R.SetRange(Code, 'A');
+        Glob := R.Amt + Glob;
+    end;
+
+    var
+        Glob: Integer;
+}
+
+table 50100 "Repro N13 Tab"
+{
+    fields { field(1; Code; Code[20]) { } field(2; Amt; Integer) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const types = buildTypeTable(
+      [{ path: "t.al", root }],
+      buildSymbolTable([{ path: "t.al", root }]),
+    );
+    let hit: ALSyntaxNode | null = null;
+    visit(root, (n) => {
+      if (n.kind === ALNodeKind.field_access && n.text === "R.Amt") hit = n;
+    });
+    if (hit === null) throw new Error("no R.Amt");
+    expect(types.typeOf(hit)).toBe("Integer");
+  });
+});

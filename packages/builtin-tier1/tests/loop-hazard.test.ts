@@ -272,3 +272,25 @@ describe("hangCapableForMutatedNode", () => {
     expect(hangCapableForMutatedNode(nine, ctx)).toBeNull();
   });
 });
+
+// R323: a named return value is a local of its procedure, so a loop that advances it is found.
+describe("classifyHangCapable: a named return value (R323)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  it("n11: CLAIMS Result := Result + 1 in a while whose condition reads the named return", () => {
+    const { root, ctx } = load(`codeunit 50100 "Repro N11"
+{
+    procedure Count() Result: Integer
+    begin
+        Result := 0;
+        while Result < 10 do
+            Result := Result + 1;
+    end;
+}
+`);
+    expect(classifyHangCapable(assignment(root, "Result := Result + 1"), ctx)).toBe(
+      "loop-condition-target",
+    );
+  });
+});

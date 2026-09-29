@@ -314,3 +314,68 @@ describe("resolveVarRef: a #if-wrapped plain procedure (R331)", () => {
     expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
   });
 });
+
+// R323: a named return value is a declaration of its member. A plain procedure's resolves to it; a
+// trigger's is unknown (R330) and never falls through to a global of its name.
+describe("resolveVarRef: a named return value (R323)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("n11: every use of Result answers the named return's declaration", () => {
+    const { root, ctx } = load(`codeunit 50100 "Repro N11"
+{
+    procedure Count() Result: Integer
+    begin
+        Result := 0;
+        while Result < 10 do
+            Result := Result + 1;
+    end;
+}
+`);
+    const results = identifiers(root).filter((n) => n.text === "Result");
+    const decl = results[0];
+    const inCondition = results[2];
+    const last = results[results.length - 1];
+    if (decl === undefined || inCondition === undefined || last === undefined)
+      throw new Error("fixture lost an identifier");
+    expect(decl.fieldName).toBe("return_value");
+    expect(inCondition.parent?.parent?.kind).toBe(ALNodeKind.while_statement);
+    const a = resolveVarRef(last, ctx);
+    expect(a?.node.startIndex).toBe(decl.startIndex);
+    expect(a?.node.fieldName).toBe("return_value");
+    expect(resolveVarRef(inCondition, ctx)?.node.startIndex).toBe(decl.startIndex);
+  });
+
+  it("n9: a trigger's named return Found answers null, not the global", () => {
+    const { root, ctx } = load(`page 50100 "Repro N9"
+{
+    trigger OnFindRecord(Which: Text) Found: Boolean
+    begin
+        Found := Rec.Find(Which);
+        Show(Glob, Found);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    procedure Show(A: Integer; B: Boolean)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Found: Integer;
+}
+`);
+    const uses = identifiers(root).filter(
+      (n) => n.text === "Found" && n.parent?.kind !== ALNodeKind.variable_declaration,
+    );
+    const use = uses[uses.length - 1];
+    if (use === undefined) throw new Error("no use of Found");
+    expect(resolveVarRef(use, ctx)).toBeNull();
+  });
+});
