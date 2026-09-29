@@ -789,6 +789,27 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       const banner = renderConsole(report);
       expect(banner).toContain("  1/M0002 is killed");
       expect(banner).toContain("  1/M0001: R-s1");
+      // The per-mutant table names each row the way `lethal verify --survivors` takes it, since
+      // this run has two batches and a bare M0001 would name two rows.
+      expect(banner).toMatch(/^0\/M0001 /m);
+      expect(banner).toMatch(/^1\/M0001 /m);
+      expect(banner).not.toMatch(/^M0001 /m);
+    });
+
+    test("a single-batch run's table keeps the bare code (R231)", () => {
+      const banner = renderConsole(
+        buildReport(
+          STATICS,
+          seq([
+            setGenerated(1),
+            { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+            scored(mutant("M0001"), 0, "survived"),
+            { type: "session-finished", elapsedMs: 1_000 },
+          ]),
+        ),
+      );
+      expect(banner).toMatch(/^M0001 /m);
+      expect(banner).not.toMatch(/^0\/M0001/m);
     });
   });
 

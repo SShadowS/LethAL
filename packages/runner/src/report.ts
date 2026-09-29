@@ -2732,9 +2732,13 @@ export function renderConsole(r: SessionReport): string {
   lines.push(
     `${pad("mutant", 8)} ${pad("file:line", 34)} ${pad("operator", 28)} ${pad("verdict", 16)} killing test`,
   );
+  // R231: codes restart per batch, so once any row is outside batch 0 the table names each row
+  // `<batchIndex>/<mutantCode>`, the id `lethal verify --survivors` takes. One batch stays bare.
+  const multiBatch = r.mutants.some((m) => m.batchIndex !== 0);
   for (const m of r.mutants) {
+    const id = multiBatch ? mutantRef(m.batchIndex, m.mutantCode) : m.mutantCode;
     lines.push(
-      `${pad(m.mutantCode, 8)} ${pad(`${m.file}:${m.line}`, 34)} ${pad(m.operatorName, 28)} ${pad(m.verdict, 16)} ${m.killingTest ?? ""}`,
+      `${pad(id, 8)} ${pad(`${m.file}:${m.line}`, 34)} ${pad(m.operatorName, 28)} ${pad(m.verdict, 16)} ${m.killingTest ?? ""}`,
     );
     // A short indented line beneath the row rather than a suffix on it: the
     // note (a bisected culprit's identity, a deadline/unstable diagnostic, or
