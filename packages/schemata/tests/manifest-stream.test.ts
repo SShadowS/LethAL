@@ -56,6 +56,25 @@ for (const [name, mutants] of Object.entries(cases)) {
   });
 }
 
+// RUST-03 S4a review M1: `many` above (2,500 short rows) never reaches the writer's flush
+// threshold (`chunk.length > 1 << 20`, 1 MiB), so no existing case compares bytes across a
+// mid-array flush, the path a BaseApp-sized manifest actually uses. Pad each row past 1 KB so the
+// chunk crosses the threshold more than twice well before the end of the array.
+it("streams byte-identically to JSON.stringify across multiple 1 MiB flushes", async () => {
+  const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
+  dirs.push(d);
+  const mutants = Array.from({ length: 3000 }, (_, i) => ({
+    mutantId: i + 1,
+    file: `f${i % 7}.al`,
+    pad: "x".repeat(1000),
+  }));
+  const m = { selectorIds, artifactId: "0".repeat(32), mutants } as never;
+  const expected = `${JSON.stringify(m, null, 2)}\n`;
+  expect(expected.length).toBeGreaterThan(2 * (1 << 20));
+  await writeManifestJson(join(d, "m.json"), m);
+  expect(await readFile(join(d, "m.json"), "utf8")).toBe(expected);
+});
+
 // A write that fails halfway must not leave a file that looks like a whole manifest.
 it("a failed write leaves no manifest and no partial file, and rethrows", async () => {
   const d = await mkdtemp(join(tmpdir(), "lethal-manifest-"));
