@@ -28,6 +28,7 @@ import {
   allProcedureLikes,
   declarationMembers,
   memberArms,
+  objectDeclarationsOf,
   procedureLikeNameNode,
   procedureLikeReturnType,
   varDeclarations,
@@ -157,6 +158,13 @@ export interface SymbolTable {
    *  (Decision 2). */
   uniqueProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
+  /**
+   * R331 (run 003): object declarations wrapped in a `#if` object region (R298's
+   * `preproc_conditional_object`). They are NOT indexed (every other member of this table reads
+   * only `file.root.children`), so a consumer that asks "does the project declare X" must read
+   * them here, or it answers "no" for an object that exists in some build.
+   */
+  readonly unindexedObjects: readonly ALSyntaxNode[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
    * Every field of a table, by the table's own name, INCLUDING fields a project `tableextension`
@@ -395,7 +403,11 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     procedureNames.set(ownerName, byName);
   };
 
+  const unindexedObjects: ALSyntaxNode[] = [];
   for (const file of files) {
+    for (const c of file.root.namedChildren)
+      if (c.rawKind === "preproc_conditional_object")
+        unindexedObjects.push(...objectDeclarationsOf(c));
     for (const objectNode of file.root.children) {
       // R162: enums are indexed for their VALUES only. They declare no procedures and no variables,
       // so they deliberately do not enter `objects` and nothing below needs to know about them.
@@ -480,6 +492,7 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     },
     resolveProcedure,
     resolveProcedureAt,
+    unindexedObjects,
     uniqueProcedure(ownerName, procName) {
       const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
       const [only] = list;

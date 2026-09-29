@@ -3127,3 +3127,148 @@ describe("R330: no typed site from a name a trigger declares in its own header",
     expect(await ops("Tab.Table.al", R330_T2)).toEqual(WANT);
   });
 });
+
+// R331 (run 003): unindexed means unknown, for every member shape and for rule 3. Sources copied
+// byte for byte from the repros pre-committed in the plan's addendum 3. Before the fix: c1 and c1s
+// emitted a `swap-additive` failing `alc` with AL0175 under [X]; c2, c2o and c2x emitted a
+// `validate-to-assign` that assigns a field that does not exist (AL0132) in every build.
+const R331_C1 = `codeunit 50100 "Repro R331C1"
+{
+#if X
+    procedure Foo(V: Text): Text
+    begin
+        exit(V + V);
+    end;
+#endif
+
+    var
+        v: Integer;
+}
+`;
+const R331_C1S = `codeunit 50100 "Repro R331C1S"
+{
+#if X
+    procedure Foo(V: Text): Text
+    begin
+        exit(V + V);
+    end;
+#endif
+
+    var
+        V: Integer;
+}
+`;
+const R331_C2_CU = `codeunit 50100 "Repro R331C2"
+{
+    procedure Pick()
+    var
+        R: Record "Repro Tab C2";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}
+`;
+const R331_C2_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+#if X
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+#else
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+#endif
+}
+`;
+const R331_C2O_TAB = `#if X
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+const R331_C2X_TAB = `table 50101 "Repro Tab C2"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+    }
+}
+`;
+const R331_C2X_EXT = `#if X
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#else
+tableextension 50102 "Repro Tab C2 Ext" extends "Repro Tab C2"
+{
+    procedure Validate(A: Integer; B: Integer)
+    begin
+    end;
+}
+#endif
+`;
+
+describe("R331: no typed site in an unindexed member, and rule 3 sees #if-wrapped declarations", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const ops = async (files: Record<string, string>) =>
+    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+
+  test("c1: no swap-additive inside a #if-wrapped plain procedure (global in other casing)", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C1 })).toEqual(["lethal.empty-block"]);
+  });
+  test("c1s: nor with the global in the same casing", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C1S })).toEqual(["lethal.empty-block"]);
+  });
+  const C2_WANT = ["lethal.empty-block", "lethal.void-method-call"];
+  test("c2: a #if-wrapped table Validate stops validate-to-assign", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C2_CU, "Tab.Table.al": R331_C2_TAB })).toEqual(
+      C2_WANT,
+    );
+  });
+  test("c2o: so does a table wrapped whole in #if", async () => {
+    expect(await ops({ "Repro.Codeunit.al": R331_C2_CU, "Tab.Table.al": R331_C2O_TAB })).toEqual(
+      C2_WANT,
+    );
+  });
+  test("c2x: so does a #if-wrapped tableextension", async () => {
+    expect(
+      await ops({
+        "Repro.Codeunit.al": R331_C2_CU,
+        "Tab.Table.al": R331_C2X_TAB,
+        "TabExt.TableExt.al": R331_C2X_EXT,
+      }),
+    ).toEqual(C2_WANT);
+  });
+});

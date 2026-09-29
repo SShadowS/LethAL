@@ -288,3 +288,29 @@ ${local}
     expect(resolveVarRef(useOf(root, "Amt"), ctx)?.typeText).toBe("Text");
   });
 });
+
+// R331 (run 003): a local of a plain procedure wrapped whole in `#if` resolves to nothing, never
+// to the global.
+describe("resolveVarRef: a #if-wrapped plain procedure (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  it("its local resolves to null, not to the global", () => {
+    const { root, ctx } = load(`codeunit 50206 "R"
+{
+    var
+        AMT: Integer;
+
+#if X
+    procedure P()
+    var
+        Amt: Text;
+    begin
+        Amt := 'x';
+    end;
+#endif
+}
+`);
+    expect(resolveVarRef(useOf(root, "Amt"), ctx)).toBeNull();
+  });
+});

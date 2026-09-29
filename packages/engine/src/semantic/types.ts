@@ -16,7 +16,7 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { findEnclosingProcedure, procedureLikeNameNode } from "../ast/tree-walks";
+import { findEnclosingProcedure } from "../ast/tree-walks";
 import {
   enclosingObjectScopeKey,
   enclosingTrigger,
@@ -258,12 +258,13 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
     // global var section) types NOTHING. The name fallback would answer with another procedure's
     // declarations, and falling through to the globals typed its parameters by the object's
     // globals: an `alc`-failing swap. A plain procedure keeps the name fallback it had.
-    const plain = proc.kind === ALNodeKind.procedure;
-    const procSym =
-      symbols.resolveProcedureAt(scope, proc.startIndex) ??
-      (plain ? symbols.resolveProcedure(scope, procedureLikeNameNode(proc)?.text ?? "") : null);
-    if (procSym === null && !plain) return null;
-    if (procSym !== null) {
+    // R331 (run 003): a member the table did not index, of ANY shape, types nothing. That covers a
+    // plain procedure wrapped whole in `#if`: the name fallback would answer with another same-named
+    // procedure's declarations, and falling through reached the object's globals (with R322, also
+    // a differently-cased one), an `alc`-failing swap.
+    const procSym = symbols.resolveProcedureAt(scope, proc.startIndex);
+    if (procSym === null) return null;
+    {
       // R302: a name a split member's arms declare differently types as nothing, and it HIDES a
       // global of that name: falling through would type it by a declaration no build uses here.
       if (procSym.ambiguous?.includes(stripQuotes(node.text).toLowerCase())) return null;

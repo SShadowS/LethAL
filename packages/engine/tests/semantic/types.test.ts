@@ -618,3 +618,36 @@ ${local}
     expect(typeAt(src("", "AMT"), "Amt")).toBe("Integer");
   });
 });
+
+// R331 (run 003): a plain procedure wrapped whole in `#if` is not indexed, so its own names are
+// unknown. Before, type resolution tried a same-named procedure's declarations and then the
+// object's globals (with R322, also one in other casing): `V + V` became an `alc`-failing `V - V`.
+describe("buildTypeTable: inside an unindexed plain member nothing types (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (global: string, overload = "") => `codeunit 50100 "Repro C1"
+{
+${overload}#if X
+    procedure Foo(V: Text): Text
+    begin
+        exit(V + V);
+    end;
+#endif
+
+    var
+        ${global}: Integer;
+}
+`;
+  it("a global in other casing does not type a wrapped member's parameter", () => {
+    expect(typeAt(src("v"), "V")).toBeNull();
+  });
+  it("nor one in the same casing (master's older form)", () => {
+    expect(typeAt(src("V"), "V")).toBeNull();
+  });
+  it("nor a same-named direct procedure's parameter (the removed name fallback)", () => {
+    const direct =
+      "    procedure Foo(V: Integer): Integer\n    begin\n        exit(V);\n    end;\n\n";
+    expect(typeAt(src("G", direct), "V")).toBeNull();
+  });
+});

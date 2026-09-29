@@ -1191,3 +1191,46 @@ ${global}}`;
     expect(claimsRecordMethod(onlyCall(site), ctx, "SetRange")).toBe(false);
   });
 });
+
+// R331 (run 003): rule 3 reads every declaration of the project, wherever `#if` put it. A table
+// procedure wrapped in `#if`, a whole table wrapped in `#if`, and a wrapped `tableextension` each
+// shadow the built-in; claiming `Validate` there let `validate-to-assign` assign a field that does
+// not exist (AL0132).
+describe("claimsRecordMethod: #if-wrapped declarations shadow the built-in (R331)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const CU = `codeunit 50000 "My Cu"
+{
+    procedure P()
+    var
+        R: Record "Other Table";
+        N: Integer;
+    begin
+        R.Validate(N, 5);
+    end;
+}`;
+  const PROC = "    procedure Validate(A: Integer; B: Integer)\n    begin\n    end;\n";
+  const TABLE = (body: string) =>
+    `table 50001 "Other Table"\n{\n    fields { field(1; "No."; Code[20]) { } }\n\n${body}}\n`;
+  const claims = (...files: string[]) => {
+    const root = parseClean(CU);
+    const ctx = projectContextFor([root, ...files.map((f) => parseClean(f))]);
+    return claimsRecordMethod(onlyCall(root), ctx, "Validate");
+  };
+
+  it("control: a table without that procedure is claimed", () => {
+    expect(claims(TABLE(""))).toBe(true);
+  });
+  it("REFUSES when the table's procedure is wrapped in #if", () => {
+    expect(claims(TABLE(`#if X\n${PROC}#else\n${PROC}#endif\n`))).toBe(false);
+  });
+  it("REFUSES when the whole table is wrapped in #if", () => {
+    const t = TABLE(PROC);
+    expect(claims(`#if X\n${t}#else\n${t}#endif\n`)).toBe(false);
+  });
+  it("REFUSES when a #if-wrapped tableextension declares it", () => {
+    const ext = `tableextension 50002 "Other Ext" extends "Other Table"\n{\n${PROC}}\n`;
+    expect(claims(TABLE(""), `#if X\n${ext}#else\n${ext}#endif\n`)).toBe(false);
+  });
+});

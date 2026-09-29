@@ -42,11 +42,10 @@
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import {
+  allProcedureLikes,
   declarationMembers,
   findEnclosingProcedure,
   isProcedureLike,
-  procedureLikeNameNode,
-  swallowedSplitMembers,
 } from "../ast/tree-walks";
 import type { SemanticContext } from "./context";
 import {
@@ -516,12 +515,11 @@ export function lookupVar(
     // what it answered before, so the fallback cannot regress a project that has no overloads.
     // R327: an unindexed split member (swallowed into the global var section) resolves nothing,
     // neither by name nor through the globals below. See `resolveIdentifierType` (types.ts).
-    const plain = procedure.kind === ALNodeKind.procedure;
-    const symbol =
-      symbols.resolveProcedureAt(objectName, procedure.startIndex) ??
-      (plain ? nameOf(procedure, symbols, objectName) : null);
-    if (symbol === null && !plain) return null;
-    if (symbol !== null) {
+    // R331 (run 003): an unindexed member of ANY shape resolves nothing, neither by name nor
+    // through the globals below. See `resolveIdentifierType` (types.ts).
+    const symbol = symbols.resolveProcedureAt(objectName, procedure.startIndex);
+    if (symbol === null) return null;
+    {
       // R302: an ambiguous name resolves to nothing, and never to a global of that name.
       if (symbol.ambiguous?.includes(name.toLowerCase())) return null;
       const local = symbol.locals.find(matches);
@@ -595,7 +593,9 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
  */
 function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
   // R327: a split member swallowed into the global var section is still a member of the object.
-  for (const member of [...declarationMembers(objectNode), ...swallowedSplitMembers(objectNode)]) {
+  // R327, R331: every procedure-like declaration counts, wherever the grammar put it: a direct
+  // member, one swallowed by the global var section, or one wrapped whole in `#if`.
+  for (const member of allProcedureLikes(objectNode)) {
     if (!isProcedureLike(member)) continue;
     for (const nameNode of member.children.filter((c) => c.fieldName === "name"))
       if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
@@ -639,6 +639,24 @@ function projectDeclaresProcedureOnTable(
 ): boolean {
   const table = resolveTable(symbols, tableRef);
   if (table !== null && declaresProcedure(table.node, procName)) return true;
+  // R331 (run 003): a table or `tableextension` wrapped whole in a `#if` object region (R298) is not
+  // in the index, but it is still the project's. Its procedures shadow the built-in too.
+  const names = [tableRef, ...(table !== null ? [table.name, String(table.id)] : [])];
+  for (const o of symbols.unindexedObjects) {
+    const own =
+      o.kind === ALNodeKind.table &&
+      names.some(
+        (n) =>
+          equalsIgnoreCase(stripQuotes(o.childForFieldName("object_name")?.text ?? ""), n) ||
+          (o.childForFieldName("object_id")?.text ?? "") === n,
+      );
+    const ext =
+      o.kind === ALNodeKind.tableextension &&
+      names.some((n) =>
+        equalsIgnoreCase(stripQuotes(o.childForFieldName("base_object")?.text ?? ""), n),
+      );
+    if ((own || ext) && declaresProcedure(o, procName)) return true;
+  }
   // Match extensions on the table's resolved NAME when we have one (so the `Record 50004` id
   // spelling still finds `extends "The Table"`), and on the raw reference otherwise.
   if (table !== null && extensionDeclaresProcedure(symbols, table.name, procName)) return true;
@@ -763,18 +781,4 @@ function lower(s: string): string {
 
 function equalsIgnoreCase(a: string, b: string): boolean {
   return lower(a) === lower(b);
-}
-
-/**
- * The legacy name-keyed lookup, kept only as `lookupVar`'s fallback. See the R210 comment there for
- * why the positional lookup is tried first and why this cannot be removed outright.
- */
-function nameOf(
-  procedure: ALSyntaxNode,
-  symbols: SymbolTable,
-  objectName: string,
-): ProcedureSymbol | null {
-  const nameNode = procedureLikeNameNode(procedure);
-  if (nameNode === null) return null;
-  return symbols.resolveProcedure(objectName, stripQuotes(nameNode.text));
 }
