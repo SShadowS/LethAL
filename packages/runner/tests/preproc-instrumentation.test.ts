@@ -2304,7 +2304,7 @@ ${b}
     expect(await ordinals(file(RENAMED, PRE))).toEqual(["#0", "Pick#0"]);
   });
 
-  test("both line maps, built from the EMITTED target, name every dispatch line of a named split member and none of a renamed one", async () => {
+  test("both line maps, built from the EMITTED target, name every dispatch line of a split member, a renamed one by its first coverage name (R318)", async () => {
     // Fenced bcdev (`buildLineMap` over the instrumented dir) and al-runner's Cobertura index both
     // read the emitted source, whose lines differ from SRC. al-runner's --server path does not
     // use a line map at all (`st.scope`), so it needs a probe of its own.
@@ -2328,8 +2328,14 @@ ${b}
         const to = (ends[i] ?? 0) - 1;
         for (let n = from; n <= to; n++) {
           if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
-          expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
-          expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
+          expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([
+            n,
+            x === renamed ? "Pick2" : x.name,
+          ]);
+          expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([
+            n,
+            x === renamed ? "Pick2" : x.name,
+          ]);
           checked++;
         }
       }
@@ -3791,5 +3797,192 @@ describe("R318: a renamed split member carries its coverage names, and no identi
       "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
       "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1|1",
     ]);
+  });
+  const R318_R10 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+
+  test("both line maps, from the EMITTED target, name a renamed member by its first coverage name", async () => {
+    // Line-based sources place a line by position, so this holds in EVERY build, a dropped name
+    // included. The boundaries are the `#if R318A` / `procedure Plain(` lines of the emitted text.
+    const cases: [string, string, string[]][] = [
+      ["r1", R318_R1, ["Pick", "Plain"]],
+      ["r3", R318_R3, ["Pick", "Choose", "Plain"]],
+      ["r4", R318_R4, ["Alpha", "Gamma"]],
+    ];
+    for (const [label, src, owners] of cases) {
+      const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-"));
+      try {
+        await writeFile(join(dir, "Repro.Codeunit.al"), text);
+        const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        const alr = await buildAlRunnerCoverageIndex(dir);
+        expect(alr.refusedFiles).toEqual([]);
+        const out = text.split("\n");
+        const starts = out.flatMap((l, k) =>
+          l.startsWith("#if R318A") || l.startsWith("    procedure Plain(") ? [k + 1] : [],
+        );
+        expect([label, starts.length]).toEqual([label, owners.length]);
+        const ends = [...starts.slice(1), out.length + 1];
+        let checked = 0;
+        for (const [i, who] of owners.entries()) {
+          const renamed = who !== "Choose" && who !== "Plain";
+          // The compiled arm's name as the server would send it in build [] (measured): the member's
+          // `#else` arm, or the member's own name for an ordinary procedure.
+          const scope =
+            label === "r4" ? (who === "Alpha" ? "Beta" : "Gamma") : renamed ? "Choose" : who;
+          for (let n = starts[i] ?? 0; n < (ends[i] ?? 0); n++) {
+            if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
+            expect([label, n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([label, n, who]);
+            expect([label, n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([label, n, who]);
+            expect([label, n, alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope)]).toEqual([
+              label,
+              n,
+              renamed ? who : undefined,
+            ]);
+            checked++;
+          }
+        }
+        expect(checked).toBeGreaterThan(owners.length);
+        for (const m of manifest.mutants) {
+          const first = m.coverageArmNames?.[0];
+          if (first !== undefined) expect(owners).toContain(first);
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a line two members share names nobody; the re-key needs the member's own arm name (R318, review r2)", async () => {
+    // r10 as written: line 12 holds the renamed member's `exit(K); end;` AND all of `Other`. The
+    // ORIGINAL text stands in for an emission in which `Other` got no mutant (operator narrowing),
+    // which leaves that line exactly as written (measured, R-318 plan, emit-r10-ra).
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-shared-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), R318_R10);
+      const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      const alr = await buildAlRunnerCoverageIndex(dir);
+      for (const map of [bcdev, alr.lineMap]) {
+        expect([10, 11, 12, 16].map((n) => map.lookup("Codeunit", 50100, n))).toEqual([
+          "Pick",
+          "Pick",
+          undefined, // shared: names nobody, NOT the first span (Pick) and not Other either
+          "After",
+        ]);
+      }
+      const at = (n: number, scope: string) =>
+        alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope);
+      expect(at(11, "Choose")).toBe("Pick"); // inside the member only, an own arm name: re-keyed
+      expect(at(11, "PICK")).toBe("Pick"); // case-insensitive, as AL is
+      expect(at(11, "Other")).toBeUndefined(); // not an own arm name: never re-keyed
+      expect(at(12, "Choose")).toBeUndefined(); // shared line: never re-keyed
+      expect(at(12, "Other")).toBeUndefined();
+      expect(at(16, "After")).toBeUndefined(); // an ordinary member
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Ruling A: the shared-line count takes EVERY declaration span of the object, not only the named
+  // procedures `lookup` can return. Two neighbours checked here: a procedure inside a `#if` wrapper
+  // in the object body, and a trigger. Both repros parse with no ERROR node (asserted), so
+  // `renamedMemberCoverageNames` gives the member its names.
+  const sharedLineCase = async (
+    src: string,
+    lines: { member: number; shared: number; after: number },
+  ): Promise<void> => {
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-shared-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), src);
+      const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      const alr = await buildAlRunnerCoverageIndex(dir);
+      expect(alr.refusedFiles).toEqual([]);
+      for (const map of [bcdev, alr.lineMap]) {
+        expect(
+          [lines.member, lines.shared, lines.after].map((n) => map.lookup("Codeunit", 50100, n)),
+        ).toEqual(["Pick", undefined, "After"]);
+      }
+      const at = (n: number, scope: string) =>
+        alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope);
+      expect(at(lines.member, "Choose")).toBe("Pick");
+      expect(at(lines.shared, "Choose")).toBeUndefined();
+      expect(at(lines.shared, "Pick")).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("a line the renamed member shares with a #if-wrapped procedure names nobody (R318, ruling A)", async () => {
+    // A directive must start its line, so a wrapped procedure can share a line with the member only
+    // inside the same wrapper: line 13 closes the member and holds all of `Wrapped`.
+    const src = `codeunit 50100 "Repro R"
+{
+#if R318B
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; procedure Wrapped(X: Integer): Integer begin exit(X + 7); end;
+#endif
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+    await sharedLineCase(src, { member: 12, shared: 13, after: 18 });
+  });
+
+  test("a line the renamed member shares with a trigger names nobody (R318, ruling A)", async () => {
+    // Line 12 closes the member and holds all of `OnRun`. A trigger is never named, so without
+    // ruling A this line would go to the member.
+    const src = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; trigger OnRun() begin Glob := 7; end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    await sharedLineCase(src, { member: 11, shared: 12, after: 16 });
   });
 });

@@ -621,12 +621,14 @@ describe("R301: a split-header procedure has a coverage span", () => {
     for (const line of [3, 7, 9]) expect(m.lookup("Codeunit", 50100, line)).toBe("First");
   });
 
-  test("an arm that renames the procedure names neither arm", () => {
+  test("an arm that renames the procedure is named by its first coverage name, in every build (R318)", () => {
+    // Before R318 these lines named nobody. `AIf` is the first name no other declaration of the
+    // object uses, which the manifest lists first in `coverageArmNames`; a line belongs to the
+    // member whichever arm is compiled, so the other arm's name is never returned.
     const m = mapFor(R301_SPLIT("AIf", "AElse"));
     for (const line of [19, 20]) {
-      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AIf");
       expect(m.lookup("Codeunit", 50100, line)).not.toBe("AElse");
-      expect(m.lookup("Codeunit", 50100, line)).toBeUndefined();
+      expect(m.lookup("Codeunit", 50100, line)).toBe("AIf");
     }
   });
 });

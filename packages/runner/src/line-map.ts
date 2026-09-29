@@ -7,7 +7,9 @@ import {
   isProcedureLike,
   objectDeclarationsOf,
   parseAL,
+  procedureLikeArmNames,
   procedureLikeNameNode,
+  renamedMemberCoverageNames,
   wrapRoot,
 } from "@lethal/engine";
 
@@ -29,6 +31,12 @@ interface ProcedureSpan {
   readonly name: string;
   readonly firstLine: number;
   readonly lastLine: number;
+  /**
+   * R318: set only on a split member whose `#if` arms RENAME it (spanned under its first coverage
+   * name): every arm's own name, lower-cased. The server re-key accepts only a producer scope
+   * that is one of these.
+   */
+  readonly arms?: readonly string[];
 }
 
 interface ObjectLines {
@@ -50,6 +58,16 @@ interface ObjectLines {
    * evidence that attribution failed in this object.
    */
   readonly triggers: readonly ProcedureSpan[];
+  /** R318: the renamed members' spans only, so an object with none answers `renamedMemberAt` at once. */
+  readonly renamed: readonly ProcedureSpan[];
+  /**
+   * R318 (review r2, ruling A): lines inside MORE THAN ONE declaration span. Spans are inclusive
+   * and one physical line can close one member and hold the next (`end; procedure Other() begin
+   * ... end;`). Counted over EVERY declaration of the object: named procedures, renamed split
+   * members with or without a coverage name, `#if`-wrapped and var-swallowed procedures, and
+   * triggers. Such a line names nobody: neither `lookup` nor the re-key may pick a side.
+   */
+  readonly shared: ReadonlySet<number>;
 }
 
 /** Key for the `(objectType, objectId)` pair. Never the bare id: a table and a codeunit may share
@@ -263,8 +281,45 @@ export class LineMap {
     // Line 0 is BC's object-level row. Deliberately checked before the span scan so it can never
     // fall inside a procedure whose range happens to start at 0 through some future bug.
     if (lineNo <= 0) return undefined;
+    // R318 (review r2): a line inside two spans belongs to neither as far as a LINE can tell.
+    if (entry.shared.has(lineNo)) return undefined;
     for (const p of entry.procedures) {
       if (lineNo >= p.firstLine && lineNo <= p.lastLine) return p.name;
+    }
+    return undefined;
+  }
+
+  /**
+   * R318: the coverage name of the RENAMED split member whose span alone holds `lineNo`, when
+   * `scope` (the producer's own name for the statement, al-runner `--server`'s `st.scope`) is one
+   * of that member's arm names. Else `undefined`, and the caller keeps `scope`.
+   *
+   * Why re-key at all: the producer names the COMPILED arm, which the collision rule may have
+   * dropped (`r3` build `[]`: `Choose`) and which in another build can be another declaration's
+   * name (`r4`: `Beta`). Keying by POSITION to the span's name is what makes the server legs agree
+   * with the line-based ones in every build.
+   *
+   * Why the two refusals: a line two declarations share can hold the other one's statement
+   * (`r10`: `OtherOnly` reports line 12 with scope `Other`), and a scope the member does not
+   * declare is, by the producer's own account, some other member's statement.
+   *
+   * Cost: one map read and an empty-list exit for every object without a renamed member, which is
+   * every object in every measured corpus.
+   */
+  renamedMemberAt(
+    objectType: string,
+    objectId: number,
+    lineNo: number,
+    scope: string | undefined,
+  ): string | undefined {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined || entry.renamed.length === 0) return undefined;
+    if (scope === undefined || lineNo <= 0 || entry.shared.has(lineNo)) return undefined;
+    const own = scope.toLowerCase();
+    for (const p of entry.renamed) {
+      if (lineNo >= p.firstLine && lineNo <= p.lastLine) {
+        return p.arms?.includes(own) === true ? p.name : undefined;
+      }
     }
     return undefined;
   }
@@ -282,6 +337,8 @@ export class LineMap {
 function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
   const procedures: ProcedureSpan[] = [];
   const triggers: ProcedureSpan[] = [];
+  /** R318 ruling A: renamed split members with no coverage name. Never named, but counted for `shared`. */
+  const unnamed: ProcedureSpan[] = [];
   const span = (n: ALSyntaxNode, name: string): ProcedureSpan => ({
     name,
     firstLine: n.startPosition.row + 1 - baseLine + 1,
@@ -296,23 +353,55 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
       return;
     }
     // R301, R316: a split-header procedure, either shape, is one procedure (one shared body). Its
-    // span starts at the `#if` line, which holds no code, so no covered line can land there. An arm
-    // that renames the procedure gets no span: which name is compiled is not known here.
+    // span starts at the `#if` line, which holds no code, so no covered line can land there.
+    // R318: an arm that renames the procedure is spanned under its first coverage name, one no
+    // other declaration of the object uses (`renamedMemberCoverageNames`), which the manifest
+    // lists first in `coverageArmNames`. A line belongs to the member whichever arm was compiled,
+    // so this holds in every build. No such name: no named span, as before R318.
     if (isProcedureLike(n)) {
       const nameNode = procedureLikeNameNode(n);
-      const name = nameNode === null ? null : stripQuotes(nameNode.text);
+      const name =
+        nameNode === null ? (renamedMemberCoverageNames(n)[0] ?? null) : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its
         // closing `end;`, so the node's own line extent is exactly the right range.
-        procedures.push(span(n, name));
+        const arms =
+          nameNode === null ? procedureLikeArmNames(n).map((a) => a.toLowerCase()) : undefined;
+        procedures.push({ ...span(n, name), ...(arms !== undefined ? { arms } : {}) });
+      } else if (n.children.length > 0) {
+        // Ruling A. A bare `procedure` keyword token is also procedure-like (no children, not a
+        // declaration): it spans nothing.
+        unnamed.push(span(n, ""));
       }
       return; // do not descend: a nested construct belongs to this procedure, not its own span
     }
     for (const c of n.children) walk(c);
   };
   walk(objectRoot);
-  return { procedures, triggers };
+  return {
+    procedures,
+    triggers,
+    renamed: procedures.filter((p) => p.arms !== undefined),
+    shared: linesInTwoSpans([...procedures, ...unnamed, ...triggers]),
+  };
 }
+
+/**
+ * R318: every line inside at least two of `spans`. Declarations are siblings and never nest, so
+ * two overlap only where one ends on the line the next begins; the running furthest end keeps it
+ * right even if they did. Usually no line at all: the empty set is shared.
+ */
+function linesInTwoSpans(spans: readonly ProcedureSpan[]): ReadonlySet<number> {
+  const shared = new Set<number>();
+  let reach = 0;
+  for (const s of [...spans].sort((a, b) => a.firstLine - b.firstLine)) {
+    for (let l = s.firstLine; l <= Math.min(reach, s.lastLine); l++) shared.add(l);
+    reach = Math.max(reach, s.lastLine);
+  }
+  return shared.size === 0 ? NO_LINES : shared;
+}
+
+const NO_LINES: ReadonlySet<number> = new Set();
 
 function stripQuotes(s: string): string {
   return s.startsWith('"') && s.endsWith('"') && s.length >= 2 ? s.slice(1, -1) : s;
