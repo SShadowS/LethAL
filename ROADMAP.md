@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**87 of 322 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 323 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -367,6 +367,7 @@ that ordering is the priority.
 - **R326** · Stubbing out `astSubtreeHash` cuts about 1.8 GB from the W8 manifest-row transient, but a single-pass hash that builds no canonical string saves nothing; the real source of that 1.8 GB is unknown · [R326.md](docs/roadmap/R326.md) · open, filed 2026-09-29
 - **R328** · After RUST-03, the JSC heap still holds 2,230 MB of free capacity after a full GC at the peak of the W8 manifest-row phase, above the 2,000 MB RUST-03 pre-committed · [R328.md](docs/roadmap/R328.md) · open, filed 2026-09-29
 - **R329** · `lethal run --dry-run` on the Base Application takes a median 494 s on the final RUST-03 tree, about 104 s (27%) longer than the native median at RUST-03's S0 (390 s); the cause is not known · [R329.md](docs/roadmap/R329.md) · open, filed 2026-09-29
+- **R332** · A deleted live-gate baseline re-records itself on the next run and the gate passes, for every gate but R321's symbol legs · [R332.md](docs/roadmap/R332.md) · open, filed 2026-09-29
 
 ---
 
