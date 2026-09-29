@@ -69,7 +69,118 @@ shape), its peak median is at least 20% lower, AND W2's peak median is not more 
 AND nodes are equal. Otherwise external stays.
 
 ## OUTCOME
-(filled in by S5)
+Written by S5, 2026-09-29. Every figure below is quoted from AMENDMENTs 1 to 10 above,
+`docs/measurements/2026-09-28-rust-03-s3.md` (S3), `docs/measurements/2026-09-28-rust-02-native-parser-gates.md`
+(RUST-02) or the RUST-01 pre-commitment's baseline table, as each line names.
+
+### Switch gates (S3, switch commit `9f7cb5f0`, S3 base `37190d5`; source: S3 and AMENDMENT 3)
+
+- Q1 structure: **MATCHED**. 0 differing files on every fixture, the grammar probe, the 12 controls,
+  do, dc, sentinel, bcf, sysapp and whole BaseApp (9,620 files, 31,135,464 nodes); kind tables equal.
+  One native difference found on the first run (`childForFieldName` on an ERROR node) was fixed in
+  `443c6d3` before the gate held.
+- Q2 identity: **MATCHED**. Census rows 0 moved on all 12 sets, native against WASM at `37190d5`;
+  identity listings byte-identical on every set; whole BaseApp `eeb5e3e2...`, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Native W2 completed in one pass, sha256 `153bac07...`,
+  equal to RUST-02's.
+- Q3 emission: **MATCHED**. `fixture-emission.test.ts` unchanged and passing on the switched tree
+  (5 pass, 0 fail).
+- Q4 R-236c: **MATCHED**. `testpage-scan.test.ts` 94 pass / 0 fail; the native leak test passed 5 runs
+  in a row and went red (`Received: 3000` against `<= 16`) with every result retained; the ten-corpus
+  census identical on both sides, BaseApp refused 11,179.
+- Q5 unit suite: **MATCHED**. 4,250 / 7 / 1 todo / 0 fail before, 4,251 / 7 / 0 / 0 after (the todo
+  is the no-WASM-in-product test, flipped to a real test by the switch).
+- Q6 live: **MATCHED**, Cronus28 lease 064, control app 1.0.0.20 (the plan named 1.0.0.19; 1.0.0.20
+  is master's `MIN_CONTROL_VERSION`), al-runner v2.11.0. `itest:bcdev` 3 / 12 / 4; `itest:chunked`
+  both legs 17 / 7 / 2, control 9 / 33, chunked 5 / 57; `itest:alrunner` 3 / 12 / 4 on all four legs;
+  `itest:tables` 301 / 68 / 18, per-mutant equal to its frozen figures (not deferred).
+- Q7 release: **MATCHED**. Trial run 36470754962 on `9f7cb5f`: all five `native-parser` jobs, the
+  darwin-x64 Intel load check, `build` and all five `smoke` jobs succeeded; `publish` skipped by
+  design on a non-tag run.
+
+### Transfer-buffer decision (S1.4; AMENDMENT 2 and its clarification)
+
+**"owned" replaced "external".** W1 peak median 1,255 MB against 1,921 (34.7% lower; the bar was
+at least 20%), W2 peak median 9,980 against 9,901 (0.8% higher; the bar was not more than 5%), nodes
+equal (31,135,464) and W2 byte-identical (`153bac07...`) on all six runs. The clarification records
+that `measure-peak.ts` wrapped RUST-02's `gate2.ts`, and the exact commands.
+
+### Ceilings, WASM and native side by side (peak MB, median of 3 unless said)
+
+| workload | ceiling | WASM | native at S0 | native final (`5e8a537d`, AMENDMENT 10) | result |
+| --- | ---: | --- | --- | ---: | --- |
+| W2, census, whole BaseApp | 16,384 | does not complete: aborted after 21.26 s, peak 4,459 MB (RUST-01 baseline table; R292) | 8,957 (RUST-02 clang; S0 took no W2) | **10,112** | **MET** |
+| W4, dry-run, Base Application | 16,384 | 17,235 (AMENDMENT 1), over the ceiling on every run | 5,202 (AMENDMENT 1) | **5,001** | **MET** |
+| W8, spec-level identity capture | 16,384 | 17,847 (AMENDMENT 1), over | 17,161 (AMENDMENT 1), over | **11,798** | **MET** |
+| W9, W8 with the product manifest writer | 16,384 | did not complete: died at 13.0 GB in `JSON.stringify` (AMENDMENT 10, R311) | not taken | **9,969** | **MET**, patch audit PASS, streaming check PASS (1,687,722 rows = deployed) |
+
+**No W8 memory win is claimed.** A win was pre-committed only at or below 8,192 MB; the final
+median is 11,798 MB (AMENDMENT 10). W4's win over WASM is on W4's own runs; W2 is a census result
+only and is never a W4 or product-wide result.
+
+### Speed, recorded, not gating
+
+- W1 parse, whole BaseApp: median 15,378 ms native (AMENDMENT 10), against RUST-02's same-day WASM
+  parse-only 14,910 ms and clang `parseFlat` 13,354 ms (RUST-02).
+- W2 wall: 89.63 s native final (AMENDMENT 10); RUST-02 clang 100.05 s. WASM does not complete.
+- W3a wall (BaseApp/Source): clang 41.93 s against WASM 157.29 s (RUST-02; not re-measured in RUST-03).
+- W4 wall: 493.72 s native final (AMENDMENT 10), against 389.99 s native and 384.87 s WASM at S0
+  (AMENDMENT 1). About 104 s slower than S0 native, cause unknown: filed as R329.
+- W8 wall: 1,573 s to 186 s median with S4.2a, 8.5 times faster (AMENDMENT 5); 182.80 s final
+  (AMENDMENT 10).
+
+### S4 sub-tasks
+
+- S4.1 (R311): the streamed manifest writer `054a9774`; its review's stale-manifest fix, `e1901ccc`,
+  removes any old manifest before a rewrite. W9 above is its measurement.
+- S4.2a (lead E, AMENDMENTs 4 and 5): **MISSED on memory**. W8 median 16,799 MB against at or below
+  13,000; E 5,835 MB against at or below 1,000. W4 unchanged as predicted (5,383, MET). The fix
+  (`167f540c`) stays: it removed B's second row copy and gave the 8.5x W8 wall win.
+- S4.2c (lead A, AMENDMENTs 6 and 7): **all MET**. W8 median 11,778 (at or below 15,850), W4 4,737
+  (at or below 5,030), A 410 MB on W8 (at or below 1,400) and 238 MB on W4 (at or below 550). Fix
+  `7cf75051`.
+- S4.2d (`astSubtreeHash`, AMENDMENTs 8 and 9): the three guards **held** (golden test, corpus
+  differential with 0 differences, identity listing unchanged), but **E (4,377 against at or below
+  2,900) and W8 (12,179 against at or below 10,500) were MISSED**; W4 MET. The fix saved no memory
+  and was **REVERTED** after AMENDMENT 9 (`fdf15987`, `f4062896`); the golden test `815b9db8` is
+  kept. The stub's about 1.8 GB saving did NOT come from building the canonical string, so its
+  source is unknown: filed as R326.
+- S4.2b (lead F, AMENDMENT 10): **MISSED**, F = 2,230 MB against at or below 2,000. No fix inside
+  RUST-03, as pre-committed: filed as R328.
+
+### Roadmap
+
+Closed: R292 (`done (9f7cb5f0)`), R311 (`done (054a9774)`), R314 (closed 2026-09-29, superseded by
+RUST-02/RUST-03). Filed: R326 (the stub's 1.8 GB), R328 (F 2,230 MB), R329 (W4 wall +104 s).
+
+### Scratch inventory (2026-09-29; `du -sh`)
+
+NOTHING WAS DELETED. The owner has not cleared any of these for removal; the plan's Step 4 clean-up
+is replaced by this list. The owner keeps `U:/Git/LethAL-wt/rust-02` and `U:/rust03-s3` until
+RUST-03 is accepted. `$S` is
+`C:/Users/SShadowS/AppData/Local/Temp/claude/U--Git-LethAL-wt-lane-code/a2d0a920-a34b-42d9-8875-ba97d0ae0889/scratchpad/rust03`;
+`$R2` is the same scratchpad's `rust02` (S0.2 report).
+
+| path | size | what it is | status |
+| --- | ---: | --- | --- |
+| `U:/rust03-s3` | 4.9G | S3 gate harness and logs (plain directory) | present; the owner keeps it until RUST-03 is accepted |
+| `U:/rust03-s42a` | 3.6G | S4.2a before/after harness trees | present, awaiting the owner |
+| `U:/rust03-s42c` | 3.3G | S4.2c harness trees | present, awaiting the owner |
+| `U:/rust03-s42d` | 3.5G | S4.2d harness trees | present, awaiting the owner |
+| `U:/rust03-probe-e` | 4.0G | the lead-E probe trees (AMENDMENT 8's evidence) | present, awaiting the owner |
+| `U:/rust03-s43` | 3.8G | S4.3 harness: `marked`, `prod`, `w8`, `w9` (each a standalone clone with its own `.git`, not a registered worktree), the W9 audit | present, awaiting the owner |
+| `$S` | 9.1G | S0.2 and later scratch: diffs, harness copies, logs, `owned.node`, `crate-owned` (38K), heap snapshots; includes `w2-wt` | present, awaiting the owner |
+| `$S/w2-wt` | 165M | S1.4's W2 worktree; deregistered from git, directory left behind (`Filename too long` in `node_modules`) | present (inside `$S`), not registered |
+| `$S/nat-wt`, `$S/wasm-wt`, `$S/wasm-cap-wt` | none | S0.2's three worktrees; their diffs are kept under `$S` (`final-*-wt.diff`) | absent on 2026-09-29 and not in `git worktree list`; removed outside S5 |
+| `$R2/cap-wt`, `$R2/head-wt` | none | RUST-02's two worktrees (RUST-02 concern 6) | absent on 2026-09-29 (`$R2` itself does not exist) and not in `git worktree list` |
+| `U:/Git/LethAL-wt/rust-01` | 0 | empty directory skeleton (`node_modules`, `packages/*`), no files, no `.git` | present, not a registered worktree |
+| `U:/Git/LethAL-wt/rust-02` | 161M | registered worktree, `lethal/rust-02` at `9ec3d21c`, 17 uncommitted paths (RUST-02's carry-in) | present; the owner keeps it until RUST-03 is accepted |
+| `U:/Git/LethAL-wt/rust-03` | 853M | this worktree, `lethal/rust-03` | present, in use |
+| `C:/Users/SShadowS/.cache/lethal-native-target` | 294M | the shared `CARGO_TARGET_DIR` (`clang/`); S1.1's leftover `cl-redcheck` is no longer there | present |
+
+Also left for the owner, not directories: the local branches `lethal/rust-03-dispatch` and
+`lethal/rust-03-redcheck` (and the remote `lethal/rust-03-redcheck`, S2's red-check), which the
+session's hook would not delete.
 
 ## AMENDMENT 1 (S0 results, before any S4 fix)
 
