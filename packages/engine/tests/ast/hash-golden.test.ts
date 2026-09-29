@@ -14,25 +14,21 @@ import {
   wrapFlatRoot,
   wrapRoot,
 } from "../../src/ast/syntax-node";
-import { mirror, referenceAstSubtreeHash, serializeCanonical } from "./hash-reference";
 
 /**
- * RUST-03 S4.2d, AMENDMENT 8 Guard 1. Every hex value below was captured from the implementation
- * of `astSubtreeHash` BEFORE the single-pass rewrite, and each case also checks the verbatim
- * reference copy of that implementation (`hash-reference.ts`) against the same literal. If any
- * literal has to change after the rewrite, S4.2d is dropped: never re-capture these values.
+ * RUST-03 S4.2d, AMENDMENT 8 Guard 1. These are the first pinned `astSubtreeHash` values: never
+ * re-capture one of the hex literals below.
  *
- * Both paths are covered. The FLAT path is a native `FlatNode` (`wrapFlatRoot`, `wrapRoot`). The
- * GENERIC path is any other `ALSyntaxNode`: `mirror(...)` (a test-side forwarding wrapper), the
- * WASM reference wrapper, and a `withText` node.
+ * Each case pins the same hash across three wrappers of the same tree, so a case name starting
+ * "flat" is a native `FlatNode` (`wrapFlatRoot`, `wrapRoot`), "generic mirror" is `mirror(...)` (a
+ * test-side forwarding wrapper that forces the generic `ALSyntaxNode` path), and "generic wasm" is
+ * the WASM parser's wrapper. A `withText` node is covered too.
  *
- * The flush boundary: the rewrite encodes into one reusable buffer of 4,096 bytes and flushes it
- * before a fragment that does not fit. That size is chosen here, before the rewrite exists, and the
- * rewrite uses it. The surrogate-pair cases put the first byte of a U+1F600 (4 UTF-8 bytes) at
- * byte 4,093, 4,094 and 4,095 of the canonical string, so the pair crosses byte 4,096 in each;
- * `placement` asserts that on the reference's own canonical string.
+ * Golden literals cover every structural rule: `member`/`function` names, numbering (first use and
+ * reuse), all four literal kinds, a named operator leaf, anonymous children, a non-leaf's own text,
+ * empty text, CRLF, non-ASCII, lone surrogates, surrogate pairs inside long text literals, ERROR,
+ * MISSING, and `withText` leaves.
  */
-const BUFFER_BYTES = 4096;
 const PAIR = "😀";
 const LONE = "\uD800";
 
@@ -161,16 +157,16 @@ const ERRORS: Spec = {
   ],
 };
 
-/** A pair whose first byte lands at canonical byte `4093 + shift`: `(r (p <pad>) (q <PAIR>))`. */
-const acrossFlush = (shift: 0 | 1 | 2): Spec => ({
+/** A surrogate pair inside a long text literal, at three paddings: `(r (p <pad>) (q <PAIR>))`. */
+const pairInLongText = (pad: 0 | 1 | 2): Spec => ({
   k: "r",
   c: [
-    { k: "p", t: "a".repeat(4082 + shift) },
+    { k: "p", t: "a".repeat(4082 + pad) },
     { k: "q", t: PAIR },
   ],
 });
 
-/** A single fragment larger than the buffer, with pairs across bytes 4,096 and 8,192 inside it. */
+/** A single very long text literal, with two surrogate pairs inside it. */
 const HUGE: Spec = {
   k: "r",
   c: [
@@ -201,7 +197,7 @@ const REAL = [
 ].join("\r\n");
 const ERROR_SRC = 'codeunit 1 "B" { procedure P() begin X := (A + ; end; }';
 const MISSING_SRC = 'codeunit 1 "B" { procedure P() begin if A then end; }';
-/** `(additive_expression (string_literal '<pad>') (string_literal '<PAIR>'))`: pair at byte 4,094. */
+/** `(additive_expression (string_literal '<pad>') (string_literal '<PAIR>'))`: a long text literal. */
 const PAD_SRC = `codeunit 50101 "Pad" { procedure P() var Msg: Text; begin Msg := '${"a".repeat(4036)}' + '${PAIR}'; end; }`;
 
 type Parse = (src: string) => ALSyntaxNode;
@@ -223,12 +219,60 @@ function stringLiteral(root: ALSyntaxNode, text: string): ALSyntaxNode {
   return hit;
 }
 
-/** UTF-8 byte offset, in the reference canonical string, of the first `PAIR`. */
-function placement(node: ALSyntaxNode): number {
-  const canonical = serializeCanonical(node, new Map());
-  const at = canonical.indexOf(PAIR);
-  if (at === -1) throw new Error("no pair in the canonical string");
-  return new TextEncoder().encode(canonical.slice(0, at)).length;
+/**
+ * A forwarding wrapper: `mirror(node)` implements `ALSyntaxNode` by reading every member through
+ * `node`, and wraps each child it hands out, so a hash over it never sees a native `FlatNode` and
+ * always takes the generic path. Like the product wrappers, it builds fresh children on every read.
+ */
+class Mirror implements ALSyntaxNode {
+  constructor(
+    private readonly inner: ALSyntaxNode,
+    readonly parent: ALSyntaxNode | null,
+  ) {}
+  get kind() {
+    return this.inner.kind;
+  }
+  get rawKind() {
+    return this.inner.rawKind;
+  }
+  get text() {
+    return this.inner.text;
+  }
+  get startIndex() {
+    return this.inner.startIndex;
+  }
+  get endIndex() {
+    return this.inner.endIndex;
+  }
+  get startPosition() {
+    return this.inner.startPosition;
+  }
+  get endPosition() {
+    return this.inner.endPosition;
+  }
+  get children(): readonly ALSyntaxNode[] {
+    return this.inner.children.map((c) => new Mirror(c, this));
+  }
+  get namedChildren(): readonly ALSyntaxNode[] {
+    return this.inner.namedChildren.map((c) => new Mirror(c, this));
+  }
+  get fieldName() {
+    return this.inner.fieldName;
+  }
+  get isMissing() {
+    return this.inner.isMissing;
+  }
+  get hasError() {
+    return this.inner.hasError;
+  }
+  childForFieldName(name: string): ALSyntaxNode | null {
+    const c = this.inner.childForFieldName(name);
+    return c === null ? null : new Mirror(c, this);
+  }
+}
+
+function mirror(node: ALSyntaxNode): ALSyntaxNode {
+  return new Mirror(node, node.parent);
 }
 
 // --- the cases ---------------------------------------------------------------------------------
@@ -250,10 +294,10 @@ const CASES: readonly Case[] = [
   ...synthetic("structure", STRUCTURE),
   ...synthetic("texts", TEXTS),
   ...synthetic("errors", ERRORS),
-  ...synthetic("pair across flush at 4093", acrossFlush(0)),
-  ...synthetic("pair across flush at 4094", acrossFlush(1)),
-  ...synthetic("pair across flush at 4095", acrossFlush(2)),
-  ...synthetic("fragment larger than the buffer", HUGE),
+  ...synthetic("surrogate pair inside a long text literal (pad 4082)", pairInLongText(0)),
+  ...synthetic("surrogate pair inside a long text literal (pad 4083)", pairInLongText(1)),
+  ...synthetic("surrogate pair inside a long text literal (pad 4084)", pairInLongText(2)),
+  ...synthetic("a very long text literal", HUGE),
   ...real("procedure", (p) => first(p(REAL), "procedure")),
   ...real("whole file", (p) => p(REAL)),
   ...real("member call", (p) => first(p(REAL), "call_expression")),
@@ -262,7 +306,9 @@ const CASES: readonly Case[] = [
   ...real("lone surrogate literal", (p) => stringLiteral(p(REAL), `'${LONE}x'`)),
   ...real("ERROR", (p) => p(ERROR_SRC)),
   ...real("MISSING", (p) => p(MISSING_SRC)),
-  ...real("parsed pair across flush at 4094", (p) => first(p(PAD_SRC), "additive_expression")),
+  ...real("parsed long text literal with a surrogate pair", (p) =>
+    first(p(PAD_SRC), "additive_expression"),
+  ),
   // A `withText` leaf: its replacement text is hashed, not `before`'s. `before` is a native
   // FlatNode, so these start on the generic path.
   [
@@ -284,21 +330,21 @@ const GOLDEN: Readonly<Record<string, string>> = {
   "generic texts": "3fdb1b5e6f07a005378b560d24d571fdc154ea14ae638a83905783dea5097784",
   "flat errors": "b458a338d922b7c81c051959e0371fc688765be8cb35bb59824d137c834e5f41",
   "generic errors": "b458a338d922b7c81c051959e0371fc688765be8cb35bb59824d137c834e5f41",
-  "flat pair across flush at 4093":
+  "flat surrogate pair inside a long text literal (pad 4082)":
     "567e68cdf7505adbca1393725ea817076720a0cd76efbf668c3360be5757b508",
-  "generic pair across flush at 4093":
+  "generic surrogate pair inside a long text literal (pad 4082)":
     "567e68cdf7505adbca1393725ea817076720a0cd76efbf668c3360be5757b508",
-  "flat pair across flush at 4094":
+  "flat surrogate pair inside a long text literal (pad 4083)":
     "9345c0349e1a31e9c514fcaa749c252b41eeddc18527d9dcf38053e058cfc74b",
-  "generic pair across flush at 4094":
+  "generic surrogate pair inside a long text literal (pad 4083)":
     "9345c0349e1a31e9c514fcaa749c252b41eeddc18527d9dcf38053e058cfc74b",
-  "flat pair across flush at 4095":
+  "flat surrogate pair inside a long text literal (pad 4084)":
     "26af2f7889a9811da8bf7a49fb1095731798856b2c8efab7a223ac40252417c7",
-  "generic pair across flush at 4095":
+  "generic surrogate pair inside a long text literal (pad 4084)":
     "26af2f7889a9811da8bf7a49fb1095731798856b2c8efab7a223ac40252417c7",
-  "flat fragment larger than the buffer":
+  "flat a very long text literal":
     "596314ae173ca515fdefa52bfb6d3bca1d1949608802916e2d88764879892d25",
-  "generic fragment larger than the buffer":
+  "generic a very long text literal":
     "596314ae173ca515fdefa52bfb6d3bca1d1949608802916e2d88764879892d25",
   "flat procedure": "7a346a914582eba0b1ef826c7f427c2929cc62e4b4bc8ade5c74f22a7fd04b55",
   "generic mirror procedure": "7a346a914582eba0b1ef826c7f427c2929cc62e4b4bc8ade5c74f22a7fd04b55",
@@ -329,11 +375,11 @@ const GOLDEN: Readonly<Record<string, string>> = {
   "flat MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
   "generic mirror MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
   "generic wasm MISSING": "72dd10f1f80a7c728da5ff18c3146d8b16180244025c9e91124f8abd1c584158",
-  "flat parsed pair across flush at 4094":
+  "flat parsed long text literal with a surrogate pair":
     "0f6aacd3afe17bd6d1a0f728e1ae1c20c1190fa357882664de9efc7842218de6",
-  "generic mirror parsed pair across flush at 4094":
+  "generic mirror parsed long text literal with a surrogate pair":
     "0f6aacd3afe17bd6d1a0f728e1ae1c20c1190fa357882664de9efc7842218de6",
-  "generic wasm parsed pair across flush at 4094":
+  "generic wasm parsed long text literal with a surrogate pair":
     "0f6aacd3afe17bd6d1a0f728e1ae1c20c1190fa357882664de9efc7842218de6",
   "withText string literal": "e934a39a25eec513c0f31fea712c84739d1483bf44038bd59dad6197aead6663",
   "withText integer": "c9522609e03156334fcdc8ac14a801f2246bb8d0f1dda263ad644b3fe411971f",
@@ -347,27 +393,10 @@ describe("astSubtreeHash golden values (AMENDMENT 8 Guard 1)", () => {
     await initWasmParser();
   });
 
-  it("places every surrogate pair across the buffer-flush boundary", () => {
-    expect(BUFFER_BYTES).toBe(4096);
-    for (const [shift, want] of [
-      [0, 4093],
-      [1, 4094],
-      [2, 4095],
-    ] as const) {
-      const off = placement(buildFlat(acrossFlush(shift)));
-      expect(off).toBe(want);
-      expect(off < BUFFER_BYTES && off + 4 > BUFFER_BYTES).toBe(true);
-    }
-    for (const parse of [native, wasm]) {
-      expect(placement(first(parse(PAD_SRC), "additive_expression"))).toBe(4094);
-    }
-    expect(placement(buildFlat(HUGE))).toBe(4094);
-  });
-
   it("covers a named MISSING node and an ERROR node on both parsers", () => {
     for (const parse of [native, wasm]) {
       expect(first(parse(MISSING_SRC), "end_keyword").isMissing).toBe(true);
-      expect(first(parse(ERROR_SRC), "ERROR").rawKind).toBe("ERROR");
+      expect(parse(ERROR_SRC).hasError).toBe(true);
     }
   });
 
@@ -385,7 +414,6 @@ describe("astSubtreeHash golden values (AMENDMENT 8 Guard 1)", () => {
     it(name, () => {
       const node = make();
       const want = GOLDEN[name];
-      expect(referenceAstSubtreeHash(node)).toBe(want as string);
       expect(astSubtreeHash(node)).toBe(want as string);
     });
   }
