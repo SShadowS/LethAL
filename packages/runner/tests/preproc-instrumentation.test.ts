@@ -4173,19 +4173,23 @@ ${head}    var
       renamedMemberAttempts.count = 0;
       const map = serverRun(index, "Codeunit50150.PickFive", [
         { scope: "Choose", line: member },
+        // A scope the member does not declare, on the member's own line: by the producer's account
+        // some other member's statement, so never re-keyed (review M2).
+        { scope: "Plain", line: member },
         { scope: "Choose", line: wrapped },
         { scope: "Plain", line: plain },
         { scope: "Choose Me" },
       ]);
       expect(keyed(map)).toEqual([
         `Pick@${member}`,
+        `Plain@${member}`,
         `Choose@${wrapped}`,
         `Plain@${plain}`,
         "Choose Me@-",
       ]);
       // Keeps the large-object pin below honest: an object WITH a renamed member is searched once
       // per statement that carries a line.
-      expect(renamedMemberAttempts.count).toBe(3);
+      expect(renamedMemberAttempts.count).toBe(4);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
