@@ -26,7 +26,8 @@ link and to the C flags.
 (release CI pins `dtolnay/rust-toolchain` at 1.96.0) and **LLVM 23.1.2** clang:
 
 ```bash
-bash scripts/install-llvm.sh <platform-key>   # pinned asset, sha256-checked; or set LLVM_BIN
+bash scripts/install-llvm.sh <platform-key>   # pinned asset, sha256-checked; prints LLVM_BIN=<dir>
+export LLVM_BIN=<dir>                         # locally the script only prints it; set it yourself
 bun scripts/build-native-parser.ts            # addon plus provenance for this machine
 bun scripts/build-native-parser.ts --test     # the Rust tests, same checked environment
 ```
@@ -93,8 +94,10 @@ not gating: speed is the owner's third priority, after no crash and lower RAM.
 
 ### Bumping the grammar in the native parser
 
-The WASM bump steps below still apply, and the WASM must be bumped to the same tag, because
-the native parser is checked against it.
+The WASM bump steps below still apply, and the WASM must be bumped to the same tag FIRST, before
+step 5: `probe-parser-equivalence.ts` compares the native parser's `GRAMMAR_PIN.kindTableSha256`
+against the vendored WASM's own kind table (`wasmKindTableSha256(wasmLanguage())`), so running it
+against the old WASM would report differences that are not a native-parser regression.
 
 1. Bump the crate pin (`tree-sitter-al = "=<new>"` in `packages/engine/native/Cargo.toml`)
    and update `Cargo.lock`.
@@ -111,6 +114,12 @@ the native parser is checked against it.
 6. Then the census method of the 4.3.0 -> 4.4.1 bump below (TSAL-441): the per-file tree
    diff on the fixtures, `census-operator-sites.ts` before and after on every corpus
    (the whole BaseApp now runs in one pass, R292), the identity listings, and the live gates.
+7. Re-check the node-count literals in `release.yml`, which a grammar bump can move: the
+   `parse_expect: "files 32 nodes 7382 errors 0"` on all five `native-parser` matrix rows plus the
+   `native-darwin-x64` job's own copy of the same string, `native_nodes: 56` on all five `smoke`
+   matrix rows plus `native-darwin-x64`'s own `nodes 56` grep, and the smoke dry-run count lines
+   (`dry run: 29 file(s), 407 mutant site(s), 387 deployed mutant(s), 1 batch(es)` and
+   `batch 0 (407 mutant site(s), 387 deployed):`).
 
 **WASM is the reference only.** It stays until one grammar bump has been done natively
 (standing ruling). After that, removing `web-tree-sitter`, `src/ast/parser-wasm.ts` and the

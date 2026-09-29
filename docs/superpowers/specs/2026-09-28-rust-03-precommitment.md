@@ -91,7 +91,9 @@ Written by S5, 2026-09-29. Every figure below is quoted from AMENDMENTs 1 to 10 
 - Q5 unit suite: **MATCHED**. 4,250 / 7 / 1 todo / 0 fail before, 4,251 / 7 / 0 / 0 after (the todo
   is the no-WASM-in-product test, flipped to a real test by the switch).
 - Q6 live: **MATCHED**, Cronus28 lease 064, control app 1.0.0.20 (the plan named 1.0.0.19; 1.0.0.20
-  is master's `MIN_CONTROL_VERSION`), al-runner v2.11.0. `itest:bcdev` 3 / 12 / 4; `itest:chunked`
+  is master's `MIN_CONTROL_VERSION`), al-runner v2.11.0. `itest:bcdev` 3 / 12 / 4, with the three
+  figures this line pre-committed at Q6 above also held: `groupedCalls` 15, `warmKills` 0 and the
+  assertion screen `vacuous` (`docs/measurements/2026-09-28-rust-03-s3.md`); `itest:chunked`
   both legs 17 / 7 / 2, control 9 / 33, chunked 5 / 57; `itest:alrunner` 3 / 12 / 4 on all four legs;
   `itest:tables` 301 / 68 / 18, per-mutant equal to its frozen figures (not deferred).
 - Q7 release: **MATCHED**. Trial run 36470754962 on `9f7cb5f`: all five `native-parser` jobs, the
@@ -177,6 +179,10 @@ RUST-03 is accepted. `$S` is
 | `U:/Git/LethAL-wt/rust-02` | 161M | registered worktree, `lethal/rust-02` at `9ec3d21c`, 17 uncommitted paths (RUST-02's carry-in) | present; the owner keeps it until RUST-03 is accepted |
 | `U:/Git/LethAL-wt/rust-03` | 853M | this worktree, `lethal/rust-03` | present, in use |
 | `C:/Users/SShadowS/.cache/lethal-native-target` | 294M | the shared `CARGO_TARGET_DIR` (`clang/`); S1.1's leftover `cl-redcheck` is no longer there | present |
+| `$S/../rust03.diff` | 8.0K | scratchpad-root copy of the switch diff, beside `$S` rather than inside it | present, awaiting the owner |
+| `$S/../rust03-ci-36447370265.log` | 36K | the Q7 trial run's CI log | present, awaiting the owner |
+| `$S/../rust03-du.txt`, `$S/../rust03-du2.txt` | 1.0K each | `du` output captured while writing this inventory | present, awaiting the owner |
+| `$S/../outcome.md`, `$S/../inv.md` | 8.0K, 4.0K | S5 drafts of this OUTCOME and this scratch inventory | present, awaiting the owner |
 
 Also left for the owner, not directories: the local branches `lethal/rust-03-dispatch` and
 `lethal/rust-03-redcheck` (and the remote `lethal/rust-03-redcheck`, S2's red-check), which the

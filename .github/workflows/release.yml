@@ -93,7 +93,7 @@ jobs:
             if (!/^clang version 23\.1\.2( |$)/.test(i.cCompiler)) throw new Error("compiler " + i.cCompiler);
             if (i.target !== "${{ matrix.triple }}") throw new Error("target " + i.target);'
 
-      - name: The addon parses a fixture (WASM is still the product parser until S3)
+      - name: The addon parses a fixture (the product parser since the RUST-03 switch)
         if: ${{ !matrix.cross }}
         shell: bash
         run: bun scripts/native-parse-smoke.ts fixtures/sandbox-data/src --expect "${{ matrix.parse_expect }}"
@@ -359,9 +359,9 @@ jobs:
           cd "$bin"
           "$exe" --version | tee version.txt
           if grep -q DIRTY version.txt; then echo "binary is stamped DIRTY"; exit 1; fi
-          # Before S3 --dry-run parses with WASM and never touches the addon, so this is the check
-          # that the embedded addon exists, loads and parses. A missing one exits non-zero with
-          # NativeParserMissingError.
+          # Since the RUST-03 switch, --dry-run below also parses through the addon (there is no
+          # WASM fallback); this native-check step is the check on the addon by itself, and a
+          # missing one exits non-zero with NativeParserMissingError.
           "$exe" native-check | tr -d '\r' | tee native.txt
           grep -Eq '^native ${{ matrix.triple }} clang version 23\.1\.2.* nodes ${{ matrix.native_nodes }}$' native.txt \
             || { echo "expected: native ${{ matrix.triple }} clang version 23.1.2 ... nodes ${{ matrix.native_nodes }}"; exit 1; }
