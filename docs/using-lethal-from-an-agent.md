@@ -252,8 +252,8 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 `explainSchemaVersion: 6`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
 and `survivorSelection`. Each `survivors` row carries `executionProven` and `reach`.
 
-A report from another schema version, or carrying a value this build cannot interpret, is REFUSED
-rather than explained with the unrecognised value dropped.
+A report whose schema version is anything other than 2 or 3, or that holds a value this build
+cannot interpret, is REFUSED rather than explained with the unrecognised value dropped.
 
 `--top <n>` caps the survivor list:
 
