@@ -64,6 +64,7 @@ import { loadEquivalenceMarks } from "./equivalence-marks";
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
 import type { EventSubscriber } from "./events";
 import { assertExplainableReport, explain } from "./explain";
+import { formatFailure } from "./format-failure";
 import { HarnessVerifier } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 import { LeaseClient } from "./lease";
@@ -5137,7 +5138,7 @@ if (import.meta.main) {
         process.exit(1);
       }
       if (process.env.LETHAL_DEBUG === "1") {
-        console.error(err.stack ?? `${err.name}: ${err.message}`);
+        console.error(formatFailure(err));
         process.exit(1);
       }
       const named = err.name !== "Error" ? `${err.name}: ` : "";

@@ -27,6 +27,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import { loadEquivalenceMarks, odataBaseUrl, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
+import { formatFailure } from "../src/format-failure";
 import { HarnessVerifier } from "../src/harness";
 import { LeaseClient } from "../src/lease";
 import { runSession } from "../src/orchestrator";
@@ -243,7 +244,7 @@ try {
 } catch (err) {
   // R332: print the reason before any await, so an operator sees it on the console even when
   // the following receipt write is slow or the process is killed before it finishes.
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+  console.error(formatFailure(err));
   await emitFailed("harden", err instanceof Error ? err.message : String(err));
   process.exit(err instanceof BaselineRecordedError ? 3 : 1);
 }
