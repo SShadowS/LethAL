@@ -926,3 +926,92 @@ with `alc`, under every subset of its symbols. The logs are `$S/logs/p002-alc-<t
 `$S/cap/head002/`, which is `$S/cap/head/` plus the branch captures of the three repros. On the
 prototype, all three pass. The unedited files FAIL against the branch's own captures, each with the
 `-` row not seen.
+
+---
+
+## ADDENDUM 2, run 002 fix round: trigger locals hide the globals (PRE-COMMITMENT, committed before the branch code)
+
+The run 002 re-review found I3. Type resolution never reads a trigger's locals, so a name used in a
+trigger falls through to the object's globals. Since R322, that includes a global whose name differs
+only in case. Its repros emit `Amt - Amt`, which fails `alc` with AL0175, and `master` emits nothing
+there. The same-case form is `master`'s older defect.
+
+Neither the committed rows nor the first addendum is edited.
+
+### The rule
+
+Inside a trigger, any name the trigger declares in its own header is UNKNOWN. That covers a plain
+`var` section and anything inside a `#if` region. Such a name gets no type in `resolveIdentifierType`
+and never reaches a global.
+
+`lookupVar` keeps resolving a plain trigger local to its declaration, as it has since R68, because
+that is its real type. It now returns `null` for a name the trigger declares only inside a `#if`
+region, instead of falling through to a global.
+
+Trigger locals are NOT resolved to their own types in `types.ts`. That would add sites, which is
+new scope.
+
+### Measured on a scratch prototype, then reasoned per row
+
+The prototype is `$S/proto3`, detached at `00980729`, with `$S/run002b-patch.py` applied. It is
+compared with the branch at `00980729`.
+
+| scope | branch | with the rule | removals |
+| --- | --- | --- | --- |
+| DC/Cloud | 102603, 97144 | 102603, 97144 | **0**; the capture is byte-identical |
+| BaseApp scratch project | 1568, 1540 | 1568, 1540 | **0** |
+| System Application | 77291, 75832 | 77291, 75832 | **0** |
+| BusinessFoundation | 3639, 3573 | 3639, 3573 | **0** |
+| Every committed repro and the gate target (version 2) | as pre-committed | identical | **0** |
+| Every fixture: identity keys and emitted targets | byte-identical to BEFORE | byte-identical | **0** |
+| All of `BC.History/BaseApp`, spec generation only | 1775413 raw specs | 1775409 | **4** (below) |
+
+Every runner warning is byte-identical.
+
+**The 4 full-BaseApp removals.** All four are in `Service/Document/ServiceHeader.Table.al`, in the
+`OnValidate` trigger of one field, and all are `lethal.swap-additive`. Their identity keys were
+measured on a scratch project holding that file and `ServiceLine.Table.al`, which is enough to type
+the sites. The ordinals are the object's own, and no other key in that project moved:
+
+- `ea7dc9fb05d7b12e86e3962b6dd8b43418865d40b84f10587ff974608eee0039|Service Header|OnValidate|lethal.swap-additive|1`
+- the same with `|1|1`
+- the same with `|1|2`
+- the same with `|1|3`
+
+**Reason:** each is an operand `1 + (<rec>."VAT %" / 100)`, where `<rec>` is a local of that
+trigger. Before the rule it was typed through the table's GLOBAL of the same name. After the rule
+the local is unknown, so the operand gets no type.
+
+**These four are NOT compile failures.** The trigger local and the global are declared with the same
+type (`Record "Service Line"`), so the old typing happened to be right, and the swapped expression
+is a valid `Decimal` subtraction. The rule loses four valid mutants: under-generation, the safe
+direction. They are outside the committed corpora, since the BaseApp scratch project does not
+contain that file, so no committed total moves.
+
+**The refinement not taken.** Keeping them would need the trigger local's own type, which the plan
+keeps out of this run.
+
+The review's census found 272 same-case trigger locals across the four corpora. Only these four
+feed a typed site that the rule removes. The rest feed no typed site, or feed one that keeps its
+type another way; that is an inference from identical output, not a per-local check.
+
+### The rows the rule removes: four new hand-written repros
+
+These are in `$S/repro/r330-t*` and `$S/expect-r002/`. Each loses exactly its `swap-additive`.
+
+| repro | shape | branch (raw, deployed) | expected | key of the removed mutant |
+| --- | --- | --- | --- | --- |
+| `r330-t1c` | codeunit `OnRun`; its `#if not CLEAN27` var block declares `Amt: Text`; global `AMT: Integer`; body `Amt + Amt` | 3, 3 | **2, 2** | `29cb74e25b27b013d70909c2b6d38f4ca2ad28040ac9566879e4f0e634dfa189\|Repro R330T1\|OnRun\|lethal.swap-additive\|1` |
+| `r330-t3` | the same with a PLAIN trigger `var` local | 3, 3 | **2, 2** | `...\|Repro R330T3\|OnRun\|lethal.swap-additive\|1` (same hash) |
+| `r330-t3s` | `r330-t3` with the global spelled `Amt` (`master`'s older same-case form) | 3, 3 | **2, 2** | `...\|Repro R330T3S\|OnRun\|lethal.swap-additive\|1` (same hash) |
+| `r330-t2` | the `#if` block form in a table field's `OnValidate` | 3, 3 | **2, 2** | `...\|Repro R330T2\|OnValidate\|lethal.swap-additive\|1` (same hash) |
+
+**`alc` on every symbol subset.** The logs are `$S/logs/p003-alc-<tool>-<repro>.log`.
+
+| emission | `r330-t1c` | `r330-t3` | `r330-t3s` | `r330-t2` |
+| --- | --- | --- | --- | --- |
+| branch at `00980729` | AL0175 under `[]` | AL0175 under both | AL0175 under both | AL0175 under `[]` |
+| `master` at `9680dad9` | no swap, PASS | no swap, PASS | **AL0175 under both** (the older form) | no swap, PASS |
+| prototype with the rule | no swap, PASS | no swap, PASS | no swap, PASS | no swap, PASS |
+
+With these four files added, `$S/expect-r002/` passes on the prototype.
