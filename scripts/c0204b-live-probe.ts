@@ -15,7 +15,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { IDENTITY_SCHEME } from "../packages/schemata/src/project";
 import { itestConfigPath } from "../packages/runner/itest/config-path";
 import { diffMutants, normalizeForComparison } from "../packages/runner/itest/mutant-equality";
 import type { NormalizedMutant } from "../packages/runner/itest/mutant-equality";
