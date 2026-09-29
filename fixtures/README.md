@@ -343,8 +343,8 @@ All three builds score 5 killed / 8 survived / 0 no-coverage over 13 mutants, an
 builds disagrees on 8 of the 13. Only a per-mutant comparison can tell them apart. The tables were
 pre-committed in `docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
 
-Six of the 13 sit in an arm a given build does not compile (the R214 shape). The six assignment
-mutants outside the arms discriminate the builds without depending on that. When R214 is fixed, this
+Six of the 13 sit in `#if` arms, and any one build compiles out four of them (the R214 shape). The
+six assignment mutants outside the arms discriminate the builds without depending on that. When R214 is fixed, this
 gate needs a new pre-commitment and a re-freeze.
 
 `.alpackages` is gitignored. Copy `Microsoft_*.app` from `sandbox-tests/.alpackages` into both
