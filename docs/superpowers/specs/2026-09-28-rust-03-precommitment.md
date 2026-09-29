@@ -260,3 +260,137 @@ placeholders and changes nothing above OUTCOME.
 
 The corpus revisions are re-read after the last native run. A moved corpus voids the comparison,
 and it is re-run.
+
+## AMENDMENT 4 (S4.2a prediction)
+
+Recorded before any S4.2a code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead E, the per-mutant allocation in the manifest-row loop of
+  `writeInstrumentedProject` (`packages/schemata/src/project.ts`). The change: line numbers from one
+  line-start index per file instead of a scan from offset 0 per call; the `local` scope prefix
+  tested without taking a whole procedure's text; each gap block's id computed once per block
+  rather than once per mutant; no child arrays built in the loop's parent walks. B's second copy
+  of the manifest rows (the spread copy in `assignIdentityOrdinals`) is cut in the same loop, as
+  the orchestrator asked; it is not part of the E prediction.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  13,000 MB. Predicted E after the fix: at or below 1,000 MB, read as in AMENDMENT 1 (the p5 phase
+  peak minus the p5 post-GC RSS) on one marked W8 run with the S0.2 phase markers. Both are
+  AMENDMENT 1's figures, unchanged: 17,161 MB minus the 4,120 MB E should lose is about 13,000 MB.
+- Predicted W4 median peak after the fix (3 runs): unchanged, at or below 5,779 MB (AMENDMENT 1's
+  highest native W4 run). Derivation: W4 is `run --dry-run`, which runs `dedupeSpecs` and prints; it
+  never calls `writeInstrumentedProject`, so the loop is not on W4's path, and AMENDMENT 1's W4
+  attribution has no lead E row. The change is confined to `project.ts`, so W4's code path is
+  byte-for-byte the same and the predicted saving on W4 is 0 MB.
+- The before figures are re-measured at `d945e6f` (the native switch, S3.1 and S4.1 have landed
+  since `e5bed71`) with the same harness, 3 runs each, so the before and after sit on one revision
+  of everything except the fix. The verdict is against the bounds above, not against the before runs.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged.
+- Recorded, not gating: the loop is 90% of W8's wall time today; the W8 wall medians before and
+  after are reported next to the peaks.
+
+## AMENDMENT 5 (S4.2a result)
+
+The fix is `167f540c` (AMENDMENT 4's item, and B's second row copy). Before is `d945e6f`, after is
+`167f540c`, each with the S0.2 capture harness (`cap-project.diff`, ported by hand onto the fixed
+tree: the same 18 changed lines, checked with `diff`) and the unmarked `spec-keys.ts`. Native addon
+sha256 `19f5d477...` on both. BC.History `4d61fc58...`, unchanged. One heavy run at a time.
+
+| workload | before, `d945e6f` (peak MB / wall s) | median | after, `167f540c` | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 19,532 / 17,539 / 18,780; 1,573 / 1,571 / 1,704 s | **18,780** (1,573 s) | 16,865 / 16,799 / 15,731; 176 / 189 / 186 s | **16,799** (186 s) | at or below 13,000 | **MISSED** |
+| W4 | 5,316 / 5,302 / 5,386; 465 / 463 / 452 s | **5,316** (463 s) | 5,383 / 5,384 / 5,298; 463 / 481 / 458 s | **5,383** (463 s) | at or below 5,779 | **MET** |
+
+- Lead E, on one marked W8 run at `167f540c` (S0.2 phase markers): p5 phase peak 14,768 MB, p5
+  post-GC RSS 8,933 MB, so E = **5,835 MB** against a predicted 1,000 or less: **MISSED**. It did
+  not shrink (AMENDMENT 1: 5,120). p5 now takes 38 s instead of about 1,350 s, so the loop's
+  CPU cost went, but its transient memory did not.
+- B: from p4 to p5 the `Object` count rises by 1,687,722, one per manifest row (AMENDMENT 1: twice
+  that). The second copy is gone.
+- W8 wall (recorded, not gating): 1,573 s to 186 s median, 8.5 times faster.
+- W4 is unchanged, as predicted: the dry-run does not run the loop. All six W4 outputs are
+  byte-identical (788,619 lines, sha256 `f31530b0...`).
+- Identity listing: all seven W8 listings (3 before, 3 after, 1 marked) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. `fixture-emission.test.ts` passes
+  unchanged, and the fixed tree's listings for the five fixtures, do, sysapp, dc, sentinel and bcf
+  are byte-identical to S3's.
+- A lead, not a measured share (one probe run, not a fix): the same marked W8 run with
+  `astSubtreeHash` replaced by an empty string had a p5 phase peak of 12,287 MB over a post-GC RSS
+  of 9,068 MB, a transient of 3,219 MB. So the per-mutant subtree hash accounts for about 2.6 GB of
+  the remaining E, and about 3.2 GB is still unattributed. The prediction is not revised.
+
+## Clarification to AMENDMENT 5 (2026-09-29)
+
+AMENDMENT 4's fourth item, "no child arrays built in the loop's parent walks", was a measured
+no-op, and `167f540c` changed nothing for it. On the native wrapper (`FlatNode`), `parent` is a
+stored field, so the loop's parent walks (`enclosingProcedureLike`, `triggerNameOf`,
+`enclosingMemberOf`, `gapBlockOf`) build no arrays. The only child-array reads left in the loop
+are the split-header procedure paths (`splitIsLocal`, `procedureLikeNameNode`), which are rare.
+AMENDMENT 5's figures are unchanged by this note.
+
+## AMENDMENT 6 (S4.2c prediction)
+
+Recorded before any S4.2c code. It changes nothing above OUTCOME.
+
+- Item: AMENDMENT 1's lead A, the spec's `after` node. `synthesizeAfter` (one copy in
+  `packages/builtin-tier1/src/mutate-helpers.ts`, one in `packages/builtin-tier2/src/mutate-helpers.ts`)
+  builds a plain object that copies `before.children` and `before.namedChildren` (each read builds a
+  fresh array of fresh `FlatNode` wrappers on the native tree), both position objects and a bound
+  `childForFieldName` closure. The change: the `after` node holds only `before` and its own text and
+  reads every other member through `before` when asked, so a spec site keeps one wrapper (`before`)
+  and pins no child arrays and no closure. Every member of `ALSyntaxNode` reads the same value as
+  before; only `text` differs from `before`, as today.
+- Predicted A after the fix, read as in AMENDMENT 1 (live cells, heap minus extra, at p4 minus p2 on
+  one marked W8 run; at p3 minus p2 on one marked W4 run): at or below 1,400 MB on W8 and at or below
+  550 MB on W4. These are AMENDMENT 1's figures, unchanged. The same-revision A before is read on the
+  S4.2a marked tree (`167f540c`, whose source differs from `b4213f23` only by two `export` keywords):
+  1,629 MB on W8 (AMENDMENT 5's marked run), and one marked W4 run taken for this item.
+- Predicted W8 median peak after the fix (3 runs, `scripts/measure-peak.ts`): at or below
+  15,850 MB. Predicted W4 median peak (3 runs): at or below 5,030 MB. Derivation: the saving A should
+  lose, by AMENDMENT 1 (2,369 to 1,400 on W8, about 970 MB; 900 to 550 on W4, 350 MB), taken off
+  AMENDMENT 5's same-revision medians (W8 16,799, W4 5,383): 16,799 - 950 and 5,383 - 350. A check
+  from the scaled sysapp snapshot gives the same size: per spec site the fix drops about 4.5
+  `FlatNode` wrappers (61 B each), two arrays, one closure (92 B), two position objects and most of
+  a 14-field object, about 600 B, so about 1,000 MB over W8's 1,775,366 raw sites and about 470 MB
+  over W4's 782,940. A lives through both peaks (p5 on W8, the dry-run's printing on W4), so the
+  whole-run peak should fall by about the same amount. The W8 runs spread 1.1 GB at S4.2a, so the W8
+  verdict can be decided by noise; that is recorded, not a reason to widen the bound.
+- Identity listing eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832
+  (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
+  `fixture-emission.test.ts` unchanged. The W4 dry-run output unchanged (sha256 `f31530b0...`,
+  788,619 lines).
+
+## AMENDMENT 7 (S4.2c result)
+
+The fix is `7cf75051` (AMENDMENT 6's item): `synthesizeAfter` in both tiers now returns the engine's
+`withText(before, text)`, which holds `before` and the text and reads every other member through
+`before`. After is `7cf75051` with the S0.2 capture harness (`cap-project.diff` ported by the same
+script as S4.2a; the ported `project.ts` differs from S4.2a's only by `167f540c..b4213f23`'s two
+`export` keywords). Before is S4.2a's after tree (`167f540c`), re-run in the same session after the
+after runs. Native addon sha256 `19f5d477...` on both. BC.History `4d61fc58...`. One heavy run at a
+time. Harness under `U:/rust03-s42c/`.
+
+| workload | before, `167f540c` (peak MB) | median | after, `7cf75051` (peak MB) | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 17,669 / 17,264 / 16,962 | **17,264** | 11,202 / 11,778 / 12,207 | **11,778** | at or below 15,850 | **MET** |
+| W4 | 5,360 / 5,304 / 5,387 | **5,360** | 4,737 / 4,524 / 5,043 | **4,737** | at or below 5,030 | **MET** |
+
+- Lead A on W8 (live cells, heap minus extra, p4 minus p2, one marked run each): before 1,629 MB
+  (AMENDMENT 5's marked run at `167f540c`: 1,920 minus 291), after **410 MB** (701 minus 291), against
+  at or below 1,400: **MET**. Objects at p4: 37,964,548 before, 17,989,154 after.
+- Lead A on W4 (live cells, p3 minus p2, one marked run each): before 780 MB (920 minus 140, marked
+  run on the `167f540c` tree taken for this item), after **238 MB** (378 minus 140), against at or
+  below 550: **MET**.
+- The whole-run peaks fell by much more than A's live cells did (W8 median by 5,486 MB, W4 by
+  623 MB). On the marked W8 runs, heap capacity at p5 fell from 7,474 to 4,767 MB and the p5 transient
+  (E) from 5,835 to 4,038 MB. That is recorded, not attributed: the fix removed about 20 million
+  live objects, and both GC-held capacity and the p5 transient move with the live set.
+- Identity listing: all seven W8 listings (3 after, 1 marked, 3 before) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. All eight W4 outputs are sha256
+  `f31530b0...` (788,619 lines). `fixture-emission.test.ts` passes unchanged, and the fixed tree's
+  listings for the five fixtures, do, sysapp, dc, sentinel and bcf are byte-identical to S3's.
+- The W4 after runs spread 519 MB (4,524 to 5,043); the highest is 13 MB above the W4 bound. The
+  verdict is on the median, as committed.
