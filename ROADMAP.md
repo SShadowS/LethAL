@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 330 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**91 of 331 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -233,6 +233,7 @@ that ordering is the priority.
 - **R311** · Even past the parser's WASM heap limit, `writeInstrumentedProject` cannot serialize a whole-BaseApp manifest: `JSON.stringify` runs out of memory · [R311.md](docs/roadmap/R311.md) · done (054a9774)
 - **R315** · No offline alc compile of a real corpus's emitted target: dc's Continia dependencies are not staged at a compatible version on this machine · [R315.md](docs/roadmap/R315.md) · open, filed 2026-09-28
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · open, filed 2026-09-29
+- **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 
 ## Backends and tooling
 
