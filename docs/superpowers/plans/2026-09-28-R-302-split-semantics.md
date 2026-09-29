@@ -681,3 +681,40 @@ Every row also requires `reachGrain` `statement` and `guardReached` true; a repo
 
 - al-runner covers 6 repros (`q1`, `q2`, `k1`, `k2`, `a1`, `d1`), not all of them; `alc` covers all of them except `n1`. al-runner's PASS condition is a green baseline and no `error` verdict; it proves nothing about marker reach (al-runner reports none). The gate is what proves reach.
 - The duplicate procedure walk in `types.ts`: the r1 prototype widened the private walk instead of deleting it. The r2 prototype deletes it and imports the engine's `findEnclosingProcedure`, as Task 1 says.
+
+### Revision r2: the gate, version 2 (PRE-COMMITMENT, committed before any run of it)
+
+**Why the gate rows committed at `afe11fca` are wrong, and are superseded (not edited).** They pre-committed `Note`, a split member that is `local` in both arms, at attribution `object` with BOTH tests covering it, and used that as the reached/not-reached control. That rests on R63's object-grain widening for locals, which applies only on the HUB coverage path. The gate runs on bcdev's default FENCED path, where the line map names a local member exactly (R175, `packages/runner/src/selection.ts`, `localsAreUnnameable`, measured there on `fixtures/sandbox-app`'s local `LogAudit`). The r2 al-runner preview of the version 1 target showed the same thing: every `Note` mutant `exact`, one covering test. So version 1 would have failed on attribution and had no negative control at all. I found this while prototyping, after `afe11fca`; the version 1 files are kept as `$S/gate/expect-gate-v1.json` and `$S/gate/R302Gate-v1.al.txt`.
+
+**The constraint that shapes version 2.** On fenced coverage, a test covers a member exactly when it executes some line of it, and a whole-body block's marker is the first thing its guard branch runs. So every test that covers a split member reaches that member's whole-body block: a covering-but-not-reaching test cannot exist for a whole-body `empty-block`. The not-reached control therefore sits on a block INSIDE a split member's body, and the whole-body blocks are proven reached by every covering test.
+
+**Target, version 2** (`$S/gate/r302-gate/src/R302Gate.Codeunit.al`, hand-written, `alc` PASS under `[]` and `[R302A]`):
+
+- `Pick(X: Integer): Integer`, a split member with identical arms (L3 to L14). Body: `if X > 1 then begin Seen := Seen + 1; end; Note(X); exit(X + 1);`
+- `Note(X: Integer)`, a split member, `local` in both arms (L16 to L23). Body: `Seen := Seen + X;`
+- `Other(): Integer`, plain, `exit(7)`.
+- Global `Seen: Integer`, which no test reads.
+
+Tests: `PickEnters` (`Pick(5)` must be 6), `PickSkips` (`Pick(1)` must be 2), `OtherOnly` (`Other()` must be 7). HEAD generates 8 mutants on this target; the fixed pipeline, 13 (`$S/expect-r2-final/r302-gate.txt`: `+` `empty-block` L8, `return-value` L13, `swap-additive` L13, `empty-block` L21, `swap-additive` L22; `= raw 13 deployed 13`). Twin parity for it: 11 compared (all but `Other`'s two).
+
+**Rows, both configurations** (`$S/gate/expect-gate.json`, version 2; every row also `reachGrain` `statement`, attribution `exact`, `guardReached` true):
+
+| member | line | operator | verdict | covering | reachedBy | why |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Pick` | 8 | `empty-block`, the split member's WHOLE body | killed | PickEnters, PickSkips | killer (either test; both fail on 0) | place 12's path, reached |
+| `Pick` | 9 | `conditional-boundary` | survived | PickEnters, PickSkips | exactly both | `X >= 1` changes only `Seen` |
+| `Pick` | 9 | `empty-block`, the block INSIDE the split body | survived | PickEnters, PickSkips | exactly PickEnters | THE CONTROL: PickSkips covers `Pick` and does NOT reach this block |
+| `Pick` | 10 | `remove-assignment` | survived | PickEnters, PickSkips | exactly PickEnters | inside the block |
+| `Pick` | 10 | `swap-additive` | survived | PickEnters, PickSkips | exactly PickEnters | inside the block |
+| `Pick` | 12 | `void-method-call` | survived | PickEnters, PickSkips | exactly both | `Seen` is not read |
+| `Pick` | 13 | `return-value` | killed | PickEnters, PickSkips | killer (either) | returns 0 |
+| `Pick` | 13 | `swap-additive` | killed | PickEnters, PickSkips | killer (either) | returns `X - 1` |
+| `Note` | 21 | `empty-block`, a local split member's WHOLE body | survived | PickEnters, PickSkips | exactly both | every covering test reaches a whole body |
+| `Note` | 22 | `remove-assignment` | survived | PickEnters, PickSkips | exactly both | `Seen` is not read |
+| `Note` | 22 | `swap-additive` | survived | PickEnters, PickSkips | exactly both | `Seen` is not read |
+| `Other` | 26 | `empty-block` | killed | OtherOnly | killer OtherOnly | plain control |
+| `Other` | 27 | `return-value` | killed | OtherOnly | killer OtherOnly | plain control |
+
+For a `killer` row without a named killer, `check-gate.ts` now requires the killing test to be a covering test and to be in `reachedBy` (either covering test may run first, R197). Red-checked offline (`$S/gate/redcheck-gate.ts`, `redcheck-v2.out`): 24 of 24 cases as wanted: the good report passes in both configurations, and eleven edits each fail in both (the control block also reached by PickSkips, not reached at all, killed; `Note`'s whole body reached by one test only; `Pick`'s whole body missing; an extra mutant; `unplaced`; attribution `object`; the wrong killer; a red baseline; the wrong symbols).
+
+Everything else in the gate is as `afe11fca` states: Cronus28 only, the CONTROLLER holds `coord lease Cronus28 bugs` and heartbeats it, R-316's cleanup rules, ids 91700 to 91799, and it commits nothing unless it passes.
