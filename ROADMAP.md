@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 327 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 327 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -119,7 +119,7 @@ that ordering is the priority.
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open; writer fixed 2026-09-28 (dd14626), coverage refused pending R300
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
-- **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · open, filed 2026-09-28
+- **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
@@ -127,10 +127,10 @@ that ordering is the priority.
 - **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · done (56b7e3b3..ae0793a9)
 - **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · open, filed 2026-09-28
 - **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · done (33cfc55a)
-- **R322** · Type resolution compares variable names case-sensitively, so a differently-cased reference can take a same-named global's type and authorize a mutant that does not compile · [R322.md](docs/roadmap/R322.md) · open, filed 2026-09-29
+- **R322** · Type resolution compares variable names case-sensitively, so a differently-cased reference can take a same-named global's type and authorize a mutant that does not compile · [R322.md](docs/roadmap/R322.md) · done (db641338)
 - **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · open, filed 2026-09-29
-- **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · open, filed 2026-09-29
-- **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · open, filed 2026-09-29
+- **R324** · A call's type is taken from the first procedure of that name, so an overloaded name can type a call by the wrong overload and authorize a mutant that does not compile · [R324.md](docs/roadmap/R324.md) · done (db641338)
+- **R325** · Identity keys carry no scheme version, so an engine change that renumbers ordinals can hand an old mutant's verdict to a new mutant through history, resume or equivalence marks · [R325.md](docs/roadmap/R325.md) · done (f10a1051)
 - **R327** · A split-header procedure after an object-level `var` section parses INSIDE that section; before the R-302 fix round its names typed by the object's GLOBALS, an `alc`-failing false site · [R327.md](docs/roadmap/R327.md) · open, filed 2026-09-29 (engine guarded; the grammar defect stays)
 
 ## Product gaps a real project hits
