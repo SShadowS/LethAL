@@ -361,3 +361,36 @@ Recorded before any S4.2c code. It changes nothing above OUTCOME.
   (1,687,723 lines) unchanged, on the whole BaseApp with the S0.2 capture harness, and
   `fixture-emission.test.ts` unchanged. The W4 dry-run output unchanged (sha256 `f31530b0...`,
   788,619 lines).
+
+## AMENDMENT 7 (S4.2c result)
+
+The fix is `7cf75051` (AMENDMENT 6's item): `synthesizeAfter` in both tiers now returns the engine's
+`withText(before, text)`, which holds `before` and the text and reads every other member through
+`before`. After is `7cf75051` with the S0.2 capture harness (`cap-project.diff` ported by the same
+script as S4.2a; the ported `project.ts` differs from S4.2a's only by `167f540c..b4213f23`'s two
+`export` keywords). Before is S4.2a's after tree (`167f540c`), re-run in the same session after the
+after runs. Native addon sha256 `19f5d477...` on both. BC.History `4d61fc58...`. One heavy run at a
+time. Harness under `U:/rust03-s42c/`.
+
+| workload | before, `167f540c` (peak MB) | median | after, `7cf75051` (peak MB) | median | predicted | result |
+| --- | --- | ---: | --- | ---: | --- | --- |
+| W8 | 17,669 / 17,264 / 16,962 | **17,264** | 11,202 / 11,778 / 12,207 | **11,778** | at or below 15,850 | **MET** |
+| W4 | 5,360 / 5,304 / 5,387 | **5,360** | 4,737 / 4,524 / 5,043 | **4,737** | at or below 5,030 | **MET** |
+
+- Lead A on W8 (live cells, heap minus extra, p4 minus p2, one marked run each): before 1,629 MB
+  (AMENDMENT 5's marked run at `167f540c`: 1,920 minus 291), after **410 MB** (701 minus 291), against
+  at or below 1,400: **MET**. Objects at p4: 37,964,548 before, 17,989,154 after.
+- Lead A on W4 (live cells, p3 minus p2, one marked run each): before 780 MB (920 minus 140, marked
+  run on the `167f540c` tree taken for this item), after **238 MB** (378 minus 140), against at or
+  below 550: **MET**.
+- The whole-run peaks fell by much more than A's live cells did (W8 median by 5,486 MB, W4 by
+  623 MB). On the marked W8 runs, heap capacity at p5 fell from 7,474 to 4,767 MB and the p5 transient
+  (E) from 5,835 to 4,038 MB. That is recorded, not attributed: the fix removed about 20 million
+  live objects, and both GC-held capacity and the p5 transient move with the live set.
+- Identity listing: all seven W8 listings (3 after, 1 marked, 3 before) are sha256
+  eeb5e3e2987cc0c76913470f5ad755cd711aebdaa955de685ce82ffef98a0832, 1,687,723 lines, header
+  `raw 1775366 deployed 1687722 skippedFiles 73`. Unchanged. All eight W4 outputs are sha256
+  `f31530b0...` (788,619 lines). `fixture-emission.test.ts` passes unchanged, and the fixed tree's
+  listings for the five fixtures, do, sysapp, dc, sentinel and bcf are byte-identical to S3's.
+- The W4 after runs spread 519 MB (4,524 to 5,043); the highest is 13 MB above the W4 bound. The
+  verdict is on the median, as committed.
