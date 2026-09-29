@@ -335,3 +335,24 @@ describe("R231: run-level lists are joined by batch AND code", () => {
     expect(d("src/A.Codeunit.al")).not.toMatch(/R175/);
   });
 });
+
+describe("R231: exported mutant ids are unique across batches", () => {
+  test("a two-batch v3 export gives each mutant its own id; an archived v2 keeps the bare code", async () => {
+    // Ids restart per batch, so two batches both hold an M0001. The schema says ids are unique.
+    const rows = [
+      mutant({ batchIndex: 0 } as never),
+      mutant({ batchIndex: 1, operatorName: "lethal.negate-conditional" } as never),
+    ];
+    const idsOf = async (schemaVersion: number) => {
+      const { report: out } = await toMutationElements(
+        report(rows, { schemaVersion, unplaceableMutants: [] } as never),
+        OPTS,
+      );
+      return Object.values(out.files).flatMap((f) =>
+        (f as { mutants: { id: string }[] }).mutants.map((m) => m.id),
+      );
+    };
+    expect(await idsOf(3)).toEqual(["0/M0001", "1/M0001"]);
+    expect(await idsOf(2)).toEqual(["M0001", "M0001"]);
+  });
+});

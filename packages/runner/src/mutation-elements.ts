@@ -237,7 +237,9 @@ export async function toMutationElements(
         if (status === undefined) unmapped.add(m.verdict);
         const description = describe(m, { unplaceable, likelyEquivalent, refOf });
         return {
-          id: m.mutantCode,
+          // R231: ids restart per batch, so on v3 the id is `<batchIndex>/<mutantCode>` and stays
+          // unique as the schema requires. An archived v2 report keeps its bare code.
+          id: refOf(m),
           // Short name: the renderers group and filter by this, and `lethal.` on every row is noise.
           mutatorName: m.operatorName.replace(/^lethal\./, ""),
           location: {
@@ -279,7 +281,7 @@ export async function toMutationElements(
     }
     const entry = files[rel] as { mutants?: unknown[] } | undefined;
     const ignored = {
-      // Unique against every mutant id, which are `M####`, and against each other: one row per
+      // Unique against every mutant id, which are `M####` or `<batchIndex>/M####`, and against each other: one row per
       // (file, reason), which is exactly what `excludedSites` holds.
       id: `ignored:${row.reason}:${rel}`,
       // The renderers GROUP and filter by this, so naming it for the reason makes every refusal of
