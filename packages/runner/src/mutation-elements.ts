@@ -199,16 +199,34 @@ export async function toMutationElements(
   opts: ElementsOptions,
 ): Promise<ElementsProjection> {
   const read = opts.readSource ?? ((p: string) => readFile(p, "utf8"));
-  const unplaceable = new Set(report.unplaceableMutants ?? []);
-  // R231: v3 lists name a mutant as `<batchIndex>/<mutantCode>`, because ids restart per batch.
-  // An archived v2 report holds bare codes, joined the old way (correct only on one batch).
-  const refOf =
-    report.schemaVersion >= 3
-      ? (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode)
-      : (m: MutantOutcome) => m.mutantCode;
-  const likelyEquivalent = new Set(
+  // R231: ids restart per batch, so every mutant is named `<batchIndex>/<mutantCode>`, built from
+  // the row itself. v3 lists already hold that form. An archived v2 report's lists hold bare codes:
+  // each is resolved to a row here, and one that names more than one row attaches to NONE (a guess
+  // at the first match could put a warning on the wrong mutant) and is reported by name.
+  const ambiguities: string[] = [];
+  const qualify = (list: string, entries: readonly string[]): Set<string> => {
+    if (report.schemaVersion >= 3) return new Set(entries);
+    const out = new Set<string>();
+    for (const code of new Set(entries)) {
+      const refs = report.mutants
+        .filter((m) => m.mutantCode === code)
+        .map((m) => mutantRef(m.batchIndex, m.mutantCode));
+      const [only] = refs;
+      if (refs.length === 1 && only !== undefined) out.add(only);
+      else if (refs.length > 1) {
+        ambiguities.push(
+          `ambiguous-v2-list-entry (R231): ${list}: ${code} names ${refs.length} mutants (${refs.join(", ")}); this schema-v2 report's bare code cannot say which, so the export attaches it to none of them. Re-run to get a v3 report.`,
+        );
+      }
+    }
+    return out;
+  };
+  const unplaceable = qualify("unplaceableMutants", report.unplaceableMutants ?? []);
+  const likelyEquivalent = qualify(
+    "likelyEquivalentSurvivors",
     (report.likelyEquivalentSurvivors?.byRisk ?? []).flatMap((g) => [...g.mutants]),
   );
+  const refOf = (m: MutantOutcome) => mutantRef(m.batchIndex, m.mutantCode);
 
   const byFile = new Map<string, MutantOutcome[]>();
   for (const m of report.mutants) {
@@ -237,8 +255,8 @@ export async function toMutationElements(
         if (status === undefined) unmapped.add(m.verdict);
         const description = describe(m, { unplaceable, likelyEquivalent, refOf });
         return {
-          // R231: ids restart per batch, so on v3 the id is `<batchIndex>/<mutantCode>` and stays
-          // unique as the schema requires. An archived v2 report keeps its bare code.
+          // R231: ids restart per batch, so the id is `<batchIndex>/<mutantCode>`, from the row, and
+          // stays unique as the schema requires, on a v2 report as on v3.
           id: refOf(m),
           // Short name: the renderers group and filter by this, and `lethal.` on every row is noise.
           mutatorName: m.operatorName.replace(/^lethal\./, ""),
@@ -281,7 +299,7 @@ export async function toMutationElements(
     }
     const entry = files[rel] as { mutants?: unknown[] } | undefined;
     const ignored = {
-      // Unique against every mutant id, which are `M####` or `<batchIndex>/M####`, and against each other: one row per
+      // Unique against every mutant id, which are `<batchIndex>/M####`, and against each other: one row per
       // (file, reason), which is exactly what `excludedSites` holds.
       id: `ignored:${row.reason}:${rel}`,
       // The renderers GROUP and filter by this, so naming it for the reason makes every refusal of
@@ -322,6 +340,6 @@ export async function toMutationElements(
         },
       },
     },
-    losses: lossesFor(report),
+    losses: [...ambiguities, ...lossesFor(report)],
   };
 }
