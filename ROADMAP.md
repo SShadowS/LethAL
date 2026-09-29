@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 339 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**95 of 341 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -137,6 +137,8 @@ that ordering is the priority.
 - **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29, reported upstream
 - **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
+- **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · open, filed 2026-09-29
+- **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
 
 ## Product gaps a real project hits
 
