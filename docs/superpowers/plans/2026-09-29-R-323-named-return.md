@@ -4,6 +4,8 @@
 
 **Revision r1 (2026-09-29), draft for the orchestrator's review.** Written in two commits on purpose, as R-302's was. The first commit holds the measurements, the decisions and the PRE-COMMITMENT (every expected mutant change per repro, per corpus and per fixture, raw and deployed separately, with the exact moved identity keys). The second commit adds the prototype check and the tasks, so git history shows the pre-commitment existed before any prototype of the fix.
 
+**Revision r2 (2026-09-29), for review r1** (`H:/lethal-coord/reviews/R-323-plan/review-r1.md`, 0 Critical). A third commit. It edits nothing in the pre-commitment, the decisions or the prototype check; it adds the section "Revision r2" after the prototype check (a corpus compile proof measured for feasibility, Decision 6's branch comparison as a step, the 2 to 3 scheme tests, the checked-and-unaffected list, and the orchestrator's rulings), and changes the tasks to carry them.
+
 **Goal:** In AL a named return value (`procedure P() Result: Integer`) is a local variable of `P`. It hides an object global of the same name, compared as AL compares names (case-insensitively). Today type resolution and receiver resolution do not see it, so a reference to it falls through to a same-named global (R323's `AL0133`), or resolves to nothing when there is no such global (lost sites and a missing hang tag). After this change the named return resolves to its own declared type in a plain procedure and in a split member whose arms agree (R-302's every-arm rule), is ambiguous in a split member whose arms disagree, and is unknown in a trigger (R330's rule for trigger header names).
 
 **Architecture:** One engine change of meaning, in `packages/engine/src/semantic/symbol-table.ts`: `parseProcedure` indexes the named return as a local of its procedure, `parseSplitProcedure` adds it to each arm's declarations so the every-arm rule decides it, and `triggerLocalNames` counts it as a trigger header name. `semantic/receiver.ts`'s `classifyDeclaredType` learns to read a named return's type, since its declaration node is not a `variable_declaration`. `IDENTITY_SCHEME` moves from 2 to 3, because the change moves identity keys for unchanged source (measured below). No emission code changes.
@@ -314,11 +316,77 @@ Two passes to know about. `n3` and `n11b` pass without the `plain` hunk, because
 
 ---
 
+## Revision r2: review r1's findings, measured and ruled (written after the prototype check)
+
+Review r1 is `H:/lethal-coord/reviews/R-323-plan/review-r1.md`: 0 Critical, 3 Important, 1 Minor. Nothing above this section is edited: the pre-commitment rows, their hashes, the decisions and the prototype check stand as committed. Where r1 narrows what a section above claims, this section says so, and the tasks below carry the new steps. Every measurement here was made at plan time, 2026-09-29, and its raw log is under `$S/corpus-alc/` and `$S/probe/`.
+
+### I1. The corpus rows are an exact SITE prediction, not a compile proof
+
+The 27 checks prove WHICH mutants the fix produces, with their tags and keys. They do not prove that each new corpus mutant compiles. The `alc` evidence above covers the 16 hand-written repros only (21 subsets). So the corpus rows are an exact site prediction, and the compile proof is a separate Task 4 step, run on every corpus slice that can be compiled offline. What can be compiled was measured, not assumed (`$S/corpus-alc/plain2.sh`, `plain-tests.sh`: a COPY of each project compiled UN-instrumented, so `alc` never writes into a corpus checkout):
+
+| project | new sites in it | offline compile, un-instrumented | how |
+| --- | --- | --- | --- |
+| System Application (`Source/System Application`) | 7 new, 8 files with any row | YES, 2 residual errors, neither in a file with a row: `PermissionSetRelationImpl.Codeunit.al` L422 `AL0133` and `RegexImpl.Codeunit.al` L336 `AL0196`, both .NET overload mismatches from the probing assemblies | package cache `C:/bcartifacts.cache/symbols` (BC 28.0.46665.49944) plus the Control app's `.alpackages`; assembly probing `C:/bcartifacts.cache/dlls` plus .NET 8.0.31 `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` |
+| Base Application (`Source/Base Application`) | the rows in 270 of the 307 files with a row | YES, 1 residual error, not in a file with a row: `DocExchServiceMgt.Codeunit.al` L814 `AL0196` | the same |
+| BaseApp test projects (14 of them: `Tests-Bank`, `-Cost Accounting`, `-Dimension`, `-ERM`, `-Job`, `-Misc`, `-Rapid Start`, `-Report`, `-Resource`, `-SCM`, `-SCM-Assembly`, `-TestLibraries`, `-User`, `-VAT`) | the rows in the other 37 files, including 10 of the 13 Tier-2 takeovers (all of `Tests-ERM`'s; the other 3 are in `MatchedOrderLineMgmt.Codeunit.al`) | YES, all 14. Thirteen compile with 0 errors; `Tests-Misc` has 9 residual errors, each a mock object the symbols do not hold (`Bank Statement Provider Mock`, `TestReport`, `Table With Removed Field`), in 3 files that hold no row | the same package cache (it holds every test library they depend on) |
+| BaseApp scratch project | 1 (`OAuth20Setup.Table.al` L315) | covered by the Base Application slice, which holds the same file and the same row | |
+| BusinessFoundation | 0 | nothing to compile | |
+| DC/Cloud | 70 new, 28 files | NO: it depends on seven Continia apps (27.x), its `.alpackages` is empty and none is on this machine, so `alc` stops at `AL1022` before compiling anything | repro-shaped extracts instead (below) |
+
+**The slice compile (Task 4 Step 2b).** For each compilable project: `generateMutationSet` on the project under the branch build, then `writeInstrumentedProject` with ONLY the new mutants (the `+` rows whose key is not a `-` row's, i.e. not a tag change), every other `.al` file copied unchanged, the Control dependency injected, the Control app in the package cache, and one `alc` run with the project's own `app.json` symbols. Instrumenting only the new mutants is sufficient, not a shortcut: a mutant's guard branch is a whole copy of its member's body with that one mutation applied, so each mutant compiles or fails on its own. PASS means the compile's error set, as (file, line, code), equals the plain compile's residual set EXACTLY, so 0 errors in any instrumented file. The tool also prints how many mutants it instrumented, which must equal the count of new rows in that project; a slice that instrumented nothing would otherwise pass.
+
+**DC/Cloud: repro-shaped extracts (Task 4 Step 2c).** A scratch tool `dc-shapes.ts` prints, for each of DC's 70 new rows, the operator, the member's named-return type, and the TYPES the operator compared (for `swap-call-arguments` the two argument types and the chosen overload's parameter types, for `swap-additive` the two operand types), never source text. The rows are grouped into distinct shapes. Each shape gets one hand-written repro with invented names under `$S/repro-dc/<shape>/` and the named return in the same role, which must (a) emit that operator at that site under the branch build (`sites.ts`), and (b) compile through `alc-all.ts`. The number of shapes is reported, not pre-committed; every shape must compile, and a shape that cannot be reproduced by hand is a STOP.
+
+So the plan claims a compile proof for System Application, Base Application and all 14 BaseApp test projects, which is all 568 new mutants of System Application and full BaseApp (7 and 561; the BaseApp scratch project's one new row is the same full BaseApp row, `RefreshAccessToken` L315), and for DC/Cloud only per shape.
+
+### I2. Decision 6's STOP check is now a step (Task 4 Step 2d)
+
+The prototype did not compare emitted branches (it says so above). Decision 6's STOP rule asks for exactly that comparison, so it becomes a step, not a narrowed rule.
+
+**The comparison.** The twin (`named-twin.ts`) is, by construction, the same member as a plain procedure with an ordinary local. So "the same operator's branch in a plain procedure of the same shape" exists for every new mutant: it is the twin's mutant at the joined (file, span, operator), spans mapped back through the `EDIT` log exactly as `twin-diff.ts` does. A scratch tool `branch-cmp.ts` instruments the new mutants of a project (the I1 slice) and the joined mutants of its twin, both under the branch build, extracts each mutant's guard branch (the text from `MutationSelector.Active('<id>') then begin` to the next `end else`), replaces the mutant id with `<ID>`, and requires the two texts to be equal. The twin runs under the branch build rather than master, which is sound because the twin has no named return in any rewritten member; the step first checks it, by requiring the branch build's site capture of each twin to be byte-identical to the plan-time master capture of the same twin (`$S/cap/twin/`).
+
+**Pre-committed:** every new mutant's branch equals its twin's, for all of them, with none excluded: 6 in the repros (`n4` 2, `n11` 1, `n13` 2, `n14` 1), 70 in DC/Cloud, 7 in System Application, 1 in the BaseApp scratch project and 561 in full BaseApp. The tool prints the number it compared per project, and each must equal those counts. DC needs no compile for this, so the branch comparison covers DC in full.
+
+**Its control.** Edit one character inside one new mutant's branch in a copy of the `n4` twin's instrumented project; `branch-cmp.ts` must report exactly that mutant, and nothing else. Recorded in `$S/logs/t4-branch-control.txt`.
+
+**The STOP rule, as it now reads:** a gate fixture changes (Step 3), any slice or shape fails to compile (Steps 2, 2b, 2c), or any new mutant's branch differs from its twin's (Step 2d). Any of these stops the merge and files "Cronus28 gate for R-323" as a separate, BLOCKED task (see "Task count and the live gate").
+
+### I3. The scheme transition itself: 2 to 3, on a same-text key
+
+R325's tests prove refusal from scheme 1 to the current scheme. R-323 adds the case that matters for THIS bump: a scheme-2 record whose key text is identical to a scheme-3 key naming a DIFFERENT mutant. `n14` is that case, pinned by the pre-commitment: the key `78d263bd...|Repro N14|Pick|lethal.swap-additive|1` names the overload's L12 mutant under scheme 2 and the new L5 mutant under scheme 3. Task 3 gains four tests (Step 1b), each on `n14`'s AL through the real `runSession` path, modelled on `resume.test.ts`'s `R325` describe (`oldSchemeRun` relabels a stored run's scheme and fingerprint):
+
+- **history** (`--skip-known-survivors`): a finished run relabelled to scheme 2 whose record holds the key above as a survivor. Under scheme 3 the L5 mutant, whose key is that same text (asserted), is EXECUTED, not reported `known-survivor`, and the warning `history-identity-scheme-changed` names `identity scheme 2`. Control: the same record relabelled to scheme 3 IS skipped, which proves the key really collides, so the refusal is what saves it.
+- **`--resume-run <id>`**: an unfinished scheme-2 run holding the key is refused with a message naming `identity scheme 2`, `scheme 3` and `R325`.
+- **`--resume last`**: the same run is named, not reported as "none found".
+- **marks**: a marks file with `"identityScheme": 2` marking that key equivalent leaves the L5 mutant unmarked (stale); control: the same file with `"identityScheme": 3` marks it.
+
+Each test asserts the literal key text from the pre-commitment, so a change to the key breaks the test instead of silently testing another key. Red-check (Task 3 Step 2): make the history path ignore the scheme (the check `resume.ts`/`store.ts` uses for R325), confirm the history test goes red and its control stays green; restore. The same for resume and marks.
+
+### Minor: the class list, the arm tests and the `alc` rule
+
+**Also checked, and unaffected** (the class table above lists what resolves a name for the mutation pipeline; these three also read identifiers):
+
+- `packages/runner/src/testpage-scan.ts` builds its own scope and already adds a procedure's `return_value` with its `return_type` (L364 to L366). It is the TestPage scan, not the mutation pipeline, and needs no change.
+- `packages/engine/src/semantic/callers.ts` resolves only bare call targets against the object's procedures. A named return is a variable, not a call target.
+- `packages/schemata/src/compile.ts`'s `latchNameFor` avoids every identifier TOKEN in the member (and the object outside other members), so it already avoids a named return's name, and its doc comment names "the return value" as a reason. No change.
+
+**The every-arm rule's name comparison gets its own tests** (Task 2 Step 1): arms `Result: Text` and `RESULT: Text` agree, so `Result` is a local of type `Text`; arms `Result: Text` and `Res: Text` give two names, each declared by one arm only, so both are ambiguous and neither is a local.
+
+**A return name cannot coexist with a parameter or local of the same name** (measured, `$S/probe/p16` to `p18`, `alc-plain.ts`): a parameter `Result` beside a return value `Result` fails `AL0123: The return value name 'Result' is already defined`; a local `Result: Text` beside a return value `Result: Integer` fails `AL0121: The variable name 'Result' is already defined`; a parameter `RESULT` beside a return value `result` fails `AL0123`, so the comparison is case-insensitive. So in AL that compiles, a member's named return never competes with another declaration of the member, and the fix needs no precedence rule between them. No test is added for that shape, since it is invalid AL.
+
+### The orchestrator's preliminary rulings, applied
+
+1. The bump to scheme 3 stands, as Task 1 (open question 1 is closed).
+2. Trigger header names: filed as a LOW-priority roadmap item in Task 5 ("resolve trigger header names: parameters, `var` locals and the named return", evidence: 46 BaseApp triggers with a named return). Open question 2 is closed.
+3. The `gate-receipt.test.ts` timeout folds into R335 (the known flaky-test item). Open question 3 is closed; the "suite green" steps below say "R335's flakes aside".
+
+---
+
 ## Task count and the live gate (added with the tasks)
 
 Six tasks, Task 0 to Task 5, all OFFLINE. No task needs a container.
 
-Cronus28 is OFF until further notice (coordinator, 2026-09-29), so nothing in this plan waits on it. Decision 6 already needs no live gate. If its STOP rule fires (a gate fixture changes in Task 4 Step 3, or `alc` fails in Step 2), the branch is not merged and a SEPARATE task, "Cronus28 gate for R-323", is filed and marked BLOCKED on Cronus28 returning; no other task depends on it or waits for it.
+Cronus28 is OFF until further notice (coordinator, 2026-09-29), so nothing in this plan waits on it. Decision 6 already needs no live gate. If its STOP rule fires (a gate fixture changes in Task 4 Step 3, `alc` fails in Step 2, 2b or 2c, or a new mutant's branch differs from its twin's in Step 2d; see "Revision r2"), the branch is not merged and a SEPARATE task, "Cronus28 gate for R-323", is filed and marked BLOCKED on Cronus28 returning; no other task depends on it or waits for it.
 
 ## Global Constraints
 
@@ -341,15 +409,16 @@ Cronus28 is OFF until further notice (coordinator, 2026-09-29), so nothing in th
 3. **Every arm, and unknown where unindexed.** `n5`/`n6` resolve, `n7`/`n8` are ambiguous, a trigger's named return is unknown (`n9`), and an unindexed member (R327, R330, R331) still resolves nothing.
 4. **The receiver reads the type.** `n13` is claimed as a record receiver, and `n12`'s codeunit receiver is not (Decision 4).
 5. **The hang tag comes back.** 21 + 6 + 55 existing corpus mutants and `n11`'s gain `loop-condition-target`; `n11b`'s tags stay.
-6. **Keys and the scheme.** Exactly the pre-committed key moves, and `IDENTITY_SCHEME` is 3 before the engine change lands, so no commit carries moved keys under scheme 2.
+6. **Keys and the scheme.** Exactly the pre-committed key moves, and `IDENTITY_SCHEME` is 3 before the engine change lands, so no commit carries moved keys under scheme 2. The 2 to 3 transition itself is tested on `n14`'s same-text key for history, both resume forms and marks (Task 3 Step 1b).
 7. **Nothing else moved.** Fixtures byte-identical; BusinessFoundation unchanged; every `.err` identical.
+8. **Compiles, and emits as a plain procedure does.** Every new System Application and full BaseApp mutant compiles in its real project (Task 4 Step 2b); every distinct DC shape compiles as a hand-written extract (Step 2c); every new mutant's guard branch equals its twin's (Step 2d).
 
 ## File structure
 
 - Task 1: `packages/schemata/src/project.ts` (`IDENTITY_SCHEME` 3, doc comment: why), `fixtures/sandbox-harden/lethal.equivalent.json`, `CHANGELOG.md`, `docs/using-lethal-from-an-agent.md`, the tests that mean "this build's scheme" by a literal, `packages/runner/tests/__snapshots__/report-equality.test.ts.snap`.
 - Task 2: `packages/engine/src/semantic/symbol-table.ts` (`parseProcedure`, `parseSplitProcedure`, `triggerLocalNames`), `packages/engine/src/semantic/receiver.ts` (`classifyDeclaredType`, a new `returnTypeAfter`). Tests: `packages/engine/tests/semantic/symbol-table.test.ts`, `types.test.ts`, `resolve-var-ref.test.ts`, `packages/builtin-tier2/tests/receiver.test.ts`, `packages/builtin-tier1/tests/loop-hazard.test.ts`.
-- Task 3: `packages/runner/tests/named-return.test.ts` (new).
-- Task 5: `docs/roadmap/R323.md` closed, a new roadmap item for the partial-header `#if` grammar gap, a one-line note in `R325.md`, regenerated `ROADMAP.md`.
+- Task 3: `packages/runner/tests/named-return.test.ts` (new), including the 2 to 3 scheme tests.
+- Task 5: `docs/roadmap/R323.md` closed, two new roadmap items (the partial-header `#if` grammar gap; resolving trigger header names, low priority), a one-line note in `R325.md`, regenerated `ROADMAP.md`.
 - Scratch, never committed: everything under `$S`.
 
 ---
@@ -411,7 +480,7 @@ Expected: the last line (about 15 minutes; full BaseApp is 7). A difference is a
 
 - [ ] **Step 1: Know what the bump touches.** The prototype run with `IDENTITY_SCHEME = 3` (`$S/logs/proto-bun-test-scheme3.txt`) names every unit test that reads the literal 2 as "this build's scheme". Reproduce it on the branch: set the constant to 3, `bun run typecheck && rm -rf packages/*/dist && bun test`, and list the failures in `$S/logs/t1-scheme3.txt`. Expected: the six tests recorded under "Task 1 inventory" at the end of this plan, and nothing else (a seventh is a STOP: something else reads the scheme as a literal).
 - [ ] **Step 2: Update each, by meaning.** A test that means "the current scheme" reads `IDENTITY_SCHEME`; a test that means "an older scheme" keeps its literal and says so in its name (the R325 tests already use 1 for that). `bun test <file> --update-snapshots` for `report-equality` only, and the diff must be the one line `"identityScheme": 2` to 3. `fixtures/sandbox-harden/lethal.equivalent.json`: `"identityScheme": 3`, justified in the commit message by Task 4's byte-identical `sandbox-harden` keys (its marks name the same mutants under both schemes). `CHANGELOG.md`: "Identity scheme 3 (R323): keys move for procedures with a named return value; existing marks files need `"identityScheme": 3` after re-checking each mark against a fresh report; history and resume from scheme-2 runs are refused by name (R325)". `docs/using-lethal-from-an-agent.md`: the example reads 3. The constant's doc comment gains one sentence: "3: R323, a named return value became a declaration (measured moves in the R-323 plan)".
-- [ ] **Step 3: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test` (the pre-existing `gate-receipt.test.ts` timeout aside, which fails on master too). `bunx biome check <touched .ts files>`.
+- [ ] **Step 3: Green.** `bun run typecheck && rm -rf packages/*/dist && bun test` (R335's known flakes aside: `campaign-subcommands.test.ts` and `gate-receipt.test.ts` time out at 5 s under a full run; each must pass when run alone). `bunx biome check <touched .ts files>`.
 - [ ] **Step 4: Commit.** `git commit -m "fix(R323): identity scheme 3; a named return value becoming a declaration moves keys for unchanged source (R325's rule)"`.
 
 ### Task 2: A named return value is a declaration (engine)
@@ -421,7 +490,7 @@ Expected: the last line (about 15 minutes; full BaseApp is 7). A difference is a
 - Test: `packages/engine/tests/semantic/symbol-table.test.ts`, `types.test.ts`, `resolve-var-ref.test.ts`, `packages/builtin-tier2/tests/receiver.test.ts`, `packages/builtin-tier1/tests/loop-hazard.test.ts`
 
 - [ ] **Step 1: Write the failing tests,** each on hand-written inline AL copied from the named repro, asserting only an engine answer:
-  - `symbol-table.test.ts`, "a named return value is a local (R323)": a plain `Pick() Result: Text` lists `Result` in `locals` with type text `Text`; a split member whose arms both declare `Result: Text` lists it; a split member with a named return in one arm only (`n7`), or two types (`n8`), lists it in `ambiguous` and in no list.
+  - `symbol-table.test.ts`, "a named return value is a local (R323)": a plain `Pick() Result: Text` lists `Result` in `locals` with type text `Text`; a split member whose arms both declare `Result: Text` lists it; a split member with a named return in one arm only (`n7`), or two types (`n8`), lists it in `ambiguous` and in no list. And the arm comparison, per review r1: arms `Result: Text` and `RESULT: Text` agree (a local of type `Text`); arms `Result: Text` and `Res: Text` put BOTH names in `ambiguous` and neither in `locals`.
   - `types.test.ts` (with the file's `typeAt`), "R323: a named return value": `n1`'s `Result` types `Text` with a global `Result: Integer`; `n2`'s with the global spelled `result`; `n3`'s types `Integer`; `n4`'s (no global) types `Integer`; `n5`/`n6` type `Text`; `n7`/`n8` are `null` with the global present; `n9`'s trigger `Found` is `null` with a global `Found: Integer`; `n13`'s `R.Amt` types `Integer` (`memberType` through the named return).
   - `resolve-var-ref.test.ts`, "R323": `resolveVarRef` on `n11`'s `Result` answers the named return's declaration (its node is the `return_value` identifier), and the same declaration for the loop condition's `Result`; on `n9`'s `Found` it answers `null`, not the global.
   - `loop-hazard.test.ts`, "R323": `classifyHangCapable` on `n11`'s `Result := Result + 1` answers `loop-condition-target`.
@@ -443,10 +512,11 @@ Expected: the last line (about 15 minutes; full BaseApp is 7). A difference is a
   - `n12`: no `validate-to-assign` at L8, and its `void-method-call` stays;
   - `n13`: `remove-setrange` at L5, no `void-method-call` there, `swap-additive` at L6;
   - `n14`: the L12 `swap-additive` key carries ordinal 1 and the new L5 one ordinal 0; `n15`: the L12 key carries ordinal 0.
-- [ ] **Step 2: Red-check** `n1` (revert `plain`), `n7` (revert `split`), `n9` (revert `trigger`), `n13` (revert `receiver`) and `n14` (revert `plain`), one at a time, restore; record in `$S/logs/t3-redcheck.txt`.
-- [ ] **Step 3: Commit.** `test(R323): runner-level pins for named return values: hiding, the every-arm rule, triggers, the receiver, the hang tag and the ordinals`.
+- [ ] **Step 1b: The 2 to 3 transition, on `n14`'s same-text key** (review r1 I3; the four tests and their controls are specified in "Revision r2", I3). In the same file, a `describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same key text")`, built on `resume.test.ts`'s `oldSchemeRun` pattern (relabel a stored run's `identity_scheme` and recompute its fingerprint with `identityScheme: 2`) over a project holding `n14`'s AL. Each test first asserts that the current run's L5 `swap-additive` carries the literal key `78d263bd...|Repro N14|Pick|lethal.swap-additive|1` (full hash from `$S/expect-precommit/n14-overload-key-add.txt`), then: history executes it and warns `identity scheme 2` (control: relabelled to 3, it IS a known survivor); `--resume-run <id>` is refused naming `identity scheme 2`, `scheme 3` and `R325`; `--resume last` names the run; a marks file at `"identityScheme": 2` leaves it unmarked (control: at 3 it is marked).
+- [ ] **Step 2: Red-check** `n1` (revert `plain`), `n7` (revert `split`), `n9` (revert `trigger`), `n13` (revert `receiver`) and `n14` (revert `plain`), one at a time, restore; and each Step 1b test: make that path ignore the scheme (history, resume, marks in turn), confirm its test goes red while its control stays green, restore. Record all in `$S/logs/t3-redcheck.txt`.
+- [ ] **Step 3: Commit.** `test(R323): runner-level pins for named return values: hiding, the every-arm rule, triggers, the receiver, the hang tag, the ordinals, and the scheme 2 to 3 refusals on a same-text key`.
 
-### Task 4: Offline proof: the checker with exact totals, alc on every subset, fixtures byte-identical
+### Task 4: Offline proof: the checker with exact totals, alc on every repro subset and every compilable corpus slice, branches equal to the twin's, fixtures byte-identical
 
 **Files:** scratch only. On the r323 worktree with Tasks 1 to 3 committed.
 
@@ -469,16 +539,20 @@ echo "checks: 27 pass; every .err identical"
 Each check pins the file's exact raw and deployed totals (`= raw N deployed M`), every `+`, `-`, `k` and `a` row, and every other mutant's key, `procedureName` and tag. Expected: the last line. Any FAIL is a STOP.
 
 - [ ] **Step 2: alc, every repro, every subset.** For each repro, `bun "$S/alc-all.ts" "$S/repro/<name>" "<syms>"` (`CLEAN27` for `n5` to `n8` and `n10`, none otherwise). Expected: `21 of 21` subsets `exit=0 app=true`, every project `PASS`. Any FAIL is a STOP.
+- [ ] **Step 2b: The corpus slice compile (System Application, Base Application, the 14 BaseApp test projects).** A scratch tool `$S/slice-alc.ts <project-dir> <expect-file> <corpus-root> <name>`, as "Revision r2", I1 specifies: new mutants only, Control dependency injected, package cache `C:/bcartifacts.cache/symbols` plus the Control app's `.alpackages` and the Control app, assembly probing `C:/bcartifacts.cache/dlls` plus .NET 8.0.31 `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App`. It prints `instrumented N` and the error set. Run SERIALLY, one project at a time, and record each run's peak memory; if one run's peak is too high for this machine, split that project's instrumented files into batches and compile each batch under the same rule. Expected, per project: `instrumented` equals that project's new rows (System Application 7; Base Application and the 14 test projects 561 in total), and the error set equals the plain compile's residuals exactly (System Application 2, Base Application 1, `Tests-Misc` 9, every other test project 0; the plain logs are `$S/corpus-alc/*-3.log` and `t-*.log`). Any other error is a STOP.
+- [ ] **Step 2c: DC/Cloud per shape.** `$S/dc-shapes.ts` over DC's 70 new rows, then one hand-written repro per distinct shape under `$S/repro-dc/`, each checked with `sites.ts` (the operator appears at the site) and `alc-all.ts` (it compiles), as "Revision r2", I1 specifies. Record the shape table in `$S/logs/t4-dc-shapes.txt`. Expected: every shape reproduced and compiled. A shape that cannot be reproduced is a STOP.
+- [ ] **Step 2d: Branches equal to the twin's.** `$S/branch-cmp.ts` for the repros, DC/Cloud, System Application, the BaseApp scratch project and full BaseApp, as "Revision r2", I2 specifies, after checking that the branch build's capture of each twin is byte-identical to `$S/cap/twin/`. Expected: compared counts 6, 70, 7, 1 and 561, and 0 differences. Then the control (one character changed in a copy of `n4`'s twin: exactly that mutant reported). Any difference is a STOP.
 - [ ] **Step 3: Fixtures byte-identical.** For each of the six gate fixtures: `bun scripts/probe-fixture-hashes.ts "fixtures/$f/src"` equals `$S/hashes-before-$f.txt`; `bun "$S/identity-keys.ts" "fixtures/$f" "$S/target-after-$f"` equals `$S/ids-before-$f.txt` (with `maxRSS_KB` dropped); and `diff -r --exclude=app.json "$S/target-before-$f" "$S/target-after-$f"` is empty. `bun run compile:fixtures` is not needed (no fixture AL changes) and is not run.
-- [ ] **Step 4: Whole suite.** `bun run typecheck`, `rm -rf packages/*/dist`, `bun test` from the root. Expected: green, except the pre-existing `gate-receipt.test.ts` timeout if it still fails on master (checked the same day).
+- [ ] **Step 4: Whole suite.** `bun run typecheck`, `rm -rf packages/*/dist`, `bun test` from the root. Expected: green, R335's known 5 s timeouts aside (each such test must pass when run alone).
 
-### Task 5: Roadmap (no live gate: Decision 6; its STOP rule is checked by Task 4 Steps 2 and 3)
+### Task 5: Roadmap (no live gate: Decision 6; its STOP rule is checked by Task 4 Steps 2, 2b, 2c, 2d and 3)
 
 - [ ] Re-check the next free id across every worktree immediately before writing (`for w in U:/Git/LethAL-wt/*/; do ls "$w/docs/roadmap"; done | sort -u | tail`); at plan time another worktree holds R337, so the first free id was R338.
+- [ ] File `docs/roadmap/R<next+1>.md` (priority low, the orchestrator's ruling): "Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them" (evidence: 46 BaseApp triggers with a named return; the R-323 plan's Decision 3).
 - [ ] File `docs/roadmap/R<next>.md`: "A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that file" (repro `n10`, `alc` passes under both subsets, 0 in every corpus; the upstream draft is under "Notes").
-- [ ] Mark `docs/roadmap/R323.md` `done (<Task 1 commit>..<Task 3 commit>)` with a closing section: the rule (resolve; every arm; unknown in a trigger; unindexed unknown), the pre-committed and measured counts per corpus (DC +70 deployed and 21 tags; System Application +7 and 6; BaseApp scratch +1; full BaseApp +548 deployed, 13 Tier-2 takeovers, 55 tags; fixtures 0), the scheme bump and its exact key moves, and the red-checks.
+- [ ] Mark `docs/roadmap/R323.md` `done (<Task 1 commit>..<Task 3 commit>)` with a closing section: the rule (resolve; every arm; unknown in a trigger; unindexed unknown), the pre-committed and measured counts per corpus (DC +70 deployed and 21 tags; System Application +7 and 6; BaseApp scratch +1; full BaseApp +548 deployed, 13 Tier-2 takeovers, 55 tags; fixtures 0), the scheme bump and its exact key moves, the compile proof per project (which were compiled, and that DC was proven per shape only), the branch comparison, and the red-checks.
 - [ ] One line in `docs/roadmap/R325.md`: "Scheme 3: R323 (named return values), measured key moves in the R-323 plan."
-- [ ] `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, then commit `roadmap(R323): done; R<next> filed`.
+- [ ] `bun scripts/roadmap-index.ts && bun test scripts/roadmap-index.test.ts`, then commit `roadmap(R323): done; R<next> and R<next+1> filed`.
 
 ---
 
@@ -515,7 +589,7 @@ Each check pins the file's exact raw and deployed totals (`= raw N deployed M`),
 >
 > Expected: a procedure node (or a split shape like `preproc_split_procedure`) whose `return_value` / `return_type` sit inside the arms. Actual: an `ERROR` node starting at `procedure`, with the `#if` parsed as a `var_section` fragment, so nothing after it in the member is structured. The same happens when only the type is conditional (`Result:` then `#if` / `Text` / `#else` / `Integer` / `#endif`). Not seen in DC/Cloud, System Application, BusinessFoundation or BaseApp (0 such ERROR nodes), so it is a completeness gap rather than an urgent one.
 
-## Open questions for the orchestrator
+## Open questions for the orchestrator (all three ruled before r2; see "Revision r2")
 
 1. **The scheme bump with zero moves in DC/Cloud and System Application.** Every user's history, resume and marks under scheme 2 will be refused once. The rule says bump (full BaseApp and two repros move keys for unchanged source). Confirm the bump, rather than a narrower rule such as "bump only when a measured corpus moves".
 2. **Trigger names.** A trigger's named return is unknown, like every other trigger header name since R330. Resolving trigger header names (parameters, locals, the named return) would add sites in 46 BaseApp triggers at least. File it as its own roadmap item, or leave it?
