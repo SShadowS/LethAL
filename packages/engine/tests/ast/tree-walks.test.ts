@@ -16,8 +16,10 @@ import {
   memberArms,
   objectDeclarationsOf,
   parseAL,
+  procedureLikeArmNames,
   procedureLikeNameNode,
   procedureLikeReturnType,
+  renamedMemberCoverageNames,
   visit,
   wrapRoot,
 } from "../../src";
@@ -638,5 +640,140 @@ describe("R-297 Task 6: split-directive single-statement slots", () => {
       "        case X of\n            1:\n                L := 10;\n#if not CLEAN27\n            2:\n#else\n            4:\n#endif\n                L := X + 20;\n            3:\n                L := 30;\n        end;",
     );
     expectSlot(src, "preproc_split_case_extended", "L := X + 20");
+  });
+});
+
+describe("R318: renamedMemberCoverageNames", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  /** Every procedure-like node of `src`, in source order, with its coverage names. */
+  const namesOf = (src: string): string[][] => {
+    const out: string[][] = [];
+    visit(wrapRoot(parseAL(src)), (n) => {
+      if (isProcedureLike(n) && n.children.length > 0) out.push(renamedMemberCoverageNames(n));
+    });
+    return out;
+  };
+  const obj = (body: string, id = 50100): string => `codeunit ${id} "Repro R${id}"
+{
+${body}
+}
+`;
+  const split = (a: string, b: string, param = "X: Integer"): string =>
+    `#if R318A
+    procedure ${a}(${param}): Integer
+#else
+    procedure ${b}(${param}): Integer
+#endif
+    begin
+        exit(1);
+    end;
+`;
+  const plain = (name: string, param = "T: Text"): string =>
+    `    procedure ${name}(${param}): Integer
+    begin
+        exit(2);
+    end;
+`;
+
+  it("a plain procedure and an agreeing split member have none", () => {
+    expect(namesOf(obj(plain("Solo") + split("Same", "same")))).toEqual([[], []]);
+  });
+
+  it("a renamed member lists each arm's name once, in source order, first spelling kept", () => {
+    expect(namesOf(obj(split("Pick", "Choose")))).toEqual([["Pick", "Choose"]]);
+    const three = `#if R318A
+    procedure Pick(X: Integer): Integer
+#elif R318B
+    procedure Choose(X: Integer): Integer
+#else
+    procedure PICK(X: Integer): Integer
+#endif
+    begin
+        exit(1);
+    end;
+`;
+    expect(namesOf(obj(three))).toEqual([["Pick", "Choose"]]);
+  });
+
+  it("quotes are stripped", () => {
+    expect(namesOf(obj(split('"Pick"', '"Choose Me"')))).toEqual([["Pick", "Choose Me"]]);
+  });
+
+  it("a named return value is not an arm name (R323)", () => {
+    const named = `#if R318A
+    procedure Pick(X: Integer) Result: Integer
+#else
+    procedure Choose(X: Integer) Result: Integer
+#endif
+    begin
+        Result := X;
+    end;
+`;
+    expect(namesOf(obj(named))).toEqual([["Pick", "Choose"]]);
+  });
+
+  it("a name a plain overload also uses is dropped, compared case-insensitively", () => {
+    expect(namesOf(obj(split("Pick", "Choose") + plain("CHOOSE")))).toEqual([["Pick"], []]);
+  });
+
+  it("a name a #if-wrapped procedure uses is dropped", () => {
+    const wrapped = `#if R318A
+${plain("Choose")}#endif
+`;
+    expect(namesOf(obj(split("Pick", "Choose") + wrapped))).toEqual([["Pick"], []]);
+  });
+
+  it("two renamed members that share a name across builds each drop it", () => {
+    expect(namesOf(obj(split("Alpha", "Beta") + split("Beta", "Gamma")))).toEqual([
+      ["Alpha"],
+      ["Gamma"],
+    ]);
+  });
+
+  it("a member whose every arm name is taken gets none", () => {
+    expect(namesOf(obj(split("Alpha", "Beta") + split("Beta", "Alpha")))).toEqual([[], []]);
+  });
+
+  it("a member swallowed by the global var section still sees a later overload (R327)", () => {
+    const src = obj(`    var
+        Glob: Integer;
+
+${split("Pick", "Choose")}
+${plain("Choose")}`);
+    expect(namesOf(src)).toEqual([["Pick"], []]);
+  });
+
+  it("a trigger's name is taken", () => {
+    const src = obj(`    trigger OnRun()
+    begin
+    end;
+
+${split("OnRun2", "OnRun")}`);
+    expect(namesOf(src)).toEqual([["OnRun2"]]);
+  });
+
+  it("an object that did not parse cleanly gives no names", () => {
+    const src = obj(`${split("Pick", "Choose")}
+    procedure Broken(
+    begin
+    end;
+`);
+    expect(namesOf(src)[0]).toEqual([]);
+  });
+
+  it("the rule is per object: another object in the same file does not collide", () => {
+    const src = obj(split("Pick", "Choose")) + obj(plain("Choose"), 50101);
+    expect(namesOf(src)).toEqual([["Pick", "Choose"], []]);
+  });
+
+  it("procedureLikeArmNames lists every arm's name, unquoted, as written", () => {
+    const found: string[][] = [];
+    visit(wrapRoot(parseAL(obj(split('"Pick"', '"Choose Me"')))), (n) => {
+      if (isProcedureLike(n) && n.children.length > 0) found.push(procedureLikeArmNames(n));
+    });
+    expect(found).toEqual([["Pick", "Choose Me"]]);
   });
 });
