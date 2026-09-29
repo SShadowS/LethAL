@@ -289,3 +289,101 @@ page 50000 "CDO Setup"
     }
   });
 });
+
+// R302: a split member (R301's shared-body shape, R316's per-arm preamble) is a member of its
+// object. A name inside it resolves only when EVERY arm declares it with the same type; any other
+// name the arms declare is ambiguous and resolves to nothing.
+describe("buildSymbolTable: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const KEY = objectScopeKey("codeunit", "Repro S");
+  const build = (src: string) => buildSymbolTable([{ path: "s.al", root: wrapRoot(parseAL(src)) }]);
+  const startOf = (src: string, marker: string) => src.indexOf(marker);
+
+  const SPLIT = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Integer): Integer
+#else
+    internal procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    var
+        Shared: Decimal;
+    begin
+        exit(X);
+    end;
+}
+`;
+  const PREAMBLE = `codeunit 50100 "Repro S"
+{
+#if CLEAN27
+    procedure Pick(X: Integer): Decimal
+    var
+        N: Integer;
+        Both: Code[20];
+#else
+    procedure Pick(X: Integer): Integer
+    var
+        Both: Code[20];
+#endif
+    begin
+        exit(X);
+    end;
+}
+`;
+
+  it("a split member is found by its own start, with the every-arm rule applied", () => {
+    const t = build(SPLIT);
+    const p = t.resolveProcedureAt(KEY, startOf(SPLIT, "#if CLEAN27"));
+    expect(p?.name).toBe("Pick");
+    expect(p?.parameters.map((v) => v.name)).toEqual(["X"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Shared"]);
+    expect(p?.ambiguous).toEqual(["y"]);
+    expect(p?.returnType).toBe("Integer");
+  });
+
+  it("a preamble's agreeing arm local is listed; an arm-only local and a disagreeing return are not", () => {
+    const t = build(PREAMBLE);
+    const p = t.resolveProcedureAt(KEY, startOf(PREAMBLE, "#if CLEAN27"));
+    expect(p?.parameters.map((v) => v.name)).toEqual(["X"]);
+    expect(p?.locals.map((v) => v.name)).toEqual(["Both"]);
+    expect(p?.ambiguous).toEqual(["n"]);
+    expect(p?.returnType).toBeNull();
+  });
+
+  it("a renamed member is indexed by position only, with the name ''", () => {
+    const renamed = SPLIT.replace("internal procedure Pick(", "internal procedure PickOld(");
+    const t = build(renamed);
+    expect(t.resolveProcedureAt(KEY, startOf(renamed, "#if CLEAN27"))?.name).toBe("");
+    expect(t.resolveProcedure(KEY, "")).toBeNull();
+    expect(t.resolveProcedure(KEY, "Pick")).toBeNull();
+  });
+
+  // R324: a call is typed only when its name names exactly one procedure of the owner. A split
+  // member counts under every arm's name, so a renamed member makes both names non-unique.
+  it("uniqueProcedure: one of a name, null for two, a renamed member under each arm's name", () => {
+    const two = `${SPLIT.slice(0, SPLIT.lastIndexOf("}"))}
+    procedure Pick(T: Text): Text
+    begin
+        exit(T);
+    end;
+
+    procedure Other(): Integer
+    begin
+        exit(1);
+    end;
+}
+`;
+    const t = build(two);
+    expect(t.uniqueProcedure(KEY, "Pick")).toBeNull();
+    expect(t.uniqueProcedure(KEY, "OTHER")?.name).toBe("Other");
+    const renamed = two.replace("internal procedure Pick(", "internal procedure Other(");
+    const r = build(renamed);
+    expect(r.uniqueProcedure(KEY, "Other")).toBeNull();
+    // `Pick` is now arm 1's name and the plain overload's: two again.
+    expect(r.uniqueProcedure(KEY, "Pick")).toBeNull();
+    const single = build(SPLIT);
+    expect(single.uniqueProcedure(KEY, '"pick"')?.name).toBe("Pick");
+  });
+});

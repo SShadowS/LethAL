@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ALNodeKind } from "../../src/ast/node-kinds";
 import { initParser, parseAL } from "../../src/ast/parser";
-import { findFirst, wrapRoot } from "../../src/ast/syntax-node";
+import { findFirst, visit, wrapRoot } from "../../src/ast/syntax-node";
 import type { ALSyntaxNode } from "../../src/ast/syntax-node";
 import { buildSymbolTable } from "../../src/semantic/symbol-table";
 import { buildTypeTable } from "../../src/semantic/types";
@@ -303,5 +303,159 @@ ${HELPER}`,
       // `A.B.C` would need the middle to resolve to a record type, which this layer does not model.
       expect(await typeOfIn("R.Amount.Something")).toBeNull();
     });
+  });
+});
+
+/** The type of the LAST identifier spelled `text` that is not a declaration's own name, or of the
+ *  last call whose callee is spelled `text` when `call` is set. A global `var` section goes AFTER
+ *  the procedures in these fixtures: before a split member it swallows the member into its body
+ *  (a grammar quirk, measured 2026-09-29; none of the corpus split members sits there). */
+function typeAt(src: string, text: string, call = false): string | null {
+  const root = wrapRoot(parseAL(src));
+  const symbols = buildSymbolTable([{ path: "t.al", root }]);
+  const types = buildTypeTable([{ path: "t.al", root }], symbols);
+  let hit: ALSyntaxNode | null = null;
+  visit(root, (n) => {
+    if (call) {
+      if (n.kind === ALNodeKind.procedure_call && n.childForFieldName("function")?.text === text)
+        hit = n;
+    } else if (
+      n.kind === ALNodeKind.identifier &&
+      n.text === text &&
+      n.parent?.kind !== ALNodeKind.variable_declaration &&
+      n.parent?.kind !== ALNodeKind.parameter
+    ) {
+      hit = n;
+    }
+  });
+  if (hit === null) throw new Error(`no ${text}`);
+  return types.typeOf(hit);
+}
+
+// R302: inside a split member, a name types only when every arm declares it with the same type.
+// A name the arms disagree on is ambiguous: it types as nothing and HIDES a global of that name,
+// because falling through to the global types it by a declaration no build uses there.
+describe("buildTypeTable: split members (R302), unique calls (R324), case (R322)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SPLIT = `codeunit 50100 "Repro T"
+{
+#if CLEAN27
+    procedure Pick(X: Integer; Y: Integer): Integer
+#else
+    procedure Pick(X: Integer; Y: Text): Integer
+#endif
+    begin
+        Show(X, Y);
+        exit(X);
+    end;
+
+    local procedure Show(A: Integer; B: Integer)
+    begin
+    end;
+
+    var
+        Y: Integer;
+}
+`;
+
+  it("an agreeing parameter types; a disagreeing one is null even with a global of its name", () => {
+    expect(typeAt(SPLIT, "X")).toBe("Integer");
+    expect(typeAt(SPLIT, "Y")).toBeNull();
+  });
+
+  it("a call to an agreeing split member types by its return; a disagreeing one is null", () => {
+    const src = `codeunit 50100 "Repro T"
+{
+#if CLEAN27
+    procedure Same(X: Integer): Integer
+#else
+    procedure Same(X: Integer): Integer
+#endif
+    begin
+        exit(X);
+    end;
+
+#if CLEAN27
+    procedure Differs(X: Integer): Decimal
+#else
+    procedure Differs(X: Integer): Integer
+#endif
+    begin
+        exit(X);
+    end;
+
+    procedure Caller()
+    begin
+        Glob := Same(1) + 1;
+        Glob := Differs(1) + 1;
+    end;
+
+    var
+        Glob: Decimal;
+}
+`;
+    expect(typeAt(src, "Same", true)).toBe("Integer");
+    expect(typeAt(src, "Differs", true)).toBeNull();
+  });
+
+  it("R324: a call to an overloaded name is null, plain or split-then-plain; a unique name in other casing types", () => {
+    const plain = `codeunit 50100 "Repro T"
+{
+    procedure Foo(X: Integer): Integer
+    begin
+        exit(X);
+    end;
+
+    procedure Foo(T: Text): Text
+    begin
+        exit(T);
+    end;
+
+    procedure Bar(): Integer
+    begin
+        exit(1);
+    end;
+
+    procedure Caller(): Integer
+    begin
+        exit(Foo('x') + FOO('y') + BAR());
+    end;
+}
+`;
+    expect(typeAt(plain, "Foo", true)).toBeNull();
+    expect(typeAt(plain, "BAR", true)).toBe("Integer");
+    const split = plain.replace(
+      "    procedure Foo(X: Integer): Integer\n",
+      "#if CLEAN27\n    procedure Foo(X: Integer): Integer\n#else\n    procedure Foo(X: Integer): Integer\n#endif\n",
+    );
+    expect(split).not.toBe(plain);
+    expect(typeAt(split, "Foo", true)).toBeNull();
+  });
+
+  it("R322: a parameter named in other casing than its use types by the parameter, not the global", () => {
+    const plain = `codeunit 50100 "Repro T"
+{
+    procedure Pick(X: Integer; y: Text)
+    begin
+        Show(X, Y);
+    end;
+
+    local procedure Show(A: Integer; B: Text)
+    begin
+    end;
+
+    var
+        Y: Integer;
+}
+`;
+    expect(typeAt(plain, "Y")).toBe("Text");
+    const split = plain.replace(
+      "    procedure Pick(X: Integer; y: Text)\n",
+      "#if CLEAN27\n    procedure Pick(X: Integer; y: Text)\n#else\n    procedure Pick(X: Integer; y: Text)\n#endif\n",
+    );
+    expect(split).not.toBe(plain);
+    expect(typeAt(split, "Y")).toBe("Text");
   });
 });

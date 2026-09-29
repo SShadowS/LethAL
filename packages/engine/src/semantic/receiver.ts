@@ -41,7 +41,12 @@
  */
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
+import {
+  declarationMembers,
+  findEnclosingProcedure,
+  isProcedureLike,
+  procedureLikeNameNode,
+} from "../ast/tree-walks";
 import type { SemanticContext } from "./context";
 import {
   type ObjectSymbol,
@@ -506,6 +511,8 @@ export function lookupVar(
       symbols.resolveProcedureAt(objectName, procedure.startIndex) ??
       nameOf(procedure, symbols, objectName);
     if (symbol !== null) {
+      // R302: an ambiguous name resolves to nothing, and never to a global of that name.
+      if (symbol.ambiguous?.includes(name.toLowerCase())) return null;
       const local = symbol.locals.find(matches);
       if (local !== undefined) return local;
       const parameter = symbol.parameters.find(matches);
@@ -577,10 +584,9 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
  */
 function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
   for (const member of declarationMembers(objectNode)) {
-    if (member.kind !== ALNodeKind.procedure) continue;
-    const nameNode = member.childForFieldName("name");
-    if (nameNode === null) continue;
-    if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
+    if (!isProcedureLike(member)) continue;
+    for (const nameNode of member.children.filter((c) => c.fieldName === "name"))
+      if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
   }
   return false;
 }
@@ -756,7 +762,7 @@ function nameOf(
   symbols: SymbolTable,
   objectName: string,
 ): ProcedureSymbol | null {
-  const nameNode = procedure.childForFieldName("name");
+  const nameNode = procedureLikeNameNode(procedure);
   if (nameNode === null) return null;
   return symbols.resolveProcedure(objectName, stripQuotes(nameNode.text));
 }

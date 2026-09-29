@@ -163,3 +163,44 @@ describe("resolveVarRef across overloaded procedure names (R210)", () => {
     expect(resolved?.typeText).toContain("Integer");
   });
 });
+
+// R302: `lookupVar` walks to the nearest procedure-like node, so a split member's own names
+// resolve; a name its arms disagree on resolves to nothing, never to a global of the same name.
+describe("resolveVarRef: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const SRC = `codeunit 50202 "R"
+{
+    var
+        Amount: Text;
+
+#if CLEAN27
+    procedure P()
+    var
+        Amount: Decimal;
+        Count: Integer;
+#else
+    procedure P()
+    var
+        Amount: Integer;
+        Count: Integer;
+#endif
+    begin
+        Count := 1;
+        Amount := 2;
+    end;
+}
+`;
+
+  it("an agreeing split-member local resolves", () => {
+    const { root, ctx } = load(SRC);
+    const sym = resolveVarRef(useOf(root, "Count"), ctx);
+    expect(sym?.typeText).toBe("Integer");
+  });
+
+  it("a disagreeing name resolves to null, not to the global", () => {
+    const { root, ctx } = load(SRC);
+    expect(resolveVarRef(useOf(root, "Amount"), ctx)).toBeNull();
+  });
+});

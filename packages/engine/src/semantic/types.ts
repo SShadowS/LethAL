@@ -16,6 +16,7 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
+import { findEnclosingProcedure, procedureLikeNameNode } from "../ast/tree-walks";
 import { enclosingObjectScopeKey, objectScopeKey } from "./symbol-table";
 import type { SourceFile, SymbolTable } from "./symbol-table";
 
@@ -126,7 +127,7 @@ function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
     // Unqualified: a procedure of the object the call sits in.
     const owner = enclosingObjectScopeKey(node);
     if (owner === null) return null;
-    return symbols.resolveProcedure(owner, callee.text)?.returnType ?? null;
+    return symbols.uniqueProcedure(owner, callee.text)?.returnType ?? null;
   }
 
   if (callee.kind === ALNodeKind.field_access) {
@@ -143,7 +144,7 @@ function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
     const ownerName = stripQuotes(raw);
     const kind = /^\s*Codeunit\b/i.test(receiverType) ? "codeunit" : "table";
     return (
-      symbols.resolveProcedure(objectScopeKey(kind, ownerName), method.text)?.returnType ?? null
+      symbols.uniqueProcedure(objectScopeKey(kind, ownerName), method.text)?.returnType ?? null
     );
   }
 
@@ -242,11 +243,14 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
     // index does not hold, which is what this line did for every case before.
     const procSym =
       symbols.resolveProcedureAt(scope, proc.startIndex) ??
-      symbols.resolveProcedure(scope, proc.childForFieldName("name")?.text ?? "");
+      symbols.resolveProcedure(scope, procedureLikeNameNode(proc)?.text ?? "");
     if (procSym !== null) {
-      const local = procSym.locals.find((v) => v.name === node.text);
+      // R302: a name a split member's arms declare differently types as nothing, and it HIDES a
+      // global of that name: falling through would type it by a declaration no build uses here.
+      if (procSym.ambiguous?.includes(stripQuotes(node.text).toLowerCase())) return null;
+      const local = procSym.locals.find((v) => sameName(v.name, node.text));
       if (local !== undefined) return extractType(local.typeText);
-      const param = procSym.parameters.find((p) => p.name === node.text);
+      const param = procSym.parameters.find((p) => sameName(p.name, node.text));
       if (param !== undefined) return extractType(param.typeText);
     }
   }
@@ -255,24 +259,14 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   // referring to a global inside a procedure that a DIFFERENT object also declares resolved
   // against the wrong object's globals or not at all. Here the scope is the identifier's own by
   // construction, so this is the same object either way.
-  const global = symbols.globalsOf(scope).find((g) => g.name === node.text);
+  const global = symbols.globalsOf(scope).find((g) => sameName(g.name, node.text));
   if (global !== undefined) return extractType(global.typeText);
   return null;
 }
 
-/** The `procedure` NODE a node sits inside, or `null` at object level (a trigger body, a field
- *  declaration). Takes no object node: R87's whole point is that the enclosing procedure is a
- *  property of the NODE, not of whichever object a caller happened to be iterating.
- *
- *  Returns the node rather than its name since [[R210]]: AL lets one object declare several
- *  procedures with the same name, so the name does not identify which one a site is in. */
-function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
-  let current: ALSyntaxNode | null = node;
-  while (current !== null) {
-    if (current.kind === ALNodeKind.procedure) return current;
-    current = current.parent;
-  }
-  return null;
+/** R322: AL compares names case-insensitively. */
+function sameName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /**

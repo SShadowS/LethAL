@@ -96,3 +96,35 @@ describe("buildCallerIndex", () => {
     expect(callers.callersOf(objectScopeKey("codeunit", "Callers"), "Helper")).toHaveLength(1);
   });
 });
+
+describe("buildCallerIndex: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("a call inside an agreeing split member names that member as the caller", () => {
+    const src = `codeunit 50110 "S"
+{
+#if CLEAN27
+    procedure Outer(): Integer
+#else
+    internal procedure Outer(): Integer
+#endif
+    begin
+        exit(Helper());
+    end;
+
+    procedure Helper(): Integer
+    begin
+        exit(1);
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const symbols = buildSymbolTable([{ path: "s.al", root }]);
+    const callers = buildCallerIndex([{ path: "s.al", root }], symbols);
+    expect(
+      callers.callersOf(objectScopeKey("codeunit", "S"), "Helper").map((c) => c.fromProcedure),
+    ).toEqual(["Outer"]);
+  });
+});

@@ -7,14 +7,17 @@ import {
   findEnclosingStatement,
   findFirst,
   gapBlockOf,
+  inMemberBody,
   initParser,
   isObjectContainer,
   isProcedureLike,
   isStatementPosition,
   isStatementSlot,
+  memberArms,
   objectDeclarationsOf,
   parseAL,
   procedureLikeNameNode,
+  procedureLikeReturnType,
   visit,
   wrapRoot,
 } from "../../src";
@@ -445,11 +448,127 @@ describe("R301: split-header procedures", () => {
     ).toBe("A");
   });
 
-  it("findEnclosingProcedure is deliberately unchanged: null inside a split procedure (R302)", () => {
+  it("findEnclosingProcedure returns the split node, for both split shapes (R302)", () => {
     const root = wrapRoot(parseAL(SPLIT));
-    expect(findEnclosingProcedure(first(root, "assignment_statement"))).toBeNull();
+    const split = first(root, "preproc_split_procedure");
+    expect(findEnclosingProcedure(first(root, "assignment_statement"))?.startIndex).toBe(
+      split.startIndex,
+    );
+    const pre = wrapRoot(parseAL(PREAMBLE));
+    const preNode = first(pre, "preproc_split_procedure_preamble");
+    const got = findEnclosingProcedure(first(pre, "assignment_statement"));
+    expect([got?.rawKind, got?.startIndex]).toEqual([preNode.rawKind, preNode.startIndex]);
+  });
+
+  it("memberArms: one arm per #if, #elif and #else, each with its own children (R302)", () => {
+    const three = `codeunit 50100 "Repro A"
+{
+#if CLEAN27
+    procedure A(X: Integer)
+#elif CLEAN26
+    procedure A(Y: Integer)
+#else
+    procedure A(Z: Integer)
+#endif
+    begin
+    end;
+}
+`;
+    const arms = memberArms(first(wrapRoot(parseAL(three)), "preproc_split_procedure"));
+    expect(arms.map((a) => a.find((c) => c.kind === ALNodeKind.parameter_list)?.text)).toEqual([
+      "X: Integer",
+      "Y: Integer",
+      "Z: Integer",
+    ]);
+    // A plain procedure is one arm: its own children.
+    const plain = findFirst(
+      wrapRoot(parseAL(`codeunit 50100 "P" { procedure A() begin end; }`)),
+      ALNodeKind.procedure,
+    );
+    if (plain === null) throw new Error("no procedure");
+    expect(memberArms(plain)).toHaveLength(1);
+  });
+
+  it("procedureLikeReturnType: the agreed type, null when arms disagree or one has none (R302)", () => {
+    const withReturn = (a: string, b: string) => `codeunit 50100 "Repro R"
+{
+#if CLEAN27
+    procedure A(X: Integer)${a}
+#else
+    procedure A(X: Integer)${b}
+#endif
+    begin
+        exit(X);
+    end;
+}
+`;
+    const rt = (src: string) =>
+      procedureLikeReturnType(first(wrapRoot(parseAL(src)), "preproc_split_procedure"));
+    expect(rt(withReturn(": Integer", ":  Integer"))).toBe("Integer");
+    // Compared whitespace-normalised, as `extractType` compares.
+    expect(rt(withReturn(': Record  "Tab A"', ': Record "Tab A"'))).toBe('Record "Tab A"');
+    expect(rt(withReturn(": Decimal", ": Integer"))).toBeNull();
+    expect(rt(withReturn(": Integer", ""))).toBeNull();
+  });
+
+  it("inMemberBody: true in a split member's body, false in an attribute inside an arm (R302)", () => {
+    const src = `codeunit 50100 "Repro T"
+{
+#if not CLEAN27
+    [Obsolete('Gone soon', '27.0')]
+    procedure A(): Text
+#else
+    procedure A(): Text
+#endif
+    begin
+        exit('kept');
+    end;
+}
+`;
+    const root = wrapRoot(parseAL(src));
+    const strings: ALSyntaxNode[] = [];
+    visit(root, (n) => {
+      if (n.kind === ALNodeKind.text_literal) strings.push(n);
+    });
+    const byText = (t: string) => {
+      const hit = strings.find((n) => n.text === t);
+      if (hit === undefined) throw new Error(`no ${t}`);
+      return hit;
+    };
+    expect(inMemberBody(byText("'kept'"))).toBe(true);
+    expect(inMemberBody(byText("'Gone soon'"))).toBe(false);
+    expect(inMemberBody(byText("'27.0'"))).toBe(false);
+  });
+
+  it("findEnclosingStatement: a split member's body block is its own statement (R302)", () => {
+    const root = wrapRoot(parseAL(SPLIT));
+    const split = first(root, "preproc_split_procedure");
+    const body = split.children.find((c) => c.kind === ALNodeKind.block);
+    if (body === undefined) throw new Error("no body");
+    const got = findEnclosingStatement(body);
+    expect([got?.startIndex, got?.endIndex]).toEqual([body.startIndex, body.endIndex]);
   });
 });
+
+const PREAMBLE = `codeunit 50100 "Repro P"
+{
+#if CLEAN27
+    procedure A(X: Integer)
+    var
+        L: Integer;
+#else
+    procedure A(X: Integer)
+    var
+        M: Integer;
+#endif
+    begin
+        G := X;
+    end;
+
+    var
+        G: Integer;
+}
+`;
 
 /**
  * R-297 Task 6: split-directive single-statement slots. BaseApp retires code with `#if` around an

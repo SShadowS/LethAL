@@ -1083,3 +1083,98 @@ describe("a plain page's implicit Rec (R67)", () => {
     expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
   });
 });
+
+// R302: a split member is a member of its object. Rule 3 (does the table declare a procedure of
+// that name) reads ANY arm's name, since a refusal that read every arm would re-open the wrong
+// claim in the build where that arm is compiled. A receiver resolves inside a split member only
+// when every arm declares it with the same type.
+describe("claimsRecordMethod: split members (R302)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const splitTable = (elseName: string, ifName = "SetRange") => `table 50001 "Other Table"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+#if CLEAN27
+    procedure ${ifName}(A: Integer; B: Integer)
+#else
+    procedure ${elseName}(A: Integer; B: Integer)
+#endif
+    begin
+    end;
+}`;
+  const cu = () =>
+    parseClean(codeunitSource("Other.SetRange(A, B);", { Other: 'Record "Other Table"' }));
+
+  it("REFUSES a call on a table that declares that name as a split member", () => {
+    const root = cu();
+    const ctx = projectContextFor([root, parseClean(splitTable("SetRange"))]);
+    expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+  });
+
+  it("REFUSES it when only ONE arm has that name, whichever arm it is", () => {
+    for (const [ifName, elseName] of [
+      ["SetRange", "SetRangeOld"],
+      ["SetRangeOld", "SetRange"],
+    ] as const) {
+      const root = cu();
+      const ctx = projectContextFor([root, parseClean(splitTable(elseName, ifName))]);
+      expect(claimsRecordMethod(onlyCall(root), ctx, "SetRange")).toBe(false);
+    }
+  });
+
+  const preamble = (typeB: string, global = "") => `codeunit 50000 "My Cu"
+{
+#if CLEAN27
+    procedure P()
+    var
+        R: Record "Tab A";
+#else
+    procedure P()
+    var
+        R: ${typeB};
+#endif
+    begin
+        R.SetRange("No.", 'X');
+    end;
+${global}}`;
+
+  it("claims a receiver every arm declares with the same record type", () => {
+    const root = parseClean(preamble('Record "Tab A"'));
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(true);
+  });
+
+  // A record global `R` is added here: an ambiguous local must HIDE it, not fall through to it.
+  it("REFUSES a receiver declared as a different type per arm, despite a record global of its name", () => {
+    const root = parseClean(preamble('Record "Tab B"', '\n    var\n        R: Record "Tab A";\n'));
+    expect(claimsRecordMethod(onlyCall(root), contextFor(root), "SetRange")).toBe(false);
+  });
+
+  // Place 11: when the positional lookup misses (here the symbols come from another parse of the
+  // object, so no start offset matches), the fallback looks the member up by NAME. A renamed split
+  // member has no name, so it must not borrow the locals of a plain procedure named like one arm.
+  it("a renamed split member does not fall back to a same-named plain procedure's locals", () => {
+    const site = parseClean(`codeunit 50000 "My Cu"
+{
+#if CLEAN27
+    procedure Pick()
+#else
+    procedure PickOld()
+#endif
+    begin
+        R.SetRange("No.", 'X');
+    end;
+}`);
+    const other = parseClean(`codeunit 50000 "My Cu"
+{
+    procedure Pick()
+    var
+        R: Record "Tab A";
+    begin
+    end;
+}`);
+    const ctx = projectContextFor([other]);
+    expect(claimsRecordMethod(onlyCall(site), ctx, "SetRange")).toBe(false);
+  });
+});

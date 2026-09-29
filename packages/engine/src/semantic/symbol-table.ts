@@ -24,7 +24,13 @@
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import { findAll } from "../ast/syntax-node";
-import { declarationMembers, varDeclarations } from "../ast/tree-walks";
+import {
+  declarationMembers,
+  memberArms,
+  procedureLikeNameNode,
+  procedureLikeReturnType,
+  varDeclarations,
+} from "../ast/tree-walks";
 
 export interface SourceFile {
   readonly path: string;
@@ -117,6 +123,9 @@ export interface ProcedureSymbol {
   readonly locals: readonly VarSymbol[];
   readonly returnType: string | null;
   readonly node: ALSyntaxNode;
+  /** R302: lowercase names a split member's arms declare differently, or that only some arms
+   *  declare. Absent on a plain procedure. */
+  readonly ambiguous?: readonly string[];
 }
 
 export interface SymbolTable {
@@ -140,6 +149,9 @@ export interface SymbolTable {
    * reference identity is not available.
    */
   resolveProcedureAt(ownerName: string, declStartIndex: number): ProcedureSymbol | null;
+  /** R302/R324: the procedure of that name when the owner declares EXACTLY ONE (names compared as
+   *  AL compares them; a split member counts under every arm's name), else null. */
+  uniqueProcedure(ownerName: string, procName: string): ProcedureSymbol | null;
   globalsOf(ownerName: string): readonly VarSymbol[];
   localsOf(ownerName: string, procName: string): readonly VarSymbol[];
   /**
@@ -272,6 +284,7 @@ export function enclosingObjectScopeKey(node: ALSyntaxNode): string | null {
 export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
+  const procedureNames = new Map<string, Map<string, ProcedureSymbol[]>>();
   const globals = new Map<string, VarSymbol[]>();
 
   const tableExtensions: ExtensionSymbol[] = [];
@@ -346,11 +359,27 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     // search so we don't misattribute nested future constructs.
     const procs: ProcedureSymbol[] = [];
     for (const child of members) {
-      if (child.kind !== ALNodeKind.procedure) continue;
-      const proc = parseProcedure(child, ownerName);
-      if (proc !== null) procs.push(proc);
+      if (child.kind === ALNodeKind.procedure) {
+        const proc = parseProcedure(child, ownerName);
+        if (proc !== null) procs.push(proc);
+      } else if (
+        child.rawKind === "preproc_split_procedure" ||
+        child.rawKind === "preproc_split_procedure_preamble"
+      ) {
+        procs.push(parseSplitProcedure(child, ownerName));
+      }
     }
     procedures.set(ownerName, procs);
+    const byName = new Map<string, ProcedureSymbol[]>();
+    for (const p of procs) {
+      const names = new Set(
+        p.node.children
+          .filter((c) => c.fieldName === "name")
+          .map((c) => stripQuotes(c.text).toLowerCase()),
+      );
+      for (const nm of names) byName.set(nm, [...(byName.get(nm) ?? []), p]);
+    }
+    procedureNames.set(ownerName, byName);
   };
 
   for (const file of files) {
@@ -413,7 +442,7 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
 
   const resolveProcedure = (ownerName: string, procName: string): ProcedureSymbol | null => {
     const list = procedures.get(ownerName);
-    if (list === undefined) return null;
+    if (list === undefined || procName === "") return null;
     return list.find((p) => p.name === procName) ?? null;
   };
 
@@ -438,6 +467,11 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     },
     resolveProcedure,
     resolveProcedureAt,
+    uniqueProcedure(ownerName, procName) {
+      const list = procedureNames.get(ownerName)?.get(stripQuotes(procName).toLowerCase()) ?? [];
+      const [only] = list;
+      return list.length === 1 && only !== undefined ? only : null;
+    },
     fieldsOf(tableName) {
       return fields.get(tableName.toLowerCase()) ?? [];
     },
@@ -525,6 +559,79 @@ function parseProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol | nu
     locals,
     returnType,
     node,
+  };
+}
+
+/**
+ * R302: a split member (R301's `preproc_split_procedure`, R316's `_preamble`) as one procedure
+ * symbol, by the every-arm rule. A parameter or an arm's own local resolves only when EVERY arm
+ * declares it with the same type text; any other name an arm declares is `ambiguous` and resolves
+ * to nothing, hiding a global of that name. A shared `var` section after `#endif` belongs to every
+ * arm. The name is the agreed one (`procedureLikeNameNode`); a renamed member gets `""`, so it is
+ * reachable by position only and never by a call's name.
+ */
+function parseSplitProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol {
+  const norm = (t: string): string => t.replace(/\s+/g, " ").trim();
+  const arms = memberArms(node);
+  const perArm = arms.map((arm) => {
+    const m = new Map<string, { sym: VarSymbol; type: string; param: boolean }>();
+    const bad = new Set<string>();
+    const add = (sym: VarSymbol, param: boolean): void => {
+      const k = sym.name.toLowerCase();
+      const prev = m.get(k);
+      if (prev !== undefined && prev.type !== norm(sym.typeText)) bad.add(k);
+      m.set(k, { sym, type: norm(sym.typeText), param });
+    };
+    for (const c of arm) {
+      if (c.kind === ALNodeKind.parameter_list) {
+        for (const p of collectParameters(c)) add(p, true);
+      } else if (
+        c.kind === ALNodeKind.var_section ||
+        c.rawKind === "preproc_conditional_var_block"
+      ) {
+        for (const d of findAll(c, ALNodeKind.variable_declaration)) {
+          const name = d.childForFieldName("name")?.text ?? "";
+          if (name !== "")
+            add(
+              {
+                name: stripQuotes(name),
+                typeText: d.childForFieldName("type")?.text ?? "",
+                node: d,
+              },
+              false,
+            );
+        }
+      }
+    }
+    return { m, bad };
+  });
+  const all = new Set<string>();
+  for (const a of perArm) for (const k of a.m.keys()) all.add(k);
+  const parameters: VarSymbol[] = [];
+  const locals: VarSymbol[] = [];
+  const ambiguous: string[] = [];
+  const [first] = perArm;
+  for (const k of all) {
+    const e0 = first?.m.get(k);
+    const agree =
+      e0 !== undefined && perArm.every((a) => !a.bad.has(k) && a.m.get(k)?.type === e0.type);
+    if (!agree || e0 === undefined) ambiguous.push(k);
+    else if (e0.param) parameters.push(e0.sym);
+    else locals.push(e0.sym);
+  }
+  const inArm = new Set(arms.flat().map((c) => c.startIndex));
+  for (const c of node.namedChildren)
+    if (c.kind === ALNodeKind.var_section && !inArm.has(c.startIndex))
+      locals.push(...collectVarDeclarations(c));
+  const nameNode = procedureLikeNameNode(node);
+  return {
+    name: nameNode === null ? "" : stripQuotes(nameNode.text),
+    owner,
+    parameters,
+    locals,
+    returnType: procedureLikeReturnType(node),
+    node,
+    ambiguous,
   };
 }
 
