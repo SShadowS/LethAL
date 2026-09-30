@@ -822,6 +822,12 @@
                 "public"
               ]
             },
+            "coverageArmNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "triggerName": {
               "type": "string"
             },
@@ -1039,6 +1045,12 @@
                 "public"
               ]
             },
+            "coverageArmNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "triggerName": {
               "type": "string"
             },
@@ -1216,6 +1228,12 @@
                 "local",
                 "public"
               ]
+            },
+            "coverageArmNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "triggerName": {
               "type": "string"

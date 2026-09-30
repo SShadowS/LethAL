@@ -24,7 +24,7 @@ import { DeploymentVerifier } from "../src/deployment-verifier";
 import { CONTROL_APP_ID, HarnessVerificationError } from "../src/harness";
 import type { HarnessVerifier } from "../src/harness";
 import type { Lease } from "../src/lease";
-import { coverageRefusedObjects } from "../src/line-map";
+import { type LineMap, type RenamedMemberNames, coverageRefusedObjects } from "../src/line-map";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { LeaseFence } from "../src/orchestrator";
 import { ContainerDeployer } from "../src/publisher";
@@ -434,6 +434,7 @@ describe("BcDevMcpBackend.attach", () => {
     fetch500?: boolean;
     coverageMode?: "procedure" | "fenced";
     alSources?: { path: string; text: string }[];
+    renamedMemberNames?: RenamedMemberNames;
   }) {
     const first = await makeBackendWithDeploy(hubRun, SYMBOLS);
     const argv: string[][] = [];
@@ -486,6 +487,7 @@ describe("BcDevMcpBackend.attach", () => {
       appBytes: new Uint8Array(await readFile(first.artifact.appPath)),
       appJsonText: JSON.stringify({ idRanges: [{ from: 70000, to: 70099 }] }),
       alSources: opts.alSources ?? [],
+      renamedMemberNames: opts.renamedMemberNames ?? new Map(),
     };
     return {
       backend,
@@ -549,6 +551,47 @@ codeunit 70000 "Some Codeunit"
       }
     });
   }
+
+  // R318 review I1: the in-memory path names a renamed member from the VERIFIED manifest's
+  // coverage names, as `buildLineMap` does from the manifest on disk. The source re-parses with an
+  // ERROR node (in `Other`), so the tree alone would name nothing on lines 8 and 9.
+  test("attach (fenced) names a renamed member from the bound artifact's manifest names (R318)", async () => {
+    const s = await attachSetup({
+      coverageMode: "fenced",
+      alSources: [
+        {
+          path: "src/Some.Codeunit.al",
+          text: `codeunit 70000 "Some Codeunit"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        X := X + 1;
+        exit(X);
+    end;
+
+    procedure Other()
+    begin
+        X := ;
+    end;
+}
+`,
+        },
+      ],
+      renamedMemberNames: new Map([["codeunit:70000", [["Pick", "Choose"]]]]),
+    });
+    try {
+      await s.backend.attach(s.bound);
+      const map = (s.backend as unknown as { lineMap?: LineMap }).lineMap;
+      expect([8, 9].map((n) => map?.lookup("Codeunit", 70000, n))).toEqual(["Pick", "Pick"]);
+      expect(map?.isNamingGap("Codeunit", 70000, 8)).toBe(false);
+    } finally {
+      await s.cleanup();
+    }
+  });
 
   test("attach refuses a server that reports another artifact, and binds no transport", async () => {
     const s = await attachSetup({ reportedIdentity: "b".repeat(32) });
@@ -1638,6 +1681,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       appBytes: new TextEncoder().encode("fake-bound-app-bytes"),
       appJsonText: "{}",
       alSources: [],
+      renamedMemberNames: new Map(),
     };
   }
 

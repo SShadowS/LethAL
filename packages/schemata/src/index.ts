@@ -35,6 +35,7 @@ export {
   assignIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,
+  coverageArmNamesComputed,
 } from "./project";
 export type {
   InstrumentedFile,

@@ -5,11 +5,15 @@ import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { MutationSpec } from "@lethal/engine";
 import type { MutantManifest } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
-import { buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
-import { buildLineMap, lineMapFromSources } from "../src/line-map";
+import { coverageArmNamesComputed, writeInstrumentedProject } from "@lethal/schemata";
+import {
+  alRunnerCoverageFrom,
+  alRunnerCoverageFromServer,
+  buildAlRunnerCoverageIndex,
+} from "../src/al-runner-coverage";
+import { buildLineMap, lineMapFromSources, renamedMemberAttempts } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
-import { identityKeyOf, serializeKey } from "../src/selection";
+import { buildCoverageIndex, coverageFilter, identityKeyOf, serializeKey } from "../src/selection";
 
 // R297 and its successors: preprocessor shapes through the real operator set and the real writer.
 // Every repro is hand-written (no corpus text).
@@ -1511,6 +1515,7 @@ describe("R301: split-header procedures get their manifest fields", () => {
       expect(m.procedureName).not.toBe("AIf");
       expect(m.procedureName).not.toBe("AElse");
       expect(m.procedureName).toBe("");
+      expect(m.coverageArmNames).toEqual(["AIf", "AElse"]);
     }
   });
 
@@ -2303,7 +2308,7 @@ ${b}
     expect(await ordinals(file(RENAMED, PRE))).toEqual(["#0", "Pick#0"]);
   });
 
-  test("both line maps, built from the EMITTED target, name every dispatch line of a named split member and none of a renamed one", async () => {
+  test("both line maps, built from the EMITTED target, name every dispatch line of a split member, a renamed one by its first coverage name (R318)", async () => {
     // Fenced bcdev (`buildLineMap` over the instrumented dir) and al-runner's Cobertura index both
     // read the emitted source, whose lines differ from SRC. al-runner's --server path does not
     // use a line map at all (`st.scope`), so it needs a probe of its own.
@@ -2327,8 +2332,14 @@ ${b}
         const to = (ends[i] ?? 0) - 1;
         for (let n = from; n <= to; n++) {
           if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
-          expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
-          expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([n, x.name || undefined]);
+          expect([n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([
+            n,
+            x === renamed ? "Pick2" : x.name,
+          ]);
+          expect([n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([
+            n,
+            x === renamed ? "Pick2" : x.name,
+          ]);
           checked++;
         }
       }
@@ -3648,5 +3659,687 @@ describe("R331: the unparsed-object fallback is conservative", () => {
         "TabExt.TableExt.al": R331_U3_EXT,
       }),
     ).toEqual(WANT);
+  });
+});
+
+/** R318 repros, hand-written. `R318_R1`: a public renamed split member (lines 3-16) and `Plain`.
+ *  `R318_R4`: two renamed members that share `Beta` across builds (lines 3-13 and 15-25). */
+const R318_R1 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := 1;
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob + K);
+    end;
+
+    procedure Plain(X: Integer): Integer
+    begin
+        exit(X + 3);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+const R318_R4 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Alpha(X: Integer): Integer
+#else
+    procedure Beta(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+#if R318A
+    procedure Beta(X: Integer): Integer
+#else
+    procedure Gamma(X: Integer): Integer
+#endif
+    var
+        L: Integer;
+    begin
+        L := X + 2;
+        exit(L);
+    end;
+}
+`;
+const R318_R3 = R318_R1.replace(
+  "    procedure Plain(",
+  "#if R318A\n    procedure Choose(T: Text): Integer\n    begin\n        exit(StrLen(T) + 1);\n    end;\n#endif\n\n    procedure Plain(",
+);
+
+describe("R318: a renamed split member carries its coverage names, and no identity key tuple moves", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("r1: the renamed member's mutants list both arm names; Plain's carry none", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    const inMember = manifest.mutants.filter((m) => m.startLine >= 3 && m.startLine <= 16);
+    expect(inMember).toHaveLength(10);
+    for (const m of inMember) {
+      expect(m.procedureName).toBe("");
+      expect(m.coverageArmNames).toEqual(["Pick", "Choose"]);
+    }
+    for (const m of manifest.mutants.filter((x) => x.startLine > 16)) {
+      expect(m.procedureName).toBe("Plain");
+      expect("coverageArmNames" in m).toBe(false);
+    }
+  });
+
+  test("r1: the arm names are computed once per member, not once per mutant", async () => {
+    coverageArmNamesComputed.count = 0;
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(10);
+    // The renamed member and Plain: two members, ten plus three mutants.
+    expect(coverageArmNamesComputed.count).toBe(2);
+  });
+
+  test("r4: each member keeps only the name the other never uses", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const got = [...manifest.mutants]
+      .sort((a, b) => a.startIndex - b.startIndex)
+      .map((m) => `L${m.startLine} ${(m.coverageArmNames ?? []).join("/")}`);
+    expect(got).toEqual([
+      "L10 Alpha",
+      "L11 Alpha",
+      "L11 Alpha",
+      "L12 Alpha",
+      "L22 Gamma",
+      "L23 Gamma",
+      "L23 Gamma",
+      "L24 Gamma",
+    ]);
+  });
+
+  // The pre-commitment: exactly HEAD b6562aba's keys (identical to b184dd5d's), measured by the
+  // R-318 plan's dry run. The renamed members stay in the "" group, so r4's second return-value
+  // keeps ordinal 1.
+  test("identity keys are HEAD's, byte for byte", async () => {
+    const keysOf = async (src: string): Promise<string[]> => {
+      const { manifest } = await instrument({ "Repro.Codeunit.al": src });
+      return [...manifest.mutants]
+        .sort((a, b) => a.startIndex - b.startIndex || a.mutantId.localeCompare(b.mutantId))
+        .map((m) => serializeKey(identityKeyOf(m)));
+    };
+    expect(await keysOf(R318_R1)).toEqual([
+      "1bdfa00ed4f9f5b66393ce5fa68726410673f75c945f991bd88595fd5bcc3bef|Repro R||lethal.empty-block|1",
+      "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Repro R||lethal.remove-assignment|1",
+      "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Repro R||lethal.shift-integer|1",
+      "42f3c401fde31149e055dfec5842326f020390b03c7018fe168a642644df6a58|Repro R||lethal.conditional-boundary|1",
+      "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
+      "2f655ef42c7141d41be438ef0a09db0588720672f6a87a7d107927722cfa2e29|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
+      "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Repro R||lethal.return-value|1",
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Repro R||lethal.swap-additive|1",
+      "d1f83cdca147307b5525047ab73ef3b96e89e7d274d898a8a0c3975ef32aa9ca|Repro R|Plain|lethal.empty-block|1",
+      "cf8233fb4c95eb8f641cac7ecd90d8bfc2f40fd8ec1a247b4cc9bbbc601c6528|Repro R|Plain|lethal.return-value|1",
+      "1c7f31c8ee6e40da96b0888e7c02e8a3484f8cf46ecf000ca6650d3453cfa251|Repro R|Plain|lethal.swap-additive|1",
+    ]);
+    expect(await keysOf(R318_R4)).toEqual([
+      "13926bb4e72d79aead21ac9263d2735b6aacd45904fbe9b058371f9115262cb2|Repro R||lethal.empty-block|1",
+      "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
+      "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Repro R||lethal.swap-additive|1",
+      "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1",
+      "d25d06cde1e1a4a5557adb12f3773916f28b8e80b8c21b4a9f8a158463163c1e|Repro R||lethal.empty-block|1",
+      "37276285a29d8c4a38baf6d602a495db9e97d227b9b18c9b00901b65b1d5e2ab|Repro R||lethal.remove-assignment|1",
+      "eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|Repro R||lethal.swap-additive|1",
+      "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Repro R||lethal.return-value|1|1",
+    ]);
+  });
+  const R318_R10 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+
+  test("both line maps, from the EMITTED target, name a renamed member by its first coverage name", async () => {
+    // Line-based sources place a line by position, so this holds in EVERY build, a dropped name
+    // included. The boundaries are the `#if R318A` / `procedure Plain(` lines of the emitted text.
+    const cases: [string, string, string[]][] = [
+      ["r1", R318_R1, ["Pick", "Plain"]],
+      ["r3", R318_R3, ["Pick", "Choose", "Plain"]],
+      ["r4", R318_R4, ["Alpha", "Gamma"]],
+    ];
+    for (const [label, src, owners] of cases) {
+      const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-"));
+      try {
+        await writeFile(join(dir, "Repro.Codeunit.al"), text);
+        const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        const alr = await buildAlRunnerCoverageIndex(dir);
+        expect(alr.refusedFiles).toEqual([]);
+        const out = text.split("\n");
+        const starts = out.flatMap((l, k) =>
+          l.startsWith("#if R318A") || l.startsWith("    procedure Plain(") ? [k + 1] : [],
+        );
+        expect([label, starts.length]).toEqual([label, owners.length]);
+        const ends = [...starts.slice(1), out.length + 1];
+        let checked = 0;
+        for (const [i, who] of owners.entries()) {
+          const renamed = who !== "Choose" && who !== "Plain";
+          // The compiled arm's name as the server would send it in build [] (measured): the member's
+          // `#else` arm, or the member's own name for an ordinary procedure.
+          const scope =
+            label === "r4" ? (who === "Alpha" ? "Beta" : "Gamma") : renamed ? "Choose" : who;
+          for (let n = starts[i] ?? 0; n < (ends[i] ?? 0); n++) {
+            if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
+            expect([label, n, bcdev.lookup("Codeunit", 50100, n)]).toEqual([label, n, who]);
+            expect([label, n, alr.lineMap.lookup("Codeunit", 50100, n)]).toEqual([label, n, who]);
+            expect([label, n, alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope)]).toEqual([
+              label,
+              n,
+              renamed ? who : undefined,
+            ]);
+            checked++;
+          }
+        }
+        expect(checked).toBeGreaterThan(owners.length);
+        for (const m of manifest.mutants) {
+          const first = m.coverageArmNames?.[0];
+          if (first !== undefined) expect(owners).toContain(first);
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a line two members share names nobody; the re-key needs the member's own arm name (R318, review r2)", async () => {
+    // r10 as written: line 12 holds the renamed member's `exit(K); end;` AND all of `Other`. The
+    // ORIGINAL text stands in for an emission in which `Other` got no mutant (operator narrowing),
+    // which leaves that line exactly as written (measured, R-318 plan, emit-r10-ra).
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-shared-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), R318_R10);
+      const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      const alr = await buildAlRunnerCoverageIndex(dir);
+      for (const map of [bcdev, alr.lineMap]) {
+        expect([10, 11, 12, 16].map((n) => map.lookup("Codeunit", 50100, n))).toEqual([
+          "Pick",
+          "Pick",
+          undefined, // shared: names nobody, NOT the first span (Pick) and not Other either
+          "After",
+        ]);
+      }
+      const at = (n: number, scope: string) =>
+        alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope);
+      expect(at(11, "Choose")).toBe("Pick"); // inside the member only, an own arm name: re-keyed
+      expect(at(11, "PICK")).toBe("Pick"); // case-insensitive, as AL is
+      expect(at(11, "Other")).toBeUndefined(); // not an own arm name: never re-keyed
+      expect(at(12, "Choose")).toBeUndefined(); // shared line: never re-keyed
+      expect(at(12, "Other")).toBeUndefined();
+      expect(at(16, "After")).toBeUndefined(); // an ordinary member
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Ruling A: the shared-line count takes EVERY declaration span of the object, not only the named
+  // procedures `lookup` can return. Two neighbours checked here: a procedure inside a `#if` wrapper
+  // in the object body, and a trigger. Both repros parse with no ERROR node (asserted), so
+  // `renamedMemberCoverageNames` gives the member its names.
+  const sharedLineCase = async (
+    src: string,
+    lines: { member: number; shared: number; after: number },
+  ): Promise<void> => {
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-shared-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), src);
+      const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      const alr = await buildAlRunnerCoverageIndex(dir);
+      expect(alr.refusedFiles).toEqual([]);
+      for (const map of [bcdev, alr.lineMap]) {
+        expect(
+          [lines.member, lines.shared, lines.after].map((n) => map.lookup("Codeunit", 50100, n)),
+        ).toEqual(["Pick", undefined, "After"]);
+      }
+      const at = (n: number, scope: string) =>
+        alr.lineMap.renamedMemberAt("Codeunit", 50100, n, scope);
+      expect(at(lines.member, "Choose")).toBe("Pick");
+      expect(at(lines.shared, "Choose")).toBeUndefined();
+      expect(at(lines.shared, "Pick")).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  // A directive must start its line, so a wrapped procedure can share a line with the member only
+  // inside the same wrapper: line 13 closes the member and holds all of `Wrapped`.
+  const R318_WRAPPED = `codeunit 50100 "Repro R"
+{
+#if R318B
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; procedure Wrapped(X: Integer): Integer begin exit(X + 7); end;
+#endif
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+
+  test("a line the renamed member shares with a #if-wrapped procedure names nobody (R318, ruling A)", async () => {
+    await sharedLineCase(R318_WRAPPED, { member: 12, shared: 13, after: 18 });
+  });
+
+  test("a line the renamed member shares with a trigger names nobody (R318, ruling A)", async () => {
+    // Line 12 closes the member and holds all of `OnRun`. A trigger is never named, so without
+    // ruling A this line would go to the member.
+    const src = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; trigger OnRun() begin Glob := 7; end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    await sharedLineCase(src, { member: 11, shared: 12, after: 16 });
+  });
+  test("an emission that re-parses with ERROR leaves a renamed member named on the line legs, as a plain member is (R318, review I1)", async () => {
+    // `Other`'s nested `#if` inside a conditional var section parses in the original but not once
+    // instrumented (grammar issue #30), so the EMITTED object has an ERROR node. A plain member in
+    // that object stays named on both line legs (measured, review fix 1); the renamed member must
+    // too, under the manifest's `coverageArmNames[0]`, since the server leg covers it by `st.scope`.
+    const HEAD_R =
+      "#if R318A\n    procedure Pick(X: Integer): Integer\n#else\n    procedure Choose(X: Integer): Integer\n#endif\n";
+    const HEAD_P = "    procedure Pick(X: Integer): Integer\n";
+    const body = (head: string): string => `codeunit 50100 "Repro R"
+{
+${head}    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+    procedure Other(X: Integer);
+#if not CLEAN27
+    var
+        K: Integer;
+#if A
+        N: Integer;
+#endif
+#endif
+    begin
+        Glob := X + 1;
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+    for (const [label, src, renamed] of [
+      ["renamed", body(HEAD_R), true],
+      ["plain", body(HEAD_P), false],
+    ] as const) {
+      expect([label, wrapRoot(parseAL(src)).hasError]).toEqual([label, false]);
+      const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
+      const inMember = manifest.mutants.filter((m) => m.procedureName !== "Other");
+      expect(inMember.length).toBeGreaterThan(0);
+      for (const m of inMember) {
+        expect([label, m.coverageArmNames?.[0] ?? m.procedureName]).toEqual([label, "Pick"]);
+      }
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      expect([label, wrapRoot(parseAL(text)).hasError]).toEqual([label, true]);
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-i1-"));
+      try {
+        await writeFile(join(dir, "Repro.Codeunit.al"), text);
+        await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify(manifest));
+        const bcdev = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        const alr = await buildAlRunnerCoverageIndex(dir);
+        expect(alr.refusedFiles).toEqual([]);
+        const out = text.split("\n");
+        const end = out.findIndex((l) => l.startsWith("    procedure Other("));
+        let checked = 0;
+        for (let n = 1; n <= end; n++) {
+          if (!(out[n - 1] ?? "").includes("MutationSelector.Active(")) continue;
+          for (const map of [bcdev, alr.lineMap]) {
+            expect([label, n, map.lookup("Codeunit", 50100, n)]).toEqual([label, n, "Pick"]);
+            expect([label, n, map.isNamingGap("Codeunit", 50100, n)]).toEqual([label, n, false]);
+          }
+          expect([label, n, alr.lineMap.renamedMemberAt("Codeunit", 50100, n, "Choose")]).toEqual([
+            label,
+            n,
+            renamed ? "Pick" : undefined,
+          ]);
+          checked++;
+        }
+        expect([label, checked]).toEqual([label, inMember.length]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a line the renamed member shares with a NAMELESS renamed member names nobody (R318, ruling A)", async () => {
+    // The first member's arm names are both taken (`Pick(Text)`, `Choose(Text)`), so it has no
+    // coverage name and no named span. Line 9 closes it and holds all of `Other`.
+    const src = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1); end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure Pick(T: Text): Integer
+    begin
+        exit(StrLen(T));
+    end;
+
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const m = await lineMapFromSources(
+      [{ path: "Repro.Codeunit.al", text: src }],
+      new Set(["codeunit:50100"]),
+    );
+    expect([8, 9, 13].map((n) => m.lookup("Codeunit", 50100, n))).toEqual([
+      undefined, // the nameless member: never named
+      undefined, // shared with it: not `Other`
+      "Pick",
+    ]);
+  });
+
+  test("a line the renamed member shares with a member swallowed by the global var section names nobody (R318, ruling A)", async () => {
+    // Placed after the object's global `var` section, both members parse INSIDE it (R327). Line 12
+    // closes the renamed member and holds all of `Other`.
+    const src = `codeunit 50100 "Repro R"
+{
+    var
+        Glob: Integer;
+
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    begin
+        Glob := X; end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(false);
+    const m = await lineMapFromSources(
+      [{ path: "Repro.Codeunit.al", text: src }],
+      new Set(["codeunit:50100"]),
+    );
+    expect([11, 12, 16].map((n) => m.lookup("Codeunit", 50100, n))).toEqual([
+      "Pick",
+      undefined,
+      "After",
+    ]);
+    expect(m.renamedMemberAt("Codeunit", 50100, 11, "Choose")).toBe("Pick");
+    expect(m.renamedMemberAt("Codeunit", 50100, 12, "Choose")).toBeUndefined();
+  });
+
+  /** One `--server` per-test coverage record: every statement hit once, in one file. */
+  const serverRun = (
+    index: Awaited<ReturnType<typeof buildAlRunnerCoverageIndex>>,
+    test: string,
+    statements: { scope?: string; line?: number }[],
+    file = "Repro.Codeunit.al",
+  ) =>
+    alRunnerCoverageFromServer(
+      { test, coverage: [{ file, statements: statements.map((st) => ({ ...st, hits: 1 })) }] },
+      index,
+    );
+  const keyed = (map: ReturnType<typeof serverRun>): string[] =>
+    map.entries.map((e) => `${e.procedure ?? "-"}@${e.line ?? "-"}`);
+
+  test("--server: a renamed member's statements are re-keyed by position; others keep st.scope", async () => {
+    // Scopes as MEASURED on al-runner 2.12.0 (R-318 plan, raw-r3 and raw-r8 logs): the compiled
+    // arm's name, unquoted. In r3's build [] the member is compiled as `Choose`, a name its list
+    // dropped because the #if-wrapped Choose(T) also carries it. The `Choose` statement on the
+    // wrapped member's line cannot occur in that build (Choose(T) is not compiled there); it is
+    // here to pin that a line outside any renamed span keeps st.scope, whatever it says.
+    const { emitted } = await instrument({ "Repro.Codeunit.al": R318_R3 });
+    const text = emitted.get("Repro.Codeunit.al") ?? "";
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-srv-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), text);
+      const index = await buildAlRunnerCoverageIndex(dir);
+      const lines = text.split("\n");
+      const at = (needle: string): number => lines.findIndex((l) => l.includes(needle)) + 1;
+      const member = at("Glob := Glob + 2;");
+      const wrapped = at("exit(StrLen(T) + 1)");
+      const plain = at("exit(X + 3)");
+      expect([member, wrapped, plain].every((n) => n > 0)).toBe(true);
+      renamedMemberAttempts.count = 0;
+      const map = serverRun(index, "Codeunit50150.PickFive", [
+        { scope: "Choose", line: member },
+        // A scope the member does not declare, on the member's own line: by the producer's account
+        // some other member's statement, so never re-keyed (review M2).
+        { scope: "Plain", line: member },
+        { scope: "Choose", line: wrapped },
+        { scope: "Plain", line: plain },
+        { scope: "Choose Me" },
+      ]);
+      expect(keyed(map)).toEqual([
+        `Pick@${member}`,
+        `Plain@${member}`,
+        `Choose@${wrapped}`,
+        `Plain@${plain}`,
+        "Choose Me@-",
+      ]);
+      // Keeps the large-object pin below honest: an object WITH a renamed member is searched once
+      // per statement that carries a line.
+      expect(renamedMemberAttempts.count).toBe(4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--server: a line the renamed member shares with a #if-wrapped procedure is never re-keyed (R318, ruling A)", async () => {
+    // Line 12 is the member's alone; line 13 closes it and holds all of `Wrapped`. A `Choose`
+    // statement on line 13 carries the member's own arm name, and still keeps the producer's scope.
+    expect(wrapRoot(parseAL(R318_WRAPPED)).hasError).toBe(false);
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-srv-wrapped-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), R318_WRAPPED);
+      const index = await buildAlRunnerCoverageIndex(dir);
+      expect(index.refusedFiles).toEqual([]);
+      const map = serverRun(index, "Codeunit50150.T", [
+        { scope: "Choose", line: 12 },
+        { scope: "Choose", line: 13 },
+        { scope: "Wrapped", line: 13 },
+        { scope: "After", line: 18 },
+      ]);
+      expect(keyed(map)).toEqual(["Pick@12", "Choose@13", "Wrapped@13", "After@18"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a shared line: OtherOnly never covers the renamed member, on either al-runner path (review r2)", async () => {
+    // The producer rows below are r10's MEASURED rows (R-318 plan, raw-r10-shared-line.log, build
+    // [] and [R318A] alike apart from the member's scope): MemberOnly hits 11 and 12, OtherOnly
+    // hits 12 with scope Other, AfterOnly hits 16. The manifest is r10's, instrumented in full; the
+    // lookup reads names, not lines, so it pairs with the original text's index.
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R10 });
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-own-"));
+    try {
+      await writeFile(join(dir, "Repro.Codeunit.al"), R318_R10);
+      const index = await buildAlRunnerCoverageIndex(dir);
+      const ref = (method: string) => ({ codeunitId: 50150, codeunitName: "Repro Tests", method });
+      const [memberOnly, otherOnly, afterOnly] = [
+        ref("MemberOnly"),
+        ref("OtherOnly"),
+        ref("AfterOnly"),
+      ];
+      const server = (scope: string) => [
+        {
+          ref: memberOnly,
+          coverage: serverRun(index, "Codeunit50150.MemberOnly", [
+            { scope, line: 11 },
+            { scope, line: 12 },
+          ]),
+        },
+        {
+          ref: otherOnly,
+          coverage: serverRun(index, "Codeunit50150.OtherOnly", [{ scope: "Other", line: 12 }]),
+        },
+        {
+          ref: afterOnly,
+          coverage: serverRun(index, "Codeunit50150.AfterOnly", [{ scope: "After", line: 16 }]),
+        },
+      ];
+      const cobertura = [
+        { ref: memberOnly, lines: [11, 12] },
+        { ref: otherOnly, lines: [12] },
+        { ref: afterOnly, lines: [16] },
+      ].map(({ ref: r, lines }) => ({
+        ref: r,
+        coverage: alRunnerCoverageFrom(
+          lines.map((line) => ({ file: "Repro.Codeunit.al", line, hits: 1 })),
+          index,
+        ),
+      }));
+      const covering = (runs: ReturnType<typeof server>) => {
+        const split = coverageFilter(
+          manifest.mutants,
+          buildCoverageIndex(runs),
+          [memberOnly, otherOnly, afterOnly],
+          undefined,
+          false,
+        );
+        return manifest.mutants
+          .map(
+            (m) =>
+              `L${m.startLine} ${(split.covered.get(m.mutantId) ?? []).map((t) => t.method).join(",") || "-"}`,
+          )
+          .sort();
+      };
+      // BOTH members' covering lists, pinned. The member (lines 10-12): MemberOnly only, never
+      // OtherOnly. Other (line 12): OtherOnly on the server path, which keeps the producer's own
+      // scope on a shared line; NO test on the line-only path, which cannot tell the two apart
+      // (the stated cost of "names nobody").
+      const memberAndOther = [
+        "L10 MemberOnly",
+        "L11 MemberOnly",
+        "L11 MemberOnly",
+        "L12 MemberOnly",
+      ];
+      for (const scope of ["Choose", "Pick"]) {
+        expect([scope, covering(server(scope))]).toEqual([
+          scope,
+          [
+            ...memberAndOther,
+            "L12 OtherOnly",
+            "L12 OtherOnly",
+            "L12 OtherOnly",
+            "L15 AfterOnly",
+            "L16 AfterOnly",
+            "L16 AfterOnly",
+          ].sort(),
+        ]);
+      }
+      expect(covering(cobertura)).toEqual(
+        [
+          ...memberAndOther,
+          "L12 -",
+          "L12 -",
+          "L12 -",
+          "L15 AfterOnly",
+          "L16 AfterOnly",
+          "L16 AfterOnly",
+        ].sort(),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a large ordinary object keeps every st.scope (no renamed member: the re-key exits at once)", async () => {
+    // Cost pin (review r2, I4; pre-flight P8): 2,000 procedures, 200,000 positive statements, no
+    // renamed member. Correctness is asserted, and so is the cost, by a counter rather than a
+    // clock: an object with no renamed member never reaches the span search.
+    const procs = Array.from(
+      { length: 2000 },
+      (_, i) =>
+        `    procedure P${i}(X: Integer): Integer\n    begin\n        exit(X + ${i});\n    end;\n`,
+    ).join("\n");
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-big-"));
+    try {
+      await writeFile(join(dir, "Big.Codeunit.al"), `codeunit 50100 "Big"\n{\n${procs}}\n`);
+      const index = await buildAlRunnerCoverageIndex(dir);
+      // `procedure P<i>` is on line 3 + 5i, its `exit` on 5 + 5i.
+      const statements = Array.from({ length: 200_000 }, (_, k) => ({
+        scope: `P${k % 2000}`,
+        line: 5 + (k % 2000) * 5,
+      }));
+      renamedMemberAttempts.count = 0;
+      const map = serverRun(index, "Codeunit50150.All", statements, "Big.Codeunit.al");
+      expect(map.entries).toHaveLength(2000); // deduplicated by (procedure, line)
+      expect(map.entries.every((e) => e.procedure === `P${((e.line ?? 0) - 5) / 5}`)).toBe(true);
+      expect(renamedMemberAttempts.count).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
