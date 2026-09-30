@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   VersionOverflowError,
   compareAppVersions,
+  confirmedDowngradeRefusal,
   nextAbove,
   parseVersionConflict,
   reserveAppVersion,
@@ -74,6 +75,46 @@ describe("parseVersionConflict", () => {
 
   it("returns null for an unrelated publish failure", () => {
     expect(parseVersionConflict("Publish failed: connection refused")).toBeNull();
+  });
+});
+
+describe("confirmedDowngradeRefusal (R250)", () => {
+  const APP = { name: "LethAL Sandbox App", publisher: "LethAL", version: "1.0.0.999" };
+  // Measured live against Cronus281, 2026-07-19 (layer-5a design spec, app-version.ts).
+  const REAL =
+    "Cannot install the extension LethAL Sandbox App by LethAL 1.0.0.999 because a newer version 1.0.106.0 was already installed.";
+
+  it("accepts BC's measured sentence naming this app, publisher and version", () => {
+    expect(confirmedDowngradeRefusal(REAL, APP)).toBe("1.0.106.0");
+    expect(confirmedDowngradeRefusal(`altool publishapp failed (exit 1):\n${REAL}`, APP)).toBe(
+      "1.0.106.0",
+    );
+  });
+
+  it("accepts it inside BC's own wrapper, where a second copy names the restore version", () => {
+    // Shape measured by the 2026-07-20 concurrent-race probe (fixtures/README.md, Probe B).
+    const wrapped = `Publishing failed due to '${REAL}'. The original extensions could not be restored due to Cannot install the extension LethAL Sandbox App by LethAL 1.0.0.998 because a newer version 1.0.106.0 was already installed..`;
+    expect(confirmedDowngradeRefusal(wrapped, APP)).toBe("1.0.106.0");
+    expect(confirmedDowngradeRefusal(wrapped, { ...APP, version: "1.0.0.997" })).toBeNull();
+  });
+
+  it("refuses the phrase quoted inside a timeout message", () => {
+    const msg =
+      'altool publishapp timed out after 600 s; last line: "a newer version 1.0.106.0 was already installed."';
+    expect(confirmedDowngradeRefusal(msg, APP)).toBeNull();
+  });
+
+  it("refuses another app's name, another publisher, and another attempted version", () => {
+    expect(confirmedDowngradeRefusal(REAL, { ...APP, name: "LethAL Sandbox Tests" })).toBeNull();
+    expect(confirmedDowngradeRefusal(REAL, { ...APP, publisher: "Contoso" })).toBeNull();
+    expect(confirmedDowngradeRefusal(REAL, { ...APP, version: "1.0.0.99" })).toBeNull();
+  });
+
+  it("escapes the names: a '.' in the app name is not a wildcard", () => {
+    const msg = REAL.replace("LethAL Sandbox App", "AxB");
+    expect(confirmedDowngradeRefusal(msg, { ...APP, name: "A.B" })).toBeNull();
+    const own = REAL.replace("LethAL Sandbox App", "A.B (x)");
+    expect(confirmedDowngradeRefusal(own, { ...APP, name: "A.B (x)" })).toBe("1.0.106.0");
   });
 });
 

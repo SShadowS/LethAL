@@ -1,3 +1,4 @@
+import type { PublishIdentity } from "./app-version";
 import { describeThrown } from "./describe-error";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
@@ -98,7 +99,19 @@ export interface EnvToolConfigSection {
  * "this source subset does not compile" and aborts on everything else (orchestrator.ts). A broken
  * tool invocation must land in the abort branch, never be mistaken for a compile verdict.
  */
-export class EnvToolError extends Error {}
+export class EnvToolError extends Error {
+  /**
+   * R250: the app a failed publish tried to install, when the thrower knows it, so the
+   * publication fence can check BC's downgrade sentence against THIS app (see
+   * `confirmedDowngradeRefusal`) instead of trusting a quoted phrase.
+   */
+  constructor(
+    message: string,
+    readonly publishing?: PublishIdentity,
+  ) {
+    super(message);
+  }
+}
 
 /** Placeholders LethAL supplies. A `vars` key may not shadow one of these. */
 export const LETHAL_PLACEHOLDERS = [

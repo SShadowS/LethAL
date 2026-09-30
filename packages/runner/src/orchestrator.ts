@@ -36,7 +36,13 @@ import {
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
-import { nextAbove, parseVersionConflict, reserveAppVersion } from "./app-version";
+import {
+  confirmedDowngradeRefusal,
+  nextAbove,
+  parseVersionConflict,
+  reserveAppVersion,
+} from "./app-version";
+import type { PublishIdentity } from "./app-version";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -67,6 +73,7 @@ import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
+import { EnvToolError } from "./env-tool";
 import {
   type EquivalenceMark,
   marksSchemeWarning,
@@ -2474,7 +2481,7 @@ class LeaseSession {
    * the marker set and records a durable `container-needs-recycle`: leaving the marker is what
    * stops the next session from publishing over a half-applied one.
    */
-  async publish<T>(run: () => Promise<T>): Promise<T> {
+  async publish<T>(run: () => Promise<T>, attempted?: PublishIdentity): Promise<T> {
     const opSeq = await this.nextOpSeq();
     const attemptId = newAttemptId(`pub-${this.d.runId}-b${this.currentBatchIndex}`);
     const begun = await this.d.client.beginPublish(this.d.lease, attemptId, opSeq);
@@ -2490,7 +2497,7 @@ class LeaseSession {
     try {
       result = await run();
     } catch (err) {
-      if (isConfirmedTerminalPublishFailure(err)) {
+      if (isConfirmedTerminalPublishFailure(err, attempted)) {
         await this.endPublish(attemptId, opSeq, "failed");
       } else {
         await this.recordRecycle(
@@ -2853,19 +2860,33 @@ class LeaseSession {
  * ever constructs one when `decidePublishOutcome` already returned `"failed"`, so there is no
  * separate outcome field to re-check, unlike `DeploymentError` which also carries `indeterminate`/
  * `anomalous`), and a version conflict (BC named the installed version verbatim — a deterministic
- * rejection).
+ * rejection). R250: the conflict counts only as BC's whole sentence naming THIS publish's app,
+ * publisher and attempted version (`confirmedDowngradeRefusal`): `attempted` when the caller knows
+ * it, else the identity an `EnvToolError` carries. With neither, a quoted phrase proves nothing.
  *
  * Everything else — notably `DeploymentError` with `indeterminate`/`anomalous` — is a publish
  * whose result we cannot state, and must NOT be tombstoned with `EndPublish`.
  */
-function isConfirmedTerminalPublishFailure(err: unknown): boolean {
+function isConfirmedTerminalPublishFailure(err: unknown, attempted?: PublishIdentity): boolean {
   // C02-05, FIRST: an anomalous test-app publish carries altool's text, which may hold BC's
   // "newer version ... was already installed", and must not reach the version-conflict fallback.
   if (err instanceof TestAppError) return err.confirmedTerminal;
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
   if (err instanceof PublishFailedError) return true;
-  return parseVersionConflict(messageOf(err)) !== null;
+  const who = attempted ?? (err instanceof EnvToolError ? err.publishing : undefined);
+  return who !== undefined && confirmedDowngradeRefusal(messageOf(err), who) !== null;
+}
+
+/** R250: what a target deploy tries to install, or `undefined` when app.json does not say. */
+function targetIdentity(
+  projectManifest: Readonly<Record<string, unknown>>,
+  version: string,
+): PublishIdentity | undefined {
+  const { name, publisher } = projectManifest;
+  return typeof name === "string" && typeof publisher === "string"
+    ? { name, publisher, version }
+    : undefined;
 }
 
 /**
@@ -2913,10 +2934,11 @@ async function deployOnce(
   safety: SessionSafety,
   leaseSession: LeaseSession | undefined,
   dir: string,
+  attempted: PublishIdentity | undefined,
 ): Promise<CompiledArtifact | null> {
   safety.assertSafe(`deploy(${dir})`);
   if (leaseSession === undefined) return backend.deploy(dir);
-  return leaseSession.publish(() => backend.deploy(dir));
+  return leaseSession.publish(() => backend.deploy(dir), attempted);
 }
 
 /**
@@ -4708,7 +4730,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       let deployErr: unknown;
       const deployStartedMs = Date.now();
       try {
-        compiled = await deployOnce(cfg.backend, safety, leaseSession, batchDir);
+        compiled = await deployOnce(
+          cfg.backend,
+          safety,
+          leaseSession,
+          batchDir,
+          targetIdentity(projectManifest, appVersion),
+        );
         deployed = true;
       } catch (err) {
         deployErr = err;
@@ -4728,7 +4756,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             // A fresh publish op (design §4/§6): the first attempt's marker was already
             // tombstoned by its `EndPublish("failed")` — a version conflict is BC naming the
             // installed version verbatim, i.e. a confirmed deterministic rejection.
-            compiled = await deployOnce(cfg.backend, safety, leaseSession, batchDir);
+            compiled = await deployOnce(
+              cfg.backend,
+              safety,
+              leaseSession,
+              batchDir,
+              targetIdentity(projectManifest, appVersion),
+            );
             deployed = true;
           } catch (retryErr) {
             const stillInstalled = parseVersionConflict(messageOf(retryErr));

@@ -238,6 +238,8 @@ const APP_JSON = JSON.stringify(
   null,
   2,
 );
+/** R250: the test app an env-tool hook publish tried to install. */
+const TESTS_APP = { name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.2" };
 
 class StubBackend implements ExecutionBackend {
   activations: Array<string | null> = [];
@@ -6674,13 +6676,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     const client = new FakeLeaseClient(log);
     const timers = new FakeTimers();
     const { lease } = leaseCfg(client, { timers });
+    // R250: BC's measured sentence, naming the app the publish tried to install.
     const refusal =
-      "envTool.publish: tool publish Tests.app exit 1: The extension could not be deployed because a newer version 1.0.106.0 was already installed.";
+      "envTool.publish: tool publish Tests.app exit 1: Cannot install the extension Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.";
     const err = await runSessionForTest(leaseBackend(), {
       lease,
       quarantineDir: freshTmpDir(),
       afterLeaseAcquired: async () => {
-        throw new EnvToolError(refusal);
+        throw new EnvToolError(refusal, TESTS_APP);
       },
     }).catch((e) => e);
     expect((err as Error).message).toBe(refusal);
@@ -6690,6 +6693,102 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(client.releaseCalls).toBe(1);
     expect(log.indexOf("acquire")).toBeLessThan(log.indexOf("release"));
     expect(timers.cleared).toBe(1);
+  });
+
+  // R250: a refusal is confirmed only by BC's whole sentence naming THIS publish's app, publisher
+  // and attempted version. Anything else is a publish whose result is unknown: no EndPublish,
+  // marker kept, recycle recorded.
+  describe("R250: only BC's sentence naming this publish confirms a downgrade refusal", () => {
+    const TIMEOUT_QUOTING =
+      'envTool.publish: timed out after 600 s; last output: "a newer version 1.0.106.0 was already installed"';
+    const cases: Array<[string, string]> = [
+      ["the phrase quoted inside a timeout message", TIMEOUT_QUOTING],
+      [
+        "another app's name",
+        "Cannot install the extension Other App by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+      ],
+      [
+        "another publisher",
+        "Cannot install the extension Sandbox Tests by Contoso 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+      ],
+      [
+        "another attempted version",
+        "Cannot install the extension Sandbox Tests by LethAL 1.0.0.1 because a newer version 1.0.106.0 was already installed.",
+      ],
+    ];
+    for (const [label, text] of cases) {
+      test(`hook publish: ${label} is NOT a confirmed refusal`, async () => {
+        const client = new FakeLeaseClient();
+        const { lease } = leaseCfg(client);
+        const dir = freshTmpDir();
+        await runSessionForTest(leaseBackend(), {
+          lease,
+          quarantineDir: dir,
+          afterLeaseAcquired: async () => {
+            throw new EnvToolError(text, TESTS_APP);
+          },
+        }).catch((e) => e);
+        expect(client.endPublishArgs).toHaveLength(0);
+        expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+          "container-needs-recycle",
+        );
+      });
+    }
+
+    test("hook publish: an EnvToolError that names no app confirms nothing, even with BC's sentence", async () => {
+      const client = new FakeLeaseClient();
+      const { lease } = leaseCfg(client);
+      await runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: freshTmpDir(),
+        afterLeaseAcquired: async () => {
+          throw new EnvToolError(
+            "Cannot install the extension Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+          );
+        },
+      }).catch((e) => e);
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
+
+    // The target deploy: the attempted version is minted per run, so the fake reads it from the
+    // app.json the orchestrator stamped into the batch directory.
+    async function targetRefusal(
+      render: (app: { name: string; publisher: string; version: string }) => string,
+    ): Promise<FakeLeaseClient> {
+      const client = new FakeLeaseClient();
+      const { lease } = leaseCfg(client);
+      const backend = leaseBackend({
+        deploy: async (dir: string) => {
+          const app = JSON.parse(await readFile(join(dir, "app.json"), "utf8"));
+          throw new Error(`altool publishapp failed (exit 1):\n${render(app)}`);
+        },
+      });
+      await runSessionForTest(backend, { lease, quarantineDir: freshTmpDir() }).catch((e) => e);
+      return client;
+    }
+
+    test("target publish: BC's sentence naming this app, publisher and version is tombstoned as failed", async () => {
+      const client = await targetRefusal(
+        (a) =>
+          `Cannot install the extension ${a.name} by ${a.publisher} ${a.version} because a newer version 99.0.0.0 was already installed.`,
+      );
+      expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    });
+
+    test("target publish: the same sentence naming another attempted version is NOT confirmed", async () => {
+      const client = await targetRefusal(
+        (a) =>
+          `Cannot install the extension ${a.name} by ${a.publisher} 1.0.0.1 because a newer version 99.0.0.0 was already installed.`,
+      );
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
+
+    test("target publish: the phrase quoted inside a timeout message is NOT confirmed", async () => {
+      const client = await targetRefusal(
+        () => "timed out; last output: a newer version 99.0.0.0 was already installed.",
+      );
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
   });
 
   // R232, run 002 review: a hook that SUCCEEDS can still leave `LeaseSession.publish()` latched,
