@@ -457,7 +457,9 @@ export function renamedMemberNamesOf(
       );
     }
     const key = keyOf(m.objectType, m.codeunitId);
-    const id = `${key}|${names.join("|").toLowerCase()}`;
+    // JSON, not a "|" join: a quoted AL name may contain "|" (it compiles), so a join makes
+    // ["Pick|Choose", "Third"] and ["Pick", "Choose|Third"] one key and drops a member's list.
+    const id = JSON.stringify([key, ...names.map((n) => n.toLowerCase())]);
     if (seen.has(id)) continue;
     seen.add(id);
     const list = out.get(key) ?? [];

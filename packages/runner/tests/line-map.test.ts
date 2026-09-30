@@ -11,6 +11,7 @@ import {
   fileLineMapEntries,
   lineMapFromSources,
   readRenamedMemberNames,
+  renamedMemberNamesOf,
 } from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
@@ -744,6 +745,64 @@ ${tail}}
       "Gamma",
       "Gamma",
       "Gamma",
+    ]);
+  });
+
+  test("two members whose name lists join to the same string keep their own lists (R318, review 001 I1)", async () => {
+    // A quoted AL name may contain "|" (measured with alc 18.0.41.45789: both builds of this shape
+    // compile, exit 0, no diagnostic). `Pick|Choose`/`Third` and `Pick`/`Choose|Third` join with
+    // "|" to the same string, so a key built that way dropped the second list. `Bad` makes the
+    // object parse with ERROR, so the tree fallback names nothing and only the manifest can.
+    const src = `codeunit 50100 "Repro P"
+{
+#if R318A
+    procedure "Pick|Choose"(X: Integer): Integer
+#else
+    procedure Third(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1);
+    end;
+
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure "Choose|Third"(X: Integer): Integer
+#endif
+    begin
+        exit(X + 2);
+    end;
+
+    procedure Bad()
+    begin
+        X := ;
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(true);
+    const entry = (names: string[]) => ({
+      objectType: "codeunit",
+      codeunitId: 50100,
+      coverageArmNames: names,
+    });
+    const mutants = [entry(["Pick|Choose", "Third"]), entry(["Pick", "Choose|Third"])];
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-pipe-"));
+    try {
+      await writeFile(join(dir, "R.Codeunit.al"), src);
+      await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ mutants }));
+      const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect([9, 18].map((n) => m.lookup("Codeunit", 50100, n))).toEqual(["Pick|Choose", "Pick"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect([...renamedMemberNamesOf(mutants)]).toEqual([
+      [
+        "codeunit:50100",
+        [
+          ["Pick|Choose", "Third"],
+          ["Pick", "Choose|Third"],
+        ],
+      ],
     ]);
   });
 });
