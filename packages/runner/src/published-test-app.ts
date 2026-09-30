@@ -102,6 +102,21 @@ export function parsePublishedApp(pkg: Buffer): PublishedApp {
 }
 
 /**
+ * R-372: the published package's own AL source, as `{ path, text }` per `.al` entry, for R-278's
+ * per-test digest. It is the body the server RUNS, where the test project's disk may hold a newer,
+ * unpublished edit. An empty array means the package carries no source (measured: alc 18 always
+ * includes it, `scripts/r372-package-source-probe/RESULTS.md`; kept for builds not measured).
+ */
+export function publishedAlSources(pkg: Buffer): Array<{ path: string; text: string }> {
+  const out: Array<{ path: string; text: string }> = [];
+  for (const entry of listPackageEntries(pkg).filter(isAlSourceEntry)) {
+    const source = readPackageEntry(pkg, entry);
+    if (source !== null) out.push({ path: entry, text: source.toString("utf8") });
+  }
+  return out;
+}
+
+/**
  * C02-05: the `<App>` element's Id, Name, Publisher and Version, from the same manifest entry
  * `parsePublishedApp` reads. Throws, like `parsePublishedApp`, on a package without them.
  */
