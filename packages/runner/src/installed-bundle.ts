@@ -62,7 +62,9 @@ export interface InstalledBundleRows {
  */
 class PayloadDigest {
   private readonly h = new Bun.CryptoHasher("sha256");
-  constructor(appJson: Uint8Array | string) {
+  constructor(appJson: Uint8Array) {
+    // Review M-7: length-prefixed, so no byte can move between app.json and the first path.
+    this.h.update(`${appJson.length}\0`);
     this.h.update(appJson);
   }
   file(path: string, bytes: Uint8Array): void {
@@ -191,7 +193,9 @@ export function openInstalledBundle(
     const cap = Math.min(max, budget);
     let out: Buffer;
     try {
-      out = gunzipSync(gz, { maxOutputLength: cap });
+      // Review M-2: zlib refuses a maxOutputLength of 0, so allow one byte and check it below; an
+      // empty file at exactly the limit still opens.
+      out = gunzipSync(gz, { maxOutputLength: Math.max(1, cap) });
     } catch (err) {
       if ((err as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") throw tooLarge(what, cap);
       throw new InstalledArtifactError(
@@ -199,6 +203,7 @@ export function openInstalledBundle(
         `${where}: the stored ${what} does not decompress: ${describeThrown(err)}`,
       );
     }
+    if (out.length > cap) throw tooLarge(what, cap);
     budget -= out.length;
     return out;
   };

@@ -124,4 +124,52 @@ describe("installed bundle (R360)", () => {
     }
     expect(openInstalledBundle(w, rec).alSources).toHaveLength(1);
   });
+
+  test("review M-9: an app.json-only tamper is refused as payload-differs", async () => {
+    const b = batch();
+    const w = await readBatchBundle(b.dir, b.appPath, b.appSha);
+    expect(() =>
+      openInstalledBundle(
+        { ...w, appJsonText: '{"id":"y"}' },
+        { ...REC, payloadSha256: w.payloadSha256 },
+      ),
+    ).toThrow(expect.objectContaining({ reason: "payload-differs" }));
+  });
+
+  test("review M-7: bytes cannot move between app.json and the first path without changing the digest", () => {
+    const parts = (appJsonText: string, path: string) =>
+      bundleOfParts({
+        appBytes: new TextEncoder().encode("APP"),
+        appJsonText,
+        manifestText: "{}",
+        files: [{ path, text: "codeunit 1 A { }" }],
+      }).payloadSha256;
+    expect(parts("{}a", "b.al")).not.toBe(parts("{}", "ab.al"));
+  });
+
+  test("review M-2: a payload at exactly the limit opens, with an empty .al, and one byte over is payload-too-large", async () => {
+    const b = batch({ "A.al": "x".repeat(10), "Z.al": "" });
+    const w = await readBatchBundle(b.dir, b.appPath, b.appSha);
+    const rec = { ...REC, payloadSha256: w.payloadSha256 };
+    // app.json 10 + manifest 31 + A.al 10 + Z.al 0 bytes.
+    const exact = 10 + 31 + 10;
+    expect(
+      openInstalledBundle(w, rec, { ...BUNDLE_LIMITS, payloadBytes: exact }).alSources,
+    ).toHaveLength(2);
+    await readBatchBundle(b.dir, b.appPath, b.appSha, { ...BUNDLE_LIMITS, payloadBytes: exact });
+    expect(() =>
+      openInstalledBundle(w, rec, { ...BUNDLE_LIMITS, payloadBytes: exact - 1 }),
+    ).toThrow(expect.objectContaining({ reason: "payload-too-large" }));
+    // The budget is spent before the last file, which is one byte: refused as too large, never as
+    // a decompression failure.
+    const c = batch({ "A.al": "x".repeat(10), "Z.al": "y" });
+    const wc = await readBatchBundle(c.dir, c.appPath, c.appSha);
+    expect(() =>
+      openInstalledBundle(
+        wc,
+        { ...REC, payloadSha256: wc.payloadSha256 },
+        { ...BUNDLE_LIMITS, payloadBytes: exact },
+      ),
+    ).toThrow(expect.objectContaining({ reason: "payload-too-large" }));
+  });
 });
