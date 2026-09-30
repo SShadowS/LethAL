@@ -74,3 +74,7 @@ Red-check each: remove the comparison (or make NULL match), the named test goes 
    the hash (al-runner falls back to `testAppHashFor`'s source hash), `resolveResume` and
    `--skip-known-survivors` compare it; tests 1 to 5 in `resume.test.ts`, red-checked.
 3. **Close**: `docs/roadmap/R247.md` status, regenerate `ROADMAP.md`.
+
+## Approved 2026-09-30 (f7ecdbbc)
+
+Scope: YES, the rule also applies to `--skip-known-survivors` (a survivor measured against another test app is not evidence, and a new test is exactly what might kill it). Additions: (1) a CHANGELOG line naming the one-time cost (unfinished pre-R247 runs refused once; the next `--skip-known-survivors` skips nothing once), and the refusal text says a version-stamp-only republish also counts as a change. (2) `lethal verify` republishes the test app on purpose and reads its source run: confirm verify never goes through the new resume or history refusal by accident, with a test if it touches resolveResume or priorSurvivorKeys. No Cronus28.
