@@ -35,3 +35,8 @@ accepts the key. Red-checks: explain building the key with `??` instead of the s
 **Tasks.** 1. Export `markIdentityOf`; add `markKey` and `markIdentityScheme` to explain, with the
 console line; v7 schema and ripple (explain tests, agent guide, agent-contract). 2. Round-trip
 tests and red-checks. 3. Close R265.
+
+## Approved 2026-09-30 (12248827), with two additions
+
+1. A report with no `identityScheme` reads as scheme 1 (R325's rule), so `markIdentityScheme` is 1 there: never absent, never guessed. Tested on a v2 report.
+2. When the report's scheme differs from this build's `IDENTITY_SCHEME`, the console and the JSON say so plainly: a mark written from that key would be stale on the next run under this build, so re-run first. Tested and red-checked.
