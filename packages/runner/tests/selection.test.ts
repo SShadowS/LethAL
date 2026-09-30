@@ -1116,3 +1116,66 @@ describe("R298: a mutant in a refused (#if-wrapped) object reads no-coverage, wh
     expect(split.refused.size).toBe(0);
   });
 });
+
+describe("R318: a renamed split member is attributed under its coverage names", () => {
+  const covNaming = (procedure: string) => ({
+    granularity: "procedure" as const,
+    entries: [{ objectType: "Codeunit", objectId: 70000, procedure }],
+  });
+  const renamed = (arms: readonly string[] = ["Pick", "Choose"]) =>
+    entry({ procedureName: "", procedureScope: "public", coverageArmNames: arms });
+
+  test("either arm's name covers it, in any case, with exact attribution", () => {
+    for (const compiled of ["Pick", "CHOOSE"]) {
+      const index = buildCoverageIndex([
+        { ref: t1, coverage: covNaming(compiled) },
+        { ref: t2, coverage: covNaming("Plain") },
+      ]);
+      const split = coverageFilter([renamed()], index, [t1, t2], undefined, false);
+      expect([compiled, split.covered.get("M0001")]).toEqual([compiled, [t1]]);
+      expect(split.attribution.get("M0001")).toBe("exact");
+    }
+  });
+
+  test("a quoted member's names match the unquoted names every producer sends (measured)", () => {
+    // al-runner --server `scope` and SymbolReference `Methods[].Name` both send `Choose Me`,
+    // measured on 2.12.0 and alc 18.0 (R-318 plan, raw-r8 and hub-names logs).
+    const index = buildCoverageIndex([{ ref: t1, coverage: covNaming("Choose Me") }]);
+    const split = coverageFilter(
+      [renamed(["Pick Me", "Choose Me"])],
+      index,
+      [t1, t2],
+      undefined,
+      false,
+    );
+    expect(split.covered.get("M0001")).toEqual([t1]);
+  });
+
+  test("two names both hit at member level: the covering set is the union", () => {
+    // On the --server leg a member's statement on a shared line keeps its compiled scope
+    // (`Choose`) while its other lines are re-keyed to `Pick`, so both keys can exist in one build.
+    const index = buildCoverageIndex([
+      { ref: t1, coverage: covNaming("Pick") },
+      { ref: t2, coverage: covNaming("Choose") },
+    ]);
+    const split = coverageFilter([renamed()], index, [t1, t2], undefined, false);
+    expect(split.covered.get("M0001")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0001")).toBe("exact");
+  });
+
+  test("a name outside its list does not cover it (the negative control)", () => {
+    const index = buildCoverageIndex([{ ref: t1, coverage: covNaming("Take") }]);
+    const m = renamed();
+    const split = coverageFilter([m], index, [t1, t2], undefined, false);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+
+  test("without the field (a manifest from before R318) it reads as before: uncovered", () => {
+    const index = buildCoverageIndex([{ ref: t1, coverage: covNaming("Pick") }]);
+    const m = entry({ procedureName: "", procedureScope: "public" });
+    const split = coverageFilter([m], index, [t1, t2], undefined, false);
+    expect(split.covered.size).toBe(0);
+    expect(split.uncovered).toEqual([m]);
+  });
+});

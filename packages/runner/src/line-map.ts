@@ -7,7 +7,9 @@ import {
   isProcedureLike,
   objectDeclarationsOf,
   parseAL,
+  procedureLikeArmNames,
   procedureLikeNameNode,
+  renamedMemberCoverageNames,
   wrapRoot,
 } from "@lethal/engine";
 
@@ -29,6 +31,12 @@ interface ProcedureSpan {
   readonly name: string;
   readonly firstLine: number;
   readonly lastLine: number;
+  /**
+   * R318: set only on a split member whose `#if` arms RENAME it (spanned under its first coverage
+   * name): every arm's own name, lower-cased. The server re-key accepts only a producer scope
+   * that is one of these.
+   */
+  readonly arms?: readonly string[];
 }
 
 interface ObjectLines {
@@ -50,7 +58,23 @@ interface ObjectLines {
    * evidence that attribution failed in this object.
    */
   readonly triggers: readonly ProcedureSpan[];
+  /** R318: the renamed members' spans only, so an object with none answers `renamedMemberAt` at once. */
+  readonly renamed: readonly ProcedureSpan[];
+  /**
+   * R318 (review r2, ruling A): lines inside MORE THAN ONE declaration span. Spans are inclusive
+   * and one physical line can close one member and hold the next (`end; procedure Other() begin
+   * ... end;`). Counted over EVERY declaration of the object: named procedures, renamed split
+   * members with or without a coverage name, `#if`-wrapped and var-swallowed procedures, and
+   * triggers. Such a line names nobody: neither `lookup` nor the re-key may pick a side.
+   */
+  readonly shared: ReadonlySet<number>;
 }
+
+/**
+ * R318 (pre-flight P8): how many `renamedMemberAt` calls got past the no-renamed-member exit, so a
+ * test can pin that an ordinary object costs one map read per statement and no span search.
+ */
+export const renamedMemberAttempts = { count: 0 };
 
 /** Key for the `(objectType, objectId)` pair. Never the bare id: a table and a codeunit may share
  *  one, which is the bug `6e89948` fixed for the hub's coverage map. */
@@ -133,6 +157,7 @@ export class LineMap {
   constructor(
     entries: readonly LineMapEntry[],
     private readonly declared: ReadonlySet<string>,
+    renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
   ) {
     for (const e of entries) {
       const key = keyOf(e.objectType, e.objectId);
@@ -153,7 +178,7 @@ export class LineMap {
         this.refused.set(key, e.refused);
         continue;
       }
-      this.byObject.set(key, spansOf(e.root, e.baseLine));
+      this.byObject.set(key, spansOf(e.root, e.baseLine, renamedNames.get(key) ?? []));
     }
   }
 
@@ -263,8 +288,46 @@ export class LineMap {
     // Line 0 is BC's object-level row. Deliberately checked before the span scan so it can never
     // fall inside a procedure whose range happens to start at 0 through some future bug.
     if (lineNo <= 0) return undefined;
+    // R318 (review r2): a line inside two spans belongs to neither as far as a LINE can tell.
+    if (entry.shared.has(lineNo)) return undefined;
     for (const p of entry.procedures) {
       if (lineNo >= p.firstLine && lineNo <= p.lastLine) return p.name;
+    }
+    return undefined;
+  }
+
+  /**
+   * R318: the coverage name of the RENAMED split member whose span alone holds `lineNo`, when
+   * `scope` (the producer's own name for the statement, al-runner `--server`'s `st.scope`) is one
+   * of that member's arm names. Else `undefined`, and the caller keeps `scope`.
+   *
+   * Why re-key at all: the producer names the COMPILED arm, which the collision rule may have
+   * dropped (`r3` build `[]`: `Choose`) and which in another build can be another declaration's
+   * name (`r4`: `Beta`). Keying by POSITION to the span's name is what makes the server legs agree
+   * with the line-based ones in every build.
+   *
+   * Why the two refusals: a line two declarations share can hold the other one's statement
+   * (`r10`: `OtherOnly` reports line 12 with scope `Other`), and a scope the member does not
+   * declare is, by the producer's own account, some other member's statement.
+   *
+   * Cost: one map read and an empty-list exit for every object without a renamed member, which is
+   * every object in every measured corpus.
+   */
+  renamedMemberAt(
+    objectType: string,
+    objectId: number,
+    lineNo: number,
+    scope: string | undefined,
+  ): string | undefined {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined || entry.renamed.length === 0) return undefined;
+    renamedMemberAttempts.count++;
+    if (scope === undefined || lineNo <= 0 || entry.shared.has(lineNo)) return undefined;
+    const own = scope.toLowerCase();
+    for (const p of entry.renamed) {
+      if (lineNo >= p.firstLine && lineNo <= p.lastLine) {
+        return p.arms?.includes(own) === true ? p.name : undefined;
+      }
     }
     return undefined;
   }
@@ -279,9 +342,15 @@ export class LineMap {
  * was regex-based; it is gone, and the over-credit it produced is exactly what this module
  * must not reintroduce.)
  */
-function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
+function spansOf(
+  objectRoot: ALSyntaxNode,
+  baseLine: number,
+  fromManifest: readonly (readonly string[])[],
+): ObjectLines {
   const procedures: ProcedureSpan[] = [];
   const triggers: ProcedureSpan[] = [];
+  /** R318 ruling A: renamed split members with no coverage name. Never named, but counted for `shared`. */
+  const unnamed: ProcedureSpan[] = [];
   const span = (n: ALSyntaxNode, name: string): ProcedureSpan => ({
     name,
     firstLine: n.startPosition.row + 1 - baseLine + 1,
@@ -296,23 +365,161 @@ function spansOf(objectRoot: ALSyntaxNode, baseLine: number): ObjectLines {
       return;
     }
     // R301, R316: a split-header procedure, either shape, is one procedure (one shared body). Its
-    // span starts at the `#if` line, which holds no code, so no covered line can land there. An arm
-    // that renames the procedure gets no span: which name is compiled is not known here.
+    // span starts at the `#if` line, which holds no code, so no covered line can land there.
+    // R318: an arm that renames the procedure is spanned under its first coverage name, one no
+    // other declaration of the object uses (`renamedMemberCoverageNames`), which the manifest
+    // lists first in `coverageArmNames`. A line belongs to the member whichever arm was compiled,
+    // so this holds in every build. No such name: no named span, as before R318.
     if (isProcedureLike(n)) {
       const nameNode = procedureLikeNameNode(n);
-      const name = nameNode === null ? null : stripQuotes(nameNode.text);
+      const name =
+        nameNode === null ? renamedSpanName(n, fromManifest) : stripQuotes(nameNode.text);
       if (name !== null && name !== "") {
         // Measured: BC's rows span a procedure CONTIGUOUSLY from its declaration line through its
         // closing `end;`, so the node's own line extent is exactly the right range.
-        procedures.push(span(n, name));
+        const arms =
+          nameNode === null ? procedureLikeArmNames(n).map((a) => a.toLowerCase()) : undefined;
+        procedures.push({ ...span(n, name), ...(arms !== undefined ? { arms } : {}) });
+      } else if (n.children.length > 0) {
+        // Ruling A. A bare `procedure` keyword token is also procedure-like (no children, not a
+        // declaration): it spans nothing.
+        unnamed.push(span(n, ""));
       }
       return; // do not descend: a nested construct belongs to this procedure, not its own span
     }
     for (const c of n.children) walk(c);
   };
   walk(objectRoot);
-  return { procedures, triggers };
+  return {
+    procedures,
+    triggers,
+    renamed: procedures.filter((p) => p.arms !== undefined),
+    shared: linesInTwoSpans([...procedures, ...unnamed, ...triggers]),
+  };
 }
+
+/**
+ * R318 (review I1): the name a RENAMED split member is spanned under.
+ *
+ * The manifest's `coverageArmNames[0]` first. The manifest was computed on the ORIGINAL source,
+ * and the line map parses the EMITTED source, which can re-parse with an ERROR node the original
+ * did not have (grammar issue #30: a nested `#if` in a conditional var section, measured). An
+ * ERROR anywhere in the object makes `renamedMemberCoverageNames` refuse, and without this the
+ * member would be unnamed on the line legs while a PLAIN member in the same object stays named
+ * (measured) and the server leg covers it by `st.scope`. The manifest entry is matched to this
+ * node by its own arm names. That is unambiguous: a coverage name is, by construction, a name no
+ * other declaration of the object carries in any arm, and instrumentation adds statements, never
+ * declarations. More than one match: no name, the safe direction.
+ *
+ * No manifest entry (a member with no mutant, or a caller with no manifest): the same computation
+ * on the tree this map parsed, as before. So an object whose ORIGINAL tree has an ERROR (no
+ * manifest names) but whose emitted tree parses cleanly still gets a span, under a name no mutant
+ * looks up. Harmless: nothing reads that key, and the shared-line count is unchanged.
+ */
+function renamedSpanName(
+  member: ALSyntaxNode,
+  fromManifest: readonly (readonly string[])[],
+): string | null {
+  const own = new Set(procedureLikeArmNames(member).map((a) => a.toLowerCase()));
+  const hits = fromManifest.filter((names) => own.has((names[0] ?? "").toLowerCase()));
+  if (hits.length > 1) return null;
+  return hits[0]?.[0] ?? renamedMemberCoverageNames(member)[0] ?? null;
+}
+
+/**
+ * R318 (review I1): per object (`type:id`, lower-cased, as `keyOf`), the distinct
+ * `coverageArmNames` lists of the manifest's renamed members.
+ */
+export type RenamedMemberNames = ReadonlyMap<string, readonly (readonly string[])[]>;
+
+const NO_RENAMED_NAMES: RenamedMemberNames = new Map();
+
+/**
+ * `RenamedMemberNames` from a manifest's mutants (`MutantManifestEntry`: the object is its
+ * `objectType` keyword and `codeunitId`). An entry that carries names but no usable object throws:
+ * keying it under a made-up object would drop the name without a word.
+ */
+export function renamedMemberNamesOf(
+  mutants: readonly {
+    readonly objectType?: unknown;
+    readonly codeunitId?: unknown;
+    readonly coverageArmNames?: readonly string[];
+  }[],
+): RenamedMemberNames {
+  const out = new Map<string, (readonly string[])[]>();
+  const seen = new Set<string>();
+  for (const m of mutants) {
+    const names = m.coverageArmNames;
+    if (names === undefined || names.length === 0) continue;
+    if (typeof m.objectType !== "string" || typeof m.codeunitId !== "number") {
+      throw new Error(
+        `line-map: a manifest entry carries coverageArmNames ${JSON.stringify(names)} but no objectType/codeunitId`,
+      );
+    }
+    const key = keyOf(m.objectType, m.codeunitId);
+    // JSON, not a "|" join: a quoted AL name may contain "|" (it compiles), so a join makes
+    // ["Pick|Choose", "Third"] and ["Pick", "Choose|Third"] one key and drops a member's list.
+    const id = JSON.stringify([key, ...names.map((n) => n.toLowerCase())]);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const list = out.get(key) ?? [];
+    list.push(names);
+    out.set(key, list);
+  }
+  return out;
+}
+
+/**
+ * R318 (review I1): `RenamedMemberNames` from the `mutant-manifest.json` that
+ * `writeInstrumentedProject` writes beside the instrumented sources. A directory with no manifest
+ * (a hand-built fixture) has none. A manifest that cannot be read or parsed THROWS: an unreadable
+ * one silently dropping renamed members' names is the say-less-on-one-leg bug this exists to fix.
+ */
+export async function readRenamedMemberNames(dir: string): Promise<RenamedMemberNames> {
+  const path = join(dir, "mutant-manifest.json");
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      return NO_RENAMED_NAMES;
+    }
+    throw new Error(
+      `line-map: could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `line-map: ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const mutants =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { mutants?: unknown }).mutants
+      : undefined;
+  if (!Array.isArray(mutants)) throw new Error(`line-map: ${path} has no "mutants" array`);
+  return renamedMemberNamesOf(mutants);
+}
+
+/**
+ * R318: every line inside at least two of `spans`. Declarations are siblings and never nest, so
+ * two overlap only where one ends on the line the next begins; the running furthest end keeps it
+ * right even if they did. Usually no line at all: the empty set is shared.
+ */
+function linesInTwoSpans(spans: readonly ProcedureSpan[]): ReadonlySet<number> {
+  const shared = new Set<number>();
+  let reach = 0;
+  for (const s of [...spans].sort((a, b) => a.firstLine - b.firstLine)) {
+    for (let l = s.firstLine; l <= Math.min(reach, s.lastLine); l++) shared.add(l);
+    reach = Math.max(reach, s.lastLine);
+  }
+  return shared.size === 0 ? NO_LINES : shared;
+}
+
+const NO_LINES: ReadonlySet<number> = new Set();
 
 function stripQuotes(s: string): string {
   return s.startsWith('"') && s.endsWith('"') && s.length >= 2 ? s.slice(1, -1) : s;
@@ -495,7 +702,11 @@ export async function buildLineMap(
   projectDir: string,
   declared: ReadonlySet<string>,
 ): Promise<LineMap> {
-  return lineMapFromSources(await readAlSources(projectDir), declared);
+  return lineMapFromSources(
+    await readAlSources(projectDir),
+    declared,
+    await readRenamedMemberNames(projectDir),
+  );
 }
 
 /** One `.al` file of a project: its path relative to the project dir, and its text. */
@@ -521,6 +732,7 @@ export async function readAlSources(projectDir: string): Promise<AlSource[]> {
 export async function lineMapFromSources(
   sources: readonly AlSource[],
   declared: ReadonlySet<string>,
+  renamedNames: RenamedMemberNames = NO_RENAMED_NAMES,
 ): Promise<LineMap> {
   await initParser();
   const entries: LineMapEntry[] = [];
@@ -529,7 +741,7 @@ export async function lineMapFromSources(
       ...fileLineMapEntries(wrapRoot(parseAL(text)), objectIdentityOf, normalizeSlashes(path)),
     );
   }
-  return new LineMap(entries, declared);
+  return new LineMap(entries, declared, renamedNames);
 }
 
 /**

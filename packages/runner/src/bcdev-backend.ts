@@ -621,6 +621,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       this.lineMap = await lineMapFromSources(
         artifact.alSources,
         this.methodIndex.declaredObjects(),
+        artifact.renamedMemberNames,
       );
       this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = coverageObjectIdFilterFromText(

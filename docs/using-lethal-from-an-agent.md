@@ -487,7 +487,7 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 3, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 4, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. Set `identityScheme` to the report's own `identityScheme`. A file without it

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 348 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**97 of 351 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -125,7 +125,7 @@ that ordering is the priority.
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
 - **R313** · A member whose `var` section tree-sitter-al cannot parse gets no reach latch: it is refused by name, and its reach is not measured · [R313.md](docs/roadmap/R313.md) · open, filed 2026-09-28
 - **R316** · A split-header procedure whose arms each have their own `var` section (`preproc_split_procedure_preamble`) has no procedure name, scope or line-map span, so coverage cannot attribute its mutants and some operators find no site in it · [R316.md](docs/roadmap/R316.md) · done (56b7e3b3..ae0793a9)
-- **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · open, filed 2026-09-28
+- **R318** · A split-header procedure whose `#if` arms rename it has no procedure name, so under coverage attribution a public one's mutants read `no-coverage` · [R318.md](docs/roadmap/R318.md) · open, NARROWED 2026-09-30: fenced bcdev and every al-runner leg attribute a renamed split member in every…
 - **R319** · al-runner's `--server` path compiles the target without the session's preprocessor symbols, so a symbol-dependent build is measured as the no-symbol one · [R319.md](docs/roadmap/R319.md) · done (33cfc55a)
 - **R322** · Type resolution compares variable names case-sensitively, so a differently-cased reference can take a same-named global's type and authorize a mutant that does not compile · [R322.md](docs/roadmap/R322.md) · done (db641338)
 - **R323** · A named return value is not a declaration to type resolution, so when a global shares its name the global's type authorizes a mutant that does not compile · [R323.md](docs/roadmap/R323.md) · done (a1f0e093..c65ffb5c)
@@ -140,7 +140,9 @@ that ordering is the priority.
 - **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · open, filed 2026-09-29
 - **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
 - **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
-- **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · open, filed 2026-09-30
+- **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
+- **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · open, filed 2026-09-30
+- **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · open, filed 2026-09-30
 
 ## Product gaps a real project hits
 
@@ -393,6 +395,7 @@ that ordering is the priority.
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · open, filed 2026-09-29
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · open, filed 2026-09-30
+- **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
 
 ---
 

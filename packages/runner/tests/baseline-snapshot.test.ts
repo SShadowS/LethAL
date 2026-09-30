@@ -210,4 +210,36 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     expect(store.findBaselineSnapshot("b", "package:other")).toBeNull();
     expect(store.findBaselineSnapshot("other", "package:t")).toBeNull();
   });
+
+  // R318 (final review I1): R318 leaves the emitted AL byte-identical, so a run of the previous
+  // identity scheme records a snapshot under the same two hashes, but its coverage was named by the
+  // old attribution. Reuse is bound to the current scheme, so that snapshot is never found.
+  function snapshotAtScheme(scheme: number): { store: ResultsStore; id: number } {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({
+      identityScheme: scheme,
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1",
+    });
+    const ref = { codeunitId: 79100, codeunitName: "Tests", method: "A" };
+    store.recordBaselineSnapshot({
+      runId: id,
+      batchIndex: 0,
+      batchHash: "b",
+      testAppHash: "package:t",
+      baseline: [{ ref, verdict: { ref, outcome: "pass", durationMs: 12 } }],
+    });
+    return { store, id };
+  }
+
+  test("R318: a snapshot recorded at the current identity scheme is reused", () => {
+    const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
+    expect(store.findBaselineSnapshot("b", "package:t")?.runId).toBe(id);
+  });
+
+  test("R318: a snapshot recorded at the previous identity scheme is NOT reused", () => {
+    const { store } = snapshotAtScheme(IDENTITY_SCHEME - 1);
+    expect(store.findBaselineSnapshot("b", "package:t")).toBeNull();
+  });
 });
