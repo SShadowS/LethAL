@@ -28,7 +28,7 @@ import type {
 import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { EnvToolClient, EnvToolError } from "../src/env-tool";
+import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
@@ -6943,6 +6943,78 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     );
     expect(latched?.type === "warning" ? latched.message : "").toContain("afterLeaseAcquired");
     expect(latched?.type === "warning" ? latched.message : "").toContain("timed out");
+  });
+
+  // R237: every case below runs the REAL client and the REAL Bun spawn, so what the fence reads is
+  // what a real env-tool publish throws. Only a tool that never started is pre-publish.
+  describe("R237: only an env tool that never started is a confirmed pre-publish failure", () => {
+    async function hookPublish(
+      toolPath: string,
+      script: string,
+      timeoutSeconds?: number,
+    ): Promise<{ err: unknown; client: FakeLeaseClient; dir: string }> {
+      const dir = freshTmpDir();
+      const client = new FakeLeaseClient();
+      // The fake does not model EndPublish clearing the marker, so an uncertain case seeds what
+      // the real release gate would read then: the marker BeginPublish set, never tombstoned.
+      if (toolPath === process.execPath) {
+        client.statusQueue = [
+          { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+          {
+            opKind: "publish",
+            opAttemptId: "pub",
+            opSeq: 8,
+            lastCompletedOpSeq: 7,
+            completed: false,
+          },
+        ];
+      }
+      const { lease } = leaseCfg(client);
+      const publishBlock = { command: ["-e", script, "{envId}", "{appFile}"] };
+      const publisher = new EnvToolPublisher(
+        new EnvToolClient({
+          toolPath,
+          publish: publishBlock,
+          resolve: [],
+          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+        }),
+        publishBlock,
+        { envId: "e1", serializerKey: `https://h|e1|${dir}` },
+        { readArtifact: async () => new Uint8Array([1, 2, 3]) },
+      );
+      const err = await runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        nowIso: () => "2026-09-30T10:00:00.000Z",
+        afterLeaseAcquired: () => publisher.publishFile(join(dir, "Tests.app")),
+      }).catch((e) => e);
+      return { err, client, dir };
+    }
+
+    test("a toolPath that does not exist releases the lease and quarantines nothing", async () => {
+      const { err, client, dir } = await hookPublish(join(freshTmpDir(), "no-such-tool.exe"), "0");
+      expect(err).toBeInstanceOf(EnvToolNotStartedError);
+      expect(client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+      expect(client.releaseCalls).toBe(1);
+      expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    });
+
+    const uncertain: Array<[string, string, number | undefined, string]> = [
+      ["LethAL's own timeout kills it", "setTimeout(() => {}, 30000)", 0.5, "timed out"],
+      ["it exits non-zero", "process.exit(3)", undefined, "exit 3"],
+      ["it starts and is then killed", "process.kill(process.pid, 'SIGKILL')", undefined, "exit "],
+    ];
+    for (const [label, script, timeoutSeconds, says] of uncertain) {
+      test(`a tool that started and ${label} keeps the lease and quarantines`, async () => {
+        const { err, client, dir } = await hookPublish(process.execPath, script, timeoutSeconds);
+        expect(err).toBeInstanceOf(EnvToolError);
+        expect((err as Error).message).toContain(says);
+        expect(client.endPublishArgs).toHaveLength(0);
+        expect(client.releaseCalls).toBe(0);
+        const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+        expect(rec?.opKind).toBe("container-needs-recycle");
+      });
+    }
   });
 });
 

@@ -73,7 +73,7 @@ import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import { discoverTests } from "./discovery";
-import { EnvToolError } from "./env-tool";
+import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
   type EquivalenceMark,
   marksSchemeWarning,
@@ -2860,8 +2860,9 @@ class LeaseSession {
  * ever constructs one when `decidePublishOutcome` already returned `"failed"`, so there is no
  * separate outcome field to re-check, unlike `DeploymentError` which also carries `indeterminate`/
  * `anomalous`), and a version conflict (BC named the installed version verbatim — a deterministic
- * rejection). R250: the conflict counts only as BC's whole sentence naming THIS publish's app,
- * publisher and attempted version (`confirmedDowngradeRefusal`): `attempted` when the caller knows
+ * rejection), and `EnvToolNotStartedError` (R237: the env tool's process was never created).
+ * R250: the conflict counts only as BC's whole sentence naming THIS publish's app, publisher and
+ * attempted version (`confirmedDowngradeRefusal`): `attempted` when the caller knows
  * it, else the identity an `EnvToolError` carries. With neither, a quoted phrase proves nothing.
  *
  * Everything else — notably `DeploymentError` with `indeterminate`/`anomalous` — is a publish
@@ -2874,6 +2875,9 @@ function isConfirmedTerminalPublishFailure(err: unknown, attempted?: PublishIden
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
   if (err instanceof PublishFailedError) return true;
+  // R237: the env tool never started, so nothing reached the server. A started tool that timed
+  // out, was killed or exited non-zero is a plain EnvToolError and stays uncertain below.
+  if (err instanceof EnvToolNotStartedError) return true;
   const who = attempted ?? (err instanceof EnvToolError ? err.publishing : undefined);
   return who !== undefined && confirmedDowngradeRefusal(messageOf(err), who) !== null;
 }
