@@ -552,9 +552,12 @@ than a stronger assertion. The test must pass twice on the unmutated build, or v
 an existing test whose own source (its attributes and its procedure) changed since the run
 (R-278, R258). An edited test gets the same two unmutated runs as an added one. Two blind spots
 remain. An edit to a helper, handler or library procedure the test calls does not make the test
-new (R371): edit the test itself too. And the run recorded each test's source from disk, so a test
-you edited before `lethal run` without republishing the test app ran its OLD body there, and verify
-then reads it as unchanged (R372): republish the test app before `lethal run`.
+new (R371): edit the test itself too. On bcdev the run records each test's source from the
+PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
+as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
+that publishes its own test apps, a package without source) it records none and warns
+`test-digests-unavailable`, and verify refuses that run as `source-predates-verify`. On al-runner the
+source on disk is what runs, and that is what the run records.
 
 ### After verify (guidance)
 
