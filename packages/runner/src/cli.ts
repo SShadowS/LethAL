@@ -88,6 +88,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
+import { validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
 import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
@@ -2137,9 +2138,6 @@ export interface LethalConfigFile {
   readonly exclude?: readonly string[];
 }
 
-/** Characters that would make a symbol ambiguous to one of the two compilers — see below. */
-const SYMBOL_SEPARATOR_RE = /[,;\s]/;
-
 /**
  * R101(c) — validates `preprocessorSymbols` and returns the list, or `[]` when absent.
  *
@@ -2148,29 +2146,7 @@ const SYMBOL_SEPARATOR_RE = /[,;\s]/;
  * compiled from the wrong branch, silently.
  */
 export function validatePreprocessorSymbols(raw: unknown): readonly string[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    throw new Error(
-      `lethal.config.json: "preprocessorSymbols" must be an array of strings, got ${JSON.stringify(raw)}`,
-    );
-  }
-  const symbols: string[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string" || entry.trim() === "") {
-      throw new Error(
-        `lethal.config.json: "preprocessorSymbols" contains a non-string or empty entry (${JSON.stringify(entry)}) — every entry must be an AL preprocessor symbol`,
-      );
-    }
-    // A symbol carrying a comma, a semicolon or whitespace would either be split by alc's
-    // `/define:A,B` list form into things nobody wrote, or reach al-runner as one unusable token.
-    if (SYMBOL_SEPARATOR_RE.test(entry)) {
-      throw new Error(
-        `lethal.config.json: "preprocessorSymbols" entry ${JSON.stringify(entry)} contains whitespace or a separator — list each symbol as its own array entry`,
-      );
-    }
-    symbols.push(entry);
-  }
-  return symbols;
+  return validateSymbolList(raw, "lethal.config.json");
 }
 
 /**
