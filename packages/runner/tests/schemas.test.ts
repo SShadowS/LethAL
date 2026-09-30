@@ -783,6 +783,28 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, doc)).toEqual([]);
   });
 
+  test("R351: coverageArmNames is additive under v3: a report without it validates, and with it", () => {
+    // v3 was edited in place, which is sound only while the field stays OPTIONAL. Making it
+    // required on a row or a survivor group would reject every report written before R351.
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("coverageArmNames");
+    const without = JSON.parse(raw) as {
+      mutants: Record<string, unknown>[];
+      survivorsByProcedure: Record<string, unknown>[];
+    };
+    expect(without.mutants.length).toBeGreaterThan(0);
+    expect(without.survivorsByProcedure.length).toBeGreaterThan(0);
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const withNames = JSON.parse(raw) as typeof without;
+    for (const row of [...withNames.mutants, ...withNames.survivorsByProcedure]) {
+      row.coverageArmNames = ["Alpha"];
+    }
+    expect(conformsTo(reportSchema, withNames)).toEqual([]);
+  });
+
   test("OLDER reports are also v2 and do NOT validate — the schema is one BUILD's shape (R157)", () => {
     // Pinned rather than hidden. `declarativeSites` and `preprocessorSymbols` are REQUIRED by
     // today's SessionReport and absent from reports written before they existed, while

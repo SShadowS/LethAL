@@ -185,6 +185,12 @@
           "procedureName": {
             "type": "string"
           },
+          "coverageArmNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "survived": {
             "type": "number"
           },
@@ -362,6 +368,12 @@
           },
           "triggerName": {
             "type": "string"
+          },
+          "coverageArmNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "procedureStartLine": {
             "type": "number"

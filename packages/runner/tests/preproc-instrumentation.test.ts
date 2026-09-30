@@ -12,8 +12,10 @@ import {
   buildAlRunnerCoverageIndex,
 } from "../src/al-runner-coverage";
 import type { TestMethodRef } from "../src/backend";
+import type { RunEvent, RunEventInput } from "../src/events";
 import { buildLineMap, lineMapFromSources, renamedMemberAttempts } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
+import { buildReport, renderConsole } from "../src/report";
 import {
   buildCoverageIndex,
   coverageFilter,
@@ -4352,7 +4354,44 @@ ${head}    var
   });
 });
 
-describe("R351: a renamed split member orders under its own arm names; no fixture key moves", () => {
+/** R351: a report from manifest entries and their verdicts, events built as report.test.ts does. */
+function r351Report(
+  rows: ReadonlyArray<readonly [MutantManifestEntry, "survived" | "no-coverage"]>,
+) {
+  const events: RunEventInput[] = [
+    {
+      type: "mutation-set-generated",
+      siteCount: rows.length,
+      deployedCount: rows.length,
+      hangCapableCount: 0,
+      totalFiles: 1,
+      instrumentableFiles: 1,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    },
+    { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+    ...rows.map(
+      ([mutant, verdict]): RunEventInput => ({
+        type: "mutant-scored",
+        mutant,
+        verdict,
+        batchIndex: 0,
+        durationMs: 10,
+        coveringTests: [],
+      }),
+    ),
+    { type: "session-finished", elapsedMs: 10 },
+  ];
+  return buildReport(
+    { caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" } },
+    events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),
+  );
+}
+
+describe("R351: a renamed split member is named by its arm names in the order, the report and explain; no fixture key moves", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -4378,6 +4417,42 @@ describe("R351: a renamed split member orders under its own arm names; no fixtur
       orderCoveringTests([A, B], m, ledger, new Map()).map((r) => r.method);
     expect(order(next)).toEqual(["B", "A"]);
     expect(order(gamma)).toEqual(["A", "B"]);
+  });
+
+  test("T1 r1: the member's row carries its arm names, Plain's row has no such key", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    const member = manifest.mutants.find((m) => m.coverageArmNames !== undefined);
+    const plain = manifest.mutants.find((m) => m.procedureName === "Plain");
+    if (member === undefined || plain === undefined) throw new Error("r1 lost a member");
+    const report = r351Report([
+      [member, "survived"],
+      [plain, "survived"],
+    ]);
+    const row = (id: string) => report.mutants.find((r) => r.mutantCode === id);
+    expect(row(member.mutantId)?.coverageArmNames).toEqual(["Pick", "Choose"]);
+    expect(row(plain.mutantId)).toBeDefined();
+    expect("coverageArmNames" in (row(plain.mutantId) ?? {})).toBe(false);
+  });
+
+  test("T2 r4: two renamed members survive as two groups, each named on the console", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const alpha = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Alpha");
+    const gamma = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Gamma");
+    if (alpha === undefined || gamma === undefined) throw new Error("r4 lost a member");
+    const report = r351Report([
+      [alpha, "survived"],
+      [gamma, "survived"],
+    ]);
+    expect(
+      report.survivorsByProcedure.map((g) => [g.procedureName, g.coverageArmNames, g.survived]),
+    ).toEqual([
+      ["", ["Alpha"], 1],
+      ["", ["Gamma"], 1],
+    ]);
+    const out = renderConsole(report);
+    expect(out).toContain("Repro R.Alpha");
+    expect(out).toContain("Repro R.Gamma");
+    expect(out).not.toContain("<object>");
   });
 
   // D7: coverageArmNames is positional and independent of preprocessor symbols, and R318's census
