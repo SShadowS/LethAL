@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
@@ -304,6 +304,29 @@ function installedOf(store: ResultsStore, artifactId: string) {
     instrumentedDir,
   };
   return { rec, sourceSha256, installed };
+}
+
+/**
+ * R261. The selector, control and table ids the INSTALLED build was compiled with, read from its
+ * hash-checked manifest (`writeInstrumentedProject` writes them there). Never the config's: a
+ * source run given `--selector-id` overrides was built with those, and only they validate against
+ * the app.json that made the overrides necessary. A trusted manifest always holds them (they
+ * predate the manifest hash), so a missing or malformed set is refused, never defaulted.
+ */
+export async function installedSelectorIds(
+  store: ResultsStore,
+  artifactId: string,
+): Promise<SelectorConfig> {
+  const { manifest } = await loadInstalledArtifact(store, installedOf(store, artifactId).installed);
+  const ids = (manifest as { selectorIds?: Partial<SelectorConfig> }).selectorIds;
+  const valid = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
+  if (ids === undefined || !valid(ids.selectorId) || !valid(ids.controlId) || !valid(ids.tableId)) {
+    throw new VerifyError(
+      "artifact-files-unusable",
+      `artifact ${artifactId}'s manifest records no valid selector ids (${JSON.stringify(ids)}), so the ids the installed build was made with are unknown; run lethal run again, then verify`,
+    );
+  }
+  return { selectorId: ids.selectorId, controlId: ids.controlId, tableId: ids.tableId };
 }
 
 /**
