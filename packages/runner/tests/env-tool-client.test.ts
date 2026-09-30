@@ -1,6 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { EnvToolClient, redact, renderCommand } from "../src/env-tool";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  EnvToolClient,
+  EnvToolError,
+  EnvToolNotStartedError,
+  redact,
+  renderCommand,
+} from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
+import { ProcessNotStartedError } from "../src/publisher";
 
 const CFG: EnvToolConfigSection = {
   toolPath: "C:/tools/continia.exe",
@@ -447,5 +457,93 @@ describe("EnvToolClient.run — successWhen", () => {
       {},
     );
     expect(out).toEqual({ envId: "e9" });
+  });
+});
+
+// R237: each case the R237 measurement ran against the REAL Bun spawn, classified by the real
+// client. Only the cases where Bun.spawn threw and no process ever existed are "never started".
+describe("EnvToolClient: which spawn failures mean the tool never started (R237)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-r237-"));
+  const txt = join(dir, "notexec.txt");
+  writeFileSync(txt, "hello");
+  const notPe = join(dir, "garbage.exe");
+  writeFileSync(notPe, "this is not a PE image");
+  const aDir = join(dir, "adir");
+  mkdirSync(aDir);
+  const tool = (toolPath: string, extra: Partial<EnvToolConfigSection> = {}) =>
+    new EnvToolClient({ toolPath, publish: { command: [] }, resolve: [], ...extra });
+  const run = (client: EnvToolClient, command: string[], reads?: Record<string, string>) =>
+    client.run({ command, ...(reads !== undefined ? { reads } : {}) }, "publish", {}).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+  const neverStarted: Array<[string, () => EnvToolClient]> = [
+    ["(a) a path that does not exist", () => tool(join(dir, "nope.exe"))],
+    ["(b) a file that is not executable", () => tool(txt)],
+    ["(b) an .exe that is not a program image", () => tool(notPe)],
+    ["(b) a directory", () => tool(aDir)],
+    ["(c) a bare name that is not on PATH", () => tool("lethal-no-such-tool-r237")],
+    ["a cwd that does not exist", () => tool(process.execPath, { cwd: join(dir, "no-cwd") })],
+  ];
+  for (const [label, make] of neverStarted) {
+    it(`${label} never started`, async () => {
+      const client = make();
+      const err = await run(client, ["-e", "0"]);
+      expect(err).toBeInstanceOf(EnvToolNotStartedError);
+      expect(err).not.toBeInstanceOf(EnvToolError);
+      const e = err as EnvToolNotStartedError;
+      expect(e.cause).toBeInstanceOf(ProcessNotStartedError);
+      expect(e.message).toContain("never started");
+      expect(e.command).toContain("-e 0");
+    });
+  }
+
+  it("carries the configured tool path", async () => {
+    const path = join(dir, "nope.exe");
+    const err = (await run(tool(path), [])) as EnvToolNotStartedError;
+    expect(err.toolPath).toBe(path);
+  });
+
+  const started: Array<[string, () => EnvToolClient, string[], Record<string, string>?]> = [
+    [
+      "(d) killed by LethAL's own timeout",
+      () => tool(process.execPath, { timeoutSeconds: 0.5 }),
+      ["-e", "setTimeout(() => {}, 30000)"],
+    ],
+    [
+      "(d) killed after it started",
+      () => tool(process.execPath),
+      ["-e", "process.kill(process.pid, 'SIGKILL')"],
+    ],
+    ["(e) a non-zero exit", () => tool(process.execPath), ["-e", "process.exit(3)"]],
+    [
+      "(f) output that is not JSON",
+      () => tool(process.execPath),
+      ["-e", "console.log('not json')"],
+      { envId: "id" },
+    ],
+  ];
+  for (const [label, make, command, reads] of started) {
+    it(`${label} is a started tool, not "never started"`, async () => {
+      const err = await run(make(), command, reads);
+      expect(err).toBeInstanceOf(EnvToolError);
+      expect(err).not.toBeInstanceOf(EnvToolNotStartedError);
+    });
+  }
+
+  // A rejection that is not Bun.spawn's own throw proves nothing about whether a process ran.
+  it("a spawn that rejects with anything else stays a plain EnvToolError", async () => {
+    const client = new EnvToolClient(
+      { toolPath: "t.exe", publish: { command: [] }, resolve: [] },
+      {
+        spawn: async () => {
+          throw Object.assign(new Error("boom"), { code: "ENOENT" });
+        },
+      },
+    );
+    const err = await run(client, []);
+    expect(err).toBeInstanceOf(EnvToolError);
+    expect(err).not.toBeInstanceOf(EnvToolNotStartedError);
   });
 });

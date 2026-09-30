@@ -1,6 +1,6 @@
 import type { PublishIdentity } from "./app-version";
 import { describeThrown } from "./describe-error";
-import { defaultSpawn } from "./publisher";
+import { ProcessNotStartedError, defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -110,6 +110,24 @@ export class EnvToolError extends Error {
     readonly publishing?: PublishIdentity,
   ) {
     super(message);
+  }
+}
+
+/**
+ * R237: the tool process never started (`Bun.spawn` threw, see `ProcessNotStartedError`), so
+ * nothing reached the environment. Extends `Error` DIRECTLY, never `EnvToolError`: the publication
+ * fence reads this as a confirmed pre-publish failure, while every `EnvToolError` stays a publish
+ * whose result is unknown. A started tool that was killed, timed out or failed is never this.
+ */
+export class EnvToolNotStartedError extends Error {
+  constructor(
+    message: string,
+    readonly toolPath: string,
+    /** The rendered command, redacted. */
+    readonly command: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
   }
 }
 
@@ -743,9 +761,16 @@ export class EnvToolClient {
       // path reported "failed to run: " and nothing else — on the one path where the tool path is
       // supplied by the user's own config and therefore most likely to be wrong. Still redacted:
       // `describeThrown` widens WHAT is reported, never who may read it.
-      throw new EnvToolError(
-        `envTool.${name}: ${shown} failed to run: ${redact(describeThrown(err), this.secrets)}`,
-      );
+      const detail = redact(describeThrown(err), this.secrets);
+      if (err instanceof ProcessNotStartedError) {
+        throw new EnvToolNotStartedError(
+          `envTool.${name}: ${shown} failed to run (the process never started): ${detail}`,
+          this.cfg.toolPath,
+          shown,
+          err,
+        );
+      }
+      throw new EnvToolError(`envTool.${name}: ${shown} failed to run: ${detail}`);
     } finally {
       clearTimeout(timer);
     }
