@@ -6245,7 +6245,7 @@ class FakeLeaseClient implements LeaseApi {
   endPublishError: Error | undefined;
   /** R249: runs inside `beginPublish`, so a test can change what the server says AFTER the refusal. */
   onBeginPublish: (() => void) | undefined;
-  /** R249: when set, every status read THROWS it. */
+  /** R249: when set, the NEXT status read throws it (once). */
   statusError: Error | undefined;
   /**
    * R249: model the server's op gate on `ReleaseLease`: refuse with `op-in-flight` while the
@@ -6353,7 +6353,11 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<OperationStatus> {
     this.log.push("status");
     this.statusArgs.push({ attemptId, opSeq });
-    if (this.statusError !== undefined) throw this.statusError;
+    const statusError = this.statusError;
+    if (statusError !== undefined) {
+      this.statusError = undefined; // one read only, so finish() still reads the marker
+      throw statusError;
+    }
     if (this.reconcileStatus !== undefined && attemptId !== "") {
       return this.reconcileStatus(attemptId, opSeq);
     }
