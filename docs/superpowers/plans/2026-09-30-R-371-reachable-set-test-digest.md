@@ -169,3 +169,11 @@ N is the number of tests one edit turns new, as p50 / p90 / max, over every test
 4. `too-many-new-tests` with `--max-new-tests`, the schema bump and its ripple; tests.
 5. File the per-survivor filter item and the Microsoft unchanged-version limit. Close R371, then the CHANGELOG and the agent guide.
 6. itest:agreement live, telling the orchestrator before leasing.
+
+## r2 rulings (orchestrator, 2026-09-30): APPROVED
+
+1. Bind/UnbindSubscription is NOT an edge, because every subscriber codeunit is already in every digest. Write that reason in the code comment, and pin it with a test in which a manual subscriber edit still turns the test new.
+2. Option (c): the default stays at 50. The refusal names the exact --max-new-tests value needed and the edit class that caused it (subscriber, fallback or object).
+3. File the per-survivor reachability filter as its own item, citing the BaseApp numbers.
+
+The submit note states the live dependency-download time and RSS on bcdev. Then itest:agreement, telling the orchestrator before leasing.
