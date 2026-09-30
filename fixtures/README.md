@@ -17,6 +17,9 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Harden Answer Key` | 79575 | `sandbox-harden-answers` | Separate answer-key app: four tests that kill S1 to S4, plus one that tries and is expected to fail against the equivalent S5. |
 | `Symbol Logic` | 79600 | `sandbox-symbols` | R321 target: one procedure with an `#if LETHALA` / `#elif LETHALB` / `#else` split. `itest:alrunner` runs it under `[LETHALA]` and `[LETHALB]`. |
 | `Symbol Tests` | 79650 | `sandbox-symbols-tests` | One test, `RateSmall`, asserting each build's own value (11, 101, or 2 with no symbol). Asserts via `Error()`. |
+| `Layout Alpha` | 79700 | `sandbox-layout` | R353 target, batch 0 at `maxGuardsPerBatch` 7: one procedure, `IsBig`. |
+| `Layout Beta` | 79701 | `sandbox-layout` | R353 target, batch 1: `Grow`, then `Twice` behind a load-bearing 26-line header comment. See "sandbox-layout (R353)" below. |
+| `Layout Tests` | 79750 | `sandbox-layout-tests` | One test per procedure: `AlphaIsBig`, `GrowAboveTen`, `TwiceOfThree`. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -30,7 +33,7 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 `validateSelectorIds` refuses an id outside every declared range, a duplicate among the three, or one
 the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
-`gift-card` 90197-90199, `sandbox-symbols` 79647-79649), and two fixtures must never share the three
+`gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749), and two fixtures must never share the three
 ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
@@ -351,6 +354,27 @@ gate needs a new pre-commitment and a re-freeze.
 projects, and `alc` the target into `sandbox-symbols-tests/.alpackages`, from current source, before
 compiling. The test app compiles against that staged package, so its compile proves nothing about the
 package being fresh; re-stage before checking. al-runner compiles both from source and needs neither.
+
+## sandbox-layout (R353)
+
+A target and test app that split into TWO batches at `maxGuardsPerBatch` 7: `Layout Alpha` (3
+mutants) is batch 0 and `Layout Beta` (7) is batch 1. Batch 0 copies `Layout Beta` verbatim, so the
+coverage index built during batch 0 knows its uninstrumented layout; batch 1 instruments it, and
+`Grow` then runs over lines that are `Twice`'s in the verbatim text. With R349's per-deploy reset,
+`AlRunnerBackend.deploy()` rebuilds the index for each batch and every covered line lands in its own
+procedure. Without it, the one-shot transport reads batch 1's coverage through batch 0's layout and
+`Twice`'s two mutants lose their own test, so they go from killed to survived. Every other al-runner
+leg runs one batch, which is why R349 passed every gate before its fix.
+
+`Layout Beta`'s header comment on `Twice` is load-bearing: its length sets the line spans the
+prediction rests on. Do not shorten it, move `Twice`, or add a procedure to that file without a new
+pre-commitment. `packages/runner/tests/layout-fixture.test.ts` fails offline if the spans move.
+The per-mutant verdicts, killing tests and covering tests, fixed and with the reset removed, are
+pre-committed in `docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitment.md`.
+
+`.alpackages` is gitignored. Create an `.alpackages` directory in `sandbox-layout` (it may stay
+empty: the target needs no symbols), and `alc` the target into `sandbox-layout-tests/.alpackages`
+from current source before compiling. al-runner compiles both from source and needs neither.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
