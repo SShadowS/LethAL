@@ -1,164 +1,230 @@
-# R-307: one bad file is skipped and named, not a whole-run abort
+# R-307: one bad file is skipped and named, not a whole-run abort (r2)
 
-Base: master `d1698cf1`. Item: `docs/roadmap/R307.md` (with R299, R305, R308). Owner rule: no crash first.
+Base: master `d1698cf1`. Item: `docs/roadmap/R307.md` (with R299, R305, R308). Owner rule: no crash
+first. r2 answers `H:/lethal-coord/reviews/R-307-plan/rulings-r1.md`; see "Changes from r1" at the end.
 
-## The idea in one paragraph
+## The idea
 
-Every schemata throw that can refuse a file depends on ONE file's source and specs. So
-`generateMutationSet` runs the writer's own per-file steps once per file, as a probe, BEFORE the
-file joins `files`. A file whose probe throws is recorded as refused, with the error text, and never
-enters `planArtifacts`, `assignMutantIds`, `identityOrdinalsOf`, a batch or a verdict. The probe and
-the writer call ONE extracted function, so they cannot drift. The writer keeps every throw as a
-backstop: if one fires after a clean probe, that is a new LethAL bug and it still aborts loudly.
+Every per-file throw in schemata depends on ONE file's source and specs. So `generateMutationSet`
+runs the writer's own per-file steps once per file, as a trial, before the file joins `files`. A
+file whose trial throws the new typed error `FileRefusedError` is refused whole. It never enters
+`planArtifacts`, `assignMutantIds`, a batch or a verdict. Any other exception still aborts the run,
+so an unforeseen bug is never quietly turned into an excluded file. The trial and the writer call
+ONE extracted function, `instrumentOneFile`, so they cannot drift. The writer keeps every throw.
+A throw that fires in the writer after a clean trial is a new LethAL bug, and it still aborts.
 
-## 1. Throw sites: per file or whole project
+**A refused file still runs.** It is published uninstrumented. `prepareBatchProject` copies it as
+it copies every file with no mutant, and tests that call it still run it. It only loses its mutants.
 
-All "per file" rows are decided in `generateMutationSet`, after the file's specs pass dedup, the
-`--operator` and `--lines` filters and `canCarryMutationSelectorVar`, and before `files.push`. That
-is before any mutant id or identity ordinal exists. "All of that file" holds by construction: the
-unit of refusal is the whole `InstrumentedFile`, which is simply never pushed.
+## 1. Throw sites
+
+Per-file refusals are decided in `generateMutationSet`, in the file loop, after dedup, the
+`--operator`/`--lines` filters and `canCarryMutationSelectorVar`, and before `files.push`. No mutant
+id exists yet. "All of that file" holds by construction: the whole `InstrumentedFile` is never pushed.
 
 | Site | Decision | Reason |
 |---|---|---|
-| `assertNoOverlap` (engine `printer.ts`), via `compileSchemataForFile` | per file | Edits of one file's source only. |
-| Injector unsupported kind (`injectMutationSelectorVar`, `compile.ts`), plus its three anchor throws in `injectSelectorVarIntoObject` | per file | One file's objects. |
-| Latch no-owner (`injectReachLatches`), plus its R303/R316/var-keyword throws | per file | One file's members. |
-| `LineMap.lookup` declared-but-unmapped (`line-map.ts`) | split, see below | Fires AFTER publish, at coverage time. |
-| `objectHeadersOf` "no AL object header" (`project.ts`) | per file | One file's text. |
-| `assertNoUnsupportedObjectMix` (R299, `project.ts`) | per file | One file's headers. R299 stays open: it asks for per-OBJECT dropping. |
-| `attributeHeader` "sits before first header" | per file | One file. |
-| "no reach grain" (writer) | backstop only | Built from the same `ided`; no input reaches it. Not in the probe. |
-| Gap-id collision (writer, across files) | whole project | A 48-bit hash collision between two files; no single file is at fault. |
-| `dedupeSpecs` throws (same operator twice, same-tier clash, unorderable tier) | whole project | An operator or registry bug, not a file property. Skipping would hide it as a smaller mutant set on every file with that shape. Runs outside the probe's `try`. |
-| Generation refusals (`--only`/`--exclude` empty, unknown `--operator`, unknown `--lines` file, snapshot miss) | whole project | Caller input. Unchanged. |
+| `assertNoOverlap` (engine `printer.ts`) | per file, typed | Edits of one file's source only. |
+| Injector unsupported kind + the three anchor throws (`compile.ts`) | per file, typed | One file's objects. |
+| Latch no-owner + R303/R316/var-keyword throws (`injectReachLatches`) | per file, typed | One file's members. |
+| `objectHeadersOf` no header; `assertNoUnsupportedObjectMix` (R299); `attributeHeader` (`project.ts`) | per file, typed | One file. R299 stays open: it asks for per-OBJECT dropping. |
+| "no reach grain" (writer) | backstop, untyped | Built from the same `ided`; no input reaches it. |
+| `LineMap` declared-but-unmapped, object WITH mutants | whole run, kept | Post-compile, after publish (C2). See below. |
+| `LineMap` declared-but-unmapped, object with NO mutant | refused object, no throw | Cannot affect any verdict. Real shape: R305's split-header file. |
+| Gap-id collision (writer, across files) | whole run | A hash collision between two files; no one file is at fault. |
+| Duplicate basename (`prepareBatchProject`) | whole run, unchanged | A layout conflict: every file is copied flat, refused or not. |
+| `dedupeSpecs` throws | whole run | An operator bug, not a file property. Called outside the `try`. |
+| Generation refusals (`--only`, `--operator`, `--lines`, snapshot) | whole run | Caller input. |
 
-**The line map, in two halves.** (a) An UNMUTATED declared object with no map entry cannot affect
-any verdict, yet today it aborts the run the moment a test touches it. Real shape: R305's
-`preproc_split_declaration` codeunit, which `generateMutationSet` already skips but the batch still
-compiles and declares. Fix: the `LineMap` constructor marks every declared key it did not map as
-REFUSED, with a reason, the same path R298 uses (`refusedByKey`, and `nameRefusals` names it once).
-The throw in `lookup` becomes dead and is deleted. (b) A MUTATED object with no map entry would now
-read `no-coverage` silently, which breaks "never reach a verdict". So the probe also runs the line
-map's own rule: every spec's enclosing object (walk up to a child of `isObjectContainer`) must be a
-root in `fileLineMapEntries(root, objectIdentityOf)`, else the file is refused. No known real AL
-reaches (b): a split header is refused by the injector first, and a `#if`-wrapped object is mapped
-(as refused, R298). It is the guard that makes (a) safe.
+**`FileRefusedError`** lives in `@lethal/engine` (the lowest package, since `assertNoOverlap` is
+there) and extends `Error` directly. Fields: `file`, `shape` (`"overlap"`, `"unsupported-kind"`,
+`"latch-owner"`, `"no-anchor"`, `"no-header"`, `"object-mix"`, `"site-before-header"`), `line?`. The
+listed sites throw it with their CURRENT message text, which carries only paths, offsets, lines,
+node kinds and object names. No site may put AL source into it (M8).
 
-## 2. Where the skip lands
+**Line map (C2).** Every `LineMap` construction site (`bcdev-backend.ts` twice, at artifact index
+time; `al-runner-coverage.ts` once) passes the batch manifest's object keys (`objectType:codeunitId`).
+The constructor, which runs on the EMITTED source against the COMPILED declarations before any
+baseline: for each declared key with no map entry, throws the existing message if the key has a
+mutant, else records it as refused with a reason, on R298's path (`refusedByKey`, named once by
+`nameRefusals`). The `lookup` throw then cannot fire and is deleted. Task T5 confirms the al-runner
+site builds before baseline; if it does not, the check moves to its index step. No trial-time
+line-map guard: the original tree proves nothing about the emitted one.
 
-`skipped` (`NotInstrumentedFile`: file, kinds, sites) does NOT fit: it has no reason, and its
-warning and caveat say "cannot carry the selector var", which would be false here. But
-`ExcludedSites` (`excluded-sites.ts`) was built for exactly a third reason: rows carry `reason` and
-an optional `detail`. So: new reason `"instrumentation-refused"`, `detail` = the error message.
-`notInstrumented` and `declarativeSites` views are untouched (`rowsOf` filters by reason).
+## 2. Where the skip lands, and the scope beside the score
 
-- `detail` must never carry source. Checked messages carry paths, offsets, node kinds and object
-  names only, which the 2026-08-09 ruling allows. A test asserts no refused `detail` contains the
-  site's source text.
-- `kinds` comes from `describeObjectKinds`, so R308's gap (a `#if`-wrapped object is misnamed)
-  applies here too. Not fixed here; the mix message in `detail` names the objects correctly.
-- Ripple: `events.ts` (`mutation-set-generated.refusedFiles?`, optional, present only when
-  non-empty, so older streams stay valid), `report-fold.ts` (pass through to `buildExcludedSites`),
-  `excluded-sites.ts` (reason union + input), `report.ts` (Caveat `"files-refused"` +
-  `CAVEAT_INTERPRETATIONS` + the push beside `uninstrumentable-files`), `bun scripts/generate-schemas.ts`
-  (two enums widen), counts in `interpretation.test.ts` and `report.test.ts`, then
-  `schemas.test.ts` and `report-equality` run unchanged. Warning code `instrumentation-refused-files`
-  names each file and its reason, like `not-instrumentable-files-skipped`.
-- **No live sample regeneration.** No `SessionReport` field is added (`excludedSites` exists and is
-  optional), no enum value is required, and no committed sample has a refused file, so every sample
-  stays byte-identical and valid. No lease is needed. If `report-equality` moves anyway, stop and
-  tell the orchestrator before any lease.
+`skipped` (`NotInstrumentedFile`) does not fit: no reason field, and its caveat would say "cannot
+carry the selector var", which is false here. `ExcludedSites` (`excluded-sites.ts`) already has
+`reason` and an optional `detail`: new reason `"instrumentation-refused"`, `detail` =
+`${shape}: ${message}`. The `notInstrumented` and `declarativeSites` views are untouched.
 
-## 3. Identity
+- **No source in the report (M8).** A test asserts that no refused `detail` contains any line
+  (trimmed, longer than 12 characters) of the refused file's source.
+- `kinds` comes from `describeObjectKinds`, so R308's gap applies. Not fixed here.
+- **Scope beside the score (I6).** A refused file narrows the scope: `reliability` is `narrowed`
+  (or `narrowed-degraded`) when any row has the new reason, never `full`. `scoreDescribes` gains
+  "; N file(s) refused, M site(s) not mutated", so `renderConsole`'s SCOPE line prints it beside
+  the score. New Caveat `"files-refused"` with its `CAVEAT_INTERPRETATIONS` entry.
+- **Ripple:** `events.ts` (`mutation-set-generated.refusedFiles?`, optional, present only when
+  non-empty, so older streams stay valid), `report-fold.ts` pass-through, `excluded-sites.ts`,
+  `report.ts` (reliability, `scoreDescribes`, caveat), `bun scripts/generate-schemas.ts`, caveat
+  counts in `interpretation.test.ts` and `report.test.ts`, then `schemas.test.ts` and
+  `report-equality` unchanged. Warning code `instrumentation-refused-files` names each file.
+- **Versions.** `REPORT_SCHEMA_VERSION` stays 3: its rule bumps for a renamed, removed or re-meant
+  field or a new required one, and this adds an optional row value and a caveat value.
+  `EXPLAIN_SCHEMA_VERSION` goes 8 to 9: its rule (R233) bumps on any widened value domain, and
+  `caveat` widens. Freeze `schemas/explain-v8.schema.json`, generate v9. **Numbering against R-214:**
+  whichever lands on master second takes the next free number at its merge (10 if R-214 took 9),
+  regenerates, and says so in its merge commit, exactly as IDENTITY_SCHEME 5 is held for R-214.
+  IDENTITY_SCHEME stays 4 (section 3).
+- **No live sample regeneration.** No `SessionReport` field is added, nothing new is required, and
+  no committed sample has a refused file, so every sample stays byte-identical and valid. If
+  `report-equality` moves anyway, stop and tell the orchestrator before any lease.
 
-M-ids are numbered by `assignMutantIds` inside `writeInstrumentedProject`, per BATCH (counter from
-1, files in path order), and identity ordinals by `identityOrdinalsOf` over that batch's rows. A
-refused file never reaches either. So a project `{A, Bad, C}` produces, for A and C, the same M-ids,
-identity keys, gap ids and manifest rows as `{A, C}`, provided Bad adds nothing to the semantic
-context the others read (the test's files share no names). The test proves it byte for byte.
+## 3. Identity (C1, I3)
 
-Against a later run where Bad instruments, C's M-ids shift by Bad's mutant count, exactly as adding
-any file does today. M-ids are per-batch labels, never cross-run identity. Identity keys do not
-shift, except for a cross-file twin in one batch (same astHash, object name, member and operator in
-two objects of different kinds sharing a name, R70's shape), which is also what adding a file does.
-Nothing about how a key is computed for unchanged source changes, so `IDENTITY_SCHEME` stays 4.
+**The hazard.** Identity ordinals number twins (same astHash, object name, member, operator,
+major) in source order over a batch's rows (`identityOrdinalsOf`). If Bad held ordinal 0 and a
+surviving twin in another file held 1, dropping Bad would give the survivor ordinal 0, Bad's old
+key, and resume, history and marks would hand it Bad's verdict.
 
-## 4. Threshold
+**The reservation.** For each refused file, `generateMutationSet` records its RESERVED identities:
+one `{file, startIndex, operatorName, tuple}` per deduped spec, computed BEFORE the trial runs, from
+the spec set only, with no instrumentation. The fields come from one new `project.ts` helper,
+`identityFieldsOf(spec, headerName)`, which the writer's own row build also uses: `astSubtreeHash`,
+`procedureNameOf`, `triggerNameOf`, operator name and version. The object name is the header
+regex's (`objectHeadersOf` + `attributeHeader`), as the writer's; if those are the refusal itself,
+the enclosing object node's AST name is used instead. `writeInstrumentedProject` takes a REQUIRED
+`reserved` input (scripts pass `[]`, so no caller forgets it). `identityOrdinalsOf` numbers rows and
+reserved entries together, sorted by file, then start, then mutant id, with a reserved entry's tie
+broken by operator name, which is the order `assignMutantIds` gives the same specs. Reserved
+entries take a number and produce no row. Every batch gets the whole reserved list; an entry whose
+tuple matches no row in that batch changes nothing.
 
-After the loop, `generateMutationSet` throws a plain `Error` (exit 1, like the barren `--operator`
-and empty `--lines` refusals) when either holds:
-- at least one file was refused and no file is left to instrument; or
-- refused files hold more than half of the would-be sites (sum of `fileSpecs.length`, refused vs
-  refused + instrumented).
+**What is stable, exactly.**
+- Against a later run where Bad instruments, in one batch (the default, and every gate): every
+  surviving key is identical, twins included. M-ids of files after Bad shift; they are per-batch
+  labels and may.
+- Against `--exclude Bad` (Bad still in the semantic context, I3): every surviving row is
+  identical, M-ids included, except a twin of a reserved entry, whose ordinal is higher by the
+  number of reserved twins before it. Both "ways" cannot hold for a twin: without Bad it is ordinal
+  0, with Bad instrumenting it is 1. The ruling picks the second, the one that prevents inheritance.
+- With `--max-guards-per-batch`: no surviving mutant takes a reserved key within its batch. Exact
+  stability against a later run holds only if Bad would land in the same batch. That limit is
+  pre-existing: twins in two different batches already both get ordinal 0 today, since ordinals are
+  numbered per batch. T9 files it; it is not widened here.
 
-Past half, the score describes a minority of the code asked about. The message names every refused
-file with its reason and says `--exclude <file>` runs the rest; that turns a silent shrink into an
-explicit narrowing, which the report already labels (`only-narrowed-run`). No new flag.
+No key is computed differently for an instrumented file, so IDENTITY_SCHEME stays 4.
 
-## Tasks (ordered)
+## 4. When the run still refuses (I5)
 
-Build loop per CLAUDE.md: native parser if needed, `bun run typecheck`, `rm -rf packages/*/dist`,
-`bun test` from repo root, `bunx biome check <touched files>`. No al-runner, no live BC.
+Only when nothing is left to measure: at least one file was refused and no file is left to
+instrument. A plain `Error` (exit 1, like the empty `--lines` refusal), naming every refused file
+and its shape. Everything else runs, with the scope shown (section 2).
 
-**T1. Extract the per-file step (schemata, `project.ts` only).** Move `objectHeadersOf`,
-`assertNoUnsupportedObjectMix`, `compileSchemataForFile`, the `grainOf` map and a per-spec
-`attributeHeader` out of the writer's loop into `export function instrumentOneFile(f, deduped,
-ided)` returning `{ headers, compiled, grainOf, headerOf }`; the writer calls it; export via
-`index.ts`. About 25 moved lines, no behaviour change. Coordination: this is the only schemata edit,
-and it sits inside R-214's file. Merge master first, keep the move verbatim, tell R-214's lane.
-Test: existing schemata suite green, manifest bytes of `fixtures/sandbox-data` unchanged (a
-before/after `writeInstrumentedProject` diff in the test run).
+## Tasks
 
-**T2. The probe and the refused list (runner, `orchestrator.ts`).** In the loop, after the
-`canCarryMutationSelectorVar` branch: dedup, local ids, `try { instrumentOneFile(...); lineMapGuard
-}` `catch` records `{file, kinds, sites: fileSpecs.length, detail}` and `continue`s. Add `refused`
-to `MutationSetResult`, emit the warning. Test file `packages/runner/tests/per-file-skip.test.ts`
-(temp project dirs, `generateMutationSet` then `writeInstrumentedProject` on the result).
+Build loop per CLAUDE.md (native parser if needed, `bun run typecheck`, `rm -rf packages/*/dist`,
+`bun test` from repo root, `bunx biome check <touched files>`). No al-runner, no live BC. Each
+red-check reverts one named line, pins the exact failing assertion, and restores.
 
-**T3. One test per real shape, each asserting: the good file instruments and writes, the bad file
-is named with its reason text, no manifest row names the bad file.**
+**T1. `FileRefusedError` (engine) and typed throws** at the sites in section 1 (engine
+`printer.ts`, schemata `compile.ts`, `project.ts`), message text unchanged. Test: each existing
+throw test also asserts `instanceof FileRefusedError` and its `shape`.
+
+**T2. Extract `instrumentOneFile` and `identityFieldsOf`; add `reserved`** (schemata `project.ts`,
+`index.ts`). A verbatim move plus the reserved entries in `identityOrdinalsOf`. Test: manifest of
+`fixtures/sandbox-data` byte-identical before and after with `reserved: []`. **Tell the
+orchestrator before the `project.ts` commit** (R-214 edits this file; the preproc lane is
+coord-only). Merge master first.
+
+**T3. Trial and refused list** (runner `orchestrator.ts`): in the loop, compute reserved entries,
+then `try { instrumentOneFile(...) } catch (e) { if (!(e instanceof FileRefusedError)) throw e; ... }`.
+Thread `refused` and `reserved` through `MutationSetResult`, `runSession`, `prepareArtifactDir`
+(bisection included). Tests in `packages/runner/tests/per-file-skip.test.ts`, temp project dirs,
+`generateMutationSet` then `writeInstrumentedProject`.
+
+**T4. One test per real shape.** Each asserts the exact refused row (`file`, `kinds`, `sites`,
+`reason`, full `detail`), that the good file writes, and that no manifest row names the bad file.
 - Mix (R299): table + enum + codeunit in one file. Red-check: move `assertNoUnsupportedObjectMix`
-  back out of `instrumentOneFile` into the writer: generation admits the file and the write throws.
-- Injector: a plain codeunit plus a `#if`-split-header codeunit (R305 shape) in one file. Step 1
-  confirms on master that this throws the unsupported-kind message; if it does not, report it and
-  treat the injector like the latch below. Red-check: delete the probe's `catch`: the run throws.
-- No object header: a file whose only object the header regex misses. Find one by trying the
-  shapes in R-297's plan (`docs/superpowers/plans/2026-09-28-R-297-instrumentation-real-corpora.md`)
-  first; if none, say so and drop this test. Red-check as the mix row.
+  out of `instrumentOneFile` into the writer; the refused-row assertion fails (no row) and the
+  write throws `object-mix`.
+- Injector: a plain codeunit plus an R305 split-header codeunit in one file. Step 1 confirms on
+  master that it throws the unsupported-kind message; if not, report it and move it to T4b.
+  Red-check: change the `instanceof` test to a class that never matches; the test fails with the
+  exact `unsupported-kind` error escaping `generateMutationSet`.
+- No header: try R-297's plan shapes first; if none reaches it, say so and drop the case.
+- An unforeseen error aborts: a stubbed plain `Error` from `instrumentOneFile` propagates. Red-check:
+  catch everything; the test fails because a row appears.
+- No source in `detail` (section 2) over all rows above.
 
-**T4. Sites no real AL reaches.** Latch no-owner (the comment in `compile.test.ts` already says no
-real statement sits outside every member) and `assertNoOverlap` (operator specs are laminar and
-insertions are zero width; no known shape). Test `instrumentOneFile` with the existing hand-built
-detached node, and a hand-built partial-overlap spec pair, expecting the same messages the probe
-records. Red-check: remove the call inside `instrumentOneFile` that holds each throw; the test goes
-green-to-red on the missing message.
+**T4b. Sites no real AL reaches:** latch no-owner (`compile.test.ts` already says no real statement
+sits outside every member) and `assertNoOverlap` (operator specs are laminar; insertions are zero
+width; no known shape). Hand-built node and hand-built partial-overlap spec pair through
+`instrumentOneFile`: exact message and `shape`. Red-check: throw a plain `Error` at that one site;
+the `instanceof` assertion fails.
 
-**T5. Line map (runner, `line-map.ts`).** Constructor refuses unmapped declared keys; delete the
-`lookup` throw; probe guard (b) from section 1. Tests: (a) `lineMapFromSources` over an R305
-split-header codeunit file plus a normal one, both declared: `lookup` returns `undefined`,
-`refusedByKey` names the split one, no throw. Red-check: restore the throw, the test goes red.
-(b) guard: hand-built root where a spec's object is not a map root, refused. Red-check: drop the
-guard.
+**T5. Line map (C2).** (a) `lineMapFromSources` over the R305 split-header file (no mutant) plus a
+normal file, both declared: construction succeeds, `refusedByKey().get(key)` equals the exact
+reason, `lookup` returns `undefined`. Red-check: delete the refuse branch; the exact reason
+assertion fails. (b) A declared key with a manifest mutant and no map entry (hand-built; no real
+shape known): construction throws the exact existing message. Red-check: drop the mutant check;
+nothing throws.
 
-**T6. Identity.** Test: `{A, Bad, C}` vs `{A, C}` through `generateMutationSet` +
-`writeInstrumentedProject`; the two manifests' rows for A and C are deep-equal, including `mutantId`
-and `identityKeyOf`. Bad sorts between A and C so a shift would show. Red-check: push Bad into
-`files` anyway and drop its rows in the writer after `assignMutantIds` (a skip AFTER numbering):
-C's ids no longer match.
+**T6. Identity (C1, I3).** Cross-kind same-name twin: `A_Twin.Table.al` (table 50100 "Twin", plus
+an enum, so the file is refused as `object-mix`) and `B_Twin.Codeunit.al` (codeunit 50100 "Twin"),
+each with the same `procedure Bump(): Integer begin exit(1 + 1); end;`. Run 1: the enum in its own
+file, so A instruments. Run 2: A refused. Assert: B's serialized `identityKeyOf` in run 2 equals run
+1's and differs from A's run-1 key; given run-1 verdicts A `killed`, B `survived`, the resume index
+(`resume.ts`) carries `survived` to B and nothing to anything else. Red-check: pass `reserved: []`;
+B's key equals A's run-1 key (ordinal 0) and the equality fails with both keys printed. Also
+compare run 2 with an `--exclude A_Twin.Table.al` run: all non-twin rows deep-equal including
+`mutantId`; B's ordinal is exactly 1 higher.
 
-**T7. Threshold.** Tests: all refused, throws; refused > 50% of sites, throws naming files and
-`--exclude`; 1 of 3 refused, runs. Red-check: flip `>` to `>=` and the boundary test at exactly half
-goes red.
+**T7. Layout and execution (I3, I4).** (a) `a/Dup.Codeunit.al` refused and `b/Dup.Codeunit.al`
+good: the run still refuses with `prepareBatchProject`'s exact duplicate-basename message. (b)
+With the orchestrator's fake backend (`orchestrator.test.ts`): a test calling Good and the refused
+Bad keeps its Good coverage (Good's mutant is scored, not `no-coverage`); a test that calls Good's
+`P2` then fails inside Bad makes P2's mutants, covered only by it, `error` with the baseline note,
+never `survived`. Also assert Bad's file sits in the batch dir byte-identical to its source.
+Red-checks: exclude refused files from `prepareBatchProject`'s copy, and the batch-dir assertion
+fails; let the fake report the failing test as passing, and P2's exact `error` assertion fails.
 
-**T8. Report ripple** (section 2 list). Test: a fold over a stream with `refusedFiles` yields an
-`excludedSites` row with the new reason and `detail`, the caveat, and a validating report; a stream
-without it yields byte-identical output to today. Red-check: drop the fold pass-through.
+**T8. Refusal and scope.** All files refused: throws the exact message. One refused, one good: runs,
+`reliability` `narrowed`, SCOPE line contains "1 file(s) refused". Red-check: remove the refused
+term from the reliability condition; the report says `full` and the assertion fails. Then the
+ripple in section 2, explain v9, and the fold test (a stream without `refusedFiles` folds to
+today's bytes).
 
-**T9. Roadmap.** `R307` to `done (<commit>)`; add a line to R299 (now a named per-file skip, still
-open for per-object dropping); `bun scripts/roadmap-index.ts`.
+**T9. Measure the trial's cost (M7).** No caching. W4 from RUST-03
+(`docs/superpowers/specs/2026-09-28-rust-03-precommitment.md`): `bun scripts/measure-peak.ts bun
+packages/runner/src/cli.ts run --project "U:/Git/BC.History/BaseApp/Source/Base Application"
+--dry-run`, three runs on master and three on this branch, same day. Gate in owner order: every run
+completes with no crash; median peak at or under 16,384 MB (the W4 ceiling) and at or under master's
+same-day median plus 5%. Report wall time against master's (RUST-03's final W4 was 5,001 MB, 493.72
+s) but do not gate on it. Diff the two outputs: any new `instrumentation-refused-files` lines are a
+finding about BaseApp; list them. A miss is filed and reported before landing.
 
-## Open questions
+**T10. Roadmap.** `R307` `done (<commit>)`; a line on R299 (now a named per-file skip, open for
+per-object dropping); file one item for cross-batch twins sharing ordinal 0 (re-check the next free
+id in every worktree first); `bun scripts/roadmap-index.ts`.
 
-- Is "M-ids stable against `{A, C}`, keys stable against a fixed Bad" the invariant the reviewer
-  wants? Stable M-ids against a FIXED Bad would need id reservation across batches, which M-ids have
-  never had; this plan does not build it.
+## Changes from r1
+
+- **C1:** reserved identity ordinals for refused files (section 3), cross-kind twin test with a
+  resume carry check (T6).
+- **C2:** the unmapped throw stays for any compiled object with mutants, checked at line-map
+  construction on emitted source against compiled declarations; the trial-time guard is removed.
+- **I3:** duplicate-basename test (T7a); surviving rows compared against `--exclude Bad` (T6).
+- **I4:** section "The idea" says a refused file still runs; T7b pins coverage and baseline errors.
+- **I5:** the more-than-half rule is gone; exit 1 only when nothing is left to measure.
+- **I6:** reliability `narrowed`, SCOPE line names the count, explain 8 to 9 with the R-214 rule.
+- **M7:** no caching; T9 measures W4 against the RUST-03 ceiling.
+- **M8:** typed `FileRefusedError`, never a generic catch; no source in `detail`, tested; every
+  red-check pins an exact row or message.
+- **Coordination:** tell the orchestrator before the `project.ts` commit.
+
+## Open question
+
+- Section 3: a twin of a refused file cannot keep its key both against `--exclude Bad` and against
+  a later run where Bad instruments. This plan keeps the second, as C1 prefers. Confirm.
