@@ -13,6 +13,7 @@ import {
 } from "../src/al-runner-coverage";
 import type { TestMethodRef } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
+import { explain } from "../src/explain";
 import { buildLineMap, lineMapFromSources, renamedMemberAttempts } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
@@ -4381,6 +4382,7 @@ function r351Report(
         batchIndex: 0,
         durationMs: 10,
         coveringTests: [],
+        ...(verdict === "survived" ? { coverageAttribution: "exact" as const } : {}),
       }),
     ),
     { type: "session-finished", elapsedMs: 10 },
@@ -4453,6 +4455,30 @@ describe("R351: a renamed split member is named by its arm names in the order, t
     expect(out).toContain("Repro R.Alpha");
     expect(out).toContain("Repro R.Gamma");
     expect(out).not.toContain("<object>");
+  });
+
+  test("T3 r4: explain names each member on its survivors and its no-coverage block", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const alpha = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Alpha");
+    const gammas = manifest.mutants.filter((m) => m.coverageArmNames?.[0] === "Gamma");
+    const [gamma, gammaUncovered] = gammas;
+    if (alpha === undefined || gamma === undefined || gammaUncovered === undefined) {
+      throw new Error("r4 lost a member");
+    }
+    const out = explain(
+      r351Report([
+        [alpha, "survived"],
+        [gamma, "survived"],
+        [gammaUncovered, "no-coverage"],
+      ]),
+    );
+    expect(out.survivors.map((s) => [s.mutantCode, s.procedureName, s.coverageArmNames])).toEqual([
+      [alpha.mutantId, "", ["Alpha"]],
+      [gamma.mutantId, "", ["Gamma"]],
+    ]);
+    expect(
+      (out.noCoverageBlocks ?? []).map((b) => [b.members, b.procedureName, b.coverageArmNames]),
+    ).toEqual([[[gammaUncovered.mutantId], "", ["Gamma"]]]);
   });
 
   // D7: coverageArmNames is positional and independent of preprocessor symbols, and R318's census

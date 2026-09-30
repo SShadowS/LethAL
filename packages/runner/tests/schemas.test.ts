@@ -355,6 +355,35 @@ describe("published JSON Schemas (R152)", () => {
     ).toEqual([]);
   });
 
+  test("R351: coverageArmNames is additive under explain v7: output without it validates, and with it", () => {
+    // v7 was edited in place, which is sound only while the field stays OPTIONAL on survivors, gaps
+    // and no-coverage blocks: required, it would reject every v7 output written before R351.
+    const raw = JSON.parse(
+      readFileSync(join(REPO_ROOT, "docs/campaign/2026-08-03-do/rung2.report.json"), "utf8"),
+    ) as { mutants: Record<string, unknown>[] };
+    raw.mutants.forEach((m, i) => {
+      m.gapId = `G${i.toString(16).padStart(12, "0")}`;
+      m.blockStartLine = Number(m.line);
+      m.blockEndLine = Number(m.line) + 1;
+    });
+    const without = explain(assertExplainableReport(raw));
+    const text = JSON.stringify(without);
+    expect(text).not.toContain("coverageArmNames");
+    expect(without.survivors.length).toBeGreaterThan(0);
+    expect(without.gaps?.length).toBeGreaterThan(0);
+    expect(without.noCoverageBlocks?.length).toBeGreaterThan(0);
+    expect(conformsTo(explainSchema, without)).toEqual([]);
+    const withNames = JSON.parse(text) as {
+      survivors: Record<string, unknown>[];
+      gaps: Record<string, unknown>[];
+      noCoverageBlocks: Record<string, unknown>[];
+    };
+    for (const row of [...withNames.survivors, ...withNames.gaps, ...withNames.noCoverageBlocks]) {
+      row.coverageArmNames = ["Alpha"];
+    }
+    expect(conformsTo(explainSchema, withNames)).toEqual([]);
+  });
+
   test("doctor output validates, with and without a caveat", () => {
     const report = {
       ok: false,
