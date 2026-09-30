@@ -4,7 +4,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Glob } from "bun";
-import { isMutationElementsExport } from "./redact-campaign-report";
+import {
+  firstPartyVerdict,
+  isMutationElementsExport,
+  loadFirstParty,
+} from "./redact-campaign-report";
 
 /**
  * The public-repo guard, and the two properties that make it worth having rather than a checklist
@@ -24,18 +28,8 @@ import { isMutationElementsExport } from "./redact-campaign-report";
 const SCRIPT = join(import.meta.dir, "redact-campaign-report.ts");
 const MARKER = "[redacted: third-party source, see this directory's README]";
 
-interface FirstPartyEntry {
-  readonly path: string;
-  readonly projectDir: string;
-  readonly reason: string;
-}
-
-/** The committed exemption list. Read fresh rather than imported so a malformed file fails the test
- *  that checks it rather than the module load of every test in this file. */
-function firstParty(): readonly FirstPartyEntry[] {
-  const raw = readFileSync(join(import.meta.dir, "redact-first-party-reports.json"), "utf8");
-  return (JSON.parse(raw) as { reports: FirstPartyEntry[] }).reports;
-}
+/** The committed exemption list, via the script's own loader (one rule, no test copy). */
+const firstParty = loadFirstParty;
 
 function reportFixture(): { path: string; original: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), "lethal-redact-"));
@@ -313,10 +307,56 @@ describe("redact-campaign-report", () => {
       };
       const mutants = report.mutants ?? [];
       expect(mutants.length, `${entry.path} has no mutants to check`).toBeGreaterThan(0);
-      const foreign = mutants
-        .map((m) => m.file ?? "")
-        .filter((f) => !existsSync(join(repoRoot, entry.projectDir, f)));
+      const foreign = firstPartyVerdict(join(repoRoot, entry.path), mutants)?.foreign;
       expect(foreign, `${entry.path} mutates files outside ${entry.projectDir}`).toEqual([]);
     }
+  });
+
+  test(
+    "R350: --check PASSES both committed first-party reports, and write mode refuses them",
+    () => {
+      const repoRoot = join(import.meta.dir, "..");
+      for (const rel of [
+        "docs/campaign/2026-08-16-gift-card/rehearsal.report.json",
+        "examples/credit-limit/demo.report.json",
+      ]) {
+        const r = run(["--check", join(repoRoot, rel)]);
+        expect(r.status, r.stderr).toBe(0);
+        expect(r.stdout).toContain("first-party");
+        // Write mode must not redact our own report (it would destroy the sample).
+        const w = run([join(repoRoot, rel)]);
+        expect(w.status).not.toBe(0);
+        expect(w.stderr).toContain("first-party");
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R350: --check still FAILS a non-allowlisted report that carries source",
+    () => {
+      // reportFixture() is the same shape as a first-party report but lives at a path the allowlist
+      // does not name, so the exemption must not apply.
+      const { path } = reportFixture();
+      expect(firstPartyVerdict(path, [{ file: "x.al" }])).toBeUndefined();
+      const r = run(["--check", path]);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("UNREDACTED");
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test("R350: an allowlisted report whose mutant files fall OUTSIDE its project is not exempt", () => {
+    const repoRoot = join(import.meta.dir, "..");
+    const rel = "examples/credit-limit/demo.report.json";
+    const inside = (
+      JSON.parse(readFileSync(join(repoRoot, rel), "utf8")) as { mutants: { file: string }[] }
+    ).mutants;
+    expect(firstPartyVerdict(join(repoRoot, rel), inside)?.foreign).toEqual([]);
+    const v = firstPartyVerdict(join(repoRoot, rel), [
+      ...inside,
+      { file: ".dependencies/CDO/Codeunit/Thing.Codeunit.al" },
+    ]);
+    expect(v?.foreign).toEqual([".dependencies/CDO/Codeunit/Thing.Codeunit.al"]);
   });
 });

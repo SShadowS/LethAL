@@ -2100,13 +2100,14 @@ const EQUIVALENCE_RISK_BY_OPERATOR: ReadonlyMap<string, string> = new Map(
 
 /**
  * The R166 identity a reader's mark is matched against. ONE definition, used by the per-row
- * `readerMark` and by the run-level `readerMarkedEquivalent`, so the two can never disagree.
+ * `readerMark`, by the run-level `readerMarkedEquivalent`, and by `lethal explain`'s
+ * `survivors[].markKey` (R265), so the key a reader copies is the key the join matches.
  *
  * The member is `identityKeyOf`'s rule (selection.ts), `||` and not `??`: a trigger row's
  * `procedureName` is "", not absent, so `??` never reached `triggerName` and every mark on a
  * trigger mutant was reported stale (R229).
  */
-function markIdentityOf(m: MutantOutcome): string {
+export function markIdentityOf(m: MutantOutcome): string {
   return serializeKey({
     astHash: m.astHash,
     codeunitName: m.codeunitName,
@@ -2116,6 +2117,25 @@ function markIdentityOf(m: MutantOutcome): string {
     ordinal: m.identityOrdinal ?? 0,
   });
 }
+
+/**
+ * R265: what `lethal explain`'s `markKeysStale` means. Emitted exactly when the report's identity
+ * scheme differs from this build's `IDENTITY_SCHEME`. It is R325's rule applied one step early:
+ * `applyEquivalenceMarks` reports a mark stale when its scheme is not the run's, and the next run
+ * under this build keys under `IDENTITY_SCHEME`, so a mark written from these keys at the report's
+ * scheme would be stale there.
+ */
+export const MARK_KEYS_STALE_INTERPRETATION: Interpretation = {
+  meaning:
+    "These mark keys were made under the report's identity scheme (`reportScheme`), and this " +
+    "build keys mutants under another (`buildScheme`). A mark written from them would be " +
+    "reported stale on the next run under this build and never applied, because a key can name " +
+    "a different mutant across schemes when an engine change renumbers twins. Re-run under this " +
+    "build first, then take the keys from that report's explain.",
+  entailedNegative:
+    "It does not mean this report's verdicts are wrong. Only the keys are tied to the older scheme.",
+  basis: "R325",
+};
 
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);

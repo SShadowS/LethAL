@@ -299,6 +299,24 @@ function testsOf(json: unknown): Array<{ name?: unknown; status?: unknown; messa
   return Array.isArray(tests) ? tests : [];
 }
 
+/** R345: how much of a dead run's stderr the unmeasurable fact keeps (the END, where the exception is). */
+const STDERR_TAIL_CHARS = 600;
+
+/**
+ * R345: what a run that produced no readable answer looks like, so the exception is not lost.
+ * Text only: nothing keys a retry or a verdict on it. Exit 82 is the low byte of 0xE0434352, the
+ * .NET unhandled-exception code, as Bun reports it.
+ */
+function deadRunDetail(run: { exitCode: number; stderr: string }): string {
+  const flat = run.stderr.replace(/\s+/g, " ").trim();
+  const tail = flat.length > STDERR_TAIL_CHARS ? `...${flat.slice(-STDERR_TAIL_CHARS)}` : flat;
+  const cause =
+    run.exitCode === 82
+      ? "; 82 is the low byte of 0xE0434352, the .NET unhandled-exception exit code, as Bun reports it (R345)"
+      : "";
+  return `exit ${run.exitCode}${cause}; stderr: ${tail === "" ? "<empty>" : tail}`;
+}
+
 function fact(
   name: ContractFactName,
   verdict: ContractVerdict,
@@ -470,7 +488,7 @@ export async function runAlRunnerContractProbe(
             "qualified-test-name",
             "unmeasurable",
             wantedName,
-            `no readable --output-json envelope (exit ${passRun.exitCode})`,
+            `no readable --output-json envelope (${deadRunDetail(passRun)})`,
           ),
         );
       } else {
@@ -512,7 +530,7 @@ export async function runAlRunnerContractProbe(
             "timeout-classified",
             "unmeasurable",
             String(RUNNER_TIMEOUT_MESSAGE),
-            `the hang probe returned no message (exit ${hangRun.exitCode}, status ${JSON.stringify(t?.status ?? "<no test>")})`,
+            `the hang probe returned no message (${deadRunDetail(hangRun)}, status ${JSON.stringify(t?.status ?? "<no test>")})`,
           ),
         );
       } else {

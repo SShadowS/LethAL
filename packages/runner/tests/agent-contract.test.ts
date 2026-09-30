@@ -642,31 +642,20 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       expect([...narrowing], `${c} has no scope in this test`).toContain(c);
   });
 
-  test("the dry-run exception names flags dry-run really ignores, and its roadmap row exists", () => {
+  test("the dry-run paragraph names flags dry-run really refuses, and --out it really reads", () => {
     const own = flowed(ownText(read(REFERENCE), "Which subcommand reads which flag (checked)"));
-    const para = own.slice(own.indexOf("One exception remains"));
+    const para = own.slice(own.indexOf("`lethal run --dry-run` executes nothing"));
     const bare = ["run", "--project", "P", "--dry-run"];
     const flags = ticks(para)
-      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run")
+      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out")
       .map((t) => t.slice(2));
     expect(flags.length).toBeGreaterThan(0);
-    const parsedWith = (flag: string): string => {
-      const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
-      for (const v of spec.type === "boolean" ? [undefined] : ["x", "2", "bcdev"]) {
-        try {
-          return JSON.stringify(
-            parseCliConfig([...bare, `--${flag}`, ...(v === undefined ? [] : [v])]),
-          );
-        } catch {}
-      }
-      throw new Error(`--${flag} is refused on run --dry-run`);
-    };
-    for (const f of flags)
-      expect(parsedWith(f), `--${f}`).toBe(JSON.stringify(parseCliConfig(bare)));
-    const id = /\b(R\d+)\b/.exec(para)?.[1] ?? "";
-    expect(read(join(REPO_ROOT, "docs", "roadmap", `R${id.slice(1).padStart(3, "0")}.md`))).toMatch(
-      /^status: "open"$/m,
-    );
+    for (const f of flags) {
+      const spec = RUN_FLAGS[f as keyof typeof RUN_FLAGS] as { readonly type: string };
+      const argv = [...bare, `--${f}`, ...(spec.type === "boolean" ? [] : ["x"])];
+      expect(() => parseCliConfig(argv), `--${f}`).toThrow(/has no effect with --dry-run/);
+    }
+    expect(parseCliConfig([...bare, "--out", "plan.json"])).toMatchObject({ outPath: "plan.json" });
   });
 
   test("the run exit sentences are exitCodeForReport's and main's", () => {
@@ -1117,6 +1106,43 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     );
     const own = ownText(read(REFERENCE), "Marking an equivalent survivor (checked)");
     expect(own).toContain(`\`<project>/${EQUIVALENCE_MARKS_FILENAME}\``);
+  });
+
+  test("R265: the explain recipe (copy markKey, set markIdentityScheme) matches, and stale means re-run", () => {
+    const report = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    const out = explain(report);
+    const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
+    expect(body).toContain("Copy its `markKey` into `key`.");
+    expect(body).toContain("Set `identityScheme` to explain's `markIdentityScheme`.");
+    expect(body).toContain("If explain printed `markKeysStale`");
+    expect(body).toContain("Re-run under this build first");
+    const file = JSON.stringify({
+      identityScheme: out.markIdentityScheme,
+      marks: out.survivors.map((s) => ({ key: s.markKey, reason: "equivalent" })),
+    });
+    const marks = parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME);
+    const rows = report.mutants.map((m) => ({
+      batchIndex: m.batchIndex,
+      mutantCode: m.mutantCode,
+      identity: serializeKey(
+        identityKeyOf({
+          ...m,
+          operatorVersion: `${m.operatorMajor}.0.0`,
+        } as unknown as MutantManifestEntry),
+      ),
+      verdict: m.verdict,
+    }));
+    // Under the report's own scheme every key matches its survivor.
+    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme);
+    expect(same.stale).toEqual([]);
+    expect(same.matched.map((x) => x.mutantCode).sort()).toEqual(
+      out.survivors.map((s) => s.mutantCode).sort(),
+    );
+    // The committed report predates this build's scheme, so explain says the keys are stale, and a
+    // run under this build does report every one of those marks stale: the doc's "re-run first".
+    expect(out.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
+    expect(out.markIdentityScheme).not.toBe(IDENTITY_SCHEME);
+    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME).stale).toHaveLength(marks.length);
   });
 
   test("the marks file lives where the doc says and has the documented shape", async () => {

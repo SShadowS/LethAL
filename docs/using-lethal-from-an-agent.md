@@ -145,9 +145,12 @@ has the complete set.
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
 
-One exception remains: `lethal run --dry-run` still accepts its execution flags (such as
-`--out`, `--backend` and `--workers`) and ignores them, because it executes nothing. So
-`--dry-run --out plan.json` writes nothing. That is filed as R266.
+`lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
+`--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
+exception is `--out <file>`, which writes the dry-run listing as JSON:
+`{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
+operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
+`deployed` counts what would ship.
 
 #### Flag notes (guidance)
 
@@ -204,7 +207,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v6.schema.json](../schemas/explain-v6.schema.json)
+- `lethal explain`: [../schemas/explain-v7.schema.json](../schemas/explain-v7.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -249,8 +252,9 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 6`. The top level carries `contract`, `score`, `survivors`, `notMeasured`
-and `survivorSelection`. Each `survivors` row carries `executionProven` and `reach`.
+`explainSchemaVersion: 7`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
+`reach` and `markKey`. The top level can also carry `markKeysStale`.
 
 A report whose schema version is anything other than 2 or 3, or that holds a value this build
 cannot interpret, is REFUSED rather than explained with the unrecognised value dropped.
@@ -292,7 +296,8 @@ Each `survivors` row can also carry `gapId`, the gap it belongs to.
 #### Explain notes (guidance)
 
 `explain` reads that file and nothing else: no server, no database, no config. It prints JSON on
-stdout.
+stdout. On stderr it prints each survivor's mark key under that survivor, for a human; the JSON has
+the same keys.
 
 Its own `contract` block states the split: **structure is contractual, prose is not.** Field names,
 nesting and value domains are stable under `explainSchemaVersion`. Do not parse `meaning` text;
@@ -490,11 +495,19 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 { "identityScheme": 4, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
-`reason` is required. Set `identityScheme` to the report's own `identityScheme`. A file without it
-was written before the field existed and reads as scheme 1, and a mark made under a scheme other than
-the one the run keys under is reported stale and never applied, because a key can name a different
-mutant after an engine change renumbers its twins (R325). Build the key from the survivor's row in
-`report.json`:
+`reason` is required. To mark a survivor:
+
+1. Run `lethal explain report.json` and find the survivor.
+2. Copy its `markKey` into `key`.
+3. Set `identityScheme` to explain's `markIdentityScheme`.
+4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
+   build's, and a mark written from it would be stale on the next run. Re-run under this build
+   first, then take the key from the new report's explain.
+
+A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
+and a mark made under a scheme other than the one the run keys under is reported stale and never
+applied, because a key can name a different mutant after an engine change renumbers its twins
+(R325). `markKey` is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
@@ -505,8 +518,8 @@ the first), append `|<identityOrdinal>` as a sixth field; a row without it takes
 
 #### Marking notes (guidance)
 
-Some survivors cannot be killed by any test, because the change does not change behaviour. No
-command prints the key yet (R265). A marked survivor is `skipped`: verify never runs it, and it
+Some survivors cannot be killed by any test, because the change does not change behaviour. Copy
+the key from `explain` rather than building it by hand. A marked survivor is `skipped`: verify never runs it, and it
 is not a measured kill or survival. `equivalenceRisk` alone never skips a survivor. A mark never
 changes the score.
 

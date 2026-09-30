@@ -4,6 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
@@ -24,10 +25,12 @@ import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
+  MARK_KEYS_STALE_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
+  markIdentityOf,
   mutantRef,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
@@ -485,6 +488,9 @@ function fullCoverageReport(): SessionReport {
       barBlock(plainMutant("M0016", "known-survivor")),
     ],
     testsOnly: ["test/Posting/**"],
+    // R265: a report from the previous identity scheme, which an older build writes, so
+    // `markKeysStale` is reached.
+    identityScheme: IDENTITY_SCHEME - 1,
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
     resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
     // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
@@ -618,6 +624,13 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].artifactId", // [joined] artifacts[].artifactId whose batchIndex equals the row's
   "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.survivors[].gapId", // [verbatim] (C02-09)
+  "$.survivors[].markKey", // [derived] report.ts's markIdentityOf(row), R265
+  "$.markIdentityScheme", // [verbatim] report.identityScheme, or 1 when absent (R325), R265
+  "$.markKeysStale.reportScheme", // [derived] markIdentityScheme, restated
+  "$.markKeysStale.buildScheme", // [enum] this build's IDENTITY_SCHEME
+  "$.markKeysStale.interpretation.meaning", // [registry]
+  "$.markKeysStale.interpretation.entailedNegative", // [registry]
+  "$.markKeysStale.interpretation.basis", // [registry]
   "$.gaps[].gapId", // [verbatim] (C02-09)
   "$.gaps[].batchIndex", // [verbatim]
   "$.gaps[].file", // [verbatim]
@@ -682,6 +695,7 @@ describe("explain — the admissibility rule, made executable", () => {
       ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
       QUARANTINE_INTERPRETATION,
       STRANDED_SKIP_INTERPRETATION,
+      MARK_KEYS_STALE_INTERPRETATION,
     ]);
     expect(registry).toEqual(expected);
   });
@@ -1107,6 +1121,7 @@ describe("explain — the admissibility rule, made executable", () => {
     const report = fullCoverageReport();
     const allowed = new Set<string>([
       ...stringsIn(report), // [verbatim]
+      ...report.mutants.map(markIdentityOf), // [derived] R265: survivors[].markKey
       ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [i.meaning, i.basis, i.entailedNegative ?? ""]),
       ...PROJECTION_AUTHORED_STRINGS,
     ]);
@@ -1221,6 +1236,7 @@ describe("explain — survivors", () => {
         "guardInterpretation",
         "interpretation",
         "line",
+        "markKey",
         "mutantCode",
         "mutatedText",
         "operatorName",
@@ -2238,6 +2254,7 @@ describe("explain — the real campaign reports", () => {
       const report = load(name);
       const allowed = new Set<string>([
         ...stringsIn(report),
+        ...report.mutants.map(markIdentityOf), // [derived] R265: survivors[].markKey
         ...ADMISSIBLE_INTERPRETATIONS.flatMap((i) => [
           i.meaning,
           i.basis,
@@ -2306,21 +2323,49 @@ describe("lethal explain — CLI", () => {
     expect(text).toContain("executionProven");
   });
 
-  async function runCli(contents: string): Promise<{ code: number; out: string }> {
+  async function runCli(contents: string): Promise<{ code: number; out: string; err: string[] }> {
     const dir = await mkdtemp(join(tmpdir(), "lethal-explain-cli-"));
     const path = join(dir, "report.json");
     await writeFile(path, contents, "utf8");
     const lines: string[] = [];
+    const err: string[] = [];
     const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       lines.push(a.map(String).join(" "));
     });
+    const error = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      err.push(a.map(String).join(" "));
+    });
     try {
       const code = await explainFromCli({ mode: "explain", reportPath: path });
-      return { code, out: lines.join("\n") };
+      return { code, out: lines.join("\n"), err };
     } finally {
       log.mockRestore();
+      error.mockRestore();
     }
   }
+
+  test("R265: each survivor's mark key is printed under it on stderr, and stdout stays JSON", async () => {
+    const report = reportFixture({ identityScheme: IDENTITY_SCHEME });
+    const { out, err } = await runCli(JSON.stringify(report));
+    const printed = JSON.parse(out) as { survivors: { mutantCode: string; markKey: string }[] };
+    expect(printed.survivors).toHaveLength(2);
+    expect(err[0]).toBe(
+      `mark keys below take "identityScheme": ${IDENTITY_SCHEME} in the marks file`,
+    );
+    printed.survivors.forEach((s, i) => {
+      expect(err[1 + 2 * i]).toContain(`/${s.mutantCode} `);
+      expect(err[2 + 2 * i]).toBe(`  mark key: ${s.markKey}`);
+    });
+    expect(err).toHaveLength(1 + 2 * printed.survivors.length);
+  });
+
+  test("R265: a report under another scheme says the keys are stale on the console", async () => {
+    const report = reportFixture({ identityScheme: IDENTITY_SCHEME - 1 });
+    const { err } = await runCli(JSON.stringify(report));
+    expect(err[0]).toBe(
+      `mark keys are STALE: this report keys under identity scheme ${IDENTITY_SCHEME - 1} and this build under ${IDENTITY_SCHEME}, so a mark written from them would be stale on the next run. Re-run under this build first.`,
+    );
+  });
 
   test("prints the projection as JSON and exits 0", async () => {
     const { code, out } = await runCli(JSON.stringify(reportFixture()));
@@ -2793,5 +2838,68 @@ describe("explain: gaps (C02-09)", () => {
       "M0201",
       "M0200",
     ]);
+  });
+});
+
+describe("R265: the mark key and its scheme", () => {
+  test("every survivor's markKey is report.ts's markIdentityOf, the key the mark join matches", () => {
+    const report = fullCoverageReport();
+    const out = explain(report);
+    const byCode = new Map(report.mutants.map((m) => [m.mutantCode, m]));
+    expect(out.survivors.length).toBeGreaterThan(2);
+    for (const s of out.survivors) {
+      const row = byCode.get(s.mutantCode);
+      if (row === undefined) throw new Error(`no row for ${s.mutantCode}`);
+      expect(s.markKey).toBe(markIdentityOf(row));
+    }
+    // The trigger survivor's key names the trigger, never an empty member.
+    const trigger = out.survivors.find((s) => s.triggerName !== undefined);
+    expect(trigger?.markKey.split("|")[2]).toBe("OnValidate");
+    // The one survivor carrying a reader mark: its markKey is the key that mark matched.
+    const marked = out.survivors.find((s) => s.readerMark !== undefined);
+    expect(marked?.markKey).toBe(marked?.readerMark?.key);
+  });
+
+  test("a v2 report with no identityScheme reads as scheme 1, never as this build's", () => {
+    const report = reportFixture({ schemaVersion: 2 });
+    expect("identityScheme" in report).toBe(false);
+    const out = explain(report);
+    expect(out.markIdentityScheme).toBe(1);
+    expect(out.markKeysStale).toEqual({
+      reportScheme: 1,
+      buildScheme: IDENTITY_SCHEME,
+      interpretation: MARK_KEYS_STALE_INTERPRETATION,
+    });
+    expect(out.markKeysStale?.interpretation).toBe(MARK_KEYS_STALE_INTERPRETATION);
+  });
+
+  test("a report under another scheme is stated stale; the build's own scheme is not", () => {
+    const other = explain(reportFixture({ identityScheme: IDENTITY_SCHEME - 1 }));
+    expect(other.markIdentityScheme).toBe(IDENTITY_SCHEME - 1);
+    expect(other.markKeysStale?.reportScheme).toBe(IDENTITY_SCHEME - 1);
+    expect(other.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
+    const same = explain(reportFixture({ identityScheme: IDENTITY_SCHEME }));
+    expect(same.markIdentityScheme).toBe(IDENTITY_SCHEME);
+    expect("markKeysStale" in same).toBe(false);
+  });
+
+  test("a malformed identityScheme, or a survivor its key cannot be made from, is refused", () => {
+    for (const bad of [0, 2.5, "4", null]) {
+      expect(() => explain(reportFixture({ identityScheme: bad as never }))).toThrow(
+        MalformedReportError,
+      );
+    }
+    const [m0, ...rest] = reportFixture().mutants;
+    if (m0 === undefined) throw new Error("empty fixture");
+    for (const corrupt of [
+      { astHash: undefined },
+      { astHash: "" },
+      { operatorMajor: "1" },
+      { identityOrdinal: -1 },
+    ]) {
+      expect(() =>
+        explain(reportFixture({ mutants: [{ ...m0, ...(corrupt as object) }, ...rest] })),
+      ).toThrow(/mark key cannot be made from/);
+    }
   });
 });

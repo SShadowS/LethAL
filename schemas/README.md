@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v6.schema.json`](explain-v6.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 6 |
+| [`explain-v7.schema.json`](explain-v7.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 7 |
+| [`explain-v6.schema.json`](explain-v6.schema.json) | the same, from builds before R265; kept so a stored v6 document stays checkable (v7 added the required `survivors[].markKey` and `markIdentityScheme`, and `markKeysStale`) | `EXPLAIN_SCHEMA_VERSION` = 6 |
 | [`explain-v5.schema.json`](explain-v5.schema.json) | the same, from builds before R-236c; kept so a stored v5 document stays checkable (v6 added the caveat `tests-testpage-refused`) | `EXPLAIN_SCHEMA_VERSION` = 5 |
 | [`explain-v4.schema.json`](explain-v4.schema.json) | the same, from builds before GH-24; kept so a stored v4 document stays checkable (its value sets drifted, see `docs/roadmap/R233.md`) | `EXPLAIN_SCHEMA_VERSION` = 4 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
@@ -15,11 +16,11 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the nine files, six are hand-written and three were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v6 and the kept v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v2 and the kept v1) are hand-written; explain v6, `doctor` and
-verify v2 are pinned against their declarations, and explain v5, explain v4 and verify v1 are
-frozen as they were published. `report` and `stream` are generated; report v2 is frozen as the
+**Of the ten files, seven are hand-written and three were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v7 and the kept v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v2 and the kept v1) are hand-written; explain v7, `doctor` and
+verify v2 are pinned against their declarations, and explain v6, explain v5, explain v4 and
+verify v1 are frozen as they were published. `report` and `stream` are generated; report v2 is frozen as the
 generator last wrote it.
 `SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
@@ -47,7 +48,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v6.schema.json`, capped and uncapped.
+   `explain-v7.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

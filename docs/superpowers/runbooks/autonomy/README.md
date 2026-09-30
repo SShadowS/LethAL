@@ -80,6 +80,11 @@ CentralGauge's lanes and the other way round.
   run only on Cronus28 and only under a lease, and need no `coord ask` (standing authorization
   above). `itest:alrunner` runs locally and needs no container. A differing verdict or moved
   frozen figure is a block reported to the owner; never re-record a baseline yourself.
+- **al-runner: one session at a time on this machine (R345).** Two al-runner processes sharing
+  `~/.cache/al-runner` can crash one of them (exit 82 as Bun reports it; upstream #5018), and every
+  run leaves an ~11 MB temp file while another holds the DLL (upstream #5019). Before any al-runner
+  work (`itest:alrunner`, probes, `--server` daemons), tell the orchestrator and wait for its go;
+  unit tests never call al-runner and never wait.
 - Pause: `coord checkpoint` answers `"paused": true` while the owner has paused the machine.
   Finish the running step (never kill a live gate midway), release leases, commit, checkpoint
   `--wait paused`, and go idle until the orchestrator says `resume`.
