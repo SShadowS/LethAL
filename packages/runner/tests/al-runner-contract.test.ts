@@ -364,17 +364,23 @@ describe("R345: a run with no envelope keeps a bounded stderr tail", () => {
   const EX = "System.IO.FileNotFoundException: Microsoft.Dynamics.Nav.Ncl";
 
   test("exit 82 with an exception line: the detail has the line and the 0xE0434352 note", async () => {
-    const d = await detailOf({ exitCode: 82, stderr: `Unhandled exception.
+    const d = await detailOf({
+      exitCode: 82,
+      stderr: `Unhandled exception.
 ${EX}
    at X
-` });
+`,
+    });
     expect(d).toContain(EX);
     expect(d).toContain("0xE0434352");
   });
 
   test("another exit code carries no 0xE0434352 note", async () => {
-    const d = await detailOf({ exitCode: 1, stderr: `${EX}
-` });
+    const d = await detailOf({
+      exitCode: 1,
+      stderr: `${EX}
+`,
+    });
     expect(d).toContain(EX);
     expect(d).not.toContain("0xE0434352");
   });
