@@ -1,15 +1,17 @@
-import type { ReachGrain } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type ReachGrain } from "@lethal/schemata";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
+  MARK_KEYS_STALE_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
   guardEvidenceOf,
+  markIdentityOf,
   survivorReachOf,
 } from "./report";
 import type {
@@ -181,8 +183,11 @@ import type { MutantVerdict } from "./store";
  * `gaps[].artifactIdAbsent` reuses the survivor's domain; no bump.
  *
  * 6: R-236c added the caveat value `tests-testpage-refused`.
+ *
+ * 7: R265 added the REQUIRED `survivors[].markKey` and `markIdentityScheme`, and the optional
+ * `markKeysStale`. A new required field is a new shape, so it bumps even though it is additive.
  */
-export const EXPLAIN_SCHEMA_VERSION = 6;
+export const EXPLAIN_SCHEMA_VERSION = 7;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -213,6 +218,7 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
   QUARANTINE_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
+  MARK_KEYS_STALE_INTERPRETATION,
 ];
 
 /** The split contract, stated in the output itself — see this module's doc comment. */
@@ -333,6 +339,25 @@ export interface ExplainSurvivor {
   /** C02-09: verbatim from the report row, the gap this survivor belongs to. Absent on a row from
    *  a report written before C02-09. */
   readonly gapId?: string;
+  /**
+   * R265: the key a `lethal.equivalent.json` mark on this survivor needs, made by report.ts's
+   * `markIdentityOf`, the one definition the mark join matches against. Valid under
+   * `ExplainOutput.markIdentityScheme`, not necessarily under this build's (see `markKeysStale`).
+   */
+  readonly markKey: string;
+}
+
+/**
+ * R265: present exactly when the report's identity scheme is not this build's `IDENTITY_SCHEME`.
+ * A mark written from these keys would be stale on the next run under this build (R325).
+ */
+export interface ExplainMarkKeysStale {
+  /** `markIdentityScheme`, restated so the block reads alone. */
+  readonly reportScheme: number;
+  /** This build's `IDENTITY_SCHEME`, the scheme the next run keys under. */
+  readonly buildScheme: number;
+  /** `MARK_KEYS_STALE_INTERPRETATION`, by reference. */
+  readonly interpretation: Interpretation;
 }
 
 /**
@@ -500,6 +525,13 @@ export interface ExplainOutput {
   readonly gaps?: readonly ExplainGap[];
   /** C02-09: present exactly when `gaps` is. */
   readonly noCoverageBlocks?: readonly ExplainNoCoverageBlock[];
+  /**
+   * R265: the `identityScheme` a marks file needs for `survivors[].markKey`: the report's own, and
+   * 1 when the report has none (R325: an absent scheme reads as 1). Never absent, never guessed.
+   */
+  readonly markIdentityScheme: number;
+  /** R265: present exactly when `markIdentityScheme` is not this build's scheme. */
+  readonly markKeysStale?: ExplainMarkKeysStale;
 }
 
 /**
@@ -715,6 +747,15 @@ export function assertExplainableReport(value: unknown): SessionReport {
       refuse("`validity.caveats` contains a value this build cannot interpret", c, KNOWN_CAVEATS);
     }
   }
+  // R265: decides `markIdentityScheme` and whether `markKeysStale` is emitted. A coerced value
+  // would hand a reader a scheme their marks file then carries.
+  const identityScheme = record.identityScheme;
+  if (
+    identityScheme !== undefined &&
+    !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
+  ) {
+    refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
   const mutants = record.mutants;
   if (!Array.isArray(mutants)) {
     refuse("`mutants` is not an array", mutants);
@@ -837,6 +878,26 @@ export function assertExplainableReport(value: unknown): SessionReport {
         attribution,
         KNOWN_ATTRIBUTIONS,
       );
+    }
+    // R265: a survivor's `markKey` is serialized from these, so a missing or coerced one would
+    // hand a reader a key that matches nothing and reads like any other key.
+    if (mutant.verdict === "survived") {
+      const ordinal = mutant.identityOrdinal;
+      if (
+        typeof mutant.astHash !== "string" ||
+        mutant.astHash.length === 0 ||
+        !Number.isInteger(mutant.operatorMajor) ||
+        (ordinal !== undefined && !(Number.isInteger(ordinal) && (ordinal as number) >= 0))
+      ) {
+        refuse(
+          `${where} is \`survived\` with an astHash, operatorMajor or identityOrdinal its mark key cannot be made from`,
+          {
+            astHash: mutant.astHash,
+            operatorMajor: mutant.operatorMajor,
+            identityOrdinal: ordinal,
+          },
+        );
+      }
     }
     if (mutant.verdict === "survived" && attribution === undefined) {
       refuse(
@@ -1035,6 +1096,7 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
       : {}),
     ...artifactOf(m, artifacts),
     ...(m.gapId !== undefined ? { gapId: m.gapId } : {}),
+    markKey: markIdentityOf(m),
   };
 }
 
@@ -1293,6 +1355,9 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   // C02-09: from ALL rows, before the cap. `--top` bounds survivors only (Q6).
   const blocks = blocksOf(validated);
+  // R265, R325: a report without `identityScheme` was written before the field existed and reads
+  // as scheme 1, the same rule `parseEquivalenceMarks` applies to a marks file without one.
+  const markIdentityScheme = validated.identityScheme ?? 1;
   return {
     explainSchemaVersion: EXPLAIN_SCHEMA_VERSION,
     derivedFromReportSchemaVersion: validated.schemaVersion,
@@ -1324,6 +1389,17 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
     toolConditions: toolConditionsOf(validated),
     ...(blocks !== undefined
       ? { gaps: blocks.gaps, noCoverageBlocks: blocks.noCoverageBlocks }
+      : {}),
+    markIdentityScheme,
+    // R325's rule (`applyEquivalenceMarks`): a mark whose scheme is not the run's is stale.
+    ...(markIdentityScheme !== IDENTITY_SCHEME
+      ? {
+          markKeysStale: {
+            reportScheme: markIdentityScheme,
+            buildScheme: IDENTITY_SCHEME,
+            interpretation: MARK_KEYS_STALE_INTERPRETATION,
+          },
+        }
       : {}),
   };
 }
