@@ -40,7 +40,7 @@ The `--json` payload:
 `notChecked` is always `publish-ceiling` and `baseline-test-health`. `caveat` is present only for
 a config shape that has one, and `caveat.kind` is `create-mode` or `al-runner-only`.
 
-`--json` is accepted by `doctor` only. On any other subcommand it is refused rather than ignored.
+`--json` is accepted by `doctor` and `campaign` only. On any other subcommand it is refused rather than ignored, and `campaign` reads it only on `compare`.
 
 ### Doctor notes (guidance)
 
@@ -135,7 +135,7 @@ has the complete set.
 | `--db` | `run`, `clear-ceiling`, `verify` |
 | `--out` | `run`, `init`, `export` |
 | `--progress-out` | `run` |
-| `--json` | `doctor` |
+| `--json` | `doctor`, `campaign` |
 | `--top` | `explain` |
 | `--report` | `campaign` |
 | `--only` | `run` |
@@ -155,7 +155,17 @@ operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts 
 #### Flag notes (guidance)
 
 A stored flag can also go unused when the config makes it moot. `campaign` also refuses some of
-its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`.
+its flags per verb: `--project` only on `anchors`, `--expect-mutants` only on `freeze`, `--json`
+only on `compare`.
+
+`lethal campaign compare --json` prints one object on stdout and its lines on stderr:
+`{campaignCompareSchemaVersion, stage, baselinePath, mutantCount, identical, differences[],
+coverage}`. Read `coverage` before `identical` (R355). `coverage.verified: true` carries the one
+`coverageMode` both sides share. `coverage.verified: false` means the stage was frozen before R355
+(its baseline records no mode) or the report predates R252, and it always carries
+`stageCoverageMode`, `reportCoverageMode` (`null` where unrecorded) and a `statement`: a matching
+`no-coverage` or `survived` verdict then proves nothing across coverage modes. Two recorded modes
+that differ never produce a document; compare refuses and exits 1 with both modes named.
 
 ### Traps (checked)
 

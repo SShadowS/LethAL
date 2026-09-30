@@ -405,9 +405,9 @@ lethal campaign compare --manifest docs/campaign/2026-08-03-do/campaign.json \
 
 | Verb | What it does | Exit |
 |------|--------------|------|
-| `freeze` | Archives the report and freezes its per-mutant verdicts under `<recordsDir>/<stage>.*`. Cardinality is asserted **before** anything is written, because the baseline guard *records* a baseline when none exists; a truncated report freezing itself would then agree with itself forever | `0`, or throws |
+| `freeze` | Archives the report and freezes its per-mutant verdicts, and the coverage mode they were measured under, under `<recordsDir>/<stage>.*`. A report with no `coverageMode` is refused. Cardinality is asserted **before** anything is written, because the baseline guard *records* a baseline when none exists; a truncated report freezing itself would then agree with itself forever | `0`, or throws |
 | `anchors` | Runs the stage's pre-committed anchor gate over the report. **The exit code is the gate**, not the printed text | `0` all passed, `1` a failure |
-| `compare` | Diffs a report against the stage's committed per-mutant baseline, **writing nothing**. A missing baseline is refused rather than recorded, which is the whole difference from `freeze` | `0` identical, `1` differs |
+| `compare` | Diffs a report against the stage's committed per-mutant baseline, **writing nothing**. A missing baseline is refused rather than recorded, which is the whole difference from `freeze`. Refused when the stage and the report were measured under different coverage modes; a stage frozen before R355 records no mode, so its match is reported as "coverage mode UNVERIFIED", never a bare "identical". `--json` prints the result as JSON | `0` identical, `1` differs |
 
 `--stage <name>` names the committed files (`<stage>.precommit.md`, `<stage>.anchors.json`,
 `<stage>.baseline.json`); you pick the name. A pre-commitment that is untracked, ignored,
