@@ -227,7 +227,7 @@ describe("runAlRunnerCanary — infrastructure-failure safety", () => {
       result = await runAlRunnerCanary("al-runner", spawn, fsOps);
     } finally {
       console.warn = originalWarn;
-      await realRm(root, { recursive: true, force: true });
+      if (root !== "") await realRm(root, { recursive: true, force: true });
     }
     // The real, correctly-computed verdicts — NOT "inconclusive" — must survive a cleanup
     // failure: a naive `finally { await rm(...) }` that rethrows would otherwise discard this

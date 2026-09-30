@@ -72,14 +72,20 @@ afterEach(() => {
 afterAll(() => {
   judgeFile();
   const stray = lethalEntries();
-  rmSync(runDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  if (leaks.length > 0 || stray.length > 0) {
-    throw new Error(
-      [
-        "R358: test files left lethal-* entries in the temp folder. Remove what a test creates (in the test, an afterEach or the file's afterAll); if product code made it, fix the product.",
-        ...leaks,
-        ...(stray.length > 0 ? [`still present at the end of the run: ${stray.join(", ")}`] : []),
-      ].join("\n"),
-    );
+  // Built BEFORE the removal, and a failed removal is appended rather than thrown: a leaked file
+  // still held open (EBUSY on Windows) must not replace the list that names who leaked it.
+  const lines =
+    leaks.length > 0 || stray.length > 0
+      ? [
+          "R358: test files left lethal-* entries in the temp folder. Bun reports this under the LAST file that ran; the leaking files are named below. Remove what a test creates (in the test, an afterEach or the file's afterAll); if product code made it, fix the product.",
+          ...leaks,
+          ...(stray.length > 0 ? [`still present at the end of the run: ${stray.join(", ")}`] : []),
+        ]
+      : [];
+  try {
+    rmSync(runDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (err) {
+    lines.push(`could not remove ${runDir}: ${err instanceof Error ? err.message : String(err)}`);
   }
+  if (lines.length > 0) throw new Error(lines.join("\n"));
 });
