@@ -9,7 +9,7 @@ import {
   gapIdOf,
 } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
-import type { TestMethodRef } from "../src/backend";
+import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
@@ -85,6 +85,7 @@ function oneBatchRun(
   projectPath = "P",
 ): number {
   const runId = store.createRun({
+    coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     projectPath,
     backend: "bcdev",
@@ -173,6 +174,7 @@ describe("resolveVerifySource", () => {
   test("verify refuses an artifact that is not its run's highest batch", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -190,6 +192,7 @@ describe("resolveVerifySource", () => {
   test("an id from another batch of the same artifact's run is wrong-batch, even when that batch has the same code", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -261,6 +264,7 @@ describe("resolveVerifySource", () => {
     for (const over of [{ appPath: undefined }, { instrumentedDir: undefined }, {}]) {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "P",
         backend: "bcdev",
@@ -278,6 +282,7 @@ describe("resolveVerifySource", () => {
   test("source-predates-verify names all four reasons a run records no source hash", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -329,6 +334,7 @@ describe("resolveVerifySource", () => {
   test("a request mixing a wrong-batch id and a carried id refuses as wrong-batch and names both", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -387,6 +393,7 @@ describe("assertSourceUnchanged", () => {
       sourceSha256: await hashTargetSource(dir, SYMBOLS),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      coverageMode: "procedure",
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
     return { dir, source };
@@ -517,6 +524,7 @@ describe("planVerify", () => {
       sourceSha256: "5".repeat(64),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      coverageMode: "procedure",
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
   }
@@ -991,6 +999,7 @@ function installedRun(
   const appBytes = new TextEncoder().encode(`app-${artifactId}`);
   writeFileSync(join(dir, "x.app"), appBytes);
   const runId = store.createRun({
+    coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     projectPath,
     backend: "bcdev",
@@ -1283,6 +1292,10 @@ describe("C02-09: gap ids", () => {
       readonly baseline?: readonly TestMethodRef[];
       readonly coveringTests?: readonly string[];
       readonly runNamed?: VerifyDeps["runNamed"];
+      /** R354: the coverage mode verify's backend reports (default `procedure`). */
+      readonly backendCoverage?: CoverageMode;
+      /** R354: the source run's recorded mode, written by SQL (`null` for a pre-R354 row). */
+      readonly sourceCoverage?: CoverageMode | null;
     } = {},
   ) {
     const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-proj-"));
@@ -1317,6 +1330,9 @@ describe("C02-09: gap ids", () => {
     for (const ref of over.baseline ?? [{ codeunitId: 50100, codeunitName: "T", method: "M" }]) {
       store.recordTestResult(runId, null, null, ref, "pass", 1);
     }
+    if (over.sourceCoverage !== undefined) {
+      store.db.run("UPDATE runs SET coverage_mode = ? WHERE id = ?", [over.sourceCoverage, runId]);
+    }
     const boom = (): never => {
       throw new Error("verify.test.ts gap fixture: not used on this path");
     };
@@ -1324,7 +1340,12 @@ describe("C02-09: gap ids", () => {
     const deps: VerifyDeps = {
       store,
       backend: {
-        capabilities: boom,
+        capabilities: () => ({
+          coverage: over.backendCoverage ?? "procedure",
+          deploy: "publish",
+          isolation: "session",
+          authoritative: true,
+        }),
         status: async () => boom(),
         deploy: async () => boom(),
         compileCheck: async () => boom(),
@@ -1443,6 +1464,62 @@ describe("C02-09: gap ids", () => {
       ["0/M0002", GA, "survived"],
     ]);
     w.store.close();
+  });
+
+  // R354: verify runs the source run's covering tests on its survived and no-coverage verdicts,
+  // all attributed under the source's coverage mode, so a mode difference REFUSES, by name.
+  describe("R354: verify refuses a source run measured under another coverage mode", () => {
+    const neverRun: VerifyDeps["runNamed"] = async () => {
+      throw new Error("runNamed must not be called when verify refuses");
+    };
+    for (const [from, to] of [
+      ["none", "procedure"],
+      ["procedure", "none"],
+      ["fenced", "procedure"],
+    ] as const) {
+      test(`source ${from}, verify ${to}: refused as coverage-mode-changed`, async () => {
+        const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+          sourceCoverage: from,
+          backendCoverage: to,
+          runNamed: neverRun,
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.refused?.reason).toBe("coverage-mode-changed");
+        expect(out.refused?.detail).toContain(`coverage mode ${from}`);
+        expect(out.refused?.detail).toContain(`verify measures under coverage mode ${to}`);
+        expect(out.refused?.detail).toContain("R354");
+        expect(out.exitCode).toBe(VERIFY_EXIT.refused);
+        expect(out.results).toEqual([]);
+        // Nothing recorded: no verify run row was created.
+        expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
+        w.store.close();
+      });
+    }
+
+    test("a source run from before R354 (no recorded mode) is refused as unrecorded", async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        sourceCoverage: null,
+        runNamed: neverRun,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused?.reason).toBe("coverage-mode-changed");
+      expect(out.refused?.detail).toContain("an unrecorded coverage mode (the run predates R354)");
+      w.store.close();
+    });
+
+    test("control: the same mode measures, and the verify run records its own mode", async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        sourceCoverage: "fenced",
+        backendCoverage: "fenced",
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      expect(out.results.map((r) => r.verdict)).toEqual(["survived"]);
+      expect(
+        w.store.db.query("SELECT coverage_mode FROM runs WHERE backend = 'lethal-verify'").all(),
+      ).toEqual([{ coverage_mode: "fenced" }]);
+      w.store.close();
+    });
   });
 
   test("a gap of reader-marked survivors reads exactly like naming them one by one", async () => {

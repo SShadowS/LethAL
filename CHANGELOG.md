@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Runs now record their coverage mode** (R354): an unfinished run from before this build is
+  refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
+  nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
+  unrecorded coverage mode.
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each

@@ -9,6 +9,7 @@ import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
 import {
   ADMISSIBLE_INTERPRETATIONS,
   ARTIFACT_ID_ABSENCES,
+  EXPLAIN_ATTRIBUTION_INTERPRETATIONS,
   EXPLAIN_CONTRACT,
   EXPLAIN_SCHEMA_VERSION,
   MalformedReportError,
@@ -23,6 +24,7 @@ import type { ArtifactIdAbsence } from "../src/explain";
 import type { Interpretation } from "../src/interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
+  COVERAGE_NOT_MEASURED_INTERPRETATION,
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   MARK_KEYS_STALE_INTERPRETATION,
@@ -715,6 +717,7 @@ describe("explain — the admissibility rule, made executable", () => {
       ...Object.values(GUARD_EVIDENCE_INTERPRETATIONS),
       ...Object.values(REACH_INTERPRETATIONS),
       ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
+      COVERAGE_NOT_MEASURED_INTERPRETATION,
       QUARANTINE_INTERPRETATION,
       STRANDED_SKIP_INTERPRETATION,
       MARK_KEYS_STALE_INTERPRETATION,
@@ -2271,7 +2274,7 @@ describe("explain — the real campaign reports", () => {
     expect(proven.length).toBe(19);
     // And the 88 carry the entailed negative that stops a reader writing 88 pointless tests.
     for (const s of unproven) {
-      expect(s.interpretation).toBe(ATTRIBUTION_INTERPRETATIONS[s.attribution]);
+      expect(s.interpretation).toBe(EXPLAIN_ATTRIBUTION_INTERPRETATIONS[s.attribution]);
       expect(s.interpretation.entailedNegative).toBeDefined();
     }
   });

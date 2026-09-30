@@ -58,6 +58,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     await Bun.write(appPath, appBytes);
     store = new ResultsStore(":memory:");
     runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -97,6 +98,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const other = { ...MANIFEST, artifactId: "f".repeat(32) };
     await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(other));
     const runB = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -147,6 +149,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       reason: "no-record",
     });
     const runB = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -169,6 +172,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const bad = { ...MANIFEST, artifactId: ARTIFACT_ID.toUpperCase() };
     await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(bad));
     const runB = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",

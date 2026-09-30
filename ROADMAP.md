@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 349 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 351 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -88,7 +88,7 @@ that ordering is the priority.
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
-- **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · open, filed 2026-09-18, MECHANISM SHARPENED the same day: the budget is marginal on its own…
+- **R226** · Three `lethal doctor` tests spawn real probes on a 5 s budget and fail the unit suite when the machine is busy, so `bun test` is not safe to run beside a live gate · [R226.md](docs/roadmap/R226.md) · done (7e27b0b, a3d961f): the cause was a walk of the real al-runner cache, not a real probe; R264 removed it…
 - **R228** · `--exclude` never reaches the resume fingerprint, so `--resume` can carry verdicts across a change of exclusions · [R228.md](docs/roadmap/R228.md) · done (this commit) — `SessionFingerprintInput.exclude`, a conditional key; digests of runs with no exclusions…
 - **R229** · A reader mark on a TRIGGER mutant never matches: the report joins marks on `procedureName ?? triggerName`, and a trigger's `procedureName` is `""` · [R229.md](docs/roadmap/R229.md) · done (f352d68c)
 - **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · done (d00ce37f)
@@ -141,6 +141,8 @@ that ordering is the priority.
 - **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
 - **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · done (33364019..b6ddf1b6)
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · open, filed 2026-09-30
+- **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
+- **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · open, filed 2026-09-30
 
 ## Product gaps a real project hits
 
@@ -205,7 +207,7 @@ that ordering is the priority.
 - **R227** · `--only` selects whole files, so a pull-request run spends most of its time re-measuring lines the PR never changed · [R227.md](docs/roadmap/R227.md) · done (this commit) — `--lines <file>:<start>-<end>` and `--changed-since <ref>`, GitHub issue #19
 - **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · open
 - **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · open
-- **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · open
+- **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · done (a7bd0c55)
 - **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · open
 - **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · open

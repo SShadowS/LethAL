@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MutantManifestEntry } from "@lethal/schemata";
+import type { CoverageMode } from "./backend";
 import type { LineRange } from "./line-filter";
 import { type CoverageAttribution, identityKeyOf, serializeKey } from "./selection";
 import type { MutantVerdict, MutantVerdictRow, RunnerKind } from "./store";
@@ -326,6 +327,14 @@ export interface SessionFingerprintInput {
    * and this one exists so an old store CANNOT be resumed, since its keys may name other mutants.
    */
   readonly identityScheme: number;
+  /**
+   * R354: the coverage mode (`caps.coverage`). With coverage off an unreached mutant scores
+   * `survived`; with it on, `no-coverage`, and each attribution rule decides which tests run. So a
+   * verdict is not carried across a mode change. Conditional like R127's keys so the function keeps
+   * every older digest for an input without it, but `runSession` ALWAYS passes it, so no digest a
+   * session computes now can equal one recorded before R354.
+   */
+  readonly coverageMode?: CoverageMode;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -363,6 +372,8 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
       : {}),
     skipKnownSurvivors: input.skipKnownSurvivors,
     identityScheme: input.identityScheme,
+    // R354: conditional, see `SessionFingerprintInput.coverageMode`.
+    ...(input.coverageMode !== undefined ? { coverageMode: input.coverageMode } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,
