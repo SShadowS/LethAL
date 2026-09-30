@@ -232,3 +232,39 @@ describe("prepareBatchProject — .al basename collisions are loud", () => {
     });
   });
 });
+
+describe("prepareBatchProject — the run's own outputs are not copied (R363)", () => {
+  it("skips a custom --db and its sidecars, --out and --progress-out, and still copies a needed JSON resource", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      await write(projectDir, "app.json", JSON.stringify(manifest));
+      await write(projectDir, "src/Thing.Codeunit.al", "codeunit 1 T { }");
+      await write(projectDir, "results.db", "SQLITE");
+      await write(projectDir, "results.db-wal", "WAL");
+      await write(projectDir, "results.db-shm", "SHM");
+      await write(projectDir, "out/report.json", "{}");
+      await write(projectDir, "events.ndjson", "{}\n");
+      await write(projectDir, "addin/config.json", '{"needed":true}');
+      // An old report this run did not name is copied like any resource: nothing is guessed from
+      // a file extension.
+      await write(projectDir, "old-report.json", "{}");
+
+      const db = join(projectDir, "results.db");
+      await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0", undefined, [
+        db,
+        `${db}-wal`,
+        `${db}-shm`,
+        `${db}-journal`,
+        join(projectDir, "out/report.json"),
+        join(projectDir, "events.ndjson"),
+      ]);
+
+      expect(await exists(join(batchDir, "results.db"))).toBe(false);
+      expect(await exists(join(batchDir, "results.db-wal"))).toBe(false);
+      expect(await exists(join(batchDir, "results.db-shm"))).toBe(false);
+      expect(await exists(join(batchDir, "out/report.json"))).toBe(false);
+      expect(await exists(join(batchDir, "events.ndjson"))).toBe(false);
+      expect(await readFile(join(batchDir, "addin/config.json"), "utf8")).toBe('{"needed":true}');
+      expect(await exists(join(batchDir, "old-report.json"))).toBe(true);
+    });
+  });
+});

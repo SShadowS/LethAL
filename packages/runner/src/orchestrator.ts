@@ -1,6 +1,6 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
@@ -939,6 +939,12 @@ export interface SessionConfig {
   readonly projectDir: string; // target AL project (source of truth)
   readonly testDir: string;
   readonly instrumentedDir: string; // scratch output dir for schemata writes
+  /**
+   * R363: the run's own output files (the results database with its `-wal`, `-shm` and `-journal`
+   * sidecars, `--out`, `--progress-out`), which `prepareBatchProject` must not copy into a batch
+   * dir when they sit inside the project. Absent means none.
+   */
+  readonly excludeOutputs?: readonly string[];
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
@@ -1411,6 +1417,8 @@ async function prepareArtifactDir(args: {
   readonly artifactId: string;
   /** C02-06: the generation snapshot to copy the uninstrumented files from; see `prepareBatchProject`. */
   readonly source: ReadonlyMap<string, Buffer> | undefined;
+  /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
+  readonly excludeOutputs: readonly string[];
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -1429,6 +1437,7 @@ async function prepareArtifactDir(args: {
     args.projectManifest,
     args.appVersion,
     args.source,
+    args.excludeOutputs,
   );
 }
 
@@ -1474,6 +1483,7 @@ async function bisectAndNote(args: {
   readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
+  readonly excludeOutputs: readonly string[];
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -1488,6 +1498,7 @@ async function bisectAndNote(args: {
           appVersion: args.appVersion,
           artifactId: args.artifactId,
           source: args.source,
+          excludeOutputs: args.excludeOutputs,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -4607,6 +4618,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         appVersion,
         artifactId,
         source: sourceSnapshot,
+        excludeOutputs: cfg.excludeOutputs ?? [],
       });
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -4871,6 +4883,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           compileCheck: (dir) => cfg.backend.compileCheck(dir),
           originalErr: deployErr,
           source: sourceSnapshot,
+          excludeOutputs: cfg.excludeOutputs ?? [],
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -5344,6 +5357,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
                 source: sourceSnapshot,
+                excludeOutputs: cfg.excludeOutputs ?? [],
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -7398,8 +7412,13 @@ export async function prepareBatchProject(
   projectManifest: Readonly<Record<string, unknown>>,
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
+  excludeOutputs: readonly string[] = [],
 ): Promise<void> {
   await writeStampedAppJson(batchDir, projectManifest, appVersion);
+  // R363: the run's own output files (the results database and its sidecars, `--out`,
+  // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
+  // is copied like any resource, and nothing is guessed from an extension.
+  const excluded = new Set(excludeOutputs.map(outputPathKey));
 
   const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
 
@@ -7470,6 +7489,7 @@ export async function prepareBatchProject(
     if (lower.endsWith(".al") || lower.endsWith(".app")) continue;
     if (basename(lower) === "app.json") continue;
     if (isToolResourcePath(rel)) continue;
+    if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
@@ -7505,6 +7525,12 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+}
+
+/** R363: one comparable form of a path. Windows paths compare case-insensitively. */
+function outputPathKey(p: string): string {
+  const r = resolve(p);
+  return process.platform === "win32" ? r.toLowerCase() : r;
 }
 
 /**

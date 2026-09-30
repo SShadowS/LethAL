@@ -821,6 +821,45 @@ describe("runFromCli (Task 7 review wiring)", () => {
   });
 });
 
+describe("runFromCli hands the run's own output paths to the session (R363)", () => {
+  it("names the resolved --db with its sidecars, --out and --progress-out", async () => {
+    const configPath = await writeTempConfig();
+    const dir = scratch("lethal-r363-");
+    const parsed: RunCliConfig = {
+      ...RUN_CONFIG_BCDEV,
+      backendKind: "al-runner",
+      configPath,
+      dbPath: join(dir, "results.db"),
+      outPath: join(dir, "report.json"),
+      progressOutPath: join(dir, "events.ndjson"),
+    };
+    let seen: readonly string[] | undefined;
+    await runFromCli(parsed, {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () =>
+        new AlRunnerBackend({
+          alRunnerPath: "unused",
+          instrumentedDir: "unused",
+          testDir: "unused",
+          selectorObjectId: 1,
+        }),
+      runSession: async (cfg) => {
+        seen = cfg.excludeOutputs;
+        return FAKE_REPORT;
+      },
+    });
+    const db = join(dir, "results.db");
+    expect(seen).toEqual([
+      db,
+      `${db}-wal`,
+      `${db}-shm`,
+      `${db}-journal`,
+      join(dir, "report.json"),
+      join(dir, "events.ndjson"),
+    ]);
+  });
+});
+
 // ————————————————————————————————————————————————————————————————————————
 // Task 7 review, Important 3 — `buildBackend` must refuse to silently fall back to
 // `ContainerDeployer`/altool for a bcdev config that has an `envTool` section configured but was

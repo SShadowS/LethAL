@@ -3401,6 +3401,22 @@ async function removeScratchQuietly(dir: string): Promise<void> {
   }
 }
 
+/**
+ * R363: the files this run writes that can sit inside the project, so `prepareBatchProject` never
+ * copies them into a batch dir: the results database and its SQLite sidecars, `--out`, and
+ * `--progress-out`.
+ */
+export function runOutputPaths(parsed: RunCliConfig): readonly string[] {
+  return [
+    parsed.dbPath,
+    `${parsed.dbPath}-wal`,
+    `${parsed.dbPath}-shm`,
+    `${parsed.dbPath}-journal`,
+    ...(parsed.outPath !== undefined ? [parsed.outPath] : []),
+    ...(parsed.progressOutPath !== undefined ? [parsed.progressOutPath] : []),
+  ];
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -3617,6 +3633,7 @@ export async function runFromCli(
         projectDir: parsed.projectDir,
         testDir: parsed.testDir,
         instrumentedDir: join(scratchRoot, "instrumented"),
+        excludeOutputs: runOutputPaths(parsed),
         selectorIds,
         skipKnownSurvivors: parsed.skipKnownSurvivors,
         workers: parsed.workers,
