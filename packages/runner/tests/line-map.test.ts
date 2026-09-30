@@ -5,7 +5,14 @@ import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { LineMap, buildLineMap, fileLineMapEntries, lineMapFromSources } from "../src/line-map";
+import {
+  LineMap,
+  buildLineMap,
+  fileLineMapEntries,
+  lineMapFromSources,
+  readRenamedMemberNames,
+  renamedMemberNamesOf,
+} from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 /**
@@ -621,12 +628,181 @@ describe("R301: a split-header procedure has a coverage span", () => {
     for (const line of [3, 7, 9]) expect(m.lookup("Codeunit", 50100, line)).toBe("First");
   });
 
-  test("an arm that renames the procedure names neither arm", () => {
+  test("an arm that renames the procedure is named by its first coverage name, in every build (R318)", () => {
+    // Before R318 these lines named nobody. `AIf` is the first name no other declaration of the
+    // object uses, which the manifest lists first in `coverageArmNames`; a line belongs to the
+    // member whichever arm is compiled, so the other arm's name is never returned.
     const m = mapFor(R301_SPLIT("AIf", "AElse"));
-    for (const line of [19, 20]) {
-      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AIf");
-      expect(m.lookup("Codeunit", 50100, line)).not.toBe("AElse");
-      expect(m.lookup("Codeunit", 50100, line)).toBeUndefined();
+    for (const line of [19, 20]) expect(m.lookup("Codeunit", 50100, line)).toBe("AIf");
+  });
+
+  test("buildLineMap reads the renamed members' names from the manifest beside the sources (R318, review I1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-manifest-"));
+    try {
+      expect((await readRenamedMemberNames(dir)).size).toBe(0); // no manifest: a hand-built dir
+      await writeFile(join(dir, "mutant-manifest.json"), "{ not json");
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(
+        /mutant-manifest\.json is not valid JSON/,
+      );
+      await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ artifactId: "x" }));
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(/no "mutants" array/);
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [{ objectType: "codeunit", coverageArmNames: ["AElse"] }] }),
+      );
+      await expect(readRenamedMemberNames(dir)).rejects.toThrow(/no objectType\/codeunitId/);
+      const entry = { objectType: "codeunit", codeunitId: 50100, coverageArmNames: ["AElse"] };
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [entry, entry] }),
+      );
+      expect([...(await readRenamedMemberNames(dir))]).toEqual([["codeunit:50100", [["AElse"]]]]);
+      // The manifest's first name wins over the tree's own (`AIf`): the manifest is the ORIGINAL.
+      await writeFile(join(dir, "R.Codeunit.al"), R301_SPLIT("AIf", "AElse"));
+      const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect(m.lookup("Codeunit", 50100, 19)).toBe("AElse");
+      // Two manifest lists that both claim this member (not a manifest the writer produces): no
+      // name, never a pick between them.
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({ mutants: [entry, { ...entry, coverageArmNames: ["AIf"] }] }),
+      );
+      const both = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect(both.lookup("Codeunit", 50100, 19)).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a manifest list names only the member whose own arms carry its first name (R318, re-review N1)", async () => {
+    // r4's shape: `Alpha`/`Beta` (lines 3-13, body 10-12) and `Beta`/`Gamma` (lines 15-25, body
+    // 22-24). The manifest lists only the first member (the second has no mutant). `Bad` makes the
+    // object parse with ERROR, so the tree fallback names nothing and the second member must stay
+    // unnamed rather than take its neighbour's list.
+    const r4 = (tail: string): string => `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Alpha(X: Integer): Integer
+#else
+    procedure Beta(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+#if R318A
+    procedure Beta(X: Integer): Integer
+#else
+    procedure Gamma(X: Integer): Integer
+#endif
+    var
+        L: Integer;
+    begin
+        L := X + 2;
+        exit(L);
+    end;
+${tail}}
+`;
+    const entry = (names: string[]) => ({
+      objectType: "codeunit",
+      codeunitId: 50100,
+      coverageArmNames: names,
+    });
+    const namesAt = async (src: string, mutants: object[]): Promise<(string | undefined)[]> => {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r318-n1-"));
+      try {
+        await writeFile(join(dir, "R.Codeunit.al"), src);
+        await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ mutants }));
+        const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+        return [10, 11, 12, 22, 23, 24].map((n) => m.lookup("Codeunit", 50100, n));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    };
+    const broken = r4("\n    procedure Bad()\n    begin\n        X := ;\n    end;\n");
+    expect(wrapRoot(parseAL(broken)).hasError).toBe(true);
+    const u = undefined;
+    // One member listed, object broken: the other member names nobody.
+    expect(await namesAt(broken, [entry(["Alpha"])])).toEqual(["Alpha", "Alpha", "Alpha", u, u, u]);
+    expect(await namesAt(broken, [entry(["Gamma"])])).toEqual([u, u, u, "Gamma", "Gamma", "Gamma"]);
+    // Both listed: each member its own.
+    expect(await namesAt(broken, [entry(["Alpha"]), entry(["Gamma"])])).toEqual([
+      "Alpha",
+      "Alpha",
+      "Alpha",
+      "Gamma",
+      "Gamma",
+      "Gamma",
+    ]);
+    // One member listed, object clean: the other gets its own name from the tree, not the list's.
+    expect(await namesAt(r4(""), [entry(["Alpha"])])).toEqual([
+      "Alpha",
+      "Alpha",
+      "Alpha",
+      "Gamma",
+      "Gamma",
+      "Gamma",
+    ]);
+  });
+
+  test("two members whose name lists join to the same string keep their own lists (R318, review 001 I1)", async () => {
+    // A quoted AL name may contain "|" (measured with alc 18.0.41.45789: both builds of this shape
+    // compile, exit 0, no diagnostic). `Pick|Choose`/`Third` and `Pick`/`Choose|Third` join with
+    // "|" to the same string, so a key built that way dropped the second list. `Bad` makes the
+    // object parse with ERROR, so the tree fallback names nothing and only the manifest can.
+    const src = `codeunit 50100 "Repro P"
+{
+#if R318A
+    procedure "Pick|Choose"(X: Integer): Integer
+#else
+    procedure Third(X: Integer): Integer
+#endif
+    begin
+        exit(X + 1);
+    end;
+
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure "Choose|Third"(X: Integer): Integer
+#endif
+    begin
+        exit(X + 2);
+    end;
+
+    procedure Bad()
+    begin
+        X := ;
+    end;
+}
+`;
+    expect(wrapRoot(parseAL(src)).hasError).toBe(true);
+    const entry = (names: string[]) => ({
+      objectType: "codeunit",
+      codeunitId: 50100,
+      coverageArmNames: names,
+    });
+    const mutants = [entry(["Pick|Choose", "Third"]), entry(["Pick", "Choose|Third"])];
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r318-pipe-"));
+    try {
+      await writeFile(join(dir, "R.Codeunit.al"), src);
+      await writeFile(join(dir, "mutant-manifest.json"), JSON.stringify({ mutants }));
+      const m = await buildLineMap(dir, new Set(["codeunit:50100"]));
+      expect([9, 18].map((n) => m.lookup("Codeunit", 50100, n))).toEqual(["Pick|Choose", "Pick"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    expect([...renamedMemberNamesOf(mutants)]).toEqual([
+      [
+        "codeunit:50100",
+        [
+          ["Pick|Choose", "Third"],
+          ["Pick", "Choose|Third"],
+        ],
+      ],
+    ]);
   });
 });

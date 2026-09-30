@@ -10,6 +10,7 @@ import {
   isProcedureLike,
   maskAlNonCode,
   procedureLikeNameNode,
+  renamedMemberCoverageNames,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
 import { buildComponents } from "./components";
@@ -100,9 +101,12 @@ export function identityTupleOf(
  * Bump it with any engine or operator change that can move an existing mutant's key for unchanged
  * AL source. `1` is every key made before this constant existed; anything recorded without a
  * scheme is read as `1`. 3: R323, a named return value became a declaration (measured moves in
- * the R-323 plan).
+ * the R-323 plan). 4: R318, a renamed split member's coverage is attributed by position and a
+ * line two members share names nobody, which changes the verdict an unchanged key can carry
+ * (history, `--resume`, `--resume-run`, equivalence marks). No key tuple moves; the bump is for
+ * changed attribution of unchanged keys.
  */
-export const IDENTITY_SCHEME = 3;
+export const IDENTITY_SCHEME = 4;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -185,6 +189,17 @@ export interface MutantManifestEntry {
    * Output, where 77 mutants in never-executed procedures were scored `survived`.
    */
   readonly procedureScope?: "local" | "public";
+  /**
+   * R318: the names coverage may attribute this mutant under, set ONLY when its member is a
+   * split-header procedure whose `#if` arms RENAME it (`procedureName` is then `""`): each arm's
+   * name once, minus any name another declaration of the same object uses
+   * (`renamedMemberCoverageNames`, engine). One arm is compiled per build and coverage names that
+   * build's member, so a row under one of these names is this member's row in whichever build ran.
+   * The line map spans the member under the FIRST name. `procedureName` stays `""` on purpose, so
+   * identity key tuples do not move. Absent everywhere else and on manifests written before R318, which
+   * read as before: no member hit, so a public renamed member is `no-coverage`.
+   */
+  readonly coverageArmNames?: readonly string[];
   readonly triggerName?: string;
   /**
    * C02-01: the 1-based first and last line of the member enclosing this mutant: its `procedure`,
@@ -495,6 +510,24 @@ function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
   return current;
 }
 
+/**
+ * R318: see `MutantManifestEntry.coverageArmNames`. `[]` outside a renamed split member. `cache`
+ * holds one answer per member (keyed by the member's start offset), `[]` answers included, for the
+ * length of ONE file's write: `renamedMemberCoverageNames` walks the whole object, and a member can
+ * carry dozens of mutants. `coverageArmNamesComputed` counts the computations, so a test can pin it.
+ */
+export const coverageArmNamesComputed = { count: 0 };
+function coverageArmNamesOf(spec: MutationSpec, cache: Map<number, string[]>): string[] {
+  const proc = enclosingProcedureLike(spec.before);
+  if (proc === null) return [];
+  const hit = cache.get(proc.startIndex);
+  if (hit !== undefined) return hit;
+  coverageArmNamesComputed.count++;
+  const names = renamedMemberCoverageNames(proc);
+  cache.set(proc.startIndex, names);
+  return names;
+}
+
 function procedureNameOf(spec: MutationSpec): string {
   const proc = enclosingProcedureLike(spec.before);
   if (proc === null) return "";
@@ -606,6 +639,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       string,
       { gapId: string; blockStartLine: number; blockEndLine: number }
     >();
+    const armNamesCache = new Map<number, string[]>();
     for (const { mutantId, spec } of ided) {
       const triggerName = triggerNameOf(spec);
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
@@ -613,6 +647,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
       const procedureScope = procedureScopeOf(spec, f.source);
+      const coverageArmNames = coverageArmNamesOf(spec, armNamesCache);
       const member = enclosingMemberOf(spec);
       const block = gapBlockOf(spec.before);
       const inFile = `${block.startIndex}\n${block.endIndex}`;
@@ -663,6 +698,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         originalText: clipMutationText(spec.before.text),
         mutatedText: clipMutationText(spec.after.text),
         ...(procedureScope !== undefined ? { procedureScope } : {}),
+        ...(coverageArmNames.length > 0 ? { coverageArmNames } : {}),
         ...(member !== null
           ? {
               procedureStartLine: lineOfIndex(starts, member.startIndex),

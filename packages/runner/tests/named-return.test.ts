@@ -549,7 +549,7 @@ function l5Of(report: Awaited<ReturnType<typeof runSession>>): ReportMutant {
   return l5;
 }
 
-describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same key text", () => {
+describe("R323: a scheme-2 record never reaches a current-scheme mutant with the same key text", () => {
   beforeAll(async () => {
     await initParser();
   });
@@ -557,8 +557,9 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
   /** A run made by this build, then relabelled to `scheme` with the fingerprint that scheme's
    *  build computes; `finished: false` clears its finish so it is resumable. */
   async function storedRun(opts: { scheme: number; finished: boolean }) {
-    // The tests below mean "2 to 3"; a later bump must revisit them, not silently re-aim them.
-    expect(IDENTITY_SCHEME).toBe(3);
+    // 3 was R323; R318 bumped the scheme without moving a key tuple, so the controls use the
+    // current scheme.
+    expect(IDENTITY_SCHEME).toBeGreaterThanOrEqual(3);
     const dirs = await makeN14Project();
     const store = new ResultsStore(":memory:");
     const first = await runSession({
@@ -613,8 +614,8 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
     expect(warnings[0]).toContain("identity scheme 2");
   });
 
-  test("history control: relabelled to scheme 3, the same record IS skipped (the key collides)", async () => {
-    const { report, warnings } = await historyRun(3);
+  test("history control: relabelled to the current scheme, the same record IS skipped (the key collides)", async () => {
+    const { report, warnings } = await historyRun(IDENTITY_SCHEME);
     expect(l5Of(report).verdict).toBe("known-survivor");
     expect(warnings).toEqual([]);
   });
@@ -624,12 +625,14 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
     await expect(
       runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, resume: runId }),
     ).rejects.toThrow(
-      new RegExp(`--resume-run ${runId} was keyed under identity scheme 2.*scheme 3.*R325`),
+      new RegExp(
+        `--resume-run ${runId} was keyed under identity scheme 2.*scheme ${IDENTITY_SCHEME}.*R325`,
+      ),
     );
   });
 
-  test("--resume-run control: relabelled to scheme 3, the same run resumes", async () => {
-    const { dirs, store, runId } = await storedRun({ scheme: 3, finished: false });
+  test("--resume-run control: relabelled to the current scheme, the same run resumes", async () => {
+    const { dirs, store, runId } = await storedRun({ scheme: IDENTITY_SCHEME, finished: false });
     const report = await runSession({
       backend: new SurvivingBackend(),
       store,
@@ -644,11 +647,13 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
     const { dirs, store, runId } = await storedRun({ scheme: 2, finished: false });
     await expect(
       runSession({ backend: new SurvivingBackend(), store, ...dirs, selectorIds, resume: "last" }),
-    ).rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme 2.*scheme 3.*R325`));
+    ).rejects.toThrow(
+      new RegExp(`run ${runId}, .*identity scheme 2.*scheme ${IDENTITY_SCHEME}.*R325`),
+    );
   });
 
-  test("--resume last control: relabelled to scheme 3, the same run resumes", async () => {
-    const { dirs, store } = await storedRun({ scheme: 3, finished: false });
+  test("--resume last control: relabelled to the current scheme, the same run resumes", async () => {
+    const { dirs, store } = await storedRun({ scheme: IDENTITY_SCHEME, finished: false });
     const report = await runSession({
       backend: new SurvivingBackend(),
       store,
@@ -660,7 +665,9 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
   });
 
   async function markedRun(identityScheme: number) {
-    expect(IDENTITY_SCHEME).toBe(3);
+    // 3 was R323; R318 bumped the scheme without moving a key tuple, so the controls use the
+    // current scheme.
+    expect(IDENTITY_SCHEME).toBeGreaterThanOrEqual(3);
     const dirs = await makeN14Project();
     return runSession({
       backend: new SurvivingBackend(),
@@ -678,8 +685,8 @@ describe("R323: a scheme-2 record never reaches a scheme-3 mutant with the same 
     expect(report.readerMarkedEquivalent?.stale).toEqual([N14_KEY]);
   });
 
-  test("marks control: the same mark at scheme 3 marks it", async () => {
-    const report = await markedRun(3);
+  test("marks control: the same mark at the current scheme marks it", async () => {
+    const report = await markedRun(IDENTITY_SCHEME);
     expect(l5Of(report).readerMark).toBeDefined();
     expect(report.readerMarkedEquivalent?.matched.map((m) => m.key)).toEqual([N14_KEY]);
   });

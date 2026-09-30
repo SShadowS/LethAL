@@ -270,12 +270,18 @@ export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean
  * A mutant whose source changed since the prior run has a different `astHash` and therefore a
  * different key, so it simply misses — a stale verdict can never attach to edited code. That is
  * the property that makes resume safe against a working tree that moved underneath it.
+ * One exception (R318): a `no-coverage` never carries onto a mutant with `coverageArmNames`.
  */
 export function carriedVerdictFor(
   index: ResumeIndex,
   m: MutantManifestEntry,
 ): CarriedVerdict | undefined {
-  return index.carryable.get(serializeKey(identityKeyOf(m)));
+  const carried = index.carryable.get(serializeKey(identityKeyOf(m)));
+  // R318: a renamed split member's key did not move when R318 gave it coverage, so a
+  // `no-coverage` recorded before R318 (when nothing could attribute coverage to it) would carry.
+  // Re-scoring it costs one execution; carrying it keeps a verdict that was never a measurement.
+  if (carried?.verdict === "no-coverage" && m.coverageArmNames !== undefined) return undefined;
+  return carried;
 }
 
 /**

@@ -23,7 +23,13 @@ const MANIFEST = {
   artifactId: ARTIFACT_ID,
   mutants: [
     { mutantId: "M0001", file: "A.Codeunit.al" },
-    { mutantId: "M0002", file: "A.Codeunit.al" },
+    {
+      mutantId: "M0002",
+      file: "A.Codeunit.al",
+      objectType: "codeunit",
+      codeunitId: 79000,
+      coverageArmNames: ["Pick", "Choose"],
+    },
   ],
 };
 
@@ -203,6 +209,8 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appBytes: new Uint8Array(Buffer.from(appBytes)),
       appJsonText: APP_JSON,
       alSources: [{ path: join("src", "A.Codeunit.al"), text: AL_SOURCE }],
+      // R318: from the VERIFIED manifest, for the fenced line map `attach` builds.
+      renamedMemberNames: new Map([["codeunit:79000", [["Pick", "Choose"]]]]),
     });
   });
 

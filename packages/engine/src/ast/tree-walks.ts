@@ -185,6 +185,67 @@ export function procedureLikeNameNode(n: ALSyntaxNode): ALSyntaxNode | null {
   return names.every((x) => key(x) === key(first)) ? first : null;
 }
 
+/**
+ * R318: the names coverage may attribute a RENAMED split member under (one whose `#if` arms give it
+ * different names, so `procedureLikeNameNode` is `null`). Each arm's name once, quotes stripped,
+ * compared as AL compares names (case-insensitive), first spelling kept, in source order, MINUS any
+ * name another declaration of the same object uses: every arm of every other procedure-like
+ * (`allProcedureLikes`, so `#if`-wrapped and swallowed ones count) and every trigger.
+ *
+ * Why that is safe: one arm is compiled per build, so the member carries exactly one of its names,
+ * and coverage names the compiled member. A name no other declaration of the object carries, in any
+ * arm, can only be this member in any build, so a coverage row under it is this member's row. A
+ * shared name (an overload included, since name-keyed coverage cannot split overloads) is dropped.
+ * An object that did not parse gets `[]`: a declaration inside an ERROR node could carry the name.
+ * `[]` for anything that is not a renamed split member.
+ */
+export function renamedMemberCoverageNames(member: ALSyntaxNode): string[] {
+  if (member.kind === ALNodeKind.procedure || procedureLikeNameNode(member) !== null) return [];
+  let object: ALSyntaxNode | null = member;
+  while (object !== null && !(object.parent !== null && isObjectContainer(object.parent))) {
+    object = object.parent;
+  }
+  if (object === null || object.hasError) return [];
+  const key = (t: string): string => t.toLowerCase();
+  const taken = new Set<string>();
+  for (const p of allProcedureLikes(object)) {
+    if (p.startIndex === member.startIndex && p.endIndex === member.endIndex) continue;
+    for (const t of procedureLikeArmNames(p)) taken.add(key(t));
+  }
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (c.kind === ALNodeKind.trigger) {
+        const name = c.childForFieldName("name");
+        if (name !== null) taken.add(key(name.text.replace(/^"|"$/g, "")));
+      } else if (!isProcedureLike(c)) {
+        walk(c);
+      }
+    }
+  };
+  walk(object);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of procedureLikeArmNames(member)) {
+    const k = key(t);
+    if (k === "" || seen.has(k) || taken.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * R318: every name a procedure-like declares, one per arm for a split member (the `name` field of
+ * each arm; a named return value is `return_value`, not a name), quotes stripped, as written. One
+ * rule for `renamedMemberCoverageNames` and for the line map's re-key check (`LineMap.renamedMemberAt`),
+ * so the two cannot disagree about what a member's own names are.
+ */
+export function procedureLikeArmNames(member: ALSyntaxNode): string[] {
+  return member.children
+    .filter((c) => c.fieldName === "name")
+    .map((c) => c.text.replace(/^"|"$/g, ""));
+}
+
 /** R302: narrowest procedure-like ancestor (`isProcedureLike`), or `null` outside any. */
 export function findEnclosingProcedure(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;

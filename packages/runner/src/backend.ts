@@ -1,5 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
-import type { AlSource } from "./line-map";
+import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
 export interface TestMethodRef {
@@ -267,6 +267,8 @@ export interface BoundArtifact {
   readonly appJsonText: string;
   /** Every `.al` under `instrumentedDir` (`readAlSources`). */
   readonly alSources: readonly AlSource[];
+  /** R318: the verified manifest's renamed-member coverage names (`renamedMemberNamesOf`). */
+  readonly renamedMemberNames: RenamedMemberNames;
 }
 
 export interface ExecutionBackend {
