@@ -24,7 +24,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestMethodRef } from "./backend";
-import { testKeyOf } from "./selection";
+import { memberGroupNameOf, testKeyOf } from "./selection";
 
 /** The tie-break name: codeunit plus method, the same shape the report prints. */
 function nameOf(ref: TestMethodRef): string {
@@ -40,9 +40,13 @@ export function newKillLedger(): KillLedger {
   return { killsByProcedure: new Map() };
 }
 
-/** The scope a kill is remembered under: the object plus the procedure or trigger. */
+/**
+ * The scope a kill is remembered under: the object plus the member's group name (the procedure,
+ * the trigger, or since R351 a renamed split member's arm names), so two renamed members of one
+ * object keep separate ledgers.
+ */
 export function procedureScopeOf(m: MutantManifestEntry): string {
-  return `${m.codeunitName}|${m.procedureName || m.triggerName || ""}`;
+  return `${m.codeunitName}|${memberGroupNameOf(m)}`;
 }
 
 export function recordKill(ledger: KillLedger, m: MutantManifestEntry, ref: TestMethodRef): void {

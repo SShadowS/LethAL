@@ -221,6 +221,11 @@
             "type": "string",
             "description": "Present on a trigger mutant, whose procedureName is \"\"."
           },
+          "coverageArmNames": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "R351: verbatim from the report row, the arm names of a renamed split member (R318), whose procedureName is \"\". Absent on every other member."
+          },
           "procedureStartLine": {
             "type": "integer",
             "description": "Verbatim from the report row: the 1-based first line of the enclosing procedure or trigger. Absent when neither encloses the site, or on a report predating this field."
@@ -340,6 +345,11 @@
             "type": "string",
             "description": "Present on a trigger block, whose procedureName is \"\"."
           },
+          "coverageArmNames": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "R351: verbatim from the report row, the arm names of a renamed split member (R318), whose procedureName is \"\". Absent on every other member."
+          },
           "members": {
             "type": "array",
             "items": { "type": "string" },
@@ -396,6 +406,11 @@
           "triggerName": {
             "type": "string",
             "description": "Present on a trigger block, whose procedureName is \"\"."
+          },
+          "coverageArmNames": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "R351: verbatim from the report row, the arm names of a renamed split member (R318), whose procedureName is \"\". Absent on every other member."
           },
           "members": {
             "type": "array",

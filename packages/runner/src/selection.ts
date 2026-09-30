@@ -48,6 +48,21 @@ export function identityKeyOf(m: MutantManifestEntry): IdentityKey {
 }
 
 /**
+ * R351: the name a mutant's MEMBER is grouped and ordered under, never part of its identity. A
+ * renamed split member (R318) has `procedureName: ""`, so without this every such member of one
+ * object shares the empty name. Its `coverageArmNames` list, as JSON, stands in: JSON starts with
+ * `[` and holds `"`, which no AL identifier can, so it never equals a real procedure or trigger
+ * name. A member whose every arm name is taken has no list and stays in `""`.
+ */
+export function memberGroupNameOf(m: MutantManifestEntry): string {
+  return (
+    m.procedureName ||
+    m.triggerName ||
+    (m.coverageArmNames !== undefined ? JSON.stringify(m.coverageArmNames) : "")
+  );
+}
+
+/**
  * The five-part tuple is `identityTupleOf` (schemata), the ONE definition; the ordinal rides as a
  * sixth part only when non-zero, so a singleton's key is unchanged from before R193.
  */
