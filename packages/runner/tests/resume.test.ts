@@ -2144,13 +2144,34 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
   });
 
   // R252's shape `explain` refuses: a survivor with no attribution in a coverage-on report. A
-  // resume from a coverage-off run is where one would come from.
+  // resume from a coverage-off run is where one would come from: R192 records a batch whose every
+  // mutant carries with the PRIOR run's attribution, which coverage off never set. So batch 0 is
+  // scored in full under coverage off and batch 1 aborts, leaving a fully carryable batch.
   test("a resumed coverage-on report never carries an unattributed survivor", async () => {
-    const r = await recordedRun("none", { finished: false });
-    expect(r.first.mutants.filter((m) => m.verdict === "survived").length).toBeGreaterThan(0);
-    const attempt: SessionReport | Error = await session(r, "procedure", {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", undefined, 2, true, "none"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const offSurvivors = first.mutants.filter(
+      (m) => m.batchIndex === 0 && m.verdict === "survived",
+    );
+    expect(offSurvivors.length).toBeGreaterThan(0);
+    expect(offSurvivors.every((m) => m.coverageAttribution === undefined)).toBe(true);
+    const r = { dirs, store };
+    const onBackend = new CountingBackend("pass", undefined, undefined, true, "procedure");
+    const attempt: SessionReport | Error = await runSession({
+      backend: onBackend,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
       resume: "last",
-    }).run.then(
+    }).then(
       (report) => report,
       (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
     );
@@ -2160,7 +2181,7 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
         : attempt.mutants.filter(
             (m) => m.verdict === "survived" && m.coverageAttribution === undefined,
           );
-    expect(unattributed.map((m) => m.mutantCode)).toEqual([]);
+    expect(unattributed.map((m) => `${m.batchIndex}/${m.mutantCode}`)).toEqual([]);
     expect(attempt).toBeInstanceOf(Error);
     // Run fresh instead, as the refusal says: every survivor is attributed.
     const fresh = await session(r, "procedure").run;
