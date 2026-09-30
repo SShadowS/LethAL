@@ -6246,6 +6246,8 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /** R361: when set, `recoverOp` THROWS it (after logging the call). */
+  recoverError: Error | undefined;
   /** When set, every renew THROWS — a lost ack, which design §6 says is not lease loss. */
   renewError: Error | undefined;
   /**
@@ -6359,6 +6361,7 @@ class FakeLeaseClient implements LeaseApi {
     this.log.push("recoverOp");
     if (terminalProof !== true) throw new Error("recoverOp called without terminal proof");
     this.recoverArgs.push({ attemptId, opSeq });
+    if (this.recoverError !== undefined) throw this.recoverError;
     return this.recoverOutcome;
   }
 }
@@ -6938,6 +6941,77 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(run.afterDeploy()).toEqual([]);
     expect(run.published()).toEqual([]);
     expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain("EndPublish refused");
+  });
+
+  // R361: a RecoverOp that THROWS is unreconciled too: latch, record the recycle, and let the
+  // ORIGINAL error reach the caller.
+  function ownPublishLostAck(client: FakeLeaseClient) {
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileOpKind = "publish"; // our own marker, so RecoverOp is attempted
+  }
+
+  test("a throwing RecoverOp latches, records the recycle and rethrows the original error (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const boom = new Error("recoverOp exploded");
+    client.recoverError = boom;
+    const dir = freshTmpDir();
+    const { lease } = leaseCfg(client);
+    const outcome = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: dir,
+      afterLeaseAcquired: async () => {},
+      permissionCanary: async () => {
+        throw new Error("the canary must not run on a latched session");
+      },
+    }).catch((e) => e);
+    expect(outcome).toBe(boom);
+    expect(client.recoverArgs).toHaveLength(1);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("socket hang up");
+    expect(rec?.detail).toContain("recoverOp exploded");
+  });
+
+  test("a throwing RecoverOp leaves the session latched: nothing runs after the publish (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    client.recoverError = new Error("recoverOp exploded");
+    const run = await runLatchedTargetSession(client);
+    expect(run.outcome).toBeInstanceOf(Error);
+    expect(String(run.outcome?.message)).toContain("recoverOp exploded");
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+  });
+
+  test("a RecoverOp that succeeds is unchanged: no record, no latch (R361 control)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const run = await runLatchedTargetSession(client);
+    expect(client.recoverArgs).toHaveLength(1);
+    expect(run.published()).toEqual(["accepted"]);
+    expect(run.afterDeploy()).toContain("activate");
+  });
+
+  test("a failed recycle write keeps the RecoverOp error primary and preserves the write failure (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const boom = new Error("recoverOp exploded");
+    client.recoverError = boom;
+    // A regular FILE where the quarantine directory should be: mkdir fails on every record().
+    const blocker = join(freshTmpDir(), "blocker");
+    await Bun.write(blocker, "not a directory");
+    const { lease } = leaseCfg(client);
+    const outcome = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: blocker,
+      afterLeaseAcquired: async () => {},
+    }).catch((e) => e);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome.message).toContain("recoverOp exploded");
+    expect(outcome.message).toContain("recording the container recycle failed");
+    expect(outcome.errors[0]).toBe(boom);
+    expect(outcome.errors).toHaveLength(2);
   });
 
   test("a target publish whose lost EndPublish ack cannot be reconciled records no accepted publish and calls nothing after (R240)", async () => {

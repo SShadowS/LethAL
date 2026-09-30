@@ -2564,7 +2564,26 @@ class LeaseSession {
       status.opSeq === opSeq &&
       attemptId !== ""
     ) {
-      const recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
+      let recovered: Awaited<ReturnType<LeaseApi["recoverOp"]>>;
+      try {
+        recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
+      } catch (err) {
+        // R361: a throwing RecoverOp is as unreconciled as a throwing status read: latch and record
+        // the recycle, then let the ORIGINAL error reach the caller. `leaveStrandedPublish` latches
+        // before it writes, so a failed recycle write still leaves the session latched; that
+        // failure rides along in an AggregateError so neither error is lost.
+        try {
+          await this.leaveStrandedPublish(
+            `EndPublish for op ${opSeq} (attemptId ${attemptId}) was not acknowledged (${messageOf(cause)}) and the reconciling RecoverOp also failed (${messageOf(err)}) — marker left set`,
+          );
+        } catch (recycleErr) {
+          throw new AggregateError(
+            [err, recycleErr],
+            `${messageOf(err)} (and recording the container recycle failed: ${messageOf(recycleErr)})`,
+          );
+        }
+        throw err;
+      }
       if (recovered.recovered || recovered.alreadyCompleted === true) return;
     }
     await this.leaveStrandedPublish(
