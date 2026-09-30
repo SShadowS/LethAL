@@ -31,11 +31,12 @@ export function scratchDirs(): (prefix: string) => string {
 }
 
 /**
- * R358/R360: `lethal run` KEEPS its `<tmp>/lethal-XXXXXX` session folder on purpose, because
- * `lethal verify` reads the installed batch's files from it. A test file that drives `runFromCli`
- * calls this once at the top level; it removes those folders after the file's last test. The
- * temp folder is the test process's private one (scripts/test-preload.ts), so nothing another
- * process made can match.
+ * R358/R360: `lethal run` removes its `<tmp>/lethal-XXXXXX` session folder after a clean report,
+ * and KEEPS it on purpose when the run throws or is quarantined, since its files name the cause.
+ * A test file that drives `runFromCli` down such a path calls this once at the top level; it
+ * removes those folders after the file's last test. A file whose runs all succeed does not need
+ * it, and the R358 preload fails a file that leaves one behind. The temp folder is the test
+ * process's private one (scripts/test-preload.ts), so nothing another process made can match.
  */
 export function removeRunScratchAfterAll(): void {
   afterAll(() => {

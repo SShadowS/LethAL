@@ -247,10 +247,11 @@ export type RunManyResult =
     };
 
 /**
- * C02-04b: an installed artifact whose local .app and manifest matched the trusted store record
- * (`loadInstalledArtifact`). Identity comes from that record, never from the caller.
+ * C02-04b: an installed artifact whose stored .app and manifest matched the trusted store record
+ * (`loadInstalledArtifact`; R360: read from the store's bundle, checked against the payload
+ * digest). Identity comes from that record, never from the caller.
  *
- * The local copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
+ * The stored copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
  * (the bytes whose hash matched) and the sources below, never the files again, so a file changed
  * after the check cannot reach the index. `appPath` and `instrumentedDir` are for messages only.
  */

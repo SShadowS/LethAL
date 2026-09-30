@@ -1,6 +1,6 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import {
@@ -191,6 +191,8 @@ import {
   loadInstalledArtifact,
   resolveNamedMutants,
 } from "./named-mutants";
+
+import { InstalledBundleError, readBatchBundle } from "./installed-bundle";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
@@ -947,6 +949,12 @@ export interface SessionConfig {
   readonly projectDir: string; // target AL project (source of truth)
   readonly testDir: string;
   readonly instrumentedDir: string; // scratch output dir for schemata writes
+  /**
+   * R363: the run's own output files (the results database with its `-wal`, `-shm` and `-journal`
+   * sidecars, `--out`, `--progress-out`), which `prepareBatchProject` must not copy into a batch
+   * dir when they sit inside the project. Absent means none.
+   */
+  readonly excludeOutputs?: readonly string[];
   readonly selectorIds: SelectorConfig;
   readonly baselineTimeoutMs?: number; // default 120000
   readonly skipKnownSurvivors?: boolean;
@@ -1419,6 +1427,8 @@ async function prepareArtifactDir(args: {
   readonly artifactId: string;
   /** C02-06: the generation snapshot to copy the uninstrumented files from; see `prepareBatchProject`. */
   readonly source: ReadonlyMap<string, Buffer> | undefined;
+  /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
+  readonly excludeOutputs: readonly string[];
 }): Promise<void> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
@@ -1437,6 +1447,7 @@ async function prepareArtifactDir(args: {
     args.projectManifest,
     args.appVersion,
     args.source,
+    args.excludeOutputs,
   );
 }
 
@@ -1482,6 +1493,7 @@ async function bisectAndNote(args: {
   readonly compileCheck: (dir: string) => Promise<void>;
   readonly originalErr: unknown;
   readonly source: ReadonlyMap<string, Buffer> | undefined;
+  readonly excludeOutputs: readonly string[];
 }): Promise<string> {
   try {
     const outcome = await bisectFailingMutant(args.subsetMutants, async (subset) => {
@@ -1496,6 +1508,7 @@ async function bisectAndNote(args: {
           appVersion: args.appVersion,
           artifactId: args.artifactId,
           source: args.source,
+          excludeOutputs: args.excludeOutputs,
         });
       } catch (err) {
         // NOT a compile answer — abort the search rather than feeding it a
@@ -3210,6 +3223,12 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
+  // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
+  // run's installed .app or stored bundle: `resolveResume` reads its verdict rows,
+  // `replayCarriedBatch` records carried verdicts from them, and snapshot reuse
+  // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
+  // work left is rebuilt and republished. `lethal verify` keeps its refusal.
+
   const { index, dropped: refusedDropped } = withoutRefusedTests(
     buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
     refusedTests,
@@ -4342,6 +4361,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     coverageMode: caps.coverage,
+    // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
+    ...(resourceKey !== undefined ? { resourceKey } : {}),
     ...(testAppHash !== undefined ? { testAppHash } : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
     projectPath: cfg.projectDir,
@@ -4740,6 +4761,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         appVersion,
         artifactId,
         source: sourceSnapshot,
+        excludeOutputs: cfg.excludeOutputs ?? [],
       });
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
@@ -5014,6 +5036,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           compileCheck: (dir) => cfg.backend.compileCheck(dir),
           originalErr: deployErr,
           source: sourceSnapshot,
+          excludeOutputs: cfg.excludeOutputs ?? [],
         });
         for (const m of execute)
           record(cfg.store, runId, m, "error", outcomes, batchIdx, emit, undefined, note);
@@ -5025,7 +5048,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // (deploy: "none") have no artifact provenance to record; their run row keeps the
       // caller-supplied appVersion.
       if (compiled !== null) {
+        // R360 C1/I4: the batch's installed files, read ONCE, with their payload digest, written
+        // in the same transaction as the row. A read error or a size limit throws
+        // `InstalledBundleError` and the run fails before it reports success; its scratch folder
+        // is kept (`runFromCli`).
+        // ASSUMPTION (review r1 #1): the batch folder is LethAL's private scratch, written by
+        // `prepareArtifactDir` above and read by nothing but the backend's compile, so its `.al`
+        // text here is the text `deploy` compiled. The digest therefore reads it after deploy
+        // rather than holding a second in-memory copy through the publish. Anything that edits a
+        // batch folder between compile and this line breaks that, and the digest would then
+        // certify text that was not compiled.
+        const bundle = await readBatchBundle(batchDir, compiled.appPath, compiled.sha256);
         cfg.store.recordArtifact(runId, {
+          bundle,
           batchIndex: batchIdx,
           appVersion: compiled.appVersion,
           appId: compiled.appId,
@@ -5034,8 +5069,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           // C02-04b: the manifest the compiler was GIVEN, in the same insert as the .app hash.
           // This is the only moment both are in hand; loadInstalledArtifact trusts nothing else.
           manifestSha256: Bun.SHA256.hash(JSON.stringify(compiled.mutantManifest), "hex"),
-          // C02-06: where lethal verify finds the installed build's files. Not identity: verify
-          // re-hashes them against this row.
+          // C02-06: where step 3d found the build. Provenance only since R360: verify reads the
+          // stored bundle above, checked against its payload digest.
           appPath: compiled.appPath,
           instrumentedDir: batchDir,
         });
@@ -5487,6 +5522,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                 compileCheck: (dir) => compileLimit.run(() => backend.compileCheck(dir)),
                 originalErr: err,
                 source: sourceSnapshot,
+                excludeOutputs: cfg.excludeOutputs ?? [],
               });
               for (const m of shard) {
                 if (perMutantTests.get(m.mutantId) === undefined) continue; // already recorded no-coverage
@@ -5622,6 +5658,21 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // is written by `createRun`/`recordArtifact`, never by `finishRun` — so app-version reservation
   // (clock-derived via `reserveAppVersion`, Layer 5A) has no dependency on this run ever finishing.
   if (!safety.isUnsafe) {
+    // R360 I4: before this run can report success, and before `runFromCli` removes its scratch
+    // folder, the highest published batch, the one still installed, must have its bundle in the
+    // store. Exact lookup, never "the latest bundle", and existence only (review M-1). Checked
+    // only here: a quarantined run returns its quarantined report (review M-3), finishes nothing,
+    // and keeps its folder.
+    const highest = cfg.store.artifactsForRun(runId).at(-1);
+    if (highest !== undefined && !cfg.store.hasInstalledBundle(runId, highest.batchIndex)) {
+      const prunedBy = cfg.store.trustedArtifactRecord(runId, highest.batchIndex)?.bundlePrunedBy;
+      throw new InstalledBundleError(
+        "bundle-missing",
+        prunedBy !== undefined && prunedBy !== null
+          ? `run ${runId}'s highest batch ${highest.batchIndex} (artifact ${highest.artifactId}) was pruned by run ${prunedBy} before this run finished, so the server may hold another build; run lethal run again`
+          : `run ${runId} published batch ${highest.batchIndex} (artifact ${highest.artifactId}) but the store holds no installed bundle for it, so lethal verify could not read it once the scratch folder is removed`,
+      );
+    }
     cfg.store.finishRun(runId, {
       batchCount: artifacts.length,
       baselineGreen: baselineGreenOverall,
@@ -7621,8 +7672,13 @@ export async function prepareBatchProject(
   projectManifest: Readonly<Record<string, unknown>>,
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
+  excludeOutputs: readonly string[] = [],
 ): Promise<void> {
   await writeStampedAppJson(batchDir, projectManifest, appVersion);
+  // R363: the run's own output files (the results database and its sidecars, `--out`,
+  // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
+  // is copied like any resource, and nothing is guessed from an extension.
+  const excluded = new Set(excludeOutputs.map(outputPathKey));
 
   const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
 
@@ -7693,6 +7749,7 @@ export async function prepareBatchProject(
     if (lower.endsWith(".al") || lower.endsWith(".app")) continue;
     if (basename(lower) === "app.json") continue;
     if (isToolResourcePath(rel)) continue;
+    if (excluded.has(outputPathKey(join(projectDir, rel)))) continue;
     const dest = join(batchDir, rel);
     await mkdir(dirname(dest), { recursive: true });
     await copyFile(join(projectDir, rel), dest);
@@ -7728,6 +7785,12 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+}
+
+/** R363: one comparable form of a path. Windows paths compare case-insensitively. */
+function outputPathKey(p: string): string {
+  const r = resolve(p);
+  return process.platform === "win32" ? r.toLowerCase() : r;
 }
 
 /**

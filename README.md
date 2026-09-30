@@ -26,7 +26,8 @@ test runs that code at all. The share your tests killed is the **mutation score*
 
 **Your source tree is never modified.** LethAL copies your project into a scratch directory under
 the OS temp dir, changes the copy there, compiles that, and publishes it. There is nothing to
-revert. What *does* persist is on the server: the modified build stays published until you
+revert. A clean run removes that directory at the end; a run that fails or is quarantined keeps it
+and prints its path, since its files name the cause. What *does* persist is on the server: the modified build stays published until you
 republish your own app (see [Restoring your app after a run](#restoring-your-app-after-a-run)),
 which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never modifies or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed.
 

@@ -540,21 +540,23 @@ describe("startEnvToolSession", () => {
 
   it("never deletes a config-supplied env", async () => {
     const { session, calls } = await start();
-    await session.teardown({ keepEnv: false, quarantined: false });
+    expect(await session.teardown({ keepEnv: false, quarantined: false })).toBeUndefined();
     expect(calls.some((c) => c.includes("delete"))).toBe(false);
   });
 
   it("deletes a created env, unless --keep-env or a quarantine", async () => {
     const a = await start({}, { envId: undefined });
-    await a.session.teardown({ keepEnv: true, quarantined: false });
+    // R360 I-1: "deleted" only after a delete that succeeded; the caller then drops the stored
+    // bundles for this environment, which nothing can verify once it is gone.
+    expect(await a.session.teardown({ keepEnv: true, quarantined: false })).toBeUndefined();
     expect(a.calls.some((c) => c.includes("delete"))).toBe(false);
 
     const b = await start({}, { envId: undefined });
-    await b.session.teardown({ keepEnv: false, quarantined: true });
+    expect(await b.session.teardown({ keepEnv: false, quarantined: true })).toBeUndefined();
     expect(b.calls.some((c) => c.includes("delete"))).toBe(false);
 
     const c = await start({}, { envId: undefined });
-    await c.session.teardown({ keepEnv: false, quarantined: false });
+    expect(await c.session.teardown({ keepEnv: false, quarantined: false })).toBe("deleted");
     expect(c.calls.some((cc) => cc.includes("delete"))).toBe(true);
   });
 
@@ -670,7 +672,8 @@ describe("startEnvToolSession", () => {
       stateDir,
     });
     expect(await readdir(stateDir)).toHaveLength(1);
-    await session.teardown({ keepEnv: false, quarantined: false }); // must not reject
+    // must not reject, and a failed delete is not "deleted" (R360 I-1)
+    expect(await session.teardown({ keepEnv: false, quarantined: false })).toBeUndefined();
     // A failed delete means the environment may still exist — the crash-recovery record must
     // survive so an operator can find it later (item 4).
     expect(await readdir(stateDir)).toHaveLength(1);

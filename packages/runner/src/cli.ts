@@ -3262,6 +3262,9 @@ export async function withEnvTeardown(
   keepEnv: boolean,
   body: () => Promise<SessionReport>,
   quarantineDir: string = defaultQuarantineDir(),
+  /** R360 I-1: called with the environment's quarantine resource key after teardown DELETED it
+   *  (never when it was kept or quarantined, or the delete failed). Its failure only warns. */
+  onEnvDeleted?: (resourceKey: string) => void,
 ): Promise<SessionReport> {
   let report: SessionReport | undefined;
   try {
@@ -3269,12 +3272,17 @@ export async function withEnvTeardown(
     return report;
   } finally {
     if (envSession !== undefined) {
+      let outcome: "deleted" | undefined;
       try {
-        await envSession.teardown({
+        outcome = await envSession.teardown({
           keepEnv,
           quarantined:
             report?.quarantined !== undefined ||
-            (await tierHasQuarantineRecord(envSession, quarantineDir)),
+            (await tierHasQuarantineRecord(
+              { server: envSession.bcdev.server, serverInstance: envSession.bcdev.serverInstance },
+              quarantineDir,
+              "the environment is treated as quarantined and kept rather than risk deleting a tier a recycle record names",
+            )),
         });
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
@@ -3282,25 +3290,37 @@ export async function withEnvTeardown(
           `[lethal] env-tool teardown failed and could not complete automatically — the environment may still exist; check ~/.lethal/env-state for the crash-recovery record. Underlying error: ${detail}`,
         );
       }
+      if (outcome === "deleted" && onEnvDeleted !== undefined) {
+        const key = quarantineResourceKey({
+          server: envSession.bcdev.server,
+          serverInstance: envSession.bcdev.serverInstance,
+        });
+        try {
+          onEnvDeleted(key);
+        } catch (err) {
+          console.warn(
+            `[lethal] the environment was deleted, but its stored bundles (resource key ${key}) could not be dropped from the results database; they can never be verified and only take space: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
   }
 }
 
-/** R238: whether the session's tier has a quarantine record. Never throws: on any doubt it
- *  answers true and says why, because the caller deletes the environment on false. */
+/** R238: whether a tier has a quarantine record. Never throws: on any doubt it answers true and
+ *  says why (`onDoubt`), because the caller deletes something on false. R360 generalized it from an
+ *  env-tool session to any `{server, serverInstance}`, for the scratch folder as well. */
 async function tierHasQuarantineRecord(
-  envSession: EnvToolSession,
+  tier: { readonly server: string; readonly serverInstance: string },
   quarantineDir: string,
+  onDoubt: string,
 ): Promise<boolean> {
   try {
-    const key = quarantineResourceKey({
-      server: envSession.bcdev.server,
-      serverInstance: envSession.bcdev.serverInstance,
-    });
+    const key = quarantineResourceKey(tier);
     return (await new QuarantineStore(quarantineDir).read(key)) !== null;
   } catch (err) {
     console.warn(
-      `[lethal] could not read the quarantine store in ${quarantineDir}, so the environment is treated as quarantined and kept rather than risk deleting a tier a recycle record names: ${err instanceof Error ? err.message : String(err)}`,
+      `[lethal] could not read the quarantine store in ${quarantineDir}, so ${onDoubt}: ${err instanceof Error ? err.message : String(err)}`,
     );
     return true;
   }
@@ -3402,6 +3422,22 @@ async function removeScratchQuietly(dir: string): Promise<void> {
   }
 }
 
+/**
+ * R363: the files this run writes that can sit inside the project, so `prepareBatchProject` never
+ * copies them into a batch dir: the results database and its SQLite sidecars, `--out`, and
+ * `--progress-out`.
+ */
+export function runOutputPaths(parsed: RunCliConfig): readonly string[] {
+  return [
+    parsed.dbPath,
+    `${parsed.dbPath}-wal`,
+    `${parsed.dbPath}-shm`,
+    `${parsed.dbPath}-journal`,
+    ...(parsed.outPath !== undefined ? [parsed.outPath] : []),
+    ...(parsed.progressOutPath !== undefined ? [parsed.progressOutPath] : []),
+  ];
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -3427,6 +3463,9 @@ export async function runFromCli(
     /** GH-25: the spawn `--changed-since` runs git through, so a test can neutralise the
      *  machine's inherited git config (a global `*.al -diff` would make an edit look binary). */
     gitSpawn?: SpawnFn;
+    /** R360: the quarantine store the scratch-folder decision reads; production uses the default
+     *  `runSession` records into. */
+    quarantineDir?: string;
   } = {},
 ): Promise<SessionReport> {
   const configFile = await loadLethalConfigFile(parsed.configPath);
@@ -3455,287 +3494,335 @@ export async function runFromCli(
   const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
   await validateIds(parsed.projectDir, selectorIds);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
-  // Kept after the session on purpose (R358, R360): the store records each batch's `.app` and
-  // instrumented folder under it, and `lethal verify` reads them back (`loadInstalledArtifact`).
-  // R7/R8: captured here (outer scope) rather than discarded, so the `withEnvTeardown` closure
-  // below can attach it to the final `SessionReport` — see `withAlRunnerCanary`. Stays
-  // `undefined` for every bcdev session (this branch never runs) and for the al-runner
-  // no-`alRunnerPath` fallback path.
-  let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
-  if (parsed.backendKind === "al-runner") {
-    // R123: the contract first — if it has moved, nothing measured after it can be trusted,
-    // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
-    await announceAlRunnerContract(
-      configFile,
-      deps.runAlRunnerContractProbe ?? runAlRunnerContractProbe,
-    );
-    alRunnerCanaryResult = await announceAlRunnerCanary(
-      configFile,
-      deps.runAlRunnerCanary ?? runAlRunnerCanary,
-    );
-    // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
-    // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
-    // being silently ignored deserves at least the same treatment. Not refused outright (unlike
-    // those flags) because a config file is often shared across `--backend` choices and an
-    // operator switching backends for a one-off al-runner run shouldn't be blocked by it; but
-    // silence is exactly the failure mode this project refuses to ship.
-    if (configFile.envTool !== undefined) {
-      console.warn(
-        "[lethal] envTool is configured but IGNORED: --backend al-runner has no environment to " +
-          "resolve or provision — the entire `envTool` section in this config is silently unused " +
-          "on this path. Remove it, or run with --backend bcdev to have it take effect.",
-      );
-    }
-  }
-
-  // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
-  // and substitutes it into `effectiveConfig`, which every downstream seam below reads instead of
-  // the raw `configFile` — `buildBackend` (both the main backend and, in a future multi-worker
-  // bcdev world, any per-worker one), `resourceIdentityFor`, and `leaseSessionFor` all still call
-  // `validateBcDevConfig` independently, but against the SAME already-resolved section.
-  const resolveSession = deps.resolveEnvToolSession ?? resolveEnvToolSession;
-  const { effectiveConfig, envSession, deploy } = await resolveSession(
-    parsed,
-    configFile,
-    basename(scratchRoot),
-  );
-
-  // Minor 6 (Task 7 review): `--keep-env` with a bcdev backend but no `envTool` section configured
-  // is a silent no-op — there is no environment for it to act on. Not catchable at parse time
-  // (parsing has no config file loaded yet), so it's caught here, right after the config-dependent
-  // `envSession` is known. `--keep-env` + `--backend al-runner` is refused outright at parse time
-  // instead (see `parseCliConfig`), so by construction the only way to reach this with `keepEnv`
-  // true and `envSession` undefined is exactly this case.
-  if (parsed.keepEnv && envSession === undefined) {
+  // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
+  // since compile diagnostics name files in it; a killed process leaves it by design. After a
+  // report it is removed unless the run is quarantined, in the report or durably for its tier
+  // (R238's check), because then its files are the evidence. `lethal verify` reads nothing here:
+  // the installed files are in the store (step 3d).
+  let tier: ReturnType<typeof resourceIdentityFor> = {};
+  let report: SessionReport;
+  try {
+    report = await runInScratch();
+  } catch (err) {
     console.warn(
-      "[lethal] --keep-env has no effect: the bcdev config has no `envTool` section configured, " +
-        "so there is no environment for LethAL to keep",
+      `[lethal] kept scratch folder ${scratchRoot} (the run failed; its files name the cause)`,
     );
+    throw err;
   }
+  const quarantined =
+    report.quarantined !== undefined ||
+    (tier.resourceServer !== undefined &&
+      tier.resourceServerInstance !== undefined &&
+      (await tierHasQuarantineRecord(
+        { server: tier.resourceServer, serverInstance: tier.resourceServerInstance },
+        deps.quarantineDir ?? defaultQuarantineDir(),
+        "the scratch folder is kept",
+      )));
+  if (quarantined) {
+    console.warn(`[lethal] kept scratch folder ${scratchRoot} (the run is quarantined)`);
+  } else {
+    await removeScratchQuietly(scratchRoot);
+  }
+  return report;
 
-  const build = deps.buildBackend ?? buildBackend;
-  const runTheSession = deps.runSession ?? runSession;
-
-  // Important 1 (Task 7 review): the try/finally that owns teardown (`withEnvTeardown`) now wraps
-  // `buildBackend`, the worker-backend loop, and `new ResultsStore(...)` too — not just
-  // `runSession` — so a REAL, possibly-billed, provisioned environment from `resolveEnvToolSession`
-  // above is never leaked no matter which of those steps throws.
-  return await withEnvTeardown(envSession, parsed.keepEnv, async () => {
-    let backend: ExecutionBackend | undefined;
-    let store: ResultsStore | undefined;
-    // Task 6: opened before `runTheSession` (below) so a killed process still leaves whatever was
-    // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
-    // `backend`.
-    let progressOutFd: number | undefined;
-    // Issue #22: the highest version an instrumented build was published under this run.
-    let highestPublished: string | undefined;
-    // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
-    // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
-    // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
-    // throw from `finally` silently DISCARDS the `try`'s pending return value and replaces it with
-    // the `finally`'s own error; a `store.close()`/`backend.close()` failure would then look
-    // identical to `runSession` itself throwing — `withEnvTeardown`'s `report` would stay
-    // `undefined`, `quarantined` would evaluate `false` even for an actually-quarantined report,
-    // and `envSession.teardown` would take the DELETE branch on the environment the quarantine
-    // exists to preserve for investigation. `main()` would also exit 1 instead of the quarantine
-    // code 3, and the report would never be printed/written.
-    let report: SessionReport | undefined;
-    try {
-      backend = await build(parsed, effectiveConfig, scratchRoot, deploy, {}, selectorIds);
-      // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
-      // without awaiting — see orchestrator.ts), but building a worker's backend
-      // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
-      // backend is constructed here, up front, each with its own
-      // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
-      // the already-built instance for that index. `runSession` still owns
-      // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
-      // doesn't own constructing them.
-      //
-      // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds
-      // al-runner backends today — `effectiveConfig` equals `configFile` on that path regardless,
-      // since `resolveEnvToolSession` is a no-op for al-runner. `deploy` is still threaded through
-      // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
-      // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
-      // only because of the `--workers > 1` bcdev refusal above, and that restriction is
-      // explicitly deferred rather than permanent.)
-      const workerBackends: ExecutionBackend[] = [];
-      if (parsed.workers > 1) {
-        for (let i = 0; i < parsed.workers; i++) {
-          workerBackends.push(
-            await build(
-              parsed,
-              effectiveConfig,
-              join(scratchRoot, `worker-${i}`),
-              deploy,
-              {},
-              selectorIds,
-            ),
-          );
-        }
-      }
-      store = new ResultsStore(parsed.dbPath);
-      // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
-      // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
-      // Writes to STDERR — never stdout, which is where the final report goes
-      // (`renderConsole`/`writeJsonReport` below) — because mixing progress into the report's
-      // own stream already cost a real session a swallowed error, twice, behind a `grep` on the
-      // combined output.
-      const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
-        heartbeatMs: PROGRESS_HEARTBEAT_MS,
-      });
-      // Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the
-      // SAME events to an NDJSON file, one JSON object per line, flushed synchronously per event
-      // so a killed process still leaves whatever was written to the OS — see progress-ndjson.ts's
-      // module doc, including the header-line and provisional-verdict contract. `fs.writeSync`
-      // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
-      // buffer when the process is killed rather than exiting cleanly, which is exactly the case
-      // this flag exists to survive.
-      // R172 proposal 3. Loaded here, once, before the session starts: a malformed marks file must
-      // stop the run BEFORE hours of execution, not after, and it must fail rather than load
-      // partially — a ruling that silently went missing looks exactly like a survivor nobody has
-      // examined yet.
-      const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
-      const emitSubscribers: EventSubscriber[] = [
-        progress,
-        (e) => {
-          if (e.type !== "batch-published" || e.appVersion === undefined) return;
-          if (
-            highestPublished === undefined ||
-            compareAppVersions(e.appVersion, highestPublished) > 0
-          ) {
-            highestPublished = e.appVersion;
-          }
-        },
-      ];
-      if (parsed.progressOutPath !== undefined) {
-        progressOutFd = openSync(parsed.progressOutPath, "w");
-        const fd = progressOutFd;
-        emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
-      }
-      report = await runTheSession({
-        backend,
-        store,
-        projectDir: parsed.projectDir,
-        testDir: parsed.testDir,
-        instrumentedDir: join(scratchRoot, "instrumented"),
-        selectorIds,
-        skipKnownSurvivors: parsed.skipKnownSurvivors,
-        workers: parsed.workers,
-        // `SessionConfig.emit` is typed `readonly EventSubscriber[]` (events.ts) precisely
-        // because `runSession` splices them into its own canonical, seq-stamped stream — every
-        // event these receive IS a full `RunEvent`, no cast required. Handed over as the list
-        // (R104): `runSession`'s `createEmitter` is the one fan-out, and it already isolates each
-        // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
-        emit: emitSubscribers,
-        ...(parsed.only !== undefined ? { only: parsed.only } : {}),
-        ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
-        ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
-        ...(lineRanges !== undefined
-          ? {
-              lines: lineRanges.ranges,
-              ...(lineRanges.changedSince !== undefined
-                ? { changedSince: lineRanges.changedSince }
-                : {}),
-            }
-          : {}),
-        ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
-        ...(parsed.maxGuardsPerBatch !== undefined
-          ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
-          : {}),
-        ...(parsed.mutantTimeoutMs !== undefined
-          ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
-          : {}),
-        ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
-        ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
-        ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
-        ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
-        ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
-        // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
-        // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
-        preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
-        ...afterLeaseAcquiredFor(envSession),
-        ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
-        ...(parsed.compileConcurrency !== undefined
-          ? { compileConcurrency: parsed.compileConcurrency }
-          : {}),
-        ...resourceIdentityFor(parsed, effectiveConfig),
-        ...leaseSessionFor(parsed, effectiveConfig),
-        ...permissionCanaryFor(parsed, effectiveConfig),
-        ...(parsed.workers > 1
-          ? {
-              backendFactory: (i: number) => {
-                const b = workerBackends[i];
-                if (b === undefined) {
-                  throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
-                }
-                return b;
-              },
-            }
-          : {}),
-      });
-    } finally {
-      // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
-      // swallow errors here... a failure here must not mask/replace whatever real error is already
-      // propagating"). Each close is independently guarded so one failing never skips the others,
-      // and none of them can replace `report` (captured above) or a real error already unwinding
-      // through this `finally`.
-      if (store !== undefined) {
-        try {
-          store.close();
-        } catch (err) {
-          console.warn(
-            `[lethal] store.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-      // Release whatever the backend is holding open: the spawned bc-dev MCP
-      // child, or (server mode) the one warm al-runner process. The
-      // `process.exit(0)` below would paper over a leak here, but only for this
-      // entry point — anything else embedding the backend would hang or leak a
-      // process instead.
-      if (backend instanceof BcDevMcpBackend || backend instanceof AlRunnerBackend) {
-        try {
-          await backend.close();
-        } catch (err) {
-          console.warn(
-            `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-      // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
-      // posture as `store`/`backend` above — a close failure here must not mask a real error
-      // already unwinding through this `finally`, and every event that mattered was already
-      // flushed synchronously by `writeSync` at emit time, not buffered here waiting for a close.
-      if (progressOutFd !== undefined) {
-        try {
-          closeSync(progressOutFd);
-        } catch (err) {
-          console.warn(
-            `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-      // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
-      // instrumented build on the server just the same, and that is when the user needs this most.
-      if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
-        process.stderr.write(`${restoreNotice(highestPublished)}\n`);
+  async function runInScratch(): Promise<SessionReport> {
+    // R7/R8: captured here (outer scope) rather than discarded, so the `withEnvTeardown` closure
+    // below can attach it to the final `SessionReport` — see `withAlRunnerCanary`. Stays
+    // `undefined` for every bcdev session (this branch never runs) and for the al-runner
+    // no-`alRunnerPath` fallback path.
+    let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
+    if (parsed.backendKind === "al-runner") {
+      // R123: the contract first — if it has moved, nothing measured after it can be trusted,
+      // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
+      await announceAlRunnerContract(
+        configFile,
+        deps.runAlRunnerContractProbe ?? runAlRunnerContractProbe,
+      );
+      alRunnerCanaryResult = await announceAlRunnerCanary(
+        configFile,
+        deps.runAlRunnerCanary ?? runAlRunnerCanary,
+      );
+      // R18: `--keep-env`/`--allow-expiring-env` are refused OUTRIGHT for al-runner (parseCliConfig,
+      // above) on the reasoning that a silent no-op is wrong — a whole configured `envTool` section
+      // being silently ignored deserves at least the same treatment. Not refused outright (unlike
+      // those flags) because a config file is often shared across `--backend` choices and an
+      // operator switching backends for a one-off al-runner run shouldn't be blocked by it; but
+      // silence is exactly the failure mode this project refuses to ship.
+      if (configFile.envTool !== undefined) {
+        console.warn(
+          "[lethal] envTool is configured but IGNORED: --backend al-runner has no environment to " +
+            "resolve or provision — the entire `envTool` section in this config is silently unused " +
+            "on this path. Remove it, or run with --backend bcdev to have it take effect.",
+        );
       }
     }
-    // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and
-    // `report` is set — a throw from `runSession` (or from `build`/`ResultsStore`) propagates
-    // through this `finally` and out of this function instead of falling through to here. Guarded
-    // explicitly (never a `!` assertion — biome forbids them) rather than trusted, matching this
-    // project's "fail loudly on a caller-contract violation" rule.
-    if (report === undefined) {
-      throw new Error(
-        "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
+
+    // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
+    // and substitutes it into `effectiveConfig`, which every downstream seam below reads instead of
+    // the raw `configFile` — `buildBackend` (both the main backend and, in a future multi-worker
+    // bcdev world, any per-worker one), `resourceIdentityFor`, and `leaseSessionFor` all still call
+    // `validateBcDevConfig` independently, but against the SAME already-resolved section.
+    const resolveSession = deps.resolveEnvToolSession ?? resolveEnvToolSession;
+    const { effectiveConfig, envSession, deploy } = await resolveSession(
+      parsed,
+      configFile,
+      basename(scratchRoot),
+    );
+
+    // Minor 6 (Task 7 review): `--keep-env` with a bcdev backend but no `envTool` section configured
+    // is a silent no-op — there is no environment for it to act on. Not catchable at parse time
+    // (parsing has no config file loaded yet), so it's caught here, right after the config-dependent
+    // `envSession` is known. `--keep-env` + `--backend al-runner` is refused outright at parse time
+    // instead (see `parseCliConfig`), so by construction the only way to reach this with `keepEnv`
+    // true and `envSession` undefined is exactly this case.
+    if (parsed.keepEnv && envSession === undefined) {
+      console.warn(
+        "[lethal] --keep-env has no effect: the bcdev config has no `envTool` section configured, " +
+          "so there is no environment for LethAL to keep",
       );
     }
-    // R7/R8: persist the measured canary verdict onto the report itself (a `--out` JSON report,
-    // or any CI that discards stderr, previously had no record of it at all — only the
-    // console.warn lines printed once at the very start, before a single mutant ran).
-    return withAlRunnerCanary(report, alRunnerCanaryResult);
-  });
+
+    const build = deps.buildBackend ?? buildBackend;
+    const runTheSession = deps.runSession ?? runSession;
+
+    // Important 1 (Task 7 review): the try/finally that owns teardown (`withEnvTeardown`) now wraps
+    // `buildBackend`, the worker-backend loop, and `new ResultsStore(...)` too — not just
+    // `runSession` — so a REAL, possibly-billed, provisioned environment from `resolveEnvToolSession`
+    // above is never leaked no matter which of those steps throws.
+    return await withEnvTeardown(
+      envSession,
+      parsed.keepEnv,
+      async () => {
+        let backend: ExecutionBackend | undefined;
+        let store: ResultsStore | undefined;
+        // Task 6: opened before `runTheSession` (below) so a killed process still leaves whatever was
+        // written to the OS. Closed in the `finally` below, best-effort, same posture as `store`/
+        // `backend`.
+        let progressOutFd: number | undefined;
+        // Issue #22: the highest version an instrumented build was published under this run.
+        let highestPublished: string | undefined;
+        // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
+        // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
+        // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
+        // throw from `finally` silently DISCARDS the `try`'s pending return value and replaces it with
+        // the `finally`'s own error; a `store.close()`/`backend.close()` failure would then look
+        // identical to `runSession` itself throwing — `withEnvTeardown`'s `report` would stay
+        // `undefined`, `quarantined` would evaluate `false` even for an actually-quarantined report,
+        // and `envSession.teardown` would take the DELETE branch on the environment the quarantine
+        // exists to preserve for investigation. `main()` would also exit 1 instead of the quarantine
+        // code 3, and the report would never be printed/written.
+        let report: SessionReport | undefined;
+        try {
+          backend = await build(parsed, effectiveConfig, scratchRoot, deploy, {}, selectorIds);
+          // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
+          // without awaiting — see orchestrator.ts), but building a worker's backend
+          // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
+          // backend is constructed here, up front, each with its own
+          // `<scratchRoot>/worker-<i>` scratch dir; the factory below just hands back
+          // the already-built instance for that index. `runSession` still owns
+          // disposing them (see `closeIfSupported` in orchestrator.ts) — it just
+          // doesn't own constructing them.
+          //
+          // (bcdev + --workers > 1 is refused in `parseCliConfig`, so this loop only ever builds
+          // al-runner backends today — `effectiveConfig` equals `configFile` on that path regardless,
+          // since `resolveEnvToolSession` is a no-op for al-runner. `deploy` is still threaded through
+          // (Important 3, Task 7 review): a bcdev worker built without it would silently publish via
+          // `ContainerDeployer`/altool instead of through the configured env tool — unreachable today
+          // only because of the `--workers > 1` bcdev refusal above, and that restriction is
+          // explicitly deferred rather than permanent.)
+          const workerBackends: ExecutionBackend[] = [];
+          if (parsed.workers > 1) {
+            for (let i = 0; i < parsed.workers; i++) {
+              workerBackends.push(
+                await build(
+                  parsed,
+                  effectiveConfig,
+                  join(scratchRoot, `worker-${i}`),
+                  deploy,
+                  {},
+                  selectorIds,
+                ),
+              );
+            }
+          }
+          store = new ResultsStore(parsed.dbPath);
+          // Task 5 (event-stream refactor, spec 2026-08-05 §A): a run this long (a baseline alone
+          // can run for minutes with zero prior output) needs a live indication it hasn't stalled.
+          // Writes to STDERR — never stdout, which is where the final report goes
+          // (`renderConsole`/`writeJsonReport` below) — because mixing progress into the report's
+          // own stream already cost a real session a swallowed error, twice, behind a `grep` on the
+          // combined output.
+          const progress = createProgressRenderer((line) => process.stderr.write(`${line}\n`), {
+            heartbeatMs: PROGRESS_HEARTBEAT_MS,
+          });
+          // Task 6 (event-stream refactor, spec 2026-08-05 §A): `--progress-out <path>` streams the
+          // SAME events to an NDJSON file, one JSON object per line, flushed synchronously per event
+          // so a killed process still leaves whatever was written to the OS — see progress-ndjson.ts's
+          // module doc, including the header-line and provisional-verdict contract. `fs.writeSync`
+          // (not a `WriteStream`) because a buffered stream can lose whatever sits in its in-process
+          // buffer when the process is killed rather than exiting cleanly, which is exactly the case
+          // this flag exists to survive.
+          // R172 proposal 3. Loaded here, once, before the session starts: a malformed marks file must
+          // stop the run BEFORE hours of execution, not after, and it must fail rather than load
+          // partially — a ruling that silently went missing looks exactly like a survivor nobody has
+          // examined yet.
+          const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
+          const emitSubscribers: EventSubscriber[] = [
+            progress,
+            (e) => {
+              if (e.type !== "batch-published" || e.appVersion === undefined) return;
+              if (
+                highestPublished === undefined ||
+                compareAppVersions(e.appVersion, highestPublished) > 0
+              ) {
+                highestPublished = e.appVersion;
+              }
+            },
+          ];
+          if (parsed.progressOutPath !== undefined) {
+            progressOutFd = openSync(parsed.progressOutPath, "w");
+            const fd = progressOutFd;
+            emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
+          }
+          // R360: kept for the scratch-folder decision after the session, see above.
+          tier = resourceIdentityFor(parsed, effectiveConfig);
+          report = await runTheSession({
+            backend,
+            store,
+            projectDir: parsed.projectDir,
+            testDir: parsed.testDir,
+            instrumentedDir: join(scratchRoot, "instrumented"),
+            excludeOutputs: runOutputPaths(parsed),
+            selectorIds,
+            skipKnownSurvivors: parsed.skipKnownSurvivors,
+            workers: parsed.workers,
+            // `SessionConfig.emit` is typed `readonly EventSubscriber[]` (events.ts) precisely
+            // because `runSession` splices them into its own canonical, seq-stamped stream — every
+            // event these receive IS a full `RunEvent`, no cast required. Handed over as the list
+            // (R104): `runSession`'s `createEmitter` is the one fan-out, and it already isolates each
+            // subscriber from a throw in its siblings, so there is nothing to pre-combine here.
+            emit: emitSubscribers,
+            ...(parsed.only !== undefined ? { only: parsed.only } : {}),
+            ...(mergedExclude.length > 0 ? { exclude: mergedExclude } : {}),
+            ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
+            ...(lineRanges !== undefined
+              ? {
+                  lines: lineRanges.ranges,
+                  ...(lineRanges.changedSince !== undefined
+                    ? { changedSince: lineRanges.changedSince }
+                    : {}),
+                }
+              : {}),
+            ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
+            ...(parsed.maxGuardsPerBatch !== undefined
+              ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
+              : {}),
+            ...(parsed.mutantTimeoutMs !== undefined
+              ? { mutantTimeoutMs: parsed.mutantTimeoutMs }
+              : {}),
+            ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
+            ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
+            ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
+            ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
+            ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
+            // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
+            // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
+            preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
+            ...afterLeaseAcquiredFor(envSession),
+            ...(parsed.allowLargeRun === true ? { allowLargeRun: true } : {}),
+            ...(parsed.compileConcurrency !== undefined
+              ? { compileConcurrency: parsed.compileConcurrency }
+              : {}),
+            ...tier,
+            ...leaseSessionFor(parsed, effectiveConfig),
+            ...permissionCanaryFor(parsed, effectiveConfig),
+            ...(parsed.workers > 1
+              ? {
+                  backendFactory: (i: number) => {
+                    const b = workerBackends[i];
+                    if (b === undefined) {
+                      throw new Error(`runFromCli: no worker backend pre-built for index ${i}`);
+                    }
+                    return b;
+                  },
+                }
+              : {}),
+          });
+        } finally {
+          // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
+          // swallow errors here... a failure here must not mask/replace whatever real error is already
+          // propagating"). Each close is independently guarded so one failing never skips the others,
+          // and none of them can replace `report` (captured above) or a real error already unwinding
+          // through this `finally`.
+          if (store !== undefined) {
+            try {
+              store.close();
+            } catch (err) {
+              console.warn(
+                `[lethal] store.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          // Release whatever the backend is holding open: the spawned bc-dev MCP
+          // child, or (server mode) the one warm al-runner process. The
+          // `process.exit(0)` below would paper over a leak here, but only for this
+          // entry point — anything else embedding the backend would hang or leak a
+          // process instead.
+          if (backend instanceof BcDevMcpBackend || backend instanceof AlRunnerBackend) {
+            try {
+              await backend.close();
+            } catch (err) {
+              console.warn(
+                `[lethal] backend.close() failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
+          // posture as `store`/`backend` above — a close failure here must not mask a real error
+          // already unwinding through this `finally`, and every event that mattered was already
+          // flushed synchronously by `writeSync` at emit time, not buffered here waiting for a close.
+          if (progressOutFd !== undefined) {
+            try {
+              closeSync(progressOutFd);
+            } catch (err) {
+              console.warn(
+                `[lethal] closing --progress-out file failed during cleanup (best-effort; the session's report/exit code is unaffected): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          // Issue #22: in the `finally`, because a run that fails AFTER publishing leaves the
+          // instrumented build on the server just the same, and that is when the user needs this most.
+          if (highestPublished !== undefined && parsed.backendKind === "bcdev") {
+            process.stderr.write(`${restoreNotice(highestPublished)}\n`);
+          }
+        }
+        // Reached only when the `try` above completed WITHOUT throwing, so `runSession` resolved and
+        // `report` is set — a throw from `runSession` (or from `build`/`ResultsStore`) propagates
+        // through this `finally` and out of this function instead of falling through to here. Guarded
+        // explicitly (never a `!` assertion — biome forbids them) rather than trusted, matching this
+        // project's "fail loudly on a caller-contract violation" rule.
+        if (report === undefined) {
+          throw new Error(
+            "runFromCli: the try block completed without throwing but produced no report — this is a bug in runFromCli, not a session failure",
+          );
+        }
+        // R7/R8: persist the measured canary verdict onto the report itself (a `--out` JSON report,
+        // or any CI that discards stderr, previously had no record of it at all — only the
+        // console.warn lines printed once at the very start, before a single mutant ran).
+        return withAlRunnerCanary(report, alRunnerCanaryResult);
+      },
+      deps.quarantineDir ?? defaultQuarantineDir(),
+      // R360 I-1: a deleted environment can never verify a bundle installed on it again.
+      (resourceKey) => {
+        const store = new ResultsStore(parsed.dbPath);
+        try {
+          store.dropBundlesOfResource(resourceKey);
+        } finally {
+          store.close();
+        }
+      },
+    );
+  }
 }
 
 /**

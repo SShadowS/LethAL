@@ -575,7 +575,7 @@ class CeilingBackend implements ExecutionBackend {
       artifactId: mutantManifest.artifactId,
       appId: appManifest.id,
       appVersion: appManifest.version,
-      appPath: join(dir, "ceiling-fake.app"),
+      appPath: await writeCeilingApp(dir),
       sha256: Bun.SHA256.hash(new Uint8Array([1, 2, 3]), "hex"),
       mutantManifest,
       appManifest: appManifest as unknown as Record<string, unknown>,
@@ -1507,3 +1507,10 @@ describe("R112 — the ceiling is reachable on an env-tool project", () => {
     expect(() => parseCliConfig(["clear-ceiling", "--project", "p"])).toThrow(/--config/);
   });
 });
+
+/** R360: step 3d stores the published `.app`, so the fake writes the bytes its sha256 names. */
+async function writeCeilingApp(dir: string): Promise<string> {
+  const path = join(dir, "ceiling-fake.app");
+  await Bun.write(path, new Uint8Array([1, 2, 3]));
+  return path;
+}
