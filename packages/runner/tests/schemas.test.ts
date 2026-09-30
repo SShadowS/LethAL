@@ -835,6 +835,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(streamSchema.$id).toContain(`stream-v${STREAM_SCHEMA_VERSION}`);
   });
 
+  test("R214: the report schema names the two preprocessor exclusion reasons", () => {
+    expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
+      "not-instrumentable",
+      "declarative",
+      "compiled-out",
+      "preproc-undecided",
+    ]);
+  });
+
   test("a report written by THIS build validates against the report schema", () => {
     // Real data, and redacted data: redaction replaces two string fields, so a report that stopped
     // validating afterwards would mean the schema disagrees with the redactor.
@@ -1007,6 +1016,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v9.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1140,6 +1161,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "declarative-sites-dropped",
         "all-errors",
         "session-warm",
+        "preproc-files-refused",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -1209,6 +1231,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v7.schema.json")).toEqual([...v6, "markKey"].sort());
     // R252's v8 changed a value domain, not the required set.
     expect(required("explain-v8.schema.json")).toEqual(required("explain-v7.schema.json"));
+    // R214's v9 added a caveat value, not a required field.
+    expect(required("explain-v9.schema.json")).toEqual(required("explain-v8.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

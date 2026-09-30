@@ -4494,6 +4494,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
+    preprocExcluded,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4537,6 +4538,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     instrumentableFiles: allFiles.length,
     notInstrumentedFiles,
     declarativeSiteFiles,
+    preprocExcludedFiles: preprocExcluded,
     excludedByOnly,
     excludedByExclude,
     excludedByOperator,

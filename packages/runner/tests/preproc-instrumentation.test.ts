@@ -4433,6 +4433,7 @@ function r351Report(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,

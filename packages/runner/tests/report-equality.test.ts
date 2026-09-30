@@ -92,6 +92,7 @@ function buildScenarioReport(): SessionReport {
       excludedByExclude: 0,
       excludedByOperator: 0,
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       notInstrumentedFiles: [
         {
           file: "Al/Page/Page 50120 Sales Approval Card.al",

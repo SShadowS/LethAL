@@ -1,11 +1,19 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
 import { type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import type {
+  BackendCapabilities,
+  BackendStatus,
+  ExecutionBackend,
+  TestMethodRef,
+  TestVerdict,
+} from "../src/backend";
+import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
+import { ResultsStore } from "../src/store";
 
 /**
  * R214's pre-commitment (docs/superpowers/specs/2026-09-29-r214-precommitment.md), per repro and
@@ -236,4 +244,134 @@ describe("R214: every drop is named and counted", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+/** Every test passes, so every covered mutant survives; the baseline covers `P12 Plain`'s `Run`. */
+class SurvivingBackend implements ExecutionBackend {
+  private active: string | null = null;
+  capabilities(): BackendCapabilities {
+    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "stub" };
+  }
+  async deploy(): Promise<null> {
+    return null;
+  }
+  async compileCheck(): Promise<void> {}
+  async activate(id: string | null): Promise<void> {
+    this.active = id;
+  }
+  async run(ref: TestMethodRef): Promise<TestVerdict> {
+    return {
+      ref,
+      outcome: "pass",
+      durationMs: 5,
+      ...(this.active === null
+        ? {
+            coverage: {
+              granularity: "procedure" as const,
+              entries: [{ objectType: "Codeunit", objectId: 50013, procedure: "Run" }],
+            },
+          }
+        : { attestation: { observedAny: true, identityMismatch: false } }),
+    };
+  }
+}
+
+const TEST_AL = `codeunit 50140 "R12 Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure RunTest()
+    begin
+    end;
+}
+`;
+
+describe("R214: the report counts compiled-out and refused files (Task 7)", () => {
+  async function reportOf(mutate: (projectDir: string) => Promise<void>) {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r214-run-"));
+    try {
+      const projectDir = join(root, "app");
+      await cp(join(R214, "p12-refused"), projectDir, { recursive: true });
+      await mutate(projectDir);
+      await Bun.write(join(root, "tests", "R12Tests.Codeunit.al"), TEST_AL);
+      return await runSession({
+        backend: new SurvivingBackend(),
+        store: new ResultsStore(":memory:"),
+        projectDir,
+        testDir: join(root, "tests"),
+        instrumentedDir: join(root, "instr"),
+        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+        preprocessorSymbols: ["R12SYM"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+  const rowsOf = (report: Awaited<ReturnType<typeof reportOf>>) =>
+    (report.excludedSites?.files ?? [])
+      .filter((f) => f.reason === "compiled-out" || f.reason === "preproc-undecided")
+      .map((f) => [norm(f.file), f.reason, f.detail])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+
+  test("run 1: refused rows, compiled-out row, no mutant from a refused file, the caveat", async () => {
+    const report = await reportOf(async (dir) => {
+      await Bun.write(join(dir, "src", "BareAnd.Codeunit.al"), BARE_AND);
+      await Bun.write(join(dir, "src", "Empty.Codeunit.al"), EMPTY_REFUSED);
+    });
+    expect(rowsOf(report)).toEqual([
+      ["src/BareAnd.Codeunit.al", "preproc-undecided", "unparsed-condition at line 5"],
+      [
+        "src/Empty.Codeunit.al",
+        "preproc-undecided",
+        "marker-mismatch (1 directive lines, 0 markers)",
+      ],
+      ["src/Plain.Codeunit.al", "compiled-out", "symbols: R12SYM"],
+      [
+        "src/Refused.Codeunit.al",
+        "preproc-undecided",
+        "marker-mismatch (2 directive lines, 0 markers)",
+      ],
+    ]);
+    const empty = report.excludedSites?.files.find((f) => norm(f.file) === "src/Empty.Codeunit.al");
+    expect(empty?.sites).toBe(0);
+    expect(report.excludedSites?.siteCount).toBe(
+      report.excludedSites?.files.reduce((n, f) => n + f.sites, 0),
+    );
+    expect(report.excludedSites?.fileCount).toBe(
+      new Set(report.excludedSites?.files.map((f) => f.file)).size,
+    );
+    const refusedFiles = [
+      "src/BareAnd.Codeunit.al",
+      "src/Empty.Codeunit.al",
+      "src/Refused.Codeunit.al",
+    ];
+    expect(report.mutants.filter((m) => refusedFiles.includes(norm(m.file)))).toEqual([]);
+    expect(report.validity.caveats).toContain("preproc-files-refused");
+    expect(JSON.stringify(report.excludedSites)).not.toMatch(/Helper|begin|:=/);
+  }, 60_000);
+
+  test("run 2: only zero-site refused files remain, and the caveat still fires (files, not sites)", async () => {
+    const report = await reportOf(async (dir) => {
+      await rm(join(dir, "src", "Refused.Codeunit.al"));
+      await Bun.write(join(dir, "src", "Empty.Codeunit.al"), EMPTY_REFUSED);
+    });
+    const undecided = (report.excludedSites?.files ?? []).filter(
+      (f) => f.reason === "preproc-undecided",
+    );
+    expect(undecided.length).toBeGreaterThan(0);
+    expect(undecided.every((f) => f.sites === 0)).toBe(true);
+    expect(report.validity.caveats).toContain("preproc-files-refused");
+  }, 60_000);
+
+  test("run 3, the control: a compiled-out site alone is the correct build, not a refusal", async () => {
+    const report = await reportOf(async (dir) => {
+      await rm(join(dir, "src", "Refused.Codeunit.al"));
+    });
+    expect(rowsOf(report)).toEqual([["src/Plain.Codeunit.al", "compiled-out", "symbols: R12SYM"]]);
+    expect(report.validity.caveats).not.toContain("preproc-files-refused");
+  }, 60_000);
 });

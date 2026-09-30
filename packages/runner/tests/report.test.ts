@@ -273,8 +273,9 @@ describe("Caveat union", () => {
       "declarative-sites-dropped": true,
       "all-errors": true,
       "session-warm": true,
+      "preproc-files-refused": true,
     };
-    expect(Object.keys(all).length).toBe(20);
+    expect(Object.keys(all).length).toBe(21);
   });
 });
 
@@ -326,6 +327,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -359,6 +361,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -393,6 +396,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -441,6 +445,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -537,6 +542,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,

@@ -237,7 +237,8 @@ export type Caveat =
   | "kills-without-assertion"
   | "declarative-sites-dropped"
   | "all-errors"
-  | "session-warm";
+  | "session-warm"
+  | "preproc-files-refused";
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -496,6 +497,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "at the pre-R198 cost. A 408 (a timeout) carries no session keys, so a `timeout-killed` at " +
       "position 1 is not asserted fresh by the guard; one at position > 1 is, through its replay.",
     basis: "R206",
+  },
+  "preproc-files-refused": {
+    meaning:
+      "At least one file holds a preprocessor directive LethAL cannot evaluate exactly as alc " +
+      "does, so NO mutant was generated anywhere in that file. It is still compiled and " +
+      "published unchanged. `excludedSites.files` names each such file with the reason " +
+      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files.",
+    entailedNegative:
+      "Not a gap in the target's tests and not a failed run: the refused files were never " +
+      "measured, in either direction. A refused file can have 0 sites, so count its rows, not " +
+      "its `sites`.",
+    basis: "R214",
   },
 };
 
@@ -2422,6 +2435,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
   if (declarativeSites.siteCount > 0) caveats.push("declarative-sites-dropped");
+  // R214 - see CAVEAT_INTERPRETATIONS["preproc-files-refused"]. Pushed on the FILE count: a refused file can have 0 sites (r3, I5).
+  if (input.excludedSites.files.some((f) => f.reason === "preproc-undecided"))
+    caveats.push("preproc-files-refused");
   if (input.staleTestApp !== undefined) caveats.push("stale-test-app");
   // See CAVEAT_INTERPRETATIONS["tests-permission-refused"] for what this caveat means to a reader.
   const permissionsRefusedTests = input.permissionsRefusedTests ?? [];
@@ -2862,6 +2878,21 @@ export function renderConsole(r: SessionReport): string {
     for (const f of r.declarativeSites.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
     }
+  }
+  const byReason = (reason: string) =>
+    (r.excludedSites?.files ?? []).filter((f) => f.reason === reason);
+  const compiledOut = byReason("compiled-out");
+  if (compiledOut.length > 0) {
+    lines.push(
+      `COMPILED OUT: ${compiledOut.reduce((n, f) => n + f.sites, 0)} site(s) in ${compiledOut.length} file(s) sit in #if arms this build does not compile (${compiledOut[0]?.detail ?? ""}). No mutant was made there; they are not untested code (R214).`,
+    );
+  }
+  const undecided = byReason("preproc-undecided");
+  if (undecided.length > 0) {
+    lines.push(
+      `PREPROCESSOR DIRECTIVES REFUSED: ${undecided.length} file(s) hold a directive LethAL cannot evaluate exactly as alc does, so none of their ${undecided.reduce((n, f) => n + f.sites, 0)} site(s) was mutated (R214):`,
+    );
+    for (const f of undecided) lines.push(`  ${f.file} (${f.detail})`);
   }
   if (r.staleTestApp !== undefined) {
     const n = r.staleTestApp.missingTests.length;

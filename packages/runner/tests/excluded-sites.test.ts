@@ -29,6 +29,7 @@ describe("buildExcludedSites", () => {
     const merged = buildExcludedSites({
       skipped: SKIPPED,
       declarative: DECLARATIVE,
+      preproc: [],
       totalFiles: 40,
     });
 
@@ -42,6 +43,7 @@ describe("buildExcludedSites", () => {
     const merged = buildExcludedSites({
       skipped: SKIPPED,
       declarative: DECLARATIVE,
+      preproc: [],
       totalFiles: 40,
     });
 
@@ -71,7 +73,12 @@ describe("buildExcludedSites", () => {
   });
 
   test("an empty input is a real zero, not an absent record", () => {
-    const merged = buildExcludedSites({ skipped: [], declarative: [], totalFiles: 12 });
+    const merged = buildExcludedSites({
+      skipped: [],
+      declarative: [],
+      preproc: [],
+      totalFiles: 12,
+    });
     expect(merged).toEqual({ totalFiles: 12, siteCount: 0, fileCount: 0, files: [] });
   });
 });
@@ -80,6 +87,7 @@ describe("the derived views reproduce today's shapes exactly", () => {
   const merged = buildExcludedSites({
     skipped: SKIPPED,
     declarative: DECLARATIVE,
+    preproc: [],
     totalFiles: 40,
   });
 
@@ -145,6 +153,7 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
           instrumentableFiles: input.totalFiles,
           notInstrumentedFiles: input.notInstrumentedFiles,
           declarativeSiteFiles: input.declarativeSiteFiles,
+          preprocExcludedFiles: [],
           excludedByOnly: 0,
           excludedByExclude: 0,
           excludedByOperator: 0,
@@ -193,6 +202,7 @@ describe("the notInstrumented gate assertion rejects a gutted view", () => {
     const merged = buildExcludedSites({
       skipped: [{ file: "src/DataScopeQuery.Query.al", kinds: "query_declaration", sites: 5 }],
       declarative: [],
+      preproc: [],
       totalFiles: 29,
     });
     const honest = notInstrumentedView(merged);
@@ -207,6 +217,7 @@ describe("the notInstrumented gate assertion rejects a gutted view", () => {
     const merged = buildExcludedSites({
       skipped: [{ file: "src/DataScopeQuery.Query.al", kinds: "query_declaration", sites: 5 }],
       declarative: [],
+      preproc: [],
       totalFiles: 29,
     });
     const honest = notInstrumentedView(merged);

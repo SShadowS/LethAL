@@ -23,7 +23,11 @@ export interface PreprocExcludedFile {
 }
 
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
-export type ExclusionReason = "not-instrumentable" | "declarative";
+export type ExclusionReason =
+  | "not-instrumentable"
+  | "declarative"
+  | "compiled-out"
+  | "preproc-undecided";
 
 export interface ExcludedSiteFile {
   readonly file: string;
@@ -43,7 +47,8 @@ export interface ExcludedSiteFile {
   readonly sites: number;
   readonly reason: ExclusionReason;
   /**
-   * Free-text detail for reasons that have one. Neither current reason does.
+   * Free-text detail for reasons that have one. R214's two reasons carry one: the effective
+   * symbols, or a reason code. Neither is source text.
    *
    * MUST NEVER carry target source (no `originalText`, no snippet of the excluded site's AL):
    * `scripts/redact-campaign-report.ts` redacts only `originalText`/`mutatedText` inside
@@ -70,6 +75,7 @@ export interface ExcludedSites {
 export function buildExcludedSites(input: {
   readonly skipped: readonly NotInstrumentedFile[];
   readonly declarative: readonly DeclarativeSiteFile[];
+  readonly preproc: readonly PreprocExcludedFile[];
   readonly totalFiles: number;
 }): ExcludedSites {
   // Mapped explicitly, field by field — never `{ ...f, reason }` — so a field later added to
@@ -89,6 +95,13 @@ export function buildExcludedSites(input: {
       kinds: f.kinds,
       sites: f.sites,
       reason: "declarative" as const,
+    })),
+    ...input.preproc.map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: f.reason,
+      detail: f.detail,
     })),
   ];
   return {

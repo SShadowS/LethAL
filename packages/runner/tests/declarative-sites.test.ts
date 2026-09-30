@@ -169,6 +169,7 @@ function foldWith(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles,
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,

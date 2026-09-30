@@ -610,6 +610,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
           instrumentableFiles: 1,
           notInstrumentedFiles: [],
           declarativeSiteFiles: [],
+          preprocExcludedFiles: [],
           excludedByOnly: 0,
           excludedByExclude: 0,
           excludedByOperator: 0,
