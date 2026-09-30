@@ -4,16 +4,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { MutationSpec } from "@lethal/engine";
-import type { MutantManifest } from "@lethal/schemata";
+import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { coverageArmNamesComputed, writeInstrumentedProject } from "@lethal/schemata";
 import {
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
   buildAlRunnerCoverageIndex,
 } from "../src/al-runner-coverage";
+import type { TestMethodRef } from "../src/backend";
+import type { RunEvent, RunEventInput } from "../src/events";
+import { explain } from "../src/explain";
 import { buildLineMap, lineMapFromSources, renamedMemberAttempts } from "../src/line-map";
 import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
-import { buildCoverageIndex, coverageFilter, identityKeyOf, serializeKey } from "../src/selection";
+import { buildReport, renderConsole } from "../src/report";
+import {
+  buildCoverageIndex,
+  coverageFilter,
+  identityKeyOf,
+  memberGroupNameOf,
+  serializeKey,
+} from "../src/selection";
+import { newKillLedger, orderCoveringTests, procedureScopeOf, recordKill } from "../src/test-order";
 
 // R297 and its successors: preprocessor shapes through the real operator set and the real writer.
 // Every repro is hand-written (no corpus text).
@@ -4342,4 +4353,177 @@ ${head}    var
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+/** R351: a report from manifest entries and their verdicts, events built as report.test.ts does. */
+function r351Report(
+  rows: ReadonlyArray<readonly [MutantManifestEntry, "survived" | "no-coverage"]>,
+) {
+  const events: RunEventInput[] = [
+    {
+      type: "mutation-set-generated",
+      siteCount: rows.length,
+      deployedCount: rows.length,
+      hangCapableCount: 0,
+      totalFiles: 1,
+      instrumentableFiles: 1,
+      notInstrumentedFiles: [],
+      declarativeSiteFiles: [],
+      excludedByOnly: 0,
+      excludedByExclude: 0,
+      excludedByOperator: 0,
+    },
+    { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+    ...rows.map(
+      ([mutant, verdict]): RunEventInput => ({
+        type: "mutant-scored",
+        mutant,
+        verdict,
+        batchIndex: 0,
+        durationMs: 10,
+        coveringTests: [],
+        ...(verdict === "survived" ? { coverageAttribution: "exact" as const } : {}),
+      }),
+    ),
+    { type: "session-finished", elapsedMs: 10 },
+  ];
+  return buildReport(
+    { caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" } },
+    events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),
+  );
+}
+
+describe("R351: a renamed split member is named by its arm names in the order, the report and explain; no fixture key moves", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("T4 r4: a kill in Alpha puts its killer first for Alpha only, never for Gamma", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const alpha = manifest.mutants.filter((m) => m.coverageArmNames?.[0] === "Alpha");
+    const gamma = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Gamma");
+    const [killed, next] = alpha;
+    if (killed === undefined || next === undefined || gamma === undefined) {
+      throw new Error("r4 lost a member's mutants");
+    }
+    const ref = (method: string): TestMethodRef => ({
+      codeunitId: 50140,
+      codeunitName: "Repro Tests",
+      method,
+    });
+    const A = ref("A");
+    const B = ref("B");
+    const ledger = newKillLedger();
+    recordKill(ledger, killed, B);
+    const order = (m: MutantManifestEntry) =>
+      orderCoveringTests([A, B], m, ledger, new Map()).map((r) => r.method);
+    expect(order(next)).toEqual(["B", "A"]);
+    expect(order(gamma)).toEqual(["A", "B"]);
+    // D8: the ordering key is not the identity. Both members keep "" in the key's name segment.
+    for (const m of [killed, next, gamma]) {
+      expect(serializeKey(identityKeyOf(m)).split("|")[2]).toBe("");
+    }
+  });
+
+  test("T1 r1: the member's row carries its arm names, Plain's row has no such key", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
+    const member = manifest.mutants.find((m) => m.coverageArmNames !== undefined);
+    const plain = manifest.mutants.find((m) => m.procedureName === "Plain");
+    if (member === undefined || plain === undefined) throw new Error("r1 lost a member");
+    const report = r351Report([
+      [member, "survived"],
+      [plain, "survived"],
+    ]);
+    const row = (id: string) => report.mutants.find((r) => r.mutantCode === id);
+    expect(row(member.mutantId)?.coverageArmNames).toEqual(["Pick", "Choose"]);
+    expect(row(plain.mutantId)).toBeDefined();
+    expect("coverageArmNames" in (row(plain.mutantId) ?? {})).toBe(false);
+  });
+
+  test("T2 r4: two renamed members survive as two groups, each named on the console", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const alpha = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Alpha");
+    const gamma = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Gamma");
+    if (alpha === undefined || gamma === undefined) throw new Error("r4 lost a member");
+    const report = r351Report([
+      [alpha, "survived"],
+      [gamma, "survived"],
+    ]);
+    expect(
+      report.survivorsByProcedure.map((g) => [g.procedureName, g.coverageArmNames, g.survived]),
+    ).toEqual([
+      ["", ["Alpha"], 1],
+      ["", ["Gamma"], 1],
+    ]);
+    const out = renderConsole(report);
+    expect(out).toContain("Repro R.Alpha");
+    expect(out).toContain("Repro R.Gamma");
+    expect(out).not.toContain("<object>");
+  });
+
+  test("T3 r4: explain names each member on its survivors and its no-coverage block", async () => {
+    const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R4 });
+    const alpha = manifest.mutants.find((m) => m.coverageArmNames?.[0] === "Alpha");
+    const gammas = manifest.mutants.filter((m) => m.coverageArmNames?.[0] === "Gamma");
+    const [gamma, gammaUncovered] = gammas;
+    if (alpha === undefined || gamma === undefined || gammaUncovered === undefined) {
+      throw new Error("r4 lost a member");
+    }
+    const out = explain(
+      r351Report([
+        [alpha, "survived"],
+        [gamma, "survived"],
+        [gammaUncovered, "no-coverage"],
+      ]),
+    );
+    expect(out.survivors.map((s) => [s.mutantCode, s.procedureName, s.coverageArmNames])).toEqual([
+      [alpha.mutantId, "", ["Alpha"]],
+      [gamma.mutantId, "", ["Gamma"]],
+    ]);
+    expect(
+      (out.noCoverageBlocks ?? []).map((b) => [b.members, b.procedureName, b.coverageArmNames]),
+    ).toEqual([[[gammaUncovered.mutantId], "", ["Gamma"]]]);
+  });
+
+  // D7: coverageArmNames is positional and independent of preprocessor symbols, and R318's census
+  // found no renamed member in the fixtures. So every fixture mutant's derived group name, and so
+  // its kill-ledger scope, is exactly the pre-R351 string: no order, and no killingTest, can move.
+  const CENSUS: Record<string, { selectorId: number; controlId: number; tableId: number }> = {
+    "sandbox-app": { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    "sandbox-data": { selectorId: 79399, controlId: 79398, tableId: 79397 },
+    "sandbox-hang": { selectorId: 79449, controlId: 79448, tableId: 79447 },
+    "sandbox-symbols": { selectorId: 79649, controlId: 79648, tableId: 79647 },
+  };
+  for (const [fixture, selectorIds] of Object.entries(CENSUS)) {
+    test(`T5 ${fixture}: every mutant's group name and ledger scope are the pre-R351 ones`, async () => {
+      const out = await mkdtemp(join(tmpdir(), "lethal-r351-census-"));
+      try {
+        const set = await generateMutationSet(join(import.meta.dir, "../../../fixtures", fixture));
+        await writeInstrumentedProject({
+          targetDir: out,
+          files: set.files,
+          selectorIds,
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "00000000-0000-0000-0000-000000000000",
+          operatorTiers,
+        });
+        const manifest = JSON.parse(
+          await readFile(join(out, "mutant-manifest.json"), "utf8"),
+        ) as MutantManifest;
+        expect(manifest.mutants.length).toBeGreaterThan(0);
+        const moved = manifest.mutants
+          .filter((m) => {
+            const before = m.procedureName || m.triggerName || "";
+            return (
+              memberGroupNameOf(m) !== before ||
+              procedureScopeOf(m) !== `${m.codeunitName}|${before}`
+            );
+          })
+          .map((m) => `${m.file}:${m.startLine} ${m.operatorName}`);
+        expect(moved).toEqual([]);
+      } finally {
+        await rm(out, { recursive: true, force: true });
+      }
+    });
+  }
 });

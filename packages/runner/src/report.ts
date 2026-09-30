@@ -28,7 +28,7 @@ import {
 } from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
-import { identityKeyOf, serializeKey } from "./selection";
+import { identityKeyOf, memberGroupNameOf, serializeKey } from "./selection";
 import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
@@ -870,6 +870,11 @@ export interface SurvivorGroup {
   readonly file: string;
   readonly codeunitName: string;
   readonly procedureName: string;
+  /**
+   * R351: a renamed split member's arm names, as on its mutants' rows (`MutantOutcome.
+   * coverageArmNames`). Without it two such groups of one file read the same, `procedureName: ""`.
+   */
+  readonly coverageArmNames?: readonly string[];
   readonly survived: number;
   readonly noCoverage: number;
   readonly killed: number;
@@ -1626,6 +1631,12 @@ export interface MutantOutcome {
   readonly procedureName: string;
   readonly triggerName?: string;
   /**
+   * R351: the arm names of a renamed split member (R318), whose `procedureName` stays `""` so no
+   * identity key moves. A SITE property, carried verbatim from `MutantManifestEntry.
+   * coverageArmNames` like `hangCapable`; absent on every ordinary member.
+   */
+  readonly coverageArmNames?: readonly string[];
+  /**
    * C02-01: the 1-based first and last line of the member enclosing this mutant: its `procedure`,
    * or its `trigger` when there is no procedure. A SITE property, carried verbatim from
    * `MutantManifestEntry.procedureStartLine`/`procedureEndLine` like `hangCapable`, and computed
@@ -2215,6 +2226,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.reachedBy !== undefined ? { reachedBy: o.reachedBy } : {}),
       ...(o.carried === true ? { carried: true } : {}),
       ...(o.mutant.triggerName !== undefined ? { triggerName: o.mutant.triggerName } : {}),
+      ...(o.mutant.coverageArmNames !== undefined
+        ? { coverageArmNames: o.mutant.coverageArmNames }
+        : {}),
       ...(o.killingTest !== undefined ? { killingTest: o.killingTest } : {}),
       ...(o.failureNote !== undefined ? { failureNote: o.failureNote } : {}),
       ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
@@ -2323,6 +2337,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     file: string;
     codeunitName: string;
     procedureName: string;
+    coverageArmNames?: readonly string[];
     survived: number;
     noCoverage: number;
     killed: number;
@@ -2330,13 +2345,16 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   };
   const groups = new Map<string, MutableGroup>();
   for (const o of input.outcomes) {
-    const key = `${o.mutant.file}::${o.mutant.procedureName || o.mutant.triggerName || "<object>"}`;
+    const key = `${o.mutant.file}::${memberGroupNameOf(o.mutant) || "<object>"}`;
     let g = groups.get(key);
     if (g === undefined) {
       g = {
         file: o.mutant.file,
         codeunitName: o.mutant.codeunitName,
         procedureName: o.mutant.procedureName || o.mutant.triggerName || "",
+        ...(o.mutant.coverageArmNames !== undefined
+          ? { coverageArmNames: o.mutant.coverageArmNames }
+          : {}),
         survived: 0,
         noCoverage: 0,
         killed: 0,
@@ -3040,7 +3058,12 @@ export function renderConsole(r: SessionReport): string {
     const shown = r.survivorsByProcedure.slice(0, 10);
     lines.push(`SURVIVORS BY PROCEDURE (${r.survivorsByProcedure.length} with survivors):`);
     for (const g of shown) {
-      const where = g.procedureName === "" ? "<object>" : g.procedureName;
+      const where =
+        g.procedureName !== ""
+          ? g.procedureName
+          : g.coverageArmNames !== undefined
+            ? g.coverageArmNames.join("/")
+            : "<object>";
       lines.push(
         `  ${g.survived.toString().padStart(3)} survived  ${g.codeunitName}.${where}  (${g.killed} killed, ${g.noCoverage} no-coverage)`,
       );
