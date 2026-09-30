@@ -1151,6 +1151,18 @@ describe("R318: a renamed split member is attributed under its coverage names", 
     expect(split.covered.get("M0001")).toEqual([t1]);
   });
 
+  test("two names both hit at member level: the covering set is the union", () => {
+    // On the --server leg a member's statement on a shared line keeps its compiled scope
+    // (`Choose`) while its other lines are re-keyed to `Pick`, so both keys can exist in one build.
+    const index = buildCoverageIndex([
+      { ref: t1, coverage: covNaming("Pick") },
+      { ref: t2, coverage: covNaming("Choose") },
+    ]);
+    const split = coverageFilter([renamed()], index, [t1, t2], undefined, false);
+    expect(split.covered.get("M0001")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0001")).toBe("exact");
+  });
+
   test("a name outside its list does not cover it (the negative control)", () => {
     const index = buildCoverageIndex([{ ref: t1, coverage: covNaming("Take") }]);
     const m = renamed();

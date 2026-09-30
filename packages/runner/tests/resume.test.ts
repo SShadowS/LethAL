@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -2171,9 +2171,15 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       .filter((m) => m.line >= 19 && m.line <= 23)
       .map((m) => `${m.line}:${m.verdict}${m.carried === true ? ":carried" : ""}`);
 
+  const roots: string[] = [];
+  afterEach(async () => {
+    for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  });
+
   /** A run under the OLD naming, relabelled to `scheme` with the fingerprint that scheme computes. */
   async function oldNamingRun(scheme: number, finished: boolean) {
     const root = await mkdtemp(join(tmpdir(), "lethal-r318-scheme-"));
+    roots.push(root);
     const dirs = {
       projectDir: join(root, "app"),
       testDir: join(root, "tests"),
@@ -2231,14 +2237,19 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
 
   test("history control: at the current scheme the old survivor IS skipped (the false verdict)", async () => {
     const { dirs, store } = await oldNamingRun(IDENTITY_SCHEME, true);
+    const events: RunEvent[] = [];
     const report = await runSession({
       backend: r3Backend("post"),
       store,
       ...dirs,
       selectorIds,
       skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
     });
     expect(wrappedOf(report)).toEqual(["20:known-survivor", "21:known-survivor"]);
+    expect(
+      events.filter((e) => e.type === "warning" && e.code === "history-identity-scheme-changed"),
+    ).toHaveLength(0);
   });
 
   test("--resume-run: a previous-scheme run is refused by name", async () => {

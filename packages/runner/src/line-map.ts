@@ -412,7 +412,9 @@ function spansOf(
  * declarations. More than one match: no name, the safe direction.
  *
  * No manifest entry (a member with no mutant, or a caller with no manifest): the same computation
- * on the tree this map parsed, as before.
+ * on the tree this map parsed, as before. So an object whose ORIGINAL tree has an ERROR (no
+ * manifest names) but whose emitted tree parses cleanly still gets a span, under a name no mutant
+ * looks up. Harmless: nothing reads that key, and the shared-line count is unchanged.
  */
 function renamedSpanName(
   member: ALSyntaxNode,
