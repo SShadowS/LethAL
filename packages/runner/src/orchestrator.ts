@@ -3561,10 +3561,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ? store.findBaselineSnapshot(batchHash, testAppHash)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
-    // R-236c: a snapshot is found by its two hashes from ANY run, so it can come from a run with a
-    // wider --tests-only. The TestPage scan read only this session's tests, so a saved row for any
-    // other test is DROPPED: it must not come back green and be sent. A snapshot missing one of
-    // this session's tests is not reused at all, since that test would then never be measured.
+    // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
+    // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
+    // tests, so a saved row for any other test is DROPPED: it must not come back green and be
+    // sent. A snapshot missing one of this session's tests is not reused at all, since that test
+    // would then never be measured.
     if (reused !== undefined) {
       const inScope = new Set(tests.map(testKeyOf));
       const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
