@@ -263,7 +263,8 @@ CREATE TABLE IF NOT EXISTS runs (
   source_sha256 TEXT,
   identity_scheme INTEGER,
   coverage_mode TEXT,
-  test_app_hash TEXT
+  test_app_hash TEXT,
+  test_digests TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -494,6 +495,8 @@ export class ResultsStore {
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
       ["runs", "test_app_hash TEXT", runCols],
+      // R-278: NULL on an older row; verify refuses it as source-predates-verify.
+      ["runs", "test_digests TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
@@ -525,13 +528,16 @@ export class ResultsStore {
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
+    /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
+     *  which `lethal verify` refuses as a run that predates it. */
+    testDigests?: Readonly<Record<string, string>>;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, test_app_hash) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, test_app_hash, test_digests) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -541,6 +547,7 @@ export class ResultsStore {
         info.identityScheme,
         info.coverageMode,
         info.testAppHash ?? null,
+        info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
       ) as {
       id: number;
     };
@@ -637,6 +644,26 @@ export class ResultsStore {
     return row === null
       ? null
       : { runId: row.id, coverageMode: parseCoverageMode(row.coverage_mode, row.id) };
+  }
+
+  /** R-278: the run's recorded test digests, or `null` for a run recorded before them. A value
+   *  that is not a JSON object of strings is a corrupt row and throws. */
+  testDigests(runId: number): Record<string, string> | null {
+    const row = this.db.query("SELECT test_digests FROM runs WHERE id = ?").get(runId) as {
+      test_digests: string | null;
+    } | null;
+    if (row === null) throw new Error(`store.ts: no run ${runId}`);
+    if (row.test_digests === null) return null;
+    const parsed: unknown = JSON.parse(row.test_digests);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      Object.values(parsed).some((v) => typeof v !== "string")
+    ) {
+      throw new Error(`store.ts: run ${runId} has a corrupt "test_digests" column value`);
+    }
+    return parsed as Record<string, string>;
   }
 
   /** R47: one run row by id, or `null`. Used to explain WHY an explicitly named `--resume-run`

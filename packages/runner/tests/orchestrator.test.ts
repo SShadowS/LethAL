@@ -55,6 +55,7 @@ import { NamedMutantError } from "../src/named-mutants";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+import { discoverTests } from "../src/discovery";
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
@@ -13200,6 +13201,44 @@ describe("C02-06 Task 5.4: runVerify", () => {
         ],
         failure: "flaked",
       },
+    ]);
+    expect(out.exitCode).toBe(5);
+  });
+
+  // R-278: Zulu Tests.OverBudgetDetected covers M0001 in the source run. Edited since, it is
+  // selected as a NEW test too: its two unmutated runs are made and the flakiness gate reads them.
+  test("R-278: an edited covering test gets the double unmutated run and the flakiness gate", async () => {
+    const ZULU = { codeunitId: 79101, codeunitName: "Zulu Tests", method: "OverBudgetDetected" };
+    const fx = await verifyFixture({
+      killerRef: OVER,
+      unmutated: ({ ref, nth }) =>
+        testKey(ref) === testKey(ZULU) && nth === 2
+          ? { ref, outcome: "fail", durationMs: 5, failureMessage: "flaked" }
+          : ALL_GREEN({ ref }),
+    });
+    const recorded = fx.store.testDigests(fx.installed.fromRunId);
+    expect(Object.keys(recorded ?? {}).sort()).toEqual(
+      (await discoverTests(fx.dirs.testDir))
+        .map((t) => `${t.codeunitId}::${t.method.toLowerCase()}`)
+        .sort(),
+    );
+    await Bun.write(
+      join(fx.dirs.testDir, "ZuluTests.Codeunit.al"),
+      MIRROR_TESTS_AL.replace("begin\n", "begin\n        // now asserts\n"),
+    );
+    const seen: NamedMutantsConfig[] = [];
+    const out = await fx.verify(["0/M0001"], {
+      runNamed: async (cfg) => {
+        seen.push(cfg);
+        return runNamedMutants(cfg);
+      },
+    });
+    expect(seen[0]?.rerunOnUnmutated?.map(testKey)).toEqual([testKey(ZULU)]);
+    expect(seen[0]?.requests[0]?.methods.filter((m) => testKey(m) === testKey(ZULU))).toHaveLength(
+      1,
+    );
+    expect(out.newTests.map((t) => [t.test, t.state])).toEqual([
+      ["Zulu Tests.OverBudgetDetected", "flaky"],
     ]);
     expect(out.exitCode).toBe(5);
   });

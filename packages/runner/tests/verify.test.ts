@@ -10,6 +10,7 @@ import {
 import { InstalledArtifactError } from "../src/artifact";
 import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
 import { NamedMutantError } from "../src/named-mutants";
@@ -18,6 +19,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
+import { testDigests } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
@@ -27,6 +29,7 @@ import {
   VERIFY_REFUSALS,
   type VerifyDeps,
   VerifyError,
+  type VerifyPlan,
   type VerifySource,
   assertSourceUnchanged,
   expandGapIds,
@@ -539,6 +542,15 @@ describe("planVerify", () => {
   const keys = (refs: ReadonlyArray<{ codeunitId: number; method: string }>) =>
     refs.map((r) => `${r.codeunitId}::${r.method}`);
 
+  /** `planVerify` against a source run that recorded the test project's CURRENT digests: every
+   *  test in it reads as unchanged since the source run (R-278). */
+  async function planUnchanged(
+    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests">,
+  ): Promise<VerifyPlan> {
+    const recorded = await testDigests(a.testDir, await discoverTests(a.testDir));
+    return planVerify({ ...a, sourceTestDigests: recorded });
+  }
+
   async function planRefusal(p: Promise<unknown>): Promise<VerifyError> {
     const e = await p.then(
       () => undefined,
@@ -549,7 +561,7 @@ describe("planVerify", () => {
   }
 
   test("covering tests plus new tests, deduplicated, in that order", async () => {
-    const plan = await planVerify({
+    const plan = await planUnchanged({
       source: source(project(), [
         { mutantCode: "M0001", coveringTests: ["Old.B", "Old.A", "Old.B"] },
         { mutantCode: "M0002", coveringTests: [] },
@@ -576,7 +588,7 @@ describe("planVerify", () => {
 
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */
   function coveringPlan(baseline: ReturnType<typeof row>[], codeunits: readonly Codeunit[]) {
-    return planVerify({
+    return planUnchanged({
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: baseline,
@@ -632,26 +644,88 @@ describe("planVerify", () => {
     expect(e.reason).toBe("source-predates-verify");
   });
 
-  test("a test in the source baseline is not new, even if it is edited", async () => {
-    // 50100 A.M is in the source baseline and was edited since; 50101 B.M shares its method name
-    // and is genuinely new. Only the second is new. The first does not cover the no-coverage
-    // survivor, so it does not run at all: the stated blind spot, pinned as behaviour.
+  /** The digests a source run recorded over `codeunits`, taken before any later edit. */
+  async function recordedOver(codeunits: readonly Codeunit[]): Promise<Record<string, string>> {
+    const dir = testDir(codeunits);
+    return testDigests(dir, await discoverTests(dir));
+  }
+
+  // R258: 50100 A.M is in the source baseline and was edited since, and does not cover the
+  // survivor; 50101 B.M shares its method name and is genuinely new. Both are new, so both run.
+  test("R258: an edited NON-covering test is new, so it joins every survivor's request", async () => {
+    const before = [
+      { id: 50100, name: "A", methods: ["M"] },
+      { id: 50101, name: "B", methods: ["M"] },
+    ];
     const plan = await planVerify({
-      source: source(project(), [{ mutantCode: "M0001", coveringTests: [] }]),
-      manifest: manifest([entry("M0001")]),
+      source: source(project(), [
+        { mutantCode: "M0001", coveringTests: [] },
+        { mutantCode: "M0002", coveringTests: [] },
+      ]),
+      manifest: manifest([entry("M0001"), entry("M0002")]),
       sourceBaseline: [row(50100, "A", "M")],
+      sourceTestDigests: await recordedOver(before.slice(0, 1)),
       testDir: testDir([
         { id: 50100, name: "A", methods: ["M"], body: "        Error('now asserts');\n" },
         { id: 50101, name: "B", methods: ["M"] },
       ]),
     });
-    expect(keys(plan.newTests)).toEqual(["50101::M"]);
-    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50101::M"]);
+    expect(keys(plan.newTests)).toEqual(["50100::M", "50101::M"]);
+    expect(plan.requests.map((r) => keys(r.methods))).toEqual([
+      ["50100::M", "50101::M"],
+      ["50100::M", "50101::M"],
+    ]);
+  });
+
+  test("R-278: an edited COVERING test is new, and is in its survivor's request once", async () => {
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M", "T.K"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+      sourceTestDigests: await recordedOver([{ id: 50100, name: "T", methods: ["M", "K"] }]),
+      testDir: testDir([
+        {
+          id: 50100,
+          name: "T",
+          methods: ["M", "K"],
+          body: "        Error('now asserts');\n",
+        },
+      ]),
+    });
+    expect(keys(plan.newTests)).toEqual(["50100::M", "50100::K"]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::M", "50100::K"]);
+  });
+
+  test("R-278: an unchanged test in the source baseline is not new", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+      sourceTestDigests: await recordedOver(codeunits),
+      testDir: testDir(codeunits),
+    });
+    expect(keys(plan.newTests)).toEqual([]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::M"]);
+  });
+
+  test("R-278: a source run with no recorded test digests is source-predates-verify, never planned", async () => {
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: null,
+        testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain("test digests");
   });
 
   test("an empty source baseline is refused, never read as every test new", async () => {
     const e = await planRefusal(
-      planVerify({
+      planUnchanged({
         source: source(project(), [{ mutantCode: "M0001", coveringTests: [] }]),
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [],
@@ -663,7 +737,7 @@ describe("planVerify", () => {
 
   test("a no-coverage survivor with no new test is refused as no-tests-to-run", async () => {
     const e = await planRefusal(
-      planVerify({
+      planUnchanged({
         source: source(project(), [
           { mutantCode: "M0001", coveringTests: ["T.M"] },
           { mutantCode: "M0002", coveringTests: [] },
@@ -680,7 +754,7 @@ describe("planVerify", () => {
 
   /** Survivors all covered by `T.M`, planned against the given marks file. */
   function markedPlan(marks: unknown, entries: readonly MutantManifestEntry[]) {
-    return planVerify({
+    return planUnchanged({
       source: source(
         project(marks),
         entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
@@ -724,7 +798,7 @@ describe("planVerify", () => {
   // reader-marked". The all-skipped plan above has a non-empty `skipped`; this one is refused.
   test("an empty target list is refused as malformed-request, never planned as all skipped", async () => {
     const e = await planRefusal(
-      planVerify({
+      planUnchanged({
         source: source(project(), []),
         manifest: manifest([]),
         sourceBaseline: [row(50100, "T", "M")],
@@ -764,7 +838,7 @@ describe("planVerify", () => {
   });
 
   test("R-236c: refused covering and new tests are never planned, and are named as not run", async () => {
-    const plan = await planVerify({
+    const plan = await planUnchanged({
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A", "Old.P"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "Old", "A"), row(50100, "Old", "P")],
@@ -807,7 +881,7 @@ describe("planVerify", () => {
 }
 `,
     );
-    const e = await planVerify({
+    const e = await planUnchanged({
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M")],
@@ -821,7 +895,7 @@ describe("planVerify", () => {
   });
 
   test("R-236c: a survivor whose every test is refused is planned as all-refused, never as an empty refusal", async () => {
-    const plan = await planVerify({
+    const plan = await planUnchanged({
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.P"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "Old", "P")],
@@ -1298,6 +1372,8 @@ describe("C02-09: gap ids", () => {
       readonly backendCoverage?: CoverageMode;
       /** R354: the source run's recorded mode, written by SQL (`null` for a pre-R354 row). */
       readonly sourceCoverage?: CoverageMode | null;
+      /** R-278: `null` records no test digests on the source run (a run from before R-278). */
+      readonly sourceDigests?: null;
     } = {},
   ) {
     const projectDir = scratch("lethal-verify-gap-proj-");
@@ -1332,6 +1408,13 @@ describe("C02-09: gap ids", () => {
     for (const ref of over.baseline ?? [{ codeunitId: 50100, codeunitName: "T", method: "M" }]) {
       store.recordTestResult(runId, null, null, ref, "pass", 1);
     }
+    // R-278: the source run recorded the test project's digests as it is now (NULL on request).
+    store.db.run("UPDATE runs SET test_digests = ? WHERE id = ?", [
+      over.sourceDigests === null
+        ? null
+        : JSON.stringify(await testDigests(testDir, await discoverTests(testDir))),
+      runId,
+    ]);
     if (over.sourceCoverage !== undefined) {
       store.db.run("UPDATE runs SET coverage_mode = ? WHERE id = ?", [over.sourceCoverage, runId]);
     }
@@ -1470,6 +1553,20 @@ describe("C02-09: gap ids", () => {
 
   // R354: verify runs the source run's covering tests on its survived and no-coverage verdicts,
   // all attributed under the source's coverage mode, so a mode difference REFUSES, by name.
+  test("R-278: runVerify refuses a source run with no recorded test digests, before any run row", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      sourceDigests: null,
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when verify refuses");
+      },
+    });
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused?.reason).toBe("source-predates-verify");
+    expect(out.refused?.detail).toContain("test digests");
+    expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
+    w.store.close();
+  });
+
   describe("R354: verify refuses a source run measured under another coverage mode", () => {
     const neverRun: VerifyDeps["runNamed"] = async () => {
       throw new Error("runNamed must not be called when verify refuses");
