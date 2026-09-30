@@ -25,7 +25,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
+import { hashPackage, hashTargetSource, testAppHashFor } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
@@ -1995,6 +1995,12 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
     // Run 2: the test now has a reachable call that may open a TestPage.
     await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
+    // R247: this backend's test-app identity is the source tree, which the edit above moved, so a
+    // resume would be refused. R-236c's case is the published app unchanged while the source
+    // scan refuses a test, so run 1 is recorded under the identity run 2 computes.
+    store.db.run("UPDATE runs SET test_app_hash = ?", [
+      (await testAppHashFor(undefined, dirs.testDir)) ?? null,
+    ]);
     const backend = new RecordingBackend(CAPS_NST);
     const events: RunEvent[] = [];
     const report = await runSession({
@@ -4648,15 +4654,17 @@ async function manifestMutants(
  * compiled into the artifact regardless, exactly the shipped defect this file's first new test
  * below exists to catch.
  */
-function seedPriorSurvivor(
+async function seedPriorSurvivor(
   store: ResultsStore,
-  projectPath: string,
+  dirs: { projectDir: string; testDir: string },
   target: MutantManifestEntry,
-): void {
+): Promise<void> {
   const runId = store.createRun({
     coverageMode: "procedure",
+    // R247: measured against the same test app, or no survivor from it is ever skipped.
+    testAppHash: (await testAppHashFor(undefined, dirs.testDir)) ?? "",
+    projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
-    projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.1",
   });
@@ -4695,7 +4703,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
     if (boundary === undefined) throw new Error("unreachable: asserted above");
 
     const store = new ResultsStore(":memory:");
-    seedPriorSurvivor(store, dirs.projectDir, boundary);
+    await seedPriorSurvivor(store, dirs, boundary);
 
     // The whole-artifact deploy fails as long as the conditional-boundary spec is present.
     // `execute` (skipKnownSurvivors: true) excludes it, but the compiled artifact — what this
@@ -6193,7 +6201,11 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
-    const keys = store.priorSurvivorKeys(dirs.projectDir, backend.capabilities().coverage);
+    const keys = store.priorSurvivorKeys(
+      dirs.projectDir,
+      backend.capabilities().coverage,
+      await testAppHashFor(undefined, dirs.testDir),
+    );
     expect(keys.size).toBe(0);
     store.close();
   });
@@ -13053,6 +13065,20 @@ describe("C02-06 Task 5.4: runVerify", () => {
       artifactId: fx.artifactId,
       projectPath: fx.dirs.projectDir,
     });
+  });
+
+  // R247: verify republishes the test app on purpose and never goes through resolveResume or
+  // priorSurvivorKeys, so a source run measured against another test app does not stop it. Its own
+  // run row records the package it publishes, the key a later bcdev session computes for it.
+  test("R247: verify records the test app it publishes, and a source run's other test app does not refuse it", async () => {
+    const fx = await verifyFixture();
+    const sourceApp = fx.store.getRun(fx.installed.fromRunId)?.testAppHash;
+    expect(sourceApp).not.toBe(`package:${COMPILED.sha256}`);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(fx.store.getRun(verifyRunId)?.testAppHash).toBe(`package:${COMPILED.sha256}`);
   });
 
   test("verify reports the server's read-back identity, not the local compile's", async () => {

@@ -13,6 +13,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Runs now record the test app they measured against** (R247): `--resume` and `--resume-run`
+  refuse by name when the test app changed since the run, a republish that only moved the version
+  stamp included. One-time cost: an unfinished run from before this build is refused once, and the
+  next `--skip-known-survivors` run skips nothing once.
 - **Runs now record their coverage mode** (R354): an unfinished run from before this build is
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an

@@ -1120,6 +1120,10 @@ export async function runVerify(
         identityScheme: source.identityScheme,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
+        // R247: the test app this run measures against, the one it is about to publish. The
+        // publish is accepted only when the server's package hashes to it, so it is the key a later
+        // bcdev session would compute (`package:` + that hash).
+        testAppHash: `package:${compiled.sha256}`,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",
