@@ -2932,6 +2932,12 @@ function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
 /**
  * One deploy dispatch: latch-guarded (design §6: `deploy`, `activate` AND `run` are all guarded)
  * and, when a lease is held, wrapped in the BeginPublish/EndPublish fence.
+ *
+ * R240: the fence can return normally with the session LATCHED (a refused EndPublish, an
+ * unreconciled lost EndPublish ack, or the heartbeat learning of lease loss mid-publish), so the
+ * latch is checked again once it returns, as `runLeaseHook` does for a hook publish. The caller
+ * then sees `SessionUnsafeError` as the deploy error, which `classifyDeployFailure` does not
+ * record: R90's history gets no row, never an `accepted` one, and nothing runs after it.
  */
 async function deployOnce(
   backend: ExecutionBackend,
@@ -2942,7 +2948,9 @@ async function deployOnce(
 ): Promise<CompiledArtifact | null> {
   safety.assertSafe(`deploy(${dir})`);
   if (leaseSession === undefined) return backend.deploy(dir);
-  return leaseSession.publish(() => backend.deploy(dir), attempted);
+  const compiled = await leaseSession.publish(() => backend.deploy(dir), attempted);
+  safety.assertSafe(`deploy(${dir}) returned`);
+  return compiled;
 }
 
 /**
