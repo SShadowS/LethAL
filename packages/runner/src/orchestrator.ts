@@ -5064,6 +5064,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // in the same transaction as the row. A read error or a size limit throws
         // `InstalledBundleError` and the run fails before it reports success; its scratch folder
         // is kept (`runFromCli`).
+        // ASSUMPTION (review r1 #1): the batch folder is LethAL's private scratch, written by
+        // `prepareArtifactDir` above and read by nothing but the backend's compile, so its `.al`
+        // text here is the text `deploy` compiled. The digest therefore reads it after deploy
+        // rather than holding a second in-memory copy through the publish. Anything that edits a
+        // batch folder between compile and this line breaks that, and the digest would then
+        // certify text that was not compiled.
         const bundle = await readBatchBundle(batchDir, compiled.appPath, compiled.sha256);
         cfg.store.recordArtifact(runId, {
           bundle,
