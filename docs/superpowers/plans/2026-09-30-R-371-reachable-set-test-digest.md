@@ -60,3 +60,112 @@
 3. `too-many-new-tests` with the flag, the schema bump and its ripple; tests.
 4. File the unchanged-version dependency item and the per-survivor filter item. Close R371, write the CHANGELOG and update the agent guide.
 5. itest:agreement live; I tell the orchestrator before leasing.
+
+---
+
+# r2 (after review r1, rulings at H:/lethal-coord/reviews/R-371-plan/rulings-r1.md)
+
+Approved and unchanged: a default cap of 50; the `--max-new-tests` flag; a named refusal instead of a silent subset; the v2 tag; one shared parse; R-372's published-source rule; every test or none.
+
+## Design changes
+
+**C1: what a digest covers.** A test's digest covers:
+- its own span;
+- for every REACHED object: the object header and properties, the global declarations with their initialisation, every trigger, and every reached procedure span;
+- all test-app event-subscriber codeunits (see C2);
+- the dependency fingerprint (see C3).
+
+The broad fallback is a digest of the WHOLE test-app source. That means every `.al` file, normalized the same way, keyed by path, plus the build inputs in `app.json` that change what compiles: `preprocessorSymbols`, `runtime`, `features`, `target`, `application` and `platform`.
+
+**C2: fail closed.** The classifier's cases are listed in `scripts/r371-reach-measure/RESULTS.md` (r2), cases 1 to 20.
+
+- **FOLLOWED:**
+  - a bare call or `this.` call that resolves to a procedure of the same codeunit (every overload);
+  - a call through a variable typed as a test-app codeunit, where `.Run()` walks OnRun;
+  - a `[HandlerFunctions]` handler;
+  - `Codeunit.Run(Codeunit::X)` of a test-app codeunit;
+  - a built-in on a test-app record, page or other object that cannot fire a trigger with code;
+  - a bare call inside a `with`, resolved through the declared type.
+- **EXTERNAL:** the object is not in the test app and IS declared by a dependency. This is checked against the dependency symbol packages when they are present; otherwise "not in the test app" is used, and the digest says which.
+- **UNFOLLOWED, which takes the broad fallback:**
+  - Bind or UnbindSubscription (see the ruling request below);
+  - an object run by id or through a variable;
+  - interface dispatch;
+  - a Variant receiver (except `Is*`);
+  - a RecordRef or FieldRef call that can fire a trigger;
+  - a procedure of a non-codeunit test-app object;
+  - a trigger-capable call on one whose code makes calls;
+  - an object declared nowhere visible;
+  - a receiver shape the walk does not model;
+  - a `with` target of unknown type;
+  - a named handler that is not found.
+- **Not an edge:** built-in functions and built-in type methods.
+
+Every test-app subscriber codeunit is folded into EVERY digest. That covers both automatic and manual (`EventSubscriberInstance = Manual`) subscribers.
+
+**C3: dependencies.** Microsoft-published dependencies are fingerprinted by publisher, id and version; that is the stated limit. Every OTHER dependency, transitive ones too, is fingerprinted by the SHA-256 of the package that RAN:
+- **bcdev:** the resident package, through the same `/packages` read as R-372, one package at a time, hashed and then dropped.
+- **al-runner:** the resolved `.app` the run loaded, under the R147 pin.
+
+An unreadable package gives NULL plus `test-digests-unavailable`. Measured on DO: 6 non-Microsoft packages, 14.1 MB, hashed in 9 ms, RSS from 74 to 89 MB. The live download time on bcdev is measured in the build and stated in the submit.
+
+**I4: with-receivers.** They are resolved through the declared type. On DC all 7 with-sites resolve; the other suites have none.
+
+**I5: subsets.** Any future subset mode must leave the survivors it did not test marked UNVERIFIED, never old.
+
+## Measured cost of r2 (166b9bbb): routine edits DO exceed the cap on DC
+
+N is the number of tests one edit turns new, as p50 / p90 / max, over every test-app procedure edited in turn. "Object" means a global or header edit.
+
+| Suite | Tests | On broad fallback | Procedure edit | P(N>50) | Object edit | P(N>50) |
+|---|---|---|---|---|---|---|
+| DC | 1,301 | 3.3% | 44 / 71 / 1,301 | **19.6%** | 51 / 284 / 1,301 | **53.8%** |
+| DO | 1,287 | 6.9% | 90 / 199 / 1,287 | **100%** | 107 / 1,287 / 1,287 | 100% |
+| BaseApp | 40,291 | 15.8% | 6,383 / 40,291 / 40,291 | 100% | same shape | 100% |
+| sandbox | 68 | 0% | 1 / 1 / 13 | 0% | 68 (one object) | |
+
+- **Where the tail comes from:** subscriber codeunits hold 6.0% (DC), 9.9% (DO) and 14.6% (BaseApp) of test-app procedures. Any edit to one turns EVERY test new.
+- **Where the floor comes from:** the broad-fallback tests join every edit, which is why DO fails under the strict rule. 78 of its 89 fallback tests are there only because of BindSubscription.
+
+**Plainly: with a cap of 50, verify would refuse about 1 ordinary procedure edit in 5 on DC and about 1 object edit in 2. On DO it would refuse every edit, and on BaseApp every edit.**
+
+## Rulings requested
+
+1. **Treat Bind or UnbindSubscription as not an edge.** I argue this is safe, because every subscriber codeunit it can bind is already in every digest (C2). It changes no coverage; it only stops a second, redundant trigger of the fallback. Relaxed numbers:
+   - DC: fallback 2.9%; procedure edit P(N>50) 15.9%; object edit 42.8%.
+   - DO: fallback 0.9%; procedure edit P(N>50) 10.9% (p50 12); object edit 22.1%.
+   - BaseApp: still 100%, because its p50 is 1,571.
+   I recommend taking it.
+2. **The cap.** Even relaxed, 50 refuses 1 in 6 DC procedure edits and every BaseApp edit. The options:
+   - (a) keep 50, and verify is a tool for small suites and local edits;
+   - (b) a default of about 300, which covers DC's object-edit p90 of 284 (the cost is S x N; at S=10 that is about 3k extra executions);
+   - (c) keep the default and make the refusal message give the number to pass as `--max-new-tests`.
+   I recommend (c): the refusal is safe, and the operator sees the cost before paying it.
+3. **The per-survivor filter** (a new test joins only the survivors it can reach). It is the only thing that bends the BaseApp curve. It needs new-test coverage, so it stays a filed item, not this build.
+
+## Tests (M6), each red-checked
+
+- **Each edge kind as the ONLY path in its test:**
+  - a same-codeunit helper;
+  - a cross-codeunit helper;
+  - a handler;
+  - a with-resolved call;
+  - a `Codeunit.Run(Codeunit::X)`;
+  - an unfollowed edge (fallback);
+  - a subscriber edit;
+  - globals, the object header and properties, and triggers of a reached object;
+  - a non-Microsoft dependency rebuilt at an UNCHANGED version. On the fake bcdev this compares the source run's PUBLISHED dependency package with verify's changed one.
+- **Negative cases:**
+  - an unrelated edit against a test with a CLASSIFIED external edge does not turn it new;
+  - an unrelated edit to an unreached object's globals does not turn it new;
+  - a Microsoft dependency rebuilt at an unchanged version does not turn it new (the stated limit, pinned).
+- **Also:** an unreadable dependency gives NULL; the v1 refusal; the cap at the limit and at limit + 1; one parse per file.
+
+## Tasks
+
+1. Export the Scanner walk with the classifier, handlers and with-resolution; one shared parse.
+2. Object parts, the subscriber fold, the broad fallback and the v2 tag; tests.
+3. Dependency fingerprints on bcdev and al-runner, with the download cost measured live; tests.
+4. `too-many-new-tests` with `--max-new-tests`, the schema bump and its ripple; tests.
+5. File the per-survivor filter item and the Microsoft unchanged-version limit. Close R371, then the CHANGELOG and the agent guide.
+6. itest:agreement live, telling the orchestrator before leasing.
