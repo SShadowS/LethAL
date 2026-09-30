@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 354 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 354 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -100,7 +100,7 @@ that ordering is the priority.
 - **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · open
 - **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · open
 - **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
-- **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · open
+- **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · done (9842500f)
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
 - **R251** · `injectMutationSelectorVar` matches objects by node IDENTITY, so specs found by separate tree walks over one object can produce two overlapping edits · [R251.md](docs/roadmap/R251.md) · done (0185b3a)
 - **R256** · A run recorded WITH preprocessor symbols before C02-06 can still be resumed by a run with NO symbols, so an old verdict or baseline can carry across a `#if` change · [R256.md](docs/roadmap/R256.md) · open
