@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 351 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 351 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -141,7 +141,7 @@ that ordering is the priority.
 - **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
 - **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · done (33364019..b6ddf1b6)
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · open, filed 2026-09-30
-- **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · open, filed 2026-09-30
+- **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · open, filed 2026-09-30
 
 ## Product gaps a real project hits
