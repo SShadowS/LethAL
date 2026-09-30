@@ -1,0 +1,230 @@
+=== DC: U:/Git/DC/Test
+files 145, codeunits 135, procedures 3191, non-codeunit objects 10
+tests discovered 1301, walked 1301, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 458
+event subscriber procedures in the test app (never walked from a test): 17
+time: read 0.1 s, parse 0.5 s, walk 0.2 s; peak RSS 260 MB (219 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 11, p90 41, max 65
+tests with >= 1 edge the walk did not follow: 983 of 1301 (75.6%)
+  codeunit outside the test app: 983 tests (75.6%)
+  with-statement receiver: 181 tests (13.9%)
+  Codeunit.Run: 30 tests (2.3%)
+  procedure in a non-codeunit test-app object: 5 tests (0.4%)
+  BindSubscription (subscribers not followed): 5 tests (0.4%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 964 tests (74.1%)
+most common unfollowed targets (tests hitting each):
+  841  codeunit outside the test app: Codeunit Assert
+  540  codeunit outside the test app: Codeunit "Library - Variable Storage"
+  528  codeunit outside the test app: Codeunit "Library - Purchase"
+  426  codeunit outside the test app: Codeunit "Library - ERM"
+  406  codeunit outside the test app: Codeunit "Library - Lower Permissions"
+  400  codeunit outside the test app: Codeunit "Library - Random"
+  397  codeunit outside the test app: Codeunit "Library - Utility"
+  347  codeunit outside the test app: Codeunit "CDC Capture Management"
+  346  codeunit outside the test app: Codeunit "CDC Record ID Mgt."
+  332  codeunit outside the test app: Codeunit "CDC Approvals Bridge"
+  233  codeunit outside the test app: Codeunit "CDC Document Importer"
+  221  codeunit outside the test app: Codeunit "CDC Temp File Storage"
+  205  codeunit outside the test app: Codeunit "Library - Document Approvals"
+  185  codeunit outside the test app: Codeunit "Workflow Setup"
+  185  codeunit outside the test app: Codeunit "CDC Workflow Setup"
+
+sharing: 2528 of 3191 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 18, p99 169, max 406
+over reached NON-test procedures (1227): p50 4, p90 29, p99 185, max 406
+top 10 procedures by reach:
+  406  CDC Library - Permission.ResetPermissionLogging/0
+  390  CDC Library - DC.GetPurchDocCatCode/1
+  334  CDC Library - DC Document.CreateDocumentValue/6
+  318  CDC Library - DC Document.CreateDCDocument/12
+  318  CDC Library - DC.GetDocTypeForDCDocument/2
+  267  CDC Library - Purchase.CreateVendor/1
+  221  CDC Library - Document Pages.OpenDocumentListAndFindDocument/2
+  205  CDC Library - User Mgt..UpdateUserEmail/1
+  201  CDC Library - Permission.SetSuperPermission/0
+  185  CDC Library - Workflow.EnableDCWorkFlow2/1
+
+handlers reached: 149; codeunit-local helpers (reached only by tests of their own codeunit): 825
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | CDC Library - Permission.ResetPermissionLogging/0 | 406 | 0 | 4872 | 41412 | 406x
+2 p90-shared helper | CDC Match (Test).AdjustRefDocument/3 | 29 | 0 | 348 | 2958 | 29x
+3 median helper | CDC Test Field Trans (Test).CreateTemplateFieldBasedOnTranslation/2 | 4 | 0 | 48 | 408 | 4x
+4 most-shared handler | CDC Storage Models.NotificationHandler/1 | 44 | 0 | 528 | 4488 | 44x
+5 median codeunit-local helper | CDC Register (Test).PurchaserTranslationModalPageHandler/1 | 4 | 0 | 48 | 408 | 4x
+
+SUMMARY | DC | 1301 | 75.6% | 406/29/4 | 406 / 29 / 4 / 44 / 4 | 260 MB | 0.8 s
+
+=== DO: U:/Git/do-rel2/Test
+files 104, codeunits 103, procedures 1695, non-codeunit objects 1
+tests discovered 1287, walked 1287, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 82
+event subscriber procedures in the test app (never walked from a test): 31
+time: read 0.1 s, parse 0.2 s, walk 0.0 s; peak RSS 214 MB (187 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 2, p90 9, max 22
+tests with >= 1 edge the walk did not follow: 1281 of 1287 (99.5%)
+  codeunit outside the test app: 1281 tests (99.5%)
+  BindSubscription (subscribers not followed): 78 tests (6.1%)
+  Codeunit.Run: 20 tests (1.6%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 1260 tests (97.9%)
+most common unfollowed targets (tests hitting each):
+  794  codeunit outside the test app: Codeunit "Library Assert"
+  466  codeunit outside the test app: Codeunit Assert
+  323  codeunit outside the test app: Codeunit Any
+  238  codeunit outside the test app: Codeunit "Library - Sales"
+  129  codeunit outside the test app: Codeunit "Library - Random"
+  114  codeunit outside the test app: Codeunit "CDO Core Event Handler"
+  95  codeunit outside the test app: Codeunit "CDO E-Document Response"
+  71  codeunit outside the test app: Codeunit "CDO Electronic Document Mgt."
+  62  codeunit outside the test app: Codeunit "CDO E-Mail"
+  49  codeunit outside the test app: Codeunit "CDO E-Mail Handler"
+  49  codeunit outside the test app: Codeunit "CDO Functions"
+  45  codeunit outside the test app: Codeunit "Upgrade Tag"
+  43  codeunit outside the test app: Codeunit "CDO E-Mail Template Management"
+  43  codeunit outside the test app: Codeunit "Upgrade Tag Library"
+  42  codeunit outside the test app: Codeunit "CDO Continia License Mgt."
+
+sharing: 1638 of 1695 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 5, p99 42, max 158
+over reached NON-test procedures (351): p50 4, p90 25, p99 104, max 158
+top 10 procedures by reach:
+  158  CDO Library - Setup.InitializeCDOSetup/0
+  152  CDO Library - Email Template.MockEmailTemplateLine/2
+  108  CDO Library - Features.GetProductCode/0
+  104  CDO Library - Email Template.MockEmailTemplateHeader/6
+  85  CDO Library - Features.DisableFeature/1
+  84  CDO Library - Email Template.MockSalesInvoiceEmailTemplate/1
+  75  CDO Library - Output Profile.MockOutputProfile/3
+  73  CDO Library - CDN.CreateSenderProfile/3
+  72  CDO Library - CDN.CreateCDNCustomerSetupForCustomer/2
+  71  CDO Library - Features.EnableFeature/1
+
+handlers reached: 50; codeunit-local helpers (reached only by tests of their own codeunit): 223
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | CDO Library - Setup.InitializeCDOSetup/0 | 158 | 0 | 1896 | 16116 | 158x
+2 p90-shared helper | CDO Email Template Mgt Tests.Initialize/0 | 25 | 0 | 300 | 2550 | 25x
+3 median helper | CDO Library - Payment Link.VerifyPaymentLinkTemplate/3 | 4 | 0 | 48 | 408 | 4x
+4 most-shared handler | CDO Email Editor Page Tests.CancelEmailConfirmHandler/2 | 17 | 0 | 204 | 1734 | 17x
+5 median codeunit-local helper | CDO Set Handled On Posted Test.EnableChangeLogModificationFor/1 | 2 | 0 | 24 | 204 | 2x
+
+SUMMARY | DO | 1287 | 99.5% | 158/25/4 | 158 / 25 / 4 / 17 / 2 | 214 MB | 0.3 s
+
+=== BaseApp: U:/Git/BC.History/BaseApp/Test
+files 1600, codeunits 1486, procedures 89987, non-codeunit objects 109
+tests discovered 40291, walked 40291, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 17098
+event subscriber procedures in the test app (never walked from a test): 549
+time: read 1.8 s, parse 10.2 s, walk 3.6 s; peak RSS 2597 MB (1523 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 10, p90 27, max 78
+tests with >= 1 edge the walk did not follow: 40035 of 40291 (99.4%)
+  codeunit outside the test app: 40025 tests (99.3%)
+  BindSubscription (subscribers not followed): 5008 tests (12.4%)
+  Codeunit.Run: 2052 tests (5.1%)
+  procedure in a non-codeunit test-app object: 46 tests (0.1%)
+  interface dispatch: 44 tests (0.1%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 39946 tests (99.1%)
+most common unfollowed targets (tests hitting each):
+  31767  codeunit outside the test app: Codeunit "Library - Test Initialize"
+  28910  codeunit outside the test app: Codeunit Assert
+  27225  codeunit outside the test app: Codeunit "Library - ERM Country Data"
+  23988  codeunit outside the test app: Codeunit "Library - Random"
+  23563  codeunit outside the test app: Codeunit "Library - Variable Storage"
+  18970  codeunit outside the test app: Codeunit "Library - Inventory"
+  18621  codeunit outside the test app: Codeunit "Library - Utility"
+  18066  codeunit outside the test app: Codeunit "Library - Setup Storage"
+  16953  codeunit outside the test app: Codeunit "Library - Sales"
+  14763  codeunit outside the test app: Codeunit "Library - ERM"
+  11539  codeunit outside the test app: Codeunit "Library - Purchase"
+  7733  codeunit outside the test app: Codeunit "Library - Warehouse"
+  5946  codeunit outside the test app: Codeunit "Application Area Mgmt. Facade"
+  5735  codeunit outside the test app: Codeunit "Application Area Cache"
+  3057  codeunit outside the test app: Codeunit "Library - Manufacturing"
+
+sharing: 88389 of 89987 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 10, p99 70, max 5734
+over reached NON-test procedures (48098): p50 3, p90 19, p99 100, max 5734
+top 10 procedures by reach:
+  5734  Library - Application Area.ClearApplicationAreaCache/0
+  5732  Library - Application Area.DisableApplicationAreaSetup/0
+  3197  Library - Application Area.CreateFoundationSetupForCurrentCompany/1
+  3195  Library - Application Area.EnableFoundationSetupForCurrentCompany/0
+  3194  Library - Application Area.EnableFoundationSetup/0
+  2316  Library - Lower Permissions.PushPermissionSetInternal/2
+  2315  Library - Lower Permissions.PushPermissionSet/1
+  2315  Library - Lower Permissions.OnAfterPushPermissionSet/1
+  1526  Library - Report Dataset.GetFileName/0
+  1524  Library - Report Dataset.GetParametersFileName/0
+
+handlers reached: 7084; codeunit-local helpers (reached only by tests of their own codeunit): 47060
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | Library - Application Area.ClearApplicationAreaCache/0 | 5734 | 0 | 68808 | 584868 | 5734x
+2 p90-shared helper | SCM Warehouse Management II.CreateItemTrackingLine/2 | 19 | 0 | 228 | 1938 | 19x
+3 median helper | ERM Dimension Purchase.CreateSalesOrderPurchasingCode/1 | 3 | 0 | 36 | 306 | 3x
+4 most-shared handler | Bank Pmt. Appl. Algorithm.MessageHandler/1 | 125 | 0 | 1500 | 12750 | 125x
+5 median codeunit-local helper | WF Demo Purch Rtrn Order Appr..MessageHandlerValidateMessage/1 | 2 | 0 | 24 | 204 | 2x
+
+SUMMARY | BaseApp | 40291 | 99.4% | 5734/19/3 | 5734 / 19 / 3 / 125 / 2 | 2597 MB | 15.6 s
+
+=== sandbox-data-tests: fixtures/sandbox-data-tests
+files 1, codeunits 1, procedures 73, non-codeunit objects 0
+tests discovered 68, walked 68, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 0
+event subscriber procedures in the test app (never walked from a test): 0
+time: read 0.0 s, parse 0.0 s, walk 0.0 s; peak RSS 112 MB (109 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 1, p90 3, max 4
+tests with >= 1 edge the walk did not follow: 53 of 68 (77.9%)
+  codeunit outside the test app: 53 tests (77.9%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 4 tests (5.9%)
+most common unfollowed targets (tests hitting each):
+  10  codeunit outside the test app: Codeunit "Data Ops"
+  8  codeunit outside the test app: Codeunit "Data Filter Ops"
+  6  codeunit outside the test app: Codeunit "Data Swap Ops"
+  5  codeunit outside the test app: Codeunit "Data Temporal Ops"
+  4  codeunit outside the test app: Codeunit "Data Flag Ops"
+  3  codeunit outside the test app: Codeunit "Data Commit Ops"
+  3  codeunit outside the test app: Codeunit "Data Find Ops"
+  3  codeunit outside the test app: Codeunit "Data Validate Ops"
+  3  codeunit outside the test app: Codeunit "Library Assert"
+  3  codeunit outside the test app: Codeunit "Data Set Ops"
+  2  codeunit outside the test app: Codeunit "Data Commit Target"
+  2  codeunit outside the test app: Codeunit "Data Assert Ops"
+  2  codeunit outside the test app: Codeunit "Data Shift Ops"
+  2  codeunit outside the test app: Codeunit "Data Reach Ops"
+  1  codeunit outside the test app: Codeunit "Data Blank Ops"
+
+sharing: 73 of 73 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 1, p99 13, max 13
+over reached NON-test procedures (5): p50 11, p90 13, p99 13, max 13
+top 10 procedures by reach:
+  13  Data Tests.ClearRelated/1
+  13  Data Tests.AddRelated/3
+  11  Data Tests.ResetMain/3
+  4  Data Tests.DeleteMain/1
+  3  Data Tests.ResetTriggerProbe/2
+  1  Data Tests.BlankNoValidateFails/0 [test]
+  1  Data Tests.InsertDoublesAmountWeak/0 [test]
+  1  Data Tests.NoTriggerValidateRunsWeak/0 [test]
+  1  Data Tests.TooLongNoValidateFails/0 [test]
+  1  Data Tests.ProcessedRequiresCategory/0 [test]
+
+handlers reached: 0; codeunit-local helpers (reached only by tests of their own codeunit): 5
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | Data Tests.AddRelated/3 | 13 | 0 | 156 | 1326 | 13x
+2 p90-shared helper | Data Tests.AddRelated/3 | 13 | 0 | 156 | 1326 | 13x
+3 median helper | Data Tests.ResetMain/3 | 11 | 0 | 132 | 1122 | 11x
+4 most-shared handler | none | - | - | - | - | -
+5 median codeunit-local helper | Data Tests.ResetMain/3 | 11 | 0 | 132 | 1122 | 11x
+
+SUMMARY | sandbox-data-tests | 68 | 77.9% | 13/13/11 | 13 / 13 / 11 / - / 11 | 112 MB | 0.0 s
+
