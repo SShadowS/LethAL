@@ -35,8 +35,9 @@ describe("R-278: testDigestsOfSources", () => {
   });
 
   test("a comment edit inside the method changes the digest", () => {
-    const lf = unit(A + B);
-    expect(digestOf(lf.replace("X := 1;", "X := 1; // now asserts"))).not.toBe(digestOf(lf));
+    // Comment text against comment text, so a normalizer that stripped comments would equate them.
+    const lf = unit(A + B).replace("X := 1;", "X := 1; // old");
+    expect(digestOf(lf.replace("// old", "// now asserts"))).not.toBe(digestOf(lf));
   });
 
   test("an attribute change changes the digest", () => {
