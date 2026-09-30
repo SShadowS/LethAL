@@ -104,9 +104,12 @@ export function identityTupleOf(
  * the R-323 plan). 4: R318, a renamed split member's coverage is attributed by position and a
  * line two members share names nobody, which changes the verdict an unchanged key can carry
  * (history, `--resume`, `--resume-run`, equivalence marks). No key tuple moves; the bump is for
- * changed attribution of unchanged keys.
+ * changed attribution of unchanged keys. 5: R214, a mutant in an #if arm the build compiles out is no
+ * longer generated, a file whose directives cannot be evaluated as alc does is not mutated, and a
+ * statement directly inside a statement-level #if became a statement position (measured moves in
+ * the R-214 plan).
  */
-export const IDENTITY_SCHEME = 4;
+export const IDENTITY_SCHEME = 5;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

@@ -26,6 +26,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 5** (R214): keys can move in any object that holds a `#if`. A mutant in an arm
+  the build's preprocessor symbols compile out is no longer generated, a file whose directives
+  LethAL cannot evaluate as alc does is not mutated at all, and a statement directly inside a
+  statement-level `#if` is now a mutation site, so twin mutants renumber. Runs now record their
+  effective preprocessor symbols (config plus `app.json`), and history, resume and equivalence
+  marks apply only within the same set. Existing marks files need `"identityScheme": 5` after
+  re-checking each mark against a fresh report, and a mark for a project whose `app.json` or config
+  defines symbols needs `"preprocessorSymbols"` naming them. History and resume from older-scheme
+  runs are refused by name (R325).
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
