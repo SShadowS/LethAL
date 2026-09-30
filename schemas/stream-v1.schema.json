@@ -315,7 +315,6 @@
         "instrumentableFiles",
         "notInstrumentedFiles",
         "declarativeSiteFiles",
-        "preprocExcludedFiles",
         "excludedByOnly",
         "excludedByExclude",
         "excludedByOperator",

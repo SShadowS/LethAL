@@ -308,7 +308,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
         declarativeSiteFiles = e.declarativeSiteFiles;
-        preprocExcludedFiles = e.preprocExcludedFiles;
+        preprocExcludedFiles = e.preprocExcludedFiles ?? [];
         excludedByOnly = e.excludedByOnly;
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;

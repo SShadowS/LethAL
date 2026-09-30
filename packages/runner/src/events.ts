@@ -151,8 +151,8 @@ export type RunEventInput =
        *  Required, and empty on a project with no declarative surface: an absent list and a
        *  measured zero must not look alike, the same rule `untargetedTriggerCount` follows. */
       readonly declarativeSiteFiles: readonly DeclarativeSiteFile[];
-      /** R214: files whose sites the build's symbols decided (compiled out) or that were refused because their directives could not be evaluated as alc does. Required, and empty on a project with neither: an absent list and a measured zero must not look alike. */
-      readonly preprocExcludedFiles: readonly PreprocExcludedFile[];
+      /** R214: files whose sites the build's symbols decided (compiled out) or that were refused because their directives could not be evaluated as alc does. Optional on the wire only so a stream written before R214 still folds (absent reads as none); the producer always writes it. */
+      readonly preprocExcludedFiles?: readonly PreprocExcludedFile[];
       /** R41: `.al` files a `--only` glob excluded from spec generation. 0 when no `only` was
        *  given. The LEARNED half of `run-configured.only` — see that event's doc comment. */
       readonly excludedByOnly: number;

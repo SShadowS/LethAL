@@ -1055,3 +1055,28 @@ describe("foldEvents, R231: unplaceable mutants are qualified by batch", () => {
     expect(folded.unplaceableCount).toBe(2);
   });
 });
+
+describe("foldEvents — a stream written before R214", () => {
+  test("a mutation-set-generated line WITHOUT preprocExcludedFiles folds to no preproc rows and no caveat", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const report = buildReport(STATICS, events);
+    expect(report.excludedSites?.files ?? []).toEqual([]);
+    expect(report.validity.caveats).not.toContain("preproc-files-refused");
+  });
+});
