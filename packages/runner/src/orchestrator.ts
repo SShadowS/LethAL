@@ -2350,6 +2350,12 @@ class LeaseSession {
   #ticking = false;
   #stopped = false;
   #lostBatchIndex: number | undefined;
+  /**
+   * R249: an owned lease that `finish()` must NOT release, because a marker was set when a
+   * `BeginPublish` was refused. It skips ONLY the release: `finish()` still reads the marker and
+   * records a recycle for one it owns, since the marker may be our own op stranded by a lost ack.
+   */
+  #keepLease = false;
   /** The op seq of this batch's publish, used to re-seed the backend's RunMutant counter. */
   #lastPublishOpSeq: number | undefined;
   /** Updated by `runSession` at the top of every batch — the scope of a lease-lost invalidation. */
@@ -2486,8 +2492,9 @@ class LeaseSession {
     const attemptId = newAttemptId(`pub-${this.d.runId}-b${this.currentBatchIndex}`);
     const begun = await this.d.client.beginPublish(this.d.lease, attemptId, opSeq);
     if (!begun.begun) {
-      this.noteLeaseLost(
+      await this.onBeginPublishRefused(
         `BeginPublish refused (opSeq ${opSeq}, attemptId ${attemptId}, alreadyCompleted ${String(begun.alreadyCompleted)})`,
+        begun.alreadyCompleted === true,
       );
       throw new LeaseUnavailableError(
         `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
@@ -2509,6 +2516,54 @@ class LeaseSession {
     await this.endPublish(attemptId, opSeq, "succeeded");
     this.#lastPublishOpSeq = opSeq;
     return result;
+  }
+
+  /**
+   * R249: a refused `BeginPublish` always stops the session, but only a PROVEN loss skips the
+   * release. The control app answers `{begun:false}` both for a tuple mismatch (lost) and for a
+   * different attempt holding the active seq (still ours), and `alreadyCompleted:true` only for a
+   * tombstoned opSeq under a matching tuple (ours). So:
+   * - `alreadyCompleted`: ours. Latch; `finish()` releases through its op gate.
+   * - else `RenewLease`: `renewed:false` is loss, as before. A lost tuple never comes back (the
+   *   epoch bumps), so `renewed:true` proves the tuple held at the refusal. Then an idle marker
+   *   latches and `finish()` releases; ANY active marker keeps the lease (fail closed). The renew
+   *   has just extended the ttl, so the hold can outlast today's; `lease-kept-under-marker` says so.
+   * - a probe that throws proves nothing: treated as loss, as before, so nothing is released.
+   */
+  private async onBeginPublishRefused(detail: string, alreadyCompleted: boolean): Promise<void> {
+    if (alreadyCompleted) {
+      this.d.safety.latchUnsafe(
+        `${detail}: our op seq is already completed; the lease is still ours`,
+      );
+      return;
+    }
+    let renewed: Awaited<ReturnType<LeaseApi["renew"]>>;
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      renewed = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
+      if (!renewed.renewed) {
+        this.noteLeaseLost(`${detail}; RenewLease answered renewed:false`);
+        return;
+      }
+      status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+    } catch (err) {
+      this.noteLeaseLost(`${detail}; the ownership probe failed (${messageOf(err)})`);
+      return;
+    }
+    if (status.opKind === OP_KIND_IDLE) {
+      this.d.safety.latchUnsafe(
+        `${detail}: the lease is still ours and no operation is in progress`,
+      );
+      return;
+    }
+    this.#keepLease = true;
+    this.stop();
+    this.d.safety.latchUnsafe(`${detail}: the lease is still ours but an operation marker is set`);
+    this.d.emit({
+      type: "warning",
+      code: "lease-kept-under-marker",
+      message: `[lethal] ${detail}. The lease is still ours (RenewLease renewed it, new expiry ${renewed.expiresAt}) but an operation marker is set (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}), so the session stopped and did NOT release the lease: releasing under a marker could let another session in on top of a live operation. The container stays locked until ${renewed.expiresAt}. To free it sooner: inspect the marker with \`lethal doctor --config <path>\`, reconcile what that operation left behind (restart the container if it may still be applying, design §8), then run \`lethal force-reset-lease --server <url> --instance <name> --config <path>\`.`,
+    });
   }
 
   /**
@@ -2848,6 +2903,9 @@ class LeaseSession {
       );
       return;
     }
+    // R249: the marker was set when BeginPublish was refused. It may have cleared since, but the
+    // session already warned that it keeps the lease, and keeping it is the fail-closed side.
+    if (this.#keepLease) return;
     try {
       const released = await this.d.client.release(this.d.lease);
       if (!released.released) {
