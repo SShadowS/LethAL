@@ -20,6 +20,7 @@ const PROJECTS = [
   "fixtures/sandbox-app",
   "fixtures/sandbox-data",
   "fixtures/sandbox-hang",
+  "fixtures/sandbox-symbols",
   "examples/gift-card",
   "examples/credit-limit",
 ];
