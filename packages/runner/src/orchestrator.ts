@@ -162,6 +162,7 @@ import {
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
+import { TestDigestError, testDigestsOfSources } from "./test-digest";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -169,7 +170,7 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { scanTestPageTests } from "./testpage-scan";
+import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
 import {
   describeTestPageUnsupported,
   isTestPageNotRunMessage,
@@ -4271,9 +4272,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
   // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
   // source a test can reach cannot be read: an unread test is not sent.
+  // R-278: one read of the test sources serves the scan and the per-test digests `lethal verify`
+  // compares against, recorded on the run row below.
+  await initParser();
+  const testSources = await readTestAppSources(cfg.testDir);
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
-    ? await scanTestPageTests(cfg.testDir, tests)
+    ? scanTestPageSources(testSources, tests)
     : new Map();
+  // R-278: a digest for EVERY discovered test, or none. Discovery is a regex and the digest a
+  // tree-sitter parse; where they disagree the run still measures, records no digests (NULL), and
+  // says so. Only verify reads them, and it refuses such a run by name.
+  let testDigests: Record<string, string> | undefined;
+  try {
+    testDigests = testDigestsOfSources(testSources, tests);
+  } catch (err) {
+    if (!(err instanceof TestDigestError)) throw err;
+    emit({
+      type: "warning",
+      code: "test-digests-unavailable",
+      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${err.message}`,
+    });
+  }
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
@@ -4336,6 +4355,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     identityScheme: IDENTITY_SCHEME,
     coverageMode: caps.coverage,
     ...(testAppHash !== undefined ? { testAppHash } : {}),
+    ...(testDigests !== undefined ? { testDigests } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,

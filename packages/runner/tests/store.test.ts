@@ -521,6 +521,54 @@ describe("ResultsStore", () => {
     rmSync(path, { force: true });
   });
 
+  // R-278: a runs table from before R-278 gains test_digests and its rows read NULL, which
+  // lethal verify refuses as a run that predates it.
+  test("migrates a pre-R-278 runs table: test_digests is added, old rows are NULL, new ones round-trip", () => {
+    const path = join(tmpdir(), `lethal-store-r278-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT,
+    source_sha256 TEXT,
+    identity_scheme INTEGER,
+    coverage_mode TEXT,
+    test_app_hash TEXT
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, identity_scheme, coverage_mode) VALUES ('P','bcdev','0.0.0.0', ${IDENTITY_SCHEME}, 'procedure')`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("test_digests");
+    expect(store.testDigests(1)).toBeNull();
+    const digests = { "50100::m": "a".repeat(64) };
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      testDigests: digests,
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    expect(store.testDigests(runId)).toEqual(digests);
+    store.db.run("UPDATE runs SET test_digests = '[1]' WHERE id = ?", [runId]);
+    expect(() => store.testDigests(runId)).toThrow(/corrupt "test_digests"/);
+    store.close();
+    rmSync(path, { force: true });
+  });
+
   test("priorSurvivorKeys returns a same-test-app run's survivors and none across a change", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
