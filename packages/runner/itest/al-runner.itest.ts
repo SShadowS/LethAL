@@ -6,6 +6,7 @@
  * script invoked via `bun run itest:alrunner` (root package.json), never
  * picked up by `bun test`.
  * R321: also runs fixtures/sandbox-symbols under [LETHALA] and [LETHALB], all three transports (symbol-fixture.ts).
+ * R353: also runs fixtures/sandbox-layout at two batches, one-shot and --server (layout-fixture.ts).
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -52,6 +53,15 @@ import {
 } from "./baseline-guard";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  LAYOUT_MAX_GUARDS,
+  LAYOUT_PROJECT_DIR,
+  LAYOUT_SELECTOR_IDS,
+  LAYOUT_TEST_DIR,
+  assertLayoutLegsEqual,
+  assertLayoutRun,
+  printLayoutTable,
+} from "./layout-fixture";
+import {
   assertEveryMutantHasReachGrain,
   assertNoReachAttestation,
   printReachSummary,
@@ -89,6 +99,8 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 // Aggregate counts (EXPECTED below) are a smoke test; this catches a per-mutant verdict swap
 // that leaves the aggregate counts unchanged.
 const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
+/** R353: the layout fixture's one-shot leg, recorded only through R332's record path. */
+const LAYOUT_BASELINE_PATH = join(HERE, "al-runner.layout.baseline.json");
 
 // R321: the symbol fixture pair, its own app and id range (79600-79699), so no other gate moves;
 // selector ids at the top of the target's range, per the `pickSelectorIds` convention.
@@ -109,6 +121,8 @@ interface GateFixture {
   readonly testDir: string;
   readonly selectorIds: typeof SELECTOR_IDS;
   readonly symbols: readonly string[];
+  /** R353: absent on every leg but the layout legs, so the others still run one batch. */
+  readonly maxGuardsPerBatch?: number;
 }
 
 const SANDBOX: GateFixture = {
@@ -223,6 +237,9 @@ async function runOnce(
       selectorIds: fixture.selectorIds,
       // R321: compiles nothing; it is only what `SessionReport.preprocessorSymbols` records.
       ...(fixture.symbols.length > 0 ? { preprocessorSymbols: fixture.symbols } : {}),
+      ...(fixture.maxGuardsPerBatch !== undefined
+        ? { maxGuardsPerBatch: fixture.maxGuardsPerBatch }
+        : {}),
     });
   } finally {
     store.close();
@@ -530,8 +547,66 @@ async function runSymbolLegs(): Promise<void> {
   }
 }
 
+/**
+ * R353: `sandbox-layout` at two batches, one-shot then `--server`. Only the one-shot leg can see a
+ * coverage index kept across `deploy()` (R349): it names a covered line's procedure through the
+ * index's line map, while the daemon names it itself. So `--server` is a CONTROL: it must match the
+ * table in every run, and equal the one-shot leg exactly when the one-shot leg is right.
+ *
+ * Checks are collected and thrown once, so a red-check shows both legs. Returns the one-shot
+ * report for `main()` to compare with the frozen baseline LAST, after every table check passed,
+ * so a record run can never record a leg that disagrees with the pre-commitment.
+ */
+async function runLayoutLegs(): Promise<SessionReport> {
+  const fixture: GateFixture = {
+    projectDir: LAYOUT_PROJECT_DIR,
+    testDir: LAYOUT_TEST_DIR,
+    selectorIds: LAYOUT_SELECTOR_IDS,
+    symbols: [],
+    maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
+  };
+  const failures: string[] = [];
+  const check = (what: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED ${what}: ${message}`);
+      failures.push(message);
+    }
+  };
+  const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-oneshot-"));
+  const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-layout-server-"));
+  try {
+    const oneShot = await runOnce(oneShotDir, false, "static", fixture);
+    printLayoutTable(oneShot, "one-shot");
+    check("layout one-shot", () => assertLayoutRun(oneShot, "one-shot"));
+
+    const viaServer = await runOnce(serverDir, true, "static", fixture);
+    printLayoutTable(viaServer, "--server");
+    check("layout --server", () => assertLayoutRun(viaServer, "--server"));
+    check("layout --server vs one-shot", () =>
+      assertLayoutLegsEqual(oneShot, viaServer, "--server"),
+    );
+
+    if (failures.length > 0) {
+      throw new Error(
+        `R353: ${failures.length} layout-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+      );
+    }
+    console.log(
+      `  layout legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
+    );
+    return oneShot;
+  } finally {
+    await rm(oneShotDir, { recursive: true, force: true });
+    await rm(serverDir, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
+  preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
   // Check BOTH symbol baselines before either leg runs: a missing file fails at startup rather
   // than after a live run, and record mode starts only when both files are in the state it needs.
   for (const symbols of SYMBOL_SETS) {
@@ -617,6 +692,9 @@ async function main(): Promise<void> {
     await rm(scratchD, { recursive: true, force: true });
   }
 
+  const layoutOneShot = await runLayoutLegs();
+  await assertGateBaseline(layoutOneShot, LAYOUT_BASELINE_PATH, "al-runner itest layout");
+
   await runSymbolLegs();
   if (RECORD_SYMBOL_BASELINES) {
     // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
@@ -629,7 +707,7 @@ async function main(): Promise<void> {
 
   console.log("al-runner itest: PASS");
   await emitPassed("alrunner", {
-    sublegs: ["one-shot", "server", "resource", "platform-pin"],
+    sublegs: ["one-shot", "server", "resource", "platform-pin", "layout-one-shot", "layout-server"],
     artifacts: { reported: false },
   });
 }

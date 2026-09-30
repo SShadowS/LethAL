@@ -1,0 +1,72 @@
+[
+  {
+    "key": "02892f3fb3b46e693091763e815b7540737f6ec9fc6dd7243792e5b1d11f4db7|Layout Alpha|IsBig|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "AlphaIsBig",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Layout Beta|Grow|lethal.return-value|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "473f8aabd89fb3776cd184869a26a1c95377d88cd9b8b6de8951a4d5feaddea4|Layout Beta|Twice|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "TwiceOfThree",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "556f58593db5335498212889dba9894dc670212013322a326eef302c07761f52|Layout Beta|Grow|lethal.empty-block|1",
+    "verdict": "killed",
+    "killingTest": "GrowAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7aa903a4ee5fd79e4e3ac2502a1c2246f91a8aaf5fa7bb2b6d11ee326b8586e6|Layout Beta|Grow|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "GrowAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Layout Beta|Grow|lethal.swap-additive|1",
+    "verdict": "killed",
+    "killingTest": "GrowAboveTen",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "860182fdff950522842eb58f98c29c20fa8b8ceca6dce0b78c4aa3237c1c91b5|Layout Alpha|IsBig|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "AlphaIsBig",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "e0227de3081ca2802aff69f83c9c34df2332781f4eb548dca858bad5f4f9c193|Layout Beta|Twice|lethal.return-value|1",
+    "verdict": "killed",
+    "killingTest": "TwiceOfThree",
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Layout Alpha|IsBig|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  },
+  {
+    "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Layout Beta|Grow|lethal.conditional-boundary|1",
+    "verdict": "survived",
+    "killingTest": null,
+    "coverageFiltered": false,
+    "errorClass": null
+  }
+]

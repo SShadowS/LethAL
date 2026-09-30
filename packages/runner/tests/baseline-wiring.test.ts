@@ -267,12 +267,12 @@ function preAwait(sf: ts.SourceFile): ts.Statement[] {
   return i < 0 ? [...stmts] : stmts.slice(0, i);
 }
 
-/** `const BASELINE_PATH = join(HERE, "<literal>")`, returning the literal. */
-function baselineName(sf: ts.SourceFile): string {
+/** `const <constant> = join(HERE, "<literal>")`, returning the literal. */
+function baselineName(sf: ts.SourceFile, constant = "BASELINE_PATH"): string {
   for (const s of sf.statements) {
     if (!ts.isVariableStatement(s)) continue;
     for (const d of s.declarationList.declarations) {
-      if (!ts.isIdentifier(d.name) || d.name.text !== "BASELINE_PATH") continue;
+      if (!ts.isIdentifier(d.name) || d.name.text !== constant) continue;
       const i = d.initializer;
       if (
         i &&
@@ -285,7 +285,7 @@ function baselineName(sf: ts.SourceFile): string {
       }
     }
   }
-  throw new Error(`${sf.fileName}: BASELINE_PATH is not join(HERE, "<name>")`);
+  throw new Error(`${sf.fileName}: ${constant} is not join(HERE, "<name>")`);
 }
 
 /** `process.exit(err instanceof BaselineRecordedError ? 3 : 1)` somewhere in the file. */
@@ -311,12 +311,16 @@ function exitsThreeOnRecord(sf: ts.SourceFile): boolean {
   return ok;
 }
 
-const WRITING_GATES: Record<string, string> = {
-  "al-runner.itest.ts": "al-runner.baseline.json",
-  "bcdev.itest.ts": "bcdev.baseline.json",
-  "envtool.itest.ts": "envtool.baseline.json",
-  "harden.itest.ts": "harden.baseline.json",
-  "tables.itest.ts": "tables.baseline.json",
+/** Each writing gate's baselines, keyed by the constant that holds the path. R353 gave al-runner a second. */
+const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
+  "al-runner.itest.ts": {
+    BASELINE_PATH: "al-runner.baseline.json",
+    LAYOUT_BASELINE_PATH: "al-runner.layout.baseline.json",
+  },
+  "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
+  "envtool.itest.ts": { BASELINE_PATH: "envtool.baseline.json" },
+  "harden.itest.ts": { BASELINE_PATH: "harden.baseline.json" },
+  "tables.itest.ts": { BASELINE_PATH: "tables.baseline.json" },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",
@@ -373,30 +377,32 @@ describe("R332 wiring: real call sites, not text", () => {
   });
 
   test("every registered gate baseline has a writing gate checked below; every reader names one", () => {
-    expect(Object.values(WRITING_GATES).sort()).toEqual(Object.keys(GATE_BASELINES).sort());
+    expect(Object.values(WRITING_GATES).flatMap(Object.values).sort()).toEqual(
+      Object.keys(GATE_BASELINES).sort(),
+    );
     expect(Object.values(READERS).filter((n) => GATE_BASELINES[n] === undefined)).toEqual([]);
   });
 
   test("each writing gate: BASELINE_PATH, startup preflight, a real assertGateBaseline call, exit 3", () => {
-    for (const [file, name] of Object.entries(WRITING_GATES)) {
+    for (const [file, baselines] of Object.entries(WRITING_GATES)) {
       const sf = parse(join(ITEST, file));
-      expect({ file, name: baselineName(sf) }).toEqual({ file, name });
       const head = preAwait(sf);
       const pre = head.flatMap((s) => calls(s, sf, "preflightGateBaseline"));
-      expect({
-        file,
-        preflight: pre.some((c) => c.arguments[0]?.getText(sf) === "BASELINE_PATH"),
-      }).toEqual({
-        file,
-        preflight: true,
-      });
       const writerFile = file === "harden.itest.ts" ? "harden-expected.ts" : file;
       const wsf = parse(join(ITEST, writerFile));
       const root = file === "harden.itest.ts" ? wsf : mainOf(wsf);
-      const asserted = calls(root, wsf, "assertGateBaseline").some((c) =>
-        ["BASELINE_PATH", "baselinePath"].includes(c.arguments[1]?.getText(wsf) ?? ""),
-      );
-      expect({ file, asserted }).toEqual({ file, asserted: true });
+      for (const [constant, name] of Object.entries(baselines)) {
+        expect({ file, name: baselineName(sf, constant) }).toEqual({ file, name });
+        expect({
+          file,
+          constant,
+          preflight: pre.some((c) => c.arguments[0]?.getText(sf) === constant),
+        }).toEqual({ file, constant, preflight: true });
+        const asserted = calls(root, wsf, "assertGateBaseline").some((c) =>
+          [constant, "baselinePath"].includes(c.arguments[1]?.getText(wsf) ?? ""),
+        );
+        expect({ file, constant, asserted }).toEqual({ file, constant, asserted: true });
+      }
       expect({ file, exit3: exitsThreeOnRecord(sf) }).toEqual({ file, exit3: true });
     }
     // harden: main() hands BASELINE_PATH to recordAfterBothLegs, whose body is checked above.
