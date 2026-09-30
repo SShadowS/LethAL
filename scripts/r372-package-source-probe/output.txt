@@ -1,0 +1,40 @@
+R-372 probe, 2026-09-30T11:40:31.297Z, AL extension ms-dynamics-smb.al-18.0.2732683, target http://Cronus28/BC tenant default
+alc: Microsoft (R) AL Compiler version 18.0.41.45789
+CASE A version 1.0.0.1 resourceExposurePolicy={"allowDebugging":true,"allowDownloadingSource":true,"includeSourceInSymbolFile":true}
+  published: OK
+  local .app: bytes=2690 manifestVersion=1.0.0.1 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  download: HTTP 200
+  downloaded: bytes=2690 manifestVersion=1.0.0.1 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+CASE B version 1.0.0.2 resourceExposurePolicy={"allowDebugging":true,"allowDownloadingSource":true,"includeSourceInSymbolFile":false}
+  published: OK
+  local .app: bytes=2693 manifestVersion=1.0.0.2 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  download: HTTP 200
+  downloaded: bytes=2693 manifestVersion=1.0.0.2 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+CASE C version 1.0.0.3 resourceExposurePolicy={"allowDebugging":true,"allowDownloadingSource":false,"includeSourceInSymbolFile":true}
+  published: OK
+  local .app: bytes=2695 manifestVersion=1.0.0.3 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  download: HTTP 200
+  downloaded: bytes=2695 manifestVersion=1.0.0.3 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+CASE D version 1.0.0.4 resourceExposurePolicy=(absent)
+  published: OK
+  local .app: bytes=2635 manifestVersion=1.0.0.4 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  download: HTTP 200
+  downloaded: bytes=2635 manifestVersion=1.0.0.4 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+UNPUBLISHED-EDIT CHECK (uses CASE A flags: allowDownloadingSource true, includeSourceInSymbolFile true)
+  published 1.0.0.5 with body X (ProbeAlpha: X := 1)
+  edited disk ProbeAlpha to X := 2, NOT republished
+  download: HTTP 200
+  downloaded vs ORIGINAL body X: bytes=2690 manifestVersion=1.0.0.5 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=EQUAL]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  downloaded vs EDITED disk body: bytes=2690 manifestVersion=1.0.0.5 allEntries=7 alEntries=1 [src/src/R372Probe.Codeunit.al=DIFFERENT]
+    entries: NavxManifest.xml, src/src/R372Probe.Codeunit.al, DocComments.xml, entitlement/5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11.xml, SymbolReference.json, MediaIdListing.xml, [Content_Types].xml
+  downloaded source holds OLD body (X := 1): true; holds NEW body (X := 2): false
+downloaded 1.0.0.5 byte-identical to locally compiled 1.0.0.5 .app: true (sha256 dl ded20d2695ceb1ff local ded20d2695ceb1ff)
