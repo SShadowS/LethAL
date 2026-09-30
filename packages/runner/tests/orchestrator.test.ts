@@ -2,8 +2,9 @@ import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -52,8 +53,9 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
-import { tinyBundle } from "./helpers/bundle";
+import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -3972,6 +3974,28 @@ describe("runSession — Layer 5A deployment identity", () => {
       payloadSha256: payload,
     });
     expect(opened.alSources.map((s) => s.path)).toContain("SandboxLogic.Codeunit.al");
+    store.close();
+  });
+
+  test("R360 I1: a session that throws after its bundle write prunes nothing, and the older finished run still loads", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new PhaseBackend(), store, ...dirs, selectorIds });
+    const done = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    class ThrowingAfterPublish extends PhaseBackend {
+      override async run(): Promise<TestVerdict> {
+        throw new Error("boom after the bundle write");
+      }
+    }
+    await expect(
+      runSession({ backend: new ThrowingAfterPublish(), store, ...dirs, selectorIds }),
+    ).rejects.toThrow("boom after the bundle write");
+    const threw = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(threw).toBeGreaterThan(done);
+    expect(store.installedBundle(threw, 0)).not.toBeNull();
+    const ref = { fromRunId: done, batchIndex: 0, appPath: "label", instrumentedDir: "label" };
+    const { manifest } = await loadInstalledArtifact(store, ref);
+    expect(manifest.mutants.length).toBeGreaterThan(0);
     store.close();
   });
 
@@ -11923,14 +11947,16 @@ describe("C02-04b: runNamedMutants", () => {
     expect(alAfter).not.toBe(alBefore);
   });
 
-  test("runNamedMutants refuses an unreadable AL source before any backend call", async () => {
+  // R360 C1: the stored AL text feeds the coverage line map, so a changed byte is refused.
+  test("runNamedMutants refuses a changed stored AL source before any backend call", async () => {
     const fx = await installedFixture();
-    // A directory named like a source: listed as an .al file, and reading it fails.
-    await mkdir(join(fx.installed.instrumentedDir, "Unreadable.Codeunit.al"));
+    fx.store.db
+      .query("UPDATE installed_bundle_files SET text_gz = ? WHERE run_id = ?")
+      .run(gzipSync("codeunit 1 Changed { }"), fx.installed.fromRunId);
     const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InstalledArtifactError);
-    expect((err as InstalledArtifactError).reason).toBe("local-copy-unreadable");
-    expect((err as InstalledArtifactError).detail).toContain(fx.installed.instrumentedDir);
+    expect((err as InstalledArtifactError).reason).toBe("payload-differs");
+    expect((err as InstalledArtifactError).detail).toContain("instrumented payload digest");
     expect(calls(fx.trace)).toEqual([]);
   });
 
@@ -11971,6 +11997,9 @@ describe("C02-04b: runNamedMutants", () => {
       ...m,
       mutants: m.mutants.slice(1),
     }));
+    // R360: the manifest is read from the store, so store the rewritten batch with a digest that
+    // matches it: only the manifest hash link can refuse it then.
+    await restoreBundleFromDisk(fx.store, fx.installed);
     await expect(
       runNamedMutants({ ...fx.cfg, requests: [{ mutantId: "M0002", methods: [OVER] }] }),
     ).rejects.toMatchObject({ reason: "manifest-differs" });
@@ -13563,3 +13592,30 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     );
   });
 });
+
+/** R360: replaces a run's stored bundle with what its batch dir holds now, digest included. */
+async function restoreBundleFromDisk(
+  store: ResultsStore,
+  at: { fromRunId: number; batchIndex: number; instrumentedDir: string; appPath: string },
+): Promise<void> {
+  const w = await bundleFor(at.instrumentedDir, at.appPath);
+  const key = [at.fromRunId, at.batchIndex] as const;
+  store.db
+    .query("UPDATE batch_artifacts SET payload_sha256 = ? WHERE run_id = ? AND batch_index = ?")
+    .run(w.payloadSha256, ...key);
+  store.db
+    .query(
+      "UPDATE installed_bundles SET app_bytes = ?, app_json_text = ?, manifest_gz = ? WHERE run_id = ? AND batch_index = ?",
+    )
+    .run(w.appBytes, w.appJsonText, w.manifestGz, ...key);
+  store.db
+    .query("DELETE FROM installed_bundle_files WHERE run_id = ? AND batch_index = ?")
+    .run(...key);
+  for (const f of w.files) {
+    store.db
+      .query(
+        "INSERT INTO installed_bundle_files (run_id, batch_index, path, text_gz) VALUES (?, ?, ?, ?)",
+      )
+      .run(...key, f.path, f.textGz);
+  }
+}

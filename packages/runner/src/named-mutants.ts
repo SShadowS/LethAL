@@ -1,10 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import type { BoundArtifact, TestMethodRef } from "./backend";
 import { describeThrown } from "./describe-error";
-import { readAlSources, renamedMemberNamesOf } from "./line-map";
+import { openInstalledBundle } from "./installed-bundle";
+import { renamedMemberNamesOf } from "./line-map";
 import { testKeyOf } from "./selection";
 import type { ResultsStore } from "./store";
 
@@ -13,26 +12,32 @@ export interface InstalledArtifactRef {
   /** The run that published it, and its batch index in that run. */
   readonly fromRunId: number;
   readonly batchIndex: number;
-  /** The compiled .app: `<sha256[0:16]>-<artifactId>.app` in the compiler outputDir. */
+  /** Where step 3d found the compiled .app. R360: a label for messages only; the bytes come from
+   *  the store, and the file is removed with the run's scratch folder. */
   readonly appPath: string;
-  /** Its batch dir: `run-<fromRunId>-batch-<batchIndex>` under the session's instrumentedDir. */
+  /** Where step 3d found the batch dir. R360: a label for messages only, like `appPath`. */
   readonly instrumentedDir: string;
 }
 
-async function readLocal<T>(what: string, read: () => Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (err) {
-    throw new InstalledArtifactError("local-copy-unreadable", `${what}: ${describeThrown(err)}`);
-  }
+/** R360: why a row written before R360 has no stored files. Shared with `lethal verify`. */
+export function predatesR360Detail(runId: number, batchIndex: number): string {
+  return `run ${runId} batch ${batchIndex} was recorded before R360; its files were kept in the temp folder then, not in the store; run lethal run again, then verify`;
+}
+
+/** R360: which run pruned a batch's stored files, and why. Shared with `lethal verify`. */
+export function prunedDetail(runId: number, batchIndex: number, prunedBy: number): string {
+  return prunedBy === runId
+    ? `run ${runId}'s installed files for batch ${batchIndex} were replaced when a later batch of the same run was published`
+    : `run ${runId}'s installed files were pruned when run ${prunedBy} finished (same app, same server), so they were replaced`;
 }
 
 /**
  * Links 1 and 2 of decision 1: the trusted store record exists and carries a manifest hash, and
- * the local .app and manifest are exactly the recorded ones. Reads only the store and local files;
- * never a backend. Returns the PARSED manifest; names are resolved in it and nowhere else. The
+ * the stored .app and manifest are exactly the recorded ones. Reads only the store (R360: the
+ * installed files live there, checked against the payload digest recorded at publish); never a
+ * file or a backend. Returns the PARSED manifest; names are resolved in it and nowhere else. The
  * returned artifact carries the verified .app bytes, `app.json` and every `.al` source, so no
- * later step re-reads a file this check did not see.
+ * later step reads anything this check did not see.
  *
  * Trust assumption: an artifactId is assumed to name one source set. A forged or partial build
  * carrying the same id is NOT detected here, so a named guard absent from it could still score
@@ -68,24 +73,47 @@ export async function loadInstalledArtifact(
       `run ${ref.fromRunId} batch ${ref.batchIndex} records artifact id "${record.artifactId}", which is not 32 lowercase hex, so it cannot be trusted`,
     );
   }
-  const manifestPath = join(ref.instrumentedDir, "mutant-manifest.json");
-  const appBytes = await readLocal(ref.appPath, () => readFile(ref.appPath));
-  const manifestText = await readLocal(manifestPath, () => readFile(manifestPath, "utf8"));
-  const manifest = await readLocal(
-    manifestPath,
-    async () => JSON.parse(manifestText) as MutantManifest,
-  );
-  // Every other local read `attach` needs, done here and only here (review r1 fix 2): an
-  // unreadable source is refused before any server call, and what attach indexes is what was read.
-  const appJsonPath = join(ref.instrumentedDir, "app.json");
-  const appJsonText = await readLocal(appJsonPath, () => readFile(appJsonPath, "utf8"));
-  const alSources = await readLocal(ref.instrumentedDir, () => readAlSources(ref.instrumentedDir));
+  // R360: no path fallback. A pre-R360 row is refused even when its temp folder still exists.
+  if (record.payloadSha256 === null) {
+    throw new InstalledArtifactError(
+      "no-record",
+      predatesR360Detail(ref.fromRunId, ref.batchIndex),
+    );
+  }
+  if (record.bundlePrunedBy !== null) {
+    throw new InstalledArtifactError(
+      "replaced",
+      prunedDetail(ref.fromRunId, ref.batchIndex, record.bundlePrunedBy),
+    );
+  }
+  const rows = store.installedBundle(ref.fromRunId, ref.batchIndex);
+  if (rows === null) {
+    throw new InstalledArtifactError(
+      "payload-differs",
+      `run ${ref.fromRunId} batch ${ref.batchIndex} records an instrumented payload digest but the store holds no installed files for it (a corrupt store)`,
+    );
+  }
+  const stored = openInstalledBundle(rows, {
+    runId: ref.fromRunId,
+    batchIndex: ref.batchIndex,
+    payloadSha256: record.payloadSha256,
+  });
+  const where = `the stored files of run ${ref.fromRunId} batch ${ref.batchIndex}`;
+  let manifest: MutantManifest;
+  try {
+    manifest = JSON.parse(stored.manifestText) as MutantManifest;
+  } catch (err) {
+    throw new InstalledArtifactError(
+      "manifest-differs",
+      `${where}: the manifest does not parse: ${describeThrown(err)}`,
+    );
+  }
 
-  const appSha = Bun.SHA256.hash(appBytes, "hex");
+  const appSha = Bun.SHA256.hash(stored.appBytes, "hex");
   if (appSha !== record.sha256) {
     throw new InstalledArtifactError(
       "local-copy-differs",
-      `${ref.appPath} hashes to ${appSha}, the record says ${record.sha256}`,
+      `${where}: the .app hashes to ${appSha}, the record says ${record.sha256}`,
     );
   }
   // Hash of the RE-STRINGIFIED object, matching what step 3d hashed (the compiler's object), so
@@ -94,13 +122,13 @@ export async function loadInstalledArtifact(
   if (manifestSha !== record.manifestSha256) {
     throw new InstalledArtifactError(
       "manifest-differs",
-      `${manifestPath} hashes to ${manifestSha}, the record says ${record.manifestSha256}`,
+      `${where}: the manifest hashes to ${manifestSha}, the record says ${record.manifestSha256}`,
     );
   }
   if (manifest.artifactId !== record.artifactId) {
     throw new InstalledArtifactError(
       "manifest-differs",
-      `${manifestPath} names artifact ${String(manifest.artifactId)}, the record says ${record.artifactId}`,
+      `${where}: the manifest names artifact ${String(manifest.artifactId)}, the record says ${record.artifactId}`,
     );
   }
   return {
@@ -110,9 +138,9 @@ export async function loadInstalledArtifact(
       sha256: record.sha256,
       appPath: ref.appPath,
       instrumentedDir: ref.instrumentedDir,
-      appBytes: new Uint8Array(appBytes),
-      appJsonText,
-      alSources,
+      appBytes: stored.appBytes,
+      appJsonText: stored.appJsonText,
+      alSources: stored.alSources,
       renamedMemberNames: renamedMemberNamesOf(manifest.mutants),
     },
     manifest,

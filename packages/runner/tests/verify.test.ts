@@ -263,10 +263,30 @@ describe("resolveVerifySource", () => {
     store.close();
   });
 
-  test("a record with no installed files or source hash is source-predates-verify, before any mutant row is read", () => {
+  test("a record with no stored files, a pruned one, or no source hash is refused before any mutant row is read", () => {
     // Each row has a NULL covering_tests list, on which batchMutantRows throws. The typed refusal
-    // must come first.
-    for (const over of [{ appPath: undefined }, { instrumentedDir: undefined }, {}]) {
+    // must come first. R360: the installed files are the stored bundle, with no path fallback.
+    const cases = [
+      {
+        sql: "UPDATE batch_artifacts SET payload_sha256 = NULL",
+        hash: true,
+        reason: "source-predates-verify",
+        text: "recorded before R360",
+      },
+      {
+        sql: "UPDATE batch_artifacts SET bundle_pruned_by = 9",
+        hash: true,
+        reason: "artifact-files-unusable",
+        text: "pruned when run 9 finished",
+      },
+      {
+        sql: undefined,
+        hash: false,
+        reason: "source-predates-verify",
+        text: "did not record its source hash",
+      },
+    ] as const;
+    for (const c of cases) {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
         coverageMode: "procedure",
@@ -275,11 +295,13 @@ describe("resolveVerifySource", () => {
         backend: "bcdev",
         appVersion: "0.0.0.0",
       });
-      store.recordArtifact(runId, artifact(0, A1, over));
-      if (Object.keys(over).length > 0) store.recordSourceHash(runId, "5".repeat(64));
+      store.recordArtifact(runId, artifact(0, A1));
+      if (c.sql !== undefined) store.db.exec(c.sql);
+      if (c.hash) store.recordSourceHash(runId, "5".repeat(64));
       store.recordMutant(runId, mutantRow("M0001", "survived", { coveringTests: undefined }));
       const e = refusal(() => resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"])));
-      expect(e.reason).toBe("source-predates-verify");
+      expect(e.reason).toBe(c.reason);
+      expect(e.detail).toContain(c.text);
       store.close();
     }
   });

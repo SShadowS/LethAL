@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
 import type { InstalledBundleWrite } from "../src/installed-bundle";
+import { bundleOfParts } from "../src/installed-bundle";
 import {
   type InstalledArtifactRef,
   NamedMutantError,
@@ -15,6 +17,7 @@ import {
   resolveNamedMutants,
 } from "../src/named-mutants";
 import { ResultsStore } from "../src/store";
+import { verifyRefusalOf } from "../src/verify";
 import { bundleFor } from "./helpers/bundle";
 
 const ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
@@ -87,21 +90,11 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  test("loadInstalledArtifact refuses a manifest with the recorded id but other mutants", async () => {
-    const [first] = MANIFEST.mutants;
-    await writeFile(
-      join(ref.instrumentedDir, "mutant-manifest.json"),
-      JSON.stringify({ ...MANIFEST, mutants: [first] }),
-    );
-    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
-      reason: "manifest-differs",
-    });
-  });
-
-  test("loadInstalledArtifact refuses a manifest whose hash matches but whose id does not", async () => {
-    // Record the hash of a manifest carrying ANOTHER id: the hash link holds, the id link must not.
-    const other = { ...MANIFEST, artifactId: "f".repeat(32) };
-    await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), JSON.stringify(other));
+  /** R360: records a fresh run whose stored bundle holds these parts, with `over` on the row. */
+  function recordStored(
+    parts: { manifestText?: string; app?: string },
+    over: { manifestSha256?: string; sha256?: string } = {},
+  ): InstalledArtifactRef {
     const runB = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
@@ -110,44 +103,95 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runB, {
-      bundle,
+      bundle: bundleOfParts({
+        appBytes: new TextEncoder().encode(parts.app ?? appBytes),
+        appJsonText: APP_JSON,
+        manifestText: parts.manifestText ?? JSON.stringify(MANIFEST, null, 2),
+        files: [{ path: "src/A.Codeunit.al", text: AL_SOURCE }],
+      }),
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP_ID,
       artifactId: ARTIFACT_ID,
-      sha256: sha(appBytes),
-      manifestSha256: sha(JSON.stringify(other)),
+      sha256: over.sha256 ?? sha(appBytes),
+      manifestSha256: over.manifestSha256 ?? sha(JSON.stringify(MANIFEST)),
     });
-    await expect(loadInstalledArtifact(store, { ...ref, fromRunId: runB })).rejects.toMatchObject({
+    return { ...ref, fromRunId: runB };
+  }
+
+  test("loadInstalledArtifact refuses a manifest with the recorded id but other mutants", async () => {
+    const [first] = MANIFEST.mutants;
+    const r = recordStored({ manifestText: JSON.stringify({ ...MANIFEST, mutants: [first] }) });
+    await expect(loadInstalledArtifact(store, r)).rejects.toMatchObject({
       reason: "manifest-differs",
     });
   });
 
-  test("loadInstalledArtifact refuses a .app that is not the recorded bytes", async () => {
-    await appendFile(ref.appPath, "x");
-    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
+  test("loadInstalledArtifact refuses a manifest whose hash matches but whose id does not", async () => {
+    // Record the hash of a manifest carrying ANOTHER id: the hash link holds, the id link must not.
+    const other = { ...MANIFEST, artifactId: "f".repeat(32) };
+    const r = recordStored(
+      { manifestText: JSON.stringify(other) },
+      { manifestSha256: sha(JSON.stringify(other)) },
+    );
+    await expect(loadInstalledArtifact(store, r)).rejects.toMatchObject({
+      reason: "manifest-differs",
+    });
+  });
+
+  test("loadInstalledArtifact refuses a stored .app that is not the recorded bytes", async () => {
+    const r = recordStored({ app: `${appBytes}x` });
+    await expect(loadInstalledArtifact(store, r)).rejects.toMatchObject({
       reason: "local-copy-differs",
     });
   });
 
-  test("loadInstalledArtifact refuses a missing file and a corrupt manifest as local-copy-unreadable", async () => {
-    await rm(ref.appPath);
-    const missing = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
-    expect(missing).toBeInstanceOf(InstalledArtifactError);
-    expect(missing).toMatchObject({ reason: "local-copy-unreadable" });
-    // The cause text is kept, so the refusal says WHICH read failed.
-    expect((missing as InstalledArtifactError).detail).toContain(ref.appPath);
-
-    await Bun.write(ref.appPath, appBytes);
-    await writeFile(join(ref.instrumentedDir, "mutant-manifest.json"), "{not json");
-    const corrupt = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
-    expect(corrupt).toBeInstanceOf(InstalledArtifactError);
-    expect(corrupt).toMatchObject({ reason: "local-copy-unreadable" });
-
-    await rm(join(ref.instrumentedDir, "mutant-manifest.json"));
-    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
-      reason: "local-copy-unreadable",
+  test("loadInstalledArtifact refuses a stored manifest that does not parse", async () => {
+    const r = recordStored({ manifestText: "{not json" });
+    await expect(loadInstalledArtifact(store, r)).rejects.toMatchObject({
+      reason: "manifest-differs",
     });
+  });
+
+  // R360 C1: the .al text feeds the coverage line map, and before R360 nothing checked it.
+  test("C1: one changed byte of one stored .al is refused, naming the payload digest", async () => {
+    store.db
+      .query("UPDATE installed_bundle_files SET text_gz = ? WHERE run_id = ?")
+      .run(gzipSync(AL_SOURCE.replace("A", "B")), runId);
+    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledArtifactError);
+    expect(err).toMatchObject({ reason: "payload-differs" });
+    expect(verifyRefusalOf(err)).toMatchObject({
+      kind: "refused",
+      reason: "artifact-files-unusable",
+      detail: expect.stringContaining("instrumented payload digest"),
+    });
+  });
+
+  test("a store that lost the installed files is refused as payload-differs, never read as empty", async () => {
+    store.db.query("DELETE FROM installed_bundles WHERE run_id = ?").run(runId);
+    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
+      reason: "payload-differs",
+    });
+  });
+
+  // R360: no path fallback. The files are still on disk here, and the row is refused anyway.
+  test("a row recorded before R360 is refused as predating R360, even with its files on disk", async () => {
+    store.db.query("UPDATE batch_artifacts SET payload_sha256 = NULL WHERE run_id = ?").run(runId);
+    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(err).toMatchObject({ reason: "no-record" });
+    expect((err as InstalledArtifactError).detail).toContain("recorded before R360");
+    expect(verifyRefusalOf(err)).toMatchObject({ reason: "source-predates-verify" });
+  });
+
+  test("a pruned row is refused as replaced, naming the run that pruned it", async () => {
+    store.db.query("UPDATE batch_artifacts SET bundle_pruned_by = 9 WHERE run_id = ?").run(runId);
+    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(err).toMatchObject({ reason: "replaced" });
+    expect((err as InstalledArtifactError).detail).toContain(
+      `run ${runId}'s installed files were pruned when run 9 finished (same app, same server)`,
+    );
+    expect(verifyRefusalOf(err)).toMatchObject({ reason: "artifact-files-unusable" });
   });
 
   test("loadInstalledArtifact refuses a run with no record, and a record without the manifest hash", async () => {
@@ -220,27 +264,9 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       instrumentedDir: ref.instrumentedDir,
       appBytes: new Uint8Array(Buffer.from(appBytes)),
       appJsonText: APP_JSON,
-      alSources: [{ path: join("src", "A.Codeunit.al"), text: AL_SOURCE }],
+      alSources: [{ path: "src/A.Codeunit.al", text: AL_SOURCE }],
       // R318: from the VERIFIED manifest, for the fenced line map `attach` builds.
       renamedMemberNames: new Map([["codeunit:79000", [["Pick", "Choose"]]]]),
-    });
-  });
-
-  // Review r1 fix 2: every local read attach needs happens here, so a bad one is refused before
-  // any server call rather than after the lease and the registry check.
-  test("loadInstalledArtifact refuses an unreadable AL source or app.json as local-copy-unreadable", async () => {
-    // A directory named like a source: it is listed as an .al file, and reading it fails.
-    const bad = join(ref.instrumentedDir, "Bad.Codeunit.al");
-    await mkdir(bad);
-    const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(InstalledArtifactError);
-    expect(err).toMatchObject({ reason: "local-copy-unreadable" });
-    expect((err as InstalledArtifactError).detail).toContain(ref.instrumentedDir);
-
-    await rm(bad, { recursive: true });
-    await rm(join(ref.instrumentedDir, "app.json"));
-    await expect(loadInstalledArtifact(store, ref)).rejects.toMatchObject({
-      reason: "local-copy-unreadable",
     });
   });
 });
