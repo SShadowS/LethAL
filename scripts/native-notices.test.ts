@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { UPSTREAM_LICENSES, licenseTexts, spdxAllowed } from "./native-notices";
+
+const scratch = scratchDirs();
 
 describe("spdxAllowed", () => {
   const cases: [string, boolean][] = [
@@ -24,7 +26,7 @@ describe("spdxAllowed", () => {
 });
 
 describe("licenseTexts", () => {
-  const root = mkdtempSync(join(tmpdir(), "notices-"));
+  const root = scratch("lethal-notices-");
   const pkg = (name: string, files: Record<string, string>) => {
     const d = join(root, name);
     mkdirSync(d, { recursive: true });

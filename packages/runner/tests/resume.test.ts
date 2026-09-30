@@ -1,8 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
@@ -37,6 +35,9 @@ import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R47 — resuming an aborted run.
@@ -97,7 +98,7 @@ const SECOND_AL = `codeunit 79002 "Sandbox Extra"
 `;
 
 async function makeProject(opts: { secondFile?: boolean } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "lethal-resume-"));
+  const root = scratch("lethal-resume-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
@@ -256,7 +257,7 @@ class NeverAttestingBackend implements ExecutionBackend {
 }
 
 function tmpdirSync(): string {
-  return mkdtempSync(join(tmpdir(), "lethal-store-"));
+  return scratch("lethal-store-");
 }
 
 function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
@@ -2420,7 +2421,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
   });
 
   test("runSession: the member is scored exact against a FRESH baseline, not carried or snapshot-reused", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-r318-resume-"));
+    const root = scratch("lethal-r318-resume-");
     const dirs = {
       projectDir: join(root, "app"),
       testDir: join(root, "tests"),
@@ -2530,7 +2531,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
 
   /** A run under the OLD naming, relabelled to `scheme` with the fingerprint that scheme computes. */
   async function oldNamingRun(scheme: number, finished: boolean) {
-    const root = await mkdtemp(join(tmpdir(), "lethal-r318-scheme-"));
+    const root = scratch("lethal-r318-scheme-");
     roots.push(root);
     const dirs = {
       projectDir: join(root, "app"),

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AL_RUNNER_PROVISION_SENTINEL, AlRunnerBackend } from "../src/al-runner-backend";
 import type { SpawnFn } from "../src/publisher";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R128 — the one-time provisioning step, and the three properties that decide whether it helps or
@@ -34,7 +36,7 @@ function spyingSpawn(result: { exitCode: number; stdout: string; stderr: string 
 }
 
 async function makeBackend(spawn: SpawnFn) {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-provision-"));
+  const dir = scratch("lethal-alrunner-provision-");
   await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
   return new AlRunnerBackend(
     {

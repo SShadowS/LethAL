@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
@@ -16,6 +15,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
@@ -60,6 +60,10 @@ import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
+import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
+removeRunScratchAfterAll();
 
 /**
  * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
@@ -1122,7 +1126,7 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
 // ————————————————————————————————————————————————————————————————————————
 describe("clearQuarantine (Task 13)", () => {
   async function freshStore(): Promise<QuarantineStore> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-cli-quarantine-"));
+    const dir = scratch("lethal-cli-quarantine-");
     return new QuarantineStore(dir);
   }
 
@@ -1540,7 +1544,7 @@ describe("resolveForceResetLeaseConfig (R51 follow-on)", () => {
 // ————————————————————————————————————————————————————————————————————————
 describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
   test("resolves an envTool config file end-to-end and completes the reset", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-force-reset-envtool-"));
+    const dir = scratch("lethal-force-reset-envtool-");
     const configPath = join(dir, "lethal.config.json");
     const configFile: LethalConfigFile = {
       bcdev: {
@@ -1970,13 +1974,13 @@ describe("issue #21: --dry-run needs no config file", () => {
     ).toMatchObject({ configPath: "c.json", configExplicit: true });
   });
   test("an absent DEFAULTED config is no config; an absent explicit one still throws", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const dir = scratch("lethal-dry-");
     const path = join(dir, "lethal.config.json");
     expect(await loadDryRunConfig(path, false)).toBeUndefined();
     await expect(loadDryRunConfig(path, true)).rejects.toThrow("cannot read config file");
   });
   test("a present but invalid config throws even when defaulted", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const dir = scratch("lethal-dry-");
     const path = join(dir, "lethal.config.json");
     await writeFile(path, "{ not json");
     await expect(loadDryRunConfig(path, false)).rejects.toThrow("not valid JSON");
@@ -2013,7 +2017,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   }
 
   test("the config's preprocessorSymbols reach the report and the recorded source hash", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-cli-symbols-"));
+    const root = scratch("lethal-cli-symbols-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     await mkdir(projectDir, { recursive: true });
@@ -2080,6 +2084,165 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(row.source_sha256).toBe(await hashTargetSource(projectDir, ["X"]));
     // And it is not the hash without the symbol, so the symbol is what is being compared.
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
+  });
+});
+
+// R358 review C1: `lethal run` KEEPS its scratch folder because the store records the installed
+// batch's `.app` and instrumented folder inside it and `lethal verify` reads them back. Driven
+// through the REAL runFromCli, runSession and verifyFromCli against one store; only the backends
+// are fakes. The verify fake stops at `compileTestApp`, the first backend call after
+// `loadInstalledArtifact`, so reaching it proves verify read the run's files. With the run's
+// scratch folder removed, verify instead prints an `artifact-files-unusable` refusal.
+describe("lethal run then lethal verify on one store (R358)", () => {
+  class DeployingBackend implements ExecutionBackend {
+    capabilities(): BackendCapabilities {
+      return { coverage: "none", deploy: "publish", isolation: "session", authoritative: false };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "fake" };
+    }
+    async deploy(dir: string): Promise<CompiledArtifact | null> {
+      const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+        id: string;
+        version: string;
+      };
+      const mutantManifest = JSON.parse(
+        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+      ) as CompiledArtifact["mutantManifest"];
+      const appPath = join(dir, "fake.app");
+      await writeFile(appPath, mutantManifest.artifactId);
+      return {
+        artifactId: mutantManifest.artifactId,
+        appId: appManifest.id,
+        appVersion: appManifest.version,
+        appPath,
+        sha256: Bun.SHA256.hash(new TextEncoder().encode(mutantManifest.artifactId), "hex"),
+        mutantManifest,
+        appManifest: appManifest as unknown as Record<string, unknown>,
+      };
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(): Promise<void> {}
+    async run(ref: TestMethodRef): Promise<TestVerdict> {
+      return { ref, outcome: "pass", durationMs: 1 };
+    }
+  }
+
+  test("verify reads the installed batch's files the run left behind", async () => {
+    const root = scratch("lethal-run-verify-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Run Verify Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(
+      join(projectDir, "Logic.Codeunit.al"),
+      `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`,
+    );
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        bcdev: {
+          mcpCommand: ["bun", "x", "bc-dev-mcp"],
+          server: "http://x",
+          serverInstance: "BC",
+          company: "CRONUS",
+          username: "u",
+          password: "p",
+          packageCachePath: "C:/.alpackages",
+          controlSymbolPath: "C:/lethal-control.app",
+        },
+      }),
+    );
+    const dbPath = join(root, "lethal.sqlite");
+    const report = await runFromCli(
+      {
+        mode: "run",
+        projectDir,
+        testDir,
+        backendKind: "al-runner",
+        dbPath,
+        configPath,
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+      },
+      {
+        validateSelectorIdsForProject: async () => {},
+        buildBackend: async () => new DeployingBackend(),
+      },
+    );
+    const survivor = report.mutants.find((m) => m.verdict === "survived");
+    const artifactId = report.artifacts?.[0]?.artifactId;
+    expect(survivor).toBeDefined();
+    expect(artifactId).toBeDefined();
+    if (survivor === undefined || artifactId === undefined) return;
+
+    let reachedWith: string | undefined;
+    const verifyBackend = Object.assign(Object.create(BcDevMcpBackend.prototype), {
+      capabilities: (): BackendCapabilities => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      compileTestApp: async (_dir: string, target: { artifactId: string }) => {
+        reachedWith = target.artifactId;
+        throw new Error("R358 fake: verify reached compileTestApp");
+      },
+      close: async () => {},
+    }) as BcDevMcpBackend;
+    let printed = "";
+    const outcome = await verifyFromCli(
+      {
+        mode: "verify",
+        dbPath,
+        artifact: artifactId,
+        testDir,
+        survivors: [`${survivor.batchIndex}/${survivor.mutantCode}`],
+        configPath,
+      },
+      {
+        write: (s) => {
+          printed += s;
+        },
+        buildBackend: async () => verifyBackend,
+      },
+    ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+    expect(printed).toBe("");
+    expect(outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(reachedWith).toBe(artifactId);
   });
 });
 
@@ -2153,7 +2316,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
   });
 
   test("verify refuses a config with an envTool section", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
     await writeFile(
@@ -2202,7 +2365,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
   });
 
   test("verify refuses a project without app.json before building the backend, and closes the store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
     // A valid config, so only the missing app.json can stop it.
@@ -2249,6 +2412,50 @@ describe("C02-06: lethal verify (Task 7)", () => {
     expect(built).toBe(0);
     // Windows refuses to delete a file an open handle holds: this passes only if the store closed.
     rmSync(dbPath);
+  });
+
+  test("verify removes its scratch directory when the backend build fails (R358)", async () => {
+    const root = scratch("lethal-verify-cli-");
+    const project = join(root, "proj");
+    await mkdir(project);
+    await writeFile(
+      join(project, "lethal.config.json"),
+      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
+    );
+    await writeFile(join(project, "app.json"), "{}");
+    const dbPath = join(root, "r.sqlite");
+    const store = new ResultsStore(dbPath);
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: project,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.0.0",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: A,
+      sha256: "1".repeat(64),
+    });
+    store.close();
+    let scratchRoot: string | undefined;
+    const buildErr = new Error("no backend");
+    await expect(
+      verifyFromCli(
+        { mode: "verify", dbPath, artifact: A, testDir: join(root, "t"), survivors: ["0/M0001"] },
+        {
+          write: () => {},
+          buildBackend: async (_inputs, _config, dir) => {
+            scratchRoot = dir;
+            throw buildErr;
+          },
+        },
+      ),
+    ).rejects.toBe(buildErr);
+    expect(scratchRoot).toBeDefined();
+    expect(existsSync(scratchRoot ?? "")).toBe(false);
   });
 
   test("VERIFY_NOT_ALL_KILLED_EXIT_CODE and VERIFY_REFUSED_EXIT_CODE are 5 and 6, and 3 and 4 are reused", () => {

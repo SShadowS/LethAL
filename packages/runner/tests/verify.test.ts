@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   IDENTITY_SCHEME,
@@ -39,6 +38,9 @@ import {
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const A1 = "a".repeat(32);
 const A2 = "b".repeat(32);
@@ -381,7 +383,7 @@ describe("assertSourceUnchanged", () => {
   const SYMBOLS = ["CLEAN24"];
 
   async function project(): Promise<{ dir: string; source: VerifySource }> {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-src-"));
+    const dir = scratch("lethal-verify-src-");
     mkdirSync(join(dir, "src"));
     writeFileSync(join(dir, "app.json"), '{"id":"x"}');
     writeFileSync(join(dir, "src", "Logic.Codeunit.al"), "codeunit 50100 Logic { }");
@@ -466,7 +468,7 @@ describe("assertSourceUnchanged", () => {
 /** R-236c: `Old.A` (green, only when asked), `Old.P` and `New.NP`, both with a reachable call that
  *  may open a TestPage. */
 function pageTestDir(withGreenA = true): string {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tp-"));
+  const dir = scratch("lethal-verify-tp-");
   const a = withGreenA ? "    [Test]\n    procedure A()\n    begin\n    end;\n\n" : "";
   writeFileSync(
     join(dir, "50100.Codeunit.al"),
@@ -484,7 +486,7 @@ describe("planVerify", () => {
 
   /** A temp test project with one real `.al` test codeunit per entry. */
   function testDir(codeunits: readonly Codeunit[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tests-"));
+    const dir = scratch("lethal-verify-tests-");
     for (const c of codeunits) {
       const methods = c.methods
         .map((m) => `    [Test]\n    procedure ${m}()\n    begin\n${c.body ?? ""}    end;\n`)
@@ -503,7 +505,7 @@ describe("planVerify", () => {
 
   /** A project dir holding the given marks file, or none when `marks` is undefined. */
   function project(marks?: unknown): string {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-proj-"));
+    const dir = scratch("lethal-verify-proj-");
     if (marks !== undefined) {
       writeFileSync(
         join(dir, "lethal.equivalent.json"),
@@ -776,7 +778,7 @@ describe("planVerify", () => {
   });
 
   test("R-236c: a reachable parse error is rethrown as TestPageScanError, never a verify refusal", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "lethal-verify-tp-err-"));
+    const dir = scratch("lethal-verify-tp-err-");
     writeFileSync(
       join(dir, "50100.Codeunit.al"),
       `codeunit 50100 "T"
@@ -987,7 +989,7 @@ function installedRun(
   sourceSha256 = "5".repeat(64),
   coveringTests: readonly string[] = ["T.M"],
 ): number {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-"));
+  const dir = scratch("lethal-verify-gap-");
   const manifest: MutantManifest = {
     selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
     artifactId,
@@ -1298,7 +1300,7 @@ describe("C02-09: gap ids", () => {
       readonly sourceCoverage?: CoverageMode | null;
     } = {},
   ) {
-    const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-gap-proj-"));
+    const projectDir = scratch("lethal-verify-gap-proj-");
     writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
     mkdirSync(join(projectDir, "src"));
     writeFileSync(join(projectDir, "src", "Logic.Codeunit.al"), 'codeunit 50000 "Logic" { }');
@@ -1311,7 +1313,7 @@ describe("C02-09: gap ids", () => {
         JSON.stringify({ identityScheme: IDENTITY_SCHEME, marks }),
       );
     }
-    const testDir = over.testDir ?? mkdtempSync(join(tmpdir(), "lethal-verify-gap-tests-"));
+    const testDir = over.testDir ?? scratch("lethal-verify-gap-tests-");
     if (over.testDir === undefined) {
       writeFileSync(
         join(testDir, "50100.Codeunit.al"),

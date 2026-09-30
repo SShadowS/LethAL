@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import { buildBackend, validateSelectorIdsForProject } from "../src/cli";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R3/R4: proves the real (non-mocked) `buildBackend`/`validateSelectorIdsForProject` wiring —
@@ -19,7 +21,7 @@ async function writeTempProject(
   idRanges: ReadonlyArray<{ from: number; to: number }>,
   extraAlFiles: Readonly<Record<string, string>> = {},
 ): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-selector-ids-"));
+  const dir = scratch("lethal-selector-ids-");
   await writeFile(
     join(dir, "app.json"),
     JSON.stringify({ id: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a", idRanges }),

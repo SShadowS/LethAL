@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -13,6 +13,9 @@ import {
 } from "../src/baseline-snapshot";
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R192, second half. The two hashes are the whole safety argument for reusing a baseline, so each
@@ -20,7 +23,7 @@ import { ResultsStore } from "../src/store";
  */
 
 function tree(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-snapshot-"));
+  const dir = scratch("lethal-snapshot-");
   for (const [rel, text] of Object.entries(files)) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });

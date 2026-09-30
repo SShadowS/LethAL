@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperationStatus } from "../../packages/runner/src/lease";
+import { scratchDirs } from "../../packages/runner/tests/helpers/scratch";
 import { calibrationScript } from "./calibrate";
 import type { CallTrace } from "./fetch-trace";
+
+const scratch = scratchDirs();
 // Imported WITH its extension: R186's importer check matches by basename, so a bare "./probe" is read as
 // importing the unguarded `scripts/r126-server-probe/probe.ts`. This probe.ts is guarded by import.meta.main.
 import {
@@ -369,7 +371,7 @@ describe("writeCaptures (orchestrator ruling A: partial and full TestPage answer
   });
 
   test("each capture lands in <out>.partial/ with its offset, bytesReceived, path and sha256", () => {
-    const dir = mkdtempSync(join(tmpdir(), "r236-cap-"));
+    const dir = scratch("lethal-r236-cap-");
     const out = join(dir, "A1.ndjson");
     const partial = new Uint8Array([123, 34, 118]);
     const full = new TextEncoder().encode('{"value":"x"}');

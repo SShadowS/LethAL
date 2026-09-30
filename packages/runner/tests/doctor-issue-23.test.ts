@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
@@ -7,6 +7,9 @@ import { readSystemRuntime } from "../src/app-package";
 import { checkAlcRuntime, checkTestApp } from "../src/doctor";
 import { HarnessVerifier } from "../src/harness";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * Issue #23: doctor was green on a BC29 server with an alc 17 (every compile then failed with
@@ -20,7 +23,7 @@ const manifest = (name: string, version: string, runtime: string) =>
 
 describe("readSystemRuntime", () => {
   test("reads the NEWEST Microsoft System package's Runtime, ignoring other apps", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-sysrt-"));
+    const dir = scratch("lethal-sysrt-");
     const app = (m: string) => buildFakeAppWithEntries({ "NavxManifest.xml": m });
     await writeFile(join(dir, "old.app"), app(manifest("System", "28.0.1.0", "17.0")));
     await writeFile(join(dir, "new.app"), app(manifest("System", "29.0.54226.0", "18.0")));
@@ -32,7 +35,7 @@ describe("readSystemRuntime", () => {
   });
   test("absent cache or no System package is undefined, not a guess", async () => {
     expect(await readSystemRuntime(join(tmpdir(), "lethal-no-such-cache-xyz"))).toBeUndefined();
-    const dir = await mkdtemp(join(tmpdir(), "lethal-sysrt-empty-"));
+    const dir = scratch("lethal-sysrt-empty-");
     expect(await readSystemRuntime(dir)).toBeUndefined();
   });
 });

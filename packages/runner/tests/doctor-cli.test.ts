@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BcDevConfigSection, LethalConfigFile } from "../src/cli";
@@ -20,6 +20,9 @@ import {
   validateBcDevConfig,
 } from "../src/cli";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "../src/doctor";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R131, R264: directories that do not exist, unique per process, so a cache check reports a
@@ -184,7 +187,7 @@ describe("lethal doctor CLI wiring — config-level parity", () => {
 describe("lethal doctor CLI wiring — environment (direct container)", () => {
   test("a healthy direct container reports the reachable sentinel, never an invented status word", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-ok-"));
+    const dir = scratch("lethal-doctor-env-direct-ok-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
@@ -197,7 +200,7 @@ describe("lethal doctor CLI wiring — environment (direct container)", () => {
 
   test("an unreachable container fails the environment check with the real HTTP detail, not an invented one", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-500-"));
+    const dir = scratch("lethal-doctor-env-direct-500-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: errorFetch(500, "boom"),
@@ -215,7 +218,7 @@ describe("lethal doctor CLI wiring — environment (direct container)", () => {
   // reachability — the one thing it claims to observe — genuinely succeeded.
   test("a wrong appId does not fail the environment check — that mis-attribution is what checkReachable() exists to avoid", async () => {
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-env-direct-wrongid-"));
+    const dir = scratch("lethal-doctor-env-direct-wrongid-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info({ appId: "not-the-control-app" })),
@@ -281,7 +284,7 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
         client: new EnvToolClient(cfg, { spawn }),
         makePublisher: () => ({ publishFile: async () => {} }),
         verifyHarness: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }),
     ).rejects.toThrow(/reports status "Stopped", not "Running"/);
 
@@ -292,7 +295,7 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
     // report does not matter, but a REAL outbound `fetch` to `https://host/env-4711` cost ~2.7s
     // per run before this, relying on DNS failing fast.
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-stopped-"));
+    const dir = scratch("lethal-doctor-envtool-stopped-");
     const { cfg: doctorCfg, deps } = await depsOf(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
       fetchFn: okFetch(info()),
@@ -320,13 +323,13 @@ describe("lethal doctor CLI wiring — environment (R34)", () => {
       client: new EnvToolClient(cfg, { spawn }),
       makePublisher: () => ({ publishFile: async () => {} }),
       verifyHarness: async () => {},
-      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      stateDir: scratch("lethal-envstate-"),
     });
     expect(session.bcdev.baseUrl).toBe("https://host/env-4711");
 
     const configFile: LethalConfigFile = { bcdev: BCDEV_RAW, envTool: cfg };
     // Final review (Minor 5): same fix as the Stopped test above — no real network/quarantine dir.
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-envtool-running-"));
+    const dir = scratch("lethal-doctor-envtool-running-");
     const { cfg: doctorCfg, deps } = await depsOf(configFile, {
       makeEnvToolClient: (c) => new EnvToolClient(c, { spawn }),
       fetchFn: okFetch(info()),
@@ -478,7 +481,7 @@ describe("lethal doctor CLI wiring — packageCachePath default (fix round 1, Im
     };
 
     const configFile: LethalConfigFile = { bcdev: bcdevNoCache, envTool: envCfg };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-no-pkgcache-"));
+    const dir = scratch("lethal-doctor-no-pkgcache-");
     // The bug threw INSIDE buildDoctorDeps itself, before runDoctor ever ran — so reaching
     // runDoctor at all (rather than a rejected promise here) is already most of this assertion.
     const { cfg, deps } = await depsOf(configFile, {
@@ -494,7 +497,7 @@ describe("lethal doctor CLI wiring — packageCachePath default (fix round 1, Im
 
 describe("lethal doctor CLI wiring — quarantine", () => {
   test("a quarantined tier that would make `run`'s consult refuse also fails doctor's quarantine check", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-quarantine-"));
+    const dir = scratch("lethal-doctor-quarantine-");
     const key = quarantineResourceKey({
       server: RESOLVED_BCDEV.server,
       serverInstance: RESOLVED_BCDEV.serverInstance,
@@ -523,7 +526,7 @@ describe("lethal doctor CLI wiring — quarantine", () => {
   });
 
   test("an unquarantined tier passes", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-quarantine-clear-"));
+    const dir = scratch("lethal-doctor-quarantine-clear-");
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
@@ -546,7 +549,7 @@ describe("lethal doctor CLI wiring — control-version (R28)", () => {
     ).rejects.toBeInstanceOf(HarnessVerificationError);
 
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-cv-"));
+    const dir = scratch("lethal-doctor-cv-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn,
@@ -560,7 +563,7 @@ describe("lethal doctor CLI wiring — control-version (R28)", () => {
   test("a current control app passes", async () => {
     const fetchFn = okFetch(info());
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-cv-ok-"));
+    const dir = scratch("lethal-doctor-cv-ok-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn,
@@ -592,7 +595,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
       buildBackend(parsed, configFile, "C:/scratch", undefined, { alToolPaths: noExtension }),
     ).rejects.toThrow(/could not locate alc\.exe/);
 
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-"));
+    const dir = scratch("lethal-doctor-tools-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
@@ -607,7 +610,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
   test("a resolved alc/altool passes", async () => {
     const found = async () => ({ alcPath: "C:/alc.exe", altoolPath: "C:/altool.exe" });
     const configFile: LethalConfigFile = { bcdev: RESOLVED_BCDEV };
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-ok-"));
+    const dir = scratch("lethal-doctor-tools-ok-");
     const { cfg, deps } = await depsOf(configFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
@@ -691,7 +694,7 @@ describe("lethal doctor CLI wiring — tool-paths", () => {
     expect(String(runErr)).toMatch(/validate selector ids/);
     expect(String(runErr)).not.toMatch(/alc\.exe|altool\.exe/);
 
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-tools-envtool-"));
+    const dir = scratch("lethal-doctor-tools-envtool-");
     const { cfg, deps } = await depsOf(doctorConfigFile, {
       quarantineDir: dir,
       fetchFn: okFetch(info()),
@@ -757,7 +760,7 @@ describe("renderDoctorReport (final review, Important 1)", () => {
 
 describe("doctorFromCli (final review, Important 1)", () => {
   async function writeConfig(configFile: LethalConfigFile): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-"));
+    const dir = scratch("lethal-doctor-fromcli-");
     const path = join(dir, "lethal.config.json");
     await writeFile(path, JSON.stringify(configFile), "utf8");
     return path;
@@ -781,7 +784,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
   }
 
   test("returns 0 and prints ok when every check passes — the REAL buildDoctorDeps, only I/O swapped", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-quarantine-"));
+    const dir = scratch("lethal-doctor-fromcli-quarantine-");
     const { code, out } = await run(
       { bcdev: RESOLVED_BCDEV },
       {
@@ -795,7 +798,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
   });
 
   test("returns 1 and prints FAIL when a check fails — the exit code the README tells users to rely on", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-quarantine-fail-"));
+    const dir = scratch("lethal-doctor-fromcli-quarantine-fail-");
     const { code, out } = await run(
       { bcdev: RESOLVED_BCDEV },
       {
@@ -833,12 +836,12 @@ describe("doctorFromCli (final review, Important 1)", () => {
   });
 
   test("doctorFromCli threads BOTH al-runner cache roots to the report (R264)", async () => {
-    const second = await mkdtemp(join(tmpdir(), "lethal-doctor-r264-second-"));
+    const second = scratch("lethal-doctor-r264-second-");
     await writeFile(join(second, "marker.bin"), "x".repeat(10));
     const { out } = await run(
       { bcdev: RESOLVED_BCDEV },
       {
-        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-fromcli-r264-q-")),
+        quarantineDir: scratch("lethal-doctor-fromcli-r264-q-"),
         alRunnerSecondaryCacheDir: second,
         fetchFn: okFetch(info()),
       },
@@ -871,7 +874,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
   }
 
   test("--json prints the report as parseable JSON, and NOT the rendered lines", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-json-"));
+    const dir = scratch("lethal-doctor-json-");
     const { code, parsed, out } = await runJson(
       { bcdev: RESOLVED_BCDEV },
       {
@@ -889,7 +892,7 @@ describe("doctorFromCli (final review, Important 1)", () => {
   });
 
   test("--json keeps the EXIT CODE identical — the rendering changes, never the verdict", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-json-fail-"));
+    const dir = scratch("lethal-doctor-json-fail-");
     const deps = {
       quarantineDir: dir,
       fetchFn: okFetch(info({ semver: "1.0.0.0" })),
@@ -1044,7 +1047,7 @@ describe("issue #23: --tests wires the test-app-present check", () => {
     const { cfg, deps } = await depsOf(
       { bcdev: RESOLVED_BCDEV },
       {
-        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-testapp-q-")),
+        quarantineDir: scratch("lethal-doctor-testapp-q-"),
         fetchFn: fetchWith(installed),
         ...(testsDir !== undefined ? { testsDir } : {}),
       },
@@ -1053,7 +1056,7 @@ describe("issue #23: --tests wires the test-app-present check", () => {
   }
 
   async function testsDirWithApp(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-doctor-testapp-"));
+    const dir = scratch("lethal-doctor-testapp-");
     await writeFile(
       join(dir, "app.json"),
       JSON.stringify({ id: "11111111-2222-3333-4444-555555555555", name: "My Tests" }),
@@ -1082,7 +1085,7 @@ describe("R264: doctor tests never reach the real disk", () => {
     const { deps } = await depsOf(
       { bcdev: RESOLVED_BCDEV },
       {
-        quarantineDir: await mkdtemp(join(tmpdir(), "lethal-doctor-r264-q-")),
+        quarantineDir: scratch("lethal-doctor-r264-q-"),
         fetchFn: okFetch(info()),
       },
     );

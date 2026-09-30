@@ -661,6 +661,7 @@ describe("lethal campaign freeze | anchors | compare", () => {
 
   afterAll(async () => {
     await rm(repo, { recursive: true, force: true });
+    await rm(dirname(reportPath), { recursive: true, force: true }); // R358: beforeAll's outDir
   });
 
   // ---- freeze -------------------------------------------------------------------------------

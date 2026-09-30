@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -19,6 +17,9 @@ import {
   runSession,
 } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R47 (`--mutant-timeout-ms`) and R48 (the large-run pre-flight refusal): the two guards that
@@ -64,7 +65,7 @@ const CAPS: BackendCapabilities = {
 const selectorIds = { selectorId: 50000, controlId: 50001, tableId: 50002 };
 
 async function makeProject() {
-  const root = await mkdtemp(join(tmpdir(), "lethal-limits-"));
+  const root = scratch("lethal-limits-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
