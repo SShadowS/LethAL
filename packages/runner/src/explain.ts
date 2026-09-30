@@ -1,8 +1,10 @@
 import { IDENTITY_SCHEME, type ReachGrain } from "@lethal/schemata";
+import type { CoverageMode } from "./backend";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import {
   CAVEAT_INTERPRETATIONS,
+  COVERAGE_NOT_MEASURED_INTERPRETATION,
   ERROR_CAUSE_INTERPRETATIONS,
   GUARD_EVIDENCE_INTERPRETATIONS,
   MARK_KEYS_STALE_INTERPRETATION,
@@ -188,8 +190,11 @@ import type { MutantVerdict } from "./store";
  * `markKeysStale`. A new required field is a new shape, so it bumps even though it is additive.
  * R351 added the optional `coverageArmNames` to survivors, gaps and no-coverage blocks: an optional
  * additive field, so no bump.
+ *
+ * 8: R252 added the value `not-measured` to `$.survivors[].attribution`, for a survivor of a report
+ * whose `coverageMode` is `"none"`. A new value, so it bumps (R233); v7 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 7;
+export const EXPLAIN_SCHEMA_VERSION = 8;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -218,10 +223,25 @@ export const ADMISSIBLE_INTERPRETATIONS: readonly Interpretation[] = [
   ...Object.values(GUARD_EVIDENCE_INTERPRETATIONS),
   ...Object.values(REACH_INTERPRETATIONS),
   ...Object.values(ERROR_CAUSE_INTERPRETATIONS),
+  COVERAGE_NOT_MEASURED_INTERPRETATION,
   QUARANTINE_INTERPRETATION,
   STRANDED_SKIP_INTERPRETATION,
   MARK_KEYS_STALE_INTERPRETATION,
 ];
+
+/**
+ * R252: a survivor's `attribution` in the output. The report's `CoverageAttribution`, plus
+ * `not-measured` for a survivor of a report whose `coverageMode` is `"none"`, where no attribution
+ * exists because no coverage was collected.
+ */
+export type ExplainAttribution = CoverageAttribution | "not-measured";
+
+/** What each `ExplainAttribution` means. The report's own registry, plus R252's constant. Exported
+ *  so `schemas.test.ts` can pin the published enum to this domain. */
+export const EXPLAIN_ATTRIBUTION_INTERPRETATIONS: Record<ExplainAttribution, Interpretation> = {
+  ...ATTRIBUTION_INTERPRETATIONS,
+  "not-measured": COVERAGE_NOT_MEASURED_INTERPRETATION,
+};
 
 /** The split contract, stated in the output itself — see this module's doc comment. */
 export interface ExplainContract {
@@ -285,7 +305,7 @@ export interface ExplainSurvivor {
    * (`CoverageSplit.attribution`, selection.ts). Same value, two spellings — see that field's
    * doc comment in report.ts for why they are not aligned.
    */
-  readonly attribution: CoverageAttribution;
+  readonly attribution: ExplainAttribution;
   readonly executionProven: boolean;
   readonly coveringTests: readonly string[];
   readonly guardEvidence: GuardEvidence;
@@ -304,7 +324,7 @@ export interface ExplainSurvivor {
   /** GH-24: verbatim from the report row, the tests whose run reached this mutant's own
    *  statement. Present exactly when the row has `guardReached`, so `[]` means none reached. */
   readonly reachedBy?: readonly string[];
-  /** `ATTRIBUTION_INTERPRETATIONS[attribution]`, by reference. */
+  /** `EXPLAIN_ATTRIBUTION_INTERPRETATIONS[attribution]`, by reference. */
   readonly interpretation: Interpretation;
   /** `GUARD_EVIDENCE_INTERPRETATIONS[guardEvidence]`, by reference. */
   readonly guardInterpretation: Interpretation;
@@ -605,6 +625,15 @@ export const EXPLAIN_CONTRACT: ExplainContract = {
  */
 const KNOWN_CAVEATS: ReadonlySet<string> = new Set(Object.keys(CAVEAT_INTERPRETATIONS));
 const KNOWN_ATTRIBUTIONS: ReadonlySet<string> = new Set(Object.keys(ATTRIBUTION_INTERPRETATIONS));
+/** R252. A `Record` so adding a `CoverageMode` variant fails to compile until it is listed here. */
+const COVERAGE_MODES: Record<CoverageMode, true> = {
+  none: true,
+  procedure: true,
+  line: true,
+  fenced: true,
+  "al-runner": true,
+};
+const KNOWN_COVERAGE_MODES: ReadonlySet<string> = new Set(Object.keys(COVERAGE_MODES));
 const KNOWN_ERROR_CAUSES: ReadonlySet<string> = new Set(Object.keys(ERROR_CAUSE_INTERPRETATIONS));
 /** GH-24. A `Record` so adding a `ReachGrain` variant fails to compile until it is listed here.
  *  Exported so `schemas.test.ts` can pin the published schema's `reachGrain` enum to this, the
@@ -669,6 +698,8 @@ const EXPLAINABLE_REPORT_VERSIONS: readonly number[] = [2, REPORT_SCHEMA_VERSION
  *   - every mutant's `coverageAttribution` — selects an interpretation AND decides `executionProven`
  *   - a `survived` mutant HAVING one       — without it `executionProven` cannot be computed, and
  *                                            defaulting it either way claims what the data does not
+ *   - `coverageMode`                       : R252, the ONE exception to the line above: a survivor may
+ *                                            lack an attribution only when this says `"none"`
  *   - every mutant's `guardObserved`       — a tri-state, one of whose states (`not-observed`) moves
  *                                            a mutant out of the survivor reading entirely
  *   - every mutant's `guardReached`, `reachGrain` and `reachedBy` : GH-24, decide `reach`; also
@@ -766,6 +797,19 @@ export function assertExplainableReport(value: unknown): SessionReport {
     !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
   ) {
     refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
+  // R252: branched on below (it decides whether a survivor may lack an attribution), so a value
+  // outside the closed set is refused rather than read as "not none".
+  const coverageMode = record.coverageMode;
+  if (
+    coverageMode !== undefined &&
+    (typeof coverageMode !== "string" || !KNOWN_COVERAGE_MODES.has(coverageMode))
+  ) {
+    refuse(
+      "`coverageMode` is a value this build cannot interpret",
+      coverageMode,
+      KNOWN_COVERAGE_MODES,
+    );
   }
   const mutants = record.mutants;
   if (!Array.isArray(mutants)) {
@@ -924,12 +968,23 @@ export function assertExplainableReport(value: unknown): SessionReport {
         );
       }
     }
+    // R252: a missing attribution is accepted ONLY when the report says on purpose that coverage
+    // was off. Never inferred from the missing field itself: under any other mode it is a defect.
     if (mutant.verdict === "survived" && attribution === undefined) {
-      refuse(
-        `${where} is \`survived\` with no coverageAttribution, so whether any test is measured to have executed it cannot be decided`,
-        mutant.coverageAttribution,
-        KNOWN_ATTRIBUTIONS,
-      );
+      if (coverageMode === undefined) {
+        refuse(
+          `${where} is \`survived\` with no coverageAttribution, and the report predates \`coverageMode\` (R252), so whether coverage was measured at all cannot be decided. Re-run with this LethAL: its report records \`coverageMode\`, which makes a coverage-off report explainable`,
+          mutant.coverageAttribution,
+          KNOWN_ATTRIBUTIONS,
+        );
+      }
+      if (coverageMode !== "none") {
+        refuse(
+          `${where} is \`survived\` with no coverageAttribution, so whether any test is measured to have executed it cannot be decided`,
+          mutant.coverageAttribution,
+          KNOWN_ATTRIBUTIONS,
+        );
+      }
     }
     const cause = mutant.cause;
     if (cause !== undefined && (typeof cause !== "string" || !KNOWN_ERROR_CAUSES.has(cause))) {
@@ -1073,21 +1128,28 @@ function artifactOf(
     : { artifactIdAbsent: "not-published" };
 }
 
-function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): ExplainSurvivor {
-  const attribution = m.coverageAttribution;
-  if (attribution === undefined) {
+function survivorOf(
+  m: MutantOutcome,
+  artifacts: SessionReport["artifacts"],
+  coverageMode: CoverageMode | undefined,
+): ExplainSurvivor {
+  const measured = m.coverageAttribution;
+  if (measured === undefined && coverageMode !== "none") {
     // Unreachable via `explain` (validated above); kept because this function is where the claim
     // `executionProven` makes would otherwise be fabricated.
     refuse(`survivor ${JSON.stringify(m.mutantCode)} has no coverageAttribution`, undefined);
   }
+  const attribution: ExplainAttribution = measured ?? "not-measured";
   const guardEvidence = guardEvidenceOf(m.guardObserved);
-  const reach = survivorReachOf(
-    attribution,
-    guardEvidence,
-    m.guardReached,
-    m.reachGrain,
-    m.carried === true,
-  );
+  // R252: with coverage not measured, the reach states that name coverage ("covered-but-unreached",
+  // "unreached-and-uncovered") would state a coverage fact no one collected. Only the mutant's own
+  // measured reach is kept; everything else is not decided.
+  const reach: SurvivorReach =
+    measured === undefined
+      ? m.carried !== true && m.guardReached === true
+        ? "reached-unnoticed"
+        : "not-decided"
+      : survivorReachOf(measured, guardEvidence, m.guardReached, m.reachGrain, m.carried === true);
   return {
     mutantCode: m.mutantCode,
     file: m.file,
@@ -1104,7 +1166,7 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
     coveringTests: m.coveringTests,
     guardEvidence,
     reach,
-    interpretation: keyed(ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
+    interpretation: keyed(EXPLAIN_ATTRIBUTION_INTERPRETATIONS, attribution, "coverageAttribution"),
     guardInterpretation: keyed(GUARD_EVIDENCE_INTERPRETATIONS, guardEvidence, "guardObserved"),
     reachInterpretation: keyed(REACH_INTERPRETATIONS, reach, "reach"),
     ...(m.reachGrain !== undefined ? { reachGrain: m.reachGrain } : {}),
@@ -1377,7 +1439,7 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
   }
   const allSurvivors = validated.mutants
     .filter((m) => m.verdict === "survived")
-    .map((m) => survivorOf(m, validated.artifacts));
+    .map((m) => survivorOf(m, validated.artifacts, validated.coverageMode));
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   // C02-09: from ALL rows, before the cap. `--top` bounds survivors only (Q6).

@@ -11,7 +11,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
-import type { BackendCapabilities, TestMethodRef } from "./backend";
+import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
 import {
   type EquivalenceMarkReport,
   SURVIVING_VERDICTS,
@@ -912,6 +912,15 @@ export interface SessionReport {
   readonly testFiles: Readonly<Record<string, string>>;
   readonly backend: string;
   readonly authoritative: boolean;
+  /**
+   * R252: the coverage mode this run was configured with (`BackendCapabilities.coverage`), recorded
+   * on purpose so a reader never has to infer it. `"none"` means no coverage was measured: every
+   * mutant ran against every green test and no row carries a `coverageAttribution`. `lethal
+   * explain` reads that absence as "coverage not measured" ONLY when this field says `"none"`.
+   * Optional because reports written before R252 lack it; absent means "not recorded", never a
+   * mode.
+   */
+  readonly coverageMode?: CoverageMode;
   readonly baselineGreen: boolean;
   readonly batches: number;
   readonly counts: {
@@ -2148,6 +2157,21 @@ export const MARK_KEYS_STALE_INTERPRETATION: Interpretation = {
   basis: "R325",
 };
 
+/**
+ * R252: what a survivor with no `coverageAttribution` means in a report whose `coverageMode` is
+ * `"none"`. Keyed to that field, which is why it lives beside `buildReport` rather than in
+ * `ATTRIBUTION_INTERPRETATIONS`: there is no attribution to key it to.
+ */
+export const COVERAGE_NOT_MEASURED_INTERPRETATION: Interpretation = {
+  meaning:
+    'Coverage not measured. The run was configured with coverageMode "none", so this mutant ran ' +
+    "against every green test and nothing recorded which of them executed the mutated code.",
+  entailedNegative:
+    "Neither covered nor uncovered: no coverage was collected to say which. Not evidence that a " +
+    "test executed this code.",
+  basis: "R252",
+};
+
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
   // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
@@ -2659,6 +2683,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     testFiles,
     backend: input.caps.authoritative ? "bcdev" : "al-runner",
     authoritative: input.caps.authoritative,
+    coverageMode: input.caps.coverage,
     baselineGreen: input.baselineGreen,
     batches: input.batches,
     counts,

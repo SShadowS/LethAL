@@ -17,6 +17,7 @@ import {
 import { STREAM_SCHEMA_VERSION } from "../src/events";
 import {
   ARTIFACT_ID_ABSENCES,
+  EXPLAIN_ATTRIBUTION_INTERPRETATIONS,
   EXPLAIN_SCHEMA_VERSION,
   REACH_GRAINS,
   SURVIVOR_RANKINGS,
@@ -30,7 +31,7 @@ import {
   REACH_INTERPRETATIONS,
   REPORT_SCHEMA_VERSION,
 } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS, identityKeyOf, serializeKey } from "../src/selection";
+import { identityKeyOf, serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import {
   KILLED_BY,
@@ -269,7 +270,7 @@ describe("published JSON Schemas (R152)", () => {
       Object.keys(CAVEAT_INTERPRETATIONS),
     );
     expect(enumAt(explainSchema, "$.survivors[].attribution")).toEqual(
-      Object.keys(ATTRIBUTION_INTERPRETATIONS),
+      Object.keys(EXPLAIN_ATTRIBUTION_INTERPRETATIONS),
     );
     expect(enumAt(explainSchema, "$.survivors[].guardEvidence")).toEqual(
       Object.keys(GUARD_EVIDENCE_INTERPRETATIONS),
@@ -382,6 +383,20 @@ describe("published JSON Schemas (R152)", () => {
       row.coverageArmNames = ["Alpha"];
     }
     expect(conformsTo(explainSchema, withNames)).toEqual([]);
+  });
+
+  test("R252: a coverage-off projection, with attribution not-measured, validates", () => {
+    const raw = JSON.parse(
+      readFileSync(join(REPO_ROOT, "docs/campaign/2026-08-03-do/rung2.report.json"), "utf8"),
+    ) as { mutants: Record<string, unknown>[]; coverageMode?: string };
+    raw.coverageMode = "none";
+    for (const m of raw.mutants) {
+      if (m.verdict === "survived") m.coverageAttribution = undefined;
+    }
+    const out = explain(assertExplainableReport(JSON.parse(JSON.stringify(raw))));
+    expect(out.survivors.length).toBeGreaterThan(0);
+    expect(out.survivors.every((s) => s.attribution === "not-measured")).toBe(true);
+    expect(conformsTo(explainSchema, out)).toEqual([]);
   });
 
   test("doctor output validates, with and without a caveat", () => {
@@ -834,6 +849,22 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, withNames)).toEqual([]);
   });
 
+  test("R252: coverageMode is additive under v3: a report without it validates, and with it", () => {
+    // v3 was edited in place, which is sound only while the field stays OPTIONAL: required, it
+    // would reject every report written before R252.
+    const raw = readFileSync(
+      join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("coverageMode");
+    const without = JSON.parse(raw) as Record<string, unknown>;
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    for (const mode of ["none", "procedure", "line", "fenced", "al-runner"]) {
+      expect(conformsTo(reportSchema, { ...without, coverageMode: mode })).toEqual([]);
+    }
+    expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
+  });
+
   test("OLDER reports are also v2 and do NOT validate — the schema is one BUILD's shape (R157)", () => {
     // Pinned rather than hidden. `declarativeSites` and `preprocessorSymbols` are REQUIRED by
     // today's SessionReport and absent from reports written before they existed, while
@@ -924,6 +955,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "explain-v7.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v8.schema.json": [
         "caveats",
         "contract",
         "derivedFromReportSchemaVersion",
@@ -1061,7 +1104,12 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "session-warm",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
-      "#/properties/survivors/items/properties/attribution": ["exact", "object", "all-green"],
+      "#/properties/survivors/items/properties/attribution": [
+        "exact",
+        "object",
+        "all-green",
+        "not-measured",
+      ],
       "#/properties/survivors/items/properties/guardEvidence": [
         "observed",
         "not-observed",
@@ -1121,6 +1169,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     };
     const v6 = required("explain-v6.schema.json");
     expect(required("explain-v7.schema.json")).toEqual([...v6, "markKey"].sort());
+    // R252's v8 changed a value domain, not the required set.
+    expect(required("explain-v8.schema.json")).toEqual(required("explain-v7.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
