@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -26,9 +27,13 @@ import type {
 } from "../src/backend";
 import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
+import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
-import { EnvToolClient, EnvToolError } from "../src/env-tool";
+import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
+import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
+import { startEnvToolSession } from "../src/env-tool-session";
+import type { EnvToolSession } from "../src/env-tool-session";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
@@ -77,7 +82,7 @@ import type {
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
-import type { SessionOutcome } from "../src/report";
+import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -240,6 +245,8 @@ const APP_JSON = JSON.stringify(
   null,
   2,
 );
+/** R250: the test app an env-tool hook publish tried to install. */
+const TESTS_APP = { name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.2" };
 
 class StubBackend implements ExecutionBackend {
   activations: Array<string | null> = [];
@@ -6677,13 +6684,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     const client = new FakeLeaseClient(log);
     const timers = new FakeTimers();
     const { lease } = leaseCfg(client, { timers });
+    // R250: BC's measured sentence, naming the app the publish tried to install.
     const refusal =
-      "envTool.publish: tool publish Tests.app exit 1: The extension could not be deployed because a newer version 1.0.106.0 was already installed.";
+      "envTool.publish: tool publish Tests.app exit 1: Cannot install the extension Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.";
     const err = await runSessionForTest(leaseBackend(), {
       lease,
       quarantineDir: freshTmpDir(),
       afterLeaseAcquired: async () => {
-        throw new EnvToolError(refusal);
+        throw new EnvToolError(refusal, TESTS_APP);
       },
     }).catch((e) => e);
     expect((err as Error).message).toBe(refusal);
@@ -6693,6 +6701,102 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(client.releaseCalls).toBe(1);
     expect(log.indexOf("acquire")).toBeLessThan(log.indexOf("release"));
     expect(timers.cleared).toBe(1);
+  });
+
+  // R250: a refusal is confirmed only by BC's whole sentence naming THIS publish's app, publisher
+  // and attempted version. Anything else is a publish whose result is unknown: no EndPublish,
+  // marker kept, recycle recorded.
+  describe("R250: only BC's sentence naming this publish confirms a downgrade refusal", () => {
+    const TIMEOUT_QUOTING =
+      'envTool.publish: timed out after 600 s; last output: "a newer version 1.0.106.0 was already installed"';
+    const cases: Array<[string, string]> = [
+      ["the phrase quoted inside a timeout message", TIMEOUT_QUOTING],
+      [
+        "another app's name",
+        "Cannot install the extension Other App by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+      ],
+      [
+        "another publisher",
+        "Cannot install the extension Sandbox Tests by Contoso 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+      ],
+      [
+        "another attempted version",
+        "Cannot install the extension Sandbox Tests by LethAL 1.0.0.1 because a newer version 1.0.106.0 was already installed.",
+      ],
+    ];
+    for (const [label, text] of cases) {
+      test(`hook publish: ${label} is NOT a confirmed refusal`, async () => {
+        const client = new FakeLeaseClient();
+        const { lease } = leaseCfg(client);
+        const dir = freshTmpDir();
+        await runSessionForTest(leaseBackend(), {
+          lease,
+          quarantineDir: dir,
+          afterLeaseAcquired: async () => {
+            throw new EnvToolError(text, TESTS_APP);
+          },
+        }).catch((e) => e);
+        expect(client.endPublishArgs).toHaveLength(0);
+        expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+          "container-needs-recycle",
+        );
+      });
+    }
+
+    test("hook publish: an EnvToolError that names no app confirms nothing, even with BC's sentence", async () => {
+      const client = new FakeLeaseClient();
+      const { lease } = leaseCfg(client);
+      await runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: freshTmpDir(),
+        afterLeaseAcquired: async () => {
+          throw new EnvToolError(
+            "Cannot install the extension Sandbox Tests by LethAL 1.0.0.2 because a newer version 1.0.106.0 was already installed.",
+          );
+        },
+      }).catch((e) => e);
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
+
+    // The target deploy: the attempted version is minted per run, so the fake reads it from the
+    // app.json the orchestrator stamped into the batch directory.
+    async function targetRefusal(
+      render: (app: { name: string; publisher: string; version: string }) => string,
+    ): Promise<FakeLeaseClient> {
+      const client = new FakeLeaseClient();
+      const { lease } = leaseCfg(client);
+      const backend = leaseBackend({
+        deploy: async (dir: string) => {
+          const app = JSON.parse(await readFile(join(dir, "app.json"), "utf8"));
+          throw new Error(`altool publishapp failed (exit 1):\n${render(app)}`);
+        },
+      });
+      await runSessionForTest(backend, { lease, quarantineDir: freshTmpDir() }).catch((e) => e);
+      return client;
+    }
+
+    test("target publish: BC's sentence naming this app, publisher and version is tombstoned as failed", async () => {
+      const client = await targetRefusal(
+        (a) =>
+          `Cannot install the extension ${a.name} by ${a.publisher} ${a.version} because a newer version 99.0.0.0 was already installed.`,
+      );
+      expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    });
+
+    test("target publish: the same sentence naming another attempted version is NOT confirmed", async () => {
+      const client = await targetRefusal(
+        (a) =>
+          `Cannot install the extension ${a.name} by ${a.publisher} 1.0.0.1 because a newer version 99.0.0.0 was already installed.`,
+      );
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
+
+    test("target publish: the phrase quoted inside a timeout message is NOT confirmed", async () => {
+      const client = await targetRefusal(
+        () => "timed out; last output: a newer version 99.0.0.0 was already installed.",
+      );
+      expect(client.endPublishArgs).toHaveLength(0);
+    });
   });
 
   // R232, run 002 review: a hook that SUCCEEDS can still leave `LeaseSession.publish()` latched,
@@ -6847,6 +6951,285 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     );
     expect(latched?.type === "warning" ? latched.message : "").toContain("afterLeaseAcquired");
     expect(latched?.type === "warning" ? latched.message : "").toContain("timed out");
+  });
+
+  // R237: every case below runs the REAL client and the REAL Bun spawn, so what the fence reads is
+  // what a real env-tool publish throws. Only a tool that never started is pre-publish.
+  describe("R237: only an env tool that never started is a confirmed pre-publish failure", () => {
+    async function hookPublish(
+      toolPath: string,
+      script: string,
+      timeoutSeconds?: number,
+    ): Promise<{ err: unknown; client: FakeLeaseClient; dir: string }> {
+      const dir = freshTmpDir();
+      const client = new FakeLeaseClient();
+      // The fake does not model EndPublish clearing the marker, so an uncertain case seeds what
+      // the real release gate would read then: the marker BeginPublish set, never tombstoned.
+      if (toolPath === process.execPath) {
+        client.statusQueue = [
+          { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+          {
+            opKind: "publish",
+            opAttemptId: "pub",
+            opSeq: 8,
+            lastCompletedOpSeq: 7,
+            completed: false,
+          },
+        ];
+      }
+      const { lease } = leaseCfg(client);
+      const publishBlock = { command: ["-e", script, "{envId}", "{appFile}"] };
+      const publisher = new EnvToolPublisher(
+        new EnvToolClient({
+          toolPath,
+          publish: publishBlock,
+          resolve: [],
+          ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+        }),
+        publishBlock,
+        { envId: "e1", serializerKey: `https://h|e1|${dir}` },
+        { readArtifact: async () => new Uint8Array([1, 2, 3]) },
+      );
+      const err = await runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        nowIso: () => "2026-09-30T10:00:00.000Z",
+        afterLeaseAcquired: () => publisher.publishFile(join(dir, "Tests.app")),
+      }).catch((e) => e);
+      return { err, client, dir };
+    }
+
+    test("a toolPath that does not exist releases the lease and quarantines nothing", async () => {
+      const { err, client, dir } = await hookPublish(join(freshTmpDir(), "no-such-tool.exe"), "0");
+      expect(err).toBeInstanceOf(EnvToolNotStartedError);
+      expect(client.endPublishArgs.map((a) => a.outcome)).toEqual(["failed"]);
+      expect(client.releaseCalls).toBe(1);
+      expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    });
+
+    const uncertain: Array<[string, string, number | undefined, string]> = [
+      ["LethAL's own timeout kills it", "setTimeout(() => {}, 30000)", 0.5, "timed out"],
+      ["it exits non-zero", "process.exit(3)", undefined, "exit 3"],
+      ["it starts and is then killed", "process.kill(process.pid, 'SIGKILL')", undefined, "exit "],
+    ];
+    for (const [label, script, timeoutSeconds, says] of uncertain) {
+      test(`a tool that started and ${label} keeps the lease and quarantines`, async () => {
+        const { err, client, dir } = await hookPublish(process.execPath, script, timeoutSeconds);
+        expect(err).toBeInstanceOf(EnvToolError);
+        expect((err as Error).message).toContain(says);
+        expect(client.endPublishArgs).toHaveLength(0);
+        expect(client.releaseCalls).toBe(0);
+        const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+        expect(rec?.opKind).toBe("container-needs-recycle");
+      });
+    }
+  });
+});
+
+// R238: a session that records a recycle and then THROWS must keep the environment it created.
+// `withEnvTeardown` read `quarantined` from the report alone, and a throwing body has none, so the
+// created environment was deleted while a `container-needs-recycle` record still named its tier.
+// Everything here is real except the env tool's spawn and the BC lease client: a create-mode
+// `startEnvToolSession`, `afterLeaseAcquiredFor`, `runSession` and `withEnvTeardown`. The created
+// environment answers at `http://cronus281/BC`, which is the tier `runSessionForTest` names, so the
+// key teardown reads is the key the session wrote.
+describe("R238: withEnvTeardown keeps a created environment the session quarantined", () => {
+  async function createdEnvSession(publishTestApp: () => Promise<void>) {
+    const calls: string[][] = [];
+    const cfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      publishApps: ["tests.app"],
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "0.username", password: "0.password" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+        pollSeconds: 0,
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+    };
+    const out: Record<string, string> = {
+      "env get": '{"url":"http://cronus281/BC"}',
+      "env users": '[{"username":"admin","password":"pw"}]',
+      "env create": '{"id":"env-new"}',
+      "env status": '{"status":"Running"}',
+    };
+    const client = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        calls.push([...argv]);
+        const line = argv.join(" ");
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    const session = await startEnvToolSession({
+      cfg,
+      bcdevRaw: {
+        company: "CRONUS",
+        tenant: "default",
+        mcpCommand: ["bun", "mcp"],
+        packageCachePath: "C:/pkg",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      projectDir: "C:/proj",
+      testDir: "C:/tests",
+      runId: "r238",
+      client,
+      makePublisher: () => ({ publishFile: publishTestApp }),
+      verifyHarness: async () => {},
+      stateDir: freshTmpDir(),
+    });
+    expect(session.createdEnvId).toBe("env-new");
+    const deleted = () => calls.some((c) => c.includes("delete"));
+    return { session, deleted };
+  }
+
+  /** Runs `body` through the real `withEnvTeardown`, recording teardown's options and warnings. */
+  async function tearDownAround(
+    session: EnvToolSession,
+    quarantineDir: string,
+    body: () => Promise<SessionReport>,
+  ) {
+    const teardownOpts: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const spied: EnvToolSession = {
+      ...session,
+      teardown: async (opts) => {
+        teardownOpts.push(opts);
+        await session.teardown(opts);
+      },
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let settled: unknown;
+    let warnings: string[] = [];
+    try {
+      settled = await withEnvTeardown(spied, false, body, quarantineDir).catch((e) => e);
+      // Read before mockRestore(), which clears the recorded calls.
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    const kept = warnings.some((w) =>
+      w.includes("keeping environment env-new (session quarantined)"),
+    );
+    return { settled, teardownOpts, kept, warnings };
+  }
+
+  test("an uncertain R19 test-app publish records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const uncertain = new EnvToolError("envTool.publish: timed out after 600 s", TESTS_APP);
+    const { session, deleted } = await createdEnvSession(async () => {
+      throw uncertain;
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect(r.settled).toBe(uncertain);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("an indeterminate target deploy records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("indeterminate", "connection reset mid-publish", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("control: a body that throws WITHOUT recording anything still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("failed", "BC rejected the package", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(r.kept).toBe(false);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a session that completes cleanly still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect((r.settled as SessionReport).quarantined).toBeUndefined();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a quarantine store that cannot be read keeps the environment and says why", async () => {
+    // A record file that exists but is not JSON: the store cannot say whether the tier is
+    // quarantined. The file name is the store's own (quarantine-store.ts `fileFor`).
+    const storeDir = freshTmpDir();
+    const name = createHash("sha256").update("http://cronus281|BC").digest("hex").slice(0, 32);
+    writeFileSync(join(storeDir, `${name}.json`), "{ truncated");
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const bodyErr = new Error("body failed");
+    const r = await tearDownAround(session, storeDir, async () => {
+      throw bodyErr;
+    });
+    expect(r.settled).toBe(bodyErr);
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(r.warnings.some((w) => w.includes("could not read the quarantine store"))).toBe(true);
+    expect(deleted()).toBe(false);
   });
 });
 

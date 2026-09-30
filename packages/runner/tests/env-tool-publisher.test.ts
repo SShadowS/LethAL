@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { ArtifactPrepareError } from "../src/artifact";
 import { decidePublishOutcome } from "../src/deployment-verifier";
-import { EnvToolClient } from "../src/env-tool";
+import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { EnvToolBlock } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { ResultsStore } from "../src/store";
+import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const CFG: EnvToolConfigSection = {
   toolPath: "tool.exe",
@@ -93,6 +94,35 @@ describe("EnvToolPublisher", () => {
         version: "1.0.0.1",
       } as never),
     ).rejects.toThrow(/newer version 1\.0\.0\.9/);
+  });
+
+  it("publishFile names the app it tried to install on a failure, read from the package (R250)", async () => {
+    const pkg = buildFakeAppWithEntries({
+      "NavxManifest.xml":
+        '<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="x" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>',
+    });
+    const client = new EnvToolClient(CFG, {
+      spawn: async () => ({ exitCode: 1, stdout: "refused", stderr: "" }),
+    });
+    const publishBlock = CFG.publish;
+    if (publishBlock === undefined) throw new Error("fixture has no publish block");
+    const publisher = new EnvToolPublisher(
+      client,
+      publishBlock,
+      { envId: "e1", serializerKey: "https://h|e1|r250" },
+      { readArtifact: async () => new Uint8Array(pkg) },
+    );
+    const err = await publisher.publishFile("tests.app").catch((e) => e);
+    expect(err).toBeInstanceOf(EnvToolError);
+    expect((err as EnvToolError).publishing).toEqual({
+      name: "Sandbox Tests",
+      publisher: "LethAL",
+      version: "1.0.0.2",
+    });
+    // Bytes that are not an app package give no identity, so no refusal can be confirmed.
+    const { publisher: plain } = publisherWith({ exitCode: 1, stdout: "refused", stderr: "" });
+    const bare = await plain.publishFile("x.app").catch((e) => e);
+    expect((bare as EnvToolError).publishing).toBeUndefined();
   });
 
   it("publishFile hashes at read instead of comparing to an expectation", async () => {

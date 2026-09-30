@@ -119,3 +119,31 @@ export function parseVersionConflict(message: string): string | null {
   const m = /newer version (\d+\.\d+\.\d+\.\d+) was already installed/.exec(message);
   return m?.[1] ?? null;
 }
+
+/** The app a publish tried to install: its name and publisher, and the version sent. */
+export interface PublishIdentity {
+  readonly name: string;
+  readonly publisher: string;
+  readonly version: string;
+}
+
+/**
+ * R250: proof that BC refused THIS publish as a downgrade. Returns the installed version only when
+ * the text holds BC's whole sentence naming this app, publisher and attempted version, as
+ * measured live (Cronus281 2026-07-19, and the 2026-07-20 stale-publish probes in
+ * fixtures/README.md): "Cannot install the extension <name> by <publisher> <attempted> because a
+ * newer version <v> was already installed." Not anchored to the start of the text, because BC
+ * itself wraps the sentence ("Publishing failed due to '...'"). A text that only QUOTES the
+ * phrase, or names another app, publisher or version, is not proof. `parseVersionConflict` stays
+ * the loose reader for the retry's version; this is what confirms a refusal.
+ */
+export function confirmedDowngradeRefusal(
+  message: string,
+  attempted: PublishIdentity,
+): string | null {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(
+    `Cannot install the extension ${esc(attempted.name)} by ${esc(attempted.publisher)} ${esc(attempted.version)} because a newer version (\\d+\\.\\d+\\.\\d+\\.\\d+) was already installed\\.`,
+  ).exec(message);
+  return m?.[1] ?? null;
+}
