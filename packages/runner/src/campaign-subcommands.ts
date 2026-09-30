@@ -58,8 +58,14 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { NormalizedMutant } from "../itest/mutant-equality";
+import {
+  coverageModeMismatch,
+  isCoverageMode,
+  parseStageBaseline,
+  stageModeUnverified,
+} from "../itest/baseline-guard";
 import { diffMutants, normalizeForComparison } from "../itest/mutant-equality";
+import type { CoverageMode } from "./backend";
 import { assertCardinality } from "./campaign-anchors";
 import { parseAnchorConfig, runAnchorCheck } from "./campaign-anchors-run";
 import { freezeStageTo } from "./campaign-freeze";
@@ -419,6 +425,66 @@ export async function runCampaignAnchors(args: CampaignAnchorsArgs): Promise<num
 }
 
 /**
+ * R355: the version of `lethal campaign compare --json`'s document. New with R355, so 1. Bumped
+ * when a field is renamed, removed or changes meaning, or when a value domain changes in either
+ * direction; an added field does not bump it (`schemas/README.md` §Versioning).
+ */
+export const CAMPAIGN_COMPARE_SCHEMA_VERSION = 1;
+
+/**
+ * R355: what compare knows about the two coverage modes. `verified: false` REQUIRES `statement`,
+ * so a comparison whose mode could not be checked cannot be reported without saying so. A stage
+ * frozen before R355 records no mode, and a report written before R252 records none either; both
+ * are compared, never assumed. Two recorded modes that differ never reach here: compare refuses.
+ */
+export type CompareCoverageMode =
+  | { readonly verified: true; readonly coverageMode: CoverageMode }
+  | {
+      readonly verified: false;
+      readonly stageCoverageMode: CoverageMode | null;
+      readonly reportCoverageMode: CoverageMode | null;
+      readonly statement: string;
+    };
+
+/** R355: `lethal campaign compare`'s result, printed by `--json`. */
+export interface CampaignCompareResult {
+  readonly campaignCompareSchemaVersion: number;
+  readonly stage: string;
+  readonly baselinePath: string;
+  readonly mutantCount: number;
+  /** True when every mutant's verdict matches. Says nothing about the mode: read `coverage`. */
+  readonly identical: boolean;
+  readonly differences: readonly string[];
+  readonly coverage: CompareCoverageMode;
+}
+
+function compareCoverage(
+  stage: string,
+  stageMode: CoverageMode | undefined,
+  reportMode: CoverageMode | undefined,
+): CompareCoverageMode {
+  if (stageMode !== undefined && reportMode !== undefined) {
+    if (stageMode !== reportMode) {
+      throw coverageModeMismatch("campaign compare", stage, stageMode, reportMode);
+    }
+    return { verified: true, coverageMode: stageMode };
+  }
+  const reasons: string[] = [];
+  if (stageMode === undefined) reasons.push(stageModeUnverified(stage));
+  if (reportMode === undefined) {
+    reasons.push(
+      "coverage mode UNVERIFIED: the report records no coverageMode (written before R252), so the mode it ran under is unknown. A matching no-coverage or survived verdict proves nothing across coverage modes.",
+    );
+  }
+  return {
+    verified: false,
+    stageCoverageMode: stageMode ?? null,
+    reportCoverageMode: reportMode ?? null,
+    statement: reasons.join(" "),
+  };
+}
+
+/**
  * `lethal campaign compare` — diff a report against the stage's COMMITTED per-mutant baseline,
  * writing nothing.
  *
@@ -427,8 +493,12 @@ export async function runCampaignAnchors(args: CampaignAnchorsArgs): Promise<num
  * catastrophic for a comparison — it would report "matches" against a file it had just written out
  * of the report it was comparing. So a missing baseline is a REFUSAL here, and nothing on disk is
  * created or modified on any path through this function.
+ *
+ * R355: refuses by name when the stage and the report both record a coverage mode and they differ.
+ * When either records none, it still compares, and the result carries the unverified statement,
+ * on the console and in `coverage`.
  */
-export async function runCampaignCompare(args: CampaignArgsBase): Promise<number> {
+export async function compareCampaignStage(args: CampaignArgsBase): Promise<CampaignCompareResult> {
   const c = resolveCampaign(args);
   const precommit = c.file("precommit.md");
   const baselinePath = c.file("baseline.json");
@@ -439,32 +509,57 @@ export async function runCampaignCompare(args: CampaignArgsBase): Promise<number
   await assertCampaignPathsCommitted(paths, { git: c.git, repoRoot: c.repoRoot });
   announceChecked(c, paths);
 
-  const baseline = JSON.parse(await readFile(baselinePath, "utf8")) as NormalizedMutant[];
-  if (!Array.isArray(baseline)) {
+  const baseline = parseStageBaseline(
+    await readFile(baselinePath, "utf8"),
+    baselinePath,
+    "campaign compare reads the committed stage baseline `campaign freeze` wrote; refusing to compare against it.",
+  );
+  const report = JSON.parse(await readFile(args.reportPath, "utf8")) as SessionReport;
+  const reportMode: unknown = report.coverageMode;
+  if (reportMode !== undefined && !isCoverageMode(reportMode)) {
     throw new Error(
-      `campaign compare: ${baselinePath} is not a per-mutant baseline array (baseline-guard.ts writes one record per mutant). Refusing to compare against a file of unknown shape.`,
+      `campaign compare: ${args.reportPath} records an unknown coverageMode ${JSON.stringify(reportMode)}. Refusing to compare a report whose mode cannot be read.`,
     );
   }
-  const report = JSON.parse(await readFile(args.reportPath, "utf8")) as SessionReport;
 
   // Cardinality first, exactly as in `freeze` and `anchors`, with the committed baseline's own
   // length as the pre-commitment: a truncated report would otherwise be reported as "these N
   // mutants all agree", which is true and beside the point.
   c.step("cardinality");
-  assertCardinality(report, baseline.length, `${args.stage} compare`);
+  assertCardinality(report, baseline.entries.length, `${args.stage} compare`);
+
+  c.step("coverage-mode");
+  const coverage = compareCoverage(args.stage, baseline.coverageMode, reportMode);
 
   c.step("compare");
-  const diffs = diffMutants(baseline, normalizeForComparison(report));
-  if (diffs.length === 0) {
+  const differences = diffMutants(baseline.entries, normalizeForComparison(report));
+  const n = baseline.entries.length;
+  if (differences.length === 0) {
     c.log(
-      `[compare] ${args.stage}: identical — all ${baseline.length} mutant(s) match the committed baseline at ${baselinePath}`,
+      coverage.verified
+        ? `[compare] ${args.stage}: identical — all ${n} mutant(s) match the committed baseline at ${baselinePath}, both under coverageMode "${coverage.coverageMode}"`
+        : `[compare] ${args.stage}: verdicts match, coverage mode UNVERIFIED, all ${n} mutant(s) match the committed baseline at ${baselinePath}`,
     );
-    return 0;
+  } else {
+    c.log(
+      `[compare] ${args.stage}: ${differences.length} per-mutant difference(s) against the committed baseline at ${baselinePath}:`,
+    );
+    for (const d of differences) c.log(`[compare]   - ${d}`);
+    c.log(`[compare] RESULT: DIFFERENT (${differences.length} mutant(s))`);
   }
-  c.log(
-    `[compare] ${args.stage}: ${diffs.length} per-mutant difference(s) against the committed baseline at ${baselinePath}:`,
-  );
-  for (const d of diffs) c.log(`[compare]   - ${d}`);
-  c.log(`[compare] RESULT: DIFFERENT (${diffs.length} mutant(s))`);
-  return 1;
+  if (!coverage.verified) c.log(`[compare] ${coverage.statement}`);
+  return {
+    campaignCompareSchemaVersion: CAMPAIGN_COMPARE_SCHEMA_VERSION,
+    stage: args.stage,
+    baselinePath,
+    mutantCount: n,
+    identical: differences.length === 0,
+    differences,
+    coverage,
+  };
+}
+
+/** `compareCampaignStage` as an exit code: 0 when every verdict matches, 1 otherwise. */
+export async function runCampaignCompare(args: CampaignArgsBase): Promise<number> {
+  return (await compareCampaignStage(args)).identical ? 0 : 1;
 }

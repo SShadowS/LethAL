@@ -44,7 +44,12 @@ import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
 import { renderVersion } from "./build-info";
-import { runCampaignAnchors, runCampaignCompare, runCampaignFreeze } from "./campaign-subcommands";
+import {
+  compareCampaignStage,
+  runCampaignAnchors,
+  runCampaignCompare,
+  runCampaignFreeze,
+} from "./campaign-subcommands";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
 import type { DoctorCheck, DoctorConfig, DoctorDeps, DoctorReport } from "./doctor";
@@ -689,6 +694,8 @@ export interface CampaignCliConfig {
   readonly expectedMutantCount?: number;
   /** `anchors` only: needed when the committed anchor config sets `reconcileNotInstrumented`. */
   readonly projectDir?: string;
+  /** `compare` only (R355): print `CampaignCompareResult` as JSON on stdout, the lines on stderr. */
+  readonly json?: true;
 }
 
 /**
@@ -848,7 +855,7 @@ USAGE
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
   lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
-  lethal campaign compare  --manifest <path> --stage <name> --report <path>
+  lethal campaign compare  --manifest <path> --stage <name> --report <path> [--json]
   lethal verify            --db <path> --artifact <id> --tests <dir> --survivors <ids>
                                          [--config <path>]
 
@@ -1058,7 +1065,13 @@ CAMPAIGN — the measurement gates, with 'committed before the run' machine-chec
             EXIT CODE is the gate, not the printed text
   compare   diff a report against the stage's committed per-mutant baseline, WRITING NOTHING. A
             missing baseline is refused rather than recorded — that is the whole difference from
-            freeze
+            freeze. R355: refused when the stage and the report both record a coverage mode and
+            they differ. A stage frozen before R355 (or a report from before R252) records none:
+            it is still compared, but the result says the mode is UNVERIFIED, never a bare
+            "identical". Freeze refuses a report with no coverageMode, so new stages are strict
+  --json                     compare only: print the result as one JSON object on stdout
+                             (campaignCompareSchemaVersion, identical, differences, coverage); the
+                             lines go to stderr. Exit code unchanged: 0 identical, 1 different
 
 VERIFY — prove named survivors are now killed, on the build the run left installed (bcdev only)
   Compiles and publishes the test project once, then runs each named survivor's covering tests
@@ -1271,7 +1284,7 @@ export const FLAG_OWNERS: ReadonlyArray<{
   { flag: "file", owners: ["clear-ceiling"] },
   {
     flag: "json",
-    owners: ["doctor"],
+    owners: ["doctor", "campaign"],
     instead:
       "For a run, the machine surfaces are --out (the JSON report), --progress-out (the NDJSON event stream), and `lethal explain <report.json>`.",
   },
@@ -1367,6 +1380,7 @@ function parseCampaignConfig(
     report?: string | undefined;
     "expect-mutants"?: string | undefined;
     project?: string | undefined;
+    json?: boolean | undefined;
   },
   positionals: readonly string[],
 ): CampaignCliConfig {
@@ -1406,6 +1420,11 @@ function parseCampaignConfig(
       `--project applies to \`lethal campaign anchors\` (the notInstrumented reconciliation reads the project's sources); \`${action}\` reads no project`,
     );
   }
+  if (action !== "compare" && values.json === true) {
+    throw new Error(
+      `--json applies to \`lethal campaign compare\` (R355: the comparison result as JSON); \`${action}\` prints no JSON document`,
+    );
+  }
   if (action === "freeze") {
     const expectedMutantCount = expectRaw === undefined ? undefined : Number(expectRaw);
     if (
@@ -1431,6 +1450,7 @@ function parseCampaignConfig(
     ...(values.project !== undefined && values.project !== ""
       ? { projectDir: values.project }
       : {}),
+    ...(values.json === true ? { json: true as const } : {}),
   };
 }
 
@@ -4954,6 +4974,12 @@ export async function campaignFromCli(parsed: CampaignCliConfig): Promise<number
       ...base,
       ...(parsed.projectDir !== undefined ? { projectDir: parsed.projectDir } : {}),
     });
+  }
+  if (parsed.json === true) {
+    // R355: the document goes to stdout alone, so the human lines move to stderr.
+    const result = await compareCampaignStage({ ...base, log: (l) => console.error(l) });
+    console.log(JSON.stringify(result, null, 2));
+    return result.identical ? 0 : 1;
   }
   return await runCampaignCompare(base);
 }
