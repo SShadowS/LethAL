@@ -28,7 +28,8 @@
  *   bun scripts/redact-campaign-report.ts <report.json> [...]
  *   bun scripts/redact-campaign-report.ts --check <report.json> [...]   # exit 1 if any field remains
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 
 /** The marker a redacted field carries. A fixed string, so `--check` is an equality test rather than
  *  a guess, and so a reader meeting one in a report can grep for where it came from. */
@@ -58,6 +59,44 @@ export function isMutationElementsExport(doc: unknown): boolean {
     (f) =>
       typeof f === "object" && f !== null && typeof (f as { source?: unknown }).source === "string",
   );
+}
+
+const REPO_ROOT = join(import.meta.dir, "..");
+
+export interface FirstPartyEntry {
+  readonly path: string;
+  readonly projectDir: string;
+  readonly reason: string;
+}
+
+/** The committed allowlist of reports whose target app lives in THIS repository. */
+export function loadFirstParty(): readonly FirstPartyEntry[] {
+  const raw = readFileSync(join(import.meta.dir, "redact-first-party-reports.json"), "utf8");
+  return (JSON.parse(raw) as { reports: FirstPartyEntry[] }).reports;
+}
+
+/**
+ * R350: the ONE rule for "this report is first-party, so its source may stay". Used by `--check`, by
+ * the write mode and by the test, so there is no second copy to drift.
+ *
+ * A report is identified by its repo-relative path. It is first-party only if it is allowlisted AND
+ * every mutant's `file` exists inside the entry's `projectDir`: the exemption is proven, not trusted.
+ * Returns `undefined` when the path is not allowlisted; otherwise the entry and the files that fall
+ * outside its project (empty means proven).
+ */
+export function firstPartyVerdict(
+  reportPath: string,
+  mutants: ReadonlyArray<{ file?: unknown }>,
+  repoRoot: string = REPO_ROOT,
+  entries: readonly FirstPartyEntry[] = loadFirstParty(),
+): { entry: FirstPartyEntry; foreign: string[] } | undefined {
+  const rel = relative(resolve(repoRoot), resolve(reportPath)).replaceAll("\\", "/");
+  const entry = entries.find((e) => e.path === rel);
+  if (entry === undefined) return undefined;
+  const foreign = mutants
+    .map((m) => (typeof m.file === "string" ? m.file : ""))
+    .filter((f) => f === "" || !existsSync(join(repoRoot, entry.projectDir, f)));
+  return { entry, foreign: [...new Set(foreign)] };
 }
 
 interface Report {
@@ -116,6 +155,21 @@ if (import.meta.main) {
       // Loud, never a quiet skip: a report shape this script cannot read is a report it cannot
       // certify, and "nothing to redact" and "could not look" must not produce the same exit code.
       throw new Error(`${path}: no \`mutants\` array — this is not a SessionReport`);
+    }
+    const fp = firstPartyVerdict(path, mutants);
+    if (fp !== undefined && fp.foreign.length > 0) {
+      throw new Error(
+        `${path}: allowlisted as first-party (${fp.entry.projectDir}) but mutates file(s) outside it: ${fp.foreign.join(", ")}. Not first-party, so it is not exempt.`,
+      );
+    }
+    if (fp !== undefined) {
+      if (check) {
+        console.log(`ok (first-party: ${fp.entry.projectDir}): ${path}`);
+        continue;
+      }
+      throw new Error(
+        `${path}: first-party report (${fp.entry.projectDir}); it is kept unredacted on purpose, so redacting it is refused.`,
+      );
     }
     let touched = 0;
     for (const mutant of mutants) {
