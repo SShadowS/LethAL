@@ -9,6 +9,9 @@ import { changedLinesSince, parseUnifiedDiffAdded } from "../src/line-filter";
 import type { SessionConfig } from "../src/orchestrator";
 import { sessionFingerprint } from "../src/resume";
 import { git, hermeticSpawn, makeGitRepo } from "./helpers/git-repo";
+import { removeRunScratchAfterAll } from "./helpers/scratch";
+
+removeRunScratchAfterAll();
 
 // GH-25: real git throughout. A fake spawn would only re-assert beliefs about git. Each git call
 // can exceed the 5 s default on a loaded Windows runner (see HOOK_TIMEOUT_MS in the campaign test).

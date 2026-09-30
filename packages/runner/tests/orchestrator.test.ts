@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
@@ -27,9 +27,13 @@ import type {
 } from "../src/backend";
 import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
+import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
+import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
+import { startEnvToolSession } from "../src/env-tool-session";
+import type { EnvToolSession } from "../src/env-tool-session";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
@@ -48,6 +52,9 @@ import type {
   RenewOutcome,
 } from "../src/lease";
 import { NamedMutantError } from "../src/named-mutants";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
@@ -75,7 +82,7 @@ import type {
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
-import type { SessionOutcome } from "../src/report";
+import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -370,7 +377,7 @@ function reachedOf(reachedActive: boolean | undefined): { reachedActive?: boolea
 }
 
 async function makeProject(testAl: string = TEST_AL) {
-  const root = await mkdtemp(join(tmpdir(), "lethal-orch-"));
+  const root = scratch("lethal-orch-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
@@ -2332,7 +2339,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-i7-"));
+    const root = scratch("lethal-orch-i7-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
@@ -2342,6 +2349,7 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
       /transport error/i,
     );
+    store.close();
     expect(backend.activations.at(-1)).toBeNull(); // finally: still deactivated
 
     // Reopen the same on-disk (WAL-mode) db from a second connection to
@@ -2613,7 +2621,7 @@ describe("runSession — parallel workers", () => {
   });
 
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-i7-"));
+    const root = scratch("lethal-orch-parallel-i7-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -3112,7 +3120,7 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
 `;
 
   async function makeHangCapableProject(targetAl: string) {
-    const root = await mkdtemp(join(tmpdir(), "lethal-hang-"));
+    const root = scratch("lethal-hang-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     const instrumentedDir = join(root, "instr");
@@ -3259,7 +3267,7 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
     testDir: string;
     instrumentedDir: string;
   }> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-objkind-"));
+    const root = scratch("lethal-orch-objkind-");
     const projectDir = join(root, "app");
     await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
     await Bun.write(join(projectDir, "SandboxPort.XmlPort.al"), PAGE_AL);
@@ -3436,7 +3444,7 @@ ${
 `;
 
   async function operatorsAtSetRange(withProcedure: boolean): Promise<string[]> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-shadow-"));
+    const root = scratch("lethal-orch-shadow-");
     const projectDir = join(root, "app");
     // Separate files — the layout the guard was inert against, and the ordinary AL convention.
     await Bun.write(join(projectDir, "ShadowCaller.Codeunit.al"), CALLER_AL);
@@ -3502,7 +3510,7 @@ describe("generateMutationSet: real cross-tier collisions", () => {
     `${s.before.kind}:${s.before.startIndex}:${s.before.endIndex}:${s.after.text}`;
 
   async function collisionSpecs(): Promise<readonly MutationSpec[]> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-"));
+    const root = scratch("lethal-orch-collide-");
     const projectDir = join(root, "app");
     await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
@@ -3553,7 +3561,7 @@ describe("generateMutationSet: real cross-tier collisions", () => {
   });
 
   test("the whole pipeline resolves them to one mutant per deletion site and two at Modify", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-e2e-"));
+    const root = scratch("lethal-orch-collide-e2e-");
     const projectDir = join(root, "app");
     const outDir = join(root, "instr");
     await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
@@ -4543,7 +4551,7 @@ describe("runSession — bisection on compile failure", () => {
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-deployerr-"));
+    const root = scratch("lethal-orch-parallel-deployerr-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -4866,7 +4874,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
   test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-prepareerr-"));
+    const root = scratch("lethal-orch-parallel-prepareerr-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -5289,7 +5297,7 @@ describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
  *  available. Each call gets its own directory, so tests never share (or race on) quarantine
  *  state. */
 function freshTmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "lethal-orch-quarantine-"));
+  return scratch("lethal-orch-quarantine-");
 }
 
 /**
@@ -6238,6 +6246,8 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /** R361: when set, `recoverOp` THROWS it (after logging the call). */
+  recoverError: Error | undefined;
   /** When set, every renew THROWS — a lost ack, which design §6 says is not lease loss. */
   renewError: Error | undefined;
   /**
@@ -6351,6 +6361,7 @@ class FakeLeaseClient implements LeaseApi {
     this.log.push("recoverOp");
     if (terminalProof !== true) throw new Error("recoverOp called without terminal proof");
     this.recoverArgs.push({ attemptId, opSeq });
+    if (this.recoverError !== undefined) throw this.recoverError;
     return this.recoverOutcome;
   }
 }
@@ -6860,6 +6871,186 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(rec?.opKind).toBe("container-needs-recycle");
   });
 
+  // R240: the TARGET publish can return normally with the session latched, the same three ways a
+  // hook publish can. Nothing after it may treat the publish as a success: no `accepted` row in
+  // R90's publish-size history, and no further backend call (the R192 package read, an activate).
+  async function runLatchedTargetSession(
+    client: FakeLeaseClient,
+    duringDeploy: (timers: FakeTimers) => Promise<void> = async () => {},
+  ) {
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const store = new ResultsStore(":memory:");
+    const testDir = scratch("lethal-r240-tests-");
+    await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+    // A test app.json, so the R192 baseline-snapshot read has a package to ask for.
+    await Bun.write(join(testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+    const calls: string[] = [];
+    const backend = leaseBackend({
+      deploy: async (dir: string) => {
+        calls.push("deploy");
+        await duringDeploy(timers);
+        const app = JSON.parse(await readFile(join(dir, "app.json"), "utf8"));
+        const mutantManifest = JSON.parse(
+          await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+        ) as CompiledArtifact["mutantManifest"];
+        return {
+          artifactId: mutantManifest.artifactId,
+          appId: app.id,
+          appVersion: app.version,
+          appPath: join(dir, "r240.app"),
+          sha256: "c".repeat(64),
+          mutantManifest,
+          appManifest: app,
+        };
+      },
+      activate: async () => {
+        calls.push("activate");
+      },
+      fetchPublishedAppPackage: async () => {
+        calls.push("fetch");
+        return undefined;
+      },
+    });
+    const outcome = await runSessionForTest(backend, {
+      lease,
+      store,
+      testDir,
+      quarantineDir: freshTmpDir(),
+    }).catch((e) => e);
+    return {
+      outcome,
+      afterDeploy: () => calls.slice(calls.indexOf("deploy") + 1),
+      published: () => store.publishOutcomes("http://cronus281|BC").map((r) => r.outcome),
+    };
+  }
+
+  test("a normal target publish is recorded accepted and the session goes on (R240 control)", async () => {
+    const run = await runLatchedTargetSession(new FakeLeaseClient());
+    expect(run.published()).toEqual(["accepted"]);
+    // The probes below are live: on a healthy session both calls do follow the publish.
+    expect(run.afterDeploy()).toContain("activate");
+    expect(run.afterDeploy()).toContain("fetch");
+  });
+
+  test("a target publish whose EndPublish is REFUSED records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishOutcome = { ended: false };
+    const run = await runLatchedTargetSession(client);
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain("EndPublish refused");
+  });
+
+  // R361: a RecoverOp that THROWS is unreconciled too: latch, record the recycle, and let the
+  // ORIGINAL error reach the caller.
+  function ownPublishLostAck(client: FakeLeaseClient) {
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileOpKind = "publish"; // our own marker, so RecoverOp is attempted
+  }
+
+  test("a throwing RecoverOp latches, records the recycle and rethrows the original error (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const boom = new Error("recoverOp exploded");
+    client.recoverError = boom;
+    const dir = freshTmpDir();
+    const { lease } = leaseCfg(client);
+    const outcome = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: dir,
+      afterLeaseAcquired: async () => {},
+      permissionCanary: async () => {
+        throw new Error("the canary must not run on a latched session");
+      },
+    }).catch((e) => e);
+    expect(outcome).toBe(boom);
+    expect(client.recoverArgs).toHaveLength(1);
+    const rec = await new QuarantineStore(dir).read("http://cronus281|BC");
+    expect(rec?.opKind).toBe("container-needs-recycle");
+    expect(rec?.detail).toContain("socket hang up");
+    expect(rec?.detail).toContain("recoverOp exploded");
+  });
+
+  test("a throwing RecoverOp leaves the session latched: nothing runs after the publish (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    client.recoverError = new Error("recoverOp exploded");
+    const run = await runLatchedTargetSession(client);
+    expect(run.outcome).toBeInstanceOf(Error);
+    expect(String(run.outcome?.message)).toContain("recoverOp exploded");
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+  });
+
+  test("a RecoverOp that succeeds is unchanged: no record, no latch (R361 control)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const run = await runLatchedTargetSession(client);
+    expect(client.recoverArgs).toHaveLength(1);
+    expect(run.published()).toEqual(["accepted"]);
+    expect(run.afterDeploy()).toContain("activate");
+  });
+
+  test("a failed recycle write keeps the RecoverOp error primary and preserves the write failure (R361)", async () => {
+    const client = new FakeLeaseClient();
+    ownPublishLostAck(client);
+    const boom = new Error("recoverOp exploded");
+    client.recoverError = boom;
+    // A regular FILE where the quarantine directory should be: mkdir fails on every record().
+    const blocker = join(freshTmpDir(), "blocker");
+    await Bun.write(blocker, "not a directory");
+    const { lease } = leaseCfg(client);
+    const outcome = await runSessionForTest(leaseBackend(), {
+      lease,
+      quarantineDir: blocker,
+      afterLeaseAcquired: async () => {},
+    }).catch((e) => e);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome.message).toContain("recoverOp exploded");
+    expect(outcome.message).toContain("recording the container recycle failed");
+    expect(outcome.errors[0]).toBe(boom);
+    expect(outcome.errors).toHaveLength(2);
+  });
+
+  test("a target publish whose lost EndPublish ack cannot be reconciled records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileStatus = () => ({
+      opKind: "run",
+      opAttemptId: "someone-else",
+      opSeq: 99,
+      lastCompletedOpSeq: 98,
+      completed: false,
+    });
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "publish", opAttemptId: "pub", opSeq: 8, lastCompletedOpSeq: 7, completed: false },
+    ];
+    const run = await runLatchedTargetSession(client);
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain(
+      "could not be reconciled",
+    );
+  });
+
+  test("a target publish during which the heartbeat learns the lease is lost records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    const run = await runLatchedTargetSession(client, async (timers) => {
+      client.renewQueue = [{ renewed: false }];
+      await timers.fire();
+    });
+    expect(client.renewArgs.length).toBeGreaterThan(0);
+    // EndPublish still answered ended:true: the latch came from the heartbeat alone.
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain("renewed:false");
+  });
+
   // R232 follow-up: a `publishApps` path that does not exist never reaches the server, so the
   // real publisher's failure must read as a confirmed pre-publish failure: released, no recycle.
   test("an afterLeaseAcquired whose publishApps file does not exist releases the lease and quarantines nothing (R232)", async () => {
@@ -7015,6 +7206,213 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(rec?.opKind).toBe("container-needs-recycle");
       });
     }
+  });
+});
+
+// R238: a session that records a recycle and then THROWS must keep the environment it created.
+// `withEnvTeardown` read `quarantined` from the report alone, and a throwing body has none, so the
+// created environment was deleted while a `container-needs-recycle` record still named its tier.
+// Everything here is real except the env tool's spawn and the BC lease client: a create-mode
+// `startEnvToolSession`, `afterLeaseAcquiredFor`, `runSession` and `withEnvTeardown`. The created
+// environment answers at `http://cronus281/BC`, which is the tier `runSessionForTest` names, so the
+// key teardown reads is the key the session wrote.
+describe("R238: withEnvTeardown keeps a created environment the session quarantined", () => {
+  async function createdEnvSession(publishTestApp: () => Promise<void>) {
+    const calls: string[][] = [];
+    const cfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      publishApps: ["tests.app"],
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "0.username", password: "0.password" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+        pollSeconds: 0,
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+    };
+    const out: Record<string, string> = {
+      "env get": '{"url":"http://cronus281/BC"}',
+      "env users": '[{"username":"admin","password":"pw"}]',
+      "env create": '{"id":"env-new"}',
+      "env status": '{"status":"Running"}',
+    };
+    const client = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        calls.push([...argv]);
+        const line = argv.join(" ");
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    const session = await startEnvToolSession({
+      cfg,
+      bcdevRaw: {
+        company: "CRONUS",
+        tenant: "default",
+        mcpCommand: ["bun", "mcp"],
+        packageCachePath: "C:/pkg",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      projectDir: "C:/proj",
+      testDir: "C:/tests",
+      runId: "r238",
+      client,
+      makePublisher: () => ({ publishFile: publishTestApp }),
+      verifyHarness: async () => {},
+      stateDir: freshTmpDir(),
+    });
+    expect(session.createdEnvId).toBe("env-new");
+    const deleted = () => calls.some((c) => c.includes("delete"));
+    return { session, deleted };
+  }
+
+  /** Runs `body` through the real `withEnvTeardown`, recording teardown's options and warnings. */
+  async function tearDownAround(
+    session: EnvToolSession,
+    quarantineDir: string,
+    body: () => Promise<SessionReport>,
+  ) {
+    const teardownOpts: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const spied: EnvToolSession = {
+      ...session,
+      teardown: async (opts) => {
+        teardownOpts.push(opts);
+        await session.teardown(opts);
+      },
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let settled: unknown;
+    let warnings: string[] = [];
+    try {
+      settled = await withEnvTeardown(spied, false, body, quarantineDir).catch((e) => e);
+      // Read before mockRestore(), which clears the recorded calls.
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    const kept = warnings.some((w) =>
+      w.includes("keeping environment env-new (session quarantined)"),
+    );
+    return { settled, teardownOpts, kept, warnings };
+  }
+
+  test("an uncertain R19 test-app publish records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const uncertain = new EnvToolError("envTool.publish: timed out after 600 s", TESTS_APP);
+    const { session, deleted } = await createdEnvSession(async () => {
+      throw uncertain;
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect(r.settled).toBe(uncertain);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("an indeterminate target deploy records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("indeterminate", "connection reset mid-publish", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("control: a body that throws WITHOUT recording anything still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("failed", "BC rejected the package", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(r.kept).toBe(false);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a session that completes cleanly still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect((r.settled as SessionReport).quarantined).toBeUndefined();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a quarantine store that cannot be read keeps the environment and says why", async () => {
+    // A record file that exists but is not JSON: the store cannot say whether the tier is
+    // quarantined. The file name is the store's own (quarantine-store.ts `fileFor`).
+    const storeDir = freshTmpDir();
+    const name = createHash("sha256").update("http://cronus281|BC").digest("hex").slice(0, 32);
+    writeFileSync(join(storeDir, `${name}.json`), "{ truncated");
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const bodyErr = new Error("body failed");
+    const r = await tearDownAround(session, storeDir, async () => {
+      throw bodyErr;
+    });
+    expect(r.settled).toBe(bodyErr);
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(r.warnings.some((w) => w.includes("could not read the quarantine store"))).toBe(true);
+    expect(deleted()).toBe(false);
   });
 });
 

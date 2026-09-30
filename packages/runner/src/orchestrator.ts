@@ -2564,7 +2564,26 @@ class LeaseSession {
       status.opSeq === opSeq &&
       attemptId !== ""
     ) {
-      const recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
+      let recovered: Awaited<ReturnType<LeaseApi["recoverOp"]>>;
+      try {
+        recovered = await this.d.client.recoverOp(this.d.lease, attemptId, opSeq, true);
+      } catch (err) {
+        // R361: a throwing RecoverOp is as unreconciled as a throwing status read: latch and record
+        // the recycle, then let the ORIGINAL error reach the caller. `leaveStrandedPublish` latches
+        // before it writes, so a failed recycle write still leaves the session latched; that
+        // failure rides along in an AggregateError so neither error is lost.
+        try {
+          await this.leaveStrandedPublish(
+            `EndPublish for op ${opSeq} (attemptId ${attemptId}) was not acknowledged (${messageOf(cause)}) and the reconciling RecoverOp also failed (${messageOf(err)}) — marker left set`,
+          );
+        } catch (recycleErr) {
+          throw new AggregateError(
+            [err, recycleErr],
+            `${messageOf(err)} (and recording the container recycle failed: ${messageOf(recycleErr)})`,
+          );
+        }
+        throw err;
+      }
       if (recovered.recovered || recovered.alreadyCompleted === true) return;
     }
     await this.leaveStrandedPublish(
@@ -2932,6 +2951,12 @@ function classifyDeployFailure(err: unknown): PublishOutcome | undefined {
 /**
  * One deploy dispatch: latch-guarded (design §6: `deploy`, `activate` AND `run` are all guarded)
  * and, when a lease is held, wrapped in the BeginPublish/EndPublish fence.
+ *
+ * R240: the fence can return normally with the session LATCHED (a refused EndPublish, an
+ * unreconciled lost EndPublish ack, or the heartbeat learning of lease loss mid-publish), so the
+ * latch is checked again once it returns, as `runLeaseHook` does for a hook publish. The caller
+ * then sees `SessionUnsafeError` as the deploy error, which `classifyDeployFailure` does not
+ * record: R90's history gets no row, never an `accepted` one, and nothing runs after it.
  */
 async function deployOnce(
   backend: ExecutionBackend,
@@ -2942,7 +2967,9 @@ async function deployOnce(
 ): Promise<CompiledArtifact | null> {
   safety.assertSafe(`deploy(${dir})`);
   if (leaseSession === undefined) return backend.deploy(dir);
-  return leaseSession.publish(() => backend.deploy(dir), attempted);
+  const compiled = await leaseSession.publish(() => backend.deploy(dir), attempted);
+  safety.assertSafe(`deploy(${dir}) returned`);
+  return compiled;
 }
 
 /**

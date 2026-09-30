@@ -1,14 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  rmdirSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { defaultRecordsDir } from "../src/campaign-freeze";
 import {
@@ -17,6 +8,9 @@ import {
   readCampaignManifest,
   resolveRecordsDir,
 } from "../src/campaign-manifest";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 function fixturePath(name: string): string {
   return join(import.meta.dir, "fixtures", name);
@@ -59,7 +53,7 @@ describe("readCampaignManifest — reading a campaign's own manifest", () => {
 describe("readCampaignManifest — caller-contract violations, fail loud not empty", () => {
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "lethal-campaign-manifest-"));
+    dir = scratch("lethal-campaign-manifest-");
   });
 
   test("a manifest missing campaignId throws, naming the field and the file", () => {
@@ -165,7 +159,7 @@ describe("findRepoRoot — indifferent to whether .git is a FILE (worktree) or a
   // file's content (campaign-manifest.ts's own doc comment), but real worktree `.git` files hold
   // a `gitdir: <path>` line, so this uses the same shape for fidelity.
   test("finds the root when .git is a FILE (the worktree shape)", () => {
-    const root = mkdtempSync(join(tmpdir(), "lethal-findroot-worktree-"));
+    const root = scratch("lethal-findroot-worktree-");
     try {
       writeFileSync(join(root, ".git"), "gitdir: /some/path/.git/worktrees/example\n", "utf8");
       const nested = join(root, "a", "b", "c");
@@ -177,7 +171,7 @@ describe("findRepoRoot — indifferent to whether .git is a FILE (worktree) or a
   });
 
   test("finds the root when .git is a DIRECTORY (the normal-clone shape)", () => {
-    const root = mkdtempSync(join(tmpdir(), "lethal-findroot-clone-"));
+    const root = scratch("lethal-findroot-clone-");
     try {
       mkdirSync(join(root, ".git"));
       const nested = join(root, "a", "b", "c");
@@ -268,7 +262,7 @@ describe("resolveRecordsDir — symlink/junction bypass refused (fix round 2, De
   // up in `finally` regardless of pass/fail — nothing is left behind on disk.
   test("an existing junction inside the repo that redirects outside is refused, not silently followed", () => {
     const root = findRepoRoot(import.meta.dir);
-    const outside = mkdtempSync(join(tmpdir(), "lethal-outside-repo-"));
+    const outside = scratch("lethal-outside-repo-");
     const linkPath = join(root, "docs", "campaign", "__test_junction__");
     if (existsSync(linkPath)) {
       rmdirSync(linkPath); // clear a stale leftover from a previously aborted run

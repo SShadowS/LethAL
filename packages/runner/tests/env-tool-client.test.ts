@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   EnvToolClient,
@@ -11,6 +10,9 @@ import {
 } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import { ProcessNotStartedError } from "../src/publisher";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const CFG: EnvToolConfigSection = {
   toolPath: "C:/tools/continia.exe",
@@ -463,7 +465,7 @@ describe("EnvToolClient.run — successWhen", () => {
 // R237: each case the R237 measurement ran against the REAL Bun spawn, classified by the real
 // client. Only the cases where Bun.spawn threw and no process ever existed are "never started".
 describe("EnvToolClient: which spawn failures mean the tool never started (R237)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-r237-"));
+  const dir = scratch("lethal-r237-");
   const txt = join(dir, "notexec.txt");
   writeFileSync(txt, "hello");
   const notPe = join(dir, "garbage.exe");

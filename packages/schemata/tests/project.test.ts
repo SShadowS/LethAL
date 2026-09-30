@@ -439,7 +439,6 @@ describe("writeInstrumentedProject", () => {
 
       // Test 2: Quoted procedure name - should strip quotes
       await rm(dir, { recursive: true, force: true });
-      await mkdtemp(join(tmpdir(), "lethal-"));
       const src2 = `codeunit 51041 "MyCodeunit" {
   procedure "My Proc"() begin
     Y := 10;
@@ -476,7 +475,6 @@ describe("writeInstrumentedProject", () => {
 
       // Test 3: Unquoted codeunit name in object header
       await rm(dir, { recursive: true, force: true });
-      await mkdtemp(join(tmpdir(), "lethal-"));
       const src3 = `codeunit 51042 Plain {
   procedure MyProc() begin
     Z := 5;

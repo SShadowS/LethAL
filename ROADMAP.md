@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 356 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 359 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -95,8 +95,8 @@ that ordering is the priority.
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · done (4688a987..eab34a51)
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · done (e431fdb)
 - **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
-- **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · open
-- **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · open
+- **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · done (8599054b)
+- **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · done (273358c4)
 - **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · open
 - **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · open
 - **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
@@ -145,6 +145,7 @@ that ordering is the priority.
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · done (1c20c306)
 - **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
+- **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · done (7d6fc37b)
 
 ## Product gaps a real project hits
 
@@ -400,7 +401,9 @@ that ordering is the priority.
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · done (512715b1)
 - **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
-- **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · open, filed 2026-09-30
+- **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · done (64488c59)
+- **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
+- **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · open, filed 2026-09-30
 
 ---
 
