@@ -4788,7 +4788,24 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
     );
   }
   const options = parsed.topSurvivors !== undefined ? { topSurvivors: parsed.topSurvivors } : {};
-  console.log(JSON.stringify(explain(assertExplainableReport(parsedJson), options), null, 2));
+  const out = explain(assertExplainableReport(parsedJson), options);
+  console.log(JSON.stringify(out, null, 2));
+  // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
+  // under its survivor; the stale statement, when there is one, comes first.
+  if (out.markKeysStale !== undefined) {
+    console.error(
+      `mark keys are STALE: this report keys under identity scheme ${out.markKeysStale.reportScheme} and this build under ${out.markKeysStale.buildScheme}, so a mark written from them would be stale on the next run. Re-run under this build first.`,
+    );
+  }
+  if (out.survivors.length > 0) {
+    console.error(
+      `mark keys below take "identityScheme": ${out.markIdentityScheme} in the marks file`,
+    );
+  }
+  for (const s of out.survivors) {
+    console.error(`survivor ${s.batchIndex}/${s.mutantCode} ${s.file}:${s.line}`);
+    console.error(`  mark key: ${s.markKey}`);
+  }
   return 0;
 }
 

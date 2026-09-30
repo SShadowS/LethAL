@@ -1108,6 +1108,43 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(own).toContain(`\`<project>/${EQUIVALENCE_MARKS_FILENAME}\``);
   });
 
+  test("R265: the explain recipe (copy markKey, set markIdentityScheme) matches, and stale means re-run", () => {
+    const report = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    const out = explain(report);
+    const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
+    expect(body).toContain("Copy its `markKey` into `key`.");
+    expect(body).toContain("Set `identityScheme` to explain's `markIdentityScheme`.");
+    expect(body).toContain("If explain printed `markKeysStale`");
+    expect(body).toContain("Re-run under this build first");
+    const file = JSON.stringify({
+      identityScheme: out.markIdentityScheme,
+      marks: out.survivors.map((s) => ({ key: s.markKey, reason: "equivalent" })),
+    });
+    const marks = parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME);
+    const rows = report.mutants.map((m) => ({
+      batchIndex: m.batchIndex,
+      mutantCode: m.mutantCode,
+      identity: serializeKey(
+        identityKeyOf({
+          ...m,
+          operatorVersion: `${m.operatorMajor}.0.0`,
+        } as unknown as MutantManifestEntry),
+      ),
+      verdict: m.verdict,
+    }));
+    // Under the report's own scheme every key matches its survivor.
+    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme);
+    expect(same.stale).toEqual([]);
+    expect(same.matched.map((x) => x.mutantCode).sort()).toEqual(
+      out.survivors.map((s) => s.mutantCode).sort(),
+    );
+    // The committed report predates this build's scheme, so explain says the keys are stale, and a
+    // run under this build does report every one of those marks stale: the doc's "re-run first".
+    expect(out.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
+    expect(out.markIdentityScheme).not.toBe(IDENTITY_SCHEME);
+    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME).stale).toHaveLength(marks.length);
+  });
+
   test("the marks file lives where the doc says and has the documented shape", async () => {
     const own = ownText(read(REFERENCE), "Marking an equivalent survivor (checked)");
     let path = "";

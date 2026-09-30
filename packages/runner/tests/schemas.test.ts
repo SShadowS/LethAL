@@ -229,7 +229,7 @@ function enumAt(root: Schema, path: string): unknown[] {
 }
 
 describe("published JSON Schemas (R152)", () => {
-  const explainSchema = loadSchema("explain-v6.schema.json");
+  const explainSchema = loadSchema(`explain-v${EXPLAIN_SCHEMA_VERSION}.schema.json`);
   const doctorSchema = loadSchema("doctor-v1.schema.json");
 
   test("the explain schema describes exactly the leaves ExplainOutput declares", () => {
@@ -872,6 +872,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v7.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1045,14 +1057,20 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     );
   });
 
-  test("the explain survivor row's required set is pinned (C02-01)", () => {
+  test("the explain survivor row's required set is pinned (C02-01, R265)", () => {
     // Nested required lists are not covered by the R157 root pin. A new survivor field added to
-    // this list would make the edited v6 schema reject an explain output stored before it.
-    const explainSchema = loadSchema("explain-v6.schema.json");
-    const items = ((explainSchema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
-      required?: string[];
+    // this list would make an edited schema reject an explain output stored before it, which is why
+    // R265's required `markKey` is a new file (v7) and v6 keeps its list.
+    const required = (file: string) => {
+      const schema = loadSchema(file);
+      const items = ((schema.properties as Record<string, Schema>).survivors?.items ?? {}) as {
+        required?: string[];
+      };
+      return [...(items.required ?? [])].sort();
     };
-    expect([...(items.required ?? [])].sort()).toEqual([
+    const v6 = required("explain-v6.schema.json");
+    expect(required("explain-v7.schema.json")).toEqual([...v6, "markKey"].sort());
+    expect(v6).toEqual([
       "attribution",
       "codeunitName",
       "coveringTests",
