@@ -858,11 +858,12 @@ export class ResultsStore {
   /**
    * Stamps the run finished and, in the same transaction, prunes installed bundles (R360 I1) in
    * the finishing run's group, the runs with its `app_id` and `resource_key` (`IS`, so NULL groups
-   * with NULL): every bundle of another FINISHED run, every bundle of an unfinished run that
-   * started before this one (ruling Q1), and this run's own lower batches. An unfinished run that
-   * started after this one keeps its bundle. The server holds one build of an app, so a pruned
-   * bundle could only ever be refused as replaced. `runSession` calls this only for a run that did
-   * not throw and did not latch unsafe, so a failed run prunes nothing.
+   * with NULL). The group's most recently PUBLISHED bundle (highest `installed_bundles` rowid, i.e.
+   * insert order) is the build on the server and is never pruned, whichever run finishes last
+   * (review r1 #2: an older run finishing after a newer one must not prune the newer bundle).
+   * Every OLDER-published bundle goes if its run is finished or started no later than this one
+   * (ruling Q1); an unfinished run that started after this one keeps its bundle. `runSession` calls
+   * this only for a run that did not throw and did not latch unsafe, so a failed run prunes nothing.
    */
   finishRun(runId: number, info: { batchCount: number; baselineGreen: boolean }): void {
     const tx = this.db.transaction(() => {
@@ -873,14 +874,13 @@ export class ResultsStore {
         .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
       const doomed = this.db
         .query(
-          "SELECT b.run_id, b.batch_index FROM batch_artifacts b " +
-            "JOIN runs o ON o.id = b.run_id JOIN runs me ON me.id = ? " +
+          "SELECT i.run_id, i.batch_index FROM installed_bundles i " +
+            "JOIN runs o ON o.id = i.run_id JOIN runs me ON me.id = ? " +
             "WHERE o.app_id IS me.app_id AND o.resource_key IS me.resource_key " +
-            "AND EXISTS (SELECT 1 FROM installed_bundles i " +
-            "WHERE i.run_id = b.run_id AND i.batch_index = b.batch_index) " +
-            "AND ((o.id <> me.id AND (o.finished_at IS NOT NULL OR o.id < me.id)) " +
-            "OR (o.id = me.id AND b.batch_index < " +
-            "(SELECT MAX(h.batch_index) FROM batch_artifacts h WHERE h.run_id = me.id)))",
+            "AND (o.finished_at IS NOT NULL OR o.id <= me.id) " +
+            "AND i.rowid < (SELECT MAX(l.rowid) FROM installed_bundles l " +
+            "JOIN runs lr ON lr.id = l.run_id " +
+            "WHERE lr.app_id IS me.app_id AND lr.resource_key IS me.resource_key)",
         )
         .all(runId) as Array<{ run_id: number; batch_index: number }>;
       for (const d of doomed) this.pruneBundle(d.run_id, d.batch_index, runId);

@@ -1312,6 +1312,29 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     store.close();
   });
 
+  test("review r1 #2: reverse finish order keeps the most recently PUBLISHED bundle, on two connections", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-order-"));
+    const path = join(dir, "r.sqlite");
+    const connA = new ResultsStore(path);
+    const connB = new ResultsStore(path);
+    try {
+      const a = run(connA, "srv|bc");
+      publish(connA, a, 0);
+      const b = run(connB, "srv|bc");
+      publish(connB, b, 0); // B's build replaces A's on the server
+      finish(connB, b); // B finishes first
+      finish(connA, a); // A, older, finishes last
+      // B's bundle is the one installed, so it survives A's late finish; A's is the stale one.
+      expect(has(connA, b, 0)).toBe(true);
+      expect(connA.trustedArtifactRecord(b, 0)?.bundlePrunedBy).toBeNull();
+      expect(has(connA, a, 0)).toBe(false);
+    } finally {
+      connA.close();
+      connB.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a NULL server groups with NULL: two al-runner-style runs prune each other", () => {
     const store = new ResultsStore(":memory:");
     const a = run(store);
@@ -1330,15 +1353,27 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     const older = run(store, "srv|bc");
     publish(store, older, 0);
     const me = run(store, "srv|bc");
+    const newer = run(store, "srv|bc");
+    publish(store, newer, 0);
+    publish(store, me, 0); // the most recent publish: the build on the server
+    finish(store, me);
+    expect(has(store, older, 0)).toBe(false);
+    expect(store.trustedArtifactRecord(older, 0)?.bundlePrunedBy).toBe(me);
+    // Published before me, but its run is unfinished and started after me: kept (Q1).
+    expect(has(store, newer, 0)).toBe(true);
+    expect(has(store, me, 0)).toBe(true);
+    store.close();
+  });
+
+  test("review r1 #2: a finishing run whose bundle a newer publish replaced prunes its own, not the newer one", () => {
+    const store = new ResultsStore(":memory:");
+    const me = run(store, "srv|bc");
     publish(store, me, 0);
     const newer = run(store, "srv|bc");
     publish(store, newer, 0);
     finish(store, me);
-    expect(has(store, older, 0)).toBe(false);
-    expect(store.highestBundlePrunedBy(older)).toEqual({ prunedBy: me, resourceKey: "srv|bc" });
     expect(has(store, newer, 0)).toBe(true);
-    expect(store.highestBundlePrunedBy(newer)).toBeNull();
-    expect(has(store, me, 0)).toBe(true);
+    expect(has(store, me, 0)).toBe(false);
     store.close();
   });
 
