@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { CARRYABLE_VERDICTS } from "../src/resume";
-import { type MutantVerdict, ResultsStore } from "../src/store";
+import { type MutantVerdict, PRUNED_BY_ENV_TEARDOWN, ResultsStore } from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -1160,6 +1160,26 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     // No finishRun: runSession never reaches it for a session that threw or latched unsafe.
     expect(has(store, done, 0)).toBe(true);
     expect(store.trustedArtifactRecord(done, 0)?.bundlePrunedBy).toBeNull();
+    store.close();
+  });
+
+  test("I-1: an environment deleted at teardown drops every bundle stored under its key, only those", () => {
+    const store = new ResultsStore(":memory:");
+    const a1 = run(store, "env-a|bc");
+    publish(store, a1, 0);
+    finish(store, a1);
+    const a2 = run(store, "env-a|bc");
+    publish(store, a2, 0);
+    const b = run(store, "env-b|bc");
+    publish(store, b, 0);
+    const none = run(store);
+    publish(store, none, 0);
+    expect(store.dropBundlesOfResource("env-a|bc")).toBe(2);
+    expect(has(store, a1, 0)).toBe(false);
+    expect(has(store, a2, 0)).toBe(false);
+    expect(store.trustedArtifactRecord(a2, 0)?.bundlePrunedBy).toBe(PRUNED_BY_ENV_TEARDOWN);
+    expect(has(store, b, 0)).toBe(true);
+    expect(has(store, none, 0)).toBe(true);
     store.close();
   });
 

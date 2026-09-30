@@ -7408,7 +7408,7 @@ describe("R238: withEnvTeardown keeps a created environment the session quaranti
       ...session,
       teardown: async (opts) => {
         teardownOpts.push(opts);
-        await session.teardown(opts);
+        return await session.teardown(opts);
       },
     };
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});

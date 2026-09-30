@@ -225,6 +225,12 @@ export interface RunRow {
   readonly coverageMode: CoverageMode | null;
 }
 
+/**
+ * R360 I-1: the `bundle_pruned_by` value for a bundle dropped because the environment it was
+ * installed on was deleted at env-tool teardown. Run ids start at 1, so 0 names no run.
+ */
+export const PRUNED_BY_ENV_TEARDOWN = 0;
+
 /** R354: the closed set a `coverage_mode` column may hold. Exhaustive by type. */
 const COVERAGE_MODES: Record<CoverageMode, true> = {
   none: true,
@@ -833,6 +839,27 @@ export class ResultsStore {
     });
     tx();
     this.checkpoint();
+  }
+
+  /**
+   * R360 I-1: the env-tool session deleted the environment whose quarantine resource key is
+   * `resourceKey`, so no bundle installed there can be verified again. Drops every one, of any
+   * run, and marks it `PRUNED_BY_ENV_TEARDOWN`. Returns how many were dropped.
+   */
+  dropBundlesOfResource(resourceKey: string): number {
+    const tx = this.db.transaction(() => {
+      const doomed = this.db
+        .query(
+          "SELECT i.run_id, i.batch_index FROM installed_bundles i " +
+            "JOIN runs r ON r.id = i.run_id WHERE r.resource_key = ?",
+        )
+        .all(resourceKey) as Array<{ run_id: number; batch_index: number }>;
+      for (const d of doomed) this.pruneBundle(d.run_id, d.batch_index, PRUNED_BY_ENV_TEARDOWN);
+      return doomed.length;
+    });
+    const n = tx();
+    this.checkpoint();
+    return n;
   }
 
   /** R360: drops one batch's bundle and records which run pruned it. */

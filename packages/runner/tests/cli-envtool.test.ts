@@ -1,8 +1,10 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
@@ -28,6 +30,7 @@ import { QuarantineStore } from "../src/quarantine-store";
 import type { SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
+import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -230,7 +233,9 @@ describe("resolveEnvToolSession", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       publishTestApps: async () => {},
-      async teardown() {},
+      async teardown() {
+        return undefined;
+      },
     };
     const result = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
       startSession: async (args) => {
@@ -290,7 +295,9 @@ describe("resolveEnvToolSession", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       publishTestApps: async () => {},
-      async teardown() {},
+      async teardown() {
+        return undefined;
+      },
     };
     const { effectiveConfig } = await resolveEnvToolSession(RUN_CONFIG_BCDEV, configFile, "run-1", {
       startSession: async () => fakeSession,
@@ -514,6 +521,7 @@ describe("withEnvTeardown", () => {
       publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
+        return undefined;
       },
     };
     const bodyErr = new Error("could not locate alc.exe/altool.exe");
@@ -653,6 +661,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
+        return undefined;
       },
     };
     const parsed: RunCliConfig = { ...RUN_CONFIG_BCDEV, configPath };
@@ -751,6 +760,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       publishTestApps: async () => {},
       async teardown(opts) {
         teardownCalls.push(opts);
+        return undefined;
       },
     };
     // al-runner (not bcdev): `resourceIdentityFor`/`leaseSessionFor` are no-ops for al-runner, so
@@ -955,6 +965,102 @@ describe("runFromCli owns its scratch folder from mkdtemp on (R360 I2)", () => {
     );
     expect(clean.err).toBeUndefined();
     expect(clean.made).toEqual([]);
+  });
+});
+
+describe("an environment deleted at teardown takes its stored bundles with it (R360 I-1)", () => {
+  /** One env-tool run: its own created environment on `server`, a runSession that stores one
+   *  bundle under that environment's key the way step 3d does, then the given report. */
+  async function envRun(
+    dbPath: string,
+    server: string,
+    opts: { keepEnv?: boolean; report?: SessionReport } = {},
+  ): Promise<void> {
+    const bcdev = { ...RESOLVED_BCDEV, server };
+    const session: EnvToolSession = {
+      bcdev,
+      envId: bcdev.serverInstance,
+      createdEnvId: "created",
+      publishTestApps: async () => {},
+      // Mirrors the real teardown: "deleted" only when the environment was actually deleted.
+      async teardown(o) {
+        return o.keepEnv || o.quarantined ? undefined : "deleted";
+      },
+    };
+    await runFromCli(
+      {
+        ...RUN_CONFIG_BCDEV,
+        configPath: await writeTempConfig(),
+        dbPath,
+        keepEnv: opts.keepEnv ?? false,
+      },
+      {
+        validateSelectorIdsForProject: async () => {},
+        quarantineDir: scratch("lethal-r360-q-"),
+        resolveEnvToolSession: async () => ({ effectiveConfig: { bcdev }, envSession: session }),
+        buildBackend: async () =>
+          new AlRunnerBackend({
+            alRunnerPath: "unused",
+            instrumentedDir: "unused",
+            testDir: "unused",
+            selectorObjectId: 1,
+          }),
+        runSession: async (cfg) => {
+          const key = quarantineResourceKey({
+            server: cfg.resourceServer ?? "",
+            serverInstance: cfg.resourceServerInstance ?? "",
+          });
+          const runId = cfg.store.createRun({
+            coverageMode: "procedure",
+            identityScheme: IDENTITY_SCHEME,
+            projectPath: "P",
+            backend: "bcdev",
+            appVersion: "0.0.0.0",
+            resourceKey: key,
+          });
+          cfg.store.recordArtifact(runId, {
+            batchIndex: 0,
+            appVersion: "1.0.0.1",
+            appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+            artifactId: randomBytes(16).toString("hex"),
+            sha256: "a".repeat(64),
+            bundle: tinyBundle(server),
+          });
+          cfg.store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+          return opts.report ?? FAKE_REPORT;
+        },
+      },
+    );
+  }
+  const bundles = (dbPath: string) => {
+    const store = new ResultsStore(dbPath);
+    try {
+      return (store.db.query("SELECT COUNT(*) AS n FROM installed_bundles").get() as { n: number })
+        .n;
+    } finally {
+      store.close();
+    }
+  };
+
+  it("two runs that each created and deleted their own environment leave no bundle", async () => {
+    const dbPath = join(scratch("lethal-r360-i1-"), "r.sqlite");
+    await envRun(dbPath, "https://env-one");
+    expect(bundles(dbPath)).toBe(0);
+    await envRun(dbPath, "https://env-two");
+    expect(bundles(dbPath)).toBe(0);
+  });
+
+  it("a kept (--keep-env) or quarantined environment keeps its bundle", async () => {
+    const dbPath = join(scratch("lethal-r360-i1-"), "r.sqlite");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await envRun(dbPath, "https://env-kept", { keepEnv: true });
+      expect(bundles(dbPath)).toBe(1);
+      await envRun(dbPath, "https://env-quarantined", { report: QUARANTINED_FAKE_REPORT });
+      expect(bundles(dbPath)).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
