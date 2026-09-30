@@ -523,10 +523,46 @@ test("publishTestApp: a failed exit with an unreadable read-back is publish-inde
     deps([], [OLD, null], DOWNGRADE),
   ).catch((e) => e);
   expect(err).toMatchObject({ reason: "publish-indeterminate", confirmedTerminal: false });
-  expect(decideTestAppOutcome(DOWNGRADE, { status: "unavailable", detail: "timeout" })).toBe(
+  expect(
+    decideTestAppOutcome(DOWNGRADE, { status: "unavailable", detail: "timeout" }, COMPILED),
+  ).toBe("indeterminate");
+  expect(decidePublishOutcome(false, { status: "unavailable", detail: "timeout" })).toBe("failed"); // the target's rule is unchanged
+});
+
+// R250: a failed exit whose read-back is readable but not our bytes is `failed` only when BC's
+// sentence names THIS test app, publisher and version. The DOWNGRADE text is the measured shape.
+test("decideTestAppOutcome: only BC's sentence naming this test app confirms a refusal (R250)", () => {
+  const notOurs = { status: "mismatch", reported: "x" } as const;
+  expect(decideTestAppOutcome(DOWNGRADE, notOurs, COMPILED)).toBe("failed");
+  const quoted =
+    'altool publishapp failed (exit 1):\ntimed out; last output: "a newer version 1.0.0.9 was already installed."';
+  expect(decideTestAppOutcome(quoted, notOurs, COMPILED)).toBe("indeterminate");
+  expect(decideTestAppOutcome(DOWNGRADE, notOurs, { ...COMPILED, name: "Other" })).toBe(
     "indeterminate",
   );
-  expect(decidePublishOutcome(false, { status: "unavailable", detail: "timeout" })).toBe("failed"); // the target's rule is unchanged
+  expect(decideTestAppOutcome(DOWNGRADE, notOurs, { ...COMPILED, publisher: "Contoso" })).toBe(
+    "indeterminate",
+  );
+  expect(decideTestAppOutcome(DOWNGRADE, notOurs, { ...COMPILED, version: "1.0.0.1" })).toBe(
+    "indeterminate",
+  );
+});
+
+test("publishTestApp: a timeout that only QUOTES the downgrade phrase is publish-indeterminate (R250)", async () => {
+  const err = await publishTestApp(
+    loggingFence([]),
+    COMPILED,
+    deps(
+      [],
+      [OLD, OLD],
+      `altool publishapp failed (exit 1):\ntimed out; last output: "a newer version 1.0.0.9 was already installed."`,
+    ),
+  ).catch((e) => e);
+  expect(err).toMatchObject({
+    reason: "publish-indeterminate",
+    confirmedTerminal: false,
+    installedVersion: undefined,
+  });
 });
 
 test("publishTestApp returns the server's version, not app.json's", async () => {
