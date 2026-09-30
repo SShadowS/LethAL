@@ -32,6 +32,7 @@ import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
+import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
 import { LeaseUnavailableError } from "../src/lease";
 import type {
@@ -73,7 +74,7 @@ import type {
 } from "../src/orchestrator";
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
-import { renderConsole } from "../src/report";
+import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
 import type { SessionOutcome } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
@@ -12792,5 +12793,103 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.refused?.reason).toBe("batch-not-installed");
     expect(fx.trace).toEqual([]);
     expect(fx.log).toEqual([]);
+  });
+});
+
+// R252 (GitHub issue #9, side report 1): `lethal explain` refused a coverage-off report LethAL itself
+// wrote, because its survivors carry no `coverageAttribution`. The report now records the mode on
+// purpose, and explain accepts the missing attribution ONLY when that record says "none".
+describe("R252: coverageMode on the report, and explain on a coverage-off report", () => {
+  /** A real report through `runSession`: every test passes, so every covered mutant survives. */
+  async function coverageOffReport(): Promise<Record<string, unknown>> {
+    const dirs = await makeProject();
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      () => "pass",
+    );
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    // Through JSON, as `lethal explain` reads it off disk.
+    const json = JSON.parse(JSON.stringify(report)) as Record<string, unknown>;
+    const survivors = (json.mutants as Array<Record<string, unknown>>).filter(
+      (m) => m.verdict === "survived",
+    );
+    expect(survivors.length).toBeGreaterThan(0);
+    for (const m of survivors) expect(m.coverageAttribution).toBeUndefined();
+    return json;
+  }
+
+  test("the report builder records coverageMode from the backend's capabilities", async () => {
+    expect((await coverageOffReport()).coverageMode).toBe("none");
+    const dirs = await makeProject();
+    const fenced = await runSession({
+      backend: new StubBackend(
+        { coverage: "fenced", deploy: "publish", isolation: "session", authoritative: false },
+        () => "pass",
+        ["IsOverBudget"],
+      ),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(fenced.coverageMode).toBe("fenced");
+  });
+
+  test("a coverage-off report is explained, its survivors shown as coverage not measured", async () => {
+    const out = explain(assertExplainableReport(await coverageOffReport()));
+    expect(out.survivors.length).toBeGreaterThan(0);
+    for (const s of out.survivors) {
+      expect(s.attribution).toBe("not-measured");
+      expect(s.executionProven).toBe(false);
+      expect(s.interpretation).toBe(COVERAGE_NOT_MEASURED_INTERPRETATION);
+      expect(s.interpretation.meaning).toStartWith("Coverage not measured.");
+      // Neither covered nor uncovered: the two reach states that name coverage are never used.
+      expect(["covered-but-unreached", "unreached-and-uncovered"]).not.toContain(s.reach);
+    }
+  });
+
+  test("coverageMode present but not none, with an unattributed survivor, is still malformed", async () => {
+    for (const mode of ["fenced", "procedure"]) {
+      const report = await coverageOffReport();
+      report.coverageMode = mode;
+      let thrown: unknown;
+      try {
+        assertExplainableReport(report);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(MalformedReportError);
+      const message = (thrown as Error).message;
+      expect(message).toContain("is `survived` with no coverageAttribution, so whether any test");
+      expect(message).not.toContain("predates");
+    }
+  });
+
+  test("a report without coverageMode is refused as predating it, with a re-run instruction", async () => {
+    const report = await coverageOffReport();
+    // biome-ignore lint/performance/noDelete: the point is the key's absence, as in an older file
+    delete report.coverageMode;
+    let thrown: unknown;
+    try {
+      assertExplainableReport(report);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(MalformedReportError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("the report predates `coverageMode` (R252)");
+    expect(message).toContain("Re-run with this LethAL");
+  });
+
+  test("a coverageMode outside the closed set is refused, never read as not-none", async () => {
+    const report = await coverageOffReport();
+    report.coverageMode = "None";
+    expect(() => assertExplainableReport(report)).toThrow(
+      "`coverageMode` is a value this build cannot interpret",
+    );
   });
 });

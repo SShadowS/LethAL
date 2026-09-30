@@ -207,7 +207,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v7.schema.json](../schemas/explain-v7.schema.json)
+- `lethal explain`: [../schemas/explain-v8.schema.json](../schemas/explain-v8.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -233,7 +233,8 @@ enforced.
 ### `--out report.json`: the record (checked)
 
 `schemaVersion: 3`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
-`validity` carries `reliability`, `scoreDescribes` and `caveats`.
+`validity` carries `reliability`, `scoreDescribes` and `caveats`. `coverageMode` names the coverage
+mode the run used; a report written before it existed has none.
 
 #### Report notes (guidance)
 
@@ -252,12 +253,19 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 7`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 8`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`.
 
 A report whose schema version is anything other than 2 or 3, or that holds a value this build
 cannot interpret, is REFUSED rather than explained with the unrecognised value dropped.
+
+When the report says coverage was off (its coverage mode is "none"), no coverage was collected, so
+a survivor has `attribution: "not-measured"`: coverage not measured, neither covered nor uncovered.
+Its `executionProven` is false, and its `reach` is decided only by the mutant's own measured reach.
+A survivor with no attribution under any other mode is refused. A report written before the
+coverage mode was recorded is refused too, and the refusal says so: re-run with this LethAL to
+explain it.
 
 `--top <n>` caps the survivor list:
 

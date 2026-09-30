@@ -29,6 +29,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "timeoutKilled": 1,
     "unstable": 1,
   },
+  "coverageMode": "procedure",
   "declarativeSites": {
     "fileCount": 0,
     "files": [],

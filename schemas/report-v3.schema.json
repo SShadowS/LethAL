@@ -221,6 +221,16 @@
     "authoritative": {
       "type": "boolean"
     },
+    "coverageMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "procedure",
+        "line",
+        "fenced",
+        "al-runner"
+      ]
+    },
     "baselineGreen": {
       "type": "boolean"
     },
