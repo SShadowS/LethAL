@@ -484,6 +484,19 @@ describe("parseCliConfig — lethal campaign (subsystem D)", () => {
       /--project applies to/,
     );
   });
+
+  test("R355: --json is read by compare and refused by freeze and anchors", () => {
+    expect(parseCliConfig(["campaign", "compare", ...BASE, "--json"])).toMatchObject({
+      action: "compare",
+      json: true,
+    });
+    expect(() =>
+      parseCliConfig(["campaign", "freeze", ...BASE, "--expect-mutants", "1", "--json"]),
+    ).toThrow(/--json applies to `lethal campaign compare`/);
+    expect(() => parseCliConfig(["campaign", "anchors", ...BASE, "--json"])).toThrow(
+      /--json applies to `lethal campaign compare`/,
+    );
+  });
 });
 
 describe("validateBcDevConfig", () => {
