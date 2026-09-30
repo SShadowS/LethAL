@@ -267,4 +267,20 @@ describe("prepareBatchProject: the run's own outputs are not copied (R363)", () 
       expect(await exists(join(batchDir, "old-report.json"))).toBe(true);
     });
   });
+
+  // Review M-9: Windows paths compare without case, so `--db C:\PROJ\Results.DB` names the same
+  // file as the project's `results.db`.
+  it.if(process.platform === "win32")(
+    "on Windows, skips an output named in another letter case",
+    async () => {
+      await withDirs(async (projectDir, batchDir) => {
+        await write(projectDir, "app.json", JSON.stringify(manifest));
+        await write(projectDir, "results.db", "SQLITE");
+        await prepareBatchProject(projectDir, batchDir, { ...manifest }, "1.0.2.0", undefined, [
+          join(projectDir, "results.db").toUpperCase(),
+        ]);
+        expect(await exists(join(batchDir, "results.db"))).toBe(false);
+      });
+    },
+  );
 });
