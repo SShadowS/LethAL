@@ -47,11 +47,20 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * throws it for the transport/shape failures listed above.
  */
 export class LeaseUnavailableError extends Error {
-  constructor(message: string) {
+  /**
+   * R362: set only by a REFUSED `BeginPublish` (the server answered `begun:false`, so it never
+   * began). What R249's ownership probe found: the lease is still ours and is released, still ours
+   * and kept under an operation marker, or lost (or unprovable).
+   */
+  readonly beginPublishRefusal?: BeginPublishRefusal;
+  constructor(message: string, beginPublishRefusal?: BeginPublishRefusal) {
     super(message);
     this.name = "LeaseUnavailableError";
+    if (beginPublishRefusal !== undefined) this.beginPublishRefusal = beginPublishRefusal;
   }
 }
+
+export type BeginPublishRefusal = "owned-released" | "owned-kept-under-marker" | "lost";
 
 /**
  * Thrown when a CALLER violates this module's own contract before any request is even shaped —

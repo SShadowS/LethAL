@@ -88,7 +88,12 @@ import {
   createEmitter,
 } from "./events";
 import { ActivationFailure } from "./failure-classes";
-import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
+import {
+  type BeginPublishRefusal,
+  LeaseUnavailableError,
+  MAX_ATTEMPT_ID_LENGTH,
+  MAX_TTL_SECONDS,
+} from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -2492,12 +2497,13 @@ class LeaseSession {
     const attemptId = newAttemptId(`pub-${this.d.runId}-b${this.currentBatchIndex}`);
     const begun = await this.d.client.beginPublish(this.d.lease, attemptId, opSeq);
     if (!begun.begun) {
-      await this.onBeginPublishRefused(
+      const refusal = await this.onBeginPublishRefused(
         `BeginPublish refused (opSeq ${opSeq}, attemptId ${attemptId}, alreadyCompleted ${String(begun.alreadyCompleted)})`,
         begun.alreadyCompleted === true,
       );
       throw new LeaseUnavailableError(
         `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
+        refusal,
       );
     }
     let result: T;
@@ -2530,12 +2536,15 @@ class LeaseSession {
    *   has just extended the ttl, so the hold can outlast today's; `lease-kept-under-marker` says so.
    * - a probe that throws proves nothing: treated as loss, as before, so nothing is released.
    */
-  private async onBeginPublishRefused(detail: string, alreadyCompleted: boolean): Promise<void> {
+  private async onBeginPublishRefused(
+    detail: string,
+    alreadyCompleted: boolean,
+  ): Promise<BeginPublishRefusal> {
     if (alreadyCompleted) {
       this.d.safety.latchUnsafe(
         `${detail}: our op seq is already completed; the lease is still ours`,
       );
-      return;
+      return "owned-released";
     }
     let renewed: Awaited<ReturnType<LeaseApi["renew"]>>;
     let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
@@ -2543,18 +2552,18 @@ class LeaseSession {
       renewed = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
       if (!renewed.renewed) {
         this.noteLeaseLost(`${detail}; RenewLease answered renewed:false`);
-        return;
+        return "lost";
       }
       status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
     } catch (err) {
       this.noteLeaseLost(`${detail}; the ownership probe failed (${messageOf(err)})`);
-      return;
+      return "lost";
     }
     if (status.opKind === OP_KIND_IDLE) {
       this.d.safety.latchUnsafe(
         `${detail}: the lease is still ours and no operation is in progress`,
       );
-      return;
+      return "owned-released";
     }
     this.#keepLease = true;
     this.stop();
@@ -2564,6 +2573,7 @@ class LeaseSession {
       code: "lease-kept-under-marker",
       message: `[lethal] ${detail}. The lease is still ours (RenewLease renewed it, new expiry ${renewed.expiresAt}) but an operation marker is set (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}), so the session stopped and did NOT release the lease: releasing under a marker could let another session in on top of a live operation. The container stays locked until ${renewed.expiresAt}. To free it sooner: inspect the marker with \`lethal doctor --config <path>\`, reconcile what that operation left behind (restart the container if it may still be applying, design §8), then run \`lethal force-reset-lease --server <url> --instance <name> --config <path>\`.`,
     });
+    return "owned-kept-under-marker";
   }
 
   /**
@@ -3501,6 +3511,13 @@ function emitLeaseLostInvalidation(
   }
 }
 
+const REFUSAL_FOUND: Record<BeginPublishRefusal, string> = {
+  "owned-released": "The ownership probe found the lease still ours, and the session releases it",
+  "owned-kept-under-marker":
+    "The ownership probe found the lease still ours but an operation marker set, so the session keeps the lease (see lease-kept-under-marker)",
+  lost: "The ownership probe found the lease lost, or could not prove it held, so nothing is released",
+};
+
 /**
  * R232: a hook that publishes through the lease's publication fence, with one set of rules for
  * both callers (runSession's `afterLeaseAcquired`, runNamedMutants' `inLease`). A failure the
@@ -3524,7 +3541,15 @@ async function runLeaseHook(a: {
     a.safety.assertSafe(a.who);
   } catch (err) {
     if (err instanceof SessionUnsafeError) throw err;
-    if (!isConfirmedTerminalPublishFailure(err)) {
+    if (err instanceof LeaseUnavailableError && err.beginPublishRefusal !== undefined) {
+      // R362: a refused BeginPublish is a parsed answer, the server never began. The fence already
+      // latched (R249); say what its probe found instead of "no proof the server stopped".
+      a.emit({
+        type: "warning",
+        code: "after-lease-acquired-refused",
+        message: `[lethal] ${a.what}: the server refused to begin the publish, so nothing was applied. ${REFUSAL_FOUND[err.beginPublishRefusal]}: ${messageOf(err)}`,
+      });
+    } else if (!isConfirmedTerminalPublishFailure(err)) {
       const reason = `${a.what} failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
       a.safety.latchUnsafe(reason);
       a.emit({

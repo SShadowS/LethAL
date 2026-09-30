@@ -12790,6 +12790,43 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(fx.client.releaseCalls).toBe(0);
   });
 
+  // R362: a refused BeginPublish inside a lease hook is a proven refusal, not an uncertain publish.
+  function expectRefusalWarning(
+    events: Array<{ code?: string; message?: string }>,
+    found: string,
+  ): void {
+    expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
+    const w = events.filter((e) => e.code === "after-lease-acquired-refused");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("nothing was applied");
+    expect(w[0]?.message).toContain(found);
+  }
+
+  test("R362: a refused BeginPublish that left the lease ours warns refused (released), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+    });
+    expectRefusalWarning(events, "the lease still ours, and the session releases it");
+    expect(fx.client.releaseResults).toEqual([{ released: true }]); // still latched, still stopped
+  });
+
+  test("R362: a refused BeginPublish under a marker warns refused (kept), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+      c.statusQueue = [MARKER];
+    });
+    expectRefusalWarning(events, "the session keeps the lease");
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("R362: a refused BeginPublish that lost the lease warns refused (lost), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: false }];
+    });
+    expectRefusalWarning(events, "lost, or could not prove it held");
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
   test("R249: a GetOperationStatus probe that throws is treated as loss: no release", async () => {
     const { fx } = await refusedBeginPublish((c) => {
       c.statusError = new Error("status unreachable");
