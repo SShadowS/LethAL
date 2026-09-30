@@ -3245,13 +3245,22 @@ export async function printDryRun(
  * exactly the "fix your config and retry" signal the quarantine code exists to avoid sending when
  * the real state is a stranded tier.
  *
- * Exported so both properties are directly unit-testable against a `body`/`teardown` that
+ * R238: `quarantined` is decided from what the session RECORDED, not from the report alone. A
+ * body that writes a durable `container-needs-recycle` record and then throws (an uncertain R19
+ * test-app publish, an indeterminate target deploy) leaves `report` undefined; reading only the
+ * report deleted the created environment the record names. So the tier's quarantine store is read
+ * here, in the `finally`, whatever `body` did. A store that cannot be read counts as quarantined:
+ * keeping an environment costs money, deleting the one a recycle record points at loses the
+ * evidence. `quarantineDir` exists for tests; production uses the same default `runSession` does.
+ *
+ * Exported so these properties are directly unit-testable against a `body`/`teardown` that
  * throw/reject on demand, without a real backend or a real environment tool.
  */
 export async function withEnvTeardown(
   envSession: EnvToolSession | undefined,
   keepEnv: boolean,
   body: () => Promise<SessionReport>,
+  quarantineDir: string = defaultQuarantineDir(),
 ): Promise<SessionReport> {
   let report: SessionReport | undefined;
   try {
@@ -3262,11 +3271,9 @@ export async function withEnvTeardown(
       try {
         await envSession.teardown({
           keepEnv,
-          // `report` is `undefined` only when `body` itself threw (a real failure, not a
-          // quarantine verdict) — that is not treated as a quarantine here either, matching what
-          // `main()` reports as the exit code (an uncaught throw exits 1, never the quarantine
-          // code 3).
-          quarantined: report?.quarantined !== undefined,
+          quarantined:
+            report?.quarantined !== undefined ||
+            (await tierHasQuarantineRecord(envSession, quarantineDir)),
         });
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
@@ -3275,6 +3282,26 @@ export async function withEnvTeardown(
         );
       }
     }
+  }
+}
+
+/** R238: whether the session's tier has a quarantine record. Never throws: on any doubt it
+ *  answers true and says why, because the caller deletes the environment on false. */
+async function tierHasQuarantineRecord(
+  envSession: EnvToolSession,
+  quarantineDir: string,
+): Promise<boolean> {
+  try {
+    const key = quarantineResourceKey({
+      server: envSession.bcdev.server,
+      serverInstance: envSession.bcdev.serverInstance,
+    });
+    return (await new QuarantineStore(quarantineDir).read(key)) !== null;
+  } catch (err) {
+    console.warn(
+      `[lethal] could not read the quarantine store in ${quarantineDir}, so the environment is treated as quarantined and kept rather than risk deleting a tier a recycle record names: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return true;
   }
 }
 

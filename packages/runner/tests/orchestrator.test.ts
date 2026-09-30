@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,9 +28,13 @@ import type {
 } from "../src/backend";
 import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
+import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
+import type { EnvToolConfigSection } from "../src/env-tool";
 import { EnvToolPublisher } from "../src/env-tool-publisher";
+import { startEnvToolSession } from "../src/env-tool-session";
+import type { EnvToolSession } from "../src/env-tool-session";
 import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
@@ -75,7 +80,7 @@ import type {
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
-import type { SessionOutcome } from "../src/report";
+import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -7015,6 +7020,213 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(rec?.opKind).toBe("container-needs-recycle");
       });
     }
+  });
+});
+
+// R238: a session that records a recycle and then THROWS must keep the environment it created.
+// `withEnvTeardown` read `quarantined` from the report alone, and a throwing body has none, so the
+// created environment was deleted while a `container-needs-recycle` record still named its tier.
+// Everything here is real except the env tool's spawn and the BC lease client: a create-mode
+// `startEnvToolSession`, `afterLeaseAcquiredFor`, `runSession` and `withEnvTeardown`. The created
+// environment answers at `http://cronus281/BC`, which is the tier `runSessionForTest` names, so the
+// key teardown reads is the key the session wrote.
+describe("R238: withEnvTeardown keeps a created environment the session quarantined", () => {
+  async function createdEnvSession(publishTestApp: () => Promise<void>) {
+    const calls: string[][] = [];
+    const cfg: EnvToolConfigSection = {
+      toolPath: "tool.exe",
+      publishApps: ["tests.app"],
+      resolve: [
+        { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
+        {
+          command: ["env", "users", "{envId}", "--json"],
+          reads: { username: "0.username", password: "0.password" },
+        },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      createEnv: { command: ["env", "create", "--json"], reads: { envId: "id" } },
+      startEnv: { command: ["env", "start", "{envId}"] },
+      readyWhen: {
+        command: ["env", "status", "{envId}", "--json"],
+        reads: { status: "status" },
+        equals: "Running",
+        pollSeconds: 0,
+      },
+      deleteEnv: { command: ["env", "delete", "{envId}"] },
+    };
+    const out: Record<string, string> = {
+      "env get": '{"url":"http://cronus281/BC"}',
+      "env users": '[{"username":"admin","password":"pw"}]',
+      "env create": '{"id":"env-new"}',
+      "env status": '{"status":"Running"}',
+    };
+    const client = new EnvToolClient(cfg, {
+      spawn: async (argv) => {
+        calls.push([...argv]);
+        const line = argv.join(" ");
+        const key = Object.keys(out).find((k) => line.includes(k));
+        return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
+      },
+    });
+    const session = await startEnvToolSession({
+      cfg,
+      bcdevRaw: {
+        company: "CRONUS",
+        tenant: "default",
+        mcpCommand: ["bun", "mcp"],
+        packageCachePath: "C:/pkg",
+        controlSymbolPath: "C:/lethal-control.app",
+      },
+      projectDir: "C:/proj",
+      testDir: "C:/tests",
+      runId: "r238",
+      client,
+      makePublisher: () => ({ publishFile: publishTestApp }),
+      verifyHarness: async () => {},
+      stateDir: freshTmpDir(),
+    });
+    expect(session.createdEnvId).toBe("env-new");
+    const deleted = () => calls.some((c) => c.includes("delete"));
+    return { session, deleted };
+  }
+
+  /** Runs `body` through the real `withEnvTeardown`, recording teardown's options and warnings. */
+  async function tearDownAround(
+    session: EnvToolSession,
+    quarantineDir: string,
+    body: () => Promise<SessionReport>,
+  ) {
+    const teardownOpts: Array<{ keepEnv: boolean; quarantined: boolean }> = [];
+    const spied: EnvToolSession = {
+      ...session,
+      teardown: async (opts) => {
+        teardownOpts.push(opts);
+        await session.teardown(opts);
+      },
+    };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let settled: unknown;
+    let warnings: string[] = [];
+    try {
+      settled = await withEnvTeardown(spied, false, body, quarantineDir).catch((e) => e);
+      // Read before mockRestore(), which clears the recorded calls.
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    const kept = warnings.some((w) =>
+      w.includes("keeping environment env-new (session quarantined)"),
+    );
+    return { settled, teardownOpts, kept, warnings };
+  }
+
+  test("an uncertain R19 test-app publish records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const uncertain = new EnvToolError("envTool.publish: timed out after 600 s", TESTS_APP);
+    const { session, deleted } = await createdEnvSession(async () => {
+      throw uncertain;
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect(r.settled).toBe(uncertain);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("an indeterminate target deploy records a recycle, throws, and the environment is KEPT", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("indeterminate", "connection reset mid-publish", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect((await new QuarantineStore(dir).read("http://cronus281|BC"))?.opKind).toBe(
+      "container-needs-recycle",
+    );
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(deleted()).toBe(false);
+  });
+
+  test("control: a body that throws WITHOUT recording anything still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const err = new DeploymentError("failed", "BC rejected the package", {
+      status: "unavailable",
+      detail: "no response",
+    });
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(
+        leaseBackend({
+          deploy: async () => {
+            throw err;
+          },
+        }),
+        { lease, quarantineDir: dir, ...afterLeaseAcquiredFor(session) },
+      ),
+    );
+    expect(r.settled).toBe(err);
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(r.kept).toBe(false);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a session that completes cleanly still deletes the environment", async () => {
+    const dir = freshTmpDir();
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const { lease } = leaseCfg(new FakeLeaseClient());
+    const r = await tearDownAround(session, dir, () =>
+      runSessionForTest(leaseBackend(), {
+        lease,
+        quarantineDir: dir,
+        ...afterLeaseAcquiredFor(session),
+      }),
+    );
+    expect((r.settled as SessionReport).quarantined).toBeUndefined();
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: false }]);
+    expect(deleted()).toBe(true);
+  });
+
+  test("a quarantine store that cannot be read keeps the environment and says why", async () => {
+    // A record file that exists but is not JSON: the store cannot say whether the tier is
+    // quarantined. The file name is the store's own (quarantine-store.ts `fileFor`).
+    const storeDir = freshTmpDir();
+    const name = createHash("sha256").update("http://cronus281|BC").digest("hex").slice(0, 32);
+    writeFileSync(join(storeDir, `${name}.json`), "{ truncated");
+    const { session, deleted } = await createdEnvSession(async () => {});
+    const bodyErr = new Error("body failed");
+    const r = await tearDownAround(session, storeDir, async () => {
+      throw bodyErr;
+    });
+    expect(r.settled).toBe(bodyErr);
+    expect(r.teardownOpts).toEqual([{ keepEnv: false, quarantined: true }]);
+    expect(r.kept).toBe(true);
+    expect(r.warnings.some((w) => w.includes("could not read the quarantine store"))).toBe(true);
+    expect(deleted()).toBe(false);
   });
 });
 
