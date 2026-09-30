@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 360 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**94 of 366 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -249,6 +249,12 @@ that ordering is the priority.
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · open, filed 2026-09-29, priority low
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
+- **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
+- **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
+- **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30
+- **R368** · `split-call-statement`: a call statement whose first line is inside `#if` gets no `void-method-call` · [R368.md](docs/roadmap/R368.md) · open, filed 2026-09-30
+- **R369** · `cond-var-typing`: declarations inside a `var`-section `#if` are invisible to the semantic layer, and the tree can stretch that `#if` over whole members · [R369.md](docs/roadmap/R369.md) · open, filed 2026-09-30
+- **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · open, filed 2026-09-30
 
 ## Backends and tooling
 
