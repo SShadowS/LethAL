@@ -72,10 +72,12 @@ export async function appJsonSymbols(
       `${path}: not valid JSON (${err instanceof Error ? err.message : String(err)}), so its preprocessor symbols are unknown`,
     );
   }
-  const raw =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as { preprocessorSymbols?: unknown }).preprocessorSymbols
-      : undefined;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `${path}: the root must be a JSON object, so its preprocessor symbols are unknown`,
+    );
+  }
+  const raw = (parsed as { preprocessorSymbols?: unknown }).preprocessorSymbols;
   return validateSymbolList(raw, path);
 }
 

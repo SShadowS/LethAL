@@ -174,6 +174,23 @@ describe("R214: the effective build symbols", () => {
     );
   });
 
+  test("an app.json whose root is not an object is refused, never read as no symbols", async () => {
+    for (const root of [[], null, 5, "x"]) {
+      await expect(appJsonSymbols("/p", snap(root))).rejects.toThrow(
+        /app\.json: the root must be a JSON object/,
+      );
+    }
+  });
+
+  test("an app.json that is not valid JSON throws naming app.json, on disk and in the snapshot", async () => {
+    await expect(
+      appJsonSymbols("/p", new Map([["app.json", Buffer.from("{ nope")]])),
+    ).rejects.toThrow(/app\.json: not valid JSON/);
+    await expect(appJsonSymbols("/p", undefined, async () => "{ nope")).rejects.toThrow(
+      /app\.json: not valid JSON/,
+    );
+  });
+
   test("the effective set is the sorted union; case matters (alc, measured)", async () => {
     // Unsorted and duplicated input, so a broken sort or de-duplication goes red (ruling P7).
     expect(
