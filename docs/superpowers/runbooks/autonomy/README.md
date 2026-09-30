@@ -48,8 +48,11 @@ CentralGauge's lanes and the other way round.
   Cronus283 belong to CentralGauge; never lease or publish to them. **Owner (2026-09-27): load
   balance across both.** Each container runs one gate at a time under a coord lease; the two lanes
   use whichever is free (the orchestrator may assign one per lane). Cronus28 carries every fixture
-  (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Cronus284 carries control 1.0.0.20 and the
-  `sandbox-data` pair only (others unpublished 2026-09-26): publish a fixture pair there before its
+  (`sandbox-app`, `sandbox-data`, `sandbox-hang`, ...). Cronus284 carries the control app and the
+  `sandbox-data` pair only (others unpublished 2026-09-26). Which control version a container has
+  installed is machine state, not repo state: `lethal doctor --config <path>` reads it from the
+  server (its `control-version` check), and the client requires the version in
+  `extensions/lethal-control/app.json`. Publish a fixture pair on Cronus284 before its
   first gate, and point a lane's gitignored `lethal.config.local.json` at `http://Cronus284` for that
   run. Both have stalled on TestPage tests (R236, `docs/measurements/2026-09-27-nst-wedge-incidents.md`);
   an unrecoverable container goes to the owner.
