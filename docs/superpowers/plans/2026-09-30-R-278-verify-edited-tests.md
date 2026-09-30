@@ -115,3 +115,7 @@ a check that nothing moved, not as a new gate.
 3. **Select in verify.** `verify.ts` `planVerify` and its caller's `sourceBaseline` feed (add the
    recorded digests to what `planVerify` receives), plus the planVerify tests above. Then close
    R278 and R258 in `docs/roadmap/` and update the guidance in `docs/using-lethal-from-an-agent.md`.
+
+## Approved 2026-09-30 (e9884472)
+
+Old runs (NULL) refuse with source-predates-verify; the CHANGELOG entry says so beside R-360's break (both make an old store's runs unverifiable until re-run). (1) The helper-codeunit gap is filed as its own item. (2) The build confirms R56's stale-test-app guard covers a test edited on disk but not republished before `lethal run`, and cites it; if it does not, file it, do not build it here. (3) No edited marker in verify's output. itest:verify-agreement runs at the end; the orchestrator is told before any Cronus28 lease.
