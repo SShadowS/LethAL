@@ -312,7 +312,7 @@ export class AlRunnerBackend implements ExecutionBackend {
   private coverageScratch: string | undefined;
   private coverageSeq = 0;
   /**
-   * Built ONCE from the active instrumented bundle and reused, because it parses every `.al` in
+   * Built ONCE per deployed bundle and reused (R349: `deploy()` drops it), because it parses every `.al` in
    * the project and doing that per test would add a full parse to an invocation that is already
    * the expensive part of a run.
    */
@@ -740,6 +740,9 @@ export class AlRunnerBackend implements ExecutionBackend {
     // first removes that dependency on an invariant this method has no way
     // to verify.
     const activeDir = join(this.cfg.instrumentedDir, "active");
+    // R349: dropped FIRST, before the old layout is removed, so a throw part-way through leaves
+    // nothing describing a layout that is no longer on disk.
+    this.resetLayoutState();
     // maxRetries/retryDelay: fs.rm defaults to 0 retries. On Windows,
     // deleting a directory a warm al-runner process, an indexer, or an AV
     // scanner still holds open is a known EBUSY/EPERM flake — a few quick
@@ -781,6 +784,23 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   async compileCheck(instrumentedDir: string): Promise<void> {
     await this.deploy(instrumentedDir);
+  }
+
+  /**
+   * R349. Drops every field DERIVED from the deployed layout. `deploy()` is the only place a new
+   * layout becomes active (`compileCheck` goes through it), so it is called there and nowhere else.
+   * A multi-batch session deploys every batch on one instance, and each batch instruments a
+   * different set of files, so a line number means something different after each deploy. A cache
+   * kept across one maps batch 2's coverage through batch 1's text: hits land on the wrong member
+   * or none, which is a false `no-coverage` or a false `survived`.
+   *
+   * A new field built from `activeDir()`'s contents belongs here. Fields that do NOT: the coverage
+   * scratch and its counter (fresh file names, no content), `platformAppsDir` (a machine fact
+   * pinned for the session), the transport's and daemon's observations (the binary's own output).
+   */
+  private resetLayoutState(): void {
+    this.coverageIndex = undefined;
+    this.serverSuite = undefined;
   }
 
   private activeDir(): string {
