@@ -99,3 +99,7 @@ the orchestrator before leasing.
 3. The env-tool confirmation (section 3).
 4. `itest:agreement` live. Close R372; update the CHANGELOG entry and the agent guide line if R-278
    wrote "on disk".
+
+## Probe result (0b312748, Cronus28 BC 28.4.53241.53758-DK, alc 18.0.41.45789)
+
+The prediction was WRONG. All four cases (A, B, C, D) carry the full test source: one `.al` entry, equal to the source on disk. The dev `/packages` read returns the exact `.app` that was published, byte-identical (same SHA-256). It is not a symbol file rebuilt under the policy, and alc 18 puts the source in the `.app` whatever the flags say. The unpublished-edit check, using case A flags: the download holds the OLD body. The orchestrator's gate on case D is passed, so the build goes ahead as planned. The "no source" branch stays, as a defensive path for builds and endpoints not measured here (older alc, SaaS). See `scripts/r372-package-source-probe/RESULTS.md`.
