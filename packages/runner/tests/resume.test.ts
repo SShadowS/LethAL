@@ -2143,6 +2143,35 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
     expect(warned[0]).toContain("an unrecorded coverage mode (the run predates R354)");
   });
 
+  // The history filter runs once per batch, so the warning's once-per-session guard is only
+  // exercised with two batches: each would otherwise warn.
+  test("history across a mode change warns exactly once over two batches", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", undefined, undefined, false, "none"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect(first.batches).toBe(2);
+    expect(first.counts.survived).toBeGreaterThan(0);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new CountingBackend("pass", undefined, undefined, false, "procedure"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    expect(warningsOf(events)).toHaveLength(1);
+  });
+
   // R252's shape `explain` refuses: a survivor with no attribution in a coverage-on report. A
   // resume from a coverage-off run is where one would come from: R192 records a batch whose every
   // mutant carries with the PRIOR run's attribution, which coverage off never set. So batch 0 is
@@ -2183,6 +2212,9 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
           );
     expect(unattributed.map((m) => `${m.batchIndex}/${m.mutantCode}`)).toEqual([]);
     expect(attempt).toBeInstanceOf(Error);
+    expect(attempt instanceof Error ? attempt.message : "").toMatch(
+      /^--resume found an unfinished run for this project and backend, run \d+, but it was measured under coverage mode none, and this session measures under coverage mode procedure\. .*\(R354\)\. Drop --resume to run from scratch\.$/,
+    );
     // Run fresh instead, as the refusal says: every survivor is attributed.
     const fresh = await session(r, "procedure").run;
     expect(fresh.coverageMode).toBe("procedure");
