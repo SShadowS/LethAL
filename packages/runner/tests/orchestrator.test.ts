@@ -38,6 +38,7 @@ import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
+import { InstalledBundleError, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseUnavailableError } from "../src/lease";
 import type {
   AcquireOutcome,
@@ -3952,6 +3953,98 @@ describe("runSession — Layer 5A deployment identity", () => {
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
     expect(record?.instrumentedDir).toBe(join(dirs.instrumentedDir, `run-${run.id}-batch-0`));
     store.close();
+  });
+
+  test("R360: step 3d stores the published batch's bundle, and it opens against its digest", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const rows = store.installedBundle(run.id, 0);
+    const payload = store.trustedArtifactRecord(run.id, 0)?.payloadSha256;
+    if (rows === null || payload === undefined || payload === null) {
+      throw new Error("expected a stored bundle with a digest");
+    }
+    const opened = openInstalledBundle(rows, {
+      runId: run.id,
+      batchIndex: 0,
+      payloadSha256: payload,
+    });
+    expect(opened.alSources.map((s) => s.path)).toContain("SandboxLogic.Codeunit.al");
+    store.close();
+  });
+
+  test("R360 I4: a published .app that vanished before step 3d fails the run by name", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend({ writeApp: false }),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect(err).toMatchObject({ reason: "bundle-unreadable" });
+    expect((err as Error).message).toContain("phase-fake.app");
+    // The run did not finish, so it pruned nothing.
+    const row = store.db.query("SELECT finished_at FROM runs LIMIT 1").get() as {
+      finished_at: string | null;
+    };
+    expect(row.finished_at).toBeNull();
+    store.close();
+  });
+
+  test("R360 I4: a store that loses the highest batch's bundle fails the end-of-run check", async () => {
+    class DroppingStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        this.db
+          .query("DELETE FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+          .run(args[0], args[1].batchIndex);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new DroppingStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect(err).toMatchObject({ reason: "bundle-missing" });
+    expect((err as Error).message).toContain("batch 0");
+    store.close();
+  });
+
+  test("R360: the run records its server's quarantine resource key, and NULL without a server", async () => {
+    const withServer = new ResultsStore(":memory:");
+    const dirs = await makeProject();
+    await runSession({
+      backend: new PhaseBackend(),
+      store: withServer,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+    });
+    const key = (s: ResultsStore) =>
+      (s.db.query("SELECT resource_key FROM runs LIMIT 1").get() as { resource_key: string | null })
+        .resource_key;
+    expect(key(withServer)).toBe(
+      quarantineResourceKey({ server: "http://cronus281", serverInstance: "BC" }),
+    );
+    withServer.close();
+    const without = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store: without,
+      ...(await makeProject()),
+      selectorIds,
+    });
+    expect(key(without)).toBeNull();
+    without.close();
   });
 
   test("runSession records the target source hash when generation and the last batch agree", async () => {

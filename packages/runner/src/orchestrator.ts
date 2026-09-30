@@ -184,7 +184,7 @@ import {
   resolveNamedMutants,
 } from "./named-mutants";
 
-import { readBatchBundle } from "./installed-bundle";
+import { InstalledBundleError, readBatchBundle } from "./installed-bundle";
 
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
@@ -3117,6 +3117,16 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
+  // R360 ruling: a later run of the same app on the same server finished and pruned this run's
+  // installed bundle, so the server no longer holds what this run published. Refused here, before
+  // anything is deployed, rather than resumed against a build that is gone.
+  const prunedBy = cfg.store.highestBundlePrunedBy(priorRunId);
+  if (prunedBy !== null) {
+    throw new Error(
+      `--resume: run ${priorRunId}'s installed bundle was pruned by run ${prunedBy} when that run finished (same app, same server), so the build run ${priorRunId} published is no longer the one installed: bundle pruned by run ${prunedBy}; re-run without --resume (R360).`,
+    );
+  }
+
   const { index, dropped: refusedDropped } = withoutRefusedTests(
     buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
     refusedTests,
@@ -4226,6 +4236,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
     coverageMode: caps.coverage,
+    // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
+    ...(resourceKey !== undefined ? { resourceKey } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
@@ -5500,6 +5512,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // `WHERE finished_at IS NOT NULL` filter. `runs.app_version`/`app_id`/`artifact_id` provenance
   // is written by `createRun`/`recordArtifact`, never by `finishRun` — so app-version reservation
   // (clock-derived via `reserveAppVersion`, Layer 5A) has no dependency on this run ever finishing.
+  // R360 I4: before this run can report success, and before `runFromCli` removes its scratch
+  // folder, the highest published batch, the one still installed, must have its bundle in the
+  // store. Exact lookup, never "the latest bundle".
+  const published = cfg.store.artifactsForRun(runId);
+  const highest = published.at(-1);
+  if (highest !== undefined && cfg.store.installedBundle(runId, highest.batchIndex) === null) {
+    throw new InstalledBundleError(
+      "bundle-missing",
+      `run ${runId} published batch ${highest.batchIndex} (artifact ${highest.artifactId}) but the store holds no installed bundle for it, so lethal verify could not read it once the scratch folder is removed`,
+    );
+  }
   if (!safety.isUnsafe) {
     cfg.store.finishRun(runId, {
       batchCount: artifacts.length,

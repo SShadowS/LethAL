@@ -991,6 +991,41 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
 });
 
 describe("runSession --resume (R47)", () => {
+  test("R360 ruling: a run whose highest batch's bundle a later run pruned is refused up front, by name", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    // An aborted run: it published batch 0 and scored one mutant, then quarantined (unfinished).
+    const aborted = new CountingBackend("pass", 1, undefined, true);
+    expect(
+      (await runSession({ backend: aborted, store, ...dirs, selectorIds })).quarantined,
+    ).toBeDefined();
+    const abortedId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    // A later run of the same app on the same (no) server finishes, which prunes the older
+    // unfinished run's bundle (ruling Q1).
+    await runSession({
+      backend: new CountingBackend("pass", undefined, undefined, true),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    const finisher = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(store.highestBundlePrunedBy(abortedId)).toBe(finisher);
+
+    for (const resume of ["last", abortedId] as const) {
+      const again = new CountingBackend("pass", undefined, undefined, true);
+      const err = await runSession({ backend: again, store, ...dirs, selectorIds, resume }).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain(
+        `run ${abortedId}'s installed bundle was pruned by run ${finisher}`,
+      );
+      expect((err as Error).message).toContain(`bundle pruned by run ${finisher}; re-run`);
+      // Before any work: nothing deployed, nothing run.
+      expect([again.deploys, again.baselineRuns, again.mutantRuns]).toEqual([0, 0, 0]);
+    }
+  });
+
   test("recovers the verdicts an aborted run had already scored, and re-runs only the rest", async () => {
     // The R47 scenario end to end: a run quarantines partway, and the mutants it had already
     // scored are recovered instead of discarded.
