@@ -29,7 +29,7 @@
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertMatchesBaseline } from "../itest/baseline-guard";
+import { assertMatchesBaseline, isCoverageMode } from "../itest/baseline-guard";
 import { assertCardinality } from "./campaign-anchors";
 import { type CampaignManifest, resolveRecordsDir } from "./campaign-manifest";
 import type { SessionReport } from "./report";
@@ -76,6 +76,16 @@ export async function freezeStageTo(
   recordsDir: string,
 ): Promise<void> {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as SessionReport;
+  // R355: every stage frozen from now on records the coverage mode it was measured under, so
+  // `campaign compare` can refuse a report from another mode. A report without one (written before
+  // R252) would freeze a stage whose mode is unknown, which is the gap this closes. Refused before
+  // any I/O against `recordsDir`, like the cardinality check below.
+  const { coverageMode } = report;
+  if (!isCoverageMode(coverageMode)) {
+    throw new Error(
+      `${stage} freeze: ${reportPath} records no coverageMode (got ${JSON.stringify(coverageMode)}). A stage frozen now must record the mode it was measured under, so compare can refuse a run under another mode (R355). Re-run with a build that writes coverageMode (R252 and later), then freeze that report.`,
+    );
+  }
   // Cardinality FIRST — see module doc comment. No directory is created and no file is read or
   // written against `recordsDir` until this passes.
   assertCardinality(report, expectedCount, `${stage} freeze`);
@@ -89,7 +99,12 @@ export async function freezeStageTo(
   // describe the same per-mutant verdicts: either the baseline was just minted FROM this report,
   // or this report matched it exactly.
   try {
-    await assertMatchesBaseline(report, join(recordsDir, `${stage}.baseline.json`), stage);
+    await assertMatchesBaseline(
+      report,
+      join(recordsDir, `${stage}.baseline.json`),
+      stage,
+      coverageMode,
+    );
   } catch (err) {
     // The failing report is the most interesting artifact this campaign can produce, and the
     // `--out` file it came from lives outside the worktree precisely because that location is not

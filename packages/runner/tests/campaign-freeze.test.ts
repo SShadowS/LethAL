@@ -70,6 +70,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     survivorsByProcedure: [],
     testFiles: {},
     backend: "bcdev",
+    coverageMode: "fenced",
     authoritative: true,
     baselineGreen: true,
     batches: 1,
@@ -186,10 +187,12 @@ describe("freezeStageTo", () => {
     const archived = JSON.parse(
       await readFile(join(recordsDir, "rung1.report.json"), "utf8"),
     ) as SessionReport;
-    // The baseline file is a bare array of semantic-identity-keyed records (baseline-guard.ts).
-    const baseline = JSON.parse(
-      await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"),
-    ) as readonly { verdict: string }[];
+    // R355: `{ coverageMode, entries }`, entries the semantic-identity-keyed records.
+    const baseline = (
+      JSON.parse(await readFile(join(recordsDir, "rung1.baseline.json"), "utf8")) as {
+        entries: readonly { verdict: string }[];
+      }
+    ).entries;
     // Run 1 was killed; the regressed run 2 was survived. The archived report must still be run 1
     // — the run its neighbouring baseline was recorded from.
     expect(archived.mutants[0]?.verdict).toBe("killed");
@@ -234,12 +237,47 @@ describe("freezeStageTo", () => {
     const archived = JSON.parse(
       await readFile(join(recordsDir, "rung1.report.json"), "utf8"),
     ) as SessionReport;
-    const baseline = JSON.parse(
-      await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"),
-    ) as readonly { verdict: string; key: string }[];
+    const baseline = (
+      JSON.parse(await readFile(join(recordsDir, "rung1.baseline.json"), "utf8")) as {
+        entries: readonly { verdict: string; key: string }[];
+      }
+    ).entries;
     expect(archived.mutants.map((m) => String(m.verdict))).toEqual(baseline.map((m) => m.verdict));
     // The baseline is keyed on semantic identity (astHash|codeunitName|operatorName|major), so
     // "the same run" is checkable field by field, not merely by count.
     expect(baseline[0]?.key).toContain(archived.mutants[0]?.astHash ?? "MISSING");
+  });
+
+  // ---- R355: the stage records its coverage mode ---------------------------------------------
+
+  test("R355: freeze writes the report's coverage mode into the stage baseline", async () => {
+    const r = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
+    await writeFile(reportPath, JSON.stringify({ ...r, coverageMode: "procedure" }), "utf8");
+    await freezeStageTo(reportPath, "rung1", 1, recordsDir);
+    const written = JSON.parse(await readFile(join(recordsDir, "rung1.baseline.json"), "utf8"));
+    expect(written.coverageMode).toBe("procedure");
+    expect(written.entries).toHaveLength(1);
+    expect(written.entries[0].verdict).toBe("survived");
+  });
+
+  test("R355: freeze REFUSES a report with no coverageMode, by name, before touching the records directory", async () => {
+    const { coverageMode: _dropped, ...legacy } = report([
+      outcome({ mutantCode: "M0001", verdict: "killed", killingTest: "T1" }),
+    ]);
+    await writeFile(reportPath, JSON.stringify(legacy), "utf8");
+    await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
+      /rung1 freeze: .* records no coverageMode .*R355/,
+    );
+    await expect(readdir(recordsDir)).rejects.toThrow(/ENOENT/);
+  });
+
+  test("R355: a re-freeze under a DIFFERENT coverage mode is refused, naming both modes", async () => {
+    const r = report([outcome({ mutantCode: "M0001", verdict: "survived" })]);
+    await writeFile(reportPath, JSON.stringify(r), "utf8");
+    await freezeStageTo(reportPath, "rung1", 1, recordsDir); // fenced
+    await writeFile(reportPath, JSON.stringify({ ...r, coverageMode: "none" }), "utf8");
+    await expect(freezeStageTo(reportPath, "rung1", 1, recordsDir)).rejects.toThrow(
+      /frozen under coverageMode "fenced" and this report ran under coverageMode "none".*R355/,
+    );
   });
 });

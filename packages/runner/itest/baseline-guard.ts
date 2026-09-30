@@ -21,6 +21,7 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
+import type { CoverageMode } from "../src/backend";
 import type { SessionReport } from "../src/report";
 import { canonical, diffMutants, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
@@ -57,12 +58,85 @@ function parseBaseline(
   } catch (err) {
     throw new Error(`${baselinePath} is not valid JSON (${(err as Error).message}).\n${remedy}`);
   }
+  return rowsOf(parsed, baselinePath, remedy);
+}
+
+function rowsOf(parsed: unknown, baselinePath: string, remedy: string): NormalizedMutant[] {
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error(
       `${baselinePath} holds no mutant rows. A committed baseline must be a non-empty array of mutant rows.\n${remedy}`,
     );
   }
   return parsed as NormalizedMutant[];
+}
+
+/** R355: the closed set a stage baseline's `coverageMode` may hold. Exhaustive by type. */
+const COVERAGE_MODES: Record<CoverageMode, true> = {
+  none: true,
+  procedure: true,
+  line: true,
+  fenced: true,
+  "al-runner": true,
+};
+
+export function isCoverageMode(value: unknown): value is CoverageMode {
+  return typeof value === "string" && Object.hasOwn(COVERAGE_MODES, value);
+}
+
+/**
+ * R355: a campaign stage baseline. Two on-disk forms, both read:
+ *   - a plain list of rows: frozen before R355, so the coverage mode it was measured under is
+ *     UNKNOWN (`coverageMode: undefined`), never assumed;
+ *   - `{ "coverageMode": <mode>, "entries": [rows] }`: what `campaign freeze` writes from R355 on.
+ * Gate baselines (`assertGateBaseline`) stay plain lists and never go through this.
+ */
+export interface StageBaseline {
+  readonly coverageMode: CoverageMode | undefined;
+  readonly entries: NormalizedMutant[];
+}
+
+export function parseStageBaseline(
+  baselineRaw: string,
+  baselinePath: string,
+  remedy: string,
+): StageBaseline {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(baselineRaw);
+  } catch (err) {
+    throw new Error(`${baselinePath} is not valid JSON (${(err as Error).message}).\n${remedy}`);
+  }
+  if (Array.isArray(parsed)) {
+    return { coverageMode: undefined, entries: rowsOf(parsed, baselinePath, remedy) };
+  }
+  const obj = parsed as { coverageMode?: unknown; entries?: unknown } | null;
+  if (obj === null || typeof obj !== "object" || !isCoverageMode(obj.coverageMode)) {
+    throw new Error(
+      `${baselinePath} is neither a list of mutant rows nor {"coverageMode": <one of ${Object.keys(COVERAGE_MODES).join(", ")}>, "entries": [...]}. Refusing to read a stage baseline of unknown shape.\n${remedy}`,
+    );
+  }
+  return { coverageMode: obj.coverageMode, entries: rowsOf(obj.entries, baselinePath, remedy) };
+}
+
+/**
+ * R355: the refusal when a stage was frozen under one coverage mode and the report ran under
+ * another. An unreached mutant is `no-coverage` in one mode and `survived` in the other, so a
+ * per-mutant match across modes proves nothing.
+ */
+export function coverageModeMismatch(
+  what: string,
+  stage: string,
+  stageMode: CoverageMode,
+  reportMode: CoverageMode,
+): Error {
+  return new Error(
+    `${what}: stage ${stage} was frozen under coverageMode "${stageMode}" and this report ran under coverageMode "${reportMode}". Refusing to compare across coverage modes (R355): an unreached mutant is no-coverage in one mode and survived in another, so a per-mutant match would prove nothing. Re-run under "${stageMode}", or freeze a new stage under "${reportMode}".`,
+  );
+}
+
+/** R355: the statement a stage frozen before R355 carries wherever it is compared. */
+export function stageModeUnverified(stage: string): string {
+  return `coverage mode UNVERIFIED: stage ${stage} predates coverageMode in its baseline (frozen before R355), so the mode it was measured under is unknown. A matching no-coverage or survived verdict proves nothing across coverage modes. Re-freeze the stage under the intended mode to make this comparison strict.`;
 }
 
 /**
@@ -85,7 +159,22 @@ function throwOnDiff(
   label: string,
   remedy: string,
 ): void {
-  const baseline = parseBaseline(baselineRaw, baselinePath, remedy);
+  throwOnRowDiff(
+    actual,
+    parseBaseline(baselineRaw, baselinePath, remedy),
+    baselinePath,
+    label,
+    remedy,
+  );
+}
+
+function throwOnRowDiff(
+  actual: readonly NormalizedMutant[],
+  baseline: readonly NormalizedMutant[],
+  baselinePath: string,
+  label: string,
+  remedy: string,
+): void {
   const diffs = diffMutants(baseline, actual);
   if (diffs.length > 0) {
     throw withStack(
@@ -104,6 +193,7 @@ export async function assertMatchesBaseline(
   report: SessionReport,
   baselinePath: string,
   label: string,
+  coverageMode?: CoverageMode,
 ): Promise<void> {
   const actual = sortedForDisk(normalizeForComparison(report));
   let baselineRaw: string | undefined;
@@ -113,19 +203,26 @@ export async function assertMatchesBaseline(
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   if (baselineRaw === undefined) {
-    await writeFile(baselinePath, `${JSON.stringify(actual, null, 2)}\n`, "utf8");
+    // R355: `campaign freeze` passes the report's mode and the stage records it. Without one (the
+    // seeding use in baseline-guard.test.ts) this writes the plain list a gate baseline uses.
+    const body = coverageMode === undefined ? actual : { coverageMode, entries: actual };
+    await writeFile(baselinePath, `${JSON.stringify(body, null, 2)}\n`, "utf8");
     console.log(
       `${label}: no committed baseline at ${baselinePath}, recorded this run's per-mutant verdicts as the new baseline. Review and commit this file.`,
     );
     return;
   }
-  throwOnDiff(
-    actual,
-    baselineRaw,
-    baselinePath,
-    label,
-    `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`,
-  );
+  const remedy = `If this difference is EXPECTED (the fixture or an operator legitimately changed), delete ${baselinePath}, re-run to record a new baseline, review the diff, then commit it.`;
+  if (coverageMode === undefined) {
+    throwOnDiff(actual, baselineRaw, baselinePath, label, remedy);
+    return;
+  }
+  const stage = parseStageBaseline(baselineRaw, baselinePath, remedy);
+  if (stage.coverageMode !== undefined && stage.coverageMode !== coverageMode) {
+    throw coverageModeMismatch(`${label} freeze`, label, stage.coverageMode, coverageMode);
+  }
+  throwOnRowDiff(actual, stage.entries, baselinePath, label, remedy);
+  if (stage.coverageMode === undefined) console.log(`${label}: ${stageModeUnverified(label)}`);
 }
 
 /** R332: lists the gate baselines a record run may write, by basename, comma-separated. */

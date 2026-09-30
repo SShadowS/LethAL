@@ -11,6 +11,7 @@ import {
   assertGateBaseline,
   assertMatchesBaseline,
   assertMatchesFrozenBaseline,
+  parseStageBaseline,
   preflightFrozenBaseline,
   preflightGateBaseline,
   preflightReadOnlyBaseline,
@@ -505,5 +506,43 @@ main().catch((err: unknown) => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("R355: stage baselines, list form and moded form", () => {
+  // Every committed campaign stage baseline, as of R355. All six are the plain list form written
+  // before R355, so each must still read, with its coverage mode UNKNOWN rather than assumed.
+  // None is rewritten or re-frozen by R355.
+  const REPO = join(import.meta.dir, "..", "..", "..");
+  const COMMITTED = [
+    "docs/campaign/2026-08-03-do/rung1.baseline.json",
+    "docs/campaign/2026-08-03-do/rung1.resumed-run.baseline.json",
+    "docs/campaign/2026-08-03-do/rung2.baseline.json",
+    "docs/campaign/2026-08-08-r85-swap-population/rung2.baseline.json",
+    "docs/campaign/2026-08-16-gift-card/rehearsal.baseline.json",
+    "examples/credit-limit/demo.baseline.json",
+  ];
+
+  test.each(COMMITTED)("%s still reads, as a list with its mode unknown", async (rel) => {
+    const path = join(REPO, rel);
+    const stage = parseStageBaseline(await readFile(path, "utf8"), path, "remedy");
+    expect(stage.coverageMode).toBeUndefined();
+    expect(stage.entries.length).toBeGreaterThan(0);
+  });
+
+  test("the moded form reads its mode; an unknown mode or shape is refused, naming the file", () => {
+    const rows = [
+      { key: "k", verdict: "killed", killingTest: "T", coverageFiltered: false, errorClass: null },
+    ];
+    expect(
+      parseStageBaseline(JSON.stringify({ coverageMode: "none", entries: rows }), "p.json", "r")
+        .coverageMode,
+    ).toBe("none");
+    expect(() =>
+      parseStageBaseline(JSON.stringify({ coverageMode: "bogus", entries: rows }), "p.json", "r"),
+    ).toThrow(/p\.json is neither/);
+    expect(() =>
+      parseStageBaseline(JSON.stringify({ coverageMode: "none", entries: [] }), "p.json", "r"),
+    ).toThrow(/p\.json holds no mutant rows/);
   });
 });

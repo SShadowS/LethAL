@@ -25,8 +25,10 @@ import { normalizeForComparison } from "../itest/mutant-equality";
 import { UncommittedPathError } from "../src/campaign-git";
 import {
   CampaignGitInvocationError,
+  type CompareCoverageMode,
   type GitRunner,
   assertCampaignPathsCommitted,
+  compareCampaignStage,
   createRepoGitRunner,
   runCampaignAnchors,
   runCampaignCompare,
@@ -137,6 +139,7 @@ function report(mutants: readonly MutantOutcome[]): SessionReport {
     survivorsByProcedure: [],
     testFiles: {},
     backend: "bcdev",
+    coverageMode: "fenced",
     authoritative: true,
     baselineGreen: true,
     batches: 1,
@@ -573,9 +576,23 @@ describe("lethal campaign freeze | anchors | compare", () => {
   let changedReportPath: string;
   let recordsDir: string;
 
+  let noneReportPath: string;
+  let procedureReportPath: string;
+  let legacyReportPath: string;
+
   beforeAll(async () => {
     const baseline = JSON.stringify(normalizeForComparison(TWO_MUTANTS), null, 2);
+    // R355: the form `campaign freeze` writes from R355 on, one per coverage mode under test.
+    const stageIn = (coverageMode: string) =>
+      JSON.stringify({ coverageMode, entries: normalizeForComparison(TWO_MUTANTS) }, null, 2);
     repo = await makeRepo({
+      [rec("stage-cov-none.precommit.md")]: "# stage-cov-none\n",
+      [rec("stage-cov-none.baseline.json")]: stageIn("none"),
+      [rec("stage-cov-procedure.precommit.md")]: "# stage-cov-procedure\n",
+      [rec("stage-cov-procedure.baseline.json")]: stageIn("procedure"),
+      // A stage frozen before R355: the plain list, mode unknown.
+      [rec("stage-legacy.precommit.md")]: "# stage-legacy\n",
+      [rec("stage-legacy.baseline.json")]: baseline,
       "campaign.json": MANIFEST,
       [rec("stage-ok.precommit.md")]: "# stage-ok\n\n2 mutants expected.\n",
       [rec("stage-ok.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
@@ -587,7 +604,7 @@ describe("lethal campaign freeze | anchors | compare", () => {
       // cardinality check by handing freeze a report that really does hold 3 mutants.
       [rec("stage-crosscheck.anchors.json")]: JSON.stringify(PASSING_ANCHORS, null, 2),
       [rec("stage-cmp.precommit.md")]: "# stage-cmp\n",
-      [rec("stage-cmp.baseline.json")]: baseline,
+      [rec("stage-cmp.baseline.json")]: stageIn("fenced"),
       [rec("stage-nobaseline.precommit.md")]: "# stage-nobaseline\n",
       [rec("stage-freeze.precommit.md")]: "# stage-freeze\n",
       // Fix round 1, Important 1/2: stages whose PRE-COMMITMENT is committed and clean, so the only
@@ -630,6 +647,16 @@ describe("lethal campaign freeze | anchors | compare", () => {
     await writeFile(reportPath, JSON.stringify(TWO_MUTANTS), "utf8");
     await writeFile(threeMutantReportPath, JSON.stringify(THREE_MUTANTS), "utf8");
     await writeFile(changedReportPath, JSON.stringify(TWO_MUTANTS_CHANGED), "utf8");
+    noneReportPath = join(outDir, "report-none.json");
+    procedureReportPath = join(outDir, "report-procedure.json");
+    legacyReportPath = join(outDir, "report-legacy.json");
+    await writeFile(noneReportPath, JSON.stringify({ ...TWO_MUTANTS, coverageMode: "none" }));
+    await writeFile(
+      procedureReportPath,
+      JSON.stringify({ ...TWO_MUTANTS, coverageMode: "procedure" }),
+    );
+    const { coverageMode: _dropped, ...legacy } = TWO_MUTANTS;
+    await writeFile(legacyReportPath, JSON.stringify(legacy));
   }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -884,6 +911,111 @@ describe("lethal campaign freeze | anchors | compare", () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  // ---- R355: coverage mode ------------------------------------------------------------------
+
+  const refusesAcrossModes = async (
+    stage: string,
+    reportFile: string,
+    stageMode: string,
+    reportMode: string,
+  ) => {
+    const err = await refusalFrom(
+      runCampaignCompare({ manifestPath, stage, reportPath: reportFile }),
+    );
+    expect(err.message).toContain(`stage ${stage} was frozen under coverageMode "${stageMode}"`);
+    expect(err.message).toContain(`this report ran under coverageMode "${reportMode}"`);
+    expect(err.message).toContain("R355");
+  };
+
+  test(
+    "R355: compare REFUSES off-vs-on: a stage frozen under none, a report under procedure",
+    () => refusesAcrossModes("stage-cov-none", procedureReportPath, "none", "procedure"),
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: compare REFUSES on-vs-off: a stage frozen under procedure, a report under none",
+    () => refusesAcrossModes("stage-cov-procedure", noneReportPath, "procedure", "none"),
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: compare REFUSES fenced vs procedure",
+    () => refusesAcrossModes("stage-cmp", procedureReportPath, "fenced", "procedure"),
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: the same mode passes cleanly, with no unverified statement",
+    async () => {
+      const lines: string[] = [];
+      const result = await compareCampaignStage({
+        manifestPath,
+        stage: "stage-cmp",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(result.identical).toBe(true);
+      expect(result.coverage).toEqual({ verified: true, coverageMode: "fenced" });
+      expect(lines.join("\n")).toContain("identical — all 2 mutant(s) match");
+      expect(lines.join("\n")).not.toContain("UNVERIFIED");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: an old list-form stage is compared, and carries the unverified statement, never a bare identical",
+    async () => {
+      const lines: string[] = [];
+      const result = await compareCampaignStage({
+        manifestPath,
+        stage: "stage-legacy",
+        reportPath,
+        log: (l) => lines.push(l),
+      });
+      expect(result.identical).toBe(true);
+      const coverage = result.coverage;
+      if (coverage.verified) throw new Error("a list-form stage must not read as verified");
+      expect(coverage.stageCoverageMode).toBeNull();
+      expect(coverage.reportCoverageMode).toBe("fenced");
+      expect(coverage.statement).toContain("stage stage-legacy predates coverageMode");
+      expect(coverage.statement).toContain("proves nothing across coverage modes");
+      const text = lines.join("\n");
+      expect(text).not.toContain("identical");
+      expect(text).toContain("coverage mode UNVERIFIED");
+      expect(text).toContain(coverage.statement);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: a report with no coverageMode against a moded stage is compared and says so",
+    async () => {
+      const lines: string[] = [];
+      const result = await compareCampaignStage({
+        manifestPath,
+        stage: "stage-cmp",
+        reportPath: legacyReportPath,
+        log: (l) => lines.push(l),
+      });
+      if (result.coverage.verified) throw new Error("a modeless report must not read as verified");
+      expect(result.coverage.statement).toContain("the report records no coverageMode");
+      expect(lines.join("\n")).toContain(result.coverage.statement);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test("R355: the result type REQUIRES the statement when the mode is unverified", () => {
+    // Compile-time: `bun run typecheck` fails if an unverified result can omit its statement.
+    // @ts-expect-error -- `statement` is required when `verified` is false.
+    const omitted: CompareCoverageMode = {
+      verified: false,
+      stageCoverageMode: null,
+      reportCoverageMode: "fenced",
+    };
+    expect(omitted.verified).toBe(false);
+  });
 
   // ---- WHICH paths each verb checks (fix round 1, Important 1) --------------------------------
   //
@@ -1144,6 +1276,13 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       // its (still uncommitted) baseline is itself a refusal, so a later freeze on that stage never
       // reaches the cardinality assertion this test is about.
       [rec("stage-spawncount.precommit.md")]: "# stage-spawncount\n",
+      // R355: a stage frozen before R355, the plain list form.
+      [rec("stage-spawnlegacy.precommit.md")]: "# stage-spawnlegacy\n",
+      [rec("stage-spawnlegacy.baseline.json")]: JSON.stringify(
+        normalizeForComparison(TWO_MUTANTS),
+        null,
+        2,
+      ),
       // The reconciliation stage — the only config in this file that turns it on, so `--project`
       // is REQUIRED and a dropped `projectDir` surfaces as "Refusing to skip a requested gate item".
       [rec("stage-recon.precommit.md")]: "# stage-recon\n",
@@ -1174,7 +1313,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
     stage: string,
     reportFile: string,
     extra: readonly string[] = [],
-  ): Promise<{ code: number; out: string }> {
+  ): Promise<{ code: number; out: string; stdout: string }> {
     const proc = Bun.spawn(
       [
         "bun",
@@ -1196,7 +1335,7 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       new Response(proc.stderr).text(),
     ]);
     const code = await proc.exited;
-    return { code, out: out + err };
+    return { code, out: out + err, stdout: out };
   }
 
   test(
@@ -1278,6 +1417,25 @@ describe("lethal campaign (exit code + dispatch, spawned)", () => {
       expect(differing.out).toContain("RESULT: DIFFERENT");
       expect(differing.out).toContain("hash-M0002");
       expect(differing.code).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "R355: `compare --json` on an old list-form stage carries the unverified statement in the JSON",
+    async () => {
+      const { code, out, stdout } = await run("compare", "stage-spawnlegacy", passingReport, [
+        "--json",
+      ]);
+      expect(code).toBe(0);
+      const doc = JSON.parse(stdout);
+      expect(doc.campaignCompareSchemaVersion).toBe(1);
+      expect(doc.identical).toBe(true);
+      expect(doc.coverage.verified).toBe(false);
+      expect(doc.coverage.stageCoverageMode).toBeNull();
+      expect(doc.coverage.statement).toContain("stage stage-spawnlegacy predates coverageMode");
+      // ... and the console lines (stderr under --json) say it too.
+      expect(out.replace(stdout, "")).toContain(doc.coverage.statement);
     },
     TEST_TIMEOUT_MS,
   );
