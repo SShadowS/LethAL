@@ -152,17 +152,20 @@ class CountingBackend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  async deploy(): Promise<CompiledArtifact | null> {
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
     this.deploys += 1;
     if (!this.withArtifact) return null;
     const artifactId = randomHex(16);
     const manifest: MutantManifest = { selectorIds, artifactId, mutants: [] };
+    // R360: step 3d stores the published `.app`, so it must exist and hash to `sha256`.
+    const appPath = join(dir, `${artifactId}.app`);
+    await Bun.write(appPath, artifactId);
     return {
       artifactId,
       appId: APP_ID,
       appVersion: "1.0.0.0",
-      appPath: `${artifactId}.app`,
-      sha256: randomHex(32),
+      appPath,
+      sha256: Bun.SHA256.hash(artifactId, "hex"),
       mutantManifest: manifest,
       appManifest: {},
     };

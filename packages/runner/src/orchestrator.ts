@@ -184,6 +184,8 @@ import {
   resolveNamedMutants,
 } from "./named-mutants";
 
+import { readBatchBundle } from "./installed-bundle";
+
 const BASELINE_TIMEOUT_DEFAULT = 120_000;
 
 /**
@@ -4895,7 +4897,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // (deploy: "none") have no artifact provenance to record; their run row keeps the
       // caller-supplied appVersion.
       if (compiled !== null) {
+        // R360 C1/I4: the batch's installed files, read ONCE, with their payload digest, written
+        // in the same transaction as the row. A read error or a size limit throws
+        // `InstalledBundleError` and the run fails before it reports success; its scratch folder
+        // is kept (`runFromCli`).
+        const bundle = await readBatchBundle(batchDir, compiled.appPath, compiled.sha256);
         cfg.store.recordArtifact(runId, {
+          bundle,
           batchIndex: batchIdx,
           appVersion: compiled.appVersion,
           appId: compiled.appId,

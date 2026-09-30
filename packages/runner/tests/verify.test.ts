@@ -12,6 +12,7 @@ import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
+import { bundleOfParts } from "../src/installed-bundle";
 import { NamedMutantError } from "../src/named-mutants";
 import type { NamedMutantsConfig } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
@@ -38,6 +39,7 @@ import {
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
+import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -56,6 +58,7 @@ function artifact(batchIndex: number, artifactId: string, over: Record<string, u
     manifestSha256: "c".repeat(64),
     appPath: `C:/s/b${batchIndex}/x.app`,
     instrumentedDir: `C:/s/b${batchIndex}`,
+    bundle: tinyBundle(artifactId),
     ...over,
   };
 }
@@ -841,7 +844,7 @@ describe("verifyRefusalOf (carried item 2)", () => {
     const installed = Object.keys(INSTALLED_ARTIFACT_REFUSALS) as Array<
       keyof typeof INSTALLED_ARTIFACT_REFUSALS
     >;
-    expect(installed.length).toBe(7);
+    expect(installed.length).toBe(10); // R360 added payload-differs, payload-too-large, replaced
     for (const reason of installed) {
       const r = verifyRefusalOf(new InstalledArtifactError(reason, "d"));
       expect(r?.kind).toBe("refused");
@@ -1014,6 +1017,7 @@ function installedRun(
       manifestSha256: Bun.SHA256.hash(manifestText, "hex"),
       appPath: join(dir, "x.app"),
       instrumentedDir: dir,
+      bundle: bundleOfParts({ appBytes, appJsonText: "{}", manifestText, files: [] }),
     }),
   );
   store.recordSourceHash(runId, sourceSha256);

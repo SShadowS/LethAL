@@ -60,6 +60,7 @@ import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
+import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -2334,6 +2335,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.0.0",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
@@ -2383,6 +2385,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.0.0",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
@@ -2433,6 +2436,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.0.0",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",

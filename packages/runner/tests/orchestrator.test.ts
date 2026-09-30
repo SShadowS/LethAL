@@ -52,6 +52,7 @@ import type {
   RenewOutcome,
 } from "../src/lease";
 import { NamedMutantError } from "../src/named-mutants";
+import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -3645,7 +3646,8 @@ class PhaseBackend implements ExecutionBackend {
       readonly onPublish?: (attempt: number) => void;
       /** What MutationControl_Identity reports; defaults to echoing the compiled artifact. */
       readonly reportedIdentity?: string;
-      /** C02-04b: write the bytes `sha256` is the hash of to `appPath`, so the file is real. */
+      /** C02-04b: write the bytes `sha256` is the hash of to `appPath`, so the file is real.
+       *  Default true since R360: step 3d stores the published `.app` in the bundle. */
       readonly writeApp?: boolean;
     } = {},
   ) {}
@@ -3668,7 +3670,7 @@ class PhaseBackend implements ExecutionBackend {
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
     this.lastCompiledVersion = appManifest.version;
-    if (this.opts.writeApp === true) {
+    if (this.opts.writeApp !== false) {
       await Bun.write(join(dir, "phase-fake.app"), mutantManifest.artifactId);
     }
     return {
@@ -5014,6 +5016,7 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
     const mutantManifest = JSON.parse(
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
+    await Bun.write(join(dir, "counting-fake.app"), new Uint8Array([1, 2, 3]));
     return {
       artifactId: mutantManifest.artifactId,
       appId: appManifest.id,
@@ -6894,12 +6897,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const mutantManifest = JSON.parse(
           await readFile(join(dir, "mutant-manifest.json"), "utf8"),
         ) as CompiledArtifact["mutantManifest"];
+        await Bun.write(join(dir, "r240.app"), "r240");
         return {
           artifactId: mutantManifest.artifactId,
           appId: app.id,
           appVersion: app.version,
           appPath: join(dir, "r240.app"),
-          sha256: "c".repeat(64),
+          sha256: Bun.SHA256.hash(await Bun.file(join(dir, "r240.app")).bytes(), "hex"),
           mutantManifest,
           appManifest: app,
         };
@@ -10961,6 +10965,7 @@ describe("C02-04 characterization", () => {
         const mutantManifest = JSON.parse(
           await readFile(join(dir, "mutant-manifest.json"), "utf8"),
         ) as CompiledArtifact["mutantManifest"];
+        await Bun.write(join(dir, "characterize-fake.app"), artifactId);
         return {
           artifactId,
           appId: appManifest.id,
@@ -13358,6 +13363,7 @@ describe("C02-06 Task 5.4: runVerify", () => {
       manifestSha256: "2".repeat(64),
       appPath: "C:/x/b1.app",
       instrumentedDir: "C:/x/b1",
+      bundle: tinyBundle(),
     });
     const out = await fx.verify(["0/M0001"]);
     expect(out.exitCode).toBe(6);

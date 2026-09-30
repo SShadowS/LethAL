@@ -99,6 +99,9 @@ export const INSTALLED_ARTIFACT_REFUSALS: Readonly<
   "local-copy-unreadable": "artifact-files-unusable",
   "local-copy-differs": "artifact-files-unusable",
   "manifest-differs": "artifact-files-unusable",
+  "payload-differs": "artifact-files-unusable",
+  "payload-too-large": "artifact-files-unusable",
+  replaced: "artifact-files-unusable",
   mismatch: "stale-artifact",
   unavailable: "artifact-identity-unavailable",
   // The backend cannot attach to an installed artifact: only bcdev can, and verify is bcdev only.

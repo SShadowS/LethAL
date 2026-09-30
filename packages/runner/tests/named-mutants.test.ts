@@ -6,6 +6,7 @@ import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
 import type { TestMethodRef } from "../src/backend";
+import type { InstalledBundleWrite } from "../src/installed-bundle";
 import {
   type InstalledArtifactRef,
   NamedMutantError,
@@ -14,6 +15,7 @@ import {
   resolveNamedMutants,
 } from "../src/named-mutants";
 import { ResultsStore } from "../src/store";
+import { bundleFor } from "./helpers/bundle";
 
 const ARTIFACT_ID = "0123456789abcdef0123456789abcdef";
 const APP_ID = "11111111-1111-1111-1111-111111111111";
@@ -43,6 +45,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
   let store: ResultsStore;
   let runId: number;
   let ref: InstalledArtifactRef;
+  let bundle: InstalledBundleWrite;
   const appBytes = "PK-fake-app-bytes";
 
   beforeEach(async () => {
@@ -56,6 +59,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     await Bun.write(join(instrumentedDir, "src", "A.Codeunit.al"), AL_SOURCE);
     const appPath = join(dir, `${sha(appBytes).slice(0, 16)}-${ARTIFACT_ID}.app`);
     await Bun.write(appPath, appBytes);
+    bundle = await bundleFor(instrumentedDir, appPath);
     store = new ResultsStore(":memory:");
     runId = store.createRun({
       coverageMode: "procedure",
@@ -65,6 +69,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle,
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP_ID,
@@ -105,6 +110,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runB, {
+      bundle,
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP_ID,
@@ -156,6 +162,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runB, {
+      bundle,
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP_ID,
@@ -179,6 +186,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runB, {
+      bundle,
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP_ID,

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { CARRYABLE_VERDICTS } from "../src/resume";
 import { type MutantVerdict, ResultsStore } from "../src/store";
+import { tinyBundle } from "./helpers/bundle";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -171,6 +172,7 @@ describe("ResultsStore", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.20653.1800",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
@@ -200,6 +202,7 @@ describe("ResultsStore", () => {
     const a = "0123456789abcdef0123456789abcdef";
     const b = "fedcba9876543210fedcba9876543210";
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP,
@@ -207,6 +210,7 @@ describe("ResultsStore", () => {
       sha256: "a".repeat(64),
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 1,
       appVersion: "1.0.1.2",
       appId: APP,
@@ -235,6 +239,7 @@ describe("ResultsStore", () => {
     });
     const a = "0123456789abcdef0123456789abcdef";
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP,
@@ -243,6 +248,7 @@ describe("ResultsStore", () => {
     });
     expect(() =>
       store.recordArtifact(runId, {
+        bundle: tinyBundle(),
         batchIndex: 0,
         appVersion: "1.0.1.9",
         appId: APP,
@@ -279,6 +285,7 @@ describe("ResultsStore", () => {
     });
     const a = "0123456789abcdef0123456789abcdef";
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: APP,
@@ -291,6 +298,8 @@ describe("ResultsStore", () => {
       sha256: "a".repeat(64),
       manifestSha256: "c".repeat(64),
       appId: APP,
+      payloadSha256: "e".repeat(64),
+      bundlePrunedBy: null,
     });
     expect(store.trustedArtifactRecord(runId, 1)).toBeNull();
     expect(store.artifactsForRun(runId)).toEqual([
@@ -338,6 +347,8 @@ describe("ResultsStore", () => {
       sha256: "e".repeat(64),
       manifestSha256: null,
       appId: APP,
+      payloadSha256: null,
+      bundlePrunedBy: null,
     });
     store.close();
     rmSync(path, { force: true });
@@ -384,6 +395,7 @@ describe("ResultsStore", () => {
     });
     expect(() =>
       store.recordArtifact(runId, {
+        bundle: tinyBundle(),
         batchIndex: 0,
         appVersion: "1.0.1.1",
         appId: "x",
@@ -482,6 +494,7 @@ describe("ResultsStore", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.1.1",
       appId: "x",
@@ -732,6 +745,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       artifactId,
       sha256: String(batchIndex).repeat(64),
       manifestSha256: "c".repeat(64),
+      bundle: tinyBundle(artifactId),
       ...over,
     };
   }
@@ -763,6 +777,9 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       sourceSha256: "5".repeat(64),
       appPath: "C:/s/b0/x.app",
       instrumentedDir: "C:/s/b0",
+      payloadSha256: "e".repeat(64),
+      // Ruling Q2: publishing batch 1 replaced batch 0 on the server, so its bundle went then.
+      bundlePrunedBy: runId,
     });
     expect(store.artifactRecordById(A1)?.batchIndex).toBe(1);
     expect(store.artifactRecordById(A1)?.highestBatchIndex).toBe(1);
@@ -1015,5 +1032,177 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     store.recordMutant(c, mutantRow("survived", { astHash: "c1" }));
     expect(store.findResumableRun(query)).toBe(c);
     store.close();
+  });
+});
+
+describe("ResultsStore: installed bundles are kept and pruned by exact batch (R360)", () => {
+  const APP_B = "0b0b0b0b-0000-4000-8000-000000000000";
+  let next = 0;
+  function run(store: ResultsStore, resourceKey?: string): number {
+    return store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+      ...(resourceKey !== undefined ? { resourceKey } : {}),
+    });
+  }
+  function publish(store: ResultsStore, runId: number, batchIndex: number, appId = APP): void {
+    next += 1;
+    store.recordArtifact(runId, {
+      batchIndex,
+      appVersion: `1.0.1.${next}`,
+      appId,
+      artifactId: next.toString(16).padStart(32, "0"),
+      sha256: "a".repeat(64),
+      manifestSha256: "c".repeat(64),
+      bundle: tinyBundle(`r${runId}b${batchIndex}`),
+    });
+  }
+  const has = (store: ResultsStore, runId: number, batch: number) =>
+    store.installedBundle(runId, batch) !== null;
+  const finish = (store: ResultsStore, runId: number) =>
+    store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+
+  test("a stored bundle reads back by exact (run, batch), and nothing else", () => {
+    const store = new ResultsStore(":memory:");
+    const r = run(store, "srv|bc");
+    publish(store, r, 0);
+    const got = store.installedBundle(r, 0);
+    expect(got?.appJsonText).toBe("{}");
+    expect(new TextDecoder().decode(got?.appBytes)).toBe(`r${r}b0`);
+    expect(got?.files.map((f) => f.path)).toEqual(["a.al"]);
+    expect(store.installedBundle(r, 1)).toBeNull();
+    expect(store.installedBundle(r + 1, 0)).toBeNull();
+    store.close();
+  });
+
+  test("a later batch's publish prunes the same run's lower batch (Q2), never another run's", () => {
+    const store = new ResultsStore(":memory:");
+    const other = run(store, "srv|bc");
+    publish(store, other, 0);
+    const r = run(store, "srv|bc");
+    publish(store, r, 0);
+    publish(store, r, 1);
+    expect(has(store, r, 0)).toBe(false);
+    expect(store.trustedArtifactRecord(r, 0)?.bundlePrunedBy).toBe(r);
+    expect(has(store, r, 1)).toBe(true);
+    expect(has(store, other, 0)).toBe(true);
+    store.close();
+  });
+
+  test("finishing a run prunes only its own (app, server) group", () => {
+    const store = new ResultsStore(":memory:");
+    const sameGroup = run(store, "srv|bc");
+    publish(store, sameGroup, 0);
+    finish(store, sameGroup);
+    const otherServer = run(store, "srv2|bc");
+    publish(store, otherServer, 0);
+    finish(store, otherServer);
+    const otherApp = run(store, "srv|bc");
+    publish(store, otherApp, 0, APP_B);
+    finish(store, otherApp);
+    const noServer = run(store);
+    publish(store, noServer, 0);
+    finish(store, noServer);
+
+    const me = run(store, "srv|bc");
+    publish(store, me, 0);
+    finish(store, me);
+
+    expect(has(store, sameGroup, 0)).toBe(false);
+    expect(store.trustedArtifactRecord(sameGroup, 0)?.bundlePrunedBy).toBe(me);
+    expect(has(store, otherServer, 0)).toBe(true);
+    expect(has(store, otherApp, 0)).toBe(true);
+    expect(has(store, noServer, 0)).toBe(true);
+    expect(has(store, me, 0)).toBe(true);
+    store.close();
+  });
+
+  test("a NULL server groups with NULL: two al-runner-style runs prune each other", () => {
+    const store = new ResultsStore(":memory:");
+    const a = run(store);
+    publish(store, a, 0);
+    finish(store, a);
+    const b = run(store);
+    publish(store, b, 0);
+    finish(store, b);
+    expect(has(store, a, 0)).toBe(false);
+    expect(has(store, b, 0)).toBe(true);
+    store.close();
+  });
+
+  test("an older unfinished run is pruned (Q1); a newer unfinished run keeps its bundle", () => {
+    const store = new ResultsStore(":memory:");
+    const older = run(store, "srv|bc");
+    publish(store, older, 0);
+    const me = run(store, "srv|bc");
+    publish(store, me, 0);
+    const newer = run(store, "srv|bc");
+    publish(store, newer, 0);
+    finish(store, me);
+    expect(has(store, older, 0)).toBe(false);
+    expect(store.highestBundlePrunedBy(older)).toBe(me);
+    expect(has(store, newer, 0)).toBe(true);
+    expect(store.highestBundlePrunedBy(newer)).toBeNull();
+    expect(has(store, me, 0)).toBe(true);
+    store.close();
+  });
+
+  test("a run that records a bundle and never finishes (it threw) prunes nothing", () => {
+    const store = new ResultsStore(":memory:");
+    const done = run(store, "srv|bc");
+    publish(store, done, 0);
+    finish(store, done);
+    const threw = run(store, "srv|bc");
+    publish(store, threw, 0);
+    // No finishRun: runSession never reaches it for a session that threw or latched unsafe.
+    expect(has(store, done, 0)).toBe(true);
+    expect(store.trustedArtifactRecord(done, 0)?.bundlePrunedBy).toBeNull();
+    store.close();
+  });
+
+  test("a failed bundle write rolls the batch row back with it", () => {
+    const store = new ResultsStore(":memory:");
+    const r = run(store, "srv|bc");
+    const bad = { ...tinyBundle(), files: [...tinyBundle().files, ...tinyBundle().files] };
+    expect(() =>
+      store.recordArtifact(r, {
+        batchIndex: 0,
+        appVersion: "1.0.0.1",
+        appId: APP,
+        artifactId: "f".repeat(32),
+        sha256: "a".repeat(64),
+        bundle: bad,
+      }),
+    ).toThrow(/UNIQUE/);
+    expect(store.trustedArtifactRecord(r, 0)).toBeNull();
+    expect(store.installedBundle(r, 0)).toBeNull();
+    store.close();
+  });
+
+  test("an older database gains payload_sha256, bundle_pruned_by and runs.resource_key on open", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-"));
+    const path = join(dir, "old.sqlite");
+    const legacy = new Database(path, { create: true });
+    legacy.exec(
+      "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finished_at TEXT, project_path TEXT NOT NULL, backend TEXT NOT NULL, app_version TEXT NOT NULL, batch_count INTEGER, baseline_green INTEGER);" +
+        "CREATE TABLE batch_artifacts (run_id INTEGER NOT NULL, batch_index INTEGER NOT NULL, artifact_id TEXT NOT NULL, artifact_sha256 TEXT NOT NULL, app_version TEXT NOT NULL, PRIMARY KEY (run_id, batch_index));",
+    );
+    legacy.close();
+    const store = new ResultsStore(path);
+    const cols = (t: string) =>
+      (store.db.query(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+    expect(cols("batch_artifacts")).toContain("payload_sha256");
+    expect(cols("batch_artifacts")).toContain("bundle_pruned_by");
+    expect(cols("runs")).toContain("resource_key");
+    const r = run(store, "srv|bc");
+    publish(store, r, 0);
+    expect(has(store, r, 0)).toBe(true);
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
