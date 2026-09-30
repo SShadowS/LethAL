@@ -164,7 +164,7 @@ describe("R214: evaluateArms follows alc's measured grammar", () => {
   });
 
   test("a BOM before the first #if is still a directive line (six corpus files start so)", () => {
-    // Counts only: tree offsets are bytes and a BOM is three of them, so no string index is used.
+    // Counts only: tree offsets are UTF-16 code units (native/src/lib.rs), so a BOM is one unit; no string index is used.
     const src = `\uFEFF#if A\n${body("        X := 1;")}#endif\n`;
     const off = run(src, []);
     const on = run(src, ["A"]);
@@ -197,5 +197,57 @@ describe("R214: evaluateArms follows alc's measured grammar", () => {
       kind: "decided",
       inactive: [],
     });
+  });
+});
+
+describe("R214: directive spelling the regexes must keep accepting", () => {
+  const two = (a: string, e: string, n: string) =>
+    body(`${a} A\n        X := 1;\n${e}\n        X := 2;\n${n}`);
+  const armOf = (src: string, symbols: readonly string[]) => {
+    const r = inactiveLines(src, symbols);
+    return typeof r === "string"
+      ? r
+      : r.length === 1
+        ? r[0] === 8
+          ? "ARM1"
+          : "ARM2"
+        : `bad: ${r.join(",")}`;
+  };
+  test("directive names in any case, `# if`, and indentation (row 32)", () => {
+    for (const src of [
+      two("#IF", "#ELSE", "#ENDIF"),
+      two("#If", "#Else", "#EndIf"),
+      two("# if", "# else", "# endif"),
+      two("    #if", "    #else", "    #endif"),
+      two("\t# IF", "\t# ELSE", "\t# ENDIF"),
+    ]) {
+      expect(armOf(src, ["A"])).toBe("ARM1");
+      expect(armOf(src, [])).toBe("ARM2");
+    }
+  });
+  test("trailing comments on #else and #endif (row 33)", () => {
+    const src = two("#if", "#else // c", "#endif // c");
+    expect(armOf(src, ["A"])).toBe("ARM1");
+    expect(armOf(src, [])).toBe("ARM2");
+  });
+  test("#define with a trailing comment (row 44)", () => {
+    const src = `#define L // why\n${body("#if L\n        X := 1;\n#endif")}`;
+    expect(inactiveLines(src, [])).toEqual([]);
+  });
+  test("#DEFINE and #Undef in any case (the define regex's i flag)", () => {
+    const inner = "#if L\n        X := 1;\n#endif\n#if DROP\n        X := 2;\n#endif";
+    const src = `#DEFINE L\n#Undef DROP\n${body(inner)}`;
+    expect(inactiveLines(src, ["DROP"])).toEqual([11]);
+  });
+  test("CRLF line endings decide the same arm as LF", () => {
+    const lf = two("#if", "#else", "#endif");
+    const crlf = lf.replaceAll("\n", "\r\n");
+    for (const s of [["A"], []] as const) expect(armOf(crlf, s)).toBe(armOf(lf, s));
+    expect(armOf(crlf, ["A"])).toBe("ARM1");
+  });
+  test("an empty #if is refused by the marker mismatch (row 26)", () => {
+    expect(inactiveLines(body("#if\n        X := 1;\n#endif"), [])).toBe(
+      "undecided: marker-mismatch (2 directive lines, 0 markers)",
+    );
   });
 });
