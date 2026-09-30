@@ -300,6 +300,7 @@ describe("ResultsStore", () => {
       appId: APP,
       payloadSha256: "e".repeat(64),
       bundlePrunedBy: null,
+      resourceKey: null,
     });
     expect(store.trustedArtifactRecord(runId, 1)).toBeNull();
     expect(store.artifactsForRun(runId)).toEqual([
@@ -349,6 +350,7 @@ describe("ResultsStore", () => {
       appId: APP,
       payloadSha256: null,
       bundlePrunedBy: null,
+      resourceKey: null,
     });
     store.close();
     rmSync(path, { force: true });
@@ -780,6 +782,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       payloadSha256: "e".repeat(64),
       // Ruling Q2: publishing batch 1 replaced batch 0 on the server, so its bundle went then.
       bundlePrunedBy: runId,
+      resourceKey: null,
     });
     expect(store.artifactRecordById(A1)?.batchIndex).toBe(1);
     expect(store.artifactRecordById(A1)?.highestBatchIndex).toBe(1);
@@ -1143,7 +1146,7 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     publish(store, newer, 0);
     finish(store, me);
     expect(has(store, older, 0)).toBe(false);
-    expect(store.highestBundlePrunedBy(older)).toBe(me);
+    expect(store.highestBundlePrunedBy(older)).toEqual({ prunedBy: me, resourceKey: "srv|bc" });
     expect(has(store, newer, 0)).toBe(true);
     expect(store.highestBundlePrunedBy(newer)).toBeNull();
     expect(has(store, me, 0)).toBe(true);

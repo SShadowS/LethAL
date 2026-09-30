@@ -189,9 +189,24 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const err = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
     expect(err).toMatchObject({ reason: "replaced" });
     expect((err as InstalledArtifactError).detail).toContain(
-      `run ${runId}'s installed files were pruned when run 9 finished (same app, same server)`,
+      `run ${runId}'s installed files were pruned when run 9 finished (same app, no recorded server)`,
     );
     expect(verifyRefusalOf(err)).toMatchObject({ reason: "artifact-files-unusable" });
+  });
+
+  test("the replaced text says what pruned it: no server claimed for a NULL key, and a deleted environment", async () => {
+    // This fixture's run recorded no server (resource_key NULL).
+    store.db.query("UPDATE batch_artifacts SET bundle_pruned_by = 9 WHERE run_id = ?").run(runId);
+    const noServer = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect((noServer as InstalledArtifactError).detail).not.toContain("same server");
+    expect((noServer as InstalledArtifactError).detail).toContain("no recorded server");
+    store.db.query("UPDATE runs SET resource_key = 'srv|bc' WHERE id = ?").run(runId);
+    const sameServer = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect((sameServer as InstalledArtifactError).detail).toContain("same server");
+    store.db.query("UPDATE batch_artifacts SET bundle_pruned_by = 0 WHERE run_id = ?").run(runId);
+    const torn = await loadInstalledArtifact(store, ref).catch((e: unknown) => e);
+    expect(torn).toMatchObject({ reason: "replaced" });
+    expect((torn as InstalledArtifactError).detail).toContain("deleted at teardown");
   });
 
   test("loadInstalledArtifact refuses a run with no record, and a record without the manifest hash", async () => {

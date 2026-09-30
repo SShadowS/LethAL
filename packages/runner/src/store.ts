@@ -988,17 +988,19 @@ export class ResultsStore {
    * R360 resume ruling: the run that pruned `runId`'s highest recorded batch's bundle, or `null`
    * when no other run pruned it (or the run recorded no batch).
    */
-  highestBundlePrunedBy(runId: number): number | null {
+  highestBundlePrunedBy(
+    runId: number,
+  ): { readonly prunedBy: number; readonly resourceKey: string | null } | null {
     const row = this.db
       .query(
-        "SELECT bundle_pruned_by FROM batch_artifacts WHERE run_id = ? " +
-          "ORDER BY batch_index DESC LIMIT 1",
+        "SELECT b.bundle_pruned_by, r.resource_key FROM batch_artifacts b " +
+          "JOIN runs r ON r.id = b.run_id WHERE b.run_id = ? ORDER BY b.batch_index DESC LIMIT 1",
       )
-      .get(runId) as { bundle_pruned_by: number | null } | null;
+      .get(runId) as { bundle_pruned_by: number | null; resource_key: string | null } | null;
     if (row === null || row.bundle_pruned_by === null || row.bundle_pruned_by === runId) {
       return null;
     }
-    return row.bundle_pruned_by;
+    return { prunedBy: row.bundle_pruned_by, resourceKey: row.resource_key };
   }
 
   /**
@@ -1021,11 +1023,13 @@ export class ResultsStore {
     payloadSha256: string | null;
     /** R360: the run that pruned this batch's bundle, or null. */
     bundlePrunedBy: number | null;
+    /** R360: the run's quarantine resource key; null when it recorded no server. */
+    resourceKey: string | null;
   } | null {
     const row = this.db
       .query(
         "SELECT b.artifact_id, b.artifact_sha256, b.manifest_sha256, r.app_id, " +
-          "b.payload_sha256, b.bundle_pruned_by " +
+          "b.payload_sha256, b.bundle_pruned_by, r.resource_key " +
           "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id " +
           "WHERE b.run_id = ? AND b.batch_index = ?",
       )
@@ -1036,6 +1040,7 @@ export class ResultsStore {
       app_id: string | null;
       payload_sha256: string | null;
       bundle_pruned_by: number | null;
+      resource_key: string | null;
     } | null;
     if (row === null) return null;
     // A NULL app_id is returned, not thrown: the caller (`loadInstalledArtifact`) refuses it as
@@ -1047,6 +1052,7 @@ export class ResultsStore {
       appId: row.app_id,
       payloadSha256: row.payload_sha256,
       bundlePrunedBy: row.bundle_pruned_by,
+      resourceKey: row.resource_key,
     };
   }
 
@@ -1095,13 +1101,15 @@ export class ResultsStore {
     payloadSha256: string | null;
     /** R360: the run that pruned this batch's bundle, or null. */
     bundlePrunedBy: number | null;
+    /** R360: the run's quarantine resource key; null when it recorded no server. */
+    resourceKey: string | null;
   } | null {
     const rows = this.db
       .query(
         "SELECT b.run_id, r.project_path, b.batch_index, " +
           "(SELECT MAX(h.batch_index) FROM batch_artifacts h WHERE h.run_id = b.run_id) AS highest, " +
           "b.artifact_sha256, r.source_sha256, b.app_path, b.instrumented_dir, " +
-          "b.payload_sha256, b.bundle_pruned_by " +
+          "b.payload_sha256, b.bundle_pruned_by, r.resource_key " +
           "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id WHERE b.artifact_id = ?",
       )
       .all(artifactId) as Array<{
@@ -1115,6 +1123,7 @@ export class ResultsStore {
       instrumented_dir: string | null;
       payload_sha256: string | null;
       bundle_pruned_by: number | null;
+      resource_key: string | null;
     }>;
     if (rows.length > 1) {
       throw new DuplicateArtifactRecordError(
@@ -1134,6 +1143,7 @@ export class ResultsStore {
       instrumentedDir: row.instrumented_dir,
       payloadSha256: row.payload_sha256,
       bundlePrunedBy: row.bundle_pruned_by,
+      resourceKey: row.resource_key,
     };
   }
 

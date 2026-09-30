@@ -153,7 +153,7 @@ import {
   describeStaleTestApp,
   isRunMutantLineCountMessage,
 } from "./stale-test-app";
-import type { ResultsStore } from "./store";
+import { PRUNED_BY_ENV_TEARDOWN, type ResultsStore } from "./store";
 import type { MutantVerdict, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import {
@@ -3120,10 +3120,15 @@ function resolveResume(
   // R360 ruling: a later run of the same app on the same server finished and pruned this run's
   // installed bundle, so the server no longer holds what this run published. Refused here, before
   // anything is deployed, rather than resumed against a build that is gone.
-  const prunedBy = cfg.store.highestBundlePrunedBy(priorRunId);
-  if (prunedBy !== null) {
+  const pruned = cfg.store.highestBundlePrunedBy(priorRunId);
+  if (pruned !== null) {
+    const flag = cfg.resume === "last" ? "--resume" : "--resume-run";
+    const why =
+      pruned.prunedBy === PRUNED_BY_ENV_TEARDOWN
+        ? "its environment was deleted at teardown"
+        : `run ${pruned.prunedBy} finished (same app, ${pruned.resourceKey === null ? "no recorded server" : "same server"})`;
     throw new Error(
-      `--resume: run ${priorRunId}'s installed bundle was pruned by run ${prunedBy} when that run finished (same app, same server), so the build run ${priorRunId} published is no longer the one installed: bundle pruned by run ${prunedBy}; re-run without --resume (R360).`,
+      `${flag}: run ${priorRunId}'s installed bundle was pruned by run ${pruned.prunedBy} when ${why}, so the build run ${priorRunId} published is no longer the one installed: bundle pruned by run ${pruned.prunedBy}; re-run without ${flag} (R360).`,
     );
   }
 

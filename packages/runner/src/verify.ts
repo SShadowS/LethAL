@@ -304,7 +304,7 @@ function installedOf(store: ResultsStore, artifactId: string) {
   if (rec.bundlePrunedBy !== null) {
     throw new VerifyError(
       "artifact-files-unusable",
-      prunedDetail(rec.runId, rec.batchIndex, rec.bundlePrunedBy),
+      prunedDetail(rec.runId, rec.batchIndex, rec.bundlePrunedBy, rec.resourceKey),
     );
   }
   if (sourceSha256 === null) {

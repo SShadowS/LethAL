@@ -5,7 +5,7 @@ import { describeThrown } from "./describe-error";
 import { openInstalledBundle } from "./installed-bundle";
 import { renamedMemberNamesOf } from "./line-map";
 import { testKeyOf } from "./selection";
-import type { ResultsStore } from "./store";
+import { PRUNED_BY_ENV_TEARDOWN, type ResultsStore } from "./store";
 
 /** Where the installed artifact came from. The record, not the caller, supplies its identity. */
 export interface InstalledArtifactRef {
@@ -24,11 +24,25 @@ export function predatesR360Detail(runId: number, batchIndex: number): string {
   return `run ${runId} batch ${batchIndex} was recorded before R360; its files were kept in the temp folder then, not in the store; run lethal run again, then verify`;
 }
 
-/** R360: which run pruned a batch's stored files, and why. Shared with `lethal verify`. */
-export function prunedDetail(runId: number, batchIndex: number, prunedBy: number): string {
-  return prunedBy === runId
-    ? `run ${runId}'s installed files for batch ${batchIndex} were replaced when a later batch of the same run was published`
-    : `run ${runId}'s installed files were pruned when run ${prunedBy} finished (same app, same server), so they were replaced`;
+/**
+ * R360: what pruned a batch's stored files. Shared with `lethal verify` and `--resume`.
+ * `resourceKey` is the run's: a NULL key groups with NULL, so no server is claimed then (review
+ * M-4). `PRUNED_BY_ENV_TEARDOWN` means the environment they were installed on was deleted.
+ */
+export function prunedDetail(
+  runId: number,
+  batchIndex: number,
+  prunedBy: number,
+  resourceKey: string | null,
+): string {
+  if (prunedBy === PRUNED_BY_ENV_TEARDOWN) {
+    return `run ${runId}'s installed files were removed when the environment they were installed on was deleted at teardown`;
+  }
+  if (prunedBy === runId) {
+    return `run ${runId}'s installed files for batch ${batchIndex} were replaced when a later batch of the same run was published`;
+  }
+  const group = resourceKey === null ? "same app, no recorded server" : "same app, same server";
+  return `run ${runId}'s installed files were pruned when run ${prunedBy} finished (${group}), so they were replaced`;
 }
 
 /**
@@ -83,7 +97,7 @@ export async function loadInstalledArtifact(
   if (record.bundlePrunedBy !== null) {
     throw new InstalledArtifactError(
       "replaced",
-      prunedDetail(ref.fromRunId, ref.batchIndex, record.bundlePrunedBy),
+      prunedDetail(ref.fromRunId, ref.batchIndex, record.bundlePrunedBy, record.resourceKey),
     );
   }
   const rows = store.installedBundle(ref.fromRunId, ref.batchIndex);

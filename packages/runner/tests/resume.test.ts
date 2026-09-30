@@ -1009,7 +1009,7 @@ describe("runSession --resume (R47)", () => {
       selectorIds,
     });
     const finisher = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
-    expect(store.highestBundlePrunedBy(abortedId)).toBe(finisher);
+    expect(store.highestBundlePrunedBy(abortedId)?.prunedBy).toBe(finisher);
 
     for (const resume of ["last", abortedId] as const) {
       const again = new CountingBackend("pass", undefined, undefined, true);
@@ -1021,6 +1021,12 @@ describe("runSession --resume (R47)", () => {
         `run ${abortedId}'s installed bundle was pruned by run ${finisher}`,
       );
       expect((err as Error).message).toContain(`bundle pruned by run ${finisher}; re-run`);
+      // Review M-4: these runs recorded no server, so the text must not claim one, and it names
+      // the flag the user actually passed.
+      expect((err as Error).message).not.toContain("same server");
+      expect((err as Error).message).toContain(
+        resume === "last" ? "without --resume " : "without --resume-run ",
+      );
       // Before any work: nothing deployed, nothing run.
       expect([again.deploys, again.baselineRuns, again.mutantRuns]).toEqual([0, 0, 0]);
     }
