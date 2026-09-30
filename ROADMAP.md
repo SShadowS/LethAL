@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**85 of 354 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**85 of 355 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -95,7 +95,7 @@ that ordering is the priority.
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · done (4688a987..eab34a51)
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · done (e431fdb)
 - **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
-- **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · open
+- **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · done (8599054b)
 - **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · done (273358c4)
 - **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · open
 - **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · open
@@ -143,6 +143,7 @@ that ordering is the priority.
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · done (1c20c306)
 - **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
+- **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · open, filed 2026-09-30
 
 ## Product gaps a real project hits
 

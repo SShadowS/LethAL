@@ -6865,6 +6865,115 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(rec?.opKind).toBe("container-needs-recycle");
   });
 
+  // R240: the TARGET publish can return normally with the session latched, the same three ways a
+  // hook publish can. Nothing after it may treat the publish as a success: no `accepted` row in
+  // R90's publish-size history, and no further backend call (the R192 package read, an activate).
+  async function runLatchedTargetSession(
+    client: FakeLeaseClient,
+    duringDeploy: (timers: FakeTimers) => Promise<void> = async () => {},
+  ) {
+    const timers = new FakeTimers();
+    const { lease } = leaseCfg(client, { timers });
+    const store = new ResultsStore(":memory:");
+    const testDir = await mkdtemp(join(tmpdir(), "lethal-r240-tests-"));
+    await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), TEST_AL);
+    // A test app.json, so the R192 baseline-snapshot read has a package to ask for.
+    await Bun.write(join(testDir, "app.json"), JSON.stringify({ ...TESTS_APP, id: APP_ID }));
+    const calls: string[] = [];
+    const backend = leaseBackend({
+      deploy: async (dir: string) => {
+        calls.push("deploy");
+        await duringDeploy(timers);
+        const app = JSON.parse(await readFile(join(dir, "app.json"), "utf8"));
+        const mutantManifest = JSON.parse(
+          await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+        ) as CompiledArtifact["mutantManifest"];
+        return {
+          artifactId: mutantManifest.artifactId,
+          appId: app.id,
+          appVersion: app.version,
+          appPath: join(dir, "r240.app"),
+          sha256: "c".repeat(64),
+          mutantManifest,
+          appManifest: app,
+        };
+      },
+      activate: async () => {
+        calls.push("activate");
+      },
+      fetchPublishedAppPackage: async () => {
+        calls.push("fetch");
+        return undefined;
+      },
+    });
+    const outcome = await runSessionForTest(backend, {
+      lease,
+      store,
+      testDir,
+      quarantineDir: freshTmpDir(),
+    }).catch((e) => e);
+    return {
+      outcome,
+      afterDeploy: () => calls.slice(calls.indexOf("deploy") + 1),
+      published: () => store.publishOutcomes("http://cronus281|BC").map((r) => r.outcome),
+    };
+  }
+
+  test("a normal target publish is recorded accepted and the session goes on (R240 control)", async () => {
+    const run = await runLatchedTargetSession(new FakeLeaseClient());
+    expect(run.published()).toEqual(["accepted"]);
+    // The probes below are live: on a healthy session both calls do follow the publish.
+    expect(run.afterDeploy()).toContain("activate");
+    expect(run.afterDeploy()).toContain("fetch");
+  });
+
+  test("a target publish whose EndPublish is REFUSED records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishOutcome = { ended: false };
+    const run = await runLatchedTargetSession(client);
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain("EndPublish refused");
+  });
+
+  test("a target publish whose lost EndPublish ack cannot be reconciled records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    client.endPublishError = new Error("socket hang up");
+    client.reconcileStatus = () => ({
+      opKind: "run",
+      opAttemptId: "someone-else",
+      opSeq: 99,
+      lastCompletedOpSeq: 98,
+      completed: false,
+    });
+    client.statusQueue = [
+      { opKind: "none", opAttemptId: "", opSeq: 0, lastCompletedOpSeq: 7, completed: true },
+      { opKind: "publish", opAttemptId: "pub", opSeq: 8, lastCompletedOpSeq: 7, completed: false },
+    ];
+    const run = await runLatchedTargetSession(client);
+    expect(client.recoverArgs).toHaveLength(0);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain(
+      "could not be reconciled",
+    );
+  });
+
+  test("a target publish during which the heartbeat learns the lease is lost records no accepted publish and calls nothing after (R240)", async () => {
+    const client = new FakeLeaseClient();
+    const run = await runLatchedTargetSession(client, async (timers) => {
+      client.renewQueue = [{ renewed: false }];
+      await timers.fire();
+    });
+    expect(client.renewArgs.length).toBeGreaterThan(0);
+    // EndPublish still answered ended:true: the latch came from the heartbeat alone.
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(run.afterDeploy()).toEqual([]);
+    expect(run.published()).toEqual([]);
+    expect(String(run.outcome?.quarantined?.reason ?? run.outcome)).toContain("renewed:false");
+  });
+
   // R232 follow-up: a `publishApps` path that does not exist never reaches the server, so the
   // real publisher's failure must read as a confirmed pre-publish failure: released, no recycle.
   test("an afterLeaseAcquired whose publishApps file does not exist releases the lease and quarantines nothing (R232)", async () => {
