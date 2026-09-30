@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
@@ -9,6 +8,9 @@ import { MsInMemoryBackend } from "../src/ms-inmemory-backend";
 import { requiresUnsafeLatch } from "../src/operation-outcome";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 /** What al-runner v2 both filters on and reports back for `ref` — see `qualifiedTestName`. */
@@ -26,7 +28,7 @@ function okSpawn(payload: unknown, exitCode = 0) {
 }
 
 async function makeBackend(spawn: ReturnType<typeof okSpawn>["spawn"]) {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-"));
+  const dir = scratch("lethal-alrunner-");
   await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
   return {
     dir,
@@ -54,7 +56,7 @@ describe("AlRunnerBackend.deploy", () => {
     // A separate directory standing in for the orchestrator's shared
     // per-batch `batchDir` — deploy() must not write into this, or into
     // `dir` itself, only into a private copy.
-    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch-"));
+    const sourceDir = scratch("lethal-alrunner-batch-");
     await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
     await writeFile(join(sourceDir, "Other.Codeunit.al"), "some AL source", "utf8");
 
@@ -87,7 +89,7 @@ describe("AlRunnerBackend.deploy", () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
     const activeDir = join(dir, "active");
 
-    const batch1 = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch1-"));
+    const batch1 = scratch("lethal-alrunner-batch1-");
     await writeFile(join(batch1, "MutationSelector.Codeunit.al"), "batch1 selector", "utf8");
     await writeFile(join(batch1, "StaleOnly.Codeunit.al"), "only in batch 1", "utf8");
     await backend.deploy(batch1);
@@ -99,7 +101,7 @@ describe("AlRunnerBackend.deploy", () => {
     // merged instead of replacing, it would silently survive into batch 2's
     // compile (a wrong verdict, not a visible error — see the comment on
     // deploy() in al-runner-backend.ts).
-    const batch2 = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch2-"));
+    const batch2 = scratch("lethal-alrunner-batch2-");
     await writeFile(join(batch2, "MutationSelector.Codeunit.al"), "batch2 selector", "utf8");
     await backend.deploy(batch2);
 
@@ -118,7 +120,7 @@ describe("AlRunnerBackend.deploy", () => {
   // into, while leaving the rest of the batch (the selector, ordinary source) intact.
   test("deploy() strips the control-registration codeunits from the active dir", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
-    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-control-"));
+    const sourceDir = scratch("lethal-alrunner-control-");
     await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "selector", "utf8");
     await writeFile(join(sourceDir, CONTROL_REGISTER_FILENAME), "register", "utf8");
     await writeFile(join(sourceDir, CONTROL_UPGRADE_FILENAME), "upgrade", "utf8");
@@ -145,7 +147,7 @@ describe("AlRunnerBackend artifact identity", () => {
   // fails this test.
   test("deploy() reads the batch's artifactId and activate() bakes it into the rewritten selector", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
-    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-artifact-"));
+    const sourceDir = scratch("lethal-alrunner-artifact-");
     await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
     await writeFile(
       join(sourceDir, "mutant-manifest.json"),
@@ -166,7 +168,7 @@ describe("AlRunnerBackend artifact identity", () => {
   // artifact id that later compares equal to another empty id.
   test("a corrupt manifest makes deploy() throw instead of silently yielding an empty artifact id", async () => {
     const { backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
-    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-corrupt-"));
+    const sourceDir = scratch("lethal-alrunner-corrupt-");
     await writeFile(join(sourceDir, "MutationSelector.Codeunit.al"), "source placeholder", "utf8");
     await writeFile(join(sourceDir, "mutant-manifest.json"), "{ not valid json", "utf8");
 
@@ -179,7 +181,7 @@ describe("AlRunnerBackend artifact identity", () => {
   // specifically so this path bakes the real id from cfg.instrumentedDir's own
   // mutant-manifest.json, not a stale "" a deploy()-cached field would have left behind.
   test("activate() without a prior deploy() bakes the real artifact id from cfg.instrumentedDir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-lazyid-"));
+    const dir = scratch("lethal-alrunner-lazyid-");
     await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
     await writeFile(
       join(dir, "mutant-manifest.json"),
@@ -225,7 +227,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
 `;
 
   async function batchDir(pad: number): Promise<string> {
-    const d = await mkdtemp(join(tmpdir(), "lethal-r349-batch-"));
+    const d = scratch("lethal-r349-batch-");
     await writeFile(join(d, "One.Codeunit.al"), probeCodeunit(pad), "utf8");
     await writeFile(
       join(d, "mutant-manifest.json"),
@@ -270,7 +272,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
     const backend = new AlRunnerBackend(
       {
         alRunnerPath: "al-runner",
-        instrumentedDir: await mkdtemp(join(tmpdir(), "lethal-r349-work-")),
+        instrumentedDir: scratch("lethal-r349-work-"),
         testDir: "/tests",
         selectorObjectId: 50000,
         coverage: "al-runner",
@@ -288,6 +290,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
     await redeploy(backend, await batchDir(4));
     line = 9;
     const second = procs(await backend.run(ref, { coverage: "none", timeoutMs: 5000 }));
+    await backend.close(); // R358: removes its Cobertura scratch directory
     return { first, second };
   }
 
@@ -313,7 +316,7 @@ describe("AlRunnerBackend.compileCheck", () => {
   // side effect deploy() itself produces.
   test("delegates to deploy(): copies the candidate dir into <instrumentedDir>/active", async () => {
     const { dir, backend } = await makeBackend(okSpawn({ tests: [] }).spawn);
-    const sourceDir = await mkdtemp(join(tmpdir(), "lethal-alrunner-candidate-"));
+    const sourceDir = scratch("lethal-alrunner-candidate-");
     await writeFile(
       join(sourceDir, "MutationSelector.Codeunit.al"),
       "candidate placeholder",
@@ -764,7 +767,7 @@ describe("AlRunnerBackend serverMode (R220)", () => {
   async function serverBackend(
     tests: Array<{ name: string; status: string; message?: string }>,
   ): Promise<{ backend: AlRunnerBackend; runs: () => number; dir: string }> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-"));
+    const dir = scratch("lethal-alrunner-server-");
     const fake = fakeServerSpawn(tests);
     const backend = new AlRunnerBackend(
       {
@@ -868,7 +871,7 @@ describe("AlRunnerBackend serverMode (R220)", () => {
   });
 
   test("serverMode:false still constructs and uses the one-shot transport", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-off-"));
+    const dir = scratch("lethal-alrunner-server-off-");
     const backend = new AlRunnerBackend(
       {
         alRunnerPath: "al-runner",
@@ -898,7 +901,7 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       // `runTests` request has no symbols field and silently ignores one, measured. So a daemon
       // started without them compiles the no-symbol build for the whole session.
       const symbols = ["CLEAN27", "A"];
-      const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-syms-"));
+      const dir = scratch("lethal-alrunner-server-syms-");
       const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
       const serverArgv: string[][] = [];
       const spy: ServerSpawnFn = (argv) => {
@@ -945,7 +948,7 @@ describe("AlRunnerBackend serverMode (R220)", () => {
   }
 
   test("R319: with no symbols the daemon's argv carries no --define at all", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-alrunner-server-nosyms-"));
+    const dir = scratch("lethal-alrunner-server-nosyms-");
     const fake = fakeServerSpawn([{ name: "Codeunit79100.A", status: "pass" }]);
     const serverArgv: string[][] = [];
     const spy: ServerSpawnFn = (argv) => {
@@ -1005,8 +1008,8 @@ describe("MsInMemoryBackend", () => {
  */
 describe("AlRunnerBackend selectorMode: resource", () => {
   async function deployed(mode: "static" | "resource") {
-    const dir = await mkdtemp(join(tmpdir(), `lethal-alrunner-${mode}-`));
-    const batch = await mkdtemp(join(tmpdir(), "lethal-alrunner-batch-"));
+    const dir = scratch(`lethal-alrunner-${mode}-`);
+    const batch = scratch("lethal-alrunner-batch-");
     await writeFile(join(batch, "MutationSelector.Codeunit.al"), "generated selector", "utf8");
     await writeFile(
       join(batch, "mutant-manifest.json"),
@@ -1116,7 +1119,7 @@ describe("AlRunnerBackend.close() removes its coverage scratch directory (R356)"
         stderr: "",
       };
     };
-    const work = await mkdtemp(join(tmpdir(), "lethal-r356-work-"));
+    const work = scratch("lethal-r356-work-");
     await writeFile(join(work, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
     const backend = new AlRunnerBackend(
       {

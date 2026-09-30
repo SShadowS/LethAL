@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -3386,6 +3386,21 @@ export function withAlRunnerCanary(
   return canary !== undefined ? { ...report, alRunnerCanary: canary } : report;
 }
 
+/**
+ * R358: removes a session's temp scratch directory. Best-effort, like the other cleanups at the
+ * end of a session: a failure (on Windows, usually a file a child process still holds open) is
+ * reported and never replaces the session's report or the error already unwinding.
+ */
+async function removeScratchQuietly(dir: string): Promise<void> {
+  try {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (err) {
+    console.warn(
+      `[lethal] could not remove the session's scratch directory ${dir} (harmless; remove it by hand): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export async function runFromCli(
   parsed: RunCliConfig,
   deps: {
@@ -3439,6 +3454,8 @@ export async function runFromCli(
   const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
   await validateIds(parsed.projectDir, selectorIds);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
+  // Kept after the session on purpose (R358, R360): the store records each batch's `.app` and
+  // instrumented folder under it, and `lethal verify` reads them back (`loadInstalledArtifact`).
   // R7/R8: captured here (outer scope) rather than discarded, so the `withEnvTeardown` closure
   // below can attach it to the final `SessionReport` — see `withAlRunnerCanary`. Stays
   // `undefined` for every bcdev session (this branch never runs) and for the al-runner
@@ -4877,6 +4894,7 @@ export async function verifyFromCli(
   };
   let store: ResultsStore | undefined;
   let backend: ExecutionBackend | undefined;
+  let scratchRoot: string | undefined;
   try {
     // Refused before the store is opened: a malformed id needs no database.
     parseVerifyRequest(parsed.artifact, parsed.survivors);
@@ -4901,7 +4919,7 @@ export async function verifyFromCli(
     // ponytail: the config's selector ids, never the source run's CLI overrides (the store keeps
     // none). buildBackend only validates them against app.json; the installed build has its own.
     const selectorIds = resolveSelectorIds({}, validateSelectorIdsConfig(configFile.selectorIds));
-    const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-verify-"));
+    scratchRoot = await mkdtemp(join(tmpdir(), "lethal-verify-"));
     const built = await (deps.buildBackend ?? buildBackend)(
       inputs,
       configFile,
@@ -4965,6 +4983,7 @@ export async function verifyFromCli(
         );
       }
     }
+    if (scratchRoot !== undefined) await removeScratchQuietly(scratchRoot);
   }
 }
 

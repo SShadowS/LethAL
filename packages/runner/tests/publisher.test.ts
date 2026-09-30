@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, rm, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { defaultAlToolPaths } from "../src/publisher";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 // NOTE (Task 6): the old `Publisher` class (compile + publish bundled, fixed
 // `lethal-instrumented.app` filename) is gone. Its compile half lives in
@@ -33,7 +35,7 @@ describe("defaultAlToolPaths", () => {
      * was written against.
      */
     async function pathsFor(platform: NodeJS.Platform) {
-      const tmpDir = await mkdtemp(join(tmpdir(), "al-platform-"));
+      const tmpDir = scratch("al-platform-");
       try {
         const bin = join(tmpDir, "ms-dynamics-smb.al-18.0.2498801", "bin");
         for (const [dir, suffix] of [
@@ -106,7 +108,7 @@ describe("defaultAlToolPaths", () => {
     };
 
     test("finds the tools when the VSIX puts them directly in bin/", async () => {
-      const tmpDir = await mkdtemp(join(tmpdir(), "al-r167-"));
+      const tmpDir = scratch("al-r167-");
       try {
         const ext = join(tmpDir, "ms-dynamics-smb.al-18.0.2668733");
         await write(join(ext, "bin"), "alc.exe");
@@ -124,7 +126,7 @@ describe("defaultAlToolPaths", () => {
       // On an older multi-platform VSIX the `bin/` root holds a DIFFERENT platform's binaries, so
       // the RID directory has to win or a Linux host gets a Windows PE — the exact regression R64
       // fixed and this must not reintroduce.
-      const tmpDir = await mkdtemp(join(tmpdir(), "al-r167-"));
+      const tmpDir = scratch("al-r167-");
       try {
         const ext = join(tmpDir, "ms-dynamics-smb.al-18.0.2498801");
         await write(join(ext, "bin"), "alc.exe");
@@ -139,7 +141,7 @@ describe("defaultAlToolPaths", () => {
     test("SKIPS a newer extension that carries no tools and uses the older one", async () => {
       // The failure as it actually happened: both installed, newest chosen, path absent. Walking
       // newest-first and checking existence is what turns that into a working run.
-      const tmpDir = await mkdtemp(join(tmpdir(), "al-r167-"));
+      const tmpDir = scratch("al-r167-");
       try {
         await mkdir(join(tmpDir, "ms-dynamics-smb.al-18.0.9999999", "bin"), { recursive: true });
         const older = join(tmpDir, "ms-dynamics-smb.al-18.0.2498801");
@@ -155,7 +157,7 @@ describe("defaultAlToolPaths", () => {
       // The suffix is what keeps the `bin/` fallback honest across hosts: a Windows VSIX has
       // `bin/alc.exe` and no `bin/alc`, so the Linux probe must find nothing rather than hand back
       // a PE binary this host cannot execute.
-      const tmpDir = await mkdtemp(join(tmpdir(), "al-r167-"));
+      const tmpDir = scratch("al-r167-");
       try {
         const ext = join(tmpDir, "ms-dynamics-smb.al-18.0.2668733");
         await write(join(ext, "bin"), "alc.exe");
@@ -167,7 +169,7 @@ describe("defaultAlToolPaths", () => {
   });
 
   test("returns undefined when no AL extensions found", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "al-test-"));
+    const tmpDir = scratch("lethal-publisher-test-");
     try {
       const result = await defaultAlToolPaths(tmpDir);
       expect(result).toBeUndefined();
@@ -177,7 +179,7 @@ describe("defaultAlToolPaths", () => {
   });
 
   test("sorts versions numerically across digit boundaries (9 vs 10)", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "al-test-"));
+    const tmpDir = scratch("lethal-publisher-test-");
     try {
       // Create fake AL extension dirs
       const dirs = [
@@ -206,7 +208,7 @@ describe("defaultAlToolPaths", () => {
   });
 
   test("picks newest version with complex multi-segment comparison", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "al-test-"));
+    const tmpDir = scratch("lethal-publisher-test-");
     try {
       // Create fake AL extension dirs
       const dirs = [

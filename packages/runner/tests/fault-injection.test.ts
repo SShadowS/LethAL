@@ -36,9 +36,6 @@
 // ————————————————————————————————————————————————————————————————————————
 
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
@@ -53,6 +50,9 @@ import { runSession } from "../src/orchestrator";
 import type { SessionConfig } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { ResultsStore } from "../src/store";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -90,7 +90,7 @@ const APP_JSON = JSON.stringify(
 const selectorIds: SelectorConfig = { selectorId: 50000, controlId: 50001, tableId: 50002 };
 
 async function makeProject() {
-  const root = await mkdtemp(join(tmpdir(), "lethal-fault-injection-"));
+  const root = scratch("lethal-fault-injection-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
@@ -127,7 +127,7 @@ function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacken
 
 /** Fresh per-call quarantine dir — no test may share (or race on) another's quarantine state. */
 function freshTmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "lethal-fault-injection-quarantine-"));
+  return scratch("lethal-fault-injection-quarantine-");
 }
 
 /** Builds a full SessionConfig around a caller-supplied fake backend, matching the tier identity

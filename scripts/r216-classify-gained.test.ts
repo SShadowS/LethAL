@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initParser, parseAL } from "../packages/engine/src/ast/parser";
 import { type ALSyntaxNode, wrapRoot } from "../packages/engine/src/ast/syntax-node";
+import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { type Role, roleOf, testCodeunitApps } from "./r216-classify-gained";
+
+const scratch = scratchDirs();
 
 /**
  * R216's role decision, which decided the census (STOP (b), 0 deployable product sites). Each case
@@ -33,7 +35,7 @@ beforeAll(async () => {
 
 /** Lays out `files` under a fresh corpus dir, then returns each file's top-level object's role. */
 function roles(files: Record<string, string>): Map<string, Role> {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-r216-"));
+  const dir = scratch("lethal-r216-");
   const roots = new Map<string, ALSyntaxNode>();
   for (const [rel, text] of Object.entries(files)) {
     const abs = join(dir, rel);

@@ -1,6 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -32,6 +31,9 @@ import type { SpawnFn } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 
@@ -373,7 +375,7 @@ async function makeBackendWithDeploy(
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
 
-  const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-test-"));
+  const outputDir = scratch("lethal-bcdev-backend-test-");
   const deployDir = instrumentedDir ?? outputDir;
   await writeDeployInputs(deployDir);
   const backend = new BcDevMcpBackend(
@@ -443,7 +445,7 @@ describe("BcDevMcpBackend.attach", () => {
       argv.push([...a]);
       return { exitCode: 0, stdout: "", stderr: "" };
     };
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-attach-"));
+    const outputDir = scratch("lethal-bcdev-attach-");
     const base = makeDeployment(outputDir, SYMBOLS, {
       spawn,
       reportedIdentity: opts.reportedIdentity ?? TEST_ARTIFACT_ID,
@@ -714,7 +716,7 @@ describe("BcDevMcpBackend.run", () => {
   // false survivors instead. An unresolvable member is now emitted at OBJECT level, which lands
   // in `byObject` (sound, one precision level coarser) and never invents member credit.
   test("emits an unresolvable methodId at OBJECT level, never expanded to local-procedure guesses", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-local-"));
+    const dir = scratch("lethal-bcdev-backend-local-");
     await Bun.write(
       join(dir, "SandboxLogic.Codeunit.al"),
       [
@@ -787,7 +789,7 @@ describe("BcDevMcpBackend.run", () => {
   // one manifest-id coincidence away from R29's shape. Objects outside the compiled artifact's
   // SymbolReference are now skipped, same scope rule the fenced path applies.
   test("skips coverage for objects the compiled artifact does not declare", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-foreign-"));
+    const dir = scratch("lethal-bcdev-backend-foreign-");
     await Bun.write(
       join(dir, "SandboxLogic.Codeunit.al"),
       [
@@ -854,7 +856,7 @@ describe("BcDevMcpBackend.run", () => {
   // FALLBACK 1 returned that non-empty-but-wrong set, FALLBACK 2 never fired, and every table
   // trigger mutant ran against one irrelevant test. 10 of 20 survivors were false.
   test("credits the OBJECT when a methodId resolves to no name and the object declares no local procedure", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-backend-objlevel-"));
+    const dir = scratch("lethal-bcdev-backend-objlevel-");
     await Bun.write(
       join(dir, "DataMain.Table.al"),
       [
@@ -1107,7 +1109,7 @@ describe("PublishFailedError (R65/R90)", () => {
 
 describe("BcDevMcpBackend.deploy", () => {
   test("invokes compiler then deployer in order and returns the verified CompiledArtifact", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-test-"));
+    const dir = scratch("lethal-bcdev-deploy-test-");
     try {
       await writeDeployInputs(dir);
       const calls: string[][] = [];
@@ -1150,7 +1152,7 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 
   test("throws a typed DeploymentError when identity reports a different artifact", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-mismatch-"));
+    const dir = scratch("lethal-bcdev-deploy-mismatch-");
     try {
       await writeDeployInputs(dir);
       const backend = new BcDevMcpBackend(
@@ -1175,7 +1177,7 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 
   test("throws a typed PublishFailedError — never DeploymentError — when the publish call itself demonstrably fails (R65/R90)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-publish-fail-"));
+    const dir = scratch("lethal-bcdev-deploy-publish-fail-");
     try {
       await writeDeployInputs(dir);
       // Overwrite the shared fixture's empty manifest: three guards, all in ONE file, so
@@ -1255,7 +1257,7 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 
   test("injects the LethAL Control dependency into the staged app.json, stages the symbol, leaves the original untouched, and reclaims the staged copy", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-stage-"));
+    const dir = scratch("lethal-bcdev-deploy-stage-");
     try {
       await writeDeployInputs(dir);
       let capturedProjectDir: string | undefined;
@@ -1331,7 +1333,7 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 
   test("reclaims the staged compile copy even when compile() throws", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-stage-cleanup-throws-"));
+    const dir = scratch("lethal-bcdev-deploy-stage-cleanup-throws-");
     try {
       await writeDeployInputs(dir);
       const fakeCompiler = {
@@ -1366,7 +1368,7 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 
   test("calls harnessVerifier.verify() unconditionally and aborts before compile if it throws", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-deploy-harness-abort-"));
+    const dir = scratch("lethal-bcdev-deploy-harness-abort-");
     try {
       await writeDeployInputs(dir);
       const compile = mock(async () => {
@@ -1403,7 +1405,7 @@ describe("BcDevMcpBackend.deploy", () => {
 
 describe("BcDevMcpBackend.compileCheck", () => {
   test("compiles without ever spawning altool (no publish, no verify)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-test-"));
+    const dir = scratch("lethal-bcdev-compilecheck-test-");
     try {
       await writeDeployInputs(dir);
       const calls: string[][] = [];
@@ -1437,7 +1439,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
   });
 
   test("throws AlcCompileError on a compiler rejection, without ever spawning altool", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-fail-"));
+    const dir = scratch("lethal-bcdev-compilecheck-fail-");
     try {
       await writeDeployInputs(dir);
       const calls: string[][] = [];
@@ -1466,7 +1468,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
   });
 
   test("deletes the candidate .app it wrote — bisection candidates must not accumulate in outputDir", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-cleanup-"));
+    const dir = scratch("lethal-bcdev-compilecheck-cleanup-");
     try {
       await writeDeployInputs(dir);
       const backend = new BcDevMcpBackend(
@@ -1496,7 +1498,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
   // directory regardless of platform — `force` only ignores a MISSING path, never a real fs
   // error like this one.
   test("compileCheck swallows a cleanup rm failure (does not mask the compile result)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-rmfail-"));
+    const dir = scratch("lethal-bcdev-compilecheck-rmfail-");
     try {
       await writeDeployInputs(dir);
       const io: ArtifactIo = {
@@ -1545,9 +1547,9 @@ describe("BcDevMcpBackend.compileCheck", () => {
   // still report dirA's "ApplyAudit". (The pre-R63 observable was the local-procedure fallback;
   // that fallback is gone, so the clobber is now observed at the methodIndex itself.)
   test("a candidate compile does not overwrite the coverage index deploy() established", async () => {
-    const dirA = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-a-"));
-    const dirB = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-b-"));
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compilecheck-clobber-out-"));
+    const dirA = scratch("lethal-bcdev-compilecheck-clobber-a-");
+    const dirB = scratch("lethal-bcdev-compilecheck-clobber-b-");
+    const outputDir = scratch("lethal-bcdev-compilecheck-clobber-out-");
     try {
       await writeDeployInputs(dirA);
       await writeDeployInputs(dirB);
@@ -1686,7 +1688,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
   }
 
   test("compileTestApp uses the backend's own compiler and control symbol, and calls no server", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-compiletestapp-"));
+    const dir = scratch("lethal-bcdev-compiletestapp-");
     try {
       await Bun.write(
         join(dir, "app.json"),
@@ -1765,7 +1767,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
   });
 
   test("publishTestApp publishes with the backend's deployer and reads back from dev/packages", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-bcdev-publishtestapp-"));
+    const dir = scratch("lethal-bcdev-publishtestapp-");
     try {
       const OLD = buildFakeAppWithEntries({
         "NavxManifest.xml": navxManifest(TESTS_APP_ID, "LethAL Sandbox Tests", "1.0.0.2"),
@@ -2283,7 +2285,7 @@ describe('coverageMode "fenced" (R58)', () => {
     coverageRows: unknown,
     idRangesOverride?: Record<string, unknown>,
   ): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-fenced-test-"));
+    const outputDir = scratch("lethal-fenced-test-");
     await writeDeployInputs(outputDir);
     // The fenced path reads the artifact's OWN idRanges out of this file to build the server-side
     // `Code Coverage."Object ID"` filter — see `coverageObjectIdFilterOf`.
@@ -2383,7 +2385,7 @@ describe('coverageMode "fenced" (R58)', () => {
     }
 
     async function backendWith(stopHungSessions: boolean) {
-      const outputDir = await mkdtemp(join(tmpdir(), "lethal-r53-wire-"));
+      const outputDir = scratch("lethal-r53-wire-");
       await writeDeployInputs(outputDir);
       await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS_AL);
       const backend = new BcDevMcpBackend(
@@ -2655,7 +2657,7 @@ describe("fenced coverage — the server-side object-id filter", () => {
     calls: Array<{ url: string; body: Record<string, unknown> }>,
     appJsonExtra: Record<string, unknown>,
   ): Promise<{ backend: BcDevMcpBackend; cleanup: () => Promise<void> }> {
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-fenced-filter-"));
+    const outputDir = scratch("lethal-fenced-filter-");
     await writeDeployInputs(outputDir);
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
@@ -2812,7 +2814,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
   }> {
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-thin-"));
+    const outputDir = scratch("lethal-thin-");
     await writeDeployInputs(outputDir);
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
@@ -2984,7 +2986,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
   }> {
-    const outputDir = await mkdtemp(join(tmpdir(), "lethal-r298-"));
+    const outputDir = scratch("lethal-r298-");
     await writeDeployInputs(outputDir);
     const appJsonPath = join(outputDir, "app.json");
     const app = JSON.parse(await readFile(appJsonPath, "utf8")) as Record<string, unknown>;
@@ -3202,7 +3204,7 @@ table 50110 "Wrapped T"
   const hubRef = { codeunitId: 50140, codeunitName: "Tests", method: "T" };
 
   async function hub(covered: unknown[]) {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-r298-hub-"));
+    const dir = scratch("lethal-r298-hub-");
     await Bun.write(join(dir, "W.Table.al"), WRAPPED);
     await Bun.write(join(dir, "Other.Codeunit.al"), PLAIN);
     const made = await makeBackendWithDeploy(

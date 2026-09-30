@@ -1,6 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -25,13 +24,17 @@ import type { EnvToolPublisher } from "../src/env-tool-publisher";
 import type { EnvToolSession } from "../src/env-tool-session";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
+import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
+removeRunScratchAfterAll();
 
 /** Writes a minimal valid (empty) `lethal.config.json` to a fresh scratch dir and returns its path.
  * Every field of `LethalConfigFile` is optional, so `{}` parses fine — tests that need real
  * `bcdev`/`envTool` content inject `resolveEnvToolSession` instead of relying on this file's
  * content, exactly like `resolveEnvToolSession`'s own no-op path for al-runner/no-envTool. */
 async function writeTempConfig(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-cfgtest-"));
+  const dir = scratch("lethal-cfgtest-");
   const path = join(dir, "lethal.config.json");
   await writeFile(path, "{}", "utf8");
   return path;
@@ -891,7 +894,7 @@ describe("buildBackend (R21 — accurate alc/altool requirement per path)", () =
 // ————————————————————————————————————————————————————————————————————————
 describe("runFromCli (R18 — envTool configured but ignored under al-runner)", () => {
   async function writeConfigWithEnvTool(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-cfgtest-"));
+    const dir = scratch("lethal-cfgtest-");
     const path = join(dir, "lethal.config.json");
     await writeFile(path, JSON.stringify({ envTool: { toolPath: "tool.exe" } }), "utf8");
     return path;

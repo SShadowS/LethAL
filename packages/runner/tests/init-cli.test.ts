@@ -1,8 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { helpText, initFromCli, parseCliConfig } from "../src/cli";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * `lethal init` exists for one field a first-time user cannot guess: the three object ids LethAL
@@ -12,7 +14,7 @@ import { helpText, initFromCli, parseCliConfig } from "../src/cli";
  */
 
 async function project(appJson: Record<string, unknown>): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-init-"));
+  const dir = scratch("lethal-init-");
   await writeFile(join(dir, "app.json"), JSON.stringify(appJson), "utf8");
   return dir;
 }

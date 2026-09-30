@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import { runSession } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { ResultsStore } from "../src/store";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 // R349, session level. `maxGuardsPerBatch: 1` splits the two carrier files into two batches, and
 // one AlRunnerBackend deploys both. Each batch instruments only its own file, so the SAME file has
@@ -105,7 +107,7 @@ function fakeAlRunner(activeDir: string): SpawnFn {
 
 describe("R349: al-runner coverage across batches", () => {
   test("batch 2's covering tests are read through batch 2's layout", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-r349-"));
+    const root = scratch("lethal-r349-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     const instrumentedDir = join(root, "instr");
@@ -134,6 +136,7 @@ describe("R349: al-runner coverage across batches", () => {
       selectorIds: { selectorId: 50000, controlId: 50001, tableId: 50002 },
       maxGuardsPerBatch: 1,
     });
+    await backend.close(); // R358: removes its Cobertura scratch directory
     expect(report.batches).toBe(2);
 
     // Pinned PER MUTANT, both batches. `Target` is covered by its own file's test alone, and
