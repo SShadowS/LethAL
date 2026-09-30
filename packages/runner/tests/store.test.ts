@@ -33,6 +33,7 @@ describe("ResultsStore", () => {
   test("round-trips a run with mutants and test results", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -42,7 +43,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p")).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure")).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -51,6 +52,7 @@ describe("ResultsStore", () => {
   test("priorSurvivorKeys reads only the latest finished run for the project", () => {
     const store = new ResultsStore(":memory:");
     const r1 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -59,6 +61,7 @@ describe("ResultsStore", () => {
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
     const r2 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -66,7 +69,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p").size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure").size).toBe(0);
     store.close();
   });
 
@@ -79,6 +82,7 @@ describe("ResultsStore", () => {
     const key = "abc123|Sample|Post|conditional-boundary|1";
 
     const r1 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -86,11 +90,12 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p")).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure")).toEqual(new Set([key]));
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
     const r2 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -102,12 +107,13 @@ describe("ResultsStore", () => {
     // Run 3 starts (mid-flight, not yet finished) and must still see the key
     // via run 2's now-latest-finished results.
     store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p")).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure")).toEqual(new Set([key]));
     store.close();
   });
 
@@ -118,6 +124,7 @@ describe("ResultsStore", () => {
     test("recordMutant returns the inserted row id", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",
@@ -133,6 +140,7 @@ describe("ResultsStore", () => {
     test("recordTestResult accepts a mutant_row_id distinct from mutant_code", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",
@@ -156,6 +164,7 @@ describe("ResultsStore", () => {
   test("records real deployment provenance over the createRun placeholder", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -182,6 +191,7 @@ describe("ResultsStore", () => {
   test("recordArtifact keeps one row per batch, and runs.artifact_id is the last batch's", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -217,6 +227,7 @@ describe("ResultsStore", () => {
   test("recordArtifact refuses a second row for the same batch, and changes nothing when it does", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -260,6 +271,7 @@ describe("ResultsStore", () => {
   test("recordArtifact stores the manifest hash and trustedArtifactRecord returns it", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -334,6 +346,7 @@ describe("ResultsStore", () => {
   test("artifactsForRun is empty for a run that published nothing", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -363,6 +376,7 @@ describe("ResultsStore", () => {
 
     const store = new ResultsStore(path);
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -377,6 +391,59 @@ describe("ResultsStore", () => {
         sha256: "z",
       }),
     ).not.toThrow();
+    store.close();
+    rmSync(path, { force: true });
+  });
+
+  // R354: a runs table from before R354 gains coverage_mode, its rows read NULL (unknown), and a
+  // NULL never equals a mode: history skips nothing from it. A new row records its mode.
+  test("migrates a pre-R354 runs table: coverage_mode is added and existing rows are NULL", () => {
+    const path = join(tmpdir(), `lethal-store-r354-${Date.now()}.sqlite`);
+    const legacy = new Database(path);
+    legacy.exec(`CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    project_path TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    app_version TEXT NOT NULL,
+    batch_count INTEGER,
+    baseline_green INTEGER,
+    app_id TEXT,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    config_fingerprint TEXT,
+    source_sha256 TEXT,
+    identity_scheme INTEGER
+  );`);
+    legacy.exec(
+      `INSERT INTO runs (project_path, backend, app_version, identity_scheme) VALUES ('P','bcdev','0.0.0.0', ${IDENTITY_SCHEME})`,
+    );
+    legacy.close();
+
+    const store = new ResultsStore(path);
+    const cols = store.db.query("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain("coverage_mode");
+    expect(store.db.query("SELECT coverage_mode FROM runs").all()).toEqual([
+      { coverage_mode: null },
+    ]);
+    expect(store.getRun(1)?.coverageMode).toBeNull();
+    // The old run's survivor is not history for any mode.
+    store.recordMutant(1, mutantRow("survived"));
+    store.finishRun(1, { batchCount: 1, baselineGreen: true });
+    const seen: unknown[] = [];
+    expect(store.priorSurvivorKeys("P", "procedure", undefined, (i) => seen.push(i)).size).toBe(0);
+    expect(seen).toEqual([{ runId: 1, coverageMode: null }]);
+    const runId = store.createRun({
+      coverageMode: "fenced",
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: "P",
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    expect(store.getRun(runId)?.coverageMode).toBe("fenced");
+    store.db.run("UPDATE runs SET coverage_mode = 'bogus' WHERE id = ?", [runId]);
+    expect(() => store.getRun(runId)).toThrow(/corrupt "coverage_mode"/);
     store.close();
     rmSync(path, { force: true });
   });
@@ -408,6 +475,7 @@ describe("ResultsStore", () => {
 
     const store = new ResultsStore(path);
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -488,6 +556,7 @@ CREATE TABLE IF NOT EXISTS mutants (
 
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          coverageMode: "procedure",
           identityScheme: IDENTITY_SCHEME,
           projectPath: "/p",
           backend: "bcdev",
@@ -496,7 +565,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p")).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure")).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -526,6 +595,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         // Opening with the current ResultsStore must add the column…
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          coverageMode: "procedure",
           identityScheme: IDENTITY_SCHEME,
           projectPath: "/p",
           backend: "bcdev",
@@ -557,6 +627,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       try {
         const store = new ResultsStore(dbPath);
         const runId = store.createRun({
+          coverageMode: "procedure",
           identityScheme: IDENTITY_SCHEME,
           projectPath: "/p",
           backend: "bcdev",
@@ -593,6 +664,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         new ResultsStore(dbPath).close();
         const store = new ResultsStore(dbPath); // second open must not throw on ALTER
         const runId = store.createRun({
+          coverageMode: "procedure",
           identityScheme: IDENTITY_SCHEME,
           projectPath: "/p",
           backend: "bcdev",
@@ -613,6 +685,7 @@ CREATE TABLE IF NOT EXISTS mutants (
     test("a NULL runner column maps to the documented default: absent, not thrown", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",
@@ -629,6 +702,7 @@ CREATE TABLE IF NOT EXISTS mutants (
     test("a corrupt runner column value throws, naming the value and the mutant row", () => {
       const store = new ResultsStore(":memory:");
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",
@@ -665,6 +739,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("recordArtifact stores the app path and batch dir, and artifactRecordById returns the batch, its run's highest batch and the source hash", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -694,6 +769,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
 
     // Absent paths and no recorded source hash read back null, never a plausible default.
     const other = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "Q",
       backend: "bcdev",
@@ -714,6 +790,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("artifactRecordById is null for an unknown id", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -727,12 +804,14 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("artifactRecordById throws when the store records one id twice", () => {
     const store = new ResultsStore(":memory:");
     const r1 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
     });
     const r2 = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -748,6 +827,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const path = join(tmpdir(), `lethal-store-c0206-${Date.now()}.sqlite`);
     const before = new ResultsStore(path);
     const runId = before.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -795,6 +875,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("batchMutantRows reads carried as true, false, or null", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -830,6 +911,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("baselineTests reads only baseline rows, with their codeunit names", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -843,6 +925,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const m = store.recordMutant(runId, mutantRow("killed"));
     store.recordTestResult(runId, m, "M0001", { ...ref, method: "OnlyUnderMutant" }, "fail", 1);
     const later = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -859,12 +942,14 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
   test("sessionIdsOf returns every session id of a run and none of another's", () => {
     const store = new ResultsStore(":memory:");
     const a = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
     });
     const b = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -884,6 +969,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     const store = new ResultsStore(":memory:");
     // Run A, shaped the way runSession writes one.
     const a = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",
@@ -893,10 +979,11 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
-    const aKeys = store.priorSurvivorKeys("P");
+    const aKeys = store.priorSurvivorKeys("P", "procedure");
     expect(aKeys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "lethal-verify",
@@ -912,12 +999,13 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     };
     expect(store.findResumableRun(query)).toBeNull();
-    expect(store.priorSurvivorKeys("P")).toEqual(aKeys);
+    expect(store.priorSurvivorKeys("P", "procedure")).toEqual(aKeys);
     expect(store.artifactRecordById(A0)?.runId).toBe(a);
 
     // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
     // null above is the verify row's exclusion, not a query that can find nothing.
     const c = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "P",
       backend: "bcdev",

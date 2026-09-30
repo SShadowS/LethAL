@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
-import type { ExecutionBackend, TestMethodRef } from "./backend";
+import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
 import { discoverTests } from "./discovery";
@@ -70,6 +70,8 @@ export const VERIFY_REFUSALS = [
   "test-app-version-below-resident",
   "test-app-publish-failed",
   "test-app-resident-unreadable",
+  // R354: the source run was measured under another coverage mode, or an unrecorded one.
+  "coverage-mode-changed",
 ] as const;
 
 export type VerifyRefusal = (typeof VERIFY_REFUSALS)[number];
@@ -223,6 +225,8 @@ export interface VerifySource {
   /** R325: the identity scheme the source run's manifest keys were made under. A reader mark is
    *  applied only when it was made under the same one. */
   readonly identityScheme: number;
+  /** R354: the coverage mode the source run measured under; `null` for a run from before R354. */
+  readonly coverageMode: CoverageMode | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -502,6 +506,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     sourceSha256,
     installed,
     identityScheme: run.identityScheme,
+    coverageMode: run.coverageMode,
     targets,
   };
 }
@@ -759,8 +764,10 @@ export async function planVerify(a: {
   };
 }
 
-/** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons. */
-export const VERIFY_SCHEMA_VERSION = 2;
+/** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons.
+ *  3 since R354 added the refusal reason `coverage-mode-changed`: a new value, so it bumps (R233);
+ *  v2 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 3;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
@@ -1068,6 +1075,22 @@ export async function runVerify(
     const req = parseVerifyRequest(args.artifact, args.survivors);
     artifactId = req.artifactId;
     source = resolveVerifySource(store, await expandGapIds(store, req));
+    // R354: verify's logic DEPENDS on the source run's coverage facts: a target must be a survived
+    // or no-coverage source verdict (`resolveVerifySource`), and each request runs the source's
+    // covering tests (`planVerify`). Both were attributed under the source's coverage mode, so
+    // under another mode, or an unrecorded one, verify REFUSES rather than warns. First, before
+    // any file is read, so the refusal costs nothing.
+    const coverageMode = backend.capabilities().coverage;
+    if (source.coverageMode !== coverageMode) {
+      throw new VerifyError(
+        "coverage-mode-changed",
+        `run ${source.runId} was measured under ${
+          source.coverageMode === null
+            ? "an unrecorded coverage mode (the run predates R354)"
+            : `coverage mode ${source.coverageMode}`
+        }, but verify measures under coverage mode ${coverageMode}. Its survived and no-coverage verdicts and its covering-test lists were attributed under that mode, so they do not say which tests reach a mutant under this one (R354). Run lethal run again under this configuration, then verify with its artifact id.`,
+      );
+    }
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
     const plan = await planVerify({
@@ -1095,6 +1118,8 @@ export async function runVerify(
       verifyRunId = store.createRun({
         // R325: the rows this run records carry the SOURCE run's manifest keys.
         identityScheme: source.identityScheme,
+        // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
+        coverageMode,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",

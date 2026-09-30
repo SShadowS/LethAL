@@ -418,7 +418,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 2`. Schema: [../schemas/verify-v2.schema.json](../schemas/verify-v2.schema.json).
+`verifySchemaVersion: 3`. Schema: [../schemas/verify-v3.schema.json](../schemas/verify-v3.schema.json).
 
 | field | values |
 |---|---|
@@ -494,6 +494,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-version-below-resident` | Raise the test app's version above the installed one. |
 | `test-app-publish-failed` | Read the detail. |
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
+| `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
 
 ### Marking an equivalent survivor (checked)
 
