@@ -1526,6 +1526,23 @@ describe("GH-24: reach decided per mutant", () => {
     }
   });
 
+  test("R351: a coverageArmNames that is not a non-empty array of strings is refused, naming the mutant", () => {
+    // Spread as-is, "Alpha" would project as ["A","l","p","h","a"]: composed, not verbatim.
+    for (const coverageArmNames of ["Alpha", [], ["Alpha", 7], null]) {
+      const report = reportFixture({
+        mutants: [
+          {
+            ...survivorMutant("M0001", "exact", true),
+            procedureName: "",
+            coverageArmNames,
+          } as unknown as MutantOutcome,
+        ],
+      });
+      expect(() => explain(report)).toThrow(MalformedReportError);
+      expect(() => explain(report)).toThrow(/M0001.*coverageArmNames/);
+    }
+  });
+
   test("GH-24b: guardReached false with a non-empty reachedBy is refused, naming the mutant", () => {
     // A test that reached the marker contradicts "not reached"; projecting it would print an
     // unreached survivor beside the name of a test that reached it.

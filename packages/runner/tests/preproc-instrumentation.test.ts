@@ -4419,6 +4419,10 @@ describe("R351: a renamed split member is named by its arm names in the order, t
       orderCoveringTests([A, B], m, ledger, new Map()).map((r) => r.method);
     expect(order(next)).toEqual(["B", "A"]);
     expect(order(gamma)).toEqual(["A", "B"]);
+    // D8: the ordering key is not the identity. Both members keep "" in the key's name segment.
+    for (const m of [killed, next, gamma]) {
+      expect(serializeKey(identityKeyOf(m)).split("|")[2]).toBe("");
+    }
   });
 
   test("T1 r1: the member's row carries its arm names, Plain's row has no such key", async () => {

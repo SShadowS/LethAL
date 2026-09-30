@@ -807,6 +807,20 @@ export function assertExplainableReport(value: unknown): SessionReport {
     ) {
       refuse(`${where} has a reachedBy that is not an array of test names`, reachedBy);
     }
+    // R351: copied onto survivors, gaps and no-coverage blocks. Spread unchecked, a string would
+    // project as its characters; the writer sets it only as a non-empty list of names.
+    const { coverageArmNames } = mutant;
+    if (
+      coverageArmNames !== undefined &&
+      (!Array.isArray(coverageArmNames) ||
+        coverageArmNames.length === 0 ||
+        coverageArmNames.some((n) => typeof n !== "string"))
+    ) {
+      refuse(
+        `${where} has a coverageArmNames that is not a non-empty array of names`,
+        coverageArmNames,
+      );
+    }
     if (
       reachGrain !== undefined &&
       (typeof reachGrain !== "string" || !KNOWN_REACH_GRAINS.has(reachGrain))
