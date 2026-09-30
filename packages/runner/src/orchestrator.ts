@@ -10,9 +10,11 @@ import {
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
+  evaluateArms,
   initParser,
   parseAL,
   procedureLikeNameNode,
+  startsInInactiveArm,
   validateSpec,
   visit,
   wrapRoot,
@@ -88,6 +90,7 @@ import {
   STREAM_SCHEMA_VERSION,
   createEmitter,
 } from "./events";
+import type { PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import {
   type BeginPublishRefusal,
@@ -106,6 +109,7 @@ import {
   permissionCanaryWarnings,
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
+import { effectiveBuildSymbols } from "./preprocessor-symbols";
 import {
   assertUnderCeiling,
   batchCeilingWarning,
@@ -384,6 +388,11 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
+  /** R214: files whose sites the build's preprocessor symbols decided: sites in an arm the build
+   *  compiles out, and files whose directives could not be evaluated as alc does. */
+  readonly preprocExcluded: readonly PreprocExcludedFile[];
+  /** R214: the effective set generation used. */
+  readonly buildSymbols: readonly string[];
 }
 
 export interface MutationSetOptions {
@@ -451,6 +460,15 @@ export interface MutationSetOptions {
    * consumed. The `.al` set is the snapshot's keys; absent, the disk is enumerated and read.
    */
   readonly source?: ReadonlyMap<string, Buffer>;
+  /**
+   * R214: the build's preprocessor symbols as the config gives them (C02-06), the list the compile
+   * step receives. `app.json`'s own `preprocessorSymbols` are added (`effectiveBuildSymbols`), because
+   * alc unions the two (measured, alc 18.0.41), and each file's `#define` / `#undef` apply. A site in
+   * an arm that build compiles out is not generated, and a file whose directives cannot be evaluated
+   * as alc does is not mutated. Absent means `[]`: what alc builds with no `/define`, not "keep every
+   * arm", which would re-open R214 for any caller that forgets it.
+   */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 /**
@@ -726,6 +744,13 @@ export async function generateMutationSet(
     }),
   );
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
+  const buildSymbols = await effectiveBuildSymbols(
+    projectDir,
+    options.preprocessorSymbols ?? [],
+    snapshot,
+  );
+  const preprocExcluded: PreprocExcludedFile[] = [];
+  const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
 
   let excludedByOnly = 0;
   let excludedByExclude = 0;
@@ -759,12 +784,21 @@ export async function generateMutationSet(
     // O(specs x nodes) on a file with many mutation sites. See
     // `buildSpanIndex`'s doc comment in @lethal/engine.
     const spanIndex = buildSpanIndex(root);
+    // R214: sites in an arm this build compiles out are not generated, and a file whose directives
+    // cannot be evaluated exactly as alc does is not mutated at all: no known-uncertain arm is scored.
+    const arms = evaluateArms(root, source, buildSymbols);
+    const inactive = arms.kind === "decided" ? arms.inactive : [];
+    let compiledOutHere = 0;
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
     visit(root, (node) => {
       for (const op of allOperators) {
         if (op.targets(node, ctx)) {
           for (const spec of op.generate(node, ctx)) {
+            if (startsInInactiveArm(inactive, spec.before.startIndex)) {
+              compiledOutHere++;
+              continue;
+            }
             // Reject specs whose `before` isn't a real node in this file's
             // tree — coalescing (Layer 4.3) relies on mutation sites being
             // laminar, which a synthetic multi-node span could violate.
@@ -799,6 +833,33 @@ export async function generateMutationSet(
         file: rel,
         kinds: describeObjectKinds(root),
         sites: declarativeInThisFile,
+      });
+    }
+    // R214: after the declarative row (so a refused file's declarative sites stay in that row,
+    // counted once) and BEFORE the bail below (so a file whose only sites were compiled out or
+    // refused is still recorded).
+    if (arms.kind === "undecided") {
+      warn(
+        "preproc-arms-undecided",
+        `[lethal] ${rel}: a preprocessor directive could not be evaluated exactly as alc does (${arms.reason}), so no mutant is generated in this file (${specs.length} site(s)). It is still compiled and published unchanged. R214.`,
+      );
+      // r3, I5: recorded even at 0 sites, so a refused file never vanishes from the report.
+      preprocExcluded.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: specs.length,
+        reason: "preproc-undecided",
+        detail: arms.reason,
+      });
+      continue;
+    }
+    if (compiledOutHere > 0) {
+      preprocExcluded.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: compiledOutHere,
+        reason: "compiled-out",
+        detail: symbolsDetail,
       });
     }
     if (specs.length === 0) continue;
@@ -895,6 +956,15 @@ export async function generateMutationSet(
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
     );
   }
+  const compiledOut = preprocExcluded.filter((f) => f.reason === "compiled-out");
+  if (compiledOut.length > 0) {
+    const total = compiledOut.reduce((n, f) => n + f.sites, 0);
+    const listed = compiledOut.slice(0, 5).map((f) => `${f.file} (${f.sites})`);
+    warn(
+      "compiled-out-sites",
+      `[lethal] ${total} site(s) in ${compiledOut.length} file(s) sit in #if arms this build compiles out (${symbolsDetail}), so no mutant was generated there (R214): ${listed.join(", ")}${compiledOut.length > 5 ? ", ..." : ""}.`,
+    );
+  }
   if (nonExecutableSites > 0) {
     const where = declarativeSites.map((d) => `${d.file} (${d.kinds}, ${d.sites} site(s))`);
     warn(
@@ -932,6 +1002,8 @@ export async function generateMutationSet(
     excludedByOperator,
     excludedByLines,
     declarativeSites,
+    preprocExcluded,
+    buildSymbols,
   };
 }
 
@@ -4428,6 +4500,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
+    preprocessorSymbols: sourceSymbols,
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;

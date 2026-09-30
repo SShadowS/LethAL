@@ -3049,6 +3049,8 @@ export async function printDryRun(
     readonly exclude?: readonly string[];
     /** R266: write the listing as JSON here. */
     readonly outPath?: string;
+    /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
+    readonly preprocessorSymbols?: readonly string[];
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
@@ -3062,6 +3064,9 @@ export async function printDryRun(
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
+      ...(paths.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: paths.preprocessorSymbols }
+        : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -5317,6 +5322,9 @@ async function main(): Promise<number> {
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
       ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
       ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
+      ...(dryRunConfig?.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
+        : {}),
     });
     return 0;
   }

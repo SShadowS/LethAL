@@ -21,7 +21,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
-import { loadDryRunConfig, restoreNotice } from "../src/cli";
+import { loadDryRunConfig, printDryRun, restoreNotice } from "../src/cli";
 import {
   DRY_RUN_REFUSED,
   FLAG_OWNERS,
@@ -60,6 +60,7 @@ import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient } from "../src/lease";
+import { generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
@@ -2089,6 +2090,106 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(row.source_sha256).toBe(await hashTargetSource(projectDir, ["X"]));
     // And it is not the hash without the symbol, so the symbol is what is being compared.
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
+  });
+
+  // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.
+  const R214_LOGIC = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+#if X
+        exit(Amount > Budget);
+#else
+        exit(Amount >= Budget);
+#endif
+    end;
+}
+`;
+  async function r214Project(): Promise<{ root: string; projectDir: string; testDir: string }> {
+    const root = scratch("lethal-cli-r214-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Symbols Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(join(projectDir, "Logic.Codeunit.al"), R214_LOGIC);
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    return { root, projectDir, testDir };
+  }
+
+  test("R214: the config's symbols decide which #if arm the session mutates", async () => {
+    const { root, projectDir, testDir } = await r214Project();
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "al-runner",
+      dbPath: join(root, "lethal.sqlite"),
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const report = await runFromCli(parsed, {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () => new PassingBackend(),
+    });
+    expect(report.mutants.some((m) => m.line === 6)).toBe(true);
+    expect(report.mutants.some((m) => m.line === 8)).toBe(false);
+  });
+
+  test("R214: --dry-run counts the sites of the build the config names", async () => {
+    const { root, projectDir } = await r214Project();
+    const paths = { dbPath: join(root, "lethal.sqlite"), configPath: join(root, "none.json") };
+    const outPath = join(root, "dry-run.json");
+    const printed: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      printed.push(args.map(String).join(" "));
+    });
+    try {
+      await printDryRun(projectDir, undefined, { ...paths, outPath, preprocessorSymbols: ["X"] });
+    } finally {
+      log.mockRestore();
+    }
+    const count = Number(/(\d+) mutant site\(s\)/.exec(printed.join("\n"))?.[1]);
+    const sitesWith = async (symbols: readonly string[]) =>
+      (await generateMutationSet(projectDir, { preprocessorSymbols: symbols })).files.reduce(
+        (n, f) => n + f.specs.length,
+        0,
+      );
+    expect(count).toBe(await sitesWith(["X"]));
+    // The two arms hold the same number of sites (measured: 3 and 3), so the count alone cannot
+    // tell the builds apart. The listing's lines can: the X arm is line 6, the #else arm line 8.
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+      batches: { sites: { line: number }[] }[];
+    };
+    const lines = new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    expect(lines.has(6)).toBe(true);
+    expect(lines.has(8)).toBe(false);
   });
 });
 

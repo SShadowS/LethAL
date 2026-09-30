@@ -12,6 +12,16 @@
  */
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
+/** R214: a file whose sites the build's preprocessor symbols decided. `detail` is the effective
+ *  symbols for `compiled-out` and the reason code for `preproc-undecided`; never source text. */
+export interface PreprocExcludedFile {
+  readonly file: string;
+  readonly kinds: string;
+  readonly sites: number;
+  readonly reason: "compiled-out" | "preproc-undecided";
+  readonly detail: string;
+}
+
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
 export type ExclusionReason = "not-instrumentable" | "declarative";
 
