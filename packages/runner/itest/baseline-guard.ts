@@ -242,6 +242,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner.baseline.json",
     "itest:alrunner",
   ),
+  "al-runner.layout.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
+    "al-runner.layout.baseline.json",
+    "itest:alrunner",
+  ),
   "bcdev.baseline.json": gateHow("LETHAL_ITEST_BCDEV=1", "bcdev.baseline.json", "itest:bcdev"),
   "envtool.baseline.json": gateHow(
     "LETHAL_ITEST_ENVTOOL=1",

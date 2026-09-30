@@ -1,0 +1,35 @@
+{
+  "id": "615cb3bb-b21f-43e5-af5c-6f800ef371c8",
+  "name": "LethAL Sandbox Layout Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R353 fixture: tests for the two-batch layout target.",
+  "description": "One test per procedure of fixtures/sandbox-layout. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "33a1cc2f-3c79-4e06-bcff-1907956a6328",
+      "name": "LethAL Sandbox Layout",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79750,
+      "to": 79799
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}
