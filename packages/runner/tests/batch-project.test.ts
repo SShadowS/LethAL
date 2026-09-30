@@ -233,7 +233,7 @@ describe("prepareBatchProject — .al basename collisions are loud", () => {
   });
 });
 
-describe("prepareBatchProject — the run's own outputs are not copied (R363)", () => {
+describe("prepareBatchProject: the run's own outputs are not copied (R363)", () => {
   it("skips a custom --db and its sidecars, --out and --progress-out, and still copies a needed JSON resource", async () => {
     await withDirs(async (projectDir, batchDir) => {
       await write(projectDir, "app.json", JSON.stringify(manifest));
