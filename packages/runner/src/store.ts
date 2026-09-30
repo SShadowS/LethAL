@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
@@ -923,13 +924,35 @@ export class ResultsStore {
       .run(prunedBy, runId, batchIndex);
   }
 
+  /** Review r1 #4: a busy checkpoint is reported once per store, not on every write. */
+  private walBusyWarned = false;
+
   /**
    * R360 I5, measured: a bundle write grows the WAL to about the bundle's size and SQLite never
-   * truncates it by itself, so the store checkpoints after writing and after pruning. A busy
-   * checkpoint (another reader holds the WAL) is left to the next one.
+   * truncates it by itself, so the store checkpoints after writing and after pruning.
+   * Best-effort: the busy timeout is off for this one statement, so a reader holding the WAL makes
+   * it report busy at once rather than stall the run for `STORE_BUSY_TIMEOUT_MS`. A busy result is
+   * NOT cleanup (review r1 #4): it warns once, naming the WAL's size, and the next checkpoint retries.
    */
   private checkpoint(): void {
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.db.exec("PRAGMA busy_timeout = 0;");
+    let row: { busy: number } | null;
+    try {
+      row = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | null;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
+    }
+    if (row === null || row.busy === 0 || this.walBusyWarned) return;
+    this.walBusyWarned = true;
+    let size = "an unknown number of";
+    try {
+      size = String(statSync(`${this.dbPath}-wal`).size);
+    } catch {
+      // No readable -wal file: the size stays unknown, the warning still names the file.
+    }
+    console.warn(
+      `[lethal] could not truncate ${this.dbPath}-wal (${size} bytes): another connection is reading the results database, so the space stays in use until a later checkpoint succeeds (R360)`,
+    );
   }
 
   /**

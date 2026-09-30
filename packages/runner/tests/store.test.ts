@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1246,6 +1246,36 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     expect(store.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: STORE_BUSY_TIMEOUT_MS });
     expect(STORE_BUSY_TIMEOUT_MS).toBe(5000);
     store.close();
+  });
+
+  test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-wal-"));
+    const path = join(dir, "r.sqlite");
+    const store = new ResultsStore(path);
+    const reader = new Database(path);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const r = run(store, "srv|bc");
+      publish(store, r, 0);
+      expect(warn).not.toHaveBeenCalled(); // no reader yet: the checkpoint completed
+      // A reader holding a snapshot keeps the WAL from being truncated.
+      reader.exec("BEGIN");
+      reader.query("SELECT COUNT(*) FROM runs").get();
+      const started = Date.now();
+      publish(store, r, 1);
+      publish(store, r, 2);
+      // Best-effort: the busy checkpoint does not wait out the busy timeout.
+      expect(Date.now() - started).toBeLessThan(STORE_BUSY_TIMEOUT_MS);
+      const walWarnings = warn.mock.calls.map((c) => c.join(" ")).filter((w) => w.includes("-wal"));
+      expect(walWarnings).toHaveLength(1);
+      expect(walWarnings[0]).toMatch(/\d+ bytes/);
+      reader.exec("COMMIT");
+    } finally {
+      warn.mockRestore();
+      reader.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("hasInstalledBundle answers by exact (run, batch)", () => {
