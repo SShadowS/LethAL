@@ -55,6 +55,11 @@ export class InstalledArtifactError extends Error {
       | "local-copy-unreadable"
       | "local-copy-differs"
       | "manifest-differs"
+      // R360: the stored installed files do not match the recorded payload digest, are over a
+      // size limit, or were pruned when a later run finished.
+      | "payload-differs"
+      | "payload-too-large"
+      | "replaced"
       | "mismatch"
       | "unavailable"
       | "unsupported",

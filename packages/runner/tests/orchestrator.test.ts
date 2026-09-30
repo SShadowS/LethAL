@@ -2,8 +2,9 @@ import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -38,6 +39,7 @@ import { createEmitter } from "../src/events";
 import type { RunEvent } from "../src/events";
 import { MalformedReportError, assertExplainableReport, explain } from "../src/explain";
 import { ActivationFailure } from "../src/failure-classes";
+import { InstalledBundleError, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseUnavailableError } from "../src/lease";
 import type {
   AcquireOutcome,
@@ -51,7 +53,9 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
+import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -96,9 +100,10 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
+import { testDigestsOfSources } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
-import { type VerifyDeps, VerifyError, runVerify } from "../src/verify";
+import { type VerifyDeps, VerifyError, planVerify, runVerify } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -498,6 +503,156 @@ describe("runSession", () => {
       "lethal verify will refuse",
     );
     store.close();
+  });
+
+  // R-372: on a backend that publishes, the recorded digest is the PUBLISHED test body's, since
+  // that is what the server runs. Disk holds a NEW body that was never republished.
+  describe("R-372: test digests from the published test app", () => {
+    const K = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+    const NEW_AL = TEST_AL.replace("begin\n", "begin\n        Error('now asserts');\n");
+    const pkg = (entries: Record<string, string>) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+        ...entries,
+      });
+    const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+
+    async function r372Run(
+      read: Uint8Array | null | undefined,
+      extra: Partial<SessionConfig> = {},
+      fetch = true,
+    ) {
+      const dirs = await makeProject(NEW_AL);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
+        "IsOverBudget",
+      ]);
+      const backend = fetch
+        ? Object.assign(stub, { fetchPublishedAppPackage: async () => read })
+        : stub;
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+        ...extra,
+      });
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const digestWarning = events.flatMap((e) =>
+        e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
+      );
+      return { dirs, store, runId, digestWarning };
+    }
+
+    test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
+      const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
+      const recorded = store.testDigests(runId);
+      expect(recorded).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K]) as Record<string, string>,
+      );
+      expect(recorded).not.toEqual(testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]));
+      expect(digestWarning).toEqual([]);
+      const plan = await planVerify({
+        source: {
+          runId,
+          projectPath: dirs.projectDir,
+          artifactSha256: "0".repeat(64),
+          sourceSha256: "5".repeat(64),
+          installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+          identityScheme: IDENTITY_SCHEME,
+          coverageMode: "procedure",
+          targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+        },
+        manifest: {
+          selectorIds,
+          artifactId: "a".repeat(32),
+          mutants: [
+            {
+              mutantId: "M0001",
+              file: "SandboxLogic.Codeunit.al",
+              startIndex: 10,
+              endIndex: 20,
+              startLine: 3,
+              operatorName: "lethal.negate-conditional",
+              operatorVersion: "1.0.0",
+              astHash: "hash-M0001",
+              objectType: "codeunit",
+              codeunitId: 79000,
+              codeunitName: "Sandbox Logic",
+              procedureName: "IsOverBudget",
+              originalText: "a",
+              mutatedText: "b",
+            },
+          ],
+        },
+        sourceBaseline: store.baselineTests(runId),
+        sourceTestDigests: recorded,
+        testDir: dirs.testDir,
+      });
+      expect(store.baselineTests(runId).map((t) => t.method)).toEqual([K.method]);
+      expect(plan.newTests.map((t) => t.method)).toEqual([K.method]);
+      store.close();
+    });
+
+    test("a package with no .al entries records NULL and names the missing source", async () => {
+      const { store, runId, digestWarning } = await r372Run(pkg({}));
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("carries no AL source");
+      expect(digestWarning[0]).toContain("includes its source");
+      store.close();
+    });
+
+    test("a package that lacks a discovered test records NULL and says the published app does not declare it", async () => {
+      const other = TEST_AL.replace("OverBudgetDetected", "SomethingElse");
+      const { store, runId, digestWarning } = await r372Run(
+        pkg({ "src/SandboxTests.Codeunit.al": other }),
+      );
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("published test app does not declare or parse");
+      expect(digestWarning[0]).toContain("Sandbox Tests.OverBudgetDetected");
+      store.close();
+    });
+
+    test("an unreadable package (null) records NULL and points at the unreadable warning", async () => {
+      const { store, runId, digestWarning } = await r372Run(null);
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("published-test-app-unreadable");
+      store.close();
+    });
+
+    test("a request that cannot be formed (undefined) records NULL, never the disk digest", async () => {
+      const { store, runId, digestWarning } = await r372Run(undefined);
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("could not be requested");
+      store.close();
+    });
+
+    // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
+    test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
+      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
+        afterLeaseAcquired: async () => {},
+      });
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("envTool.publishApps");
+      store.close();
+    });
+
+    test("a backend that publishes nothing (al-runner) still records the disk digests", async () => {
+      const { store, runId, digestWarning } = await r372Run(undefined, {}, false);
+      expect(store.testDigests(runId)).toEqual(
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]),
+      );
+      expect(digestWarning).toEqual([]);
+      store.close();
+    });
   });
 
   test("no coverage: uncovered procedure mutants get no-coverage, no runs", async () => {
@@ -3687,7 +3842,8 @@ class PhaseBackend implements ExecutionBackend {
       readonly onPublish?: (attempt: number) => void;
       /** What MutationControl_Identity reports; defaults to echoing the compiled artifact. */
       readonly reportedIdentity?: string;
-      /** C02-04b: write the bytes `sha256` is the hash of to `appPath`, so the file is real. */
+      /** C02-04b: write the bytes `sha256` is the hash of to `appPath`, so the file is real.
+       *  Default true since R360: step 3d stores the published `.app` in the bundle. */
       readonly writeApp?: boolean;
     } = {},
   ) {}
@@ -3710,7 +3866,7 @@ class PhaseBackend implements ExecutionBackend {
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
     this.lastCompiledVersion = appManifest.version;
-    if (this.opts.writeApp === true) {
+    if (this.opts.writeApp !== false) {
       await Bun.write(join(dir, "phase-fake.app"), mutantManifest.artifactId);
     }
     return {
@@ -3992,6 +4148,157 @@ describe("runSession — Layer 5A deployment identity", () => {
     const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
     expect(record?.instrumentedDir).toBe(join(dirs.instrumentedDir, `run-${run.id}-batch-0`));
     store.close();
+  });
+
+  test("R360: step 3d stores the published batch's bundle, and it opens against its digest", async () => {
+    const dirs = await makeProject();
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    const run = store.db.query("SELECT id FROM runs LIMIT 1").get() as { id: number };
+    const rows = store.installedBundle(run.id, 0);
+    const payload = store.trustedArtifactRecord(run.id, 0)?.payloadSha256;
+    if (rows === null || payload === undefined || payload === null) {
+      throw new Error("expected a stored bundle with a digest");
+    }
+    const opened = openInstalledBundle(rows, {
+      runId: run.id,
+      batchIndex: 0,
+      payloadSha256: payload,
+    });
+    expect(opened.alSources.map((s) => s.path)).toContain("SandboxLogic.Codeunit.al");
+    store.close();
+  });
+
+  test("R360 I1: a session that throws after its bundle write prunes nothing, and the older finished run still loads", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: new PhaseBackend(), store, ...dirs, selectorIds });
+    const done = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    class ThrowingAfterPublish extends PhaseBackend {
+      override async run(): Promise<TestVerdict> {
+        throw new Error("boom after the bundle write");
+      }
+    }
+    await expect(
+      runSession({ backend: new ThrowingAfterPublish(), store, ...dirs, selectorIds }),
+    ).rejects.toThrow("boom after the bundle write");
+    const threw = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    expect(threw).toBeGreaterThan(done);
+    expect(store.installedBundle(threw, 0)).not.toBeNull();
+    const ref = { fromRunId: done, batchIndex: 0, appPath: "label", instrumentedDir: "label" };
+    const { manifest } = await loadInstalledArtifact(store, ref);
+    expect(manifest.mutants.length).toBeGreaterThan(0);
+    store.close();
+  });
+
+  test("R360 I4: a published .app that vanished before step 3d fails the run by name", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend({ writeApp: false }),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect(err).toMatchObject({ reason: "bundle-unreadable" });
+    expect((err as Error).message).toContain("phase-fake.app");
+    // The run did not finish, so it pruned nothing.
+    const row = store.db.query("SELECT finished_at FROM runs LIMIT 1").get() as {
+      finished_at: string | null;
+    };
+    expect(row.finished_at).toBeNull();
+    store.close();
+  });
+
+  test("R360 I4: a store that loses the highest batch's bundle fails the end-of-run check", async () => {
+    class DroppingStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        this.db
+          .query("DELETE FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+          .run(args[0], args[1].batchIndex);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new DroppingStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect(err).toMatchObject({ reason: "bundle-missing" });
+    expect((err as Error).message).toContain("batch 0");
+    store.close();
+  });
+
+  test("review M-1: the end-of-run check tests existence and never loads the bundle", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const load = spyOn(store, "installedBundle");
+    await runSession({ backend: new PhaseBackend(), store, ...dirs, selectorIds });
+    expect(load).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  test("review M-3: a highest bundle another run pruned is named in the end-of-run refusal", async () => {
+    class PrunedByAnotherStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        const key = [args[0], args[1].batchIndex] as const;
+        this.db
+          .query("DELETE FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+          .run(...key);
+        this.db
+          .query(
+            "UPDATE batch_artifacts SET bundle_pruned_by = 99 WHERE run_id = ? AND batch_index = ?",
+          )
+          .run(...key);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new PrunedByAnotherStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ reason: "bundle-missing" });
+    expect((err as Error).message).toContain("pruned by run 99");
+    store.close();
+  });
+
+  test("R360: the run records its server's quarantine resource key, and NULL without a server", async () => {
+    const withServer = new ResultsStore(":memory:");
+    const dirs = await makeProject();
+    await runSession({
+      backend: new PhaseBackend(),
+      store: withServer,
+      ...dirs,
+      selectorIds,
+      resourceServer: "http://cronus281",
+      resourceServerInstance: "BC",
+    });
+    const key = (s: ResultsStore) =>
+      (s.db.query("SELECT resource_key FROM runs LIMIT 1").get() as { resource_key: string | null })
+        .resource_key;
+    expect(key(withServer)).toBe(
+      quarantineResourceKey({ server: "http://cronus281", serverInstance: "BC" }),
+    );
+    withServer.close();
+    const without = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store: without,
+      ...(await makeProject()),
+      selectorIds,
+    });
+    expect(key(without)).toBeNull();
+    without.close();
   });
 
   test("runSession records the target source hash when generation and the last batch agree", async () => {
@@ -5058,6 +5365,7 @@ class CompilePublishVerifyBackend implements ExecutionBackend {
     const mutantManifest = JSON.parse(
       await readFile(join(dir, "mutant-manifest.json"), "utf8"),
     ) as CompiledArtifact["mutantManifest"];
+    await Bun.write(join(dir, "counting-fake.app"), new Uint8Array([1, 2, 3]));
     return {
       artifactId: mutantManifest.artifactId,
       appId: appManifest.id,
@@ -6965,12 +7273,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         const mutantManifest = JSON.parse(
           await readFile(join(dir, "mutant-manifest.json"), "utf8"),
         ) as CompiledArtifact["mutantManifest"];
+        await Bun.write(join(dir, "r240.app"), "r240");
         return {
           artifactId: mutantManifest.artifactId,
           appId: app.id,
           appVersion: app.version,
           appPath: join(dir, "r240.app"),
-          sha256: "c".repeat(64),
+          sha256: Bun.SHA256.hash(await Bun.file(join(dir, "r240.app")).bytes(), "hex"),
           mutantManifest,
           appManifest: app,
         };
@@ -7358,7 +7667,7 @@ describe("R238: withEnvTeardown keeps a created environment the session quaranti
       ...session,
       teardown: async (opts) => {
         teardownOpts.push(opts);
-        await session.teardown(opts);
+        return await session.teardown(opts);
       },
     };
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
@@ -11032,6 +11341,7 @@ describe("C02-04 characterization", () => {
         const mutantManifest = JSON.parse(
           await readFile(join(dir, "mutant-manifest.json"), "utf8"),
         ) as CompiledArtifact["mutantManifest"];
+        await Bun.write(join(dir, "characterize-fake.app"), artifactId);
         return {
           artifactId,
           appId: appManifest.id,
@@ -11896,14 +12206,16 @@ describe("C02-04b: runNamedMutants", () => {
     expect(alAfter).not.toBe(alBefore);
   });
 
-  test("runNamedMutants refuses an unreadable AL source before any backend call", async () => {
+  // R360 C1: the stored AL text feeds the coverage line map, so a changed byte is refused.
+  test("runNamedMutants refuses a changed stored AL source before any backend call", async () => {
     const fx = await installedFixture();
-    // A directory named like a source: listed as an .al file, and reading it fails.
-    await mkdir(join(fx.installed.instrumentedDir, "Unreadable.Codeunit.al"));
+    fx.store.db
+      .query("UPDATE installed_bundle_files SET text_gz = ? WHERE run_id = ?")
+      .run(gzipSync("codeunit 1 Changed { }"), fx.installed.fromRunId);
     const err = await runNamedMutants(fx.cfg).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(InstalledArtifactError);
-    expect((err as InstalledArtifactError).reason).toBe("local-copy-unreadable");
-    expect((err as InstalledArtifactError).detail).toContain(fx.installed.instrumentedDir);
+    expect((err as InstalledArtifactError).reason).toBe("payload-differs");
+    expect((err as InstalledArtifactError).detail).toContain("instrumented payload digest");
     expect(calls(fx.trace)).toEqual([]);
   });
 
@@ -11944,6 +12256,9 @@ describe("C02-04b: runNamedMutants", () => {
       ...m,
       mutants: m.mutants.slice(1),
     }));
+    // R360: the manifest is read from the store, so store the rewritten batch with a digest that
+    // matches it: only the manifest hash link can refuse it then.
+    await restoreBundleFromDisk(fx.store, fx.installed);
     await expect(
       runNamedMutants({ ...fx.cfg, requests: [{ mutantId: "M0002", methods: [OVER] }] }),
     ).rejects.toMatchObject({ reason: "manifest-differs" });
@@ -13618,6 +13933,7 @@ describe("C02-06 Task 5.4: runVerify", () => {
       manifestSha256: "2".repeat(64),
       appPath: "C:/x/b1.app",
       instrumentedDir: "C:/x/b1",
+      bundle: tinyBundle(),
     });
     const out = await fx.verify(["0/M0001"]);
     expect(out.exitCode).toBe(6);
@@ -13724,3 +14040,30 @@ describe("R252: coverageMode on the report, and explain on a coverage-off report
     );
   });
 });
+
+/** R360: replaces a run's stored bundle with what its batch dir holds now, digest included. */
+async function restoreBundleFromDisk(
+  store: ResultsStore,
+  at: { fromRunId: number; batchIndex: number; instrumentedDir: string; appPath: string },
+): Promise<void> {
+  const w = await bundleFor(at.instrumentedDir, at.appPath);
+  const key = [at.fromRunId, at.batchIndex] as const;
+  store.db
+    .query("UPDATE batch_artifacts SET payload_sha256 = ? WHERE run_id = ? AND batch_index = ?")
+    .run(w.payloadSha256, ...key);
+  store.db
+    .query(
+      "UPDATE installed_bundles SET app_bytes = ?, app_json_text = ?, manifest_gz = ? WHERE run_id = ? AND batch_index = ?",
+    )
+    .run(w.appBytes, w.appJsonText, w.manifestGz, ...key);
+  store.db
+    .query("DELETE FROM installed_bundle_files WHERE run_id = ? AND batch_index = ?")
+    .run(...key);
+  for (const f of w.files) {
+    store.db
+      .query(
+        "INSERT INTO installed_bundle_files (run_id, batch_index, path, text_gz) VALUES (?, ?, ?, ?)",
+      )
+      .run(...key, f.path, f.textGz);
+  }
+}

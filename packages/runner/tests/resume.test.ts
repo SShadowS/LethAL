@@ -152,17 +152,20 @@ class CountingBackend implements ExecutionBackend {
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
   }
-  async deploy(): Promise<CompiledArtifact | null> {
+  async deploy(dir: string): Promise<CompiledArtifact | null> {
     this.deploys += 1;
     if (!this.withArtifact) return null;
     const artifactId = randomHex(16);
     const manifest: MutantManifest = { selectorIds, artifactId, mutants: [] };
+    // R360: step 3d stores the published `.app`, so it must exist and hash to `sha256`.
+    const appPath = join(dir, `${artifactId}.app`);
+    await Bun.write(appPath, artifactId);
     return {
       artifactId,
       appId: APP_ID,
       appVersion: "1.0.0.0",
-      appPath: `${artifactId}.app`,
-      sha256: randomHex(32),
+      appPath,
+      sha256: Bun.SHA256.hash(artifactId, "hex"),
       mutantManifest: manifest,
       appManifest: {},
     };
@@ -989,6 +992,89 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
 });
 
 describe("runSession --resume (R47)", () => {
+  test("review M-3: a quarantined run whose bundle is gone still returns its quarantined report", async () => {
+    class DroppingStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        this.db.query("DELETE FROM installed_bundles WHERE run_id = ?").run(args[0]);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new DroppingStore(":memory:");
+    const report = await runSession({
+      backend: new CountingBackend("pass", 1, undefined, true),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.quarantined).toBeDefined();
+    store.close();
+  });
+
+  // Review r1 #3: no resume path reads the prior run's installed .app or bundle (resolveResume,
+  // replayCarriedBatch and snapshot reuse read store rows, the current batch dir and the test app),
+  // so a pruned bundle must not cost the user the aborted run's carryable work.
+  test("R360: a run whose highest bundle a later run pruned still resumes, under both flags", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    // An aborted run: it published batch 0 and scored one mutant, then quarantined (unfinished).
+    const aborted = new CountingBackend("pass", 1, undefined, true);
+    expect(
+      (await runSession({ backend: aborted, store, ...dirs, selectorIds })).quarantined,
+    ).toBeDefined();
+    const abortedId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    // A later run of the same app on the same (no) server publishes and finishes, which prunes
+    // the older unfinished run's bundle (ruling Q1).
+    await runSession({
+      backend: new CountingBackend("pass", undefined, undefined, true),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(store.trustedArtifactRecord(abortedId, 0)?.bundlePrunedBy).not.toBeNull();
+
+    for (const resume of [abortedId, "last"] as const) {
+      const again = new CountingBackend("pass", undefined, undefined, true);
+      const report = await runSession({ backend: again, store, ...dirs, selectorIds, resume });
+      expect(report.resumedFrom?.runId).toBe(abortedId);
+      expect(report.resumedFrom?.carriedMutants).toBe(1);
+      expect(report.quarantined).toBeUndefined();
+    }
+  });
+
+  test("R360 I4: a resumed run that publishes nothing (every batch carried) passes the end-of-run check", async () => {
+    const dirs = await makeProject();
+    // How many mutants the project has, from a control run.
+    const control = await runSession({
+      backend: new CountingBackend("pass"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    const n = control.mutants.length;
+    expect(n).toBeGreaterThan(1);
+    const store = new ResultsStore(":memory:");
+    // Scores all but the last mutant, then strands it: every mutant then carries on resume.
+    const first = await runSession({
+      backend: new CountingBackend("pass", n - 1, undefined, true),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    const again = new CountingBackend("pass", undefined, undefined, true);
+    const report = await runSession({
+      backend: again,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(again.deploys).toBe(0);
+    expect(report.artifacts ?? []).toEqual([]);
+    expect(report.quarantined).toBeUndefined();
+  });
+
   test("recovers the verdicts an aborted run had already scored, and re-runs only the rest", async () => {
     // The R47 scenario end to end: a run quarantines partway, and the mutants it had already
     // scored are recovered instead of discarded.

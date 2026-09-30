@@ -247,10 +247,11 @@ export type RunManyResult =
     };
 
 /**
- * C02-04b: an installed artifact whose local .app and manifest matched the trusted store record
- * (`loadInstalledArtifact`). Identity comes from that record, never from the caller.
+ * C02-04b: an installed artifact whose stored .app and manifest matched the trusted store record
+ * (`loadInstalledArtifact`; R360: read from the store's bundle, checked against the payload
+ * digest). Identity comes from that record, never from the caller.
  *
- * The local copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
+ * The stored copy is read ONCE, by that preflight, and carried here: `attach` indexes `appBytes`
  * (the bytes whose hash matched) and the sources below, never the files again, so a file changed
  * after the check cannot reach the index. `appPath` and `instrumentedDir` are for messages only.
  */
@@ -317,8 +318,9 @@ export interface ExecutionBackend {
    *   The caller says so, because a check that fails silently reads exactly like a check that
    *   passed.
    * - **`undefined`** — it was never asked, because this configuration cannot form the request at
-   *   all (no server named, no credentials). The caller stays silent: there is no failure to report,
-   *   only a capability that does not apply here.
+   *   all (no server named, no credentials). Check 2 stays silent: there is no failure to report,
+   *   only a capability that does not apply here. R-372: the run then records no test digests
+   *   (`test-digests-unavailable`), since the body the server runs was never seen.
    *
    * Optional for the same reason `undefined` exists: `al-runner` compiles and runs locally, so
    * there is no published app to ask about. Implementations must never throw — a proactive check

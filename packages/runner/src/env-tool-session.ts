@@ -67,7 +67,12 @@ export interface EnvToolSession {
    * Always present; a no-op when no `publishApps` are configured, so callers need not branch.
    */
   publishTestApps(): Promise<void>;
-  teardown(opts: { keepEnv: boolean; quarantined: boolean }): Promise<void>;
+  /**
+   * Deletes a created environment unless it is kept (`keepEnv`, or quarantined). Resolves
+   * `"deleted"` only after a delete that succeeded (R360 I-1: the caller then drops the stored
+   * bundles installed there); anything else means the environment may still exist.
+   */
+  teardown(opts: { keepEnv: boolean; quarantined: boolean }): Promise<"deleted" | undefined>;
 }
 
 /**
@@ -355,6 +360,7 @@ export async function startEnvToolSession(args: {
           return;
         }
         await removeRecordedEnv(stateDir, args.runId);
+        return "deleted";
       },
     };
   } catch (err) {
