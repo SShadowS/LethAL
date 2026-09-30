@@ -118,6 +118,7 @@ import {
   type PublishedApp,
   comparePublishedTestApp,
   parsePublishedApp,
+  publishedAlSources,
   publishedTestAppWarning,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
@@ -4291,27 +4292,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
   // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
   // source a test can reach cannot be read: an unread test is not sent.
-  // R-278: one read of the test sources serves the scan and the per-test digests `lethal verify`
-  // compares against, recorded on the run row below.
+  // R-278: one read of the test sources serves the scan and, where nothing is published (R-372),
+  // the per-test digests `lethal verify` compares against, recorded on the run row below.
   await initParser();
   const testSources = await readTestAppSources(cfg.testDir);
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
     ? scanTestPageSources(testSources, tests)
     : new Map();
-  // R-278: a digest for EVERY discovered test, or none. Discovery is a regex and the digest a
-  // tree-sitter parse; where they disagree the run still measures, records no digests (NULL), and
-  // says so. Only verify reads them, and it refuses such a run by name.
-  let testDigests: Record<string, string> | undefined;
-  try {
-    testDigests = testDigestsOfSources(testSources, tests);
-  } catch (err) {
-    if (!(err instanceof TestDigestError)) throw err;
-    emit({
-      type: "warning",
-      code: "test-digests-unavailable",
-      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${err.message}`,
-    });
-  }
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
@@ -4327,7 +4314,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // the refusal, on the server's own words. See `published-test-app.ts`.
   // R247: it also returns this session's test-app identity, recorded on the run and compared by
   // `--resume` and `--skip-known-survivors`.
-  const testAppHash = await reportPublishedTestApp(cfg, tests, emit);
+  // R-372: the digests come from the same read, so they describe the body the server RUNS.
+  const { testAppHash, testDigests } = await testAppIdentity(cfg, tests, testSources, emit);
 
   const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
@@ -6396,36 +6384,42 @@ async function reportPublishedTestApp(
   cfg: SessionConfig,
   tests: readonly TestMethodRef[],
   emit: RunEmitter,
-): Promise<string | undefined> {
+): Promise<{ testAppHash: string | undefined; sources: PublishedTestSources }> {
   const fetchPackage = cfg.backend.fetchPublishedAppPackage;
   // R247: this session's test-app identity, from the ONE package read this function already makes
   // (`testAppHashFor`'s rule: the package's hash when it was read, `undefined` when the read
   // failed, else the test source tree's hash).
   const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
-  if (fetchPackage === undefined) return sourceHash();
+  const notRead = async () => ({
+    testAppHash: await sourceHash(),
+    sources: { kind: "unavailable", why: NO_PUBLISHED_READ } as const,
+  });
+  if (fetchPackage === undefined) {
+    return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
+  }
 
   let manifest: TestAppManifest;
   try {
     manifest = JSON.parse(await readFile(join(cfg.testDir, "app.json"), "utf8")) as TestAppManifest;
   } catch {
-    return sourceHash();
+    return notRead();
   }
   const { name, publisher, version } = manifest;
   if (typeof name !== "string" || typeof publisher !== "string" || typeof version !== "string") {
-    return sourceHash();
+    return notRead();
   }
 
   const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
   // `undefined` means the backend could not form the request at all — nothing was tried, so there
   // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
-  if (bytes === undefined) return sourceHash();
+  if (bytes === undefined) return notRead();
   if (bytes === null) {
     emit({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
     });
-    return undefined;
+    return { testAppHash: undefined, sources: { kind: "unavailable", why: UNREADABLE } };
   }
   const testAppHash = `package:${hashPackage(bytes)}`;
 
@@ -6438,7 +6432,7 @@ async function reportPublishedTestApp(
       code: "published-test-app-unreadable",
       message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
     });
-    return testAppHash;
+    return { testAppHash, sources: { kind: "unavailable", why: UNREADABLE } };
   }
 
   const message = publishedTestAppWarning(
@@ -6447,7 +6441,75 @@ async function reportPublishedTestApp(
   if (message !== undefined) {
     emit({ type: "warning", code: "published-test-app-mismatch", message });
   }
-  return testAppHash;
+  const files = publishedAlSources(Buffer.from(bytes));
+  return {
+    testAppHash,
+    sources:
+      files.length > 0
+        ? { kind: "published", files }
+        : {
+            kind: "unavailable",
+            why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
+          },
+  };
+}
+
+/** R-372: where the test bodies the server runs can be read, or why they cannot. */
+type PublishedTestSources =
+  /** The backend publishes nothing (al-runner): the source on disk is what runs. */
+  | { readonly kind: "not-published" }
+  /** The published package's own `.al` entries. */
+  | { readonly kind: "published"; readonly files: ReadonlyArray<{ path: string; text: string }> }
+  | { readonly kind: "unavailable"; readonly why: string };
+
+const NO_PUBLISHED_READ =
+  "the published test app could not be requested from the server (no dev server, no dev-endpoint credentials, or no readable test app.json), and the source on disk is not known to be the body it runs";
+const UNREADABLE =
+  "the published test app could not be read, see the published-test-app-unreadable warning";
+
+/**
+ * R139 check 2 plus R-278's digests, from ONE package read. R-372: on a backend that publishes, the
+ * digest is taken from the PUBLISHED source, never from disk: an edit that was not republished
+ * runs its old body, and a digest of the new one would let verify read the edit as measured.
+ * A digest for every discovered test or none (NULL plus `test-digests-unavailable`, which verify
+ * refuses by name). The published texts go out of scope when this returns.
+ */
+async function testAppIdentity(
+  cfg: SessionConfig,
+  tests: readonly TestMethodRef[],
+  diskSources: ReadonlyArray<{ path: string; text: string }>,
+  emit: RunEmitter,
+): Promise<{ testAppHash: string | undefined; testDigests?: Record<string, string> }> {
+  const { testAppHash, sources } = await reportPublishedTestApp(cfg, tests, emit);
+  const none = (why: string) => {
+    emit({
+      type: "warning",
+      code: "test-digests-unavailable",
+      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${why}`,
+    });
+    return { testAppHash };
+  };
+  // An env-tool session publishes `envTool.publishApps`, PREBUILT .app files, only after the lease
+  // is taken, which is after the read above (`afterLeaseAcquiredFor` in cli.ts calls
+  // `publishTestApps` in env-tool-session.ts, which publishes each file as it is). Neither that
+  // read nor the disk is known to be the body the server runs.
+  if (cfg.afterLeaseAcquired !== undefined) {
+    return none(
+      "this run publishes its test apps itself (envTool.publishApps, prebuilt .app files) after the published test app is read, so neither that read nor the source on disk is known to be the body the server runs",
+    );
+  }
+  if (sources.kind === "unavailable") return none(sources.why);
+  try {
+    const files = sources.kind === "published" ? sources.files : diskSources;
+    return { testAppHash, testDigests: testDigestsOfSources(files, tests) };
+  } catch (err) {
+    if (!(err instanceof TestDigestError)) throw err;
+    return none(
+      sources.kind === "published"
+        ? `the published test app does not declare or parse every discovered test (republish it): ${err.message}`
+        : err.message,
+    );
+  }
 }
 
 /**

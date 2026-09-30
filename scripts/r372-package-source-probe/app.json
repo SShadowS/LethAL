@@ -1,0 +1,22 @@
+{
+  "id": "5d0c3b7e-8a51-4f7e-9c2b-372a0f0e7a11",
+  "name": "LethAL R372 Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.1",
+  "brief": "R-372 scratch probe. Not for production use.",
+  "description": "Measures what the dev /packages download carries per resourceExposurePolicy.",
+  "idRanges": [
+    {
+      "from": 79900,
+      "to": 79909
+    }
+  ],
+  "runtime": "13.0",
+  "dependencies": [],
+  "features": [],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  }
+}

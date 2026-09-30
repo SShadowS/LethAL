@@ -100,9 +100,10 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
+import { testDigestsOfSources } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
-import { type VerifyDeps, VerifyError, runVerify } from "../src/verify";
+import { type VerifyDeps, VerifyError, planVerify, runVerify } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -502,6 +503,156 @@ describe("runSession", () => {
       "lethal verify will refuse",
     );
     store.close();
+  });
+
+  // R-372: on a backend that publishes, the recorded digest is the PUBLISHED test body's, since
+  // that is what the server runs. Disk holds a NEW body that was never republished.
+  describe("R-372: test digests from the published test app", () => {
+    const K = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "OverBudgetDetected" };
+    const NEW_AL = TEST_AL.replace("begin\n", "begin\n        Error('now asserts');\n");
+    const pkg = (entries: Record<string, string>) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+        ...entries,
+      });
+    const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+
+    async function r372Run(
+      read: Uint8Array | null | undefined,
+      extra: Partial<SessionConfig> = {},
+      fetch = true,
+    ) {
+      const dirs = await makeProject(NEW_AL);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
+        "IsOverBudget",
+      ]);
+      const backend = fetch
+        ? Object.assign(stub, { fetchPublishedAppPackage: async () => read })
+        : stub;
+      const store = new ResultsStore(":memory:");
+      const events: RunEvent[] = [];
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+        ...extra,
+      });
+      const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+      const digestWarning = events.flatMap((e) =>
+        e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
+      );
+      return { dirs, store, runId, digestWarning };
+    }
+
+    test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
+      const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
+      const recorded = store.testDigests(runId);
+      expect(recorded).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K]) as Record<string, string>,
+      );
+      expect(recorded).not.toEqual(testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]));
+      expect(digestWarning).toEqual([]);
+      const plan = await planVerify({
+        source: {
+          runId,
+          projectPath: dirs.projectDir,
+          artifactSha256: "0".repeat(64),
+          sourceSha256: "5".repeat(64),
+          installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+          identityScheme: IDENTITY_SCHEME,
+          coverageMode: "procedure",
+          targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+        },
+        manifest: {
+          selectorIds,
+          artifactId: "a".repeat(32),
+          mutants: [
+            {
+              mutantId: "M0001",
+              file: "SandboxLogic.Codeunit.al",
+              startIndex: 10,
+              endIndex: 20,
+              startLine: 3,
+              operatorName: "lethal.negate-conditional",
+              operatorVersion: "1.0.0",
+              astHash: "hash-M0001",
+              objectType: "codeunit",
+              codeunitId: 79000,
+              codeunitName: "Sandbox Logic",
+              procedureName: "IsOverBudget",
+              originalText: "a",
+              mutatedText: "b",
+            },
+          ],
+        },
+        sourceBaseline: store.baselineTests(runId),
+        sourceTestDigests: recorded,
+        testDir: dirs.testDir,
+      });
+      expect(store.baselineTests(runId).map((t) => t.method)).toEqual([K.method]);
+      expect(plan.newTests.map((t) => t.method)).toEqual([K.method]);
+      store.close();
+    });
+
+    test("a package with no .al entries records NULL and names the missing source", async () => {
+      const { store, runId, digestWarning } = await r372Run(pkg({}));
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("carries no AL source");
+      expect(digestWarning[0]).toContain("includes its source");
+      store.close();
+    });
+
+    test("a package that lacks a discovered test records NULL and says the published app does not declare it", async () => {
+      const other = TEST_AL.replace("OverBudgetDetected", "SomethingElse");
+      const { store, runId, digestWarning } = await r372Run(
+        pkg({ "src/SandboxTests.Codeunit.al": other }),
+      );
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("published test app does not declare or parse");
+      expect(digestWarning[0]).toContain("Sandbox Tests.OverBudgetDetected");
+      store.close();
+    });
+
+    test("an unreadable package (null) records NULL and points at the unreadable warning", async () => {
+      const { store, runId, digestWarning } = await r372Run(null);
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("published-test-app-unreadable");
+      store.close();
+    });
+
+    test("a request that cannot be formed (undefined) records NULL, never the disk digest", async () => {
+      const { store, runId, digestWarning } = await r372Run(undefined);
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("could not be requested");
+      store.close();
+    });
+
+    // envTool.publishApps are prebuilt .app files published under the lease, AFTER the read.
+    test("an env-tool session (afterLeaseAcquired) records NULL even when the read has source", async () => {
+      const { store, runId, digestWarning } = await r372Run(OLD_PKG, {
+        afterLeaseAcquired: async () => {},
+      });
+      expect(store.testDigests(runId)).toBeNull();
+      expect(digestWarning).toHaveLength(1);
+      expect(digestWarning[0]).toContain("envTool.publishApps");
+      store.close();
+    });
+
+    test("a backend that publishes nothing (al-runner) still records the disk digests", async () => {
+      const { store, runId, digestWarning } = await r372Run(undefined, {}, false);
+      expect(store.testDigests(runId)).toEqual(
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]),
+      );
+      expect(digestWarning).toEqual([]);
+      store.close();
+    });
   });
 
   test("no coverage: uncovered procedure mutants get no-coverage, no runs", async () => {

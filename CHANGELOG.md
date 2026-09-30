@@ -26,7 +26,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   (R-278, R258): an edited covering test gets the new-test double unmutated run and the flakiness
   gate, and an edited test that did not cover the survivor is now run against it. One-time cost:
   `lethal verify` refuses a source run from before this build as `source-predates-verify`; run
-  `lethal run` again, then verify.
+  `lethal run` again, then verify. On bcdev the digest is taken from the PUBLISHED test app, the body
+  the server runs, not from disk (R372); where that source cannot be read the run records none,
+  warns `test-digests-unavailable`, and verify refuses it. al-runner digests the source on disk.
 - **Runs now record the test app they measured against** (R247): `--resume` and `--resume-run`
   refuse by name when the test app changed since the run, a republish that only moved the version
   stamp included. One-time cost: an unfinished run from before this build is refused once, and the

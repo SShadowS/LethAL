@@ -318,8 +318,9 @@ export interface ExecutionBackend {
    *   The caller says so, because a check that fails silently reads exactly like a check that
    *   passed.
    * - **`undefined`** — it was never asked, because this configuration cannot form the request at
-   *   all (no server named, no credentials). The caller stays silent: there is no failure to report,
-   *   only a capability that does not apply here.
+   *   all (no server named, no credentials). Check 2 stays silent: there is no failure to report,
+   *   only a capability that does not apply here. R-372: the run then records no test digests
+   *   (`test-digests-unavailable`), since the body the server runs was never seen.
    *
    * Optional for the same reason `undefined` exists: `al-runner` compiles and runs locally, so
    * there is no published app to ask about. Implementations must never throw — a proactive check
