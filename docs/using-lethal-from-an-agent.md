@@ -548,9 +548,13 @@ Start from the row's `coveringTests` and the mutated span. Prefer a row with
 `executionProven: true`; a `false` one may be no finding at all. `reach: "covered-but-unreached"`
 means a test enters the procedure and never reaches the statement, so it needs a new case rather
 than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
-`flaky` or `red` (for `infra-error`, read both runs first: at least one call failed). Verify runs the covering tests the run recorded plus the tests your edit added,
-so an edit to an existing test that did NOT cover the mutant is never run against it: that is a
-blind spot, not a survival.
+`flaky` or `red` (for `infra-error`, read both runs first: at least one call failed). Verify runs the covering tests the run recorded plus every NEW test: one your edit added, or
+an existing test whose own source (its attributes and its procedure) changed since the run
+(R-278, R258). An edited test gets the same two unmutated runs as an added one. Two blind spots
+remain. An edit to a helper, handler or library procedure the test calls does not make the test
+new (R371): edit the test itself too. And the run recorded each test's source from disk, so a test
+you edited before `lethal run` without republishing the test app ran its OLD body there, and verify
+then reads it as unchanged (R372): republish the test app before `lethal run`.
 
 ### After verify (guidance)
 

@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
+import { initParser } from "@lethal/engine";
+import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
@@ -37,7 +38,8 @@ import {
   TestAppError,
   type TestAppRefusal,
 } from "./test-app-publish";
-import { scanTestPageTests } from "./testpage-scan";
+import { testDigestKey, testDigestsOfSources } from "./test-digest";
+import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
@@ -304,6 +306,29 @@ function installedOf(store: ResultsStore, artifactId: string) {
     instrumentedDir,
   };
   return { rec, sourceSha256, installed };
+}
+
+/**
+ * R261. The selector, control and table ids the INSTALLED build was compiled with, read from its
+ * hash-checked manifest (`writeInstrumentedProject` writes them there). Never the config's: a
+ * source run given `--selector-id` overrides was built with those, and only they validate against
+ * the app.json that made the overrides necessary. A trusted manifest always holds them (they
+ * predate the manifest hash), so a missing or malformed set is refused, never defaulted.
+ */
+export async function installedSelectorIds(
+  store: ResultsStore,
+  artifactId: string,
+): Promise<SelectorConfig> {
+  const { manifest } = await loadInstalledArtifact(store, installedOf(store, artifactId).installed);
+  const ids = (manifest as { selectorIds?: Partial<SelectorConfig> }).selectorIds;
+  const valid = (n: unknown): n is number => Number.isInteger(n) && (n as number) > 0;
+  if (ids === undefined || !valid(ids.selectorId) || !valid(ids.controlId) || !valid(ids.tableId)) {
+    throw new VerifyError(
+      "artifact-files-unusable",
+      `artifact ${artifactId}'s manifest records no valid selector ids (${JSON.stringify(ids)}), so the ids the installed build was made with are unknown; run lethal run again, then verify`,
+    );
+  }
+  return { selectorId: ids.selectorId, controlId: ids.controlId, tableId: ids.tableId };
 }
 
 /**
@@ -591,15 +616,19 @@ export interface VerifyPlan {
  *
  * A survivor a reader marked equivalent is skipped. Every other one runs its source-run covering
  * tests, each matched to the source baseline by `(codeunitId, method)` and required unchanged in
- * the test project, then every new test (not in the source baseline by `testKeyOf`).
+ * the test project, then every new test: not in the source baseline by `testKeyOf`, OR edited
+ * since the source run (R-278/R258: its source digest differs from the one the run recorded).
  */
 export async function planVerify(a: {
   readonly source: VerifySource;
   readonly manifest: MutantManifest;
   readonly sourceBaseline: ReturnType<ResultsStore["baselineTests"]>;
+  /** R-278: the source run's recorded test digests (`store.testDigests`); `null` for a run that
+   *  predates them, which is refused. */
+  readonly sourceTestDigests: Readonly<Record<string, string>> | null;
   readonly testDir: string;
 }): Promise<VerifyPlan> {
-  const { source, manifest, sourceBaseline, testDir } = a;
+  const { source, manifest, sourceBaseline, sourceTestDigests, testDir } = a;
   // An empty target list would return the same `requests: []` as "every target was skipped", and
   // only the second is a real answer. A skipped-all plan always has a non-empty `skipped`.
   if (source.targets.length === 0) {
@@ -661,6 +690,15 @@ export async function planVerify(a: {
     );
   }
 
+  // R-278: "treat every test as edited" would be safe but would run the whole suite against every
+  // survivor, twice unmutated; refusing costs nothing and says what to do.
+  if (sourceTestDigests === null) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded no test digests, either because it predates them or because its test source could not be digested (see that run's test-digests-unavailable warning), so an edited test cannot be told from an unchanged one; run lethal run again, then verify`,
+    );
+  }
+
   const discovered = await discoverTests(testDir);
   const baselineKeys = new Set(
     sourceBaseline.map((r) =>
@@ -671,7 +709,20 @@ export async function planVerify(a: {
   // planned. Throws TestPageScanError on unreadable reachable source, before anything is published.
   // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
   // VERIFY_REFUSALS keeps its value set.
-  const refusedWhy = await scanTestPageTests(testDir, discovered);
+  await initParser();
+  const testSources = await readTestAppSources(testDir);
+  const refusedWhy = scanTestPageSources(testSources, discovered);
+  const digestsNow = testDigestsOfSources(testSources, discovered);
+  const recorded = new Map(Object.entries(sourceTestDigests));
+  // A test the source run recorded no digest for is new: `undefined` is never "unchanged".
+  const isNew = (ref: TestMethodRef) => {
+    const was = recorded.get(testDigestKey(ref));
+    return (
+      !baselineKeys.has(testKeyOf(ref)) ||
+      was === undefined ||
+      was !== digestsNow[testDigestKey(ref)]
+    );
+  };
   const testPageRefused = new Map(
     discovered.flatMap((ref) => {
       const reason = refusedWhy.get(testKeyOf(ref));
@@ -681,10 +732,8 @@ export async function planVerify(a: {
     }),
   );
   const isRefused = (ref: TestMethodRef) => testPageRefused.has(testKeyOf(ref));
-  const newTests = discovered.filter((ref) => !baselineKeys.has(testKeyOf(ref)) && !isRefused(ref));
-  const refusedNew = discovered.filter(
-    (ref) => !baselineKeys.has(testKeyOf(ref)) && isRefused(ref),
-  );
+  const newTests = discovered.filter((ref) => isNew(ref) && !isRefused(ref));
+  const refusedNew = discovered.filter((ref) => isNew(ref) && isRefused(ref));
 
   // Decision 5, ruling 10: a covering NAME picks exactly one source baseline row, and the test
   // project must still hold that row's (codeunitId, method) under the same codeunit name.
@@ -1097,6 +1146,7 @@ export async function runVerify(
       source,
       manifest,
       sourceBaseline: store.baselineTests(source.runId),
+      sourceTestDigests: store.testDigests(source.runId),
       testDir: args.testDir,
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
@@ -1120,6 +1170,10 @@ export async function runVerify(
         identityScheme: source.identityScheme,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
+        // R247: the test app this run measures against, the one it is about to publish. The
+        // publish is accepted only when the server's package hashes to it, so it is the key a later
+        // bcdev session would compute (`package:` + that hash).
+        testAppHash: `package:${compiled.sha256}`,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",
