@@ -6243,6 +6243,18 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /** R249: runs inside `beginPublish`, so a test can change what the server says AFTER the refusal. */
+  onBeginPublish: (() => void) | undefined;
+  /** R249: when set, every status read THROWS it. */
+  statusError: Error | undefined;
+  /**
+   * R249: model the server's op gate on `ReleaseLease`: refuse with `op-in-flight` while the
+   * current marker (the status queue's head) is not idle. Off by default: existing tests seed a
+   * fixed `releaseOutcome`.
+   */
+  releaseGatedOnMarker = false;
+  /** R249: what each `release` call answered, so a test can prove a release really happened. */
+  releaseResults: ReleaseOutcome[] = [];
   /** R361: when set, `recoverOp` THROWS it (after logging the call). */
   recoverError: Error | undefined;
   /** When set, every renew THROWS — a lost ack, which design §6 says is not lease loss. */
@@ -6306,7 +6318,12 @@ class FakeLeaseClient implements LeaseApi {
   async release(_lease: LeaseTuple): Promise<ReleaseOutcome> {
     this.log.push("release");
     this.releaseCalls++;
-    return this.releaseOutcome;
+    const busy = this.releaseGatedOnMarker && (this.statusQueue[0]?.opKind ?? "none") !== "none";
+    const outcome: ReleaseOutcome = busy
+      ? { released: false, reason: "op-in-flight" }
+      : this.releaseOutcome;
+    this.releaseResults.push(outcome);
+    return outcome;
   }
   async beginPublish(
     _lease: LeaseTuple,
@@ -6315,6 +6332,7 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<BeginPublishOutcome> {
     this.log.push("beginPublish");
     this.beginPublishArgs.push({ attemptId, opSeq });
+    this.onBeginPublish?.();
     return this.beginPublishOutcome;
   }
   async endPublish(
@@ -6335,6 +6353,7 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<OperationStatus> {
     this.log.push("status");
     this.statusArgs.push({ attemptId, opSeq });
+    if (this.statusError !== undefined) throw this.statusError;
     if (this.reconcileStatus !== undefined && attemptId !== "") {
       return this.reconcileStatus(attemptId, opSeq);
     }
@@ -12642,6 +12661,9 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     const tlog: string[] = [];
     const fx = await fixture();
     fx.client.beginPublishOutcome = { begun: false, alreadyCompleted: false };
+    fx.client.onBeginPublish = () => {
+      fx.client.renewQueue = [{ renewed: false }];
+    };
     await expect(
       runNamedMutants({
         ...fx.cfg,
@@ -12664,10 +12686,89 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     });
     expect(work).toEqual([]); // no baseline, no mutant
     expect(fx.client.endPublishArgs).toEqual([]);
-    // KNOWN-WRONG, pre-existing LeaseSession behaviour, recorded here and NOT endorsed: every
-    // refused BeginPublish is read as lease loss, so a lease that may still be ours is never
-    // released and is held to its ttl. Tracked as R249 (docs/roadmap/R249.md). When R249 lands,
-    // this becomes 1.
+    // R249: renewed:false right after the refusal proves the tuple is gone, so nothing is released.
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  // R249: the four other answers to a refused BeginPublish. Each stops the session the same way.
+  async function refusedBeginPublish(
+    set: (c: FakeLeaseClient) => void,
+    outcome: BeginPublishOutcome = { begun: false },
+  ) {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.releaseGatedOnMarker = true;
+    fx.client.beginPublishOutcome = outcome;
+    fx.client.onBeginPublish = () => set(fx.client);
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(tlog).toEqual(["read"]); // no altool spawn
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string };
+      return x.call === "run" || x.call === "runMany";
+    });
+    expect(work).toEqual([]);
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; code?: string; message?: string } }).event]
+        : [],
+    );
+    return { fx, events };
+  }
+  const MARKER: OperationStatus = {
+    opKind: "run",
+    opAttemptId: "run-other-attempt",
+    opSeq: 9,
+    lastCompletedOpSeq: 8,
+    completed: false,
+  };
+
+  test("R249: alreadyCompleted is still our lease, so the session stops and the lease is really released", async () => {
+    const { fx } = await refusedBeginPublish(() => {}, { begun: false, alreadyCompleted: true });
+    expect(fx.client.releaseResults).toEqual([{ released: true }]);
+  });
+
+  test("R249: renewed:true and no marker: the session stops and the lease is really released", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+    });
+    expect(fx.client.releaseResults).toEqual([{ released: true }]);
+  });
+
+  test("R249: renewed:true with an active marker keeps the lease and warns with the expiry, the marker and the way out", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+      c.statusQueue = [MARKER];
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+    const kept = events.filter((e) => e.code === "lease-kept-under-marker");
+    expect(kept).toHaveLength(1);
+    const msg = kept[0]?.message ?? "";
+    expect(msg).toContain("2026-07-24T12:05:00.000Z");
+    expect(msg).toContain("opKind run");
+    expect(msg).toContain("opAttemptId run-other-attempt");
+    expect(msg).toContain("lethal doctor --config <path>");
+    expect(msg).toContain(
+      "lethal force-reset-lease --server <url> --instance <name> --config <path>",
+    );
+    expect(await fx.quarantine()).toBeNull();
+  });
+
+  test("R249: a RenewLease probe that throws is treated as loss: no release", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.renewError = new Error("renew unreachable");
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("R249: a GetOperationStatus probe that throws is treated as loss: no release", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.statusError = new Error("status unreachable");
+    });
     expect(fx.client.releaseCalls).toBe(0);
   });
 
