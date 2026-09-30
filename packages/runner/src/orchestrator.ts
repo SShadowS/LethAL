@@ -2350,7 +2350,11 @@ class LeaseSession {
   #ticking = false;
   #stopped = false;
   #lostBatchIndex: number | undefined;
-  /** R249: an owned lease that `finish()` must NOT release, because a marker was set. */
+  /**
+   * R249: an owned lease that `finish()` must NOT release, because a marker was set when a
+   * `BeginPublish` was refused. It skips ONLY the release: `finish()` still reads the marker and
+   * records a recycle for one it owns, since the marker may be our own op stranded by a lost ack.
+   */
   #keepLease = false;
   /** The op seq of this batch's publish, used to re-seed the backend's RunMutant counter. */
   #lastPublishOpSeq: number | undefined;
@@ -2866,7 +2870,7 @@ class LeaseSession {
    */
   async finish(): Promise<void> {
     this.stop();
-    if (this.#lostBatchIndex !== undefined || this.#keepLease) return;
+    if (this.#lostBatchIndex !== undefined) return;
     let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
     try {
       status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
@@ -2899,6 +2903,9 @@ class LeaseSession {
       );
       return;
     }
+    // R249: the marker was set when BeginPublish was refused. It may have cleared since, but the
+    // session already warned that it keeps the lease, and keeping it is the fail-closed side.
+    if (this.#keepLease) return;
     try {
       const released = await this.d.client.release(this.d.lease);
       if (!released.released) {

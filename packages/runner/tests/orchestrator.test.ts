@@ -12743,12 +12743,7 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(fx.client.releaseResults).toEqual([{ released: true }]);
   });
 
-  test("R249: renewed:true with an active marker keeps the lease and warns with the expiry, the marker and the way out", async () => {
-    const { fx, events } = await refusedBeginPublish((c) => {
-      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
-      c.statusQueue = [MARKER];
-    });
-    expect(fx.client.releaseCalls).toBe(0);
+  function expectKeptWarning(events: Array<{ code?: string; message?: string }>): void {
     const kept = events.filter((e) => e.code === "lease-kept-under-marker");
     expect(kept).toHaveLength(1);
     const msg = kept[0]?.message ?? "";
@@ -12759,6 +12754,29 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     expect(msg).toContain(
       "lethal force-reset-lease --server <url> --instance <name> --config <path>",
     );
+  }
+
+  test("R249: an active marker of our own keeps the lease, still records the recycle, and warns", async () => {
+    // finish()'s own RenewLease also answers renewed:true, so the marker is ours: a stranded op.
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+      c.statusQueue = [MARKER];
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+    expectKeptWarning(events);
+    expect(await fx.quarantine()).toMatchObject({ opKind: "container-needs-recycle" });
+  });
+
+  test("R249: an active marker of another session keeps the lease, records nothing, and warns", async () => {
+    // The probe renews, then finish()'s own RenewLease answers renewed:false: the row moved on,
+    // so finish() treats the marker as foreign, exactly as it did before R249.
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }, { renewed: false }];
+      c.statusQueue = [MARKER];
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+    expectKeptWarning(events);
+    expect(events.some((e) => e.code === "lease-marker-foreign")).toBe(true);
     expect(await fx.quarantine()).toBeNull();
   });
 
