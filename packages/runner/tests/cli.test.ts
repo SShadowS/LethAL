@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { describe, expect, spyOn, test } from "bun:test";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
@@ -55,6 +56,7 @@ import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
+import { InstalledBundleError } from "../src/installed-bundle";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -2088,12 +2090,11 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   });
 });
 
-// R358 review C1: `lethal run` KEEPS its scratch folder because the store records the installed
-// batch's `.app` and instrumented folder inside it and `lethal verify` reads them back. Driven
-// through the REAL runFromCli, runSession and verifyFromCli against one store; only the backends
-// are fakes. The verify fake stops at `compileTestApp`, the first backend call after
-// `loadInstalledArtifact`, so reaching it proves verify read the run's files. With the run's
-// scratch folder removed, verify instead prints an `artifact-files-unusable` refusal.
+// R358 review C1, then R360: a clean `lethal run` removes its scratch folder, and `lethal verify`
+// reads the installed batch's files from the store (step 3d's bundle). Driven through the REAL
+// runFromCli, runSession and verifyFromCli against one store; only the backends are fakes. The
+// verify fake stops at `compileTestApp`, the first backend call after `loadInstalledArtifact`, so
+// reaching it with the folder already gone proves verify read the stored files.
 describe("lethal run then lethal verify on one store (R358)", () => {
   class DeployingBackend implements ExecutionBackend {
     capabilities(): BackendCapabilities {
@@ -2129,7 +2130,8 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     }
   }
 
-  test("verify reads the installed batch's files the run left behind", async () => {
+  /** The run/verify fixture on disk: a one-codeunit app, one test codeunit, a bcdev config. */
+  async function writeFixture() {
     const root = scratch("lethal-run-verify-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
@@ -2186,24 +2188,34 @@ describe("lethal run then lethal verify on one store (R358)", () => {
       }),
     );
     const dbPath = join(root, "lethal.sqlite");
-    const report = await runFromCli(
-      {
-        mode: "run",
-        projectDir,
-        testDir,
-        backendKind: "al-runner",
-        dbPath,
-        configPath,
-        skipKnownSurvivors: false,
-        workers: 1,
-        keepEnv: false,
-        allowExpiringEnv: false,
-      },
-      {
-        validateSelectorIdsForProject: async () => {},
-        buildBackend: async () => new DeployingBackend(),
-      },
-    );
+    const runConfig = (): RunCliConfig => ({
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "al-runner",
+      dbPath,
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    });
+    return { testDir, configPath, dbPath, runConfig };
+  }
+
+  /** `lethal-XXXXXX` run folders in this test process's private temp folder (the R358 preload). */
+  const runFolders = () =>
+    new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
+
+  test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
+    const { testDir, configPath, dbPath, runConfig } = await writeFixture();
+    const before = runFolders();
+    const report = await runFromCli(runConfig(), {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () => new DeployingBackend(),
+    });
+    // R360: the clean run removed its scratch folder, so nothing verify reads can come from it.
+    expect([...runFolders()].filter((e) => !before.has(e))).toEqual([]);
     const survivor = report.mutants.find((m) => m.verdict === "survived");
     const artifactId = report.artifacts?.[0]?.artifactId;
     expect(survivor).toBeDefined();
@@ -2244,6 +2256,34 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     expect(printed).toBe("");
     expect(outcome).toBe("R358 fake: verify reached compileTestApp");
     expect(reachedWith).toBe(artifactId);
+  });
+
+  test("R360 I4: a published .app that vanished fails the run by name and keeps its folder", async () => {
+    const { runConfig } = await writeFixture();
+    class VanishingBackend extends DeployingBackend {
+      override async deploy(dir: string): Promise<CompiledArtifact | null> {
+        const compiled = await super.deploy(dir);
+        if (compiled !== null) await rm(compiled.appPath);
+        return compiled;
+      }
+    }
+    const before = runFolders();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const err = await runFromCli(runConfig(), {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () => new VanishingBackend(),
+    }).catch((e: unknown) => e);
+    const warned = warn.mock.calls.map((c) => c.join(" "));
+    warn.mockRestore();
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect((err as Error).message).toContain("fake.app");
+    const kept = [...runFolders()].filter((e) => !before.has(e));
+    expect(kept).toHaveLength(1);
+    expect(
+      warned.some((w) =>
+        w.includes(`[lethal] kept scratch folder ${join(tmpdir(), kept[0] ?? "")}`),
+      ),
+    ).toBe(true);
   });
 });
 

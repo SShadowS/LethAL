@@ -1,5 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import { readdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -22,7 +24,9 @@ import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { EnvToolPublisher } from "../src/env-tool-publisher";
 import type { EnvToolSession } from "../src/env-tool-session";
+import { QuarantineStore } from "../src/quarantine-store";
 import type { SessionReport } from "../src/report";
+import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
@@ -818,6 +822,139 @@ describe("runFromCli (Task 7 review wiring)", () => {
     } finally {
       AlRunnerBackend.prototype.close = originalClose;
     }
+  });
+});
+
+describe("runFromCli owns its scratch folder from mkdtemp on (R360 I2)", () => {
+  /** `lethal-XXXXXX` folders in this test process's private temp folder (the R358 preload). */
+  const runFolders = () =>
+    new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
+  const alRunnerBackend = async () =>
+    new AlRunnerBackend({
+      alRunnerPath: "unused",
+      instrumentedDir: "unused",
+      testDir: "unused",
+      selectorObjectId: 1,
+    });
+  async function drive(
+    over: Partial<RunCliConfig>,
+    deps: Parameters<typeof runFromCli>[1],
+  ): Promise<{ made: string[]; warned: string; err: unknown }> {
+    const before = runFolders();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let err: unknown;
+    try {
+      await runFromCli(
+        {
+          ...RUN_CONFIG_BCDEV,
+          backendKind: "al-runner",
+          configPath: await writeTempConfig(),
+          dbPath: ":memory:",
+          ...over,
+        },
+        { validateSelectorIdsForProject: async () => {}, buildBackend: alRunnerBackend, ...deps },
+      );
+    } catch (e) {
+      err = e;
+    }
+    const warned = warn.mock.calls.map((c) => c.join(" ")).join(String.fromCharCode(10));
+    warn.mockRestore();
+    // Folders this call made that still exist (a kept one), found by difference.
+    const made = [...runFolders()].filter((e) => !before.has(e)).map((e) => join(tmpdir(), e));
+    return { made, warned, err };
+  }
+
+  it("removes the folder after a clean, non-quarantined report", async () => {
+    const { made, err } = await drive({}, { runSession: async () => FAKE_REPORT });
+    expect(err).toBeUndefined();
+    expect(made).toEqual([]);
+  });
+
+  it("keeps and names the folder when the report is quarantined", async () => {
+    const { made, warned } = await drive({}, { runSession: async () => QUARANTINED_FAKE_REPORT });
+    expect(made).toHaveLength(1);
+    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
+  });
+
+  it("keeps and names the folder when the session throws", async () => {
+    const { made, warned, err } = await drive(
+      {},
+      {
+        runSession: async () => {
+          throw new Error("session boom");
+        },
+      },
+    );
+    expect((err as Error).message).toBe("session boom");
+    expect(made).toHaveLength(1);
+    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
+  });
+
+  it("keeps and names the folder when something throws before the session (env-tool resolve)", async () => {
+    const { made, warned, err } = await drive(
+      {},
+      {
+        resolveEnvToolSession: async () => {
+          throw new Error("resolve boom");
+        },
+      },
+    );
+    expect((err as Error).message).toBe("resolve boom");
+    expect(made).toHaveLength(1);
+    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
+  });
+
+  it("keeps and names the folder when the al-runner contract probe throws, before any teardown owner", async () => {
+    const configPath = await writeTempConfig();
+    await writeFile(
+      configPath,
+      JSON.stringify({ alRunner: { alRunnerPath: "C:/nope/al-runner.exe" } }),
+    );
+    const { made, warned, err } = await drive(
+      { configPath },
+      {
+        runAlRunnerContractProbe: async () => {
+          throw new Error("probe boom");
+        },
+      },
+    );
+    expect((err as Error).message).toBe("probe boom");
+    expect(made).toHaveLength(1);
+    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
+  });
+
+  it("keeps the folder when its tier has a durable quarantine record, though the report is clean", async () => {
+    const quarantineDir = scratch("lethal-r360-q-");
+    await new QuarantineStore(quarantineDir).record({
+      resourceKey: quarantineResourceKey({
+        server: RESOLVED_BCDEV.server,
+        serverInstance: RESOLVED_BCDEV.serverInstance,
+      }),
+      opKind: "publish",
+      detail: "left for a recycle",
+      recordedAtIso: "2026-09-30T00:00:00.000Z",
+    });
+    const { made, warned } = await drive(
+      { backendKind: "bcdev" },
+      {
+        quarantineDir,
+        resolveEnvToolSession: async () => ({ effectiveConfig: { bcdev: RESOLVED_BCDEV } }),
+        runSession: async () => FAKE_REPORT,
+      },
+    );
+    expect(made).toHaveLength(1);
+    expect(warned).toContain(`[lethal] kept scratch folder ${made[0]}`);
+    // Control: the same bcdev run with no record removes it.
+    const clean = await drive(
+      { backendKind: "bcdev" },
+      {
+        quarantineDir: scratch("lethal-r360-q-"),
+        resolveEnvToolSession: async () => ({ effectiveConfig: { bcdev: RESOLVED_BCDEV } }),
+        runSession: async () => FAKE_REPORT,
+      },
+    );
+    expect(clean.err).toBeUndefined();
+    expect(clean.made).toEqual([]);
   });
 });
 
