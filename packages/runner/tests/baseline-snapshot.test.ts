@@ -205,11 +205,11 @@ describe("ResultsStore baseline snapshots (R192)", () => {
       testAppHash: "package:t",
       baseline: [{ ref, verdict: { ref, outcome: "pass", durationMs: 34 } }],
     });
-    const found = store.findBaselineSnapshot("b", "package:t");
+    const found = store.findBaselineSnapshot("b", "package:t", "procedure");
     expect(found?.runId).toBe(id);
     expect(found?.baseline[0]?.verdict.durationMs).toBe(34);
-    expect(store.findBaselineSnapshot("b", "package:other")).toBeNull();
-    expect(store.findBaselineSnapshot("other", "package:t")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:other", "procedure")).toBeNull();
+    expect(store.findBaselineSnapshot("other", "package:t", "procedure")).toBeNull();
   });
 
   // R318 (final review I1): R318 leaves the emitted AL byte-identical, so a run of the previous
@@ -237,11 +237,23 @@ describe("ResultsStore baseline snapshots (R192)", () => {
 
   test("R318: a snapshot recorded at the current identity scheme is reused", () => {
     const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
-    expect(store.findBaselineSnapshot("b", "package:t")?.runId).toBe(id);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
   });
 
   test("R318: a snapshot recorded at the previous identity scheme is NOT reused", () => {
     const { store } = snapshotAtScheme(IDENTITY_SCHEME - 1);
-    expect(store.findBaselineSnapshot("b", "package:t")).toBeNull();
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
+  });
+
+  // R354 run 002: a snapshot is reused only by a session of the run's own coverage mode, and a run
+  // from before R354 (NULL) matches no mode.
+  test("R354: a snapshot is found only under its run's coverage mode; NULL matches none", () => {
+    const { store, id } = snapshotAtScheme(IDENTITY_SCHEME);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")?.runId).toBe(id);
+    for (const other of ["none", "line", "fenced", "al-runner"] as const) {
+      expect(store.findBaselineSnapshot("b", "package:t", other)).toBeNull();
+    }
+    store.db.run("UPDATE runs SET coverage_mode = NULL WHERE id = ?", [id]);
+    expect(store.findBaselineSnapshot("b", "package:t", "procedure")).toBeNull();
   });
 });

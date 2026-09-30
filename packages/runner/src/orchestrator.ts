@@ -3590,7 +3590,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     );
     const reusable =
       allowReuse && testAppHash !== undefined
-        ? store.findBaselineSnapshot(batchHash, testAppHash)
+        ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
         : null;
     reused = snapshotApplies(reusable, batchHash, testAppHash) ? reusable : undefined;
     // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so

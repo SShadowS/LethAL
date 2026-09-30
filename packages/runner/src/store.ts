@@ -1047,16 +1047,23 @@ export class ResultsStore {
    * identity scheme, or null. R318: a scheme bump can leave the emitted AL byte-identical while
    * changing how coverage is attributed, so an older scheme's snapshot matches both hashes but
    * carries the old attribution. It is never reused.
+   * R354: and only from a run of the SAME coverage mode. A snapshot holds the green tests and the
+   * coverage the batch's mutants are selected by, measured under its run's mode; another mode's
+   * (or a pre-R354 run's, NULL) would select them by another rule. `=` never matches NULL.
    */
-  findBaselineSnapshot(batchHash: string, testAppHash: string): BaselineSnapshot | null {
+  findBaselineSnapshot(
+    batchHash: string,
+    testAppHash: string,
+    coverageMode: CoverageMode,
+  ): BaselineSnapshot | null {
     const row = this.db
       .query(
         `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
          WHERE batch_hash = ? AND test_app_hash = ?
-           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ?)
+           AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ? AND coverage_mode = ?)
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(batchHash, testAppHash, IDENTITY_SCHEME) as {
+      .get(batchHash, testAppHash, IDENTITY_SCHEME, coverageMode) as {
       run_id: number;
       batch_index: number;
       batch_hash: string;

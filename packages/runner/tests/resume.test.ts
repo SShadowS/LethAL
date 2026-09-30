@@ -2172,6 +2172,66 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
     expect(warningsOf(events)).toHaveLength(1);
   });
 
+  // Run 002: a resumed batch with work left may reuse a baseline snapshot, found by its source and
+  // test-app hashes from ANY run. A newer run under another mode on the same source records one
+  // too; it must not be used, or the resumed run selects its mutants' tests with that mode's
+  // baseline and coverage. Run A (mode `a`) aborts in batch 1 after its baseline, run B (mode `b`)
+  // finishes on the same source, then A resumes: batch 1 reuses A's own snapshot, never B's.
+  for (const [a, b] of [
+    ["procedure", "none"],
+    ["none", "procedure"],
+  ] as const) {
+    test(`a resumed ${a} run never reuses a newer ${b} run's baseline snapshot`, async () => {
+      const dirs = await makeProject({ secondFile: true });
+      const store = new ResultsStore(":memory:");
+      const runA = await runSession({
+        backend: new CountingBackend("pass", undefined, 2, false, a),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(runA.quarantined).toBeDefined();
+      const runB = await runSession({
+        backend: new CountingBackend("pass", undefined, undefined, false, b),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(runB.quarantined).toBeUndefined();
+      const ids = store.db.query("SELECT id, coverage_mode FROM runs ORDER BY id").all() as Array<{
+        id: number;
+        coverage_mode: string;
+      }>;
+      expect(ids.map((r) => r.coverage_mode)).toEqual([a, b]);
+      const [idA, idB] = ids.map((r) => r.id);
+      // B's snapshot for batch 1 exists and is the newer one: the unguarded query returns it.
+      const snaps = store.db
+        .query("SELECT run_id FROM baseline_snapshots WHERE batch_index = 1 ORDER BY id")
+        .all() as Array<{ run_id: number }>;
+      expect(snaps.map((s) => s.run_id)).toEqual([idA, idB]);
+
+      const events: RunEvent[] = [];
+      const resumed = await runSession({
+        backend: new CountingBackend("pass", undefined, undefined, false, a),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+        resume: "last",
+        emit: [(e) => events.push(e)],
+      });
+      expect(resumed.resumedFrom?.runId).toBe(idA);
+      const reused = events.flatMap((e) =>
+        e.type === "warning" && e.code === "resume-baseline-reused" ? [e.message] : [],
+      );
+      expect(reused).toHaveLength(1);
+      expect(reused[0]).toContain(`same as run ${idA}'s batch 1`);
+      expect(reused[0]).not.toContain(`run ${idB}'s`);
+    });
+  }
+
   // R252's shape `explain` refuses: a survivor with no attribution in a coverage-on report. A
   // resume from a coverage-off run is where one would come from: R192 records a batch whose every
   // mutant carries with the PRIOR run's attribution, which coverage off never set. So batch 0 is
@@ -2204,14 +2264,9 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
       (report) => report,
       (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
     );
-    const unattributed =
-      attempt instanceof Error
-        ? []
-        : attempt.mutants.filter(
-            (m) => m.verdict === "survived" && m.coverageAttribution === undefined,
-          );
-    expect(unattributed.map((m) => `${m.batchIndex}/${m.mutantCode}`)).toEqual([]);
+    // Refused before anything ran: no deploy, no baseline, no mutant, so nothing was carried.
     expect(attempt).toBeInstanceOf(Error);
+    expect([onBackend.deploys, onBackend.baselineRuns, onBackend.mutantRuns]).toEqual([0, 0, 0]);
     expect(attempt instanceof Error ? attempt.message : "").toMatch(
       /^--resume found an unfinished run for this project and backend, run \d+, but it was measured under coverage mode none, and this session measures under coverage mode procedure\. .*\(R354\)\. Drop --resume to run from scratch\.$/,
     );
