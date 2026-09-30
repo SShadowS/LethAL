@@ -10,19 +10,39 @@ export type SpawnFn = (
   opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
 ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
+/**
+ * R237: `Bun.spawn` threw, so no process was ever created. Measured on Windows (Bun 1.3.14, see
+ * the R237 roadmap item): a missing path, a bare name not on PATH, a non-executable file, a
+ * directory, a file that is not a PE image and a missing `cwd` ALL throw synchronously from
+ * `Bun.spawn` with no pid, under several codes (ENOENT, EUNKNOWN), while a started process that is
+ * killed, exits non-zero or prints anything always RETURNS. So the boundary is "`Bun.spawn`
+ * threw", never an error code. The message is `describeThrown(cause)`, so a caller that prints it
+ * reads exactly what it read before this class existed. Extends `Error` directly.
+ */
+export class ProcessNotStartedError extends Error {
+  constructor(cause: unknown) {
+    super(describeThrown(cause), { cause });
+  }
+}
+
 const bunSpawn: SpawnFn = async (argv, opts) => {
   // Bun.spawn supports `signal` natively (kills the child with SIGTERM when
   // the AbortSignal fires) — no manual proc.kill() wiring needed.
-  const proc = Bun.spawn([...argv], {
-    stdout: "pipe",
-    stderr: "pipe",
-    ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
-    // Bun.spawn's `env`, when given, REPLACES the child's environment rather than merging
-    // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
-    // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
-    ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
-    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
-  });
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    proc = Bun.spawn([...argv], {
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+      // Bun.spawn's `env`, when given, REPLACES the child's environment rather than merging
+      // with process.env (unlike leaving it unset, which fully inherits) — merge explicitly so
+      // adding credentials for altool doesn't drop PATH/SystemRoot/etc. that alc/altool need.
+      ...(opts?.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
+      ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    });
+  } catch (err) {
+    throw new ProcessNotStartedError(err);
+  }
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),

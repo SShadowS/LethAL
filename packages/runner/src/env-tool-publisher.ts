@@ -1,9 +1,11 @@
+import type { PublishIdentity } from "./app-version";
 import { ArtifactPrepareError } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import { describeThrown } from "./describe-error";
 import type { EnvToolBlock, EnvToolClient } from "./env-tool";
 import { EnvToolError } from "./env-tool";
 import { serializePublish } from "./publish-serializer";
+import { readAppIdentity } from "./published-test-app";
 import type { AppPublisher } from "./publisher";
 
 export interface EnvToolPublisherIo {
@@ -80,6 +82,18 @@ export class EnvToolPublisher implements AppPublisher {
             `[lethal] ${appPath} is already published on env ${this.ctx.envId} (same package ID) — skipping`,
           );
           return;
+        }
+        // R250: name the app this publish tried to install, so the fence can tell BC's downgrade
+        // refusal of THIS package from a message that only quotes the phrase.
+        if (err instanceof EnvToolError && err.publishing === undefined) {
+          let publishing: PublishIdentity | undefined;
+          try {
+            const { name, publisher, version } = readAppIdentity(Buffer.from(bytes));
+            publishing = { name, publisher, version };
+          } catch {
+            // Not a readable app package: no identity, so no refusal can be confirmed.
+          }
+          if (publishing !== undefined) throw new EnvToolError(err.message, publishing);
         }
         throw err;
       }

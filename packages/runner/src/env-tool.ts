@@ -1,5 +1,6 @@
+import type { PublishIdentity } from "./app-version";
 import { describeThrown } from "./describe-error";
-import { defaultSpawn } from "./publisher";
+import { ProcessNotStartedError, defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -98,7 +99,37 @@ export interface EnvToolConfigSection {
  * "this source subset does not compile" and aborts on everything else (orchestrator.ts). A broken
  * tool invocation must land in the abort branch, never be mistaken for a compile verdict.
  */
-export class EnvToolError extends Error {}
+export class EnvToolError extends Error {
+  /**
+   * R250: the app a failed publish tried to install, when the thrower knows it, so the
+   * publication fence can check BC's downgrade sentence against THIS app (see
+   * `confirmedDowngradeRefusal`) instead of trusting a quoted phrase.
+   */
+  constructor(
+    message: string,
+    readonly publishing?: PublishIdentity,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * R237: the tool process never started (`Bun.spawn` threw, see `ProcessNotStartedError`), so
+ * nothing reached the environment. Extends `Error` DIRECTLY, never `EnvToolError`: the publication
+ * fence reads this as a confirmed pre-publish failure, while every `EnvToolError` stays a publish
+ * whose result is unknown. A started tool that was killed, timed out or failed is never this.
+ */
+export class EnvToolNotStartedError extends Error {
+  constructor(
+    message: string,
+    readonly toolPath: string,
+    /** The rendered command, redacted. */
+    readonly command: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+  }
+}
 
 /** Placeholders LethAL supplies. A `vars` key may not shadow one of these. */
 export const LETHAL_PLACEHOLDERS = [
@@ -730,9 +761,16 @@ export class EnvToolClient {
       // path reported "failed to run: " and nothing else — on the one path where the tool path is
       // supplied by the user's own config and therefore most likely to be wrong. Still redacted:
       // `describeThrown` widens WHAT is reported, never who may read it.
-      throw new EnvToolError(
-        `envTool.${name}: ${shown} failed to run: ${redact(describeThrown(err), this.secrets)}`,
-      );
+      const detail = redact(describeThrown(err), this.secrets);
+      if (err instanceof ProcessNotStartedError) {
+        throw new EnvToolNotStartedError(
+          `envTool.${name}: ${shown} failed to run (the process never started): ${detail}`,
+          this.cfg.toolPath,
+          shown,
+          err,
+        );
+      }
+      throw new EnvToolError(`envTool.${name}: ${shown} failed to run: ${detail}`);
     } finally {
       clearTimeout(timer);
     }

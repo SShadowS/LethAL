@@ -2,7 +2,8 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listPackageEntries, readPackageEntry } from "./app-package";
-import { compareAppVersions, parseVersionConflict } from "./app-version";
+import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
+import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
 import type { BoundArtifact } from "./backend";
 import { hashPackage } from "./baseline-snapshot";
@@ -353,13 +354,13 @@ export async function publishTestApp(
         : hashPackage(afterBytes) === app.sha256
           ? { status: "accepted" }
           : { status: "mismatch", reported: hashPackage(afterBytes) };
-    const outcome = decideTestAppOutcome(publishError, verification);
+    const outcome = decideTestAppOutcome(publishError, verification, app);
     if (outcome !== "accepted" || afterBytes === undefined) {
       throw new TestAppError(
         // "accepted" here only narrows the type: accepted implies afterBytes is defined.
         `publish-${outcome === "accepted" ? "indeterminate" : outcome}`,
         describeOutcome(publishError, verification, app),
-        parseVersionConflict(publishError ?? "") ?? undefined,
+        confirmedDowngradeRefusal(publishError ?? "", app) ?? undefined,
       );
     }
     // Inside the fence the bytes landed, so a parse failure leaves the result unstated: it must be
@@ -390,17 +391,19 @@ export async function publishTestApp(
  * - An UNAVAILABLE read-back is unknown, never failed: `null` from fetchPublishedAppPackage is a
  *   timeout or a refused connection, which cannot show the publish did not land.
  * - A READABLE read-back that is not our bytes is `failed` only when the failure text itself
- *   proves BC refused the publish (BC's downgrade refusal, read by `parseVersionConflict`).
+ *   proves BC refused THIS publish (BC's downgrade sentence naming this app, publisher and
+ *   version, read by `confirmedDowngradeRefusal`, R250).
  *   Otherwise it is unknown: altool may have lost its response after dispatch while BC is still
  *   applying the publish, and one immediate read of the old bytes cannot rule that out.
  */
 export function decideTestAppOutcome(
   publishError: string | undefined,
   verification: DeploymentVerification,
+  app: PublishIdentity,
 ): PublishOutcome {
   if (publishError !== undefined && verification.status === "unavailable") return "indeterminate";
   const outcome = decidePublishOutcome(publishError === undefined, verification);
-  if (outcome === "failed" && parseVersionConflict(publishError ?? "") === null) {
+  if (outcome === "failed" && confirmedDowngradeRefusal(publishError ?? "", app) === null) {
     return "indeterminate";
   }
   return outcome;
