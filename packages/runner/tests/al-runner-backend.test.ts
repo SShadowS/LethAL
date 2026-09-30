@@ -205,6 +205,105 @@ describe("AlRunnerBackend artifact identity", () => {
   });
 });
 
+// R349. One backend deploys every batch of a session, and each batch instruments a different set
+// of files, so the same file's line numbers move between deploys. Found by the code lane at R-318
+// review: the coverage index was built once per backend and never dropped, so batch 2's lines were
+// read through batch 1's text.
+describe("AlRunnerBackend: a deploy() drops everything built from the previous layout (R349)", () => {
+  const probeCodeunit = (pad: number) => `codeunit 79150 "Probe One"
+{
+${"    // pad\n".repeat(pad)}    procedure Reached()
+    begin
+        exit;
+    end;
+
+    procedure Other()
+    begin
+        exit;
+    end;
+}
+`;
+
+  async function batchDir(pad: number): Promise<string> {
+    const d = await mkdtemp(join(tmpdir(), "lethal-r349-batch-"));
+    await writeFile(join(d, "One.Codeunit.al"), probeCodeunit(pad), "utf8");
+    await writeFile(
+      join(d, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "a".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    await writeFile(join(d, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    return d;
+  }
+
+  /** A fake al-runner that passes the test and reports ONE covered line, the one it is told. */
+  function coveringSpawn(line: () => number): SpawnFn {
+    return async (argv) => {
+      const o = argv.indexOf("--coverage-out");
+      const out = o >= 0 ? argv[o + 1] : undefined;
+      if (out !== undefined) {
+        await writeFile(
+          out,
+          `<coverage><packages><package><classes><class name="x" filename="One.Codeunit.al"><lines><line number="${line()}" hits="1"/></lines></class></classes></package></packages></coverage>`,
+          "utf8",
+        );
+      }
+      return {
+        exitCode: 0,
+        stdout: alRunnerStdout({
+          tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+          passed: 1,
+          failed: 0,
+          errors: 0,
+          total: 1,
+          exitCode: 0,
+        }),
+        stderr: "",
+      };
+    };
+  }
+
+  async function coveredProcedures(
+    redeploy: (b: AlRunnerBackend, dir: string) => Promise<unknown>,
+  ): Promise<{ first: string[]; second: string[] }> {
+    let line = 0;
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: await mkdtemp(join(tmpdir(), "lethal-r349-work-")),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      coveringSpawn(() => line),
+    );
+    const procs = (v: { coverage?: { entries: readonly { procedure?: string }[] } }) =>
+      (v.coverage?.entries ?? []).map((e) => e.procedure ?? "<none>");
+    // Batch 1, no shift: line 5 is `exit;` inside Reached.
+    await redeploy(backend, await batchDir(0));
+    line = 5;
+    const first = procs(await backend.run(ref, { coverage: "none", timeoutMs: 5000 }));
+    // Batch 2, the same file four lines further down: Reached's `exit;` is now line 9, which in
+    // batch 1's text was inside Other.
+    await redeploy(backend, await batchDir(4));
+    line = 9;
+    const second = procs(await backend.run(ref, { coverage: "none", timeoutMs: 5000 }));
+    return { first, second };
+  }
+
+  test("deploy(): batch 2's coverage is read through batch 2's text", async () => {
+    const { first, second } = await coveredProcedures((b, d) => b.deploy(d));
+    expect(first).toEqual(["Reached"]);
+    expect(second).toEqual(["Reached"]);
+  });
+
+  test("compileCheck() is a redeploy too, and drops the index the same way", async () => {
+    const { first, second } = await coveredProcedures((b, d) => b.compileCheck(d));
+    expect(first).toEqual(["Reached"]);
+    expect(second).toEqual(["Reached"]);
+  });
+});
+
 describe("AlRunnerBackend.compileCheck", () => {
   // al-runner has no publish step of its own — deploy() is already just a local file copy, and
   // the actual `alc` invocation happens lazily inside run(), per test. So bisection's
@@ -717,6 +816,31 @@ describe("AlRunnerBackend serverMode (R220)", () => {
       { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" },
       { coverage: "none", timeoutMs: 1000 },
     );
+    expect(runs()).toBe(2);
+    await backend.close();
+  });
+
+  test("deploy() DROPS the suite cache too, so batch 2 is never answered from batch 1's run (R349)", async () => {
+    const { backend, runs, dir } = await serverBackend([
+      { name: "Codeunit79100.A", status: "pass" },
+    ]);
+    const a = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
+    const batch = async (): Promise<string> => {
+      const d = await mkdtemp(join(dir, "batch-"));
+      await writeFile(join(d, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+      await writeFile(
+        join(d, "mutant-manifest.json"),
+        JSON.stringify({ artifactId: "b".repeat(32), mutants: [] }),
+        "utf8",
+      );
+      return d;
+    };
+    await backend.deploy(await batch());
+    await backend.run(a, { coverage: "none", timeoutMs: 1000 });
+    expect(runs()).toBe(1);
+    // No activate() in between, deliberately: the cache must not depend on the caller making one.
+    await backend.deploy(await batch());
+    await backend.run(a, { coverage: "none", timeoutMs: 1000 });
     expect(runs()).toBe(2);
     await backend.close();
   });
