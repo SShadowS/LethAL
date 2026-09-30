@@ -83,3 +83,7 @@ codes and add it there if so.
 difference is a change, fenced against procedure included, not only off against on: a verdict
 scored under one attribution rule is not evidence under another. (2) `lethal verify` records its
 OWN backend's mode on the run it creates, because that is what the run it records actually used.
+
+## Approved 2026-09-30 (c188b768)
+
+Both controller rulings confirmed. Addition for (2): when verify's mode differs from its SOURCE run's recorded mode, or the source's is NULL, verify's output says so by name, since a `no-coverage` verdict in the source is not comparable across modes. Verify REFUSES if its logic depends on the source's coverage facts; otherwise it WARNS. The note says which, with a test. CHANGELOG gains one line: unfinished runs from before R354 are refused once, and the next `--skip-known-survivors` skips nothing once.
