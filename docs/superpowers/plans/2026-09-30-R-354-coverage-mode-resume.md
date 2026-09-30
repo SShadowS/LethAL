@@ -78,3 +78,8 @@ restored and reported.
 No change to the report schema or `explain`: R252 already records `coverageMode`. The new
 warning code is an event string only; check whether `events.ts` keeps a closed list of warning
 codes and add it there if so.
+
+**Controller rulings on the plan's open points (to confirm in review):** (1) ANY coverage-mode
+difference is a change, fenced against procedure included, not only off against on: a verdict
+scored under one attribution rule is not evidence under another. (2) `lethal verify` records its
+OWN backend's mode on the run it creates, because that is what the run it records actually used.
