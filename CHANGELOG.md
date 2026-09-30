@@ -13,6 +13,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal run` removes its temp scratch folder after a clean run** (R360): the installed
+  batch's files now live in the results database, checked against a digest of the instrumented
+  payload, so `lethal verify` refuses a run recorded before this build ("recorded before R360"):
+  run `lethal run` again, then verify. A run that throws or is quarantined keeps its folder and
+  names it. A finishing run prunes older runs' stored files for the same app on the same server,
+  and verify names the run that replaced them; `--resume` refuses a run whose files were pruned.
+- **The run's own outputs are no longer copied into each batch build** (R363): the results
+  database with its sidecars, `--out` and `--progress-out`.
 - **Runs now record their coverage mode** (R354): an unfinished run from before this build is
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an

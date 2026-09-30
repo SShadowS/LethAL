@@ -338,8 +338,8 @@ CREATE TABLE IF NOT EXISTS batch_artifacts (
   -- C02-04b: SHA-256 of JSON.stringify(the manifest the compiler was given). NULL on a row written
   -- before the column existed, which trustedArtifactRecord's callers refuse rather than trust.
   manifest_sha256 TEXT,
-  -- C02-06: where step 3d's compiled package and batch dir are, for lethal verify. Not identity:
-  -- verify re-hashes the files against the row. NULL on an older row, which verify refuses.
+  -- C02-06: where step 3d found the compiled package and batch dir. Provenance only since R360:
+  -- verify reads the stored bundle (installed_bundles), never these paths.
   app_path TEXT,
   instrumented_dir TEXT,
   PRIMARY KEY (run_id, batch_index)

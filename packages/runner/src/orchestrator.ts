@@ -4924,8 +4924,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           // C02-04b: the manifest the compiler was GIVEN, in the same insert as the .app hash.
           // This is the only moment both are in hand; loadInstalledArtifact trusts nothing else.
           manifestSha256: Bun.SHA256.hash(JSON.stringify(compiled.mutantManifest), "hex"),
-          // C02-06: where lethal verify finds the installed build's files. Not identity: verify
-          // re-hashes them against this row.
+          // C02-06: where step 3d found the build. Provenance only since R360: verify reads the
+          // stored bundle above, checked against its payload digest.
           appPath: compiled.appPath,
           instrumentedDir: batchDir,
         });
