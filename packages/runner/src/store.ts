@@ -1043,25 +1043,6 @@ export class ResultsStore {
   }
 
   /**
-   * R360 resume ruling: the run that pruned `runId`'s highest recorded batch's bundle, or `null`
-   * when no other run pruned it (or the run recorded no batch).
-   */
-  highestBundlePrunedBy(
-    runId: number,
-  ): { readonly prunedBy: number; readonly resourceKey: string | null } | null {
-    const row = this.db
-      .query(
-        "SELECT b.bundle_pruned_by, r.resource_key FROM batch_artifacts b " +
-          "JOIN runs r ON r.id = b.run_id WHERE b.run_id = ? ORDER BY b.batch_index DESC LIMIT 1",
-      )
-      .get(runId) as { bundle_pruned_by: number | null; resource_key: string | null } | null;
-    if (row === null || row.bundle_pruned_by === null || row.bundle_pruned_by === runId) {
-      return null;
-    }
-    return { prunedBy: row.bundle_pruned_by, resourceKey: row.resource_key };
-  }
-
-  /**
    * C02-04b: the record LethAL wrote when it held both the manifest and the .app bytes, for one
    * batch. `null` when no such batch was recorded. `manifestSha256` is `null` on a row written
    * before that column existed; the caller must refuse it, not trust it by default. `appId` is

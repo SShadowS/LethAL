@@ -159,7 +159,7 @@ import {
   describeStaleTestApp,
   isRunMutantLineCountMessage,
 } from "./stale-test-app";
-import { PRUNED_BY_ENV_TEARDOWN, type ResultsStore } from "./store";
+import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, testDigestsOfSources } from "./test-digest";
@@ -3222,20 +3222,11 @@ function resolveResume(
     priorRunId = cfg.resume;
   }
 
-  // R360 ruling: a later run of the same app on the same server finished and pruned this run's
-  // installed bundle, so the server no longer holds what this run published. Refused here, before
-  // anything is deployed, rather than resumed against a build that is gone.
-  const pruned = cfg.store.highestBundlePrunedBy(priorRunId);
-  if (pruned !== null) {
-    const flag = cfg.resume === "last" ? "--resume" : "--resume-run";
-    const why =
-      pruned.prunedBy === PRUNED_BY_ENV_TEARDOWN
-        ? "its environment was deleted at teardown"
-        : `run ${pruned.prunedBy} finished (same app, ${pruned.resourceKey === null ? "no recorded server" : "same server"})`;
-    throw new Error(
-      `${flag}: run ${priorRunId}'s installed bundle was pruned by run ${pruned.prunedBy} when ${why}, so the build run ${priorRunId} published is no longer the one installed: bundle pruned by run ${pruned.prunedBy}; re-run without ${flag} (R360).`,
-    );
-  }
+  // R360 (review r1 #3): no pruned-bundle check here. Nothing on the resume path reads the prior
+  // run's installed .app or stored bundle: `resolveResume` reads its verdict rows,
+  // `replayCarriedBatch` records carried verdicts from them, and snapshot reuse
+  // (`findBaselineSnapshot`) keys on the CURRENT batch dir's hash and the test app. A batch with
+  // work left is rebuilt and republished. `lethal verify` keeps its refusal.
 
   const { index, dropped: refusedDropped } = withoutRefusedTests(
     buildResumeIndex(cfg.store.mutantVerdicts(priorRunId), cfg.stopHungSessions === true),
