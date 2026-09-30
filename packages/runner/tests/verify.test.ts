@@ -696,6 +696,21 @@ describe("planVerify", () => {
     expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::M", "50100::K"]);
   });
 
+  // A non-NULL map that lacks a discovered test's key must never read as "unchanged".
+  test("R-278: a baseline test with no recorded digest in a non-NULL map is new", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
+    const recorded = await recordedOver(codeunits);
+    const { "50100::k": _dropped, ...withoutK } = recorded;
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+      sourceTestDigests: withoutK,
+      testDir: testDir(codeunits),
+    });
+    expect(keys(plan.newTests)).toEqual(["50100::K"]);
+  });
+
   test("R-278: an unchanged test in the source baseline is not new", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
     const plan = await planVerify({

@@ -21,6 +21,15 @@ import { readTestAppSources } from "./testpage-scan";
 export const testDigestKey = (ref: { codeunitId: number; method: string }): string =>
   `${ref.codeunitId}::${ref.method.toLowerCase()}`;
 
+/** A discovered test the parser found no declaration for. Its own class so `runSession` can catch
+ *  exactly this and nothing else: the run goes on without digests, and verify refuses it later. */
+export class TestDigestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TestDigestError";
+  }
+}
+
 const NAME_KINDS = new Set(["identifier", "quoted_identifier"]);
 /** Trivia that may sit between a procedure's attributes, or between them and the procedure. */
 const TRIVIA = new Set(["comment", "multiline_comment", "pragma"]);
@@ -47,7 +56,7 @@ function spanOf(source: string, proc: ALSyntaxNode): string {
   return source.slice(start, proc.endIndex);
 }
 
-/** Every discovered test's digest, by `testDigestKey`. Throws when the parser finds no declaration
+/** Every discovered test's digest, by `testDigestKey`: all of them or, by throwing, none. Throws when the parser finds no declaration
  *  for a discovered test: an undigested test would read as unchanged or as missing, never loudly. */
 export function testDigestsOfSources(
   files: ReadonlyArray<{ path: string; text: string }>,
@@ -72,7 +81,7 @@ export function testDigestsOfSources(
       .filter((p) => p.id === t.codeunitId && p.name === normalizeAlName(t.method))
       .map((p) => normalize(p.span));
     if (spans.length === 0) {
-      throw new Error(
+      throw new TestDigestError(
         `test-digest.ts: ${t.codeunitName}.${t.method} (codeunit ${t.codeunitId}) was discovered, but the parser found no procedure of that name to digest`,
       );
     }

@@ -465,6 +465,41 @@ describe("runSession", () => {
     expect(report.mutationScore).toBe(0);
   });
 
+  // R-278 fix round 1: discovery (a regex) finds a test the digest's parser cannot. The run still
+  // measures; it records NO digests (NULL, never a partial map) and says so in a warning.
+  test("R-278: a test the digest cannot parse leaves the run's digests NULL, warns, and the run completes", async () => {
+    const dirs = await makeProject();
+    await Bun.write(
+      join(dirs.testDir, "Broken.Codeunit.al"),
+      'codeunit 50190 "Broken Tests"\n{\n    Subtype = Test;\n    [Test]\n    procedure A(\n    begin\n    end;\n}\n',
+    );
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      (mutant) => (mutant === null ? "pass" : "fail"),
+    );
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(report.counts.killed).toBeGreaterThan(0);
+    const [run] = store.db.query("SELECT id FROM runs").all() as Array<{ id: number }>;
+    if (run === undefined) throw new Error("no run row");
+    expect(store.testDigests(run.id)).toBeNull();
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "test-digests-unavailable",
+    );
+    expect(warning?.type === "warning" ? warning.message : "").toContain("Broken Tests.A");
+    expect(warning?.type === "warning" ? warning.message : "").toContain(
+      "lethal verify will refuse",
+    );
+    store.close();
+  });
+
   test("no coverage: uncovered procedure mutants get no-coverage, no runs", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, () => "pass", []); // covers nothing

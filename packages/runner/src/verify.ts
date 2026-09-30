@@ -695,7 +695,7 @@ export async function planVerify(a: {
   if (sourceTestDigests === null) {
     throw new VerifyError(
       "source-predates-verify",
-      `run ${source.runId} recorded no test digests (before lethal verify could tell an edited test from an unchanged one); run lethal run again, then verify`,
+      `run ${source.runId} recorded no test digests, either because it predates them or because its test source could not be digested (see that run's test-digests-unavailable warning), so an edited test cannot be told from an unchanged one; run lethal run again, then verify`,
     );
   }
 
@@ -714,9 +714,15 @@ export async function planVerify(a: {
   const refusedWhy = scanTestPageSources(testSources, discovered);
   const digestsNow = testDigestsOfSources(testSources, discovered);
   const recorded = new Map(Object.entries(sourceTestDigests));
-  const isNew = (ref: TestMethodRef) =>
-    !baselineKeys.has(testKeyOf(ref)) ||
-    recorded.get(testDigestKey(ref)) !== digestsNow[testDigestKey(ref)];
+  // A test the source run recorded no digest for is new: `undefined` is never "unchanged".
+  const isNew = (ref: TestMethodRef) => {
+    const was = recorded.get(testDigestKey(ref));
+    return (
+      !baselineKeys.has(testKeyOf(ref)) ||
+      was === undefined ||
+      was !== digestsNow[testDigestKey(ref)]
+    );
+  };
   const testPageRefused = new Map(
     discovered.flatMap((ref) => {
       const reason = refusedWhy.get(testKeyOf(ref));

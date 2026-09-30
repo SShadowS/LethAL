@@ -162,7 +162,7 @@ import {
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
-import { testDigestsOfSources } from "./test-digest";
+import { TestDigestError, testDigestsOfSources } from "./test-digest";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -4279,7 +4279,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
     ? scanTestPageSources(testSources, tests)
     : new Map();
-  const testDigests = testDigestsOfSources(testSources, tests);
+  // R-278: a digest for EVERY discovered test, or none. Discovery is a regex and the digest a
+  // tree-sitter parse; where they disagree the run still measures, records no digests (NULL), and
+  // says so. Only verify reads them, and it refuses such a run by name.
+  let testDigests: Record<string, string> | undefined;
+  try {
+    testDigests = testDigestsOfSources(testSources, tests);
+  } catch (err) {
+    if (!(err instanceof TestDigestError)) throw err;
+    emit({
+      type: "warning",
+      code: "test-digests-unavailable",
+      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${err.message}`,
+    });
+  }
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
@@ -4342,7 +4355,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     identityScheme: IDENTITY_SCHEME,
     coverageMode: caps.coverage,
     ...(testAppHash !== undefined ? { testAppHash } : {}),
-    testDigests,
+    ...(testDigests !== undefined ? { testDigests } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
