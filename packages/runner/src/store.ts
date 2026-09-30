@@ -222,6 +222,10 @@ export interface RunRow {
   /** R354: the coverage mode the run measured under. `null` on a row recorded before the column
    *  existed: unknown, and never equal to any mode. */
   readonly coverageMode: CoverageMode | null;
+  /** R247: the test app the run measured against (`testAppHashFor`'s value: `package:<sha256>` or
+   *  `source:<hash>`). `null` when unknown, including every row recorded before the column: never
+   *  equal to anything, NULL included. */
+  readonly testAppHash: string | null;
 }
 
 /** R354: the closed set a `coverage_mode` column may hold. Exhaustive by type. */
@@ -258,7 +262,8 @@ CREATE TABLE IF NOT EXISTS runs (
   config_fingerprint TEXT,
   source_sha256 TEXT,
   identity_scheme INTEGER,
-  coverage_mode TEXT
+  coverage_mode TEXT,
+  test_app_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -487,6 +492,8 @@ export class ResultsStore {
       ["runs", "identity_scheme INTEGER", runCols],
       // R354: NULL on an older row, read as "coverage mode unknown", which never equals a mode.
       ["runs", "coverage_mode TEXT", runCols],
+      // R247: NULL on an older row, read as "test app unknown", which never matches.
+      ["runs", "test_app_hash TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
@@ -515,13 +522,16 @@ export class ResultsStore {
     /** R354: the coverage mode the run measures under (`caps.coverage`). Required, so no run is
      *  recorded without one: a verdict is only comparable to one scored under the same mode. */
     coverageMode: CoverageMode;
+    /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
+     *  no resume or history read ever matches. */
+    testAppHash?: string;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode) " +
-          "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, test_app_hash) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -530,6 +540,7 @@ export class ResultsStore {
         info.configFingerprint ?? null,
         info.identityScheme,
         info.coverageMode,
+        info.testAppHash ?? null,
       ) as {
       id: number;
     };
@@ -634,7 +645,7 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, coverage_mode FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, coverage_mode, test_app_hash FROM runs WHERE id = ?",
       )
       .get(runId) as {
       id: number;
@@ -644,6 +655,7 @@ export class ResultsStore {
       finished_at: string | null;
       identity_scheme: number;
       coverage_mode: string | null;
+      test_app_hash: string | null;
     } | null;
     if (row === null) return null;
     return {
@@ -654,6 +666,7 @@ export class ResultsStore {
       finished: row.finished_at !== null,
       identityScheme: row.identity_scheme,
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
+      testAppHash: row.test_app_hash,
     };
   }
 
@@ -1255,6 +1268,10 @@ export class ResultsStore {
     /** R354: the coverage mode THIS session measures under. A survivor recorded under another
      *  mode, or an unrecorded one, is not a survivor under this one, so none is returned. */
     coverageMode: CoverageMode,
+    /** R247: the test app THIS session measures against. A survivor measured against another test
+     *  app, or an unknown one (`undefined` here, NULL on the run), is not evidence: a new test is
+     *  exactly what might kill it. No key is returned then. */
+    testAppHash: string | undefined,
     /**
      * R325: called when the latest finished run was keyed under another identity scheme. Its keys
      * then name nothing reliable in this build (a renumbering can hand one to a different mutant),
@@ -1264,12 +1281,19 @@ export class ResultsStore {
     /** R354: called when the latest finished run was measured under another coverage mode, or an
      *  unrecorded one; no key is returned. Checked after the scheme. */
     onCoverageModeChanged?: (info: { runId: number; coverageMode: CoverageMode | null }) => void,
+    /** R247: called when the test app differs, or is unknown. Checked after the coverage mode. */
+    onTestAppChanged?: (info: { runId: number; testAppHash: string | null }) => void,
   ): Set<string> {
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, coverage_mode FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, coverage_mode, test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
-      .get(projectPath) as { id: number; scheme: number; coverage_mode: string | null } | null;
+      .get(projectPath) as {
+      id: number;
+      scheme: number;
+      coverage_mode: string | null;
+      test_app_hash: string | null;
+    } | null;
     if (!run) return new Set();
     if (run.scheme !== IDENTITY_SCHEME) {
       onSchemeChanged?.({ runId: run.id, identityScheme: run.scheme });
@@ -1278,6 +1302,10 @@ export class ResultsStore {
     const recorded = parseCoverageMode(run.coverage_mode, run.id);
     if (recorded !== coverageMode) {
       onCoverageModeChanged?.({ runId: run.id, coverageMode: recorded });
+      return new Set();
+    }
+    if (run.test_app_hash === null || run.test_app_hash !== testAppHash) {
+      onTestAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
       return new Set();
     }
     const rows = this.db
