@@ -72,6 +72,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     await writeInstrumentedProject({
       targetDir: target,
       files: set.files,
+      identityOrdinals: set.identityOrdinals,
       selectorIds: args.selectorIds,
       artifactId,
       targetAppId,

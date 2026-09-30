@@ -454,8 +454,9 @@ describe("sessionFingerprint (R47)", () => {
   // The value itself moved once, on purpose: R325 put the identity scheme into EVERY digest (it was
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
   // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
-  // it was 4a8c47ac...288a under scheme 3.
-  const PINNED = "25fdc64aa60c2cd08df6e75268d07edf13a9bdc52d6e91f0d0ae257984f3be4f";
+  // it was 4a8c47ac...288a under scheme 3. It moved again for R374, scheme 5; it was 25fdc64a...be4f
+  // under scheme 4.
+  const PINNED = "ef3bb9d1f2134482a63cca3f4fe735ed677e0c5d644ede3979857d1fced7daf5";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1895,8 +1896,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 4 since R318 (changed attribution of unchanged keys).
-    expect(IDENTITY_SCHEME).toBe(4);
+    // Pinned by value so a bump is deliberate: 5 since R374 (run-wide identity ordinals).
+    expect(IDENTITY_SCHEME).toBe(5);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

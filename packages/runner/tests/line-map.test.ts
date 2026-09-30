@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ALNodeKind, initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { ALSyntaxNode } from "@lethal/engine";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import {
   LineMap,
   buildLineMap,
@@ -460,14 +460,16 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
     const dir = await mkdtemp(join(tmpdir(), "lethal-gh09-"));
     try {
       // The selector ids the live run used; the guard layout does not depend on the artifact id.
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: set.files,
-        selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: set.files,
+          selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers,
+        }),
+      );
       const map = await buildLineMap(dir, new Set(["codeunit:79000", "codeunit:79001"]));
       for (const row of OVER_BUDGET_DETECTED) {
         expect(map.lookup("Codeunit", 79000, row)).toBe("IsOverBudget");

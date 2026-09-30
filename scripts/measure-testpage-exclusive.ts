@@ -64,6 +64,7 @@ export async function censusMutants(projectDir: string): Promise<readonly Census
     await writeInstrumentedProject({
       targetDir: target,
       files: set.files,
+      identityOrdinals: set.identityOrdinals,
       selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
       artifactId: "00000000000000000000000000000000",
       targetAppId: appJson.id,

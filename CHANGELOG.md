@@ -37,6 +37,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 5** (R374): identity ordinals are now numbered once over the whole run, not
+  per batch. Before, two twin mutants (same object, member, operator and code) that
+  `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so
+  `--skip-known-survivors` could skip one on the other's verdict. Keys move only where batching
+  split twins; a one-batch run keeps every key. Every older store stops resuming (`--resume` and
+  `--resume-run` refuse it by name), the next `--skip-known-survivors` run skips nothing once, and
+  marks files need `"identityScheme": 5` after re-checking each mark against a fresh report (R325).
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
@@ -46,7 +53,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
   resume from scheme-2 runs are refused by name (R325).
 - **Existing `lethal.equivalent.json` files need an `"identityScheme"` field** (R325), set to the
-  report's own `identityScheme` (4 since R318, see above). Identity keys now
+  report's own `identityScheme` (5 since R374, see above). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
   so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is

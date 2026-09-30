@@ -20,6 +20,7 @@ import {
 import {
   CARRIER_KINDS,
   IDENTITY_SCHEME,
+  type IdentityEntry,
   type InstrumentedFile,
   type MutantManifest,
   type MutantManifestEntry,
@@ -28,7 +29,10 @@ import {
   canCarryMutationSelectorVar,
   dedupeSpecs,
   describeObjectKinds,
+  identityEntriesOf,
+  identitySiteKey,
   isMutableSite,
+  numberIdentityOrdinals,
   reachLatchRefusedOwner,
   varSectionUnparsed,
   writeInstrumentedProject,
@@ -384,6 +388,11 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
+  /**
+   * R374: every deployed mutant's identity ordinal, numbered ONCE over the whole run and keyed by
+   * `identitySiteKey`. `writeInstrumentedProject` requires it, so no batch numbers its own twins.
+   */
+  readonly identityOrdinals: ReadonlyMap<string, number>;
 }
 
 export interface MutationSetOptions {
@@ -743,6 +752,8 @@ export async function generateMutationSet(
   // bare total cannot tell a reader whether the refusal touched anything they care about.
   let nonExecutableSites = 0;
   const declarativeSites: DeclarativeSiteFile[] = [];
+  // R374: one entry per deployed mutant, numbered once over the whole run after the loop.
+  const identityEntries: IdentityEntry[] = [];
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
@@ -840,6 +851,7 @@ export async function generateMutationSet(
     }
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
+    identityEntries.push(...identityEntriesOf(rel, source, dedupeSpecs(fileSpecs, tierOf)));
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
@@ -932,6 +944,7 @@ export async function generateMutationSet(
     excludedByOperator,
     excludedByLines,
     declarativeSites,
+    identityOrdinals: numberIdentityOrdinals(identityEntries),
   };
 }
 
@@ -1318,9 +1331,9 @@ export function narrowFilesToSubset(
   subset: readonly MutantManifestEntry[],
 ): InstrumentedFile[] {
   const specKey = (file: string, spec: MutationSpec) =>
-    `${file}\0${spec.before.startIndex}\0${spec.before.endIndex}\0${spec.operatorName}`;
+    identitySiteKey(file, spec.before.startIndex, spec.before.endIndex, spec.operatorName);
   const wanted = new Set(
-    subset.map((m) => `${m.file}\0${m.startIndex}\0${m.endIndex}\0${m.operatorName}`),
+    subset.map((m) => identitySiteKey(m.file, m.startIndex, m.endIndex, m.operatorName)),
   );
   const seen = new Set<string>();
   const out: InstrumentedFile[] = [];
@@ -1420,6 +1433,8 @@ async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly subset?: readonly MutantManifestEntry[];
+  /** R374: the run-wide ordinals from `generateMutationSet`. */
+  readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
   readonly projectManifest: Readonly<Record<string, unknown>>;
@@ -1440,6 +1455,7 @@ async function prepareArtifactDir(args: {
     artifactId: args.artifactId,
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
+    identityOrdinals: args.identityOrdinals,
   });
   await prepareBatchProject(
     args.projectDir,
@@ -1480,6 +1496,7 @@ async function bisectAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
   readonly batchFiles: readonly InstrumentedFile[];
+  readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
   readonly projectManifest: Readonly<Record<string, unknown>>;
@@ -1502,6 +1519,7 @@ async function bisectAndNote(args: {
           targetDir: args.scratchDir,
           files: args.batchFiles,
           subset,
+          identityOrdinals: args.identityOrdinals,
           selectorIds: args.selectorIds,
           projectDir: args.projectDir,
           projectManifest: args.projectManifest,
@@ -4422,6 +4440,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
+    identityOrdinals,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4755,6 +4774,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       await prepareArtifactDir({
         targetDir: batchDir,
         files: batchFiles,
+        identityOrdinals,
         selectorIds: cfg.selectorIds,
         projectDir: cfg.projectDir,
         projectManifest,
@@ -5028,6 +5048,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
           batchFiles,
+          identityOrdinals,
           selectorIds: cfg.selectorIds,
           projectDir: cfg.projectDir,
           projectManifest,
@@ -5512,6 +5533,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                   `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
                 ),
                 batchFiles,
+                identityOrdinals,
                 selectorIds: cfg.selectorIds,
                 projectDir: cfg.projectDir,
                 projectManifest,

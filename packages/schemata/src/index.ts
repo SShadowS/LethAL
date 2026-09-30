@@ -33,6 +33,12 @@ export {
   clipMutationText,
   identityTupleOf,
   assignIdentityOrdinals,
+  identitySiteKey,
+  identityFieldsOf,
+  identityEntriesOf,
+  numberIdentityOrdinals,
+  runIdentityOrdinals,
+  withRunIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,
   coverageArmNamesComputed,
@@ -40,6 +46,7 @@ export {
 export type {
   InstrumentedFile,
   WriteInput,
+  IdentityEntry,
   MutantManifest,
   MutantManifestEntry,
 } from "./project";

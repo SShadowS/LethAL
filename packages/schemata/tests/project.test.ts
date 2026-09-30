@@ -24,8 +24,10 @@ import {
   attributeHeader,
   gapIdOf,
   identityTupleOf,
+  runIdentityOrdinals,
   scanDeclaredObjects,
   stripAlComments,
+  withRunIdentityOrdinals,
   writeInstrumentedProject,
 } from "../src/project";
 import type { ObjectHeader, WriteInput } from "../src/project";
@@ -61,14 +63,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "P.Codeunit.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "P.Codeunit.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const entries = (await readdir(dir)).sort();
       expect(entries).toContain("P.Codeunit.al");
@@ -136,14 +140,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "T.Table.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "T.Table.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants[0]?.procedureName).toBe("");
@@ -187,14 +193,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "T.Table.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "T.Table.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants[0]?.procedureName).toBe("");
@@ -232,14 +240,16 @@ describe("writeInstrumentedProject", () => {
         after: { ...a, text: i === 0 ? "X := 10;" : "Y := 20;" } as never,
         parentContext: "statement-position" as const,
       }));
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "Scoped.Codeunit.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "Scoped.Codeunit.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       const byProc = new Map<string, string | undefined>(
         (manifest.mutants as readonly { procedureName: string; procedureScope?: string }[]).map(
@@ -294,14 +304,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "Hang.Codeunit.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "Hang.Codeunit.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       const byProc = new Map<string, { hangCapable?: string }>(
         (manifest.mutants as ReadonlyArray<{ procedureName: string; hangCapable?: string }>).map(
@@ -337,14 +349,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path, source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path, source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       const [entry] = manifest.mutants as Record<string, unknown>[];
       if (entry === undefined || manifest.mutants.length !== 1) {
@@ -418,14 +432,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "P.Codeunit.al", source: src1, root: root1, specs: specs1 }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "P.Codeunit.al", source: src1, root: root1, specs: specs1 }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       let manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.selectorIds).toEqual({ selectorId: 60000, controlId: 60001, tableId: 60002 });
@@ -457,14 +473,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "MyCodeunit.Codeunit.al", source: src2, root: root2, specs: specs2 }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "MyCodeunit.Codeunit.al", source: src2, root: root2, specs: specs2 }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       entry = manifest.mutants[0];
@@ -493,14 +511,16 @@ describe("writeInstrumentedProject", () => {
           parentContext: "statement-position",
         },
       ];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "Plain.Codeunit.al", source: src3, root: root3, specs: specs3 }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "Plain.Codeunit.al", source: src3, root: root3, specs: specs3 }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       entry = manifest.mutants[0];
@@ -569,17 +589,19 @@ describe("writeInstrumentedProject", () => {
         },
       ];
 
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [
-          { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
-          { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
-        ],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [
+            { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
+            { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       expect(manifest.mutants).toHaveLength(3);
@@ -663,17 +685,19 @@ describe("writeInstrumentedProject", () => {
         },
       ];
 
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [
-          { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
-          { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
-        ],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [
+            { path: "A.Codeunit.al", source: srcA, root: rootA, specs: specsA },
+            { path: "B.Codeunit.al", source: srcB, root: rootB, specs: specsB },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
       const bEntry = (manifest.mutants as Array<{ mutantId: string; file: string }>).find(
@@ -713,26 +737,28 @@ describe("writeInstrumentedProject", () => {
         after: { ...call, text: "" } as never,
         parentContext: "statement-position",
       });
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [
-          {
-            path: "D.Codeunit.al",
-            source: src,
-            root,
-            specs: [collide("lethal.void-method-call"), collide("lethal.remove-testfield")],
-          },
-        ],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        // A REAL tier map — the empty NO_TIERS map would make `dedupeSpecs` throw on this pair
-        // ("one of them is unregistered"), so the collision would never be resolved at all.
-        operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
-          ["lethal.void-method-call", 1],
-          ["lethal.remove-testfield", 2],
-        ]),
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [
+            {
+              path: "D.Codeunit.al",
+              source: src,
+              root,
+              specs: [collide("lethal.void-method-call"), collide("lethal.remove-testfield")],
+            },
+          ],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          // A REAL tier map — the empty NO_TIERS map would make `dedupeSpecs` throw on this pair
+          // ("one of them is unregistered"), so the collision would never be resolved at all.
+          operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
+            ["lethal.void-method-call", 1],
+            ["lethal.remove-testfield", 2],
+          ]),
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{ mutantId: string; operatorName: string }>;
@@ -846,20 +872,22 @@ describe("writeInstrumentedProject", () => {
         ...modifyPair,
       ];
 
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "T.Table.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
-          ["lethal.void-method-call", 1],
-          ["lethal.remove-testfield", 2],
-          ["lethal.remove-setrange", 2],
-          ["lethal.remove-calcfields", 2],
-          ["lethal.swap-modify-flag", 2],
-        ]),
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "T.Table.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: new Map<string, 1 | 2 | 3 | "custom">([
+            ["lethal.void-method-call", 1],
+            ["lethal.remove-testfield", 2],
+            ["lethal.remove-setrange", 2],
+            ["lethal.remove-calcfields", 2],
+            ["lethal.swap-modify-flag", 2],
+          ]),
+        }),
+      );
 
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{ mutantId: string; startIndex: number; operatorName: string }>;
@@ -916,14 +944,16 @@ describe("writeInstrumentedProject", () => {
   it("writes the artifact id into the manifest and the generated selector", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-artifactid-"));
     try {
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [],
-        selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [],
+          selectorIds: { selectorId: 79000, controlId: 79001, tableId: 79002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
         artifactId: string;
       };
@@ -938,14 +968,16 @@ describe("writeInstrumentedProject", () => {
   it("emits an Upgrade codeunit registering identity via the selector (Task 8)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-upgrade-"));
     try {
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [],
-        selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [],
+          selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
 
       const entries = await readdir(dir);
       expect(entries).toContain(CONTROL_SELECTOR_FILENAME);
@@ -1017,14 +1049,16 @@ codeunit 51051 "Second Obj"
     it("attributes each mutant to its OWN object, not the file's first header", async () => {
       const dir = await mkdtemp(join(tmpdir(), "lethal-two-injectable-objects-"));
       try {
-        await writeInstrumentedProject({
-          targetDir: dir,
-          files: [twoInjectableObjectFile()],
-          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-          artifactId: "0123456789abcdef0123456789abcdef",
-          targetAppId: TARGET_APP_ID,
-          operatorTiers: NO_TIERS,
-        });
+        await writeInstrumentedProject(
+          withRunIdentityOrdinals({
+            targetDir: dir,
+            files: [twoInjectableObjectFile()],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          }),
+        );
 
         const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
           mutants: Array<{
@@ -1102,14 +1136,16 @@ page 51053 "Not Injectable"
       try {
         let thrown: unknown;
         try {
-          await writeInstrumentedProject({
-            targetDir: dir,
-            files: [mixedKindFile()],
-            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-            artifactId: "0123456789abcdef0123456789abcdef",
-            targetAppId: TARGET_APP_ID,
-            operatorTiers: NO_TIERS,
-          });
+          await writeInstrumentedProject(
+            withRunIdentityOrdinals({
+              targetDir: dir,
+              files: [mixedKindFile()],
+              selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+              artifactId: "0123456789abcdef0123456789abcdef",
+              targetAppId: TARGET_APP_ID,
+              operatorTiers: NO_TIERS,
+            }),
+          );
         } catch (err) {
           thrown = err;
         }
@@ -1126,14 +1162,16 @@ page 51053 "Not Injectable"
     it("refuses BEFORE writing the half-instrumented source into the artifact dir", async () => {
       const dir = await mkdtemp(join(tmpdir(), "lethal-mixed-kind-nowrite-"));
       try {
-        await writeInstrumentedProject({
-          targetDir: dir,
-          files: [mixedKindFile()],
-          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-          artifactId: "0123456789abcdef0123456789abcdef",
-          targetAppId: TARGET_APP_ID,
-          operatorTiers: NO_TIERS,
-        }).catch(() => {});
+        await writeInstrumentedProject(
+          withRunIdentityOrdinals({
+            targetDir: dir,
+            files: [mixedKindFile()],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          }),
+        ).catch(() => {});
         expect(await readdir(dir)).not.toContain("Mixed.Kind.al");
       } finally {
         await rm(dir, { recursive: true, force: true });
@@ -1147,30 +1185,32 @@ page 51053 "Not Injectable"
         const root = wrapRoot(parseAL(src));
         const assign = findFirst(root, ALNodeKind.assignment_statement);
         if (assign === null) throw new Error("no assignment");
-        await writeInstrumentedProject({
-          targetDir: dir,
-          files: [
-            {
-              path: "Only.Codeunit.al",
-              source: src,
-              root,
-              specs: [
-                {
-                  operatorName: "op.flip",
-                  operatorVersion: "1.0.0",
-                  astNodeId: `${assign.startIndex}`,
-                  before: assign,
-                  after: { ...assign, text: "X := 2;" } as never,
-                  parentContext: "statement-position",
-                },
-              ],
-            },
-          ],
-          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-          artifactId: "0123456789abcdef0123456789abcdef",
-          targetAppId: TARGET_APP_ID,
-          operatorTiers: NO_TIERS,
-        });
+        await writeInstrumentedProject(
+          withRunIdentityOrdinals({
+            targetDir: dir,
+            files: [
+              {
+                path: "Only.Codeunit.al",
+                source: src,
+                root,
+                specs: [
+                  {
+                    operatorName: "op.flip",
+                    operatorVersion: "1.0.0",
+                    astNodeId: `${assign.startIndex}`,
+                    before: assign,
+                    after: { ...assign, text: "X := 2;" } as never,
+                    parentContext: "statement-position",
+                  },
+                ],
+              },
+            ],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          }),
+        );
         const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
           mutants: Array<{ objectType: string; codeunitId: number }>;
         };
@@ -1209,30 +1249,32 @@ page 51053 "Not Injectable"
         const root = wrapRoot(parseAL(src));
         const assign = findFirst(root, ALNodeKind.assignment_statement);
         if (assign === null) throw new Error("fixture has no assignment to mutate");
-        await writeInstrumentedProject({
-          targetDir: dir,
-          files: [
-            {
-              path: "Live.Table.al",
-              source: src,
-              root,
-              specs: [
-                {
-                  operatorName: "op.flip",
-                  operatorVersion: "1.0.0",
-                  astNodeId: `${assign.startIndex}`,
-                  before: assign,
-                  after: { ...assign, text: "X := 2;" } as never,
-                  parentContext: "statement-position",
-                },
-              ],
-            },
-          ],
-          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-          artifactId: "0123456789abcdef0123456789abcdef",
-          targetAppId: TARGET_APP_ID,
-          operatorTiers: NO_TIERS,
-        });
+        await writeInstrumentedProject(
+          withRunIdentityOrdinals({
+            targetDir: dir,
+            files: [
+              {
+                path: "Live.Table.al",
+                source: src,
+                root,
+                specs: [
+                  {
+                    operatorName: "op.flip",
+                    operatorVersion: "1.0.0",
+                    astNodeId: `${assign.startIndex}`,
+                    before: assign,
+                    after: { ...assign, text: "X := 2;" } as never,
+                    parentContext: "statement-position",
+                  },
+                ],
+              },
+            ],
+            selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: TARGET_APP_ID,
+            operatorTiers: NO_TIERS,
+          }),
+        );
         const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
           mutants: Array<{ objectType: string; codeunitId: number }>;
         };
@@ -1418,14 +1460,16 @@ describe("GH-24: the manifest records each mutant's reach grain", () => {
         parentContext: "statement-position",
       });
       const specs = [mk(call, "", "op.void"), mk(assign, "X := 2", "op.flip")];
-      await writeInstrumentedProject({
-        targetDir: dir,
-        files: [{ path: "G.Codeunit.al", source: src, root, specs }],
-        selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: TARGET_APP_ID,
-        operatorTiers: NO_TIERS,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: dir,
+          files: [{ path: "G.Codeunit.al", source: src, root, specs }],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        }),
+      );
       const expected = new Map<string, string>();
       const ided = assignMutantIds(new Map([["G.Codeunit.al", specs]])).get("G.Codeunit.al") ?? [];
       for (const c of buildComponents(ided)) {
@@ -1465,9 +1509,11 @@ function twoProcedureInput(): WriteInput {
     parentContext: "statement-position",
   }));
   if (specs.length !== 2) throw new Error("fixture shape: expected two assignments");
+  const files = [{ path: "Two.Codeunit.al", source: src, root, specs }];
   return {
     targetDir: mkdtempSync(join(tmpdir(), "lethal-gapcollide-")),
-    files: [{ path: "Two.Codeunit.al", source: src, root, specs }],
+    files,
+    identityOrdinals: runIdentityOrdinals(files, NO_TIERS),
     selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
     artifactId: "0123456789abcdef0123456789abcdef",
     targetAppId: TARGET_APP_ID,

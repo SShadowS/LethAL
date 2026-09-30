@@ -161,6 +161,7 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
     await writeInstrumentedProject({
       targetDir,
       files: set.files,
+      identityOrdinals: set.identityOrdinals,
       selectorIds,
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "00000000-0000-0000-0000-000000000000",

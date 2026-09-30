@@ -52,6 +52,13 @@ export interface WriteInput {
   readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
   /** C02-09: a test seam for the gap id function; production passes nothing and gets `gapIdOf`. */
   readonly gapIdOf?: typeof gapIdOf;
+  /**
+   * R374: every mutant's identity ordinal, numbered ONCE over the whole run (`runIdentityOrdinals`,
+   * or `generateMutationSet`'s `identityOrdinals`), keyed by `identitySiteKey`. Required: a batch
+   * that numbered its own rows would give twins in two batches the same key. A row with no entry
+   * is refused, never defaulted to 0.
+   */
+  readonly identityOrdinals: ReadonlyMap<string, number>;
 }
 
 /** C02-09: a gap's id. Reads the file (separators normalised), the block's offsets and its raw
@@ -104,9 +111,11 @@ export function identityTupleOf(
  * the R-323 plan). 4: R318, a renamed split member's coverage is attributed by position and a
  * line two members share names nobody, which changes the verdict an unchanged key can carry
  * (history, `--resume`, `--resume-run`, equivalence marks). No key tuple moves; the bump is for
- * changed attribution of unchanged keys.
+ * changed attribution of unchanged keys. 5: R374, identity ordinals are numbered once over the whole
+ * run instead of per batch, so keys move only where batching split twins (two twins in two
+ * batches both held ordinal 0 before).
  */
-export const IDENTITY_SCHEME = 4;
+export const IDENTITY_SCHEME = 5;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -120,8 +129,7 @@ export function assignIdentityOrdinals(
   return entries.map((e) => ({ ...e, identityOrdinal: ordinalOf.get(e) ?? 0 }));
 }
 
-/** The numbering `assignIdentityOrdinals` applies, without copying the entries (RUST-03 S4.2a:
- *  the writer sets it on its own rows, so a whole-BaseApp manifest is not held twice). */
+/** The numbering `assignIdentityOrdinals` applies, without copying the entries (RUST-03 S4.2a). */
 function identityOrdinalsOf(
   entries: readonly MutantManifestEntry[],
 ): Map<MutantManifestEntry, number> {
@@ -140,6 +148,109 @@ function identityOrdinalsOf(
     next.set(tuple, n + 1);
   }
   return ordinalOf;
+}
+
+/** R374: the key a run-wide identity ordinal is stored under: (file, span, operator), the triple
+ *  `narrowFilesToSubset` (runner) already matches a manifest row back to its spec by. */
+export function identitySiteKey(
+  file: string,
+  startIndex: number,
+  endIndex: number,
+  operatorName: string,
+): string {
+  return `${file}\0${startIndex}\0${endIndex}\0${operatorName}`;
+}
+
+/** R374: the identity fields the writer's row carries for `spec`, from ONE place, so a run-wide
+ *  numbering and the manifest row cannot build two different tuples for one mutant. */
+export function identityFieldsOf(
+  spec: MutationSpec,
+  headerName: string,
+): Pick<
+  MutantManifestEntry,
+  "astHash" | "codeunitName" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
+> {
+  const triggerName = triggerNameOf(spec);
+  return {
+    astHash: astSubtreeHash(spec.before),
+    codeunitName: headerName,
+    procedureName: procedureNameOf(spec),
+    ...(triggerName !== undefined ? { triggerName } : {}),
+    operatorName: spec.operatorName,
+    operatorVersion: spec.operatorVersion,
+  };
+}
+
+/** R374: one mutant (or one reserved refused-file site) in the run-wide numbering. */
+export interface IdentityEntry {
+  /** `identitySiteKey` of the site. */
+  readonly key: string;
+  readonly file: string;
+  readonly startIndex: number;
+  readonly operatorName: string;
+  /** `identityTupleOf` of the site's `identityFieldsOf`. */
+  readonly tuple: string;
+}
+
+/** R374: the identity entries of one file's DEDUPED specs, attributed by the writer's own header
+ *  rule (`objectHeadersOf` + `attributeHeader`). Throws exactly where the writer would. */
+export function identityEntriesOf(
+  path: string,
+  source: string,
+  deduped: readonly MutationSpec[],
+): IdentityEntry[] {
+  const headers = objectHeadersOf(source, path);
+  return deduped.map((spec) => {
+    const header = attributeHeader(headers, spec, path);
+    return {
+      key: identitySiteKey(path, spec.before.startIndex, spec.before.endIndex, spec.operatorName),
+      file: path,
+      startIndex: spec.before.startIndex,
+      operatorName: spec.operatorName,
+      tuple: identityTupleOf(identityFieldsOf(spec, header.name)),
+    };
+  });
+}
+
+/**
+ * R374: number identity twins ONCE over every entry of the run, in source order: file, start,
+ * then operator name, the order `assignMutantIds` gives the same specs (the sort is stable, so
+ * two entries equal on all three keep their input order, as `assignMutantIds` keeps them).
+ * Reserved entries (R-307) take a number like any other. Two entries on one key are refused.
+ */
+export function numberIdentityOrdinals(entries: readonly IdentityEntry[]): Map<string, number> {
+  const order = [...entries].sort(
+    (a, b) =>
+      a.file.localeCompare(b.file) ||
+      a.startIndex - b.startIndex ||
+      a.operatorName.localeCompare(b.operatorName),
+  );
+  const next = new Map<string, number>();
+  const out = new Map<string, number>();
+  for (const e of order) {
+    if (out.has(e.key)) {
+      throw new Error(
+        `numberIdentityOrdinals: two mutants share one site key ${JSON.stringify(e.key)}, so a run-wide identity ordinal cannot name one of them`,
+      );
+    }
+    const n = next.get(e.tuple) ?? 0;
+    out.set(e.key, n);
+    next.set(e.tuple, n + 1);
+  }
+  return out;
+}
+
+/** R374: the run-wide ordinals of `files`, deduped as the writer dedupes them. For callers that
+ *  write instrumented files they built themselves (scripts, tests); a real run takes
+ *  `generateMutationSet`'s `identityOrdinals`. */
+export function runIdentityOrdinals(
+  files: readonly InstrumentedFile[],
+  operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
+): Map<string, number> {
+  const tierOf: TierResolver = (name) => operatorTiers.get(name);
+  return numberIdentityOrdinals(
+    files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
+  );
 }
 
 export interface MutantManifestEntry {
@@ -599,6 +710,12 @@ function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
   return current;
 }
 
+/** R374: `input` with its run-wide ordinals numbered over `input.files` alone. For a caller that
+ *  writes ONE hand-built file set (tests, scripts); a real run passes `generateMutationSet`'s. */
+export function withRunIdentityOrdinals(input: Omit<WriteInput, "identityOrdinals">): WriteInput {
+  return { ...input, identityOrdinals: runIdentityOrdinals(input.files, input.operatorTiers) };
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
@@ -610,7 +727,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
-  // RUST-03 S4.2a: rows are built once and numbered in place (`identityOrdinalsOf`), not copied.
+  // R374: rows are numbered from the run-wide `identityOrdinals`, never per batch.
   const rows: { -readonly [K in keyof MutantManifestEntry]: MutantManifestEntry[K] }[] = [];
   // C02-09: gap id -> "<file>\n<start>\n<end>" of the block it names. Offsets decide: two blocks
   // on one line are two blocks. A second, different block under one id is refused, never merged.
@@ -641,11 +758,24 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
     >();
     const armNamesCache = new Map<number, string[]>();
     for (const { mutantId, spec } of ided) {
-      const triggerName = triggerNameOf(spec);
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
       const header = attributeHeader(headers, spec, f.path);
+      const id = identityFieldsOf(spec, header.name);
+      const triggerName = id.triggerName;
+      const siteKey = identitySiteKey(
+        f.path,
+        spec.before.startIndex,
+        spec.before.endIndex,
+        spec.operatorName,
+      );
+      const identityOrdinal = input.identityOrdinals.get(siteKey);
+      if (identityOrdinal === undefined) {
+        throw new Error(
+          `writeInstrumentedProject: ${mutantId} (${f.path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}) has no run-wide identity ordinal; the caller's identityOrdinals was built over a different spec set (R374)`,
+        );
+      }
       const procedureScope = procedureScopeOf(spec, f.source);
       const coverageArmNames = coverageArmNamesOf(spec, armNamesCache);
       const member = enclosingMemberOf(spec);
@@ -684,17 +814,17 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         startIndex: spec.before.startIndex,
         endIndex: spec.before.endIndex,
         startLine: lineOfIndex(starts, spec.before.startIndex),
-        operatorName: spec.operatorName,
-        operatorVersion: spec.operatorVersion,
-        astHash: astSubtreeHash(spec.before),
+        operatorName: id.operatorName,
+        operatorVersion: id.operatorVersion,
+        astHash: id.astHash,
         gapId: gap.gapId,
         blockStartLine: gap.blockStartLine,
         blockEndLine: gap.blockEndLine,
         reachGrain,
         objectType: header.type,
         codeunitId: header.id,
-        codeunitName: header.name,
-        procedureName: procedureNameOf(spec),
+        codeunitName: id.codeunitName,
+        procedureName: id.procedureName,
         originalText: clipMutationText(spec.before.text),
         mutatedText: clipMutationText(spec.after.text),
         ...(procedureScope !== undefined ? { procedureScope } : {}),
@@ -711,16 +841,11 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
-        identityOrdinal: 0,
+        identityOrdinal,
       });
     }
   }
 
-  // R193: identity ordinals are assigned over the WHOLE manifest, after every file's entries exist,
-  // because a twin pair sits in one procedure and therefore one file, but numbering per file
-  // would still be a second implementation of the same rule.
-  const ordinalOf = identityOrdinalsOf(rows);
-  for (const r of rows) r.identityOrdinal = ordinalOf.get(r) ?? 0;
   const manifest: readonly MutantManifestEntry[] = rows;
 
   // The delegating selector (Active -> LC Control State.IsActive) and the register-install

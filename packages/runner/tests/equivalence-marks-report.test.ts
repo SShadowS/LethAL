@@ -61,6 +61,7 @@ async function mutate(
   await writeInstrumentedProject({
     targetDir: out,
     files: set.files,
+    identityOrdinals: set.identityOrdinals,
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
     artifactId: "0123456789abcdef0123456789abcdef",
     targetAppId: APP_JSON.id,

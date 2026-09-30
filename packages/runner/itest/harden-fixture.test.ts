@@ -37,6 +37,7 @@ async function manifest(): Promise<MutantManifest> {
     await writeInstrumentedProject({
       targetDir: dir,
       files: set.files,
+      identityOrdinals: set.identityOrdinals,
       selectorIds: { selectorId: 79547, controlId: 79548, tableId: 79549 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: appJson.id,

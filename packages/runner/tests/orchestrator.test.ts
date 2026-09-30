@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -3765,14 +3765,16 @@ describe("generateMutationSet: real cross-tier collisions", () => {
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
     try {
       const { files } = await generateMutationSet(projectDir);
-      await writeInstrumentedProject({
-        targetDir: outDir,
-        files,
-        selectorIds,
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: outDir,
+          files,
+          selectorIds,
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(outDir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{ startIndex: number; operatorName: string }>;
       };
@@ -4971,14 +4973,16 @@ async function manifestMutants(
   scratchDir: string,
 ): Promise<readonly MutantManifestEntry[]> {
   const { files } = await generateMutationSet(projectDir);
-  await writeInstrumentedProject({
-    targetDir: scratchDir,
-    files,
-    selectorIds,
-    artifactId: "seed00000000000000000000000000",
-    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: scratchDir,
+      files,
+      selectorIds,
+      artifactId: "seed00000000000000000000000000",
+      targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      operatorTiers,
+    }),
+  );
   const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
     mutants: MutantManifestEntry[];
   };

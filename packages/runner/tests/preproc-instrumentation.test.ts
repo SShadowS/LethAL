@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { type ALSyntaxNode, initParser, parseAL, visit, wrapRoot } from "@lethal/engine";
 import type { MutationSpec } from "@lethal/engine";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
-import { coverageArmNamesComputed, writeInstrumentedProject } from "@lethal/schemata";
+import {
+  coverageArmNamesComputed,
+  withRunIdentityOrdinals,
+  writeInstrumentedProject,
+} from "@lethal/schemata";
 import {
   alRunnerCoverageFrom,
   alRunnerCoverageFromServer,
@@ -54,14 +58,16 @@ async function instrument(
     await writeFile(join(src, "app.json"), JSON.stringify({ ...APP_JSON, ...appJsonExtra }));
     for (const [name, text] of Object.entries(files)) await writeFile(join(src, name), text);
     const set = await generateMutationSet(src);
-    await writeInstrumentedProject({
-      targetDir: out,
-      files: set.files,
-      selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-      artifactId: "0123456789abcdef0123456789abcdef",
-      targetAppId: APP_JSON.id,
-      operatorTiers,
-    });
+    await writeInstrumentedProject(
+      withRunIdentityOrdinals({
+        targetDir: out,
+        files: set.files,
+        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: APP_JSON.id,
+        operatorTiers,
+      }),
+    );
     const manifest = JSON.parse(
       await readFile(join(out, "mutant-manifest.json"), "utf8"),
     ) as MutantManifest;
@@ -1708,14 +1714,16 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       await writeFile(join(src, "app.json"), JSON.stringify(APP_JSON));
       await writeFile(join(src, "Repro.Codeunit.al"), S3);
       const set = await generateMutationSet(src);
-      await writeInstrumentedProject({
-        targetDir: out,
-        files: set.files,
-        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: APP_JSON.id,
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: out,
+          files: set.files,
+          selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: APP_JSON.id,
+          operatorTiers,
+        }),
+      );
       const text = await readFile(join(out, "Repro.Codeunit.al"), "utf8");
       expect(text).toContain("procedure Pick(X: Integer); var LethALReachLatch: Boolean;");
       let errors = 0;
@@ -4499,14 +4507,16 @@ describe("R351: a renamed split member is named by its arm names in the order, t
       const out = await mkdtemp(join(tmpdir(), "lethal-r351-census-"));
       try {
         const set = await generateMutationSet(join(import.meta.dir, "../../../fixtures", fixture));
-        await writeInstrumentedProject({
-          targetDir: out,
-          files: set.files,
-          selectorIds,
-          artifactId: "0123456789abcdef0123456789abcdef",
-          targetAppId: "00000000-0000-0000-0000-000000000000",
-          operatorTiers,
-        });
+        await writeInstrumentedProject(
+          withRunIdentityOrdinals({
+            targetDir: out,
+            files: set.files,
+            selectorIds,
+            artifactId: "0123456789abcdef0123456789abcdef",
+            targetAppId: "00000000-0000-0000-0000-000000000000",
+            operatorTiers,
+          }),
+        );
         const manifest = JSON.parse(
           await readFile(join(out, "mutant-manifest.json"), "utf8"),
         ) as MutantManifest;
