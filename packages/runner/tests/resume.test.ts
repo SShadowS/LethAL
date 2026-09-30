@@ -2206,6 +2206,7 @@ describe("R354: no verdict crosses a coverage-mode change", () => {
       }>;
       expect(ids.map((r) => r.coverage_mode)).toEqual([a, b]);
       const [idA, idB] = ids.map((r) => r.id);
+      if (idA === undefined || idB === undefined) throw new Error("two runs expected");
       // B's snapshot for batch 1 exists and is the newer one: the unguarded query returns it.
       const snaps = store.db
         .query("SELECT run_id FROM baseline_snapshots WHERE batch_index = 1 ORDER BY id")
