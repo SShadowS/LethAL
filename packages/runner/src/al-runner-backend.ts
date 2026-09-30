@@ -943,6 +943,11 @@ export class AlRunnerBackend implements ExecutionBackend {
     );
   }
 
+  /** R-371: the non-Microsoft dependency packages every leg loads come from `packagesDir`. */
+  dependencyPackageDirs(): readonly string[] {
+    return this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [];
+  }
+
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     if (this.server !== undefined) return this.runViaServer(ref, opts);
     const started = Date.now();

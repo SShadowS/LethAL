@@ -143,6 +143,24 @@ function insideWithStatement(n: ALSyntaxNode): boolean {
   return false;
 }
 
+const NO_WITH: readonly Recv[] = Object.freeze([]);
+
+/** R-371: the target expression of every with-statement enclosing `n`, innermost first. */
+function withTargets(n: ALSyntaxNode): readonly Recv[] {
+  let out: Recv[] | undefined;
+  let cur = n.parent;
+  while (cur !== null) {
+    if (cur.rawKind === "with_statement") {
+      const r = cur.childForFieldName("record");
+      out ??= [];
+      out.push(r === null ? { k: "opaque", kind: "with_statement" } : toRecv(r));
+    }
+    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") break;
+    cur = cur.parent;
+  }
+  return out ?? NO_WITH;
+}
+
 /**
  * Plain facts only, no syntax nodes: no parse result may outlive the reading of its file. Under WASM a
  * kept tree lived in the wasm heap, and BC.History/BaseApp's 9,620 kept trees hit its 2,048 MB
@@ -156,6 +174,10 @@ type Site =
       readonly name: string;
       readonly args: number;
       readonly inWith: boolean;
+      /** R-371: the target of every enclosing with-statement, innermost first; empty outside one. */
+      readonly withRecv: readonly Recv[];
+      /** R-371: the first argument's text, read only for `Codeunit::X` in an object run. */
+      readonly arg0: string | undefined;
     }
   /** `receiver.member`, called or not; `recv` is the receiver's shape, a bare name when plain. */
   | {
@@ -164,6 +186,7 @@ type Site =
       readonly receiver: string;
       readonly member: string;
       readonly args: number;
+      readonly arg0: string | undefined;
     };
 
 /**
@@ -230,7 +253,9 @@ function toRecv(n: ALSyntaxNode): Recv {
 
 const ARRAY_OF = /^\s*array\s*\[[^\]]*\]\s*of\s+([\s\S]*)$/i;
 
-interface Unit {
+export interface Unit {
+  /** R-371: `codeunit`, or the object kind of a non-codeunit unit (`table`, `pageextension`, ...). */
+  readonly kind: string;
   readonly file: string;
   readonly id: number;
   readonly name: string; // normalised
@@ -238,12 +263,31 @@ interface Unit {
   readonly damaged: boolean;
   /** Every declared name -> EVERY type text it has across `#if` arms (run 003). */
   readonly globals: ReadonlyMap<string, readonly string[]>;
+  /** R-371: the variables AL declares implicitly (`Rec`, `xRec`, a data item's name), read by
+   *  the digest's walk only, so the TestPage scan's reading of a name did not change. */
+  readonly implicit: ReadonlyMap<string, readonly string[]>;
+  /** R-371: a non-codeunit object whose `Rec` type is not known here (see `buildObjectUnit`). */
+  readonly implicitUnknown: boolean;
   readonly pageNamesAnywhere: ReadonlySet<string>;
   readonly procs: readonly Proc[];
   readonly problems: readonly string[];
+  /** R-371: the codeunit's triggers (OnRun), or every trigger of a non-codeunit object, nested
+   *  ones included. Apart from `procs`, so the TestPage scan never walks or matches one. */
+  readonly triggers: readonly Proc[];
+  /** R-371: holds an `[EventSubscriber]` procedure or says `EventSubscriberInstance = Manual`. */
+  readonly subscriber: boolean;
+  /** R-371: for a codeunit, SHA-256 of the object minus its procedures (the header, properties,
+   *  globals and their initialisation, triggers, and the `#if` lines between members); for any
+   *  other object, of its whole text. */
+  readonly partsHash: string;
+  /** R-371: SHA-256 of the whole object's text. */
+  readonly textHash: string;
+  /** R-371, non-codeunit units: `<kind>:<normalised name>` of the object it declares or, for an
+   *  extension, extends. The units under one base key are one object's code. */
+  readonly baseKey: string | undefined;
 }
 
-interface Proc {
+export interface Proc {
   readonly unit: Unit;
   /** Undefined when the procedure has no code block. */
   readonly sites: readonly Site[] | undefined;
@@ -255,7 +299,39 @@ interface Proc {
   /** Parameters, named return value and locals -> every type text across `#if` arms. A name here
    *  hides every global of that name (ordinary shadowing). */
   readonly scope: ReadonlyMap<string, readonly string[]>;
+  /** R-371: the normalised names a `[HandlerFunctions('A,B')]` attribute lists. */
+  readonly handlers: readonly string[];
+  /** R-371: SHA-256 of the procedure's span, its attributes included (R-278's span). */
+  readonly spanHash: string;
+  /** R-371: unique within the test app: `[<kind> ]<id>:<display>`, `#<n>` for a repeat. */
+  readonly key: string;
+  /** R-371: carries an `[EventSubscriber]` attribute. */
+  readonly subscriber: boolean;
 }
+
+/** R-371: one parse of the test app, as plain facts, shared by the TestPage scan and the digest. */
+export interface TestAppModel {
+  /** The codeunits: the only units the TestPage scan reads. */
+  readonly units: readonly Unit[];
+  /** R-371: every other object with a name, as a walkable unit. */
+  readonly objects: readonly Unit[];
+  /** Parse damage inside a codeunit or outside every object: either could hide a target. */
+  readonly suspect: readonly string[];
+  /** R-371: every file with any parse damage; the digest's walk trusts no EXTERNAL then. */
+  readonly damaged: readonly string[];
+  /** SHA-256 of every file's normalised text, sorted: the whole-source fallback's input. */
+  readonly fileHashes: readonly string[];
+}
+
+/** R-278's normalisation: line endings and trailing spaces and tabs only, and R-372's BOM. */
+export const normalizeSource = (text: string): string =>
+  text
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "");
+
+export const sha256 = (text: string): string =>
+  new Bun.CryptoHasher("sha256").update(text).digest("hex");
 
 function nameNode(n: ALSyntaxNode): ALSyntaxNode | undefined {
   return n.namedChildren.find((c) => NAME_KINDS.has(c.rawKind));
@@ -317,24 +393,177 @@ function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   return out;
 }
 
-function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[]): Unit {
+/**
+ * Where `decl`'s span starts: its first attribute directly before it (they are its siblings,
+ * possibly with trivia between), R-278's rule. With `andTrivia`, trivia directly before is taken
+ * too: R-371's object parts leave a doc comment above a procedure out, so adding a commented test
+ * to a codeunit does not read as an edit to its header.
+ */
+function spanStart(decl: ALSyntaxNode, andTrivia = false): number {
+  let start = decl.startIndex;
+  const siblings = decl.parent?.namedChildren ?? [];
+  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
+  for (i -= 1; i >= 0; i -= 1) {
+    const x = siblings[i];
+    if (x === undefined) break;
+    if (x.rawKind === "attribute_item" || (andTrivia && TRIVIA.has(x.rawKind)))
+      start = x.startIndex;
+    else if (!TRIVIA.has(x.rawKind)) break;
+  }
+  return start;
+}
+
+/** The attribute texts directly before `decl`, nearest first. */
+function attributesOf(decl: ALSyntaxNode): string[] {
+  const out: string[] = [];
+  const siblings = decl.parent?.namedChildren ?? [];
+  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
+  for (i -= 1; i >= 0; i -= 1) {
+    const x = siblings[i];
+    if (x === undefined) break;
+    if (x.rawKind === "attribute_item") out.push(x.text.trim());
+    else if (!TRIVIA.has(x.rawKind)) break;
+  }
+  return out;
+}
+
+const HANDLER_ATTRIBUTE = /^\[\s*HandlerFunctions\s*\(\s*'([^']*)'/i;
+const SUBSCRIBER_ATTRIBUTE = /^\[\s*EventSubscriber\s*\(/i;
+const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
+
+/**
+ * R-371: `node`'s text with every procedure span in it cut out (attributes and the comments
+ * directly above included), each remaining piece trimmed and blank ones dropped. What is left is
+ * the object's header, properties, globals, triggers and the `#if` lines between members, and
+ * adding or editing a procedure leaves it unchanged.
+ */
+function partsText(source: string, node: ALSyntaxNode): string {
+  const cuts: Array<[number, number]> = [];
+  visit(node, (n) => {
+    if (n.rawKind === "procedure") cuts.push([spanStart(n, true), n.endIndex]);
+  });
+  cuts.sort((x, y) => x[0] - y[0]);
+  const pieces: string[] = [];
+  let at = node.startIndex;
+  for (const [from, to] of cuts) {
+    if (from < at) continue; // nested inside a cut already taken
+    pieces.push(source.slice(at, from));
+    at = to;
+  }
+  pieces.push(source.slice(at, node.endIndex));
+  return pieces
+    .map((x) => normalizeSource(x).trim())
+    .filter((x) => x.length > 0)
+    .join("\n");
+}
+
+/** A procedure or trigger as plain facts; `problems` is the scan's list, `null` for R-371 only. */
+function procOf(
+  p: ALSyntaxNode,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+): Proc | undefined {
+  const isTrigger = p.rawKind === "trigger_declaration";
+  const id2 = nameNode(p);
+  if (id2 === undefined) return undefined;
+  const scope = new Map<string, string[]>();
+  const plist = p.namedChildren.find((c) => c.rawKind === "parameter_list");
+  const params = plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
+  for (const prm of params) {
+    const n = nameNode(prm);
+    const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
+    if (n !== undefined) addType(scope, n.text, t);
+  }
+  // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
+  // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
+  const returnType = p.childForFieldName("return_type")?.text;
+  const returnValue = p.childForFieldName("return_value");
+  if (returnValue !== null && returnType !== undefined)
+    addType(scope, returnValue.text, returnType);
+  const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
+  // A trigger's locals, and anything outside a codeunit, are read by R-371's walk only, so they
+  // report no scan problem.
+  if (vars !== undefined)
+    addDeclarations(
+      vars,
+      scope,
+      `${unit.display}.${id2.text}`,
+      isTrigger || problems === null ? [] : problems,
+    );
+  const block = p.namedChildren.find((c) => c.rawKind === "code_block");
+  const attributes = attributesOf(p);
+  const handlerList = attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h);
+  const display = `${unit.display}.${id2.text}`;
+  const seen = keys.get(display.toLowerCase()) ?? 0;
+  keys.set(display.toLowerCase(), seen + 1);
+  const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
+  return {
+    unit,
+    sites: block === undefined ? undefined : callSites(block),
+    name: normalizeAlName(id2.text),
+    display,
+    params: params.length,
+    returnType,
+    scope,
+    handlers: (handlerList ?? "")
+      .split(",")
+      .map((h) => normalizeAlName(h.trim()))
+      .filter((h) => h.length > 0),
+    spanHash: sha256(normalizeSource(source.slice(spanStart(p), p.endIndex))),
+    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${isTrigger ? " (trigger)" : ""}`,
+    subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
+  };
+}
+
+/** The value of a declaration_body-level property (`TableNo`, `SourceTable`), as written. */
+function propertyValue(body: ALSyntaxNode | undefined, name: string): string | undefined {
+  for (const c of flattenPreproc(body?.namedChildren ?? [])) {
+    if (c.rawKind !== "property") continue;
+    const m = /^\s*([A-Za-z]+)\s*=\s*([\s\S]*?)\s*;?\s*$/.exec(c.text);
+    if (m?.[1] !== undefined && m[1].toLowerCase() === name.toLowerCase()) return m[2];
+  }
+  return undefined;
+}
+
+function buildUnit(
+  file: string,
+  node: ALSyntaxNode,
+  errors: readonly ErrorSite[],
+  source: string,
+): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
   const body = node.namedChildren.find((c) => c.rawKind === "declaration_body");
   const problems: string[] = [];
   const globals = new Map<string, string[]>();
   const pageNamesAnywhere = new Set<string>();
+  const text = source.slice(node.startIndex, node.endIndex);
+  // R-371: a codeunit with `TableNo` has an implicit `Rec` of that table in its OnRun.
+  const implicit = new Map<string, string[]>();
+  const tableNo = propertyValue(body, "TableNo");
+  if (tableNo !== undefined) addType(implicit, "Rec", `Record ${tableNo}`);
   const unitShell = {
+    kind: "codeunit",
     file,
     id,
     name: normalizeAlName(display),
     display,
     damaged: errors.some((e) => within(e.startIndex, node)),
     globals,
+    implicit,
+    implicitUnknown: false,
     pageNamesAnywhere,
     problems,
     procs: [] as Proc[],
+    triggers: [] as Proc[],
+    subscriber: MANUAL_BINDING.test(text),
+    partsHash: sha256(partsText(source, node)),
+    textHash: sha256(normalizeSource(text)),
+    baseKey: undefined,
   };
+  const keys = new Map<string, number>();
   if (body !== undefined) {
     const members = flattenPreproc(body.namedChildren).flatMap((c) =>
       c.rawKind.endsWith("var_section") ? [c, ...procsInVarSection(c)] : [c],
@@ -347,44 +576,121 @@ function buildUnit(file: string, node: ALSyntaxNode, errors: readonly ErrorSite[
     addDeclarations(body, all, `${display}`, []);
     for (const [n, ts] of all) if (ts.some((t) => PAGE_TYPE.test(t))) pageNamesAnywhere.add(n);
     for (const p of members) {
-      if (p.rawKind !== "procedure") continue;
-      const id2 = nameNode(p);
-      if (id2 === undefined) continue;
-      const scope = new Map<string, string[]>();
-      const plist = p.namedChildren.find((c) => c.rawKind === "parameter_list");
-      const params = plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
-      for (const prm of params) {
-        const n = nameNode(prm);
-        const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
-        if (n !== undefined) addType(scope, n.text, t);
-      }
-      // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
-      // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
-      const returnType = p.childForFieldName("return_type")?.text;
-      const returnValue = p.childForFieldName("return_value");
-      if (returnValue !== null && returnType !== undefined)
-        addType(scope, returnValue.text, returnType);
-      const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
-      if (vars !== undefined) addDeclarations(vars, scope, `${display}.${id2.text}`, problems);
-      const block = p.namedChildren.find((c) => c.rawKind === "code_block");
-      unitShell.procs.push({
-        unit: unitShell,
-        sites: block === undefined ? undefined : callSites(block),
-        name: normalizeAlName(id2.text),
-        display: `${display}.${id2.text}`,
-        params: params.length,
-        returnType,
-        scope,
-      });
+      if (p.rawKind !== "procedure" && p.rawKind !== "trigger_declaration") continue;
+      const proc = procOf(p, unitShell, source, problems, keys);
+      if (proc === undefined) continue;
+      if (proc.subscriber) unitShell.subscriber = true;
+      (p.rawKind === "trigger_declaration" ? unitShell.triggers : unitShell.procs).push(proc);
     }
   }
   return unitShell;
 }
 
+/** A report, query or xmlport data item's name and table: `dataitem(Name; Table)`. */
+const DATA_ITEM =
+  /^\s*(?:dataitem|tableelement)\s*\(\s*("[^"]*"|[A-Za-z_]\w*)\s*;\s*([^)]+?)\s*\)/i;
+const DATA_ITEM_KIND = /dataitem|tableelement/;
+
+/**
+ * R-371 (ruling B): a non-codeunit test-app object (table, page, report, extension, ...) as a
+ * walkable unit. Its procedures and EVERY trigger in it, nested ones (field, action, data item)
+ * included, so a walk that enters the object can walk them all. `partsHash` is its whole text:
+ * any edit to the object is an edit to what a test that reaches it runs. Never seen by the
+ * TestPage scan.
+ */
+function buildObjectUnit(
+  file: string,
+  node: ALSyntaxNode,
+  errors: readonly ErrorSite[],
+  source: string,
+  kind: string,
+  baseKey: string | undefined,
+  extendsText: string | undefined,
+): Unit {
+  const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
+  const nameText = nameNode(node)?.text ?? "";
+  const display = nameText.replace(/^"|"$/g, "");
+  const body = node.namedChildren.find((c) => c.rawKind === "declaration_body");
+  const globals = new Map<string, string[]>();
+  for (const c of flattenPreproc(body?.namedChildren ?? [])) {
+    if (c.rawKind.endsWith("var_section")) addDeclarations(c, globals, display, [], true);
+  }
+  // The implicit record variables AL declares for the object's code. Where their type is not
+  // known here (a page with no SourceTable, a page or report extension), `implicitUnknown` makes
+  // a trigger-capable call on one fall back.
+  const implicit = new Map<string, string[]>();
+  let recType: string | undefined;
+  if (kind === "table") recType = `Record ${nameText}`;
+  else if (kind === "tableextension" && extendsText !== undefined)
+    recType = `Record ${extendsText}`;
+  else if (kind === "page") {
+    const src = propertyValue(body, "SourceTable");
+    if (src !== undefined) recType = `Record ${src}`;
+  }
+  if (recType !== undefined) {
+    addType(implicit, "Rec", recType);
+    addType(implicit, "xRec", recType);
+  }
+  visit(node, (x) => {
+    if (DATA_ITEM_KIND.test(x.rawKind)) {
+      const m = DATA_ITEM.exec(x.text);
+      if (m?.[1] !== undefined && m[2] !== undefined) addType(implicit, m[1], `Record ${m[2]}`);
+    }
+  });
+  const text = normalizeSource(source.slice(node.startIndex, node.endIndex));
+  const hash = sha256(text);
+  const unit = {
+    kind,
+    file,
+    id,
+    name: normalizeAlName(display),
+    display: `${kind} ${display}`,
+    damaged: errors.some((e) => within(e.startIndex, node)),
+    globals,
+    implicit,
+    implicitUnknown: recType === undefined,
+    pageNamesAnywhere: new Set<string>(),
+    problems: [],
+    procs: [] as Proc[],
+    triggers: [] as Proc[],
+    subscriber: false,
+    partsHash: hash,
+    textHash: hash,
+    baseKey,
+  };
+  const keys = new Map<string, number>();
+  const walk = (n: ALSyntaxNode): void => {
+    if (n.rawKind === "procedure" || n.rawKind === "trigger_declaration") {
+      const proc = procOf(n, unit, source, null, keys);
+      if (proc !== undefined)
+        (n.rawKind === "trigger_declaration" ? unit.triggers : unit.procs).push(proc);
+      return;
+    }
+    for (const c of n.namedChildren) walk(c);
+  };
+  walk(node);
+  return unit;
+}
+/**
+ * The argument count, and the first argument's text when it is an object reference
+ * (`Codeunit::X`, which R-371's walk reads for an object run); `""` for any other first argument,
+ * so no argument's text is kept that nothing reads.
+ */
+function argInfo(call: ALSyntaxNode): { args: number; arg0: string | undefined } {
+  const list = call.namedChildren.find((c) => c.rawKind === "argument_list");
+  const real = list === undefined ? [] : realChildren(list);
+  const first = real[0];
+  return {
+    args: real.length,
+    arg0:
+      first === undefined ? undefined : first.rawKind === "database_reference" ? first.text.trim() : "",
+  };
+}
+
 /** The call sites under `block`, in the pre-order the traversal used to visit them live. */
 function callSites(block: ALSyntaxNode): Site[] {
   const out: Site[] = [];
-  const member = (m: ALSyntaxNode, args: number): void => {
+  const member = (m: ALSyntaxNode, args: number, arg0: string | undefined): void => {
     const [receiver, name] = realChildren(m);
     if (receiver === undefined || name === undefined) return;
     out.push({
@@ -393,17 +699,20 @@ function callSites(block: ALSyntaxNode): Site[] {
       receiver: receiver.text,
       member: name.text,
       args,
+      arg0,
     });
+  };
+  const bare = (n: ALSyntaxNode, name: string, args: number, arg0: string | undefined): void => {
+    const withRecv = withTargets(n);
+    out.push({ kind: "bare", name, args, inWith: withRecv.length > 0, withRecv, arg0 });
   };
   visit(block, (n) => {
     if (n.rawKind === "call_expression") {
       const fn = n.childForFieldName("function");
-      const list = n.namedChildren.find((c) => c.rawKind === "argument_list");
-      const args = list === undefined ? 0 : realChildren(list).length;
+      const { args, arg0 } = argInfo(n);
       if (fn === null) return;
-      if (NAME_KINDS.has(fn.rawKind))
-        out.push({ kind: "bare", name: fn.text, args, inWith: insideWithStatement(n) });
-      else if (fn.rawKind === "member_expression") member(fn, args);
+      if (NAME_KINDS.has(fn.rawKind)) bare(n, fn.text, args, arg0);
+      else if (fn.rawKind === "member_expression") member(fn, args, arg0);
       return;
     }
     if (n.rawKind === "member_expression") {
@@ -412,13 +721,12 @@ function callSites(block: ALSyntaxNode): Site[] {
         parent !== null &&
         parent.rawKind === "call_expression" &&
         parent.childForFieldName("function")?.startIndex === n.startIndex;
-      if (!isCallee) member(n, 0);
+      if (!isCallee) member(n, 0, undefined);
       return;
     }
     if (n.rawKind === "call_statement") {
       const id = nameNode(n);
-      if (id !== undefined)
-        out.push({ kind: "bare", name: id.text, args: 0, inWith: insideWithStatement(n) });
+      if (id !== undefined) bare(n, id.text, 0, undefined);
     }
   });
   return out;
@@ -432,19 +740,123 @@ interface TestState {
   reason: string | undefined;
 }
 
-class Scanner {
+/** R-371: what one digest walk reached. Built per test, hashed, and dropped at once. */
+export interface ReachState {
+  readonly procs: Set<Proc>;
+  readonly units: Set<Unit>;
+  /** Non-codeunit objects whose triggers were walked (`enterObject`), by base key. */
+  readonly entered: Set<string>;
+  /** The first UNFOLLOWED edge met, in words; undefined while every edge was classified. */
+  fallback: string | undefined;
+}
+
+export const newReachState = (): ReachState => ({
+  procs: new Set(),
+  units: new Set(),
+  entered: new Set(),
+  fallback: undefined,
+});
+
+function fallBack(st: ReachState, why: string): void {
+  st.fallback ??= why;
+}
+
+/** The object name a type or reference text ends in: the last dotted segment, quotes kept whole. */
+function lastSegment(raw: string): string {
+  const segments = raw.trim().match(/"[^"]*"|[^.]+/g) ?? [raw];
+  return normalizeAlName((segments[segments.length - 1] ?? raw).trim());
+}
+
+/**
+ * R-371 (the orchestrator's EXTERNAL condition): whether a reference is ONE plain name that the
+ * test app's objects can be checked against: a bare identifier, or one quoted name (dots inside
+ * the quotes are part of the name). An id, a namespace-qualified name and any other shape are
+ * not, and a reference the test app does not declare is then UNFOLLOWED, never EXTERNAL.
+ */
+const PLAIN_NAME = /^\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\s*$/;
+
+const OBJ_TYPE =
+  /^\s*(codeunit|record|page|report|query|xmlport|testpage|testrequestpage)\s+(.+?)(?:\s+temporary)?\s*$/i;
+const KIND_OF: Readonly<Record<string, string>> = {
+  codeunit: "codeunit",
+  record: "table",
+  page: "page",
+  testpage: "page",
+  report: "report",
+  testrequestpage: "report",
+  query: "query",
+  xmlport: "xmlport",
+};
+const RUN_ROOTS = new Set(["codeunit", "page", "report", "xmlport", "query"]);
+const RUN_MEMBER = /^(run|execute|import|export|saveas|print|open|trap)/i;
+const RECORD_TRIGGER = new Set([
+  "insert",
+  "modify",
+  "delete",
+  "deleteall",
+  "modifyall",
+  "validate",
+  "rename",
+]);
+/** Names AL declares in non-codeunit code whose calls reach only the object's own triggers
+ *  (walked whenever its code is entered) or the platform. */
+const SYSTEM_ROOTS = new Set([
+  "currpage",
+  "currreport",
+  "currxmlport",
+  "currquery",
+  "database",
+  "session",
+  "system",
+  "companyproperty",
+  "requestoptionspage",
+]);
+
+export class Scanner {
   /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
    *  349 of BaseApp's 415 s (CPU profile, R-236c round 2). */
   private readonly byKey = new Map<string, Unit[]>();
+  /** R-371: `<kind>:<name or id>` of an object -> the test-app units declaring or extending it. */
+  private readonly otherByBase = new Map<string, Unit[]>();
+  /** R-371: every test-app table and tableextension unit (case 14). */
+  private readonly tableUnits: readonly Unit[];
+  /** R-371: the name of every procedure any test-app object declares. */
+  private readonly procNames = new Set<string>();
+  /** R-371: any file of the test app has parse damage. */
+  private readonly anyDamage: boolean;
+  /** `normalizeAlName` per distinct text, once: a walk asks for the same few names millions of
+   *  times on a large suite, and each answer was a fresh string (R-371's RSS measurement). */
+  private readonly normCache = new Map<string, string>();
+  /** `unitsFor` per distinct type text, once, for the same reason. */
+  private readonly unitsForCache = new Map<string, Unit[]>();
 
-  constructor(units: readonly Unit[]) {
-    for (const u of units) {
-      for (const k of new Set([String(u.id), u.name])) {
-        const list = this.byKey.get(k);
-        if (list === undefined) this.byKey.set(k, [u]);
-        else list.push(u);
-      }
+  private norm(raw: string): string {
+    let v = this.normCache.get(raw);
+    if (v === undefined) {
+      v = normalizeAlName(raw);
+      this.normCache.set(raw, v);
     }
+    return v;
+  }
+
+  constructor(model: TestAppModel) {
+    const add = (map: Map<string, Unit[]>, k: string, u: Unit): void => {
+      const list = map.get(k);
+      if (list === undefined) map.set(k, [u]);
+      else if (!list.includes(u)) list.push(u);
+    };
+    for (const u of model.units) {
+      for (const k of new Set([String(u.id), u.name])) add(this.byKey, k, u);
+      for (const p of u.procs) this.procNames.add(p.name);
+    }
+    for (const u of model.objects) {
+      const kind = u.kind.replace(/extension$/, "");
+      if (u.baseKey !== undefined) add(this.otherByBase, u.baseKey, u);
+      if (!u.kind.endsWith("extension")) add(this.otherByBase, `${kind}:${u.id}`, u);
+      for (const p of u.procs) this.procNames.add(p.name);
+    }
+    this.tableUnits = model.objects.filter((u) => u.kind === "table" || u.kind === "tableextension");
+    this.anyDamage = model.damaged.length > 0;
   }
 
   /**
@@ -454,8 +866,17 @@ class Scanner {
    * is walked, and a call is resolved, or a test refused, if ANY of them says so.
    */
   unitsFor(typeText: string): Unit[] {
-    const raw = CODEUNIT_TYPE.exec(typeText)?.[1];
-    if (raw === undefined) return [];
+    let v = this.unitsForCache.get(typeText);
+    if (v === undefined) {
+      const raw = CODEUNIT_TYPE.exec(typeText)?.[1];
+      v = raw === undefined ? [] : this.unitsNamed(raw);
+      this.unitsForCache.set(typeText, v);
+    }
+    return v;
+  }
+
+  /** R-371: `unitsFor` on a reference that is already the name (`Codeunit::X` gives `X`). */
+  private unitsNamed(raw: string): Unit[] {
     // A namespace-qualified reference (`Codeunit My.Tests."Lib"`) carries the namespace as leading
     // dotted segments OUTSIDE any quotes; the object itself is always the LAST such segment
     // (review round 1, #3). A quoted segment is kept whole even if it contains its own dot
@@ -468,10 +889,10 @@ class Scanner {
     // name here, since it can coincidentally equal an UNRELATED codeunit's own quoted name
     // (`"A.B"`) that has nothing to do with namespace `A`'s object `B` (review round 3).
     if (segments.length === 1) {
-      for (const u of this.byNameAll(normalizeAlName(raw))) candidates.add(u);
+      for (const u of this.byNameAll(this.norm(raw))) candidates.add(u);
     }
     const last = segments[segments.length - 1] ?? raw;
-    for (const u of this.byNameAll(normalizeAlName(last))) candidates.add(u);
+    for (const u of this.byNameAll(this.norm(last))) candidates.add(u);
     return [...candidates];
   }
 
@@ -501,7 +922,7 @@ class Scanner {
     path: readonly string[],
     st: TestState,
   ): boolean {
-    const name = normalizeAlName(rawName);
+    const name = this.norm(rawName);
     let matched = false;
     for (const c of owner.procs) {
       if (c.name === name && c.params === args) {
@@ -533,7 +954,7 @@ class Scanner {
   ): void {
     const matched = this.calls(unit, rawName, args, path, st);
     if (matched) return;
-    if (OPENING_METHODS.has(normalizeAlName(rawName))) {
+    if (OPENING_METHODS.has(this.norm(rawName))) {
       st.reason ??= `${path.join(" -> ")} calls ${rawName} (unresolved same-codeunit call, safety-first)`;
       return;
     }
@@ -554,7 +975,7 @@ class Scanner {
       // refuses outright (review round 1, #4). Any other member is a call edge on whatever
       // codeunit the receiver's value can be, walked like a plain one; a receiver whose type the
       // scanner cannot work out fails loudly, never "not an edge" (run 002, review r1 #1).
-      if (OPENING_METHODS.has(normalizeAlName(member))) {
+      if (OPENING_METHODS.has(this.norm(member))) {
         st.reason ??= `${path.join(" -> ")} calls ${receiver}.${member} on an unresolved receiver`;
         return;
       }
@@ -568,7 +989,7 @@ class Scanner {
       for (const t of types) this.callOn(t, receiver, member, args, path, st);
       return;
     }
-    const key = normalizeAlName(site.recv.name);
+    const key = this.norm(site.recv.name);
     if (key === "this") {
       // `this` refers to the codeunit instance itself (review round 1, #1): not a declared name,
       // so it is never in scope/globals, and must not silently fall through as "not a TestPage".
@@ -596,7 +1017,7 @@ class Scanner {
     path: readonly string[],
     st: TestState,
   ): void {
-    if (PAGE_TYPE.test(type) && OPENING_METHODS.has(normalizeAlName(member))) {
+    if (PAGE_TYPE.test(type) && OPENING_METHODS.has(this.norm(member))) {
       st.reason ??= `${path.join(" -> ")} calls ${receiver}.${member} on ${type.trim()}`;
       return;
     }
@@ -613,6 +1034,297 @@ class Scanner {
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // R-371: the digest's walk. Every call edge is FOLLOWED, EXTERNAL or UNFOLLOWED, fail closed: an
+  // edge not positively FOLLOWED or EXTERNAL is UNFOLLOWED, and an UNFOLLOWED edge sends the test
+  // to the broad fallback (a digest of the whole test-app source). The cases are numbered as in
+  // scripts/r371-reach-measure/RESULTS.md ("The classifier's cases"); cases 14, 15 and 16 are
+  // FOLLOWED by walking the object's code (the r2 ruling on the subscriber closure, option B).
+  // The TestPage scan above is not changed by any of this: it walks `walk`, which reads none of
+  // R-371's facts.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Walks `p` and everything it reaches into `st`. */
+  reach(p: Proc, st: ReachState): void {
+    if (st.procs.has(p)) return;
+    st.procs.add(p);
+    this.reachUnit(p.unit, st);
+    // Any code of a non-codeunit object can fire that object's triggers (`Modify(true)`,
+    // `CurrPage.Update()`, ...): walk them all, and the test app's extensions' with them.
+    if (p.unit.kind !== "codeunit" && p.unit.baseKey !== undefined)
+      this.enterObject(p.unit.baseKey, st);
+    // Case 4: a `[HandlerFunctions]` handler is looked up in the test's own codeunit; case 20.
+    for (const h of p.handlers) {
+      let found = false;
+      for (const c of p.unit.procs) {
+        if (c.name === h) {
+          found = true;
+          this.reach(c, st);
+        }
+      }
+      if (!found) fallBack(st, `handler ${h} is named but not found in ${p.unit.display}`);
+    }
+    for (const site of p.sites ?? []) {
+      if (site.kind === "bare") this.reachBare(p, site, st);
+      else this.reachMember(p, site, st);
+    }
+  }
+
+  private reachUnit(u: Unit, st: ReachState): void {
+    if (st.units.has(u)) return;
+    st.units.add(u);
+    if (u.damaged) fallBack(st, `${u.display} (${u.file}) does not parse cleanly`);
+  }
+
+  /**
+   * R-371: walks EVERY trigger of every test-app unit under `baseKey` (the object and the test
+   * app's extensions of it), nested field, action and data-item triggers included. Complete for
+   * "which of this object's code can run": in AL an object's code is its triggers and its
+   * procedures, a procedure runs only when called (and every call from a walked trigger is itself
+   * a walked site), and `buildObjectUnit` collects every trigger in the object's text.
+   */
+  private enterObject(baseKey: string, st: ReachState): void {
+    if (st.entered.has(baseKey)) return;
+    st.entered.add(baseKey);
+    for (const u of this.otherByBase.get(baseKey) ?? []) {
+      this.reachUnit(u, st);
+      for (const t of u.triggers) this.reach(t, st);
+    }
+  }
+
+  /** Cases 1-3: every same-arity procedure of that name in `owner`. */
+  private reachCalls(owner: Unit, rawName: string, args: number, st: ReachState): boolean {
+    const name = this.norm(rawName);
+    let matched = false;
+    for (const c of owner.procs) {
+      if (c.name === name && c.params === args) {
+        matched = true;
+        this.reach(c, st);
+      }
+    }
+    return matched;
+  }
+
+  /** `X.Run()` on a test-app codeunit, or `Codeunit.Run(Codeunit::X)`: its OnRun trigger. */
+  private runUnit(u: Unit, st: ReachState): void {
+    this.reachUnit(u, st);
+    for (const t of u.triggers) if (t.name === "onrun") this.reach(t, st);
+  }
+
+  private reachBare(p: Proc, site: Extract<Site, { kind: "bare" }>, st: ReachState): void {
+    if (this.reachCalls(p.unit, site.name, site.args, st)) return;
+    // Ruling 1 (R-371 r2): Bind/UnbindSubscription is NOT an edge. What it binds is a test-app
+    // subscriber codeunit, and every such codeunit, with everything it reaches, is already in
+    // EVERY test's digest (`subscriberFold` in test-digest.ts). Treating it as UNFOLLOWED would
+    // only add the whole-source fallback a second time, for no coverage it does not already have.
+    const nn = this.norm(site.name);
+    if (nn === "bindsubscription" || nn === "unbindsubscription") return;
+    // A bare name its own object does not declare, outside any `with`, is a built-in function:
+    // only a built-in compiles there. Not an edge. (A built-in such as `Modify` in a table's code
+    // can fire the object's own triggers, which `reach` walks on entering the object.)
+    if (site.withRecv.length === 0) return;
+    // Case 7 (I4): through every enclosing with-target's declared types; case 19 when unknown.
+    const types: string[] = [];
+    for (const r of site.withRecv) {
+      const t = this.typesOf(p, r);
+      // A with-target is a declared variable: an empty list is an undeclared name, unknown.
+      if (typeof t === "string" || t.length === 0) {
+        fallBack(
+          st,
+          `${p.display} calls ${site.name} inside a with-statement whose target's type is unknown`,
+        );
+        return;
+      }
+      types.push(...t);
+    }
+    for (const t of types) this.reachOn(t, "(with)", site.name, site.args, st);
+  }
+
+  private reachMember(p: Proc, site: Extract<Site, { kind: "member" }>, st: ReachState): void {
+    const { args, receiver, member, arg0 } = site;
+    const nm = this.norm(member);
+    const inObject = p.unit.kind !== "codeunit";
+    if (site.recv.k !== "name") {
+      const types = this.typesOf(p, site.recv);
+      if (typeof types === "string") {
+        // Case 18.
+        fallBack(st, `${p.display} calls ${receiver}.${member} on a receiver of unmodelled shape`);
+        return;
+      }
+      // In a non-codeunit object's code, a chain the walk types as nothing (`CurrPage.Part.Page`)
+      // may still name a test-app procedure: not known complete, so it falls back.
+      if (inObject && types.length === 0 && this.procNames.has(nm)) {
+        fallBack(st, `${p.display} calls ${receiver}.${member}, whose receiver's type is unknown`);
+        return;
+      }
+      for (const t of types) this.reachOn(t, receiver, member, args, st);
+      return;
+    }
+    const key = this.norm(site.recv.name);
+    if (key === "this") {
+      this.reachCalls(p.unit, member, args, st);
+      return;
+    }
+    const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
+    if (types === undefined) {
+      // An undeclared root is a type or system name (the scan's rule). The only call edges from
+      // one are object runs (cases 5, 9 and 11).
+      if (RUN_ROOTS.has(key) && RUN_MEMBER.test(member)) {
+        this.objectRun(key, arg0, `${receiver}.${member}`, st);
+        return;
+      }
+      // Outside a codeunit, AL declares names the walk may not type (`Rec` on a page extension, a
+      // report extension's data items): a call on one that could run test-app code falls back.
+      if (
+        inObject &&
+        !SYSTEM_ROOTS.has(key) &&
+        (RECORD_TRIGGER.has(nm) || RUN_MEMBER.test(member) || this.procNames.has(nm))
+      )
+        fallBack(st, `${p.display} calls ${receiver}.${member}, whose receiver's type is unknown`);
+      return;
+    }
+    for (const t of types) this.reachOn(t, receiver, member, args, st);
+  }
+
+  /** `Codeunit.Run(Codeunit::X)` and friends: by name, resolved; by id or variable, case 11. */
+  private objectRun(root: string, arg0: string | undefined, label: string, st: ReachState): void {
+    const m =
+      arg0 === undefined ? null : /^(codeunit|page|report|xmlport|query)\s*::\s*(.+)$/i.exec(arg0);
+    const kind = m?.[1]?.toLowerCase();
+    const raw = m?.[2];
+    if (kind === undefined || raw === undefined || kind !== root) {
+      fallBack(st, `${label} runs an object by id or through a variable`);
+      return;
+    }
+    if (kind === "codeunit") {
+      const us = this.unitsNamed(raw);
+      if (us.length > 0) {
+        for (const u of us) this.runUnit(u, st);
+        return;
+      }
+    } else if (this.testAppObject(kind, raw, "run", 0, label, st)) return;
+    this.outside(kind, raw, label, st);
+  }
+
+  /**
+   * A member on a variable of a non-codeunit test-app object, or of a dependency's object a
+   * test-app extension extends (cases 6, 15, 16). True when a test-app object declares the object
+   * itself; false when only extensions of it are in the test app, so the object is a dependency's
+   * or nothing visible (`outside` decides).
+   */
+  private testAppObject(
+    kind: string,
+    raw: string,
+    member: string,
+    args: number,
+    label: string,
+    st: ReachState,
+  ): boolean {
+    const us = [
+      ...new Set([
+        ...(this.otherByBase.get(`${kind}:${lastSegment(raw)}`) ?? []),
+        ...(/^\s*\d+\s*$/.test(raw) ? (this.otherByBase.get(`${kind}:${raw.trim()}`) ?? []) : []),
+      ]),
+    ];
+    if (us.length === 0) return false;
+    for (const u of us) this.reachUnit(u, st);
+    const nm = this.norm(member);
+    // Case 15: a procedure the object (or a test-app extension of it) declares is walked like a
+    // codeunit's: every same-arity declaration. Complete, because a member call on an object
+    // variable resolves only to the object's own procedures or to a built-in; a name the object
+    // declares at another arity alone is not known to be a built-in, so it falls back.
+    const named = us.filter((u) => u.procs.some((c) => c.name === nm));
+    if (named.length > 0) {
+      let matched = false;
+      for (const u of named) if (this.reachCalls(u, member, args, st)) matched = true;
+      if (!matched) fallBack(st, `${label} names a procedure of ${kind} ${raw.trim()} at no arity it declares`);
+      return us.some((u) => !u.kind.endsWith("extension"));
+    }
+    // Case 16: a call that can fire a trigger walks EVERY trigger of the object and of the test
+    // app's extensions of it, field and action triggers included (`enterObject`). Complete: which
+    // trigger fires depends on runtime data, and every one is walked.
+    const triggerCapable = kind === "table" ? RECORD_TRIGGER.has(nm) : RUN_MEMBER.test(member);
+    if (triggerCapable) {
+      for (const u of us) if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+    }
+    // Case 6: any other member is a built-in that runs no test-app code; the object is reached.
+    return us.some((u) => !u.kind.endsWith("extension"));
+  }
+
+  /**
+   * Case 8, EXTERNAL: an object the test app does not declare. The test app compiled, so only a
+   * dependency (or the platform) declares it, and the dependency fingerprint covers it. "Not in
+   * the test app" is decided by resolving the name against the test app's own objects
+   * (case-insensitively, the last dotted segment), NOT against the dependencies' symbol packages:
+   * reading those cost about 500 MB on DO (RESULTS.md, r2) and adds no safety over a compile.
+   * UNFOLLOWED instead (case 17) when the test app has parse damage that could hide the
+   * declaration, or when the reference is not one plain name the resolver could check (an id, a
+   * namespace-qualified name, any other shape): the orchestrator's condition on EXTERNAL.
+   */
+  private outside(kind: string, raw: string, label: string, st: ReachState): void {
+    if (this.anyDamage) {
+      fallBack(
+        st,
+        `${label} (${kind} ${raw.trim()}) is not in the test app, which has parse errors that could hide it`,
+      );
+    } else if (!PLAIN_NAME.test(raw)) {
+      fallBack(
+        st,
+        `${label} names ${kind} ${raw.trim()}, which is not one plain name the test app's objects can be checked against`,
+      );
+    }
+  }
+
+  private reachOn(
+    rawType: string,
+    receiver: string,
+    member: string,
+    args: number,
+    st: ReachState,
+  ): void {
+    const type = ARRAY_OF.exec(rawType)?.[1] ?? rawType;
+    const nm = this.norm(member);
+    const label = `${receiver}.${member}`;
+    if (/^\s*interface\b/i.test(type)) {
+      fallBack(st, `${label} dispatches through ${type.trim()}`); // case 12
+      return;
+    }
+    if (/^\s*variant\s*$/i.test(type)) {
+      // Case 13. A Variant's own methods are type tests (IsRecord, IsDecimal, ...): not edges.
+      if (!/^is/i.test(member)) fallBack(st, `${label} is called on a Variant`);
+      return;
+    }
+    if (/^\s*(recordref|fieldref)\b/i.test(type)) {
+      // Case 14: a RecordRef/FieldRef call that can fire a trigger walks EVERY trigger (table and
+      // field triggers) of EVERY test-app table and tableextension. Complete: the record's table
+      // is not known statically, a test-app trigger can only be in one of those objects, and a
+      // dependency's table is EXTERNAL through the dependency fingerprint.
+      if (RECORD_TRIGGER.has(nm)) {
+        for (const u of this.tableUnits) if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+      }
+      return;
+    }
+    const m = OBJ_TYPE.exec(type);
+    const kw = m?.[1]?.toLowerCase();
+    const raw = m?.[2];
+    if (kw === undefined || raw === undefined) return; // a built-in type's method: not an edge
+    const kind = KIND_OF[kw] ?? kw;
+    if (kind === "codeunit") {
+      const targets = this.unitsNamed(raw);
+      if (targets.length > 0) {
+        for (const t of targets) {
+          this.reachUnit(t, st);
+          if (!this.reachCalls(t, member, args, st) && nm === "run") this.runUnit(t, st);
+        }
+        return;
+      }
+      this.outside("codeunit", raw, label, st);
+      return;
+    }
+    if (this.testAppObject(kind, raw, member, args, label, st)) return;
+    this.outside(kind, raw, label, st);
+  }
+
   /**
    * Every type text the value `r` can have, read in `p`, or a string saying why that is unknown.
    * An empty list means "not a test-app codeunit": a literal, an operator's result, a built-in's
@@ -627,7 +1339,7 @@ class Scanner {
       case "opaque":
         return `a ${r.kind}`;
       case "name": {
-        const key = normalizeAlName(r.name);
+        const key = this.norm(r.name);
         if (key === "this") return [`Codeunit ${p.unit.id}`];
         return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? [])];
       }
@@ -646,7 +1358,7 @@ class Scanner {
         return base.flatMap((t) => ARRAY_OF.exec(t)?.[1] ?? []);
       }
       case "call": {
-        const name = normalizeAlName(r.name);
+        const name = this.norm(r.name);
         const procs = p.unit.procs.filter((c) => c.name === name && c.params === r.args);
         // None: a built-in, unless a with-statement's target could own it.
         if (procs.length === 0) return r.inWith ? `${r.name}() inside a with-statement` : [];
@@ -655,7 +1367,7 @@ class Scanner {
       case "member": {
         const recvTypes = this.typesOf(p, r.recv);
         if (typeof recvTypes === "string") return recvTypes;
-        const name = normalizeAlName(r.member);
+        const name = this.norm(r.member);
         const out: string[] = [];
         for (const t of recvTypes) {
           if (!CODEUNIT_TYPE.test(t)) continue;
@@ -670,12 +1382,16 @@ class Scanner {
   }
 }
 
-/** Reads one file's codeunits and parse damage into plain facts; `parsed` is not kept. */
+const OTHER_KIND = /^(\w+?)(extension)?_declaration$/;
+
+/** Reads one file's objects and parse damage into plain facts; `parsed` is not kept. */
 function scanFile(
   path: string,
+  source: string,
   parsed: ReturnType<typeof parseAL>,
   units: Unit[],
   suspect: string[],
+  others: Unit[],
 ): void {
   const root = wrapRoot(parsed);
   const errors = errorOffsets(root);
@@ -683,7 +1399,34 @@ function scanFile(
     (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
   );
   for (const o of objects) {
-    if (o.rawKind === "codeunit_declaration") units.push(buildUnit(path, o, errors));
+    if (o.rawKind === "codeunit_declaration") {
+      units.push(buildUnit(path, o, errors, source));
+      continue;
+    }
+    // R-371: every other object, for the digest's walk. The TestPage scan never reads these.
+    const km = OTHER_KIND.exec(o.rawKind);
+    if (km === null || nameNode(o) === undefined) continue;
+    const base = km[1] ?? "";
+    const isExt = km[2] !== undefined;
+    let baseKey = `${base}:${normalizeAlName((nameNode(o)?.text ?? "").replace(/^"|"$/g, ""))}`;
+    let extendsText: string | undefined;
+    if (isExt) {
+      const kids = o.namedChildren;
+      const at = kids.findIndex((c) => c.rawKind === "extends_keyword");
+      extendsText = at >= 0 ? kids[at + 1]?.text : undefined;
+      baseKey = `${base}:${extendsText === undefined ? "" : lastSegment(extendsText)}`;
+    }
+    others.push(
+      buildObjectUnit(
+        path,
+        o,
+        errors,
+        source,
+        isExt ? `${base}extension` : base,
+        baseKey,
+        extendsText,
+      ),
+    );
   }
   for (const e of errors) {
     const owner = objects.find((o) => within(e.startIndex, o));
@@ -701,17 +1444,41 @@ function scanFile(
   }
 }
 
+/**
+ * R-371: parses every file ONCE into the plain facts both the TestPage scan and the per-test
+ * digest read. No syntax node and no source text outlives this call: each span is hashed while
+ * its file's tree is alive, and only the hash is kept.
+ */
+export function buildTestAppModel(
+  files: ReadonlyArray<{ path: string; text: string }>,
+): TestAppModel {
+  const units: Unit[] = [];
+  const objects: Unit[] = [];
+  const suspect: string[] = [];
+  const damaged: string[] = [];
+  const fileHashes: string[] = [];
+  for (const f of files) {
+    const parsed = parseAL(f.text);
+    if (wrapRoot(parsed).hasError) damaged.push(f.path);
+    scanFile(f.path, f.text, parsed, units, suspect, objects);
+    fileHashes.push(sha256(normalizeSource(f.text)));
+  }
+  return { units, objects, suspect, damaged, fileHashes: fileHashes.sort() };
+}
+
 export function analyzeTestPageSources(
   files: ReadonlyArray<{ path: string; text: string }>,
   tests: readonly TestMethodRef[],
 ): TestPageAnalysis {
-  const units: Unit[] = [];
-  /** Errors inside a codeunit, or outside every top-level object: either could hide a target. */
-  const suspect: string[] = [];
-  for (const f of files) {
-    scanFile(f.path, parseAL(f.text), units, suspect);
-  }
-  const scanner = new Scanner(units);
+  return analyzeTestPageModel(buildTestAppModel(files), tests);
+}
+
+export function analyzeTestPageModel(
+  model: TestAppModel,
+  tests: readonly TestMethodRef[],
+): TestPageAnalysis {
+  const { units, suspect } = model;
+  const scanner = new Scanner(model);
   const refused = new Map<string, string>();
   const errors: string[] = [];
   for (const t of tests) {
@@ -761,7 +1528,15 @@ export function scanTestPageSources(
   files: ReadonlyArray<{ path: string; text: string }>,
   tests: readonly TestMethodRef[],
 ): ReadonlyMap<string, string> {
-  const { refused, errors } = analyzeTestPageSources(files, tests);
+  return scanTestPageModel(buildTestAppModel(files), tests);
+}
+
+/** R-371: the scan over a model already parsed, so the digest can share the one parse. */
+export function scanTestPageModel(
+  model: TestAppModel,
+  tests: readonly TestMethodRef[],
+): ReadonlyMap<string, string> {
+  const { refused, errors } = analyzeTestPageModel(model, tests);
   if (errors.length > 0) throw new TestPageScanError(errors);
   return refused;
 }

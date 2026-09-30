@@ -96,6 +96,13 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
+import {
+  appInputsOfAppJson,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  readAppJsonInputs,
+  targetOf,
+} from "../src/digest-inputs";
 import { testDigestsOfSources } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
@@ -512,6 +519,21 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json. */
+    const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
+      const app =
+        from !== undefined
+          ? appInputsOfPackage(from)
+          : ((await readAppJsonInputs(dirs.testDir)) ?? appInputsOfAppJson({}));
+      return {
+        dependencies: await dependencyFingerprint(
+          app,
+          async () => null,
+          await targetOf(dirs.projectDir),
+        ),
+        buildInputs: app.buildInputs,
+      };
+    };
 
     async function r372Run(
       read: Uint8Array | null | undefined,
@@ -546,10 +568,16 @@ describe("runSession", () => {
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
       const recorded = store.testDigests(runId);
+      const inputs = await inputsFor(dirs, OLD_PKG);
       expect(recorded).toEqual(
-        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K]) as Record<string, string>,
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs) as Record<
+          string,
+          string
+        >,
       );
-      expect(recorded).not.toEqual(testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]));
+      expect(recorded).not.toEqual(
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K], inputs),
+      );
       expect(digestWarning).toEqual([]);
       const plan = await planVerify({
         source: {
@@ -587,6 +615,7 @@ describe("runSession", () => {
         sourceBaseline: store.baselineTests(runId),
         sourceTestDigests: recorded,
         testDir: dirs.testDir,
+        dependencies: inputs.dependencies,
       });
       expect(store.baselineTests(runId).map((t) => t.method)).toEqual([K.method]);
       expect(plan.newTests.map((t) => t.method)).toEqual([K.method]);
@@ -642,9 +671,9 @@ describe("runSession", () => {
     });
 
     test("a backend that publishes nothing (al-runner) still records the disk digests", async () => {
-      const { store, runId, digestWarning } = await r372Run(undefined, {}, false);
+      const { dirs, store, runId, digestWarning } = await r372Run(undefined, {}, false);
       expect(store.testDigests(runId)).toEqual(
-        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]),
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K], await inputsFor(dirs)),
       );
       expect(digestWarning).toEqual([]);
       store.close();

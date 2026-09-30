@@ -329,4 +329,11 @@ export interface ExecutionBackend {
     readonly publisher: string;
     readonly name: string;
   }): Promise<Uint8Array | null | undefined>;
+
+  /**
+   * R-371, OPTIONAL: the folders a backend that publishes nothing loads dependency packages from
+   * (al-runner's `--package-cache`), so a run can fingerprint the non-Microsoft dependencies that
+   * RAN. Absent: none, and such a dependency cannot be read (the run records no test digests).
+   */
+  dependencyPackageDirs?(): readonly string[];
 }

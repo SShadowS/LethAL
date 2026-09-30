@@ -12,9 +12,12 @@ const unit = (methods: string, header = `codeunit 50100 "T"`) =>
 const A = "    [Test]\n    procedure A()\n    begin\n        X := 1;\n    end;\n";
 const B = "    [Test]\n    procedure B()\n    begin\n    end;\n";
 
+/** R-371: the dependency fingerprint and build inputs, fixed here. */
+const I = { dependencies: "d", buildInputs: "b" };
+
 /** Every discovered test's digest in one file. */
 function digests(text: string): Record<string, string> {
-  return testDigestsOfSources([{ path: "T.al", text }], testsInAlSource("T.al", text));
+  return testDigestsOfSources([{ path: "T.al", text }], testsInAlSource("T.al", text), I);
 }
 const digestOf = (text: string, method = "A") => digests(text)[`50100::${method.toLowerCase()}`];
 
@@ -22,7 +25,7 @@ describe("R-278: testDigestsOfSources", () => {
   test("a digest is recorded for every discovered test, keyed by codeunit id and lowercased method", () => {
     const d = digests(unit(A + B));
     expect(Object.keys(d).sort()).toEqual(["50100::a", "50100::b"]);
-    expect(d["50100::a"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(d["50100::a"]).toMatch(/^v2:[0-9a-f]{64}$/);
     expect(testDigestKey({ codeunitId: 50100, method: "MyTest" })).toBe(
       testDigestKey({ codeunitId: 50100, method: "mytest" }),
     );
@@ -74,6 +77,7 @@ describe("R-278: testDigestsOfSources", () => {
       testDigestsOfSources(
         [{ path: "T.al", text }],
         [{ codeunitId: 50100, codeunitName: "T", method: "Missing", file: "T.al" }],
+        I,
       ),
     ).toThrow(/found no procedure of that name/);
   });

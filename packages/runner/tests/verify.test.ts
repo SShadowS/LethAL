@@ -19,6 +19,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
+import { appInputsOfAppJson, readAppJsonInputs } from "../src/digest-inputs";
 import { testDigests } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
@@ -39,11 +40,17 @@ import {
   resolveVerifySource,
   runVerify,
   verifyExitCode,
+  verifyDependencyFingerprint,
   verifyRefusalOf,
 } from "../src/verify";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+
+/** R-371: the dependency fingerprint the planVerify fixtures record and verify with. */
+const DEPS = "fixture-dependencies";
+/** R-371: the digest inputs of a test project without an app.json, as `planVerify` reads them. */
+const INPUTS = { dependencies: DEPS, buildInputs: appInputsOfAppJson({}).buildInputs };
 
 const A1 = "a".repeat(32);
 const A2 = "b".repeat(32);
@@ -545,10 +552,10 @@ describe("planVerify", () => {
   /** `planVerify` against a source run that recorded the test project's CURRENT digests: every
    *  test in it reads as unchanged since the source run (R-278). */
   async function planUnchanged(
-    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests">,
+    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests" | "dependencies">,
   ): Promise<VerifyPlan> {
-    const recorded = await testDigests(a.testDir, await discoverTests(a.testDir));
-    return planVerify({ ...a, sourceTestDigests: recorded });
+    const recorded = await testDigests(a.testDir, await discoverTests(a.testDir), INPUTS);
+    return planVerify({ ...a, sourceTestDigests: recorded, dependencies: DEPS });
   }
 
   async function planRefusal(p: Promise<unknown>): Promise<VerifyError> {
@@ -647,7 +654,7 @@ describe("planVerify", () => {
   /** The digests a source run recorded over `codeunits`, taken before any later edit. */
   async function recordedOver(codeunits: readonly Codeunit[]): Promise<Record<string, string>> {
     const dir = testDir(codeunits);
-    return testDigests(dir, await discoverTests(dir));
+    return testDigests(dir, await discoverTests(dir), INPUTS);
   }
 
   // R258: 50100 A.M is in the source baseline and was edited since, and does not cover the
@@ -665,6 +672,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001"), entry("M0002")]),
       sourceBaseline: [row(50100, "A", "M")],
       sourceTestDigests: await recordedOver(before.slice(0, 1)),
+      dependencies: DEPS,
       testDir: testDir([
         { id: 50100, name: "A", methods: ["M"], body: "        Error('now asserts');\n" },
         { id: 50101, name: "B", methods: ["M"] },
@@ -683,6 +691,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
       sourceTestDigests: await recordedOver([{ id: 50100, name: "T", methods: ["M", "K"] }]),
+      dependencies: DEPS,
       testDir: testDir([
         {
           id: 50100,
@@ -706,6 +715,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
       sourceTestDigests: withoutK,
+      dependencies: DEPS,
       testDir: testDir(codeunits),
     });
     expect(keys(plan.newTests)).toEqual(["50100::K"]);
@@ -718,6 +728,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
       sourceTestDigests: await recordedOver(codeunits),
+      dependencies: DEPS,
       testDir: testDir(codeunits),
     });
     expect(keys(plan.newTests)).toEqual([]);
@@ -731,6 +742,7 @@ describe("planVerify", () => {
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "T", "M")],
         sourceTestDigests: null,
+        dependencies: DEPS,
         testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
       }),
     );
@@ -1427,7 +1439,13 @@ describe("C02-09: gap ids", () => {
     store.db.run("UPDATE runs SET test_digests = ? WHERE id = ?", [
       over.sourceDigests === null
         ? null
-        : JSON.stringify(await testDigests(testDir, await discoverTests(testDir))),
+        : JSON.stringify(
+            await testDigests(testDir, await discoverTests(testDir), {
+              dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
+              buildInputs: ((await readAppJsonInputs(testDir)) ?? appInputsOfAppJson({}))
+                .buildInputs,
+            }),
+          ),
       runId,
     ]);
     if (over.sourceCoverage !== undefined) {

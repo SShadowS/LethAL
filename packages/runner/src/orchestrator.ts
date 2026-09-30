@@ -122,6 +122,16 @@ import {
   publishedTestAppWarning,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
+import {
+  DependencyUnreadableError,
+  appInputsOfAppJson,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  packageFolderReader,
+  publishedPackageReader,
+  readAppJsonInputs,
+  targetOf,
+} from "./digest-inputs";
 import { buildReport } from "./report";
 import type {
   DeclarativeSiteFile,
@@ -163,7 +173,7 @@ import {
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
-import { TestDigestError, testDigestsOfSources } from "./test-digest";
+import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -171,7 +181,12 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
+import {
+  type TestAppModel,
+  buildTestAppModel,
+  readTestAppSources,
+  scanTestPageModel,
+} from "./testpage-scan";
 import {
   describeTestPageUnsupported,
   isTestPageNotRunMessage,
@@ -4276,9 +4291,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R-278: one read of the test sources serves the scan and, where nothing is published (R-372),
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   await initParser();
-  const testSources = await readTestAppSources(cfg.testDir);
+  // R-371: ONE parse of the test sources, shared by the scan and the digests.
+  const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
-    ? scanTestPageSources(testSources, tests)
+    ? scanTestPageModel(testModel, tests)
     : new Map();
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
@@ -4296,7 +4312,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R247: it also returns this session's test-app identity, recorded on the run and compared by
   // `--resume` and `--skip-known-survivors`.
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
-  const { testAppHash, testDigests } = await testAppIdentity(cfg, tests, testSources, emit);
+  const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
+    cfg,
+    tests,
+    testModel,
+    emit,
+  );
 
   const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
@@ -4344,6 +4365,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     coverageMode: caps.coverage,
     ...(testAppHash !== undefined ? { testAppHash } : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
+    ...(testDigestParts !== undefined ? { testDigestParts } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
@@ -6395,7 +6417,7 @@ async function reportPublishedTestApp(
     testAppHash,
     sources:
       files.length > 0
-        ? { kind: "published", files }
+        ? { kind: "published", files, pkg: bytes }
         : {
             kind: "unavailable",
             why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
@@ -6407,8 +6429,12 @@ async function reportPublishedTestApp(
 type PublishedTestSources =
   /** The backend publishes nothing (al-runner): the source on disk is what runs. */
   | { readonly kind: "not-published" }
-  /** The published package's own `.al` entries. */
-  | { readonly kind: "published"; readonly files: ReadonlyArray<{ path: string; text: string }> }
+  /** The published package's own `.al` entries, and the package (R-371 reads its manifest). */
+  | {
+      readonly kind: "published";
+      readonly files: ReadonlyArray<{ path: string; text: string }>;
+      readonly pkg: Uint8Array;
+    }
   | { readonly kind: "unavailable"; readonly why: string };
 
 const NO_PUBLISHED_READ =
@@ -6426,9 +6452,13 @@ const UNREADABLE =
 async function testAppIdentity(
   cfg: SessionConfig,
   tests: readonly TestMethodRef[],
-  diskSources: ReadonlyArray<{ path: string; text: string }>,
+  diskModel: TestAppModel,
   emit: RunEmitter,
-): Promise<{ testAppHash: string | undefined; testDigests?: Record<string, string> }> {
+): Promise<{
+  testAppHash: string | undefined;
+  testDigests?: Record<string, string>;
+  testDigestParts?: TestDigestParts;
+}> {
   const { testAppHash, sources } = await reportPublishedTestApp(cfg, tests, emit);
   const none = (why: string) => {
     emit({
@@ -6449,9 +6479,31 @@ async function testAppIdentity(
   }
   if (sources.kind === "unavailable") return none(sources.why);
   try {
-    const files = sources.kind === "published" ? sources.files : diskSources;
-    return { testAppHash, testDigests: testDigestsOfSources(files, tests) };
+    // R-371: the dependency fingerprint and build inputs of the app that RUNS. On a backend that
+    // publishes, the published package's manifest and the server's resident dependency packages;
+    // on al-runner, the test project's app.json and the package folders it is handed.
+    const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+    const published = sources.kind === "published";
+    const inputs = published
+      ? appInputsOfPackage(sources.pkg)
+      : ((await readAppJsonInputs(cfg.testDir)) ?? appInputsOfAppJson({}));
+    const read =
+      published && fetchPackage !== undefined
+        ? publishedPackageReader(fetchPackage)
+        : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
+    const dependencies = await dependencyFingerprint(inputs, read, await targetOf(cfg.projectDir));
+    const { digests, parts } = testDigestsOfModel(
+      published ? buildTestAppModel(sources.files) : diskModel,
+      tests,
+      { dependencies, buildInputs: inputs.buildInputs },
+    );
+    return { testAppHash, testDigests: digests, testDigestParts: parts };
   } catch (err) {
+    if (err instanceof DependencyUnreadableError) {
+      return none(
+        `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
+      );
+    }
     if (!(err instanceof TestDigestError)) throw err;
     return none(
       sources.kind === "published"
