@@ -113,6 +113,7 @@ import {
   type VerifyOutput,
   artifactRecordOf,
   assertProjectReadable,
+  installedSelectorIds,
   parseVerifyRequest,
   refusalOutput,
   runVerify,
@@ -5003,9 +5004,10 @@ export async function verifyFromCli(
       );
     }
     const inputs: BackendInputs = { backendKind: "bcdev", projectDir, testDir: parsed.testDir };
-    // ponytail: the config's selector ids, never the source run's CLI overrides (the store keeps
-    // none). buildBackend only validates them against app.json; the installed build has its own.
-    const selectorIds = resolveSelectorIds({}, validateSelectorIdsConfig(configFile.selectorIds));
+    // R261: the ids the installed build was made with, from its hash-checked manifest, so a source
+    // run given --selector-id overrides verifies with those. Never the config's current defaults.
+    // buildBackend validates them against app.json; the bcdev backend has no other use for them.
+    const selectorIds = await installedSelectorIds(store, parsed.artifact);
     scratchRoot = await mkdtemp(join(tmpdir(), "lethal-verify-"));
     const built = await (deps.buildBackend ?? buildBackend)(
       inputs,

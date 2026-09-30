@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -50,13 +51,14 @@ import {
   validateAlRunnerConfig,
   validateBcDevConfig,
   validateSelectorIdsConfig,
+  validateSelectorIdsForProject,
   withAlRunnerCanary,
 } from "../src/cli";
 import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
-import { InstalledBundleError } from "../src/installed-bundle";
+import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -2130,8 +2132,15 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     }
   }
 
-  /** The run/verify fixture on disk: a one-codeunit app, one test codeunit, a bcdev config. */
-  async function writeFixture() {
+  // R261: the app's idRanges EXCLUDE the default selector ids (79197..79199), so the run needs the
+  // --selector-id overrides below, exactly the case verify used to fail on.
+  const OVERRIDES: SelectorConfig = { selectorId: 79050, controlId: 79051, tableId: 79052 };
+
+  /** `lethal-XXXXXX` run folders in this test process's private temp folder (the R358 preload). */
+  const runFolders = () =>
+    new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
+
+  async function runThenArtifact(backend: ExecutionBackend = new DeployingBackend()) {
     const root = scratch("lethal-run-verify-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
@@ -2144,7 +2153,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         name: "Run Verify Fixture",
         publisher: "LethAL",
         version: "1.0.0.0",
-        idRanges: [{ from: 79000, to: 79199 }],
+        idRanges: [{ from: 79000, to: 79099 }],
       }),
     );
     await writeFile(
@@ -2172,58 +2181,45 @@ describe("lethal run then lethal verify on one store (R358)", () => {
 `,
     );
     const configPath = join(root, "lethal.config.json");
-    await writeFile(
-      configPath,
-      JSON.stringify({
-        bcdev: {
-          mcpCommand: ["bun", "x", "bc-dev-mcp"],
-          server: "http://x",
-          serverInstance: "BC",
-          company: "CRONUS",
-          username: "u",
-          password: "p",
-          packageCachePath: "C:/.alpackages",
-          controlSymbolPath: "C:/lethal-control.app",
-        },
-      }),
-    );
+    const bcdev = {
+      mcpCommand: ["bun", "x", "bc-dev-mcp"],
+      server: "http://x",
+      serverInstance: "BC",
+      company: "CRONUS",
+      username: "u",
+      password: "p",
+      packageCachePath: "C:/.alpackages",
+      controlSymbolPath: "C:/lethal-control.app",
+    };
+    await writeFile(configPath, JSON.stringify({ bcdev }));
     const dbPath = join(root, "lethal.sqlite");
-    const runConfig = (): RunCliConfig => ({
-      mode: "run",
-      projectDir,
-      testDir,
-      backendKind: "al-runner",
-      dbPath,
-      configPath,
-      skipKnownSurvivors: false,
-      workers: 1,
-      keepEnv: false,
-      allowExpiringEnv: false,
-    });
-    return { testDir, configPath, dbPath, runConfig };
-  }
-
-  /** `lethal-XXXXXX` run folders in this test process's private temp folder (the R358 preload). */
-  const runFolders = () =>
-    new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
-
-  test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
-    const { testDir, configPath, dbPath, runConfig } = await writeFixture();
-    const before = runFolders();
-    const report = await runFromCli(runConfig(), {
-      validateSelectorIdsForProject: async () => {},
-      buildBackend: async () => new DeployingBackend(),
-    });
-    // R360: the clean run removed its scratch folder, so nothing verify reads can come from it.
-    expect([...runFolders()].filter((e) => !before.has(e))).toEqual([]);
+    // The REAL id check runs here: the overrides pass it, the config's defaults would not.
+    const report = await runFromCli(
+      {
+        mode: "run",
+        projectDir,
+        testDir,
+        backendKind: "al-runner",
+        dbPath,
+        configPath,
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+        selectorIdOverrides: OVERRIDES,
+      },
+      { buildBackend: async () => backend },
+    );
     const survivor = report.mutants.find((m) => m.verdict === "survived");
     const artifactId = report.artifacts?.[0]?.artifactId;
-    expect(survivor).toBeDefined();
-    expect(artifactId).toBeDefined();
-    if (survivor === undefined || artifactId === undefined) return;
+    if (survivor === undefined || artifactId === undefined) {
+      throw new Error("R358 fixture: the run produced no survivor or no artifact");
+    }
+    return { root, projectDir, testDir, configPath, bcdev, dbPath, survivor, artifactId };
+  }
 
-    let reachedWith: string | undefined;
-    const verifyBackend = Object.assign(Object.create(BcDevMcpBackend.prototype), {
+  function verifyBackendFake(onReach: (artifactId: string) => void): BcDevMcpBackend {
+    return Object.assign(Object.create(BcDevMcpBackend.prototype), {
       capabilities: (): BackendCapabilities => ({
         coverage: "none",
         deploy: "publish",
@@ -2231,35 +2227,144 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         authoritative: true,
       }),
       compileTestApp: async (_dir: string, target: { artifactId: string }) => {
-        reachedWith = target.artifactId;
+        onReach(target.artifactId);
         throw new Error("R358 fake: verify reached compileTestApp");
       },
       close: async () => {},
     }) as BcDevMcpBackend;
+  }
+
+  /** Verify through the REAL id check against app.json, recording the ids it was handed. */
+  async function verifyOnce(ctx: Awaited<ReturnType<typeof runThenArtifact>>) {
+    let reachedWith: string | undefined;
+    const handed: SelectorConfig[] = [];
     let printed = "";
     const outcome = await verifyFromCli(
       {
         mode: "verify",
-        dbPath,
-        artifact: artifactId,
-        testDir,
-        survivors: [`${survivor.batchIndex}/${survivor.mutantCode}`],
-        configPath,
+        dbPath: ctx.dbPath,
+        artifact: ctx.artifactId,
+        testDir: ctx.testDir,
+        survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+        configPath: ctx.configPath,
       },
       {
         write: (s) => {
           printed += s;
         },
-        buildBackend: async () => verifyBackend,
+        buildBackend: async (inputs, _config, _dir, _deploy, _deps, selectorIds) => {
+          if (selectorIds === undefined) throw new Error("verify passed no selector ids");
+          handed.push(selectorIds);
+          await validateSelectorIdsForProject(inputs.projectDir, selectorIds);
+          return verifyBackendFake((id) => {
+            reachedWith = id;
+          });
+        },
       },
     ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
-    expect(printed).toBe("");
-    expect(outcome).toBe("R358 fake: verify reached compileTestApp");
-    expect(reachedWith).toBe(artifactId);
+    return { outcome, printed, handed, reachedWith };
+  }
+
+  test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
+    const before = runFolders();
+    const ctx = await runThenArtifact();
+    // R360: the clean run removed its scratch folder, so nothing verify reads can come from it.
+    expect([...runFolders()].filter((e) => !before.has(e))).toEqual([]);
+    const v = await verifyOnce(ctx);
+    expect(v.printed).toBe("");
+    expect(v.outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(v.reachedWith).toBe(ctx.artifactId);
+  });
+
+  test("R261: a source run given --selector-id overrides verifies with those overrides", async () => {
+    const ctx = await runThenArtifact();
+    const v = await verifyOnce(ctx);
+    expect(v.handed).toEqual([OVERRIDES]);
+    expect(v.outcome).toBe("R358 fake: verify reached compileTestApp");
+  });
+
+  test("R261: verify still uses the installed build's ids after the config's defaults change", async () => {
+    const ctx = await runThenArtifact();
+    await writeFile(
+      ctx.configPath,
+      JSON.stringify({
+        bcdev: ctx.bcdev,
+        selectorIds: { selectorId: 79060, controlId: 79061, tableId: 79062 },
+      }),
+    );
+    const v = await verifyOnce(ctx);
+    expect(v.handed).toEqual([OVERRIDES]);
+    expect(v.outcome).toBe("R358 fake: verify reached compileTestApp");
+  });
+
+  test("R261: a manifest without selector ids refuses by name before any backend is built", async () => {
+    const ctx = await runThenArtifact();
+    // A manifest with no ids, re-hashed into the trusted record so only the missing ids differ.
+    // R360: the manifest verify reads is the stored bundle's, so the bundle and its payload
+    // digest are rewritten, not a file in the (removed) scratch folder.
+    const store = new ResultsStore(ctx.dbPath);
+    const rec = store.artifactRecordById(ctx.artifactId);
+    const rows = rec === null ? null : store.installedBundle(rec.runId, rec.batchIndex);
+    if (rec === null || rows === null || rec.payloadSha256 === null) {
+      throw new Error("R261 fixture: no stored bundle");
+    }
+    const opened = openInstalledBundle(rows, {
+      runId: rec.runId,
+      batchIndex: rec.batchIndex,
+      payloadSha256: rec.payloadSha256,
+    });
+    const { selectorIds: _dropped, ...rest } = JSON.parse(opened.manifestText);
+    const rewritten = bundleOfParts({
+      appBytes: opened.appBytes,
+      appJsonText: opened.appJsonText,
+      manifestText: JSON.stringify(rest),
+      files: opened.alSources,
+    });
+    store.close();
+    const db = new Database(ctx.dbPath);
+    db.query(
+      "UPDATE batch_artifacts SET manifest_sha256 = ?, payload_sha256 = ? WHERE artifact_id = ?",
+    ).run(Bun.SHA256.hash(JSON.stringify(rest), "hex"), rewritten.payloadSha256, ctx.artifactId);
+    db.query(
+      "UPDATE installed_bundles SET manifest_gz = ? WHERE run_id = ? AND batch_index = ?",
+    ).run(rewritten.manifestGz, rec.runId, rec.batchIndex);
+    db.close();
+    const v = await verifyOnce(ctx);
+    expect(v.handed).toEqual([]);
+    const out = JSON.parse(v.printed);
+    expect(out.refused.reason).toBe("artifact-files-unusable");
+    expect(out.refused.detail).toContain("selector ids");
+    expect(out.exitCode).toBe(VERIFY_REFUSED_EXIT_CODE);
+  });
+
+  test("verify removes its scratch directory when the backend build fails (R358)", async () => {
+    const ctx = await runThenArtifact();
+    let scratchRoot: string | undefined;
+    const buildErr = new Error("no backend");
+    await expect(
+      verifyFromCli(
+        {
+          mode: "verify",
+          dbPath: ctx.dbPath,
+          artifact: ctx.artifactId,
+          testDir: ctx.testDir,
+          survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+          configPath: ctx.configPath,
+        },
+        {
+          write: () => {},
+          buildBackend: async (_inputs, _config, dir) => {
+            scratchRoot = dir;
+            throw buildErr;
+          },
+        },
+      ),
+    ).rejects.toBe(buildErr);
+    expect(scratchRoot).toBeDefined();
+    expect(existsSync(scratchRoot ?? "")).toBe(false);
   });
 
   test("R360 I4: a published .app that vanished fails the run by name and keeps its folder", async () => {
-    const { runConfig } = await writeFixture();
     class VanishingBackend extends DeployingBackend {
       override async deploy(dir: string): Promise<CompiledArtifact | null> {
         const compiled = await super.deploy(dir);
@@ -2269,10 +2374,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     }
     const before = runFolders();
     const warn = spyOn(console, "warn").mockImplementation(() => {});
-    const err = await runFromCli(runConfig(), {
-      validateSelectorIdsForProject: async () => {},
-      buildBackend: async () => new VanishingBackend(),
-    }).catch((e: unknown) => e);
+    const err = await runThenArtifact(new VanishingBackend()).catch((e: unknown) => e);
     const warned = warn.mock.calls.map((c) => c.join(" "));
     warn.mockRestore();
     expect(err).toBeInstanceOf(InstalledBundleError);
@@ -2455,51 +2557,6 @@ describe("C02-06: lethal verify (Task 7)", () => {
     expect(built).toBe(0);
     // Windows refuses to delete a file an open handle holds: this passes only if the store closed.
     rmSync(dbPath);
-  });
-
-  test("verify removes its scratch directory when the backend build fails (R358)", async () => {
-    const root = scratch("lethal-verify-cli-");
-    const project = join(root, "proj");
-    await mkdir(project);
-    await writeFile(
-      join(project, "lethal.config.json"),
-      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
-    );
-    await writeFile(join(project, "app.json"), "{}");
-    const dbPath = join(root, "r.sqlite");
-    const store = new ResultsStore(dbPath);
-    const runId = store.createRun({
-      coverageMode: "procedure",
-      identityScheme: IDENTITY_SCHEME,
-      projectPath: project,
-      backend: "bcdev",
-      appVersion: "0.0.0.0",
-    });
-    store.recordArtifact(runId, {
-      bundle: tinyBundle(),
-      batchIndex: 0,
-      appVersion: "1.0.0.0",
-      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-      artifactId: A,
-      sha256: "1".repeat(64),
-    });
-    store.close();
-    let scratchRoot: string | undefined;
-    const buildErr = new Error("no backend");
-    await expect(
-      verifyFromCli(
-        { mode: "verify", dbPath, artifact: A, testDir: join(root, "t"), survivors: ["0/M0001"] },
-        {
-          write: () => {},
-          buildBackend: async (_inputs, _config, dir) => {
-            scratchRoot = dir;
-            throw buildErr;
-          },
-        },
-      ),
-    ).rejects.toBe(buildErr);
-    expect(scratchRoot).toBeDefined();
-    expect(existsSync(scratchRoot ?? "")).toBe(false);
   });
 
   test("VERIFY_NOT_ALL_KILLED_EXIT_CODE and VERIFY_REFUSED_EXIT_CODE are 5 and 6, and 3 and 4 are reused", () => {

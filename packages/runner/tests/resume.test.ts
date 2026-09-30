@@ -1256,7 +1256,9 @@ describe("runSession --resume (R47)", () => {
     expect(report.mutants.filter((m) => m.carried === true)).toHaveLength(3);
   });
 
-  test("R192 (second half): a changed test app means the baseline IS re-run", async () => {
+  // R247 superseded this: a changed test app no longer re-runs the baseline under a resume, it
+  // refuses the resume, since every carried verdict was measured against the old test app too.
+  test("R192 (second half), R247: a changed test app refuses the resume, so no baseline is reused", async () => {
     const dirs = await makeProject({ secondFile: true });
     const store = new ResultsStore(":memory:");
     await runSession({
@@ -1270,20 +1272,18 @@ describe("runSession --resume (R47)", () => {
     const { writeFile: write } = await import("node:fs/promises");
     await write(join(dirs.testDir, "Extra.Codeunit.al"), 'codeunit 79999 "Extra" { }', "utf8");
     const second = new CountingBackend("pass");
-    const events: RunEvent[] = [];
-    await runSession({
-      backend: second,
-      store,
-      ...dirs,
-      selectorIds,
-      maxGuardsPerBatch: 1,
-      resume: "last",
-      emit: [(e) => events.push(e)],
-    });
-    expect(second.baselineRuns).toBeGreaterThan(0);
-    expect(events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused")).toBe(
-      false,
-    );
+    await expect(
+      runSession({
+        backend: second,
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+        resume: "last",
+      }),
+    ).rejects.toThrow(/R247/);
+    expect(second.baselineRuns).toBe(0);
+    expect(second.deploys).toBe(0);
   });
 
   test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {
@@ -2744,5 +2744,192 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     expect(current.marked?.contradicted.map((c) => [c.key, c.verdict])).toEqual([
       [current.key, "no-coverage"],
     ]);
+  });
+});
+describe("R247: no verdict crosses a test-app change", () => {
+  /** A bcdev-shaped backend: the server holds a test-app package, read by `fetchPublishedAppPackage`.
+   *  `null` is a failed read (identity unknown). */
+  class PackageBackend extends CountingBackend {
+    constructor(
+      readonly pkg: Uint8Array | null,
+      abortFromDeploy?: number,
+    ) {
+      super("pass", undefined, abortFromDeploy);
+    }
+    async fetchPublishedAppPackage(): Promise<Uint8Array | null> {
+      return this.pkg;
+    }
+  }
+  /** Two packages that differ ONLY in the version stamp, as a re-stamp-only republish produces. */
+  const pkg = (version: string) =>
+    new TextEncoder().encode(`PK <NavxManifest><App Name="Sandbox Tests" Version="${version}"/>`);
+  const APP_A = pkg("1.0.0.0");
+  const APP_B = pkg("1.0.0.1");
+  const hashOf = (b: Uint8Array) => `package:${Bun.SHA256.hash(b, "hex")}`;
+
+  /** Batch 0 fully scored, batch 1 aborted: an unfinished run holding a whole carried batch
+   *  (R192's shape). With `finished`, a completed run. */
+  async function recorded(app: Uint8Array, opts: { finished: boolean }) {
+    const dirs = await makeProject({ secondFile: true });
+    // The test app's own app.json names the package the backend is asked for.
+    await Bun.write(
+      join(dirs.testDir, "app.json"),
+      JSON.stringify({ name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new PackageBackend(app, opts.finished ? undefined : 2),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const run = store.db.query("SELECT id, test_app_hash FROM runs").get() as {
+      id: number;
+      test_app_hash: string | null;
+    };
+    // The run records the test app it measured against.
+    expect(run.test_app_hash).toBe(hashOf(app));
+    return { dirs, store, first, runId: run.id };
+  }
+
+  const again = (
+    r: Awaited<ReturnType<typeof recorded>>,
+    backend: CountingBackend,
+    extra: { resume?: number | "last"; skipKnownSurvivors?: boolean; events?: RunEvent[] } = {},
+  ) => {
+    const events = extra.events;
+    return runSession({
+      backend,
+      store: r.store,
+      ...r.dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      ...(extra.resume !== undefined ? { resume: extra.resume } : {}),
+      ...(extra.skipKnownSurvivors !== undefined
+        ? { skipKnownSurvivors: extra.skipKnownSurvivors }
+        : {}),
+      ...(events !== undefined ? { emit: [(e: RunEvent) => events.push(e)] } : {}),
+    });
+  };
+
+  for (const mode of ["run", "last"] as const) {
+    describe(`--resume ${mode}`, () => {
+      const target = (runId: number) => (mode === "last" ? ("last" as const) : runId);
+      const flag = (runId: number) => (mode === "last" ? "--resume" : `--resume-run ${runId}`);
+
+      test("the same test app carries: the fully scored batch is neither deployed nor baselined", async () => {
+        const r = await recorded(APP_A, { finished: false });
+        const backend = new PackageBackend(APP_A);
+        const report = await again(r, backend, { resume: target(r.runId) });
+        expect(report.resumedFrom?.runId).toBe(r.runId);
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+        // ONE deploy, batch 1's: batch 0 carried whole (R192) without a deploy or a baseline.
+        expect(backend.deploys).toBe(1);
+        expect(
+          report.mutants.filter((m) => m.carried === true).every((m) => m.batchIndex === 0),
+        ).toBe(true);
+        const row = r.store.db.query("SELECT test_app_hash FROM runs ORDER BY id DESC").get() as {
+          test_app_hash: string | null;
+        };
+        expect(row.test_app_hash).toBe(hashOf(APP_A));
+      });
+
+      test("a republish that only moved the version stamp is refused by name; nothing is deployed or run", async () => {
+        const r = await recorded(APP_A, { finished: false });
+        const backend = new PackageBackend(APP_B);
+        await expect(again(r, backend, { resume: target(r.runId) })).rejects.toThrow(
+          new RegExp(
+            `^${flag(r.runId)}: run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is ${hashOf(APP_B)}\\. .*version stamp.*byte for byte.*\\(R247\\)\\. Drop the resume flag to run from scratch\\.$`,
+          ),
+        );
+        expect(backend.deploys).toBe(0);
+        expect(backend.baselineRuns + backend.mutantRuns).toBe(0);
+      });
+
+      test("a run from before R247 (NULL) is refused, even against a readable test app", async () => {
+        const r = await recorded(APP_A, { finished: false });
+        r.store.db.run("UPDATE runs SET test_app_hash = NULL");
+        await expect(
+          again(r, new PackageBackend(APP_A), { resume: target(r.runId) }),
+        ).rejects.toThrow(
+          new RegExp(
+            `run ${r.runId} was measured against test app unknown \\(it recorded no test-app identity; the run predates R247\\), and this session's test app is ${hashOf(APP_A)}\\..*R247`,
+          ),
+        );
+      });
+
+      test("an unreadable test app this session (unknown) is refused", async () => {
+        const r = await recorded(APP_A, { finished: false });
+        await expect(
+          again(r, new PackageBackend(null), { resume: target(r.runId) }),
+        ).rejects.toThrow(
+          new RegExp(
+            `run ${r.runId} was measured against test app ${hashOf(APP_A)}, and this session's test app is unknown\\..*R247`,
+          ),
+        );
+      });
+
+      test("single carried rows too: a run aborted mid-batch is refused after a test source edit", async () => {
+        const dirs = await makeProject();
+        const store = new ResultsStore(":memory:");
+        await runSession({
+          backend: new CountingBackend("pass", 1),
+          store,
+          ...dirs,
+          selectorIds,
+        });
+        const runId = (store.db.query("SELECT id FROM runs").get() as { id: number }).id;
+        // No package on this backend (al-runner's shape): the identity is the test source tree.
+        await Bun.write(join(dirs.testDir, "Extra.Codeunit.al"), 'codeunit 79999 "Extra" { }');
+        const backend = new CountingBackend("pass");
+        await expect(
+          runSession({ backend, store, ...dirs, selectorIds, resume: target(runId) }),
+        ).rejects.toThrow(new RegExp(`run ${runId} was measured against test app source:.*R247`));
+        expect(backend.mutantRuns + backend.baselineRuns).toBe(0);
+      });
+    });
+  }
+
+  const historyWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "history-test-app-changed" ? [e.message] : [],
+    );
+
+  test("history across a changed test app skips nothing and warns once over two batches", async () => {
+    const r = await recorded(APP_A, { finished: true });
+    expect(r.first.counts.survived).toBeGreaterThan(0);
+    const events: RunEvent[] = [];
+    const report = await again(r, new PackageBackend(APP_B), { skipKnownSurvivors: true, events });
+    expect(report.batches).toBe(2);
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    expect(report.counts.survived).toBe(r.first.counts.survived);
+    const warned = historyWarnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(`run ${r.runId}`);
+    expect(warned[0]).toContain(hashOf(APP_A));
+    expect(warned[0]).toContain(hashOf(APP_B));
+    expect(warned[0]).toContain("R247");
+  });
+
+  test("history from a run with no recorded test app skips nothing and warns once", async () => {
+    const r = await recorded(APP_A, { finished: true });
+    r.store.db.run("UPDATE runs SET test_app_hash = NULL");
+    const events: RunEvent[] = [];
+    const report = await again(r, new PackageBackend(APP_A), { skipKnownSurvivors: true, events });
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    const warned = historyWarnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("was measured against test app unknown");
+  });
+
+  test("history control: the same test app skips the survivors and does not warn", async () => {
+    const r = await recorded(APP_A, { finished: true });
+    const events: RunEvent[] = [];
+    const report = await again(r, new PackageBackend(APP_A), { skipKnownSurvivors: true, events });
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toHaveLength(
+      r.first.counts.survived,
+    );
+    expect(historyWarnings(events)).toEqual([]);
   });
 });

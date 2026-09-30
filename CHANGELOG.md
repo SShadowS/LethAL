@@ -22,6 +22,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   what replaced them; `--resume` refuses a run whose files were pruned.
 - **The run's own outputs are no longer copied into each batch build** (R363): the results
   database with its sidecars, `--out` and `--progress-out`.
+- **Runs now record a source digest per test, and `lethal verify` treats an edited test as new**
+  (R-278, R258): an edited covering test gets the new-test double unmutated run and the flakiness
+  gate, and an edited test that did not cover the survivor is now run against it. One-time cost:
+  `lethal verify` refuses a source run from before this build as `source-predates-verify`; run
+  `lethal run` again, then verify.
+- **Runs now record the test app they measured against** (R247): `--resume` and `--resume-run`
+  refuse by name when the test app changed since the run, a republish that only moved the version
+  stamp included. One-time cost: an unfinished run from before this build is refused once, and the
+  next `--skip-known-survivors` run skips nothing once.
 - **Runs now record their coverage mode** (R354): an unfinished run from before this build is
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an

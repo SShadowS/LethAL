@@ -62,6 +62,7 @@ import type {
 } from "./backend";
 import {
   hashAlTree,
+  hashPackage,
   hashSourceSnapshot,
   readTargetSource,
   snapshotApplies,
@@ -88,7 +89,12 @@ import {
   createEmitter,
 } from "./events";
 import { ActivationFailure } from "./failure-classes";
-import { LeaseUnavailableError, MAX_ATTEMPT_ID_LENGTH, MAX_TTL_SECONDS } from "./lease";
+import {
+  type BeginPublishRefusal,
+  LeaseUnavailableError,
+  MAX_ATTEMPT_ID_LENGTH,
+  MAX_TTL_SECONDS,
+} from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
@@ -154,8 +160,9 @@ import {
   isRunMutantLineCountMessage,
 } from "./stale-test-app";
 import { PRUNED_BY_ENV_TEARDOWN, type ResultsStore } from "./store";
-import type { MutantVerdict, RunnerKind } from "./store";
+import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
+import { TestDigestError, testDigestsOfSources } from "./test-digest";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -163,7 +170,7 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { scanTestPageTests } from "./testpage-scan";
+import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
 import {
   describeTestPageUnsupported,
   isTestPageNotRunMessage,
@@ -2363,6 +2370,12 @@ class LeaseSession {
   #ticking = false;
   #stopped = false;
   #lostBatchIndex: number | undefined;
+  /**
+   * R249: an owned lease that `finish()` must NOT release, because a marker was set when a
+   * `BeginPublish` was refused. It skips ONLY the release: `finish()` still reads the marker and
+   * records a recycle for one it owns, since the marker may be our own op stranded by a lost ack.
+   */
+  #keepLease = false;
   /** The op seq of this batch's publish, used to re-seed the backend's RunMutant counter. */
   #lastPublishOpSeq: number | undefined;
   /** Updated by `runSession` at the top of every batch — the scope of a lease-lost invalidation. */
@@ -2499,11 +2512,13 @@ class LeaseSession {
     const attemptId = newAttemptId(`pub-${this.d.runId}-b${this.currentBatchIndex}`);
     const begun = await this.d.client.beginPublish(this.d.lease, attemptId, opSeq);
     if (!begun.begun) {
-      this.noteLeaseLost(
+      const refusal = await this.onBeginPublishRefused(
         `BeginPublish refused (opSeq ${opSeq}, attemptId ${attemptId}, alreadyCompleted ${String(begun.alreadyCompleted)})`,
+        begun.alreadyCompleted === true,
       );
       throw new LeaseUnavailableError(
         `BeginPublish refused for opSeq ${opSeq} — the lease or the operation marker is no longer ours (design §4)`,
+        refusal,
       );
     }
     let result: T;
@@ -2522,6 +2537,58 @@ class LeaseSession {
     await this.endPublish(attemptId, opSeq, "succeeded");
     this.#lastPublishOpSeq = opSeq;
     return result;
+  }
+
+  /**
+   * R249: a refused `BeginPublish` always stops the session, but only a PROVEN loss skips the
+   * release. The control app answers `{begun:false}` both for a tuple mismatch (lost) and for a
+   * different attempt holding the active seq (still ours), and `alreadyCompleted:true` only for a
+   * tombstoned opSeq under a matching tuple (ours). So:
+   * - `alreadyCompleted`: ours. Latch; `finish()` releases through its op gate.
+   * - else `RenewLease`: `renewed:false` is loss, as before. A lost tuple never comes back (the
+   *   epoch bumps), so `renewed:true` proves the tuple held at the refusal. Then an idle marker
+   *   latches and `finish()` releases; ANY active marker keeps the lease (fail closed). The renew
+   *   has just extended the ttl, so the hold can outlast today's; `lease-kept-under-marker` says so.
+   * - a probe that throws proves nothing: treated as loss, as before, so nothing is released.
+   */
+  private async onBeginPublishRefused(
+    detail: string,
+    alreadyCompleted: boolean,
+  ): Promise<BeginPublishRefusal> {
+    if (alreadyCompleted) {
+      this.d.safety.latchUnsafe(
+        `${detail}: our op seq is already completed; the lease is still ours`,
+      );
+      return "owned-released";
+    }
+    let renewed: Awaited<ReturnType<LeaseApi["renew"]>>;
+    let status: Awaited<ReturnType<LeaseApi["getOperationStatus"]>>;
+    try {
+      renewed = await this.d.client.renew(this.d.lease, this.d.ttlSeconds);
+      if (!renewed.renewed) {
+        this.noteLeaseLost(`${detail}; RenewLease answered renewed:false`);
+        return "lost";
+      }
+      status = await this.d.client.getOperationStatus(this.d.lease, "", 0);
+    } catch (err) {
+      this.noteLeaseLost(`${detail}; the ownership probe failed (${messageOf(err)})`);
+      return "lost";
+    }
+    if (status.opKind === OP_KIND_IDLE) {
+      this.d.safety.latchUnsafe(
+        `${detail}: the lease is still ours and no operation is in progress`,
+      );
+      return "owned-released";
+    }
+    this.#keepLease = true;
+    this.stop();
+    this.d.safety.latchUnsafe(`${detail}: the lease is still ours but an operation marker is set`);
+    this.d.emit({
+      type: "warning",
+      code: "lease-kept-under-marker",
+      message: `[lethal] ${detail}. The lease is still ours (RenewLease renewed it, new expiry ${renewed.expiresAt}) but an operation marker is set (opKind ${status.opKind}, opAttemptId ${status.opAttemptId}, opSeq ${status.opSeq}), so the session stopped and did NOT release the lease: releasing under a marker could let another session in on top of a live operation. The container stays locked until ${renewed.expiresAt}. To free it sooner: inspect the marker with \`lethal doctor --config <path>\`, reconcile what that operation left behind (restart the container if it may still be applying, design §8), then run \`lethal force-reset-lease --server <url> --instance <name> --config <path>\`.`,
+    });
+    return "owned-kept-under-marker";
   }
 
   /**
@@ -2861,6 +2928,9 @@ class LeaseSession {
       );
       return;
     }
+    // R249: the marker was set when BeginPublish was refused. It may have cleared since, but the
+    // session already warned that it keeps the lease, and keeping it is the fail-closed side.
+    if (this.#keepLease) return;
     try {
       const released = await this.d.client.release(this.d.lease);
       if (!released.released) {
@@ -3026,12 +3096,45 @@ function describeCoverageMode(mode: CoverageMode | null): string {
 const COVERAGE_MODE_WHY =
   "An unreached mutant scores survived with coverage off and no-coverage with it on, and each mode attributes covering tests by its own rule, so none of its verdicts is carried";
 
+/** R247: a run's recorded test app in a refusal or warning. NULL is unknown. */
+function describeTestApp(hash: string | null | undefined): string {
+  return hash === null || hash === undefined ? "unknown" : hash;
+}
+
+/** R247: why no verdict crosses a test-app change, said the same way on every path. */
+const TEST_APP_WHY =
+  "A verdict measured against one test app says nothing about another: a changed test is exactly what might kill a survivor or spare a kill. Any change to the package's bytes counts, including a republish that only moved the version stamp and a recompile alc did not reproduce byte for byte";
+
+/**
+ * R247: refuses to carry any verdict of `row` unless it measured against THIS session's test app.
+ * Unknown on either side (a run from before R247, or a package this session could not read) never
+ * matches, NULL against NULL included. It covers every carried verdict, whole batches (R192) and
+ * single rows alike, because it refuses the run before any resume index is built from it.
+ */
+function assertSameTestApp(
+  row: RunRow | null,
+  flag: string,
+  testAppHash: string | undefined,
+): void {
+  if (row === null) throw new Error(`${flag}: the run it found is no longer in this database`);
+  if (row.testAppHash !== null && testAppHash !== undefined && row.testAppHash === testAppHash) {
+    return;
+  }
+  throw new Error(
+    `${flag}: run ${row.id} was measured against test app ${describeTestApp(row.testAppHash)}${
+      row.testAppHash === null ? " (it recorded no test-app identity; the run predates R247)" : ""
+    }, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so none of its verdicts is carried (R247). Drop the resume flag to run from scratch.`,
+  );
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
   configFingerprint: string,
   /** R354: the coverage mode this session measures under (`caps.coverage`). */
   coverageMode: CoverageMode,
+  /** R247: the test app this session measures against; `undefined` is unknown. */
+  testAppHash: string | undefined,
   emit: RunEmitter,
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
@@ -3078,6 +3181,7 @@ function resolveResume(
       );
     }
     priorRunId = found;
+    assertSameTestApp(cfg.store.getRun(found), "--resume", testAppHash);
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3105,6 +3209,7 @@ function resolveResume(
         `--resume-run ${cfg.resume} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
       );
     }
+    assertSameTestApp(row, `--resume-run ${cfg.resume}`, testAppHash);
     if (row.configFingerprint !== configFingerprint) {
       throw new Error(
         `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -3471,6 +3576,13 @@ function emitLeaseLostInvalidation(
   }
 }
 
+const REFUSAL_FOUND: Record<BeginPublishRefusal, string> = {
+  "owned-released": "The ownership probe found the lease still ours, and the session releases it",
+  "owned-kept-under-marker":
+    "The ownership probe found the lease still ours but an operation marker set, so the session keeps the lease (see lease-kept-under-marker)",
+  lost: "The ownership probe found the lease lost, or could not prove it held, so nothing is released",
+};
+
 /**
  * R232: a hook that publishes through the lease's publication fence, with one set of rules for
  * both callers (runSession's `afterLeaseAcquired`, runNamedMutants' `inLease`). A failure the
@@ -3494,7 +3606,15 @@ async function runLeaseHook(a: {
     a.safety.assertSafe(a.who);
   } catch (err) {
     if (err instanceof SessionUnsafeError) throw err;
-    if (!isConfirmedTerminalPublishFailure(err)) {
+    if (err instanceof LeaseUnavailableError && err.beginPublishRefusal !== undefined) {
+      // R362: a refused BeginPublish is a parsed answer, the server never began. The fence already
+      // latched (R249); say what its probe found instead of "no proof the server stopped".
+      a.emit({
+        type: "warning",
+        code: "after-lease-acquired-refused",
+        message: `[lethal] ${a.what}: the server refused to begin the publish, so nothing was applied. ${REFUSAL_FOUND[err.beginPublishRefusal]}: ${messageOf(err)}`,
+      });
+    } else if (!isConfirmedTerminalPublishFailure(err)) {
       const reason = `${a.what} failed with no proof that the server stopped, so the session is latched and the lease is kept unless the server shows no operation in progress: ${messageOf(err)}`;
       a.safety.latchUnsafe(reason);
       a.emit({
@@ -4180,9 +4300,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
   // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
   // source a test can reach cannot be read: an unread test is not sent.
+  // R-278: one read of the test sources serves the scan and the per-test digests `lethal verify`
+  // compares against, recorded on the run row below.
+  await initParser();
+  const testSources = await readTestAppSources(cfg.testDir);
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
-    ? await scanTestPageTests(cfg.testDir, tests)
+    ? scanTestPageSources(testSources, tests)
     : new Map();
+  // R-278: a digest for EVERY discovered test, or none. Discovery is a regex and the digest a
+  // tree-sitter parse; where they disagree the run still measures, records no digests (NULL), and
+  // says so. Only verify reads them, and it refuses such a run by name.
+  let testDigests: Record<string, string> | undefined;
+  try {
+    testDigests = testDigestsOfSources(testSources, tests);
+  } catch (err) {
+    if (!(err instanceof TestDigestError)) throw err;
+    emit({
+      type: "warning",
+      code: "test-digests-unavailable",
+      message: `[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: ${err.message}`,
+    });
+  }
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
     .map((t) => ({ qualifiedName: qualifiedTestName(t), method: t.method }));
@@ -4196,7 +4334,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named
   // in seconds rather than after a full baseline round trip. Reports, never refuses — check 1 owns
   // the refusal, on the server's own words. See `published-test-app.ts`.
-  await reportPublishedTestApp(cfg, tests, emit);
+  // R247: it also returns this session's test-app identity, recorded on the run and compared by
+  // `--resume` and `--skip-known-survivors`.
+  const testAppHash = await reportPublishedTestApp(cfg, tests, emit);
 
   const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
@@ -4234,6 +4374,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backendName,
     configFingerprint,
     caps.coverage,
+    testAppHash,
     emit,
     testPageRefusedNames,
   );
@@ -4243,6 +4384,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     coverageMode: caps.coverage,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
+    ...(testAppHash !== undefined ? { testAppHash } : {}),
+    ...(testDigests !== undefined ? { testDigests } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
@@ -4437,6 +4580,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historySchemeWarned = false;
   // R354: likewise for its coverage-mode warning.
   let historyCoverageModeWarned = false;
+  // R247: likewise for its test-app warning.
+  let historyTestAppWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -4757,6 +4902,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const prior = cfg.store.priorSurvivorKeys(
         cfg.projectDir,
         caps.coverage,
+        testAppHash,
         (old) => {
           if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
           historySchemeWarned = true;
@@ -4773,6 +4919,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             type: "warning",
             code: "history-coverage-mode-changed",
             message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
+          });
+        },
+        (old) => {
+          if (historyTestAppWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+          historyTestAppWarned = true;
+          emit({
+            type: "warning",
+            code: "history-test-app-changed",
+            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
           });
         },
       );
@@ -6244,33 +6399,38 @@ async function reportPublishedTestApp(
   cfg: SessionConfig,
   tests: readonly TestMethodRef[],
   emit: RunEmitter,
-): Promise<void> {
+): Promise<string | undefined> {
   const fetchPackage = cfg.backend.fetchPublishedAppPackage;
-  if (fetchPackage === undefined) return;
+  // R247: this session's test-app identity, from the ONE package read this function already makes
+  // (`testAppHashFor`'s rule: the package's hash when it was read, `undefined` when the read
+  // failed, else the test source tree's hash).
+  const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  if (fetchPackage === undefined) return sourceHash();
 
   let manifest: TestAppManifest;
   try {
     manifest = JSON.parse(await readFile(join(cfg.testDir, "app.json"), "utf8")) as TestAppManifest;
   } catch {
-    return;
+    return sourceHash();
   }
   const { name, publisher, version } = manifest;
   if (typeof name !== "string" || typeof publisher !== "string" || typeof version !== "string") {
-    return;
+    return sourceHash();
   }
 
   const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
   // `undefined` means the backend could not form the request at all — nothing was tried, so there
   // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
-  if (bytes === undefined) return;
+  if (bytes === undefined) return sourceHash();
   if (bytes === null) {
     emit({
       type: "warning",
       code: "published-test-app-unreadable",
       message: `[lethal] could not read the published test app "${name}" from the server, so this run did not verify that the container holds the suite this project's source declares. A stale test app is still caught at baseline, one round trip later.`,
     });
-    return;
+    return undefined;
   }
+  const testAppHash = `package:${hashPackage(bytes)}`;
 
   let published: PublishedApp;
   try {
@@ -6281,7 +6441,7 @@ async function reportPublishedTestApp(
       code: "published-test-app-unreadable",
       message: `[lethal] the server returned a package for the test app "${name}" that could not be read (${err instanceof Error ? err.message : String(err)}), so this run did not verify the published suite.`,
     });
-    return;
+    return testAppHash;
   }
 
   const message = publishedTestAppWarning(
@@ -6290,6 +6450,7 @@ async function reportPublishedTestApp(
   if (message !== undefined) {
     emit({ type: "warning", code: "published-test-app-mismatch", message });
   }
+  return testAppHash;
 }
 
 /**

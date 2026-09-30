@@ -26,7 +26,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage, hashTargetSource } from "../src/baseline-snapshot";
+import { hashPackage, hashTargetSource, testAppHashFor } from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
 import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
@@ -59,6 +59,7 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+import { discoverTests } from "../src/discovery";
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
@@ -466,6 +467,41 @@ describe("runSession", () => {
     expect(report.counts.killed).toBe(0);
     expect(report.counts.survived).toBeGreaterThan(0);
     expect(report.mutationScore).toBe(0);
+  });
+
+  // R-278 fix round 1: discovery (a regex) finds a test the digest's parser cannot. The run still
+  // measures; it records NO digests (NULL, never a partial map) and says so in a warning.
+  test("R-278: a test the digest cannot parse leaves the run's digests NULL, warns, and the run completes", async () => {
+    const dirs = await makeProject();
+    await Bun.write(
+      join(dirs.testDir, "Broken.Codeunit.al"),
+      'codeunit 50190 "Broken Tests"\n{\n    Subtype = Test;\n    [Test]\n    procedure A(\n    begin\n    end;\n}\n',
+    );
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      (mutant) => (mutant === null ? "pass" : "fail"),
+    );
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(report.counts.killed).toBeGreaterThan(0);
+    const [run] = store.db.query("SELECT id FROM runs").all() as Array<{ id: number }>;
+    if (run === undefined) throw new Error("no run row");
+    expect(store.testDigests(run.id)).toBeNull();
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "test-digests-unavailable",
+    );
+    expect(warning?.type === "warning" ? warning.message : "").toContain("Broken Tests.A");
+    expect(warning?.type === "warning" ? warning.message : "").toContain(
+      "lethal verify will refuse",
+    );
+    store.close();
   });
 
   test("no coverage: uncovered procedure mutants get no-coverage, no runs", async () => {
@@ -1999,6 +2035,12 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
 
     // Run 2: the test now has a reachable call that may open a TestPage.
     await Bun.write(join(dirs.testDir, "SandboxTests.Codeunit.al"), PAGE_TEST_AL);
+    // R247: this backend's test-app identity is the source tree, which the edit above moved, so a
+    // resume would be refused. R-236c's case is the published app unchanged while the source
+    // scan refuses a test, so run 1 is recorded under the identity run 2 computes.
+    store.db.run("UPDATE runs SET test_app_hash = ?", [
+      (await testAppHashFor(undefined, dirs.testDir)) ?? null,
+    ]);
     const backend = new RecordingBackend(CAPS_NST);
     const events: RunEvent[] = [];
     const report = await runSession({
@@ -4804,15 +4846,17 @@ async function manifestMutants(
  * compiled into the artifact regardless, exactly the shipped defect this file's first new test
  * below exists to catch.
  */
-function seedPriorSurvivor(
+async function seedPriorSurvivor(
   store: ResultsStore,
-  projectPath: string,
+  dirs: { projectDir: string; testDir: string },
   target: MutantManifestEntry,
-): void {
+): Promise<void> {
   const runId = store.createRun({
     coverageMode: "procedure",
+    // R247: measured against the same test app, or no survivor from it is ever skipped.
+    testAppHash: (await testAppHashFor(undefined, dirs.testDir)) ?? "",
+    projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
-    projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.1",
   });
@@ -4851,7 +4895,7 @@ describe("runSession — Task 7: bisects the full manifest, not the history-filt
     if (boundary === undefined) throw new Error("unreachable: asserted above");
 
     const store = new ResultsStore(":memory:");
-    seedPriorSurvivor(store, dirs.projectDir, boundary);
+    await seedPriorSurvivor(store, dirs, boundary);
 
     // The whole-artifact deploy fails as long as the conditional-boundary spec is present.
     // `execute` (skipKnownSurvivors: true) excludes it, but the compiled artifact — what this
@@ -6350,7 +6394,11 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
-    const keys = store.priorSurvivorKeys(dirs.projectDir, backend.capabilities().coverage);
+    const keys = store.priorSurvivorKeys(
+      dirs.projectDir,
+      backend.capabilities().coverage,
+      await testAppHashFor(undefined, dirs.testDir),
+    );
     expect(keys.size).toBe(0);
     store.close();
   });
@@ -6403,6 +6451,18 @@ class FakeLeaseClient implements LeaseApi {
   endPublishOutcome: EndPublishOutcome = { ended: true };
   recoverOutcome: RecoverOpOutcome = { recovered: true };
   endPublishError: Error | undefined;
+  /** R249: runs inside `beginPublish`, so a test can change what the server says AFTER the refusal. */
+  onBeginPublish: (() => void) | undefined;
+  /** R249: when set, the NEXT status read throws it (once). */
+  statusError: Error | undefined;
+  /**
+   * R249: model the server's op gate on `ReleaseLease`: refuse with `op-in-flight` while the
+   * current marker (the status queue's head) is not idle. Off by default: existing tests seed a
+   * fixed `releaseOutcome`.
+   */
+  releaseGatedOnMarker = false;
+  /** R249: what each `release` call answered, so a test can prove a release really happened. */
+  releaseResults: ReleaseOutcome[] = [];
   /** R361: when set, `recoverOp` THROWS it (after logging the call). */
   recoverError: Error | undefined;
   /** When set, every renew THROWS — a lost ack, which design §6 says is not lease loss. */
@@ -6466,7 +6526,12 @@ class FakeLeaseClient implements LeaseApi {
   async release(_lease: LeaseTuple): Promise<ReleaseOutcome> {
     this.log.push("release");
     this.releaseCalls++;
-    return this.releaseOutcome;
+    const busy = this.releaseGatedOnMarker && (this.statusQueue[0]?.opKind ?? "none") !== "none";
+    const outcome: ReleaseOutcome = busy
+      ? { released: false, reason: "op-in-flight" }
+      : this.releaseOutcome;
+    this.releaseResults.push(outcome);
+    return outcome;
   }
   async beginPublish(
     _lease: LeaseTuple,
@@ -6475,6 +6540,7 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<BeginPublishOutcome> {
     this.log.push("beginPublish");
     this.beginPublishArgs.push({ attemptId, opSeq });
+    this.onBeginPublish?.();
     return this.beginPublishOutcome;
   }
   async endPublish(
@@ -6495,6 +6561,11 @@ class FakeLeaseClient implements LeaseApi {
   ): Promise<OperationStatus> {
     this.log.push("status");
     this.statusArgs.push({ attemptId, opSeq });
+    const statusError = this.statusError;
+    if (statusError !== undefined) {
+      this.statusError = undefined; // one read only, so finish() still reads the marker
+      throw statusError;
+    }
     if (this.reconcileStatus !== undefined && attemptId !== "") {
       return this.reconcileStatus(attemptId, opSeq);
     }
@@ -12809,6 +12880,9 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     const tlog: string[] = [];
     const fx = await fixture();
     fx.client.beginPublishOutcome = { begun: false, alreadyCompleted: false };
+    fx.client.onBeginPublish = () => {
+      fx.client.renewQueue = [{ renewed: false }];
+    };
     await expect(
       runNamedMutants({
         ...fx.cfg,
@@ -12831,10 +12905,144 @@ describe("C02-05: the test-app publish inside runNamedMutants' fence", () => {
     });
     expect(work).toEqual([]); // no baseline, no mutant
     expect(fx.client.endPublishArgs).toEqual([]);
-    // KNOWN-WRONG, pre-existing LeaseSession behaviour, recorded here and NOT endorsed: every
-    // refused BeginPublish is read as lease loss, so a lease that may still be ours is never
-    // released and is held to its ttl. Tracked as R249 (docs/roadmap/R249.md). When R249 lands,
-    // this becomes 1.
+    // R249: renewed:false right after the refusal proves the tuple is gone, so nothing is released.
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  // R249: the four other answers to a refused BeginPublish. Each stops the session the same way.
+  async function refusedBeginPublish(
+    set: (c: FakeLeaseClient) => void,
+    outcome: BeginPublishOutcome = { begun: false },
+  ) {
+    const tlog: string[] = [];
+    const fx = await fixture();
+    fx.client.releaseGatedOnMarker = true;
+    fx.client.beginPublishOutcome = outcome;
+    fx.client.onBeginPublish = () => set(fx.client);
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      inLease: inLease(tlog, [OLD, NEW]),
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(LeaseUnavailableError);
+    expect(tlog).toEqual(["read"]); // no altool spawn
+    const work = calls(fx.trace).filter((c) => {
+      const x = c as { call: string };
+      return x.call === "run" || x.call === "runMany";
+    });
+    expect(work).toEqual([]);
+    const events = fx.trace.flatMap((x) =>
+      typeof x === "object" && x !== null && "event" in x
+        ? [(x as { event: { type: string; code?: string; message?: string } }).event]
+        : [],
+    );
+    return { fx, events };
+  }
+  const MARKER: OperationStatus = {
+    opKind: "run",
+    opAttemptId: "run-other-attempt",
+    opSeq: 9,
+    lastCompletedOpSeq: 8,
+    completed: false,
+  };
+
+  test("R249: alreadyCompleted is still our lease, so the session stops and the lease is really released", async () => {
+    const { fx } = await refusedBeginPublish(() => {}, { begun: false, alreadyCompleted: true });
+    expect(fx.client.releaseResults).toEqual([{ released: true }]);
+  });
+
+  test("R249: renewed:true and no marker: the session stops and the lease is really released", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+    });
+    expect(fx.client.releaseResults).toEqual([{ released: true }]);
+  });
+
+  function expectKeptWarning(events: Array<{ code?: string; message?: string }>): void {
+    const kept = events.filter((e) => e.code === "lease-kept-under-marker");
+    expect(kept).toHaveLength(1);
+    const msg = kept[0]?.message ?? "";
+    expect(msg).toContain("2026-07-24T12:05:00.000Z");
+    expect(msg).toContain("opKind run");
+    expect(msg).toContain("opAttemptId run-other-attempt");
+    expect(msg).toContain("lethal doctor --config <path>");
+    expect(msg).toContain(
+      "lethal force-reset-lease --server <url> --instance <name> --config <path>",
+    );
+  }
+
+  test("R249: an active marker of our own keeps the lease, still records the recycle, and warns", async () => {
+    // finish()'s own RenewLease also answers renewed:true, so the marker is ours: a stranded op.
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+      c.statusQueue = [MARKER];
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+    expectKeptWarning(events);
+    expect(await fx.quarantine()).toMatchObject({ opKind: "container-needs-recycle" });
+  });
+
+  test("R249: an active marker of another session keeps the lease, records nothing, and warns", async () => {
+    // The probe renews, then finish()'s own RenewLease answers renewed:false: the row moved on,
+    // so finish() treats the marker as foreign, exactly as it did before R249.
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }, { renewed: false }];
+      c.statusQueue = [MARKER];
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+    expectKeptWarning(events);
+    expect(events.some((e) => e.code === "lease-marker-foreign")).toBe(true);
+    expect(await fx.quarantine()).toBeNull();
+  });
+
+  test("R249: a RenewLease probe that throws is treated as loss: no release", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.renewError = new Error("renew unreachable");
+    });
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  // R362: a refused BeginPublish inside a lease hook is a proven refusal, not an uncertain publish.
+  function expectRefusalWarning(
+    events: Array<{ code?: string; message?: string }>,
+    found: string,
+  ): void {
+    expect(events.some((e) => e.code === "after-lease-acquired-uncertain")).toBe(false);
+    const w = events.filter((e) => e.code === "after-lease-acquired-refused");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("nothing was applied");
+    expect(w[0]?.message).toContain(found);
+  }
+
+  test("R362: a refused BeginPublish that left the lease ours warns refused (released), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+    });
+    expectRefusalWarning(events, "the lease still ours, and the session releases it");
+    expect(fx.client.releaseResults).toEqual([{ released: true }]); // still latched, still stopped
+  });
+
+  test("R362: a refused BeginPublish under a marker warns refused (kept), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: true, expiresAt: "2026-07-24T12:05:00.000Z" }];
+      c.statusQueue = [MARKER];
+    });
+    expectRefusalWarning(events, "the session keeps the lease");
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("R362: a refused BeginPublish that lost the lease warns refused (lost), not uncertain", async () => {
+    const { fx, events } = await refusedBeginPublish((c) => {
+      c.renewQueue = [{ renewed: false }];
+    });
+    expectRefusalWarning(events, "lost, or could not prove it held");
+    expect(fx.client.releaseCalls).toBe(0);
+  });
+
+  test("R249: a GetOperationStatus probe that throws is treated as loss: no release", async () => {
+    const { fx } = await refusedBeginPublish((c) => {
+      c.statusError = new Error("status unreachable");
+    });
     expect(fx.client.releaseCalls).toBe(0);
   });
 
@@ -13059,6 +13267,20 @@ describe("C02-06 Task 5.4: runVerify", () => {
     });
   });
 
+  // R247: verify republishes the test app on purpose and never goes through resolveResume or
+  // priorSurvivorKeys, so a source run measured against another test app does not stop it. Its own
+  // run row records the package it publishes, the key a later bcdev session computes for it.
+  test("R247: verify records the test app it publishes, and a source run's other test app does not refuse it", async () => {
+    const fx = await verifyFixture();
+    const sourceApp = fx.store.getRun(fx.installed.fromRunId)?.testAppHash;
+    expect(sourceApp).not.toBe(`package:${COMPILED.sha256}`);
+    const out = await fx.verify(["0/M0001"]);
+    expect(out.exitCode).toBe(0);
+    const verifyRunId = out.verifyRunId;
+    if (verifyRunId === undefined) throw new Error("verify recorded no run");
+    expect(fx.store.getRun(verifyRunId)?.testAppHash).toBe(`package:${COMPILED.sha256}`);
+  });
+
   test("verify reports the server's read-back identity, not the local compile's", async () => {
     const fx = await verifyFixture({
       compile: async () => ({ ...COMPILED, version: "1.0.0.2", sha256: "d".repeat(64) }),
@@ -13178,6 +13400,44 @@ describe("C02-06 Task 5.4: runVerify", () => {
         ],
         failure: "flaked",
       },
+    ]);
+    expect(out.exitCode).toBe(5);
+  });
+
+  // R-278: Zulu Tests.OverBudgetDetected covers M0001 in the source run. Edited since, it is
+  // selected as a NEW test too: its two unmutated runs are made and the flakiness gate reads them.
+  test("R-278: an edited covering test gets the double unmutated run and the flakiness gate", async () => {
+    const ZULU = { codeunitId: 79101, codeunitName: "Zulu Tests", method: "OverBudgetDetected" };
+    const fx = await verifyFixture({
+      killerRef: OVER,
+      unmutated: ({ ref, nth }) =>
+        testKey(ref) === testKey(ZULU) && nth === 2
+          ? { ref, outcome: "fail", durationMs: 5, failureMessage: "flaked" }
+          : ALL_GREEN({ ref }),
+    });
+    const recorded = fx.store.testDigests(fx.installed.fromRunId);
+    expect(Object.keys(recorded ?? {}).sort()).toEqual(
+      (await discoverTests(fx.dirs.testDir))
+        .map((t) => `${t.codeunitId}::${t.method.toLowerCase()}`)
+        .sort(),
+    );
+    await Bun.write(
+      join(fx.dirs.testDir, "ZuluTests.Codeunit.al"),
+      MIRROR_TESTS_AL.replace("begin\n", "begin\n        // now asserts\n"),
+    );
+    const seen: NamedMutantsConfig[] = [];
+    const out = await fx.verify(["0/M0001"], {
+      runNamed: async (cfg) => {
+        seen.push(cfg);
+        return runNamedMutants(cfg);
+      },
+    });
+    expect(seen[0]?.rerunOnUnmutated?.map(testKey)).toEqual([testKey(ZULU)]);
+    expect(seen[0]?.requests[0]?.methods.filter((m) => testKey(m) === testKey(ZULU))).toHaveLength(
+      1,
+    );
+    expect(out.newTests.map((t) => [t.test, t.state])).toEqual([
+      ["Zulu Tests.OverBudgetDetected", "flaky"],
     ]);
     expect(out.exitCode).toBe(5);
   });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**84 of 358 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**81 of 361 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -97,8 +97,8 @@ that ordering is the priority.
 - **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
 - **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · done (8599054b)
 - **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · done (273358c4)
-- **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · open
-- **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · open
+- **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · done (bc9d4cbc, ba6a346a)
+- **R249** · A refused `BeginPublish` is always read as a lost lease, so an owned-but-idle lease is left held until its ttl · [R249.md](docs/roadmap/R249.md) · done (01c3d1c4)
 - **R248** · A test-app publish whose pre-fence read fails still goes ahead, and then can only end indeterminate: one wrong read credential leaves a container needing a recycle · [R248.md](docs/roadmap/R248.md) · done (56d33cd)
 - **R250** · `parseVersionConflict` matches BC's downgrade phrase anywhere in an error's text, and two publish paths trust it as proof the server refused · [R250.md](docs/roadmap/R250.md) · done (9842500f)
 - **R244** · empty-block's repeat_statement entry matches no block on the vendored grammar: a repeat body is a statement_block · [R244.md](docs/roadmap/R244.md) · open
@@ -144,6 +144,8 @@ that ordering is the priority.
 - **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
 - **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · done (7d6fc37b)
+- **R362** · A refused `BeginPublish` inside a lease hook warns `after-lease-acquired-uncertain`, which says there is no proof the server stopped · [R362.md](docs/roadmap/R362.md) · done (6e5eef0a)
+- **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · open
 
 ## Product gaps a real project hits
 
@@ -211,10 +213,10 @@ that ordering is the priority.
 - **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · done (a7bd0c55)
 - **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · open
-- **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · open
+- **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · done (42f66228, 66146b08)
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · open
 - **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · open
-- **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · open
+- **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · done (dc5d2e4f)
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · done (d24e766)
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · done (75be4c23)
 - **R266** · `lethal run --dry-run` accepts and ignores its 19 execution flags (`--out`, `--progress-out`, `--tests`, `--backend` and more) · [R266.md](docs/roadmap/R266.md) · done (7443861b)
@@ -225,7 +227,7 @@ that ordering is the priority.
 - **R275** · an explain gap does not print its verify command; the gap id and artifact id are the inputs, the command still has to be assembled · [R275.md](docs/roadmap/R275.md) · open
 - **R276** · gap ids change when a block is moved, and differ between a CRLF and an LF checkout of the same commit · [R276.md](docs/roadmap/R276.md) · open
 - **R277** · `unobservedBlock` is withheld on operator- and line-narrowed runs and on quarantined runs, so a `--changed-since` PR run never gets the mark · [R277.md](docs/roadmap/R277.md) · open
-- **R278** · lethal verify selects an edited COVERING test as an old test, so it never gets the new-test double run or a new-test state · [R278.md](docs/roadmap/R278.md) · open
+- **R278** · lethal verify selects an edited COVERING test as an old test, so it never gets the new-test double run or a new-test state · [R278.md](docs/roadmap/R278.md) · done (42f66228, 66146b08)
 - **R280** · `scripts/probe-grammar-crosscheck.ts` is not type-checked: a breaking change to `grammar-crosscheck.ts` passes `bun run typecheck` · [R280.md](docs/roadmap/R280.md) · open
 - **R282** · `swap-modify-flag` for `DeleteAll(true)` and `ModifyAll(..., true)` (GH-04): refused on R013 ground 1, 6 sites and 0 marginal · [R282.md](docs/roadmap/R282.md) · closed 2026-09-27: refused on R013 ground 1: 6 sites (DeleteAll 6, ModifyAll 0) on do-rel2/Cloud sha256…
 - **R283** · `asserterror` before a method call on an array element: tree-sitter splits the statement, so the call as AL reads it is never a site (34 sites, all in BaseApp's tests) · [R283.md](docs/roadmap/R283.md) · closed 2026-09-27: superseded by R216
@@ -246,6 +248,7 @@ that ordering is the priority.
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · open, filed 2026-09-29, priority low
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
+- **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · open
 
 ## Backends and tooling
 
