@@ -40,6 +40,8 @@ interface FakeShape {
   readonly compileScorable?: boolean;
   /** When set, EVERY spawn rejects with this — the `unmeasurable` path. */
   readonly spawnThrows?: string;
+  /** When set, the passing-test run dies without an envelope (R345). */
+  readonly passCrash?: { readonly exitCode: number; readonly stderr: string };
 }
 
 /**
@@ -110,6 +112,9 @@ function fakeSpawn(shape: FakeShape = {}): { spawn: SpawnFn; argvs: string[][] }
             stderr: "",
           }
         : { exitCode: 1, stdout: "", stderr: "error AL0111: Semicolon expected.\n" };
+    }
+    if (shape.passCrash !== undefined) {
+      return { exitCode: shape.passCrash.exitCode, stdout: "", stderr: shape.passCrash.stderr };
     }
     return {
       exitCode: 0,
@@ -347,5 +352,40 @@ describe("the probe measures the command line the transport actually sends", () 
     for (const argv of argvs) {
       expect(argv).not.toContain("--test-timeout");
     }
+  });
+});
+
+describe("R345: a run with no envelope keeps a bounded stderr tail", () => {
+  const detailOf = async (passCrash: { exitCode: number; stderr: string }) => {
+    const { spawn } = fakeSpawn({ passCrash });
+    const r = await runAlRunnerContractProbe("al-runner", spawn);
+    return r.facts.find((f) => f.fact === "qualified-test-name")?.measured ?? "";
+  };
+  const EX = "System.IO.FileNotFoundException: Microsoft.Dynamics.Nav.Ncl";
+
+  test("exit 82 with an exception line: the detail has the line and the 0xE0434352 note", async () => {
+    const d = await detailOf({ exitCode: 82, stderr: `Unhandled exception.
+${EX}
+   at X
+` });
+    expect(d).toContain(EX);
+    expect(d).toContain("0xE0434352");
+  });
+
+  test("another exit code carries no 0xE0434352 note", async () => {
+    const d = await detailOf({ exitCode: 1, stderr: `${EX}
+` });
+    expect(d).toContain(EX);
+    expect(d).not.toContain("0xE0434352");
+  });
+
+  test("a very long stderr is bounded and keeps the END", async () => {
+    const d = await detailOf({
+      exitCode: 82,
+      stderr: `START_MARK${"x".repeat(20_000)}END_MARK`,
+    });
+    expect(d.length).toBeLessThan(1500);
+    expect(d).toContain("END_MARK");
+    expect(d).not.toContain("START_MARK");
   });
 });
