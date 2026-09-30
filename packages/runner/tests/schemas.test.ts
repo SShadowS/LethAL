@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME, type MutantManifest, type MutantManifestEntry } from "@lethal/schemata";
 import { Glob } from "bun";
+import { normalizeForComparison } from "../itest/mutant-equality";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { CAMPAIGN_COMPARE_SCHEMA_VERSION, compareCampaignStage } from "../src/campaign-subcommands";
 import {
   DOCTOR_AL_RUNNER_ONLY_CAVEAT,
   DOCTOR_CAVEAT_KINDS,
@@ -44,6 +46,7 @@ import {
   type VerifyOutput,
   runVerify,
 } from "../src/verify";
+import { makeGitRepo } from "./helpers/git-repo";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
 /**
@@ -935,6 +938,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       rootRequired[file] = [...(doc.required ?? [])].sort();
     }
     expect(rootRequired).toEqual({
+      "campaign-compare-v1.schema.json": [
+        "baselinePath",
+        "campaignCompareSchemaVersion",
+        "coverage",
+        "differences",
+        "identical",
+        "mutantCount",
+        "stage",
+      ],
       "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
       "explain-v4.schema.json": [
         "caveats",
@@ -1258,5 +1270,89 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       path: "$.counts",
       problem: "required but absent",
     });
+  });
+});
+
+describe("published JSON Schema - campaign compare (R357)", () => {
+  const compareSchema = loadSchema(
+    `campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}.schema.json`,
+  );
+  const RECORDS = "campaign-records/r357";
+  const mutant = (code: string, verdict: string, line: number) => ({
+    mutantCode: code,
+    file: "A.Codeunit.al",
+    line,
+    operatorName: "conditional-boundary",
+    verdict,
+    batchIndex: 0,
+    astHash: `hash-${code}`,
+    codeunitName: "A",
+    operatorMajor: 1,
+    runner: "fenced",
+    durationMs: 0,
+    procedureName: "P",
+    startIndex: 0,
+    endIndex: 1,
+    originalText: "x",
+    mutatedText: "y",
+    coveringTests: [],
+  });
+  const reportWith = (coverageMode: string) => ({
+    coverageMode,
+    mutants: [mutant("M0001", "killed", 1), mutant("M0002", "survived", 2)],
+    batches: 1,
+  });
+  const entries = normalizeForComparison(reportWith("fenced") as never);
+
+  let repo: string;
+  let out: string;
+  const args = (stage: string) => ({
+    manifestPath: join(repo, "campaign.json"),
+    stage,
+    reportPath: join(out, "fenced.json"),
+    log: () => {},
+  });
+
+  beforeAll(async () => {
+    repo = await makeGitRepo({
+      "campaign.json": JSON.stringify({ recordsDir: RECORDS, campaignId: "r357" }),
+      [`${RECORDS}/verified.precommit.md`]: "# v\n",
+      [`${RECORDS}/verified.baseline.json`]: JSON.stringify({ coverageMode: "fenced", entries }),
+      [`${RECORDS}/legacy.precommit.md`]: "# l\n",
+      [`${RECORDS}/legacy.baseline.json`]: JSON.stringify(entries),
+      [`${RECORDS}/other.precommit.md`]: "# o\n",
+      [`${RECORDS}/other.baseline.json`]: JSON.stringify({ coverageMode: "none", entries }),
+    });
+    out = mkdtempSync(join(tmpdir(), "r357-"));
+    writeFileSync(join(out, "fenced.json"), JSON.stringify(reportWith("fenced")));
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(out, { recursive: true, force: true });
+  });
+
+  test("a matching stage validates, and an UNVERIFIED old stage validates with its statement", async () => {
+    const verified = await compareCampaignStage(args("verified"));
+    expect(verified.coverage.verified).toBe(true);
+    expect(conformsTo(compareSchema, verified)).toEqual([]);
+
+    const legacy = await compareCampaignStage(args("legacy"));
+    expect(legacy.coverage.verified).toBe(false);
+    expect(conformsTo(compareSchema, legacy)).toEqual([]);
+
+    // The validator must be able to say no: an unverified result WITHOUT its statement.
+    const { statement: _dropped, ...bare } = legacy.coverage as Record<string, unknown>;
+    expect(conformsTo(compareSchema, { ...legacy, coverage: bare }).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  test("a coverage-mode mismatch is a refusal: it throws, so there is no document to validate", async () => {
+    await expect(compareCampaignStage(args("other"))).rejects.toThrow(/coverageMode "none"/);
+  }, 60_000);
+
+  test("the schema pins the version its build emits", () => {
+    const props = compareSchema.properties as Record<string, Schema>;
+    expect(props.campaignCompareSchemaVersion?.const).toBe(CAMPAIGN_COMPARE_SCHEMA_VERSION);
+    expect(compareSchema.$id).toContain(`campaign-compare-v${CAMPAIGN_COMPARE_SCHEMA_VERSION}`);
   });
 });
