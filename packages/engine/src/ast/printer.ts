@@ -1,3 +1,4 @@
+import { FileRefusedError } from "../file-refused";
 import type { ALSyntaxNode } from "./syntax-node";
 
 export function print(source: string, _root: ALSyntaxNode): string {
@@ -25,7 +26,7 @@ export function printWithRewrites(
   }
 
   edits.sort((a, b) => a.start - b.start);
-  assertNoOverlap(edits, where);
+  assertNoOverlap(edits, where, source);
 
   const parts: string[] = [];
   let cursor = 0;
@@ -49,6 +50,7 @@ function assertNodeInTree(node: ALSyntaxNode, root: ALSyntaxNode): void {
 function assertNoOverlap(
   edits: ReadonlyArray<{ start: number; end: number; kind: string }>,
   where: string | undefined,
+  source: string,
 ): void {
   for (let i = 1; i < edits.length; i++) {
     const prev = edits[i - 1];
@@ -56,8 +58,15 @@ function assertNoOverlap(
     if (prev === undefined || curr === undefined) continue;
     if (curr.start < prev.end) {
       const location = where !== undefined ? ` in ${where}` : "";
-      throw new Error(
+      // R307: the edits come from this one file's source, so the file is refused, not the run.
+      const lineAt = (at: number): number => source.slice(0, at).split("\n").length;
+      throw new FileRefusedError(
         `overlapping rewrites${location} at ${prev.start}..${prev.end} (${prev.kind}) and ${curr.start}..${curr.end} (${curr.kind})`,
+        {
+          file: where ?? "<file>",
+          shape: "overlap",
+          lines: [lineAt(prev.start), lineAt(Math.max(prev.end, curr.end))],
+        },
       );
     }
   }
