@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
@@ -60,6 +59,9 @@ import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
@@ -1122,7 +1124,7 @@ describe("resourceIdentityFor (Task 13 folded fix — cli.ts sources quarantine 
 // ————————————————————————————————————————————————————————————————————————
 describe("clearQuarantine (Task 13)", () => {
   async function freshStore(): Promise<QuarantineStore> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-cli-quarantine-"));
+    const dir = scratch("lethal-cli-quarantine-");
     return new QuarantineStore(dir);
   }
 
@@ -1540,7 +1542,7 @@ describe("resolveForceResetLeaseConfig (R51 follow-on)", () => {
 // ————————————————————————————————————————————————————————————————————————
 describe("forceResetLeaseFromCli — the wiring (R51 follow-on)", () => {
   test("resolves an envTool config file end-to-end and completes the reset", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-force-reset-envtool-"));
+    const dir = scratch("lethal-force-reset-envtool-");
     const configPath = join(dir, "lethal.config.json");
     const configFile: LethalConfigFile = {
       bcdev: {
@@ -1970,13 +1972,13 @@ describe("issue #21: --dry-run needs no config file", () => {
     ).toMatchObject({ configPath: "c.json", configExplicit: true });
   });
   test("an absent DEFAULTED config is no config; an absent explicit one still throws", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const dir = scratch("lethal-dry-");
     const path = join(dir, "lethal.config.json");
     expect(await loadDryRunConfig(path, false)).toBeUndefined();
     await expect(loadDryRunConfig(path, true)).rejects.toThrow("cannot read config file");
   });
   test("a present but invalid config throws even when defaulted", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-dry-"));
+    const dir = scratch("lethal-dry-");
     const path = join(dir, "lethal.config.json");
     await writeFile(path, "{ not json");
     await expect(loadDryRunConfig(path, false)).rejects.toThrow("not valid JSON");
@@ -2013,7 +2015,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   }
 
   test("the config's preprocessorSymbols reach the report and the recorded source hash", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-cli-symbols-"));
+    const root = scratch("lethal-cli-symbols-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     await mkdir(projectDir, { recursive: true });
@@ -2153,7 +2155,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
   });
 
   test("verify refuses a config with an envTool section", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
     await writeFile(
@@ -2202,7 +2204,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
   });
 
   test("verify refuses a project without app.json before building the backend, and closes the store", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-verify-cli-"));
+    const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
     // A valid config, so only the missing app.json can stop it.
@@ -2249,6 +2251,50 @@ describe("C02-06: lethal verify (Task 7)", () => {
     expect(built).toBe(0);
     // Windows refuses to delete a file an open handle holds: this passes only if the store closed.
     rmSync(dbPath);
+  });
+
+  test("verify removes its scratch directory when the backend build fails (R358)", async () => {
+    const root = scratch("lethal-verify-cli-");
+    const project = join(root, "proj");
+    await mkdir(project);
+    await writeFile(
+      join(project, "lethal.config.json"),
+      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
+    );
+    await writeFile(join(project, "app.json"), "{}");
+    const dbPath = join(root, "r.sqlite");
+    const store = new ResultsStore(dbPath);
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      projectPath: project,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      batchIndex: 0,
+      appVersion: "1.0.0.0",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: A,
+      sha256: "1".repeat(64),
+    });
+    store.close();
+    let scratchRoot: string | undefined;
+    const buildErr = new Error("no backend");
+    await expect(
+      verifyFromCli(
+        { mode: "verify", dbPath, artifact: A, testDir: join(root, "t"), survivors: ["0/M0001"] },
+        {
+          write: () => {},
+          buildBackend: async (_inputs, _config, dir) => {
+            scratchRoot = dir;
+            throw buildErr;
+          },
+        },
+      ),
+    ).rejects.toBe(buildErr);
+    expect(scratchRoot).toBeDefined();
+    expect(existsSync(scratchRoot ?? "")).toBe(false);
   });
 
   test("VERIFY_NOT_ALL_KILLED_EXIT_CODE and VERIFY_REFUSED_EXIT_CODE are 5 and 6, and 3 and 4 are reused", () => {
