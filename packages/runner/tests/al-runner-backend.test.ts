@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { CONTROL_REGISTER_FILENAME, CONTROL_UPGRADE_FILENAME } from "@lethal/schemata";
 import { AL_RUNNER_UNCLASSIFIED_ERROR, AlRunnerBackend } from "../src/al-runner-backend";
 import type { ServerSpawnFn } from "../src/al-runner-server";
@@ -1078,5 +1078,76 @@ describe("AlRunnerBackend selectorMode: resource", () => {
       resourceFolders?: string[];
     };
     expect(manifest.resourceFolders).toBeUndefined();
+  });
+});
+
+// R356. The `--coverage-out` scratch directory was created on the first coverage run and never
+// removed. The path is read from the argv the fake spawn sees, so the test names the exact
+// directory this backend made instead of scanning the shared temp folder.
+describe("AlRunnerBackend.close() removes its coverage scratch directory (R356)", () => {
+  const exists = (p: string) =>
+    stat(p).then(
+      () => true,
+      () => false,
+    );
+
+  async function coverageBackend(fail: boolean) {
+    const dirs: string[] = [];
+    const spawn: SpawnFn = async (argv) => {
+      const o = argv.indexOf("--coverage-out");
+      const out = o >= 0 ? argv[o + 1] : undefined;
+      if (out !== undefined) {
+        dirs.push(dirname(out));
+        if (!fail) {
+          await writeFile(out, "<coverage><packages/></coverage>", "utf8");
+        }
+      }
+      if (fail) throw new Error("spawn failed");
+      return {
+        exitCode: 0,
+        stdout: alRunnerStdout({
+          tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+          passed: 1,
+          failed: 0,
+          errors: 0,
+          total: 1,
+          exitCode: 0,
+        }),
+        stderr: "",
+      };
+    };
+    const work = await mkdtemp(join(tmpdir(), "lethal-r356-work-"));
+    await writeFile(join(work, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: work,
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      spawn,
+    );
+    return { backend, dirs };
+  }
+
+  test("a backend that read coverage leaves no scratch directory after close()", async () => {
+    const { backend, dirs } = await coverageBackend(false);
+    await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    const dir = dirs[0] as string;
+    expect(dir).toContain("lethal-alrunner-cov-");
+    expect(await exists(dir)).toBe(true);
+    await backend.close();
+    expect(await exists(dir)).toBe(false);
+    await backend.close(); // idempotent
+  });
+
+  test("a run that fails after the directory was made does not leak it past close()", async () => {
+    const { backend, dirs } = await coverageBackend(true);
+    await backend.run(ref, { coverage: "none", timeoutMs: 5000 }).catch(() => undefined);
+    const dir = dirs[0] as string;
+    expect(await exists(dir)).toBe(true);
+    await backend.close();
+    expect(await exists(dir)).toBe(false);
   });
 });

@@ -1030,8 +1030,17 @@ export class AlRunnerBackend implements ExecutionBackend {
   }
 
   async close(): Promise<void> {
-    await this.transport.close();
-    await this.server?.close();
+    try {
+      await this.transport.close();
+      await this.server?.close();
+    } finally {
+      // R356. Every Cobertura file was parsed inside `run()`, so nothing reads this after close.
+      const scratch = this.coverageScratch;
+      this.coverageScratch = undefined;
+      if (scratch !== undefined) {
+        await rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
   }
 
   /**
