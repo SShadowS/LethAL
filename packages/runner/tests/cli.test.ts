@@ -21,6 +21,7 @@ import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import { loadDryRunConfig, restoreNotice } from "../src/cli";
 import {
+  DRY_RUN_REFUSED,
   FLAG_OWNERS,
   RUN_FLAGS,
   VALID_SUBCOMMANDS,
@@ -2340,30 +2341,9 @@ const VALUE: Readonly<Record<string, string>> = {
   format: "mutation-elements",
 };
 
-/** MEASURED exemption: flags `run --dry-run` accepts and ignores. Filed as R266; may only
- *  shrink. Measured 2026-09-26 once FLAG_OWNERS was total (before it, `--server`, `--instance` and
- *  `--file` were ignored here too; they are now refused as `clear-*` flags). */
-const DRY_RUN_IGNORES: ReadonlySet<string> = new Set([
-  "tests",
-  "backend",
-  "out",
-  "progress-out",
-  "workers",
-  "compile-concurrency",
-  "keep-env",
-  "allow-expiring-env",
-  "selector-id",
-  "control-id",
-  "table-id",
-  "skip-known-survivors",
-  "max-guards-per-batch",
-  "max-methods-per-call",
-  "request-ceiling-ms",
-  "no-group-runs",
-  "retry-stranded",
-  "stop-hung-sessions",
-  "allow-large-run",
-]);
+/** MEASURED exemption: flags `run --dry-run` accepts and ignores. R266 emptied it: `--out` now
+ *  writes the listing and every other execution flag is refused. It may not grow. */
+const DRY_RUN_IGNORES: ReadonlySet<string> = new Set<string>([]);
 
 /**
  * NAMED exception: a flag the parse STORES (so "reads" by the parsed-config oracle) whose value a
@@ -2517,6 +2497,22 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     expect(ignored).toEqual([]);
   });
 
+  test("R266: every execution flag is refused by name under --dry-run", () => {
+    for (const flag of DRY_RUN_REFUSED) {
+      const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
+      const argv = [
+        "run",
+        "--project",
+        "p",
+        "--dry-run",
+        `--${flag}`,
+        ...(spec.type === "boolean" ? [] : ["1"]),
+      ];
+      expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
+    }
+    expect(DRY_RUN_REFUSED.length).toBe(18);
+  });
+
   test("the dry-run exemption is exact", () => {
     const dry = INVOCATIONS.find((i) => i.argv.includes("--dry-run"));
     if (dry === undefined) throw new Error("no dry-run invocation");
@@ -2526,6 +2522,13 @@ describe("C02-07: flags are read or refused, never ignored", () => {
 
   test("every owner reads its flag in at least one of its invocations", () => {
     for (const { flag, owners } of FLAG_OWNERS) {
+      // R266: `--dry-run` is measured by its own mode below; adding it to a real run now refuses
+      // (the execution flags that run carries), and removing it from the dry run refuses on the
+      // missing --tests, so the toggle oracle cannot see it read.
+      if (flag === "dry-run") {
+        expect(parseCliConfig(["run", "--project", "P", "--dry-run"]).mode).toBe("dry-run");
+        continue;
+      }
       for (const sub of owners) {
         const mine = INVOCATIONS.filter((i) => i.sub === sub);
         // A flag the invocation already supplies is measured too, by changing its value.

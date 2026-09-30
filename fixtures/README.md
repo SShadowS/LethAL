@@ -701,8 +701,7 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 Both backends must reproduce this table exactly, and two consecutive runs against the same
 backend must be 100% verdict-identical (the determinism exit criterion — design.md §13).
 
-Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --tests
-fixtures/sandbox-tests --backend al-runner --dry-run` — it prints `16 mutant site(s)` and, per
+Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --dry-run` — it prints `16 mutant site(s)` and, per
 file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al`, in
 `ClampPercent` and inside `LogAudit`).
 
