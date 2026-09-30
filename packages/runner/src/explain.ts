@@ -186,6 +186,8 @@ import type { MutantVerdict } from "./store";
  *
  * 7: R265 added the REQUIRED `survivors[].markKey` and `markIdentityScheme`, and the optional
  * `markKeysStale`. A new required field is a new shape, so it bumps even though it is additive.
+ * R351 added the optional `coverageArmNames` to survivors, gaps and no-coverage blocks: an optional
+ * additive field, so no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 7;
 
@@ -317,6 +319,9 @@ export interface ExplainSurvivor {
   readonly batchIndex?: number;
   /** C02-01: present on a trigger mutant, whose `procedureName` is `""`. */
   readonly triggerName?: string;
+  /** R351: verbatim from the report row, the arm names of a renamed split member (R318), whose
+   *  `procedureName` is `""`. Absent on every other member. */
+  readonly coverageArmNames?: readonly string[];
   /** C02-01: verbatim from the report row; see `MutantOutcome.procedureStartLine`. */
   readonly procedureStartLine?: number;
   /** C02-01: verbatim from the report row; see `MutantOutcome.procedureEndLine`. */
@@ -373,6 +378,9 @@ export interface ExplainGap {
   readonly codeunitName: string;
   readonly procedureName: string;
   readonly triggerName?: string;
+  /** R351: verbatim from the report row, the arm names of a renamed split member (R318), whose
+   *  `procedureName` is `""`. Absent on every other member. */
+  readonly coverageArmNames?: readonly string[];
   /** mutantCodes of the gap's `survived` rows, ordered by line then mutantCode. */
   readonly members: readonly string[];
   readonly survived: number;
@@ -399,6 +407,9 @@ export interface ExplainNoCoverageBlock {
   readonly codeunitName: string;
   readonly procedureName: string;
   readonly triggerName?: string;
+  /** R351: verbatim from the report row, the arm names of a renamed split member (R318), whose
+   *  `procedureName` is `""`. Absent on every other member. */
+  readonly coverageArmNames?: readonly string[];
   /** mutantCodes of the block's `no-coverage` rows, ordered by line then mutantCode. */
   readonly members: readonly string[];
 }
@@ -796,6 +807,20 @@ export function assertExplainableReport(value: unknown): SessionReport {
     ) {
       refuse(`${where} has a reachedBy that is not an array of test names`, reachedBy);
     }
+    // R351: copied onto survivors, gaps and no-coverage blocks. Spread unchecked, a string would
+    // project as its characters; the writer sets it only as a non-empty list of names.
+    const { coverageArmNames } = mutant;
+    if (
+      coverageArmNames !== undefined &&
+      (!Array.isArray(coverageArmNames) ||
+        coverageArmNames.length === 0 ||
+        coverageArmNames.some((n) => typeof n !== "string"))
+    ) {
+      refuse(
+        `${where} has a coverageArmNames that is not a non-empty array of names`,
+        coverageArmNames,
+      );
+    }
     if (
       reachGrain !== undefined &&
       (typeof reachGrain !== "string" || !KNOWN_REACH_GRAINS.has(reachGrain))
@@ -1088,6 +1113,7 @@ function survivorOf(m: MutantOutcome, artifacts: SessionReport["artifacts"]): Ex
     // the report row cannot ride through into the output.
     batchIndex: m.batchIndex,
     ...(m.triggerName !== undefined ? { triggerName: m.triggerName } : {}),
+    ...(m.coverageArmNames !== undefined ? { coverageArmNames: [...m.coverageArmNames] } : {}),
     ...(m.procedureStartLine !== undefined ? { procedureStartLine: m.procedureStartLine } : {}),
     ...(m.procedureEndLine !== undefined ? { procedureEndLine: m.procedureEndLine } : {}),
     ...(m.equivalenceRisk !== undefined ? { equivalenceRisk: m.equivalenceRisk } : {}),
@@ -1189,6 +1215,7 @@ function blocksOf(
       codeunitName: r.codeunitName,
       procedureName: r.procedureName,
       ...(r.triggerName !== undefined ? { triggerName: r.triggerName } : {}),
+      ...(r.coverageArmNames !== undefined ? { coverageArmNames: [...r.coverageArmNames] } : {}),
     };
     if (t.survived > 0) {
       const member = firstMember.get(gapId);

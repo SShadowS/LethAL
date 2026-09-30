@@ -367,8 +367,8 @@ describe("explain — the plan's own four tests", () => {
  * cannot produce is the hazard `legacyBuildReport`'s own doc comment warns about, and a fixture is
  * a poor place to learn that lesson twice:
  *
- *   counts       3 survived + 4 error + 2 killed + 1 no-coverage + 6 known-survivor
- *   recorded     16 = outcomes.length
+ *   counts       3 survived + 4 error + 2 killed + 2 no-coverage + 6 known-survivor
+ *   recorded     17 = outcomes.length
  *   scored        5 = killed + timeoutKilled + survived
  *   mutationScore 0.4 = 2/5
  *   unstable/deadlineExceeded  1 each, matching M0005 and M0004's `cause`
@@ -415,6 +415,24 @@ function fullCoverageReport(): SessionReport {
     gapId: "G1a2b3c4d5e02",
     blockStartLine: 41,
     blockEndLine: 46,
+    // R351: a renamed split member, so `procedureName` is "" and `coverageArmNames` names it. It
+    // reaches the survivor's and the gap's `coverageArmNames[]` leaves.
+    procedureName: "",
+    coverageArmNames: ["PickTotal", "ChooseTotal"],
+  };
+  // R351: a no-coverage row of the same renamed member, in its block, so `noCoverageBlocks` reaches
+  // its `coverageArmNames[]` leaf too.
+  const renamedNoCoverage: MutantOutcome = {
+    ...plainMutant("M0017", "no-coverage"),
+    file: survivorWithRisk.file,
+    line: 45,
+    batchIndex: survivorWithRisk.batchIndex,
+    codeunitName: survivorWithRisk.codeunitName,
+    procedureName: "",
+    coverageArmNames: ["PickTotal", "ChooseTotal"],
+    gapId: "G1a2b3c4d5e02",
+    blockStartLine: 41,
+    blockEndLine: 46,
   };
   // C02-01: a trigger mutant, so `procedureName` is "" and `triggerName` carries the member name. It
   // reaches the `triggerName` leaf the "no dead entries" test needs.
@@ -455,13 +473,13 @@ function fullCoverageReport(): SessionReport {
       ...base.validity,
       reliability: "narrowed-degraded",
       caveats: ["baseline-red", "narrowed", "tests-narrowed", "resumed"],
-      scoredMutants: { scored: 5, recorded: 16 },
+      scoredMutants: { scored: 5, recorded: 17 },
     },
     baselineGreen: false,
     counts: {
       killed: 2,
       survived: 3,
-      noCoverage: 1,
+      noCoverage: 2,
       timeoutKilled: 0,
       knownSurvivors: 6,
       unstable: 1,
@@ -479,6 +497,7 @@ function fullCoverageReport(): SessionReport {
       errorBlock(strandedSkipMutant("M0007")),
       barBlock(plainMutant("M0008", "killed")),
       barBlock(plainMutant("M0009", "killed")),
+      renamedNoCoverage,
       triggerNoCoverage,
       barBlock(plainMutant("M0011", "known-survivor")),
       barBlock(plainMutant("M0012", "known-survivor")),
@@ -616,6 +635,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].reachedBy[]", // [verbatim] (GH-24)
   "$.survivors[].batchIndex", // [verbatim]
   "$.survivors[].triggerName", // [verbatim]
+  "$.survivors[].coverageArmNames[]", // [verbatim] (R351)
   "$.survivors[].procedureStartLine", // [verbatim]
   "$.survivors[].procedureEndLine", // [verbatim]
   "$.survivors[].equivalenceRisk", // [verbatim]
@@ -639,6 +659,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.gaps[].codeunitName", // [verbatim]
   "$.gaps[].procedureName", // [verbatim]
   "$.gaps[].triggerName", // [verbatim]
+  "$.gaps[].coverageArmNames[]", // [verbatim] (R351)
   "$.gaps[].members[]", // [verbatim] the survived rows' mutantCodes
   "$.gaps[].survived", // [derived] tallyGaps count
   "$.gaps[].killed", // [derived]
@@ -654,6 +675,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.noCoverageBlocks[].codeunitName", // [verbatim]
   "$.noCoverageBlocks[].procedureName", // [verbatim]
   "$.noCoverageBlocks[].triggerName", // [verbatim]
+  "$.noCoverageBlocks[].coverageArmNames[]", // [verbatim] (R351)
   "$.noCoverageBlocks[].members[]", // [verbatim] the no-coverage rows' mutantCodes
   "$.notMeasured[].mutantCode", // [verbatim]
   "$.notMeasured[].file", // [verbatim]
@@ -923,6 +945,7 @@ describe("explain — the admissibility rule, made executable", () => {
       procedureStartLine?: number;
       procedureEndLine?: number;
       triggerName?: string;
+      coverageArmNames?: readonly string[];
       equivalenceRisk?: string;
       readerMark?: { readonly key: string; readonly reason: string };
       reachGrain?: string;
@@ -943,6 +966,8 @@ describe("explain — the admissibility rule, made executable", () => {
       procedureEndLine: m.procedureEndLine,
       hasTriggerName: "triggerName" in m,
       triggerName: m.triggerName,
+      hasCoverageArmNames: "coverageArmNames" in m,
+      coverageArmNames: m.coverageArmNames,
       hasEquivalenceRisk: "equivalenceRisk" in m,
       equivalenceRisk: m.equivalenceRisk,
       hasReaderMark: "readerMark" in m,
@@ -988,6 +1013,8 @@ describe("explain — the admissibility rule, made executable", () => {
         procedureName: r.procedureName,
         hasTriggerName: r.triggerName !== undefined,
         triggerName: r.triggerName,
+        hasCoverageArmNames: r.coverageArmNames !== undefined,
+        coverageArmNames: r.coverageArmNames,
         members: rows
           .filter((m) => m.verdict === verdict)
           .sort(byLineThenCode)
@@ -1002,6 +1029,7 @@ describe("explain — the admissibility rule, made executable", () => {
       codeunitName: string;
       procedureName: string;
       triggerName?: string;
+      coverageArmNames?: readonly string[];
       members: readonly string[];
     }) => ({
       batchIndex: b.batchIndex,
@@ -1012,6 +1040,8 @@ describe("explain — the admissibility rule, made executable", () => {
       procedureName: b.procedureName,
       hasTriggerName: "triggerName" in b,
       triggerName: b.triggerName,
+      hasCoverageArmNames: "coverageArmNames" in b,
+      coverageArmNames: b.coverageArmNames,
       members: b.members,
     });
     const survivedGapIds = [...new Set(survivorSources.map((m) => m.gapId))];
@@ -1493,6 +1523,23 @@ describe("GH-24: reach decided per mutant", () => {
     for (const [field, report] of cases) {
       expect(() => explain(report)).toThrow(MalformedReportError);
       expect(() => explain(report)).toThrow(new RegExp(field));
+    }
+  });
+
+  test("R351: a coverageArmNames that is not a non-empty array of strings is refused, naming the mutant", () => {
+    // Spread as-is, "Alpha" would project as ["A","l","p","h","a"]: composed, not verbatim.
+    for (const coverageArmNames of ["Alpha", [], ["Alpha", 7], null]) {
+      const report = reportFixture({
+        mutants: [
+          {
+            ...survivorMutant("M0001", "exact", true),
+            procedureName: "",
+            coverageArmNames,
+          } as unknown as MutantOutcome,
+        ],
+      });
+      expect(() => explain(report)).toThrow(MalformedReportError);
+      expect(() => explain(report)).toThrow(/M0001.*coverageArmNames/);
     }
   });
 
