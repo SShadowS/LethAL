@@ -218,6 +218,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
   test("recordMutant persists runner at the column level, NULL when absent", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -242,6 +243,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
   test("mutantVerdicts reads the runner back, and omits it when NULL", () => {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -298,6 +300,7 @@ CREATE TABLE IF NOT EXISTS mutants (
 
       const store = new ResultsStore(dbPath);
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",
@@ -324,6 +327,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       new ResultsStore(dbPath).close();
       const store = new ResultsStore(dbPath); // second open must not throw on ALTER
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: "/p",
         backend: "bcdev",

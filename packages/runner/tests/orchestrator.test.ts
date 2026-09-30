@@ -4644,6 +4644,7 @@ function seedPriorSurvivor(
   target: MutantManifestEntry,
 ): void {
   const runId = store.createRun({
+    coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     projectPath,
     backend: "bcdev",
@@ -6182,7 +6183,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
     expect(rawVerdicts.every((r) => r.verdict === "error")).toBe(true);
     // The original guard still holds independently: an unfinished run is invisible to
     // priorSurvivorKeys, so this does not rely on the correction alone.
-    const keys = store.priorSurvivorKeys(dirs.projectDir);
+    const keys = store.priorSurvivorKeys(dirs.projectDir, backend.capabilities().coverage);
     expect(keys.size).toBe(0);
     store.close();
   });
@@ -11120,6 +11121,7 @@ async function installedFixture(
     instrumentedDir: join(dirs.instrumentedDir, `run-${fromRunId}-batch-0`),
   };
   const runId = store.createRun({
+    coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
     projectPath: dirs.projectDir,
     backend: "named-mutants-test",

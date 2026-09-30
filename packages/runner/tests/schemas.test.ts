@@ -463,7 +463,13 @@ function neverCalledBackend(): VerifyDeps["backend"] {
     throw new Error("schemas.test.ts verify fixture: the backend is not used on this path");
   };
   return {
-    capabilities: boom,
+    // R354: verify reads its own coverage mode before anything else; the source run is `procedure`.
+    capabilities: () => ({
+      coverage: "procedure",
+      deploy: "publish",
+      isolation: "session",
+      authoritative: true,
+    }),
     status: async () => boom(),
     deploy: async () => boom(),
     compileCheck: async () => boom(),
@@ -550,6 +556,7 @@ async function buildVerifyHappyPathOutput() {
     const store = new ResultsStore(":memory:");
     const preprocessorSymbols: string[] = [];
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: projectDir,
       backend: "bcdev",
@@ -629,6 +636,14 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     const v1 = loadSchema("verify-v1.schema.json");
     expect((v1.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(1);
     expect(enumAt(v1, "$.refused.reason")).not.toContain("unknown-gap");
+  });
+
+  // R354: v3 added the refusal reason `coverage-mode-changed`. v2 stays as it was published.
+  test("verify-v2.schema.json is kept as published", () => {
+    const v2 = loadSchema("verify-v2.schema.json");
+    expect((v2.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(2);
+    expect(enumAt(v2, "$.refused.reason")).toContain("gap-has-no-survivor");
+    expect(enumAt(v2, "$.refused.reason")).not.toContain("coverage-mode-changed");
   });
 
   test("results[].gapId is a declared leaf of the current verify schema", () => {
@@ -1033,6 +1048,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "verifySchemaVersion",
       ],
       "verify-v2.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      "verify-v3.schema.json": [
         "counts",
         "exitCode",
         "newTests",

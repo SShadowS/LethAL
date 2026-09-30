@@ -11,6 +11,7 @@ import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
   BackendStatus,
+  CoverageMode,
   ExecutionBackend,
   RunOpts,
   TestMethodRef,
@@ -18,6 +19,7 @@ import type {
 } from "../src/backend";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
+import type { SessionReport } from "../src/report";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
@@ -140,9 +142,11 @@ class CountingBackend implements ExecutionBackend {
      *  assumption). When true, deploy() returns a fresh CompiledArtifact each call, the way a
      *  real backend does, so a test can assert on `SessionReport.artifacts`. */
     private readonly withArtifact = false,
+    /** R354: the coverage mode this backend reports (default CAPS's, `procedure`). */
+    private readonly coverage: CoverageMode = CAPS.coverage,
   ) {}
   capabilities(): BackendCapabilities {
-    return CAPS;
+    return { ...CAPS, coverage: this.coverage };
   }
   async status(): Promise<BackendStatus> {
     return { ok: true, details: "stub" };
@@ -468,6 +472,16 @@ describe("sessionFingerprint (R47)", () => {
     expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(PINNED);
   });
 
+  // R354: the coverage mode is a conditional key, so an input without it keeps PINNED (the
+  // function is unchanged for it), while every mode, and each mode against none, digests apart.
+  test("the coverage mode changes it, and its absence keeps PINNED", () => {
+    const modes = ["none", "procedure", "line", "fenced", "al-runner"] as const;
+    const digests = modes.map((coverageMode) => sessionFingerprint({ ...base, coverageMode }));
+    expect(new Set(digests).size).toBe(modes.length);
+    expect(digests).not.toContain(PINNED);
+    expect(sessionFingerprint(base)).toBe(PINNED);
+  });
+
   test("--tests-only changes it — that narrowing CAN change a verdict", () => {
     expect(sessionFingerprint({ ...base, testsOnly: ["x/**"] })).not.toBe(sessionFingerprint(base));
   });
@@ -496,6 +510,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("findResumableRun matches an unfinished run with the same fingerprint", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -530,6 +545,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a FINISHED run is not resumable — there is nothing left to score", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -550,6 +566,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("a different fingerprint does not match — scopes are not interchangeable", () => {
     const store = new ResultsStore(":memory:");
     store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -570,6 +587,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // A pre-R47 lethal.sqlite row cannot prove how it was scoped, so it must not be resumable.
     const store = new ResultsStore(":memory:");
     store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -592,6 +610,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // have recorded nothing, so "most recent unfinished" alone is the wrong rule.
     const store = new ResultsStore(":memory:");
     const withVerdicts = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -613,6 +632,7 @@ describe("ResultsStore resume queries (R47)", () => {
     });
     // Newer, but died before recording anything.
     store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -634,6 +654,7 @@ describe("ResultsStore resume queries (R47)", () => {
     // one — the SQL filter and CARRYABLE_VERDICTS must agree on that.
     const store = new ResultsStore(":memory:");
     const good = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -654,6 +675,7 @@ describe("ResultsStore resume queries (R47)", () => {
       batchIndex: 0,
     });
     const allErrors = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -686,6 +708,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("mutantVerdicts reads back identity, verdict, killing test and duration", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -724,6 +747,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("R192: mutantVerdicts reads back the coverage facts, and their absence stays an absence", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -828,6 +852,7 @@ describe("ResultsStore resume queries (R47)", () => {
   test("R86: mutantVerdicts reads back the killing run's failure text, so --resume can carry it", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -883,6 +908,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   test("rewrites the named batch's verdicts to error and drops the killing test", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -906,6 +932,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
   test("R86: invalidateBatch drops the killing run's failure text along with the killing test", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -926,6 +953,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     // One artifact's attestation says nothing about a different artifact's verdicts.
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -943,6 +971,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     // specific diagnosis than this generic note.
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -1555,6 +1584,7 @@ describe("runSession --resume (R47)", () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");
     const foreign = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/somewhere/else",
       backend: "bcdev",
@@ -1929,6 +1959,219 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
   });
 });
 
+describe("R354: no verdict crosses a coverage-mode change", () => {
+  /** A run recorded under `mode`: finished, or aborted after one mutant (so it stays resumable). */
+  async function recordedRun(mode: CoverageMode, opts: { finished: boolean }) {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new CountingBackend("pass", opts.finished ? undefined : 1, undefined, false, mode),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    const run = store.db.query("SELECT id, backend, coverage_mode FROM runs").get() as {
+      id: number;
+      backend: string;
+      coverage_mode: string | null;
+    };
+    // The run records the mode it measured under.
+    expect(run.coverage_mode).toBe(mode);
+    return { dirs, store, first, runId: run.id, backend: run.backend };
+  }
+
+  /** Relabels a run as one measured under `mode` (NULL: from before R354), fingerprint included,
+   *  exactly as a run of that mode (or of a pre-R354 build, whose digest had no mode) wrote it. */
+  function relabel(
+    store: ResultsStore,
+    run: { dirs: { projectDir: string; testDir: string }; runId: number; backend: string },
+    mode: CoverageMode | null,
+  ) {
+    const fingerprint = sessionFingerprint({
+      projectDir: run.dirs.projectDir,
+      testDir: run.dirs.testDir,
+      backend: run.backend,
+      skipKnownSurvivors: false,
+      selectorIds,
+      identityScheme: IDENTITY_SCHEME,
+      ...(mode !== null ? { coverageMode: mode } : {}),
+    });
+    store.db.run("UPDATE runs SET coverage_mode = ?, config_fingerprint = ? WHERE id = ?", [
+      mode,
+      fingerprint,
+      run.runId,
+    ]);
+  }
+
+  const session = (
+    r: { dirs: Awaited<ReturnType<typeof makeProject>>; store: ResultsStore },
+    mode: CoverageMode,
+    extra: { resume?: number | "last"; skipKnownSurvivors?: boolean; emit?: RunEvent[] } = {},
+  ) => {
+    const backend = new CountingBackend("pass", undefined, undefined, false, mode);
+    const events = extra.emit;
+    return {
+      backend,
+      run: runSession({
+        backend,
+        store: r.store,
+        ...r.dirs,
+        selectorIds,
+        ...(extra.resume !== undefined ? { resume: extra.resume } : {}),
+        ...(extra.skipKnownSurvivors !== undefined
+          ? { skipKnownSurvivors: extra.skipKnownSurvivors }
+          : {}),
+        ...(events !== undefined ? { emit: [(e: RunEvent) => events.push(e)] } : {}),
+      }),
+    };
+  };
+
+  const warningsOf = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "history-coverage-mode-changed" ? [e.message] : [],
+    );
+
+  for (const [from, to] of [
+    ["none", "procedure"],
+    ["procedure", "none"],
+  ] as const) {
+    describe(`coverage ${from} to ${to}`, () => {
+      test("--resume-run is refused by name", async () => {
+        const r = await recordedRun(from, { finished: false });
+        await expect(session(r, to, { resume: r.runId }).run).rejects.toThrow(
+          new RegExp(
+            `^--resume-run ${r.runId} was measured under coverage mode ${from}, but this session measures under coverage mode ${to}\\. .*\\(R354\\)\\. Drop --resume-run to run from scratch\\.$`,
+          ),
+        );
+      });
+
+      test("--resume last is refused, naming the run", async () => {
+        const r = await recordedRun(from, { finished: false });
+        await expect(session(r, to, { resume: "last" }).run).rejects.toThrow(
+          new RegExp(
+            `^--resume found an unfinished run for this project and backend, run ${r.runId}, but it was measured under coverage mode ${from}, and this session measures under coverage mode ${to}\\. .*\\(R354\\)`,
+          ),
+        );
+      });
+
+      test("history skips nothing and warns once", async () => {
+        const r = await recordedRun(from, { finished: true });
+        expect(r.first.counts.survived).toBeGreaterThan(0);
+        const events: RunEvent[] = [];
+        const s = session(r, to, { skipKnownSurvivors: true, emit: events });
+        const report = await s.run;
+        expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+        expect(s.backend.mutantRuns).toBeGreaterThanOrEqual(report.mutants.length);
+        const warned = warningsOf(events);
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain(`run ${r.runId}`);
+        expect(warned[0]).toContain(`coverage mode ${from}`);
+        expect(warned[0]).toContain(`coverage mode ${to}`);
+        expect(warned[0]).toContain("R354");
+      });
+    });
+  }
+
+  for (const mode of ["none", "procedure"] as const) {
+    describe(`control, same mode (${mode})`, () => {
+      test("--resume-run carries", async () => {
+        const r = await recordedRun(mode, { finished: false });
+        const s = session(r, mode, { resume: r.runId });
+        const report = await s.run;
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+      });
+
+      test("--resume last carries", async () => {
+        const r = await recordedRun(mode, { finished: false });
+        const s = session(r, mode, { resume: "last" });
+        const report = await s.run;
+        expect(report.resumedFrom?.runId).toBe(r.runId);
+        expect(report.mutants.filter((m) => m.carried === true).length).toBeGreaterThan(0);
+      });
+
+      test("history skips the survivors, and does not warn", async () => {
+        const r = await recordedRun(mode, { finished: true });
+        const events: RunEvent[] = [];
+        const report = await session(r, mode, { skipKnownSurvivors: true, emit: events }).run;
+        expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toHaveLength(
+          r.first.counts.survived,
+        );
+        expect(warningsOf(events)).toEqual([]);
+      });
+    });
+  }
+
+  test("fenced against procedure is a change: every path refuses", async () => {
+    const open = await recordedRun("procedure", { finished: false });
+    relabel(open.store, open, "fenced");
+    await expect(session(open, "procedure", { resume: open.runId }).run).rejects.toThrow(
+      new RegExp(
+        `--resume-run ${open.runId} was measured under coverage mode fenced, but this session measures under coverage mode procedure\\..*R354`,
+      ),
+    );
+    await expect(session(open, "procedure", { resume: "last" }).run).rejects.toThrow(
+      new RegExp(`run ${open.runId}, but it was measured under coverage mode fenced.*R354`),
+    );
+    const done = await recordedRun("procedure", { finished: true });
+    relabel(done.store, done, "fenced");
+    const events: RunEvent[] = [];
+    const report = await session(done, "procedure", { skipKnownSurvivors: true, emit: events }).run;
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    expect(warningsOf(events)).toHaveLength(1);
+  });
+
+  test("a run from before R354 (no recorded mode) never carries, on any path", async () => {
+    const open = await recordedRun("procedure", { finished: false });
+    relabel(open.store, open, null);
+    await expect(session(open, "procedure", { resume: open.runId }).run).rejects.toThrow(
+      new RegExp(
+        `--resume-run ${open.runId} was measured under an unrecorded coverage mode \\(the run predates R354\\), but this session measures under coverage mode procedure\\.`,
+      ),
+    );
+    await expect(session(open, "procedure", { resume: "last" }).run).rejects.toThrow(
+      new RegExp(
+        `run ${open.runId}, but it was measured under an unrecorded coverage mode \\(the run predates R354\\)`,
+      ),
+    );
+    const done = await recordedRun("procedure", { finished: true });
+    relabel(done.store, done, null);
+    const events: RunEvent[] = [];
+    const report = await session(done, "procedure", { skipKnownSurvivors: true, emit: events }).run;
+    expect(report.mutants.filter((m) => m.verdict === "known-survivor")).toEqual([]);
+    const warned = warningsOf(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("an unrecorded coverage mode (the run predates R354)");
+  });
+
+  // R252's shape `explain` refuses: a survivor with no attribution in a coverage-on report. A
+  // resume from a coverage-off run is where one would come from.
+  test("a resumed coverage-on report never carries an unattributed survivor", async () => {
+    const r = await recordedRun("none", { finished: false });
+    expect(r.first.mutants.filter((m) => m.verdict === "survived").length).toBeGreaterThan(0);
+    const attempt: SessionReport | Error = await session(r, "procedure", {
+      resume: "last",
+    }).run.then(
+      (report) => report,
+      (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+    );
+    const unattributed =
+      attempt instanceof Error
+        ? []
+        : attempt.mutants.filter(
+            (m) => m.verdict === "survived" && m.coverageAttribution === undefined,
+          );
+    expect(unattributed.map((m) => m.mutantCode)).toEqual([]);
+    expect(attempt).toBeInstanceOf(Error);
+    // Run fresh instead, as the refusal says: every survivor is attributed.
+    const fresh = await session(r, "procedure").run;
+    expect(fresh.coverageMode).toBe("procedure");
+    const survivors = fresh.mutants.filter((m) => m.verdict === "survived");
+    expect(survivors.length).toBeGreaterThan(0);
+    expect(survivors.filter((m) => m.coverageAttribution === undefined)).toEqual([]);
+    expect(fresh.mutants.some((m) => m.carried === true)).toBe(false);
+  });
+});
+
 /** R318: a target whose public split member is renamed by its `#if` arms, and one test. */
 const R318_TARGET = `codeunit 79000 "Repro R"
 {
@@ -2207,6 +2450,8 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       skipKnownSurvivors: false,
       selectorIds,
       identityScheme: scheme,
+      // R354: what runSession computes: it always passes the mode, here the backend's.
+      coverageMode: "procedure",
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,

@@ -332,6 +332,7 @@ async function main(): Promise<void> {
       inLease?: (fence: LeaseFence) => Promise<void>,
     ): Promise<NamedMutantsResult> => {
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: PROJECT_DIR,
         backend: `itest-testapp-${++calls}`,

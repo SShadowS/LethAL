@@ -602,6 +602,7 @@ async function main(): Promise<void> {
             throw new Error("step 9: the resident manifest has no mutant");
           const compiled = await backend.compileTestApp(TEST_DIR, artifact);
           const runId = store.createRun({
+            coverageMode: "procedure",
             identityScheme: IDENTITY_SCHEME,
             projectPath: PROJECT_DIR,
             backend: "itest-verify-scale-restore",

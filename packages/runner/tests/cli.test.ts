@@ -2151,6 +2151,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = join(root, "r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: project,
       backend: "bcdev",
@@ -2199,6 +2200,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const dbPath = join(root, "r.sqlite");
     const store = new ResultsStore(dbPath);
     const runId = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: project,
       backend: "bcdev",

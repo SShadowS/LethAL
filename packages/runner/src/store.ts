@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
-import type { TestMethodRef, TestOutcome } from "./backend";
+import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { CoverageAttribution } from "./selection";
@@ -219,6 +219,27 @@ export interface RunRow {
   /** R325: the identity scheme the run's keys were made under. A row recorded before the column
    *  existed reads as 1. */
   readonly identityScheme: number;
+  /** R354: the coverage mode the run measured under. `null` on a row recorded before the column
+   *  existed: unknown, and never equal to any mode. */
+  readonly coverageMode: CoverageMode | null;
+}
+
+/** R354: the closed set a `coverage_mode` column may hold. Exhaustive by type. */
+const COVERAGE_MODES: Record<CoverageMode, true> = {
+  none: true,
+  procedure: true,
+  line: true,
+  fenced: true,
+  "al-runner": true,
+};
+
+/** R354: a stored `coverage_mode`, checked. NULL is "unknown"; any other string is a corrupt row. */
+function parseCoverageMode(value: string | null, runId: number): CoverageMode | null {
+  if (value === null) return null;
+  if (Object.hasOwn(COVERAGE_MODES, value)) return value as CoverageMode;
+  throw new Error(
+    `store.ts: run ${runId} has a corrupt "coverage_mode" column value ${JSON.stringify(value)}; expected one of ${Object.keys(COVERAGE_MODES).join(", ")}, or NULL`,
+  );
 }
 
 const SCHEMA = `
@@ -236,7 +257,8 @@ CREATE TABLE IF NOT EXISTS runs (
   artifact_sha256 TEXT,
   config_fingerprint TEXT,
   source_sha256 TEXT,
-  identity_scheme INTEGER
+  identity_scheme INTEGER,
+  coverage_mode TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -463,6 +485,8 @@ export class ResultsStore {
       ["runs", "source_sha256 TEXT", runCols],
       // R325: NULL on an older row, and read as scheme 1, the only scheme there was.
       ["runs", "identity_scheme INTEGER", runCols],
+      // R354: NULL on an older row, read as "coverage mode unknown", which never equals a mode.
+      ["runs", "coverage_mode TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
@@ -488,13 +512,16 @@ export class ResultsStore {
      *  that records keys made by another build (verify records the SOURCE run's manifest keys)
      *  must say so rather than inherit this build's `IDENTITY_SCHEME`. */
     identityScheme: number;
+    /** R354: the coverage mode the run measures under (`caps.coverage`). Required, so no run is
+     *  recorded without one: a verdict is only comparable to one scored under the same mode. */
+    coverageMode: CoverageMode;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme) " +
-          "VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode) " +
+          "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -502,6 +529,7 @@ export class ResultsStore {
         info.appVersion,
         info.configFingerprint ?? null,
         info.identityScheme,
+        info.coverageMode,
       ) as {
       id: number;
     };
@@ -574,13 +602,39 @@ export class ResultsStore {
     return row === null ? null : { runId: row.id, identityScheme: row.scheme };
   }
 
+  /**
+   * R354: the most recent unfinished run for this project and backend, under this build's identity
+   * scheme, that holds something to carry but was measured under ANOTHER coverage mode, or under an
+   * unrecorded one (NULL: `IS NOT` counts it). `--resume` never resumes it; this exists so the
+   * refusal can name it.
+   */
+  unfinishedRunUnderOtherCoverageMode(q: {
+    projectPath: string;
+    backend: string;
+    coverageMode: CoverageMode;
+    carryableVerdicts: readonly string[];
+  }): { runId: number; coverageMode: CoverageMode | null } | null {
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
+    const row = this.db
+      .query(
+        `SELECT id, coverage_mode FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND coverage_mode IS NOT ? AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+      )
+      .get(q.projectPath, q.backend, IDENTITY_SCHEME, q.coverageMode, ...q.carryableVerdicts) as {
+      id: number;
+      coverage_mode: string | null;
+    } | null;
+    return row === null
+      ? null
+      : { runId: row.id, coverageMode: parseCoverageMode(row.coverage_mode, row.id) };
+  }
+
   /** R47: one run row by id, or `null`. Used to explain WHY an explicitly named `--resume-run`
    *  cannot be resumed (wrong project, wrong backend, different scope, already finished) rather
    *  than silently finding nothing. */
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, coverage_mode FROM runs WHERE id = ?",
       )
       .get(runId) as {
       id: number;
@@ -589,6 +643,7 @@ export class ResultsStore {
       config_fingerprint: string | null;
       finished_at: string | null;
       identity_scheme: number;
+      coverage_mode: string | null;
     } | null;
     if (row === null) return null;
     return {
@@ -598,6 +653,7 @@ export class ResultsStore {
       configFingerprint: row.config_fingerprint,
       finished: row.finished_at !== null,
       identityScheme: row.identity_scheme,
+      coverageMode: parseCoverageMode(row.coverage_mode, row.id),
     };
   }
 
@@ -1189,21 +1245,32 @@ export class ResultsStore {
    *  the run after that, not silently fall out of history after one `--skip-known-survivors` pass. */
   priorSurvivorKeys(
     projectPath: string,
+    /** R354: the coverage mode THIS session measures under. A survivor recorded under another
+     *  mode, or an unrecorded one, is not a survivor under this one, so none is returned. */
+    coverageMode: CoverageMode,
     /**
      * R325: called when the latest finished run was keyed under another identity scheme. Its keys
      * then name nothing reliable in this build (a renumbering can hand one to a different mutant),
      * so NO key is returned and nothing is skipped; the caller says so.
      */
     onSchemeChanged?: (info: { runId: number; identityScheme: number }) => void,
+    /** R354: called when the latest finished run was measured under another coverage mode, or an
+     *  unrecorded one; no key is returned. Checked after the scheme. */
+    onCoverageModeChanged?: (info: { runId: number; coverageMode: CoverageMode | null }) => void,
   ): Set<string> {
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, coverage_mode FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
-      .get(projectPath) as { id: number; scheme: number } | null;
+      .get(projectPath) as { id: number; scheme: number; coverage_mode: string | null } | null;
     if (!run) return new Set();
     if (run.scheme !== IDENTITY_SCHEME) {
       onSchemeChanged?.({ runId: run.id, identityScheme: run.scheme });
+      return new Set();
+    }
+    const recorded = parseCoverageMode(run.coverage_mode, run.id);
+    if (recorded !== coverageMode) {
+      onCoverageModeChanged?.({ runId: run.id, coverageMode: recorded });
       return new Set();
     }
     const rows = this.db

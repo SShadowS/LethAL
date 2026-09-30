@@ -184,6 +184,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   test("round-trips a completed baseline under its two hashes, latest first", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
       projectPath: "/p",
       backend: "bcdev",
@@ -217,6 +218,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
   function snapshotAtScheme(scheme: number): { store: ResultsStore; id: number } {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
+      coverageMode: "procedure",
       identityScheme: scheme,
       projectPath: "/p",
       backend: "bcdev",

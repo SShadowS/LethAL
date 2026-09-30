@@ -757,6 +757,7 @@ async function main(): Promise<void> {
       );
       const compiled = await backend.compileTestApp(TEST_DIR, artifact);
       const runId = store.createRun({
+        coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
         projectPath: PROJECT_DIR,
         backend: "itest-agreement-restore",

@@ -2949,10 +2949,23 @@ export function assertRunSizeAcceptable(input: {
  * nothing and ran everything would be indistinguishable from a resume that worked, which is the
  * worst outcome available here: the user believes twelve hours of prior work was reused.
  */
+/** R354: a run's recorded coverage mode in a refusal or warning. NULL is a run from before R354. */
+function describeCoverageMode(mode: CoverageMode | null): string {
+  return mode === null
+    ? "an unrecorded coverage mode (the run predates R354)"
+    : `coverage mode ${mode}`;
+}
+
+/** R354: why no verdict crosses a coverage-mode change, said the same way on every path. */
+const COVERAGE_MODE_WHY =
+  "An unreached mutant scores survived with coverage off and no-coverage with it on, and each mode attributes covering tests by its own rule, so none of its verdicts is carried";
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
   configFingerprint: string,
+  /** R354: the coverage mode this session measures under (`caps.coverage`). */
+  coverageMode: CoverageMode,
   emit: RunEmitter,
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
@@ -2982,6 +2995,18 @@ function resolveResume(
           `--resume found an unfinished run for this project and backend, run ${other.runId}, but it was keyed under identity scheme ${other.identityScheme} and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume to run from scratch.`,
         );
       }
+      // R354: likewise for a run measured under another coverage mode, or an unrecorded one.
+      const otherMode = cfg.store.unfinishedRunUnderOtherCoverageMode({
+        projectPath: cfg.projectDir,
+        backend: backendName,
+        coverageMode,
+        carryableVerdicts: [...CARRYABLE_VERDICTS],
+      });
+      if (otherMode !== null) {
+        throw new Error(
+          `--resume found an unfinished run for this project and backend, run ${otherMode.runId}, but it was measured under ${describeCoverageMode(otherMode.coverageMode)}, and this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume to run from scratch.`,
+        );
+      }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
       );
@@ -3005,6 +3030,13 @@ function resolveResume(
     if (row.identityScheme !== IDENTITY_SCHEME) {
       throw new Error(
         `--resume-run ${cfg.resume} was keyed under identity scheme ${row.identityScheme}, but this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so none of its verdicts is carried (R325). Drop --resume-run to run from scratch.`,
+      );
+    }
+    // R354: after the scheme, before the fingerprint (which carries the mode too and would refuse
+    // this run anyway, as "scoped differently"). NULL is unknown and never equals a mode.
+    if (row.coverageMode !== coverageMode) {
+      throw new Error(
+        `--resume-run ${cfg.resume} was measured under ${describeCoverageMode(row.coverageMode)}, but this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume-run to run from scratch.`,
       );
     }
     if (row.configFingerprint !== configFingerprint) {
@@ -4096,6 +4128,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
     // R325: always in the digest, so a run keyed under another scheme never matches.
     identityScheme: IDENTITY_SCHEME,
+    // R354: ALWAYS passed, so no run recorded before R354 (no mode in its digest) can match.
+    coverageMode: caps.coverage,
     selectorIds: cfg.selectorIds,
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
@@ -4118,12 +4152,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     cfg,
     backendName,
     configFingerprint,
+    caps.coverage,
     emit,
     testPageRefusedNames,
   );
 
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
+    coverageMode: caps.coverage,
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
@@ -4316,6 +4352,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let lastIssuedVersion: string | undefined;
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
+  // R354: likewise for its coverage-mode warning.
+  let historyCoverageModeWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -4631,15 +4669,29 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // 2. history filter
       // R325: a latest finished run keyed under another identity scheme yields no keys, so nothing
       // is skipped on a verdict that may belong to another mutant. Said once per session.
-      const prior = cfg.store.priorSurvivorKeys(cfg.projectDir, (old) => {
-        if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-        historySchemeWarned = true;
-        emit({
-          type: "warning",
-          code: "history-identity-scheme-changed",
-          message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
-        });
-      });
+      // R354: likewise for one measured under another coverage mode, or an unrecorded one.
+      const prior = cfg.store.priorSurvivorKeys(
+        cfg.projectDir,
+        caps.coverage,
+        (old) => {
+          if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+          historySchemeWarned = true;
+          emit({
+            type: "warning",
+            code: "history-identity-scheme-changed",
+            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
+          });
+        },
+        (old) => {
+          if (historyCoverageModeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+          historyCoverageModeWarned = true;
+          emit({
+            type: "warning",
+            code: "history-coverage-mode-changed",
+            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
+          });
+        },
+      );
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
       });
