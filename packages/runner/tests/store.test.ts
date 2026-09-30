@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { CARRYABLE_VERDICTS } from "../src/resume";
-import { type MutantVerdict, PRUNED_BY_ENV_TEARDOWN, ResultsStore } from "../src/store";
+import {
+  type MutantVerdict,
+  PRUNED_BY_ENV_TEARDOWN,
+  ResultsStore,
+  STORE_BUSY_TIMEOUT_MS,
+} from "../src/store";
 import { tinyBundle } from "./helpers/bundle";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
@@ -1067,6 +1072,22 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     store.installedBundle(runId, batch) !== null;
   const finish = (store: ResultsStore, runId: number) =>
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
+
+  test("review M-8: the store waits for a busy writer instead of failing at once", () => {
+    const store = new ResultsStore(":memory:");
+    expect(store.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: STORE_BUSY_TIMEOUT_MS });
+    expect(STORE_BUSY_TIMEOUT_MS).toBe(5000);
+    store.close();
+  });
+
+  test("hasInstalledBundle answers by exact (run, batch)", () => {
+    const store = new ResultsStore(":memory:");
+    const r = run(store, "srv|bc");
+    publish(store, r, 0);
+    expect(store.hasInstalledBundle(r, 0)).toBe(true);
+    expect(store.hasInstalledBundle(r, 1)).toBe(false);
+    store.close();
+  });
 
   test("a stored bundle reads back by exact (run, batch), and nothing else", () => {
     const store = new ResultsStore(":memory:");

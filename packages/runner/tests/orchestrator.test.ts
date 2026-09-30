@@ -4042,6 +4042,43 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  test("review M-1: the end-of-run check tests existence and never loads the bundle", async () => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const load = spyOn(store, "installedBundle");
+    await runSession({ backend: new PhaseBackend(), store, ...dirs, selectorIds });
+    expect(load).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  test("review M-3: a highest bundle another run pruned is named in the end-of-run refusal", async () => {
+    class PrunedByAnotherStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        const key = [args[0], args[1].batchIndex] as const;
+        this.db
+          .query("DELETE FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+          .run(...key);
+        this.db
+          .query(
+            "UPDATE batch_artifacts SET bundle_pruned_by = 99 WHERE run_id = ? AND batch_index = ?",
+          )
+          .run(...key);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new PrunedByAnotherStore(":memory:");
+    const err = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ reason: "bundle-missing" });
+    expect((err as Error).message).toContain("pruned by run 99");
+    store.close();
+  });
+
   test("R360: the run records its server's quarantine resource key, and NULL without a server", async () => {
     const withServer = new ResultsStore(":memory:");
     const dirs = await makeProject();

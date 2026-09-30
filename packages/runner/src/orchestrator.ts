@@ -5517,18 +5517,22 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // `WHERE finished_at IS NOT NULL` filter. `runs.app_version`/`app_id`/`artifact_id` provenance
   // is written by `createRun`/`recordArtifact`, never by `finishRun` — so app-version reservation
   // (clock-derived via `reserveAppVersion`, Layer 5A) has no dependency on this run ever finishing.
-  // R360 I4: before this run can report success, and before `runFromCli` removes its scratch
-  // folder, the highest published batch, the one still installed, must have its bundle in the
-  // store. Exact lookup, never "the latest bundle".
-  const published = cfg.store.artifactsForRun(runId);
-  const highest = published.at(-1);
-  if (highest !== undefined && cfg.store.installedBundle(runId, highest.batchIndex) === null) {
-    throw new InstalledBundleError(
-      "bundle-missing",
-      `run ${runId} published batch ${highest.batchIndex} (artifact ${highest.artifactId}) but the store holds no installed bundle for it, so lethal verify could not read it once the scratch folder is removed`,
-    );
-  }
   if (!safety.isUnsafe) {
+    // R360 I4: before this run can report success, and before `runFromCli` removes its scratch
+    // folder, the highest published batch, the one still installed, must have its bundle in the
+    // store. Exact lookup, never "the latest bundle", and existence only (review M-1). Checked
+    // only here: a quarantined run returns its quarantined report (review M-3), finishes nothing,
+    // and keeps its folder.
+    const highest = cfg.store.artifactsForRun(runId).at(-1);
+    if (highest !== undefined && !cfg.store.hasInstalledBundle(runId, highest.batchIndex)) {
+      const prunedBy = cfg.store.trustedArtifactRecord(runId, highest.batchIndex)?.bundlePrunedBy;
+      throw new InstalledBundleError(
+        "bundle-missing",
+        prunedBy !== undefined && prunedBy !== null
+          ? `run ${runId}'s highest batch ${highest.batchIndex} (artifact ${highest.artifactId}) was pruned by run ${prunedBy} before this run finished, so the server may hold another build; run lethal run again`
+          : `run ${runId} published batch ${highest.batchIndex} (artifact ${highest.artifactId}) but the store holds no installed bundle for it, so lethal verify could not read it once the scratch folder is removed`,
+      );
+    }
     cfg.store.finishRun(runId, {
       batchCount: artifacts.length,
       baselineGreen: baselineGreenOverall,

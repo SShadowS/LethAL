@@ -991,6 +991,25 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
 });
 
 describe("runSession --resume (R47)", () => {
+  test("review M-3: a quarantined run whose bundle is gone still returns its quarantined report", async () => {
+    class DroppingStore extends ResultsStore {
+      override recordArtifact(...args: Parameters<ResultsStore["recordArtifact"]>): void {
+        super.recordArtifact(...args);
+        this.db.query("DELETE FROM installed_bundles WHERE run_id = ?").run(args[0]);
+      }
+    }
+    const dirs = await makeProject();
+    const store = new DroppingStore(":memory:");
+    const report = await runSession({
+      backend: new CountingBackend("pass", 1, undefined, true),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.quarantined).toBeDefined();
+    store.close();
+  });
+
   test("R360 ruling: a run whose highest batch's bundle a later run pruned is refused up front, by name", async () => {
     const dirs = await makeProject();
     const store = new ResultsStore(":memory:");

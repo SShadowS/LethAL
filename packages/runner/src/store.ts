@@ -231,6 +231,13 @@ export interface RunRow {
  */
 export const PRUNED_BY_ENV_TEARDOWN = 0;
 
+/**
+ * Review M-8: how long a write waits for another process's write lock before SQLITE_BUSY. A
+ * BaseApp-sized bundle transaction was measured at 0.6 s (R360 I5), so 5 s covers it several times
+ * over while a writer that is really stuck still fails loudly within seconds.
+ */
+export const STORE_BUSY_TIMEOUT_MS = 5000;
+
 /** R354: the closed set a `coverage_mode` column may hold. Exhaustive by type. */
 const COVERAGE_MODES: Record<CoverageMode, true> = {
   none: true,
@@ -387,6 +394,7 @@ export class ResultsStore {
   constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = new Database(dbPath, { create: true });
+    this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
     this.migrate();
@@ -956,6 +964,16 @@ export class ResultsStore {
     });
     tx();
     this.checkpoint();
+  }
+
+  /** Review M-1: whether one batch's bundle is stored, by exact `(runId, batchIndex)`, without
+   *  loading it. */
+  hasInstalledBundle(runId: number, batchIndex: number): boolean {
+    return (
+      this.db
+        .query("SELECT 1 FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+        .get(runId, batchIndex) !== null
+    );
   }
 
   /** R360: one batch's stored bundle, by exact `(runId, batchIndex)`; `null` when none is stored. */
