@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
@@ -15,6 +15,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
@@ -59,9 +60,10 @@ import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
-import { scratchDirs } from "./helpers/scratch";
+import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+removeRunScratchAfterAll();
 
 /**
  * R89. `--resume` is a BOOLEAN flag, so `parseArgs` puts the next word in `positionals`, where
@@ -2082,6 +2084,165 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(row.source_sha256).toBe(await hashTargetSource(projectDir, ["X"]));
     // And it is not the hash without the symbol, so the symbol is what is being compared.
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
+  });
+});
+
+// R358 review C1: `lethal run` KEEPS its scratch folder because the store records the installed
+// batch's `.app` and instrumented folder inside it and `lethal verify` reads them back. Driven
+// through the REAL runFromCli, runSession and verifyFromCli against one store; only the backends
+// are fakes. The verify fake stops at `compileTestApp`, the first backend call after
+// `loadInstalledArtifact`, so reaching it proves verify read the run's files. With the run's
+// scratch folder removed, verify instead prints an `artifact-files-unusable` refusal.
+describe("lethal run then lethal verify on one store (R358)", () => {
+  class DeployingBackend implements ExecutionBackend {
+    capabilities(): BackendCapabilities {
+      return { coverage: "none", deploy: "publish", isolation: "session", authoritative: false };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "fake" };
+    }
+    async deploy(dir: string): Promise<CompiledArtifact | null> {
+      const appManifest = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+        id: string;
+        version: string;
+      };
+      const mutantManifest = JSON.parse(
+        await readFile(join(dir, "mutant-manifest.json"), "utf8"),
+      ) as CompiledArtifact["mutantManifest"];
+      const appPath = join(dir, "fake.app");
+      await writeFile(appPath, mutantManifest.artifactId);
+      return {
+        artifactId: mutantManifest.artifactId,
+        appId: appManifest.id,
+        appVersion: appManifest.version,
+        appPath,
+        sha256: Bun.SHA256.hash(new TextEncoder().encode(mutantManifest.artifactId), "hex"),
+        mutantManifest,
+        appManifest: appManifest as unknown as Record<string, unknown>,
+      };
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(): Promise<void> {}
+    async run(ref: TestMethodRef): Promise<TestVerdict> {
+      return { ref, outcome: "pass", durationMs: 1 };
+    }
+  }
+
+  test("verify reads the installed batch's files the run left behind", async () => {
+    const root = scratch("lethal-run-verify-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Run Verify Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(
+      join(projectDir, "Logic.Codeunit.al"),
+      `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`,
+    );
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        bcdev: {
+          mcpCommand: ["bun", "x", "bc-dev-mcp"],
+          server: "http://x",
+          serverInstance: "BC",
+          company: "CRONUS",
+          username: "u",
+          password: "p",
+          packageCachePath: "C:/.alpackages",
+          controlSymbolPath: "C:/lethal-control.app",
+        },
+      }),
+    );
+    const dbPath = join(root, "lethal.sqlite");
+    const report = await runFromCli(
+      {
+        mode: "run",
+        projectDir,
+        testDir,
+        backendKind: "al-runner",
+        dbPath,
+        configPath,
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+      },
+      {
+        validateSelectorIdsForProject: async () => {},
+        buildBackend: async () => new DeployingBackend(),
+      },
+    );
+    const survivor = report.mutants.find((m) => m.verdict === "survived");
+    const artifactId = report.artifacts?.[0]?.artifactId;
+    expect(survivor).toBeDefined();
+    expect(artifactId).toBeDefined();
+    if (survivor === undefined || artifactId === undefined) return;
+
+    let reachedWith: string | undefined;
+    const verifyBackend = Object.assign(Object.create(BcDevMcpBackend.prototype), {
+      capabilities: (): BackendCapabilities => ({
+        coverage: "none",
+        deploy: "publish",
+        isolation: "session",
+        authoritative: true,
+      }),
+      compileTestApp: async (_dir: string, target: { artifactId: string }) => {
+        reachedWith = target.artifactId;
+        throw new Error("R358 fake: verify reached compileTestApp");
+      },
+      close: async () => {},
+    }) as BcDevMcpBackend;
+    let printed = "";
+    const outcome = await verifyFromCli(
+      {
+        mode: "verify",
+        dbPath,
+        artifact: artifactId,
+        testDir,
+        survivors: [`${survivor.batchIndex}/${survivor.mutantCode}`],
+        configPath,
+      },
+      {
+        write: (s) => {
+          printed += s;
+        },
+        buildBackend: async () => verifyBackend,
+      },
+    ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+    expect(printed).toBe("");
+    expect(outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(reachedWith).toBe(artifactId);
   });
 });
 

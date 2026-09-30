@@ -1,7 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
@@ -26,9 +24,10 @@ import type { EnvToolPublisher } from "../src/env-tool-publisher";
 import type { EnvToolSession } from "../src/env-tool-session";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
-import { scratchDirs } from "./helpers/scratch";
+import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+removeRunScratchAfterAll();
 
 /** Writes a minimal valid (empty) `lethal.config.json` to a fresh scratch dir and returns its path.
  * Every field of `LethalConfigFile` is optional, so `{}` parses fine — tests that need real
@@ -1152,72 +1151,5 @@ describe("afterLeaseAcquiredFor (R19)", () => {
 
   it("produces nothing without an env-tool session — nobody asked LethAL to publish test apps", () => {
     expect(afterLeaseAcquiredFor(undefined)).toEqual({});
-  });
-});
-
-// R358: `runFromCli` made `<tmp>/lethal-XXXXXX` for every session and never removed it, so every
-// `lethal run` left its instrumented copy of the project in the temp folder. The directory is
-// captured where the session hands it on (`buildBackend`'s third argument, or its name as the run
-// id `resolveEnvToolSession` receives), then checked after `runFromCli` returns or throws.
-describe("runFromCli removes its session scratch directory (R358)", () => {
-  const alRunner = async (): Promise<RunCliConfig> => ({
-    ...RUN_CONFIG_BCDEV,
-    backendKind: "al-runner",
-    configPath: await writeTempConfig(),
-    dbPath: ":memory:",
-  });
-
-  it("after a session that completes", async () => {
-    let scratchRoot: string | undefined;
-    const result = await runFromCli(await alRunner(), {
-      validateSelectorIdsForProject: async () => {},
-      resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
-      buildBackend: async (_inputs, _config, root) => {
-        scratchRoot = root;
-        return new AlRunnerBackend({
-          alRunnerPath: "unused",
-          instrumentedDir: "unused",
-          testDir: "unused",
-          selectorObjectId: 1,
-        });
-      },
-      runSession: async () => QUARANTINED_FAKE_REPORT,
-    });
-    expect(result).toBe(QUARANTINED_FAKE_REPORT);
-    expect(scratchRoot).toBeDefined();
-    expect(existsSync(scratchRoot ?? "")).toBe(false);
-  });
-
-  it("after a backend build that throws", async () => {
-    let scratchRoot: string | undefined;
-    const buildErr = new Error("no backend");
-    await expect(
-      runFromCli(await alRunner(), {
-        validateSelectorIdsForProject: async () => {},
-        resolveEnvToolSession: async () => ({ effectiveConfig: {} }),
-        buildBackend: async (_inputs, _config, root) => {
-          scratchRoot = root;
-          throw buildErr;
-        },
-      }),
-    ).rejects.toBe(buildErr);
-    expect(scratchRoot).toBeDefined();
-    expect(existsSync(scratchRoot ?? "")).toBe(false);
-  });
-
-  it("after an environment resolution that throws, before withEnvTeardown is entered", async () => {
-    let runId: string | undefined;
-    const envErr = new Error("no environment");
-    await expect(
-      runFromCli(await alRunner(), {
-        validateSelectorIdsForProject: async () => {},
-        resolveEnvToolSession: async (_parsed, _config, id) => {
-          runId = id;
-          throw envErr;
-        },
-      }),
-    ).rejects.toBe(envErr);
-    expect(runId).toBeDefined();
-    expect(existsSync(join(tmpdir(), runId ?? ""))).toBe(false);
   });
 });

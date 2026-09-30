@@ -1,5 +1,5 @@
 import { afterAll } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,4 +28,21 @@ export function scratchDirs(): (prefix: string) => string {
     made.push(d);
     return d;
   };
+}
+
+/**
+ * R358/R360: `lethal run` KEEPS its `<tmp>/lethal-XXXXXX` session folder on purpose, because
+ * `lethal verify` reads the installed batch's files from it. A test file that drives `runFromCli`
+ * calls this once at the top level; it removes those folders after the file's last test. The
+ * temp folder is the test process's private one (scripts/test-preload.ts), so nothing another
+ * process made can match.
+ */
+export function removeRunScratchAfterAll(): void {
+  afterAll(() => {
+    for (const e of readdirSync(tmpdir())) {
+      if (/^lethal-[A-Za-z0-9]{6}$/.test(e)) {
+        rmSync(join(tmpdir(), e), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
 }
