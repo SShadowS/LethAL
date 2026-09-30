@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdir, mkdtemp as realMkdtemp } from "node:fs/promises";
+import { readdir, mkdtemp as realMkdtemp, rm as realRm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   type AlRunnerCanaryFsOps,
@@ -211,8 +211,13 @@ describe("runAlRunnerCanary — infrastructure-failure safety", () => {
     console.warn = ((...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     }) as typeof console.warn;
+    // R358: the stub below never removes the directory, so the test does.
+    let root = "";
     const fsOps: AlRunnerCanaryFsOps = {
-      mkdtemp: (prefix) => realMkdtemp(prefix),
+      mkdtemp: async (prefix) => {
+        root = await realMkdtemp(prefix);
+        return root;
+      },
       rm: async () => {
         throw new Error("EBUSY: resource busy or locked");
       },
@@ -222,6 +227,7 @@ describe("runAlRunnerCanary — infrastructure-failure safety", () => {
       result = await runAlRunnerCanary("al-runner", spawn, fsOps);
     } finally {
       console.warn = originalWarn;
+      await realRm(root, { recursive: true, force: true });
     }
     // The real, correctly-computed verdicts — NOT "inconclusive" — must survive a cleanup
     // failure: a naive `finally { await rm(...) }` that rethrows would otherwise discard this
@@ -239,8 +245,9 @@ describe("runAlRunnerCanary — infrastructure-failure safety", () => {
       | undefined;
     const fsOps: AlRunnerCanaryFsOps = {
       mkdtemp: (prefix) => realMkdtemp(prefix),
-      rm: async (_path, opts) => {
+      rm: async (path, opts) => {
         rmOpts = opts;
+        await realRm(path, opts);
       },
     };
     await runAlRunnerCanary("al-runner", spawn, fsOps);

@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Glob } from "bun";
+import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import {
   firstPartyVerdict,
   isMutationElementsExport,
   loadFirstParty,
 } from "./redact-campaign-report";
+
+const scratch = scratchDirs();
 
 /**
  * The public-repo guard, and the two properties that make it worth having rather than a checklist
@@ -32,7 +34,7 @@ const MARKER = "[redacted: third-party source, see this directory's README]";
 const firstParty = loadFirstParty;
 
 function reportFixture(): { path: string; original: Record<string, unknown> } {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-redact-"));
+  const dir = scratch("lethal-redact-");
   const path = join(dir, "report.json");
   const original = {
     schemaVersion: 2,
@@ -155,7 +157,7 @@ describe("redact-campaign-report", () => {
     "refuses a file that is not a SessionReport rather than reporting nothing to do",
     () => {
       // "nothing to redact" and "could not look" must not produce the same exit code.
-      const dir = mkdtempSync(join(tmpdir(), "lethal-redact-bad-"));
+      const dir = scratch("lethal-redact-bad-");
       const path = join(dir, "not-a-report.json");
       writeFileSync(path, JSON.stringify({ hello: "world" }), "utf8");
       const r = run([path]);

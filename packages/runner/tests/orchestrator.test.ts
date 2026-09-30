@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
@@ -48,6 +47,9 @@ import type {
   RenewOutcome,
 } from "../src/lease";
 import { NamedMutantError } from "../src/named-mutants";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
 // to drive more than one batch while `planArtifacts` still collapses everything into one artifact.
@@ -368,7 +370,7 @@ function reachedOf(reachedActive: boolean | undefined): { reachedActive?: boolea
 }
 
 async function makeProject(testAl: string = TEST_AL) {
-  const root = await mkdtemp(join(tmpdir(), "lethal-orch-"));
+  const root = scratch("lethal-orch-");
   const projectDir = join(root, "app");
   const testDir = join(root, "tests");
   const instrumentedDir = join(root, "instr");
@@ -2330,7 +2332,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
 describe("runSession — I7 second consecutive transport error aborts the session", () => {
   test("stub backend erroring on every active-mutant run throws, persists partial results", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-i7-"));
+    const root = scratch("lethal-orch-i7-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, (mutant) => (mutant === null ? "pass" : "error"), [
@@ -2340,6 +2342,7 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
       /transport error/i,
     );
+    store.close();
     expect(backend.activations.at(-1)).toBeNull(); // finally: still deactivated
 
     // Reopen the same on-disk (WAL-mode) db from a second connection to
@@ -2611,7 +2614,7 @@ describe("runSession — parallel workers", () => {
   });
 
   test("a shard's transport-error abort drains sibling shards before rethrowing", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-i7-"));
+    const root = scratch("lethal-orch-parallel-i7-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -3110,7 +3113,7 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
 `;
 
   async function makeHangCapableProject(targetAl: string) {
-    const root = await mkdtemp(join(tmpdir(), "lethal-hang-"));
+    const root = scratch("lethal-hang-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
     const instrumentedDir = join(root, "instr");
@@ -3257,7 +3260,7 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
     testDir: string;
     instrumentedDir: string;
   }> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-objkind-"));
+    const root = scratch("lethal-orch-objkind-");
     const projectDir = join(root, "app");
     await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
     await Bun.write(join(projectDir, "SandboxPort.XmlPort.al"), PAGE_AL);
@@ -3434,7 +3437,7 @@ ${
 `;
 
   async function operatorsAtSetRange(withProcedure: boolean): Promise<string[]> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-shadow-"));
+    const root = scratch("lethal-orch-shadow-");
     const projectDir = join(root, "app");
     // Separate files — the layout the guard was inert against, and the ordinary AL convention.
     await Bun.write(join(projectDir, "ShadowCaller.Codeunit.al"), CALLER_AL);
@@ -3500,7 +3503,7 @@ describe("generateMutationSet: real cross-tier collisions", () => {
     `${s.before.kind}:${s.before.startIndex}:${s.before.endIndex}:${s.after.text}`;
 
   async function collisionSpecs(): Promise<readonly MutationSpec[]> {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-"));
+    const root = scratch("lethal-orch-collide-");
     const projectDir = join(root, "app");
     await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
@@ -3551,7 +3554,7 @@ describe("generateMutationSet: real cross-tier collisions", () => {
   });
 
   test("the whole pipeline resolves them to one mutant per deletion site and two at Modify", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-collide-e2e-"));
+    const root = scratch("lethal-orch-collide-e2e-");
     const projectDir = join(root, "app");
     const outDir = join(root, "instr");
     await Bun.write(join(projectDir, "Collisions.Codeunit.al"), COLLISION_AL);
@@ -4541,7 +4544,7 @@ describe("runSession — bisection on compile failure", () => {
   // error, and get silently downgraded into a per-mutant "error" note instead of aborting the
   // run.
   test("a worker's DeploymentError aborts the whole session instead of being bisected", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-deployerr-"));
+    const root = scratch("lethal-orch-parallel-deployerr-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -4864,7 +4867,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
   // if this outer one were missing — `calls === 1` is what only the outer guard delivers (zero
   // wasted bisection compiles, not merely "eventually aborts correctly").
   test("a worker's ArtifactPrepareError aborts the whole session instead of being bisected", async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-orch-parallel-prepareerr-"));
+    const root = scratch("lethal-orch-parallel-prepareerr-");
     const dbPath = join(root, "results.sqlite");
     const dirs = await makeProject();
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
@@ -5287,7 +5290,7 @@ describe("activateOnce / runOnce — retry only pre-dispatch failures", () => {
  *  available. Each call gets its own directory, so tests never share (or race on) quarantine
  *  state. */
 function freshTmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "lethal-orch-quarantine-"));
+  return scratch("lethal-orch-quarantine-");
 }
 
 /**

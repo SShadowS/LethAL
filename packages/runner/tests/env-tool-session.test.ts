@@ -1,6 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { EnvToolClient, EnvToolError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -10,6 +9,9 @@ import {
   HarnessVerificationError,
   MultiTenantContainerError,
 } from "../src/harness";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const FAR_FUTURE = "2099-01-01T00:00:00Z";
 
@@ -126,7 +128,7 @@ async function start(
       // this specific type — a bare `Error` here would no longer exercise the republish path.
       if (harnessCalls === 1) throw new HarnessVerificationError("HarnessInfo failed: HTTP 404");
     },
-    stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+    stateDir: scratch("lethal-envstate-"),
     ...over,
   });
   return { ...h, session, harnessCalls: () => harnessCalls };
@@ -247,7 +249,7 @@ describe("startEnvToolSession", () => {
   });
 
   it("creates an env when none is configured and records it to state before use", async () => {
-    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const stateDir = scratch("lethal-envstate-");
     const { session } = await start({ stateDir }, { envId: undefined });
     expect(session.createdEnvId).toBe("env-new");
     expect(session.envId).toBe("env-new");
@@ -324,7 +326,7 @@ describe("startEnvToolSession", () => {
       }),
       verifyHarness: async () => {},
       sleep: async () => {},
-      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      stateDir: scratch("lethal-envstate-"),
     });
     expect(session.createdEnvId).toBe("env-new");
     expect(seen[0]).toBe("create");
@@ -382,7 +384,7 @@ describe("startEnvToolSession", () => {
         verifyHarness: async () => {},
         now: () => clock,
         sleep: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }),
     ).rejects.toThrow(/did not reach status "Running"/);
   });
@@ -418,7 +420,7 @@ describe("startEnvToolSession", () => {
         return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
-    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const stateDir = scratch("lethal-envstate-");
     const session = await startEnvToolSession({
       cfg,
       bcdevRaw: BCDEV_RAW,
@@ -466,7 +468,7 @@ describe("startEnvToolSession", () => {
         return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
-    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const stateDir = scratch("lethal-envstate-");
     await expect(
       startEnvToolSession({
         cfg,
@@ -519,7 +521,7 @@ describe("startEnvToolSession", () => {
         client: failing,
         makePublisher: () => ({ publishFile: async () => {} }),
         verifyHarness: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }),
       // Never "delete also failed" — a failing delete attempt must never mask the real error.
     ).rejects.toThrow(/symbols download failed/);
@@ -557,19 +559,19 @@ describe("startEnvToolSession", () => {
   });
 
   it("unlinks the crash-recovery record after a successful delete, but keeps it when the env survives (item 4)", async () => {
-    const keptDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const keptDir = scratch("lethal-envstate-");
     const kept = await start({ stateDir: keptDir }, { envId: undefined });
     expect(await readdir(keptDir)).toHaveLength(1);
     await kept.session.teardown({ keepEnv: true, quarantined: false });
     expect(await readdir(keptDir)).toHaveLength(1); // still there — this IS the recovery hint
 
-    const quarantinedDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const quarantinedDir = scratch("lethal-envstate-");
     const quarantined = await start({ stateDir: quarantinedDir }, { envId: undefined });
     expect(await readdir(quarantinedDir)).toHaveLength(1);
     await quarantined.session.teardown({ keepEnv: false, quarantined: true });
     expect(await readdir(quarantinedDir)).toHaveLength(1);
 
-    const deletedDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const deletedDir = scratch("lethal-envstate-");
     const deleted = await start({ stateDir: deletedDir }, { envId: undefined });
     expect(await readdir(deletedDir)).toHaveLength(1);
     await deleted.session.teardown({ keepEnv: false, quarantined: false });
@@ -581,7 +583,7 @@ describe("startEnvToolSession", () => {
   // must now scan `stateDir` and warn on whatever it finds, naming the envId and the exact delete
   // command already recorded — never deleting anything itself.
   it("warns on a stale crash-recovery record left by an earlier run, naming its envId and delete command (R17)", async () => {
-    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const stateDir = scratch("lethal-envstate-");
     await writeFile(
       join(stateDir, "some-other-run.json"),
       JSON.stringify({
@@ -610,7 +612,7 @@ describe("startEnvToolSession", () => {
   });
 
   it("does not warn about a record matching the CURRENT run's own id, or when stateDir has none at all (R17)", async () => {
-    const emptyDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const emptyDir = scratch("lethal-envstate-");
     const warnSpy1 = spyOn(console, "warn").mockImplementation(() => {});
     let warnings1: string[];
     try {
@@ -623,7 +625,7 @@ describe("startEnvToolSession", () => {
 
     // `start()` always uses runId "r1" — pre-seed a record under that SAME id (as if this run
     // were retrying after already recording itself) and prove it is never reported back as stale.
-    const ownDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const ownDir = scratch("lethal-envstate-");
     await writeFile(
       join(ownDir, "r1.json"),
       JSON.stringify({ runId: "r1", envId: "env-4711", deleteArgv: [], startedAtMs: Date.now() }),
@@ -655,7 +657,7 @@ describe("startEnvToolSession", () => {
         return { exitCode: 0, stdout: key === undefined ? "{}" : (out[key] ?? "{}"), stderr: "" };
       },
     });
-    const stateDir = await mkdtemp(join(tmpdir(), "lethal-envstate-"));
+    const stateDir = scratch("lethal-envstate-");
     const session = await startEnvToolSession({
       cfg: h.cfg,
       bcdevRaw: BCDEV_RAW,
@@ -713,7 +715,7 @@ describe("startEnvToolSession", () => {
             "5C-B1 refuses a multi-tenant/shared-publication container",
           );
         },
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }),
     ).rejects.toThrow(MultiTenantContainerError);
     // The differentiator: a MultiTenantContainerError must never trigger the "republish the
@@ -736,7 +738,7 @@ describe("startEnvToolSession", () => {
         client: h.client,
         makePublisher: () => ({ publishFile: async () => {} }),
         verifyHarness: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }),
     ).rejects.toThrow(EnvToolError);
 
@@ -755,7 +757,7 @@ describe("startEnvToolSession", () => {
       client: h.client,
       makePublisher: () => ({ publishFile: async () => {} }),
       verifyHarness: async () => {},
-      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      stateDir: scratch("lethal-envstate-"),
     }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
     expect(readyWhenErr).toMatch(/envTool\.readyWhen is required/);
     expect(readyWhenErr).not.toContain("envTool.startEnv");
@@ -770,7 +772,7 @@ describe("startEnvToolSession", () => {
       client: h.client,
       makePublisher: () => ({ publishFile: async () => {} }),
       verifyHarness: async () => {},
-      stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+      stateDir: scratch("lethal-envstate-"),
     }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
     expect(startEnvErr).toMatch(/envTool\.startEnv is required/);
     expect(startEnvErr).not.toContain("envTool.readyWhen");
@@ -819,7 +821,7 @@ describe("startEnvToolSession", () => {
         }),
         verifyHarness: async () => {},
         sleep: async () => {},
-        stateDir: await mkdtemp(join(tmpdir(), "lethal-envstate-")),
+        stateDir: scratch("lethal-envstate-"),
       }).then(
         (session) => ({ session, error: undefined as unknown }),
         (error: unknown) => ({ session: undefined, error }),

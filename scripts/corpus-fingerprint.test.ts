@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { scratchDirs } from "../packages/runner/tests/helpers/scratch";
 import { corpusEntries, fingerprintCorpus } from "./corpus-fingerprint";
+
+const scratch = scratchDirs();
 
 /**
  * R187. The fingerprint is what a rule pins its reference corpus by and what an instrument prints
@@ -17,7 +19,7 @@ import { corpusEntries, fingerprintCorpus } from "./corpus-fingerprint";
  */
 
 function corpus(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "lethal-corpus-"));
+  const dir = scratch("lethal-corpus-");
   for (const [rel, text] of Object.entries(files)) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
@@ -10,6 +10,9 @@ import {
   parseAlRunnerPlatformAppsDir,
 } from "../src/al-runner-transport";
 import type { SpawnFn } from "../src/publisher";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R147 — pin the platform-app directory al-runner's own provisioning run reported, and stop sending
@@ -254,7 +257,7 @@ function spyingSpawn(result: { exitCode: number; stdout: string; stderr: string 
 
 /** A platform-apps directory holding `n` `.app` files, plus a decoy that is not one. */
 async function platformAppsDirWith(n: number): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "lethal-r147-"));
+  const root = scratch("lethal-r147-");
   const dir = join(root, "28.0.46665.53671", "platform-apps");
   await mkdir(dir, { recursive: true });
   for (let i = 0; i < n; i++) await writeFile(join(dir, `Microsoft_App${i}.app`), "x", "utf8");
@@ -263,7 +266,7 @@ async function platformAppsDirWith(n: number): Promise<string> {
 }
 
 async function makeBackend(spawn: SpawnFn): Promise<AlRunnerBackend> {
-  const dir = await mkdtemp(join(tmpdir(), "lethal-r147-backend-"));
+  const dir = scratch("lethal-r147-backend-");
   await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
   return new AlRunnerBackend(
     { alRunnerPath: "al-runner", instrumentedDir: dir, testDir: "/tests", selectorObjectId: 50000 },
@@ -388,7 +391,7 @@ describe("AlRunnerBackend.usePlatformAppsDir reaches the argv of every later run
  */
 describe("R242: only the one-shot transport consumes the platform-app pin", () => {
   async function backendFor(mode: "one-shot" | "server" | "resource"): Promise<AlRunnerBackend> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-r242-"));
+    const dir = scratch("lethal-r242-");
     const neverSpawn: ServerSpawnFn = () => {
       throw new Error("the daemon must not start just to answer the pin question");
     };

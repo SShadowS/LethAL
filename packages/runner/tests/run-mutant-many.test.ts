@@ -1,11 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ActivationConfig } from "../src/activation";
 import type { TestMethodRef } from "../src/backend";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import type { RunMutantManyRequest } from "../src/run-mutant-transport";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 /**
  * R198: `RunMutantTransport.runMany` against one fake fetch that routes by action. The design
@@ -260,7 +262,7 @@ async function withTraceEnv<T>(path: string | undefined, body: () => Promise<T>)
   }
 }
 
-const traceDir = () => mkdtempSync(join(tmpdir(), "lethal-r289-"));
+const traceDir = () => scratch("lethal-r289-");
 
 describe("runMany — a well-formed answer becomes per-method verdicts (R198 §3.3)", () => {
   test("complete: one pass per method, in order, with the server's durations", async () => {

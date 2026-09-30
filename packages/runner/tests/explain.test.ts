@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
@@ -39,7 +39,10 @@ import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../
 import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
+import { scratchDirs } from "./helpers/scratch";
 import { TypeLeafPathError, typeLeafPaths } from "./helpers/type-leaf-paths";
+
+const scratch = scratchDirs();
 
 // ————————————————————————————————————————————————————————————————————————————————————————
 // Fixtures. A literal `SessionReport` rather than a run-shaped builder ON PURPOSE: `explain`'s
@@ -2374,7 +2377,7 @@ describe("lethal explain — CLI", () => {
   });
 
   async function runCli(contents: string): Promise<{ code: number; out: string; err: string[] }> {
-    const dir = await mkdtemp(join(tmpdir(), "lethal-explain-cli-"));
+    const dir = scratch("lethal-explain-cli-");
     const path = join(dir, "report.json");
     await writeFile(path, contents, "utf8");
     const lines: string[] = [];
@@ -2451,7 +2454,7 @@ describe("lethal explain — CLI", () => {
     const parsed = parseCliConfig(["explain", "report.json", "--top", "1"]);
     expect(parsed).toEqual({ mode: "explain", reportPath: "report.json", topSurvivors: 1 });
 
-    const dir = await mkdtemp(join(tmpdir(), "lethal-explain-top-"));
+    const dir = scratch("lethal-explain-top-");
     const path = join(dir, "report.json");
     await writeFile(path, JSON.stringify(reportFixture()), "utf8");
     const lines: string[] = [];
