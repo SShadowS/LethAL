@@ -468,7 +468,7 @@ this build returns.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--project` | *(required)* | AL project directory to mutate |
-| `--tests` | *(required)* | Test project directory (omit only with `--dry-run`) |
+| `--tests` | *(required)* | Test project directory (refused with `--dry-run`, which needs no test project) |
 | `--backend` | *(required)* | `bcdev` or `al-runner` |
 | `--only <glob>` | *(all files)* | Only these files contribute mutants. Repeatable. Cannot change a verdict, because every file is still parsed, compiled and published |
 | `--tests-only <glob>` | *(whole suite)* | Only these test files run at baseline. Repeatable. **Can change a verdict**: excluding a killing test manufactures a survivor. Flagged `tests-narrowed` in the report |

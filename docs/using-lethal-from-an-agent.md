@@ -145,9 +145,12 @@ has the complete set.
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
 
-One exception remains: `lethal run --dry-run` still accepts its execution flags (such as
-`--out`, `--backend` and `--workers`) and ignores them, because it executes nothing. So
-`--dry-run --out plan.json` writes nothing. That is filed as R266.
+`lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
+`--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
+exception is `--out <file>`, which writes the dry-run listing as JSON:
+`{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
+operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
+`deployed` counts what would ship.
 
 #### Flag notes (guidance)
 

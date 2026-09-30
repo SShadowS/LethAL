@@ -968,6 +968,44 @@ async function captureDryRun(
 }
 
 describe("--dry-run reports both counts and the measured bracket (R92/R90)", () => {
+  test("R266: --out writes the listing as JSON, with the same counts the console prints", async () => {
+    const dirs = await makeCeilingProject([
+      { name: "Collisions.Codeunit.al", source: COLLISION_AL },
+    ]);
+    try {
+      const outPath = join(dirs.root, "plan.json");
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await printDryRun(dirs.projectDir, undefined, {
+          dbPath: join(dirs.root, "absent.sqlite"),
+          configPath: join(dirs.root, "absent.json"),
+          outPath,
+        });
+      } finally {
+        log.mockRestore();
+      }
+      const listing = JSON.parse(await Bun.file(outPath).text());
+      expect(listing.files).toBe(1);
+      expect(listing.sites).toBeGreaterThan(listing.deployed);
+      expect(listing.perFile[0]).toMatchObject({
+        sites: listing.sites,
+        deployed: listing.deployed,
+      });
+      const all = listing.batches.flatMap((b: { sites: unknown[] }) => b.sites);
+      expect(all.length).toBe(listing.sites);
+      expect(all.filter((x: { deployed: boolean }) => x.deployed).length).toBe(listing.deployed);
+      expect(all[0]).toEqual({
+        file: expect.any(String),
+        line: expect.any(Number),
+        operator: expect.any(String),
+        deployed: expect.any(Boolean),
+      });
+      expect(listing.notInstrumented).toEqual([]);
+    } finally {
+      await rm(dirs.root, { recursive: true, force: true });
+    }
+  });
+
   test("names BOTH the site count and the deployed count per file, largest first — never one number standing for the other", async () => {
     const dirs = await makeCeilingProject([
       { name: "Collisions.Codeunit.al", source: COLLISION_AL },

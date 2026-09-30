@@ -295,9 +295,34 @@ export async function validateSelectorIdsForProject(
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
+/** R266: the execution flags `lethal run --dry-run` refuses by name. `--out` is not here: it
+ *  writes the dry-run listing. */
+export const DRY_RUN_REFUSED = [
+  "tests",
+  "backend",
+  "progress-out",
+  "workers",
+  "compile-concurrency",
+  "keep-env",
+  "allow-expiring-env",
+  "selector-id",
+  "control-id",
+  "table-id",
+  "skip-known-survivors",
+  "max-guards-per-batch",
+  "max-methods-per-call",
+  "request-ceiling-ms",
+  "no-group-runs",
+  "retry-stranded",
+  "stop-hung-sessions",
+  "allow-large-run",
+] as const;
+
 export interface DryRunCliConfig {
   readonly mode: "dry-run";
   readonly projectDir: string;
+  /** R266: `--out <file>` writes the dry-run listing as JSON (see `DryRunListing`). */
+  readonly outPath?: string;
   /** R41: `--only` globs, absent when the run was not narrowed — see `RunCliConfig.only`.
    *  Honoured here too, so the count a dry run reports is the count a real run would produce. */
   readonly only?: readonly string[];
@@ -881,7 +906,12 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              server's measured publish bracket. It never creates a results database;
                              when one already exists AND the config names a bcdev server to look the
                              bracket up for, that database is OPENED FOR WRITING and its schema
-                             brought up to date, exactly as a real run would
+                             brought up to date, exactly as a real run would. With --out <file> it
+                             writes the listing as JSON: {files, sites, deployed, perFile[{file,
+                             sites, deployed}], batches[{index, sites[{file, line, operator,
+                             deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
+                             execution flag (--tests, --backend, --workers ...) is refused with
+                             --dry-run, because a dry run executes nothing
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -1814,9 +1844,20 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (testsOnlyRaw !== undefined && testsOnlyRaw.length > 0) {
       throw new Error("--tests-only has no effect with --dry-run (a dry run executes no tests)");
     }
+    // R266: every execution flag is refused, by name, rather than accepted and ignored. `--out` is
+    // the one exception: it writes the dry-run listing.
+    for (const flag of DRY_RUN_REFUSED) {
+      const v = (values as Record<string, unknown>)[flag];
+      if (v !== undefined && v !== false) {
+        throw new Error(
+          `--${flag} has no effect with --dry-run (a dry run executes nothing). Remove --${flag}, or drop --dry-run to run for real.`,
+        );
+      }
+    }
     return {
       mode: "dry-run",
       projectDir,
+      ...(values.out !== undefined && values.out !== "" ? { outPath: values.out } : {}),
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...(values.config !== undefined ? { configExplicit: true as const } : {}),
@@ -2970,6 +3011,19 @@ async function dryRunCeiling(
   }
 }
 
+/** R266: the JSON `lethal run --dry-run --out <file>` writes. Same numbers the console prints. */
+export interface DryRunListing {
+  readonly files: number;
+  readonly sites: number;
+  readonly deployed: number;
+  readonly perFile: ReadonlyArray<{ file: string; sites: number; deployed: number }>;
+  readonly batches: ReadonlyArray<{
+    index: number;
+    sites: ReadonlyArray<{ file: string; line: number; operator: string; deployed: boolean }>;
+  }>;
+  readonly notInstrumented: ReadonlyArray<{ file: string; kinds: string; sites: number }>;
+}
+
 /**
  * Batch count here is derived from `planArtifacts` — the exact same seam
  * `runSession` uses to decide how many artifacts to compile and deploy — so
@@ -2996,6 +3050,8 @@ export async function printDryRun(
      * are sites the real run will never generate.
      */
     readonly exclude?: readonly string[];
+    /** R266: write the listing as JSON here. */
+    readonly outPath?: string;
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
@@ -3094,6 +3150,30 @@ export async function printDryRun(
         `\npublish ceiling MEASURED on server ${measured.tier}: ${failurePart}; ${successPart}. ${refusalPart} This is what this server was observed to do, not a fixed limit.`,
       );
     }
+  }
+  if (paths.outPath !== undefined) {
+    const listing: DryRunListing = {
+      files: files.length,
+      sites: sites.length,
+      deployed: deployedTotal,
+      perFile,
+      batches: artifacts.map((artifact, index) => ({
+        index,
+        sites: sitesOf(artifact).map((s) => ({
+          file: s.file,
+          line: s.line,
+          operator: s.operatorName,
+          deployed: s.deployed,
+        })),
+      })),
+      notInstrumented: skipped.map((s) => ({ file: s.file, kinds: s.kinds, sites: s.sites })),
+    };
+    await writeFile(
+      paths.outPath,
+      `${JSON.stringify(listing, null, 2)}
+`,
+      "utf8",
+    );
   }
   for (const [i, artifact] of artifacts.entries()) {
     const artifactSites = sitesOf(artifact);
@@ -5079,6 +5159,7 @@ async function main(): Promise<number> {
     await printDryRun(parsed.projectDir, parsed.only, {
       dbPath: parsed.dbPath,
       configPath: parsed.configPath,
+      ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
       ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
       ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),

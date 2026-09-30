@@ -642,31 +642,20 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       expect([...narrowing], `${c} has no scope in this test`).toContain(c);
   });
 
-  test("the dry-run exception names flags dry-run really ignores, and its roadmap row exists", () => {
+  test("the dry-run paragraph names flags dry-run really refuses, and --out it really reads", () => {
     const own = flowed(ownText(read(REFERENCE), "Which subcommand reads which flag (checked)"));
-    const para = own.slice(own.indexOf("One exception remains"));
+    const para = own.slice(own.indexOf("`lethal run --dry-run` executes nothing"));
     const bare = ["run", "--project", "P", "--dry-run"];
     const flags = ticks(para)
-      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run")
+      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out")
       .map((t) => t.slice(2));
     expect(flags.length).toBeGreaterThan(0);
-    const parsedWith = (flag: string): string => {
-      const spec = RUN_FLAGS[flag as keyof typeof RUN_FLAGS] as { readonly type: string };
-      for (const v of spec.type === "boolean" ? [undefined] : ["x", "2", "bcdev"]) {
-        try {
-          return JSON.stringify(
-            parseCliConfig([...bare, `--${flag}`, ...(v === undefined ? [] : [v])]),
-          );
-        } catch {}
-      }
-      throw new Error(`--${flag} is refused on run --dry-run`);
-    };
-    for (const f of flags)
-      expect(parsedWith(f), `--${f}`).toBe(JSON.stringify(parseCliConfig(bare)));
-    const id = /\b(R\d+)\b/.exec(para)?.[1] ?? "";
-    expect(read(join(REPO_ROOT, "docs", "roadmap", `R${id.slice(1).padStart(3, "0")}.md`))).toMatch(
-      /^status: "open"$/m,
-    );
+    for (const f of flags) {
+      const spec = RUN_FLAGS[f as keyof typeof RUN_FLAGS] as { readonly type: string };
+      const argv = [...bare, `--${f}`, ...(spec.type === "boolean" ? [] : ["x"])];
+      expect(() => parseCliConfig(argv), `--${f}`).toThrow(/has no effect with --dry-run/);
+    }
+    expect(parseCliConfig([...bare, "--out", "plan.json"])).toMatchObject({ outPath: "plan.json" });
   });
 
   test("the run exit sentences are exitCodeForReport's and main's", () => {
