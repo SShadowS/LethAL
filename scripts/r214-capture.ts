@@ -100,7 +100,7 @@ if (listingDir !== undefined) {
   ]);
   const DIRECTIVE_LINE = /^[ \t]*#[ \t]*(if|elif|else|endif|define|undef)(?![A-Za-z0-9_])/gim;
   const holdingSpans = (src: string): [number, number][] => {
-    const text = src.replace(/^﻿/, " ");
+    const text = src.replace(/^\uFEFF/, " ");
     const at = [...text.matchAll(DIRECTIVE_LINE)].map((m) => m.index ?? 0);
     const spans: [number, number][] = [];
     visit(
