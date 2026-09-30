@@ -1,0 +1,3 @@
+raw 2 deployed 2 skippedFiles 0
+Define.Codeunit.al:6	lethal.empty-block	proc=Run	hang=-	fbd8a892c26ee913402d1ea8d25a8b4a3bb87f4ef4f1e3709ea9779d2eecd4c5|P6 Define|Run|lethal.empty-block|1	95-189	grain=statement	plat=-
+Define.Codeunit.al:8	lethal.void-method-call	proc=Run	hang=-	08fd28012cba3abee5c967fcf48d810429ec2d2b8bc29eb7c82b4b30c30a59b7|P6 Define|Run|lethal.void-method-call|1	122-131	grain=statement	plat=-

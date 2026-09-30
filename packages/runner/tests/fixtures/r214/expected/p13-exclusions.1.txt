@@ -1,0 +1,6 @@
+raw 5 deployed 5 skippedFiles 0
+src/ElseTail.Codeunit.al:4	lethal.empty-block	proc=Apply	hang=-	54c60dc17a5c3e99c64d3ec6b3a80f7075919fc8d3694cdee431281e02a5c5a9|P13 Else Tail|Apply|lethal.empty-block|1	114-332	grain=statement	plat=-
+src/ElseTail.Codeunit.al:11	lethal.shift-integer	proc=Apply	hang=-	40bd529559a7866c39a33594c23c212bd9753b38b27f3695c3f8012cd8562df5|P13 Else Tail|Apply|lethal.shift-integer|1	263-264	grain=unplaced	plat=-
+src/ElseTail.Codeunit.al:12	lethal.shift-integer	proc=Apply	hang=-	40bd529559a7866c39a33594c23c212bd9753b38b27f3695c3f8012cd8562df5|P13 Else Tail|Apply|lethal.shift-integer|1|1	287-288	grain=unplaced	plat=-
+src/SplitBlock.Codeunit.al:4	lethal.empty-block	proc=P	hang=-	413152e626592746edf6a1812d99c9faaadce315071e38e76b84b8be92df937b|P13 Split Block|P|lethal.empty-block|1	83-219	grain=statement	plat=-
+src/SplitBlock.Codeunit.al:8	lethal.shift-integer	proc=P	hang=-	bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|P13 Split Block|P|lethal.shift-integer|1	152-153	grain=unplaced	plat=-

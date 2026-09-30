@@ -1,0 +1,7 @@
+raw 6 deployed 6 skippedFiles 0
+Nested.Codeunit.al:6	lethal.empty-block	proc=Pick	hang=-	a7450d5a5c188ff8585ba92976ace98319f0da5570b3911804f4c2e0c4b6a9bc|P5 Nested|Pick|lethal.empty-block|1	101-320	grain=statement	plat=-
+Nested.Codeunit.al:7	lethal.remove-assignment	proc=Pick	hang=-	b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|P5 Nested|Pick|lethal.remove-assignment|1	115-121	grain=statement	plat=-
+Nested.Codeunit.al:9	lethal.void-method-call	proc=Pick	hang=-	08fd28012cba3abee5c967fcf48d810429ec2d2b8bc29eb7c82b4b30c30a59b7|P5 Nested|Pick|lethal.void-method-call|1	137-146	grain=statement	plat=-
+Nested.Codeunit.al:13	lethal.remove-assignment	proc=Pick	hang=-	109058edb8393ac579cb9c42e8de27d095d6c3bb3d3715d307e2365333be1d36|P5 Nested|Pick|lethal.remove-assignment|1	189-200	grain=statement	plat=-
+Nested.Codeunit.al:13	lethal.swap-additive	proc=Pick	hang=-	751a95480ea8b36b83ffde42661a0b3b23814dbb09d1986d23fba790f9ec2a17|P5 Nested|Pick|lethal.swap-additive|1	194-200	grain=statement	plat=-
+Nested.Codeunit.al:21	lethal.return-value	proc=Pick	hang=-	40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|P5 Nested|Pick|lethal.return-value|1	304-311	grain=statement	plat=-
