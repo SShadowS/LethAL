@@ -7,6 +7,8 @@
  * picked up by `bun test`.
  * R321: also runs fixtures/sandbox-symbols under [LETHALA] and [LETHALB], all three transports (symbol-fixture.ts).
  * R353: also runs fixtures/sandbox-layout at two batches, one-shot and --server (layout-fixture.ts).
+ * R387: LAST, runs sandbox-app through the CLI's own `buildBackend` with no transport key, and
+ * checks that its defaults (`--server`, the resource selector) actually ran (cli-default-leg.ts).
  *
  * Skips cleanly (exit 0) when LETHAL_ITEST_ALRUNNER is unset, so CI/local
  * `bun test` runs are unaffected and a developer without al-runner installed
@@ -38,10 +40,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AlRunnerBackend } from "../src/al-runner-backend";
+import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
+import type { ExecutionBackend } from "../src/backend";
+import { buildBackend } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
+import { defaultSpawn } from "../src/publisher";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
@@ -51,6 +56,15 @@ import {
   preflightFrozenBaseline,
   preflightGateBaseline,
 } from "./baseline-guard";
+import {
+  CLI_DEFAULT_SPEC,
+  cliDefaultMechanismFailures,
+  daemonPlatformAppsLines,
+  expectedCliDefaultShape,
+  legShape,
+  recordSpawns,
+  watchResourceSelector,
+} from "./cli-default-leg";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   LAYOUT_MAX_GUARDS,
@@ -101,6 +115,8 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
 /** R353: the layout fixture's one-shot leg, recorded only through R332's record path. */
 const LAYOUT_BASELINE_PATH = join(HERE, "al-runner.layout.baseline.json");
+/** R387: the CLI-default leg (`buildBackend`, no transport key), recorded only through R332. */
+const CLI_DEFAULT_BASELINE_PATH = join(HERE, "al-runner.cli-default.baseline.json");
 
 // R321: the symbol fixture pair, its own app and id range (79600-79699), so no other gate moves;
 // selector ids at the top of the target's range, per the `pickSelectorIds` convention.
@@ -604,8 +620,142 @@ async function runLayoutLegs(): Promise<SessionReport> {
   }
 }
 
+/** R387: the BC build and platform-app directory a report records, for printing beside another. */
+function provenance(report: SessionReport): { bcBuild: string; platformAppsDir: string } {
+  const ctx = report.validity.executionContexts;
+  return {
+    bcBuild: ctx.find((c) => c.bcBuild !== undefined)?.bcBuild ?? "<not recorded>",
+    platformAppsDir:
+      ctx.find((c) => c.platformAppsDir !== undefined)?.platformAppsDir ?? "<not recorded>",
+  };
+}
+
+/**
+ * R387: sandbox-app through `buildBackend` with an `alRunner` section that sets NO transport key,
+ * so the leg measures what `lethal run --backend al-runner` does with no config. Runs after every
+ * other leg (R345: one al-runner session at a time).
+ *
+ * Its table is pre-committed against leg A (`expectedCliDefaultShape`, CLI_DEFAULT_SPEC): equal per
+ * mutant except `SandboxPricing`'s four, which are `survived` because coverage is off by default.
+ * The table cannot tell the fast path from the one-shot static path, so the mechanism is checked
+ * independently (`cliDefaultMechanismFailures`). Checks are collected and thrown once; the frozen
+ * baseline is compared by `main()` AFTER they pass, so a record run never records a wrong leg.
+ */
+async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
+  const scratch = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-cli-default-"));
+  const store = new ResultsStore(":memory:");
+  const rec = recordSpawns(defaultSpawn, defaultServerSpawn);
+  let backend: AlRunnerBackend | undefined;
+  try {
+    const built: ExecutionBackend = await buildBackend(
+      { backendKind: "al-runner", projectDir: PROJECT_DIR, testDir: TEST_DIR },
+      { alRunner: { alRunnerPath } },
+      scratch,
+      undefined,
+      { alRunnerSpawn: rec.spawn, alRunnerServerSpawn: rec.serverSpawn },
+      SELECTOR_IDS,
+    );
+    if (!(built instanceof AlRunnerBackend)) {
+      throw new Error(
+        "R387: buildBackend did not return an AlRunnerBackend for --backend al-runner",
+      );
+    }
+    backend = built;
+    // `buildBackend` gives the backend `<scratch>/al-runner-active`; `deploy()` copies into `active`.
+    const resource = watchResourceSelector(backend, join(scratch, "al-runner-active", "active"));
+    const report = await runSession({
+      backend,
+      store,
+      projectDir: PROJECT_DIR,
+      testDir: TEST_DIR,
+      instrumentedDir: join(scratch, "instrumented"),
+      selectorIds: SELECTOR_IDS,
+    });
+
+    console.log(
+      `  cli-default leg: killed=${report.counts.killed} survived=${report.counts.survived} noCoverage=${report.counts.noCoverage}`,
+    );
+    for (const m of report.mutants) {
+      console.log(`    ${m.mutantCode} ${m.verdict} ${m.file}:${m.line} ${m.operatorName}`);
+    }
+    console.log(
+      `  cli-default mechanism: ${rec.record.serverArgv.length} daemon spawn(s), ${rec.record.oneShotArgv.length} one-shot spawn(s), ${resource.deploys} deploy(s), ${resource.activations} activation(s), ${resource.alHashes.size} distinct *.al text(s)`,
+    );
+    // R387 plan 2a: server mode declines R147's pin, so the build and the platform apps can differ
+    // from leg A's. RECORDED and printed, never asserted away. The daemon's own words only; nothing
+    // is inferred when it does not name a directory.
+    const a = provenance(legA);
+    const d = provenance(report);
+    console.log(`  BC build: leg A ${a.bcBuild}, cli-default ${d.bcBuild}`);
+    if (a.bcBuild !== d.bcBuild) {
+      console.warn(
+        `  R387: the two transports selected DIFFERENT BC builds; see ${CLI_DEFAULT_SPEC}`,
+      );
+    }
+    console.log(`  platform apps: leg A ${a.platformAppsDir}`);
+    const named = daemonPlatformAppsLines(rec.record.serverStderr);
+    console.log(
+      named.length > 0
+        ? `  platform apps, as the daemon named them: ${named.join(" | ")}`
+        : "  platform apps: the daemon named no platform-app directory on stderr (a stated limit, not inferred)",
+    );
+
+    const failures: string[] = [];
+    const check = (what: string, fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`  FAILED ${what}: ${message}`);
+        failures.push(message);
+      }
+    };
+    check("cli-default counts", () => {
+      assert.equal(
+        report.baselineGreen,
+        true,
+        "R387: the cli-default leg's baseline must be green",
+      );
+      assert.deepEqual(
+        {
+          killed: report.counts.killed,
+          survived: report.counts.survived,
+          noCoverage: report.counts.noCoverage,
+        },
+        { killed: 3, survived: 16, noCoverage: 0 },
+        `R387: the cli-default leg must be 3 / 16 / 0 (${CLI_DEFAULT_SPEC})`,
+      );
+    });
+    check("cli-default table", () =>
+      assert.deepEqual(
+        legShape(report),
+        expectedCliDefaultShape(legA),
+        `R387: per-mutant verdicts differ from the pre-committed table (${CLI_DEFAULT_SPEC})`,
+      ),
+    );
+    check("cli-default mechanism", () =>
+      assert.deepEqual(
+        cliDefaultMechanismFailures(rec.record, resource),
+        [],
+        "R387: the CLI defaults did not take effect (--server and the resource selector)",
+      ),
+    );
+    if (failures.length > 0) {
+      throw new Error(
+        `R387: ${failures.length} cli-default check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+      );
+    }
+    return report;
+  } finally {
+    store.close();
+    await backend?.close();
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
+  preflightGateBaseline(CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
   preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
   // Check BOTH symbol baselines before either leg runs: a missing file fails at startup rather
   // than after a live run, and record mode starts only when both files are in the state it needs.
@@ -629,8 +779,11 @@ async function main(): Promise<void> {
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-b-"));
   const scratchC = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-server-"));
   const scratchD = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-resource-"));
+  // R387: kept for the CLI-default leg, which runs last and is pre-committed against it.
+  let legA: SessionReport | undefined;
   try {
     const first = await runOnce(scratchA);
+    legA = first;
     assertVerdictTable(first);
     assertPlatformAppsPinned(first);
     // Per-mutant regression guard against the committed baseline — in addition to the aggregate
@@ -705,9 +858,22 @@ async function main(): Promise<void> {
     process.exit(3);
   }
 
+  // R387: last, after every existing leg, against leg A's report.
+  if (legA === undefined) throw new Error("R387: leg A produced no report to compare against");
+  const cliDefault = await runCliDefaultLeg(legA);
+  await assertGateBaseline(cliDefault, CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
+
   console.log("al-runner itest: PASS");
   await emitPassed("alrunner", {
-    sublegs: ["one-shot", "server", "resource", "platform-pin", "layout-one-shot", "layout-server"],
+    sublegs: [
+      "one-shot",
+      "server",
+      "resource",
+      "platform-pin",
+      "layout-one-shot",
+      "layout-server",
+      "cli-default",
+    ],
     artifacts: { reported: false },
   });
 }
