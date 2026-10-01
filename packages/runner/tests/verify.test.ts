@@ -54,6 +54,9 @@ import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 
+/** R-371: a test project's app.json, with no dependency and no build input (a test project
+ *  always has one; a missing one is refused). */
+const TEST_APP_JSON = '{"name":"Tests","publisher":"P","version":"1.0.0.0"}';
 /** R-371: the dependency fingerprint the planVerify fixtures record and verify with. */
 const DEPS = "fixture-dependencies";
 /** R-371: the digest inputs of a test project without an app.json, as `planVerify` reads them. */
@@ -509,6 +512,7 @@ describe("assertSourceUnchanged", () => {
  *  may open a TestPage. */
 function pageTestDir(withGreenA = true): string {
   const dir = scratch("lethal-verify-tp-");
+  writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
   const a = withGreenA ? "    [Test]\n    procedure A()\n    begin\n    end;\n\n" : "";
   writeFileSync(
     join(dir, "50100.Codeunit.al"),
@@ -527,6 +531,7 @@ describe("planVerify", () => {
   /** A temp test project with one real `.al` test codeunit per entry. */
   function testDir(codeunits: readonly Codeunit[]): string {
     const dir = scratch("lethal-verify-tests-");
+    writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
     for (const c of codeunits) {
       const methods = c.methods
         .map((m) => `    [Test]\n    procedure ${m}()\n    begin\n${c.body ?? ""}    end;\n`)
@@ -800,6 +805,29 @@ describe("planVerify", () => {
     expect(e.reason).toBe("source-predates-verify");
     expect(e.detail).toContain("R-278's scheme");
     expect(e.detail).toContain("once per source run");
+  });
+
+  // Review r1 #4: verify reads the test project's build inputs from its app.json; an unreadable
+  // one is a dependency-unreadable refusal, never empty inputs.
+  test("R-371: a test project whose app.json is missing is refused, never digested over empty inputs", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const recorded = await recordedOver(codeunits);
+    const dir = testDir(codeunits);
+    rmSync(join(dir, "app.json"));
+    const e = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M")],
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+      testDir: dir,
+      maxNewTests: 1000,
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(DependencyUnreadableError);
+    expect(verifyRefusalOf(e)).toMatchObject({ kind: "refused", reason: "dependency-unreadable" });
   });
 
   // R-371: the scheme check reads no package, so it comes before the dependency read: a v1 source
@@ -1580,6 +1608,7 @@ describe("C02-09: gap ids", () => {
     }
     const testDir = over.testDir ?? scratch("lethal-verify-gap-tests-");
     if (over.testDir === undefined) {
+      writeFileSync(join(testDir, "app.json"), TEST_APP_JSON);
       writeFileSync(
         join(testDir, "50100.Codeunit.al"),
         'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
@@ -1604,7 +1633,7 @@ describe("C02-09: gap ids", () => {
         : JSON.stringify(
             await testDigests(testDir, await discoverTests(testDir), {
               dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
-              buildInputs: ((await readAppJsonInputs(testDir)) ?? appInputsOfAppJson({}))
+              buildInputs: (await readAppJsonInputs(testDir))
                 .buildInputs,
             }),
           ),

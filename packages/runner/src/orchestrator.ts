@@ -124,7 +124,6 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import {
   DependencyUnreadableError,
-  appInputsOfAppJson,
   appInputsOfPackage,
   dependencyFingerprint,
   packageFolderReader,
@@ -6537,7 +6536,7 @@ async function testAppIdentity(
     const published = sources.kind === "published";
     const inputs = published
       ? appInputsOfPackage(sources.pkg)
-      : ((await readAppJsonInputs(cfg.testDir)) ?? appInputsOfAppJson({}));
+      : await readAppJsonInputs(cfg.testDir);
     const read =
       published && fetchPackage !== undefined
         ? publishedPackageReader(fetchPackage)

@@ -42,7 +42,6 @@ import {
 } from "./test-app-publish";
 import {
   DependencyUnreadableError,
-  appInputsOfAppJson,
   dependencyFingerprint,
   publishedPackageReader,
   readAppJsonInputs,
@@ -777,7 +776,7 @@ export async function planVerify(a: {
   const refusedWhy = scanTestPageModel(model, discovered);
   const inputs = {
     dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
-    buildInputs: ((await readAppJsonInputs(testDir)) ?? appInputsOfAppJson({})).buildInputs,
+    buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
@@ -945,7 +944,7 @@ export async function verifyDependencyFingerprint(
 ): Promise<string> {
   const fetchPackage = backend.fetchPublishedAppPackage?.bind(backend);
   return dependencyFingerprint(
-    (await readAppJsonInputs(testDir)) ?? appInputsOfAppJson({}),
+    await readAppJsonInputs(testDir),
     fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
     await targetOf(projectPath),
   );

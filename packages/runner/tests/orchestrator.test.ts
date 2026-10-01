@@ -60,7 +60,6 @@ import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 import {
-  appInputsOfAppJson,
   appInputsOfPackage,
   dependencyFingerprint,
   readAppJsonInputs,
@@ -403,6 +402,7 @@ async function makeProject(testAl: string = TEST_AL) {
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), testAl);
+  await Bun.write(join(testDir, "app.json"), '{"name":"Tests","publisher":"P","version":"1.0.0.0"}');
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -485,6 +485,34 @@ describe("runSession", () => {
 
   // R-278 fix round 1: discovery (a regex) finds a test the digest's parser cannot. The run still
   // measures; it records NO digests (NULL, never a partial map) and says so in a warning.
+  // Review r1 #4: an unreadable test-project app.json records no digests, never digests over
+  // empty build inputs.
+  test("R-371: a missing test-project app.json leaves the run's digests NULL and says why", async () => {
+    const dirs = await makeProject();
+    await rm(join(dirs.testDir, "app.json"));
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      (mutant) => (mutant === null ? "pass" : "fail"),
+    );
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const [run] = store.db.query("SELECT id FROM runs").all() as Array<{ id: number }>;
+    if (run === undefined) throw new Error("no run row");
+    expect(store.testDigests(run.id)).toBeNull();
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "test-digests-unavailable",
+    );
+    expect(warning?.type === "warning" ? warning.message : "").toContain("app.json");
+    store.close();
+  });
+
   test("R-278: a test the digest cannot parse leaves the run's digests NULL, warns, and the run completes", async () => {
     const dirs = await makeProject();
     await Bun.write(
@@ -534,7 +562,7 @@ describe("runSession", () => {
       const app =
         from !== undefined
           ? appInputsOfPackage(from)
-          : ((await readAppJsonInputs(dirs.testDir)) ?? appInputsOfAppJson({}));
+          : await readAppJsonInputs(dirs.testDir);
       return {
         dependencies: await dependencyFingerprint(
           app,

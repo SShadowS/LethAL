@@ -130,7 +130,8 @@ export function appInputsOfManifest(xml: string): AppInputs {
 /** A package's own inputs, from its NavxManifest.xml. */
 export function appInputsOfPackage(pkg: Uint8Array): AppInputs {
   const manifest = readPackageEntry(Buffer.from(pkg), "NavxManifest.xml");
-  if (manifest === null) throw new DependencyUnreadableError("a package carries no NavxManifest.xml");
+  if (manifest === null)
+    throw new DependencyUnreadableError("a package carries no NavxManifest.xml");
   return appInputsOfManifest(manifest.toString("utf8"));
 }
 
@@ -172,15 +173,22 @@ export function appInputsOfAppJson(json: unknown): AppInputs {
   };
 }
 
-/** `dir/app.json` read, or `undefined` when there is none. Unparseable throws. */
-export async function readAppJsonInputs(dir: string): Promise<AppInputs | undefined> {
-  let text: string;
+/**
+ * `dir/app.json` read. Fails closed: a missing, unreadable or unparseable app.json throws
+ * `DependencyUnreadableError`, never empty inputs. A test project always has one (alc needs it),
+ * so no absence is supported; empty inputs would give a credible, narrower digest, and two failed
+ * reads would compare equal.
+ */
+export async function readAppJsonInputs(dir: string): Promise<AppInputs> {
+  let json: unknown;
   try {
-    text = await readFile(join(dir, "app.json"), "utf8");
-  } catch {
-    return undefined;
+    json = JSON.parse((await readFile(join(dir, "app.json"), "utf8")).replace(/^\uFEFF/, ""));
+  } catch (err) {
+    throw new DependencyUnreadableError(
+      `the test project's app.json (${join(dir, "app.json")}) could not be read: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
-  return appInputsOfAppJson(JSON.parse(text.replace(/^\uFEFF/, "")));
+  return appInputsOfAppJson(json);
 }
 
 /**
@@ -317,7 +325,9 @@ export async function targetOf(
 ): Promise<{ readonly id: string; readonly inputs: AppInputs }> {
   let json: unknown;
   try {
-    json = JSON.parse((await readFile(join(projectDir, "app.json"), "utf8")).replace(/^\uFEFF/, ""));
+    json = JSON.parse(
+      (await readFile(join(projectDir, "app.json"), "utf8")).replace(/^\uFEFF/, ""),
+    );
   } catch (err) {
     throw new DependencyUnreadableError(
       `the target project's app.json could not be read (${err instanceof Error ? err.message : String(err)})`,

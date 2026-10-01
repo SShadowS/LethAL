@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   type AppDependency,
   DependencyUnreadableError,
   appInputsOfAppJson,
   appInputsOfManifest,
   dependencyFingerprint,
+  readAppJsonInputs,
 } from "../src/digest-inputs";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { scratchDirs } from "./helpers/scratch";
+
+const scratch = scratchDirs();
 
 const DEP = "22222222-2222-2222-2222-222222222222";
 const SUB = "33333333-3333-3333-3333-333333333333";
@@ -71,6 +77,20 @@ describe("R-371: digest-inputs", () => {
     const b = await dependencyFingerprint(root("Microsoft", MS), read);
     expect(a).toBe(b);
     expect(n).toBe(0);
+  });
+
+  // Review r1 #4: a test project's app.json that cannot be read is never read as empty inputs.
+  test("a missing or unparseable test-project app.json throws, never empty inputs", async () => {
+    const missing = scratch("lethal-appjson-missing-");
+    await expect(readAppJsonInputs(missing)).rejects.toBeInstanceOf(DependencyUnreadableError);
+    const broken = scratch("lethal-appjson-broken-");
+    writeFileSync(join(broken, "app.json"), '{"name": "T", ');
+    await expect(readAppJsonInputs(broken)).rejects.toBeInstanceOf(DependencyUnreadableError);
+    const ok = scratch("lethal-appjson-ok-");
+    writeFileSync(join(ok, "app.json"), '{"runtime": "16.0"}');
+    expect((await readAppJsonInputs(ok)).buildInputs).toBe(
+      appInputsOfAppJson({ runtime: "16.0" }).buildInputs,
+    );
   });
 
   test("an unreadable non-Microsoft dependency throws, never a partial fingerprint", async () => {
