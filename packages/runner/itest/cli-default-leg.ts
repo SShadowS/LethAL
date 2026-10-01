@@ -6,7 +6,7 @@
  * tell the fast path from the one-shot static path (both reach 3 / 16 / 0), so the leg also records,
  * independently of the config:
  * - every al-runner spawn, through `buildBackend`'s injectable `deps` spawns: exactly one `--server`
- *   daemon per backend, and no one-shot test invocation (an argv with `--test`);
+ *   daemon per backend, and no one-shot call except the exact argvs `expectedOneShotArgvs` allows;
  * - the resource selector: the resource file exists after each `deploy()`, holds the activated id
  *   after each `activate()`, and the bundle's `*.al` text changes once per deploy, never per
  *   activation. al-runner's output cache keys on that text (R222), so the number of distinct `*.al`
@@ -25,8 +25,12 @@ import {
   SELECTOR_RESOURCE_NAME,
   SELECTOR_RESOURCE_NONE,
 } from "@lethal/schemata";
-import { AL_RUNNER_PROVISION_SENTINEL } from "../src/al-runner-backend";
+import { provisionArgv } from "../src/al-runner-backend";
 import type { ServerProcessHandle, ServerSpawnFn } from "../src/al-runner-server";
+import {
+  normalisePlatformAppsPath,
+  parseAlRunnerPlatformAppsDir,
+} from "../src/al-runner-transport";
 import type { ExecutionBackend } from "../src/backend";
 import type { SpawnFn } from "../src/publisher";
 import type { SessionReport } from "../src/report";
@@ -129,16 +133,23 @@ export function watchResourceSelector(
   return ev;
 }
 
-/*
- * THE ONE-SHOT ALLOW-LIST under `--server` lives here and in `cliDefaultMechanismFailures` below,
- * and nowhere else: the provision sentinel (`AL_RUNNER_PROVISION_SENTINEL`) and `isVersionProbe`.
- * A new legitimate one-shot call (a named probe) is added HERE, by exact argv, never by a looser
- * pattern; every other one-shot spawn under `--server` must keep failing the check.
+/**
+ * THE ONE-SHOT ALLOW-LIST under `--server`, and its only home. Under `--server` the only one-shot
+ * calls are `provisionOnce`'s (its exact argv, from the same `provisionArgv` the backend spawns) and
+ * `status()`'s probe, exactly `[alRunnerPath, "--version"]`. `cliDefaultMechanismFailures` allows a
+ * one-shot argv only when it is element-for-element EQUAL to one of these, each at most once per
+ * backend. A different binary path, an extra element, or a test filter beside the sentinel is not
+ * equal, so it fails. A new legitimate one-shot call is added HERE, by exact argv, never by a looser
+ * pattern.
  */
+export function expectedOneShotArgvs(
+  cfg: Parameters<typeof provisionArgv>[0],
+): readonly (readonly string[])[] {
+  return [provisionArgv(cfg), [cfg.alRunnerPath, "--version"]];
+}
 
-/** `status()`'s probe: exactly the binary and `--version`, nothing else. */
-const isVersionProbe = (argv: readonly string[]): boolean =>
-  argv.length === 2 && argv[1] === "--version";
+const sameArgv = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** Every one-shot argv without the binary path, for the leg's log line. */
 export function oneShotArgvSummary(record: SpawnRecord): string[] {
@@ -149,6 +160,8 @@ export function oneShotArgvSummary(record: SpawnRecord): string[] {
 export function cliDefaultMechanismFailures(
   record: SpawnRecord,
   resource: ResourceEvidence,
+  /** `expectedOneShotArgvs(cfg)` for the config the leg's backend was built from. */
+  allowedOneShot: readonly (readonly string[])[],
   backends = 1,
 ): string[] {
   const out: string[] = [];
@@ -156,32 +169,28 @@ export function cliDefaultMechanismFailures(
   if (servers !== backends) {
     out.push(`server: expected ${backends} --server spawn(s), saw ${servers}`);
   }
-  // `provisionOnce` is a one-shot call with a `--test` filter that matches NO test (the sentinel),
-  // made for its provisioning side effect only; it runs in server mode too. Measured live
-  // 2026-10-01: it was the one `--test` spawn under `--server`. Every OTHER `--test` spawn is a
-  // test run the daemon should have made.
-  const provisioning = record.oneShotArgv.filter((a) =>
-    a.includes(AL_RUNNER_PROVISION_SENTINEL),
-  ).length;
-  if (provisioning > backends) {
-    out.push(`server: expected at most ${backends} provisioning spawn(s), saw ${provisioning}`);
+  // An EXACT allow-list (see `expectedOneShotArgvs`), not a `--test` filter or a sentinel search: a
+  // whole-suite run carries no `--test`, and a real test run can carry the sentinel as a stray
+  // element. Measured live 2026-10-01: `provisionOnce` runs under `--server` too, and `runSession`
+  // calls `status()` first. Anything else is a one-shot run the daemon should have made.
+  const seen = allowedOneShot.map(() => 0);
+  const other: string[][] = [];
+  for (const argv of record.oneShotArgv) {
+    const i = allowedOneShot.findIndex((a) => sameArgv(a, argv));
+    if (i < 0) other.push(argv);
+    else seen[i] = (seen[i] ?? 0) + 1;
   }
-  // An ALLOW-LIST, not a `--test` filter: a one-shot whole-suite run carries no `--test` at all, so
-  // counting `--test` alone would miss it. Under `--server` the only one-shot calls are the
-  // provisioning call above and `status()`'s `[path, "--version"]` probe (`runSession` calls it
-  // first). Anything else is a one-shot run the daemon should have made.
-  const other = record.oneShotArgv.filter(
-    (a) => !a.includes(AL_RUNNER_PROVISION_SENTINEL) && !isVersionProbe(a),
-  );
   if (other.length !== 0) {
     out.push(
-      `server: expected no one-shot run besides provisioning and --version, saw ${other.length}: ${other.map((a) => a.slice(1).join(" ")).join(" | ")}`,
+      `server: expected no one-shot run besides the allowed provisioning and --version argvs, saw ${other.length}: ${other.map((a) => a.join(" ")).join(" | ")}`,
     );
   }
-  const versions = record.oneShotArgv.filter(isVersionProbe).length;
-  if (versions > backends) {
-    out.push(`server: expected at most ${backends} --version probe(s), saw ${versions}`);
-  }
+  allowedOneShot.forEach((a, i) => {
+    const n = seen[i] ?? 0;
+    if (n > backends) {
+      out.push(`server: expected at most ${backends} of ${a.slice(1).join(" ")}, saw ${n}`);
+    }
+  });
   if (resource.activations === 0) out.push("resource: no activate() was observed");
   out.push(...resource.problems.map((p) => `resource: ${p}`));
   // At most one per deploy: two batches with byte-identical text would share one compile.
@@ -221,6 +230,29 @@ export function expectedCliDefaultShape(legA: SessionReport): LegRow[] {
       ? { mutantCode: row.mutantCode, verdict: "survived", killingTest: undefined }
       : row,
   );
+}
+
+/**
+ * A REPORT line, never an assertion: whether the platform-app directory the daemon named on stderr
+ * agrees with leg A's pinned one. Only the daemon's own words count: a directory derived from its
+ * `[bc] selected` line (`selected-artifact`) is an inference, so it reads as "not named".
+ */
+export function platformAppsAgreement(legADir: string | undefined, daemonStderr: string): string {
+  const parsed = parseAlRunnerPlatformAppsDir(daemonStderr);
+  const named =
+    parsed.kind === "found" && parsed.basis !== "selected-artifact"
+      ? [parsed.dir]
+      : parsed.kind === "conflicting"
+        ? [...parsed.dirs]
+        : [];
+  if (named.length === 0) {
+    return "platform apps: the daemon named no platform-app directory on stderr (a stated limit, not inferred)";
+  }
+  const a = legADir ?? "<not recorded>";
+  const agree =
+    legADir !== undefined &&
+    named.every((d) => normalisePlatformAppsPath(d) === normalisePlatformAppsPath(legADir));
+  return `platform apps: ${agree ? "AGREE" : "DIFFER"}, leg A ${a}, daemon ${named.join(" | ")}`;
 }
 
 /** The platform-app directory a daemon named on stderr, if it named one. Never inferred. */

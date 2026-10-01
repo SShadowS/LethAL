@@ -61,8 +61,10 @@ import {
   cliDefaultMechanismFailures,
   daemonPlatformAppsLines,
   expectedCliDefaultShape,
+  expectedOneShotArgvs,
   legShape,
   oneShotArgvSummary,
+  platformAppsAgreement,
   recordSpawns,
   watchResourceSelector,
 } from "./cli-default-leg";
@@ -696,11 +698,13 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
     }
     console.log(`  platform apps: leg A ${a.platformAppsDir}`);
     const named = daemonPlatformAppsLines(rec.record.serverStderr);
-    console.log(
-      named.length > 0
-        ? `  platform apps, as the daemon named them: ${named.join(" | ")}`
-        : "  platform apps: the daemon named no platform-app directory on stderr (a stated limit, not inferred)",
-    );
+    if (named.length > 0) {
+      console.log(`  platform apps, as the daemon named them: ${named.join(" | ")}`);
+    }
+    const legADir = legA.validity.executionContexts.find(
+      (c) => c.platformAppsDir !== undefined,
+    )?.platformAppsDir;
+    console.log(`  ${platformAppsAgreement(legADir, rec.record.serverStderr)}`);
 
     const failures: string[] = [];
     const check = (what: string, fn: () => void): void => {
@@ -737,7 +741,13 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
     );
     check("cli-default mechanism", () =>
       assert.deepEqual(
-        cliDefaultMechanismFailures(rec.record, resource),
+        // The same config `buildBackend` gave the backend above: testDir TEST_DIR, and the config
+        // file `{ alRunner: { alRunnerPath } }` sets no packagesDir and no preprocessorSymbols.
+        cliDefaultMechanismFailures(
+          rec.record,
+          resource,
+          expectedOneShotArgvs({ alRunnerPath, testDir: TEST_DIR }),
+        ),
         [],
         "R387: the CLI defaults did not take effect (--server and the resource selector)",
       ),
