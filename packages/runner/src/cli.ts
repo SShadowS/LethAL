@@ -2163,7 +2163,12 @@ export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
  * the key that changes it. `undefined` when there is nothing to say. Not a `Caveat`: it changes no
  * verdict, so it needs no report field.
  */
-export function alRunnerAdvisory(c: Partial<AlRunnerConfigSection>): string | undefined {
+export function alRunnerAdvisory(
+  c: Partial<AlRunnerConfigSection>,
+  /** The files the coverage guard named when it turned a requested coverage off. The user already
+   *  set the coverage key, so the line then says why it is off instead of advising to set it. */
+  coverageTurnedOffFor: readonly string[] = [],
+): string | undefined {
   const t = effectiveAlRunnerTransport(c);
   const notes: string[] = [];
   if (!t.serverMode) {
@@ -2179,7 +2184,11 @@ export function alRunnerAdvisory(c: Partial<AlRunnerConfigSection>): string | un
       'serverMode false with selectorMode "resource" is a combination no gate has measured live',
     );
   }
-  if (t.coverage === "none") {
+  if (coverageTurnedOffFor.length > 0) {
+    notes.push(
+      `coverage is "none" (turned off for this run because al-runner's coverage cannot describe ${coverageTurnedOffFor.join(", ")})`,
+    );
+  } else if (t.coverage === "none") {
     notes.push(
       'coverage is "none" (every mutant runs every green test; "alRunner.coverage": "al-runner" runs only the covering tests, and reports an unreached mutant no-coverage instead of survived)',
     );
@@ -2200,11 +2209,20 @@ export async function withAlRunnerCoverageGuard(
   projectDir: string,
   warn: (line: string) => void = console.warn,
 ): Promise<LethalConfigFile> {
+  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn)).config;
+}
+
+/** The guard, also returning the files it named (empty when it did not fall back). */
+async function applyAlRunnerCoverageGuard(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  warn: (line: string) => void,
+): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
   const section = configFile.alRunner;
-  if (section?.coverage !== "al-runner") return configFile;
+  if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
   const support = await alRunnerCoverageSupport(projectDir);
   if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
-    return configFile;
+    return { config: configFile, named: [] };
   }
   const named = [
     ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
@@ -2213,7 +2231,7 @@ export async function withAlRunnerCoverageGuard(
   warn(
     `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot describe ${named.join(", ")}, and trusting it would report those objects' mutants no-coverage while tests do reach them.`,
   );
-  return { ...configFile, alRunner: { ...section, coverage: "none" } };
+  return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
 }
 
 /**
@@ -2229,8 +2247,12 @@ export async function prepareAlRunnerSession(
 ): Promise<LethalConfigFile> {
   if (configFile.alRunner === undefined) return configFile;
   validateAlRunnerConfig(configFile.alRunner);
-  const sessionConfig = await withAlRunnerCoverageGuard(configFile, projectDir, warn);
-  const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {});
+  const { config: sessionConfig, named } = await applyAlRunnerCoverageGuard(
+    configFile,
+    projectDir,
+    warn,
+  );
+  const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
   if (advisory !== undefined) warn(advisory);
   return sessionConfig;
 }

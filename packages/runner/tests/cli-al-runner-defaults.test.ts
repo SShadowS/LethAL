@@ -400,6 +400,16 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(warned).toHaveLength(2);
   });
 
+  test("after a fallback the advisory says why coverage is off and never advises the key the user set", async () => {
+    const dir = await alProject({ "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l));
+    const advisory = warned.find((l) => l.startsWith("[lethal] al-runner settings:")) ?? "";
+    expect(advisory).toContain("turned off for this run");
+    expect(advisory).toContain("B.Codeunit.al (an #if-wrapped object)");
+    expect(advisory).not.toContain('"alRunner.coverage": "al-runner" runs only');
+  });
+
   test("prepareAlRunnerSession refuses a bad section before anything else", async () => {
     await expect(
       prepareAlRunnerSession({ alRunner: { alRunnerPath: "a", typo: 1 } as never }, "unused"),
