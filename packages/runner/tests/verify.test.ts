@@ -11,7 +11,11 @@ import {
 import { InstalledArtifactError } from "../src/artifact";
 import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
-import { appInputsOfAppJson, readAppJsonInputs } from "../src/digest-inputs";
+import {
+  DependencyUnreadableError,
+  appInputsOfAppJson,
+  readAppJsonInputs,
+} from "../src/digest-inputs";
 import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
@@ -796,6 +800,31 @@ describe("planVerify", () => {
     expect(e.reason).toBe("source-predates-verify");
     expect(e.detail).toContain("R-278's scheme");
     expect(e.detail).toContain("once per source run");
+  });
+
+  // R-371: the scheme check reads no package, so it comes before the dependency read: a v1 source
+  // with an unreadable dependency is source-predates-verify, and no package is read at all.
+  test("R-371: a v1 source with an unreadable dependency refuses source-predates-verify, reading no package", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const v2 = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    let reads = 0;
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v1,
+        dependencies: async () => {
+          reads += 1;
+          throw new DependencyUnreadableError("fixture: the package cannot be read");
+        },
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(reads).toBe(0);
   });
 
   describe("R-371: --max-new-tests", () => {

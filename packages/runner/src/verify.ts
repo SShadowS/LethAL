@@ -672,8 +672,11 @@ export async function planVerify(a: {
    *  too-many-new-tests refusal. */
   readonly sourceTestDigestParts?: unknown;
   readonly testDir: string;
-  /** R-371: this verify's dependency fingerprint (`verifyDependencyFingerprint`). */
-  readonly dependencies: string;
+  /** R-371: this verify's dependency fingerprint (`verifyDependencyFingerprint`), or a function
+   *  that reads it. A function is called only after every refusal that reads no package (the
+   *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
+   *  and costs no download. */
+  readonly dependencies: string | (() => Promise<string>);
   /** R-371: refuse above this many new tests. Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
 }): Promise<VerifyPlan> {
@@ -773,7 +776,7 @@ export async function planVerify(a: {
   const model = buildTestAppModel(await readTestAppSources(testDir));
   const refusedWhy = scanTestPageModel(model, discovered);
   const inputs = {
-    dependencies: a.dependencies,
+    dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
     buildInputs: ((await readAppJsonInputs(testDir)) ?? appInputsOfAppJson({})).buildInputs,
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
@@ -1287,7 +1290,7 @@ export async function runVerify(
       sourceTestDigests: store.testDigests(source.runId),
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
-      dependencies: await verifyDependencyFingerprint(backend, args.testDir, source.projectPath),
+      dependencies: () => verifyDependencyFingerprint(backend, args.testDir, source.projectPath),
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
