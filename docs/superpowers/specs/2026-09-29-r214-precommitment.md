@@ -496,3 +496,26 @@ extra=(); [ "$c" = baseapp ] && extra=(--directive-members-only)
 bun scripts/r214-capture.ts --listing "$D" --label "$c.$i" --from-expected "$O/expect-$c-$i.txt" --presence "$O/presence-$c-$i.txt" --regions "$O/regions-$c-$i.json" --root "$root" "${extra[@]}"
 sha256sum "$D"/*
 ```
+
+## Amendment (2026-10-01): BaseApp set 1 skippedFiles
+
+This amendment was written AFTER Task 9 measured the number. It is an explained correction, not a prediction. Orchestrator question q-20261001T150342, approved 2026-10-01.
+
+What changed. The "Corpora" table above gives the baseapp.1 capture header as `raw 1761609 deployed 1674059 skippedFiles 73`. The measured header is `raw 1761609 deployed 1674059 skippedFiles 67`. The raw and deployed totals, every row, the listings and the counts all match. Only `skippedFiles` differs.
+
+Cause. Six files of a skipped kind (query, xmlport, report extension) have their WHOLE object inside `#if not CLEAN27`. Under baseapp set 1 that code is compiled out. These files no longer count as skipped. Each is now reported as a `compiled-out` row, with the same per-file site count that master reported as skipped. 73 - 6 = 67. All six are under `Source/Base Application/`:
+
+| file | sites |
+| --- | ---: |
+| `Inventory/RoleCenters/MyItems.Query.al` | 2 |
+| `Manufacturing/Inventory/Planning/MfgPlanningAvailability.ReportExt.al` | 76 |
+| `Sales/Peppol/SalesCreditMemoPEPPOL20.XmlPort.al` | 301 |
+| `Sales/Peppol/SalesCreditMemoPEPPOL21.XmlPort.al` | 359 |
+| `Sales/Peppol/SalesInvoicePEPPOL20.XmlPort.al` | 344 |
+| `Sales/Peppol/SalesInvoicePEPPOL21.XmlPort.al` | 352 |
+
+The six counts sum to 1434. Their `kinds` string reads "no object declaration (root is source_file)" (R308's string), because the object declaration sits inside the inactive `#if`.
+
+Why it was not predicted. `predict.ts` copied master's header line and does not model skipped files.
+
+Scope. Every other expectation in this spec is unchanged, including baseapp.0 at `skippedFiles 73`. Task 9 measured them all as equal.
