@@ -2,3 +2,5 @@
 *.al text eol=lf
 *.wasm binary
 *.app binary
+# R214: pinned by SHA-256 in the pre-commitment spec; pp.ts was measured with CRLF line ends, so keep its bytes.
+scripts/r214/*.ts -text
