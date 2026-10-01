@@ -18,7 +18,7 @@ import { buildComponents } from "./components";
 import { type TierResolver, dedupeSpecs } from "./dedup";
 import { type ReachGrain, reachGrainOf } from "./dispatch";
 import type { DeclaredObject } from "./id-ranges";
-import { assignMutantIds } from "./ids";
+import { type IdedSpec, assignMutantIds } from "./ids";
 import {
   type SelectorConfig,
   emitMutationSelector,
@@ -93,6 +93,22 @@ export function identityTupleOf(
   const scope = m.procedureName || m.triggerName || "";
   const major = Number(m.operatorVersion.split(".")[0] ?? "0");
   return `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${major}`;
+}
+
+/**
+ * R307: the LOOSE identity tuple: `identityTupleOf` without the object name. A file refused by the
+ * header rule (`no-header`, `site-before-header`) has no object name to give, so the run records
+ * these instead of reserving exact entries (fail closed, I3).
+ */
+export function looseIdentityTupleOf(
+  m: Pick<
+    MutantManifestEntry,
+    "astHash" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
+  >,
+): string {
+  const scope = m.procedureName || m.triggerName || "";
+  const major = Number(m.operatorVersion.split(".")[0] ?? "0");
+  return `${m.astHash}|${scope}|${m.operatorName}|${major}`;
 }
 
 /**
@@ -731,6 +747,41 @@ export function withRunIdentityOrdinals(input: Omit<WriteInput, "identityOrdinal
   return { ...input, identityOrdinals: runIdentityOrdinals(input.files, input.operatorTiers) };
 }
 
+/**
+ * R307: the writer's per-file steps, in the writer's order, moved here verbatim so the writer and
+ * `generateMutationSet`'s per-file trial run ONE function and cannot drift. Every per-file refusal
+ * (`FileRefusedError`) fires in here; nothing is written. `ided` must be the file's deduped specs
+ * with ids in `assignMutantIds` order (the trial passes file-local ids, which order the same).
+ */
+export function instrumentOneFile(
+  f: Pick<InstrumentedFile, "path" | "source" | "root">,
+  deduped: readonly MutationSpec[],
+  ided: readonly IdedSpec[],
+): {
+  readonly compiled: string;
+  readonly grainOf: ReadonlyMap<string, ReachGrain>;
+  readonly headerOf: ReadonlyMap<string, ObjectHeader>;
+} {
+  // Read every object header BEFORE instrumenting: both remaining throws (no object header,
+  // an injectable object mixed with a non-injectable one) mean this file can never be
+  // attributed correctly, and failing before the write keeps a refused file from being left
+  // behind, half-instrumented, in the artifact dir.
+  const headers = objectHeadersOf(f.source, f.path);
+  assertNoUnsupportedObjectMix(headers, f.path);
+  const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
+  // The same components `compileSchemataForFile` builds from the same `ided`, so the grain
+  // recorded here is the one the emitted chain placed (or omitted) its marker by.
+  const grainOf = new Map<string, ReachGrain>();
+  for (const c of buildComponents(ided)) {
+    for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
+  }
+  // R6: attributed to ITS OWN enclosing object, not always the file's first header.
+  const headerOf = new Map<string, ObjectHeader>();
+  for (const { mutantId, spec } of ided)
+    headerOf.set(mutantId, attributeHeader(headers, spec, f.path));
+  return { compiled, grainOf, headerOf };
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
@@ -751,19 +802,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
-    // Read every object header BEFORE instrumenting: both remaining throws (no object header,
-    // an injectable object mixed with a non-injectable one) mean this file can never be
-    // attributed correctly, and failing before the write keeps a refused file from being left
-    // behind, half-instrumented, in the artifact dir.
-    const headers = objectHeadersOf(f.source, f.path);
-    assertNoUnsupportedObjectMix(headers, f.path);
-    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
-    // The same components `compileSchemataForFile` builds from the same `ided`, so the grain
-    // recorded here is the one the emitted chain placed (or omitted) its marker by.
-    const grainOf = new Map<string, ReachGrain>();
-    for (const c of buildComponents(ided)) {
-      for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
-    }
+    const { compiled, grainOf, headerOf } = instrumentOneFile(f, deduped, ided);
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     // RUST-03 S4.2a: per file, not per mutant: the line index, and each gap block's id and lines.
     const starts = lineStartsOf(f.source);
@@ -776,7 +815,10 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
-      const header = attributeHeader(headers, spec, f.path);
+      const header = headerOf.get(mutantId);
+      if (header === undefined) {
+        throw new Error(`writeInstrumentedProject: no object header for ${mutantId} in ${f.path}`);
+      }
       const id = identityFieldsOf(spec, header.name);
       const triggerName = id.triggerName;
       const siteKey = identitySiteKey(

@@ -6,6 +6,8 @@ import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type FileRefusalFields,
+  FileRefusedError,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
@@ -26,12 +28,16 @@ import {
   type MutantManifestEntry,
   type SelectorConfig,
   type TierResolver,
+  assignMutantIds,
   canCarryMutationSelectorVar,
   dedupeSpecs,
   describeObjectKinds,
   identityEntriesOf,
+  identityFieldsOf,
   identitySiteKey,
+  instrumentOneFile,
   isMutableSite,
+  looseIdentityTupleOf,
   numberIdentityOrdinals,
   reachLatchRefusedOwner,
   varSectionUnparsed,
@@ -334,6 +340,21 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  * into `SessionReport.notInstrumented` (report.ts) — present in both the console render and the
  * `--out` JSON, not just stderr.
  */
+/**
+ * R307: one file refused whole by `generateMutationSet`'s per-file trial. It deploys no mutant and
+ * is published uninstrumented. The fields are the `FileRefusedError`'s own (no source text).
+ */
+export interface RefusedFile extends FileRefusalFields {
+  /** Its post-filter, deduped site count: the mutants it would have deployed. */
+  readonly sites: number;
+  /**
+   * Only when the header rule refused it (no object name to reserve an exact entry under): the
+   * `looseIdentityTupleOf` of each deduped site. Absent for an exact refusal, whose sites are
+   * reserved in `identityOrdinals` instead.
+   */
+  readonly looseTuples?: readonly string[];
+}
+
 export interface MutationSetResult {
   readonly files: readonly InstrumentedFile[];
   /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
@@ -393,6 +414,8 @@ export interface MutationSetResult {
    * `identitySiteKey`. `writeInstrumentedProject` requires it, so no batch numbers its own twins.
    */
   readonly identityOrdinals: ReadonlyMap<string, number>;
+  /** R307: files the per-file trial refused, in path order. Empty when none was. */
+  readonly refusedFiles: readonly RefusedFile[];
 }
 
 export interface MutationSetOptions {
@@ -754,6 +777,7 @@ export async function generateMutationSet(
   const declarativeSites: DeclarativeSiteFile[] = [];
   // R374: one entry per deployed mutant, numbered once over the whole run after the loop.
   const identityEntries: IdentityEntry[] = [];
+  const refusedFiles: RefusedFile[] = [];
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
@@ -849,9 +873,49 @@ export async function generateMutationSet(
       skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
       continue;
     }
+    // R307: the writer's own per-file steps, run once here as a trial. A `FileRefusedError` refuses
+    // THIS file whole; anything else is a LethAL bug and still aborts the run. The exact identity
+    // entries are computed first: a header-rule refusal (no object name) has none, and records
+    // loose tuples instead (fail closed, I3).
+    const deduped = dedupeSpecs(fileSpecs, tierOf);
+    let entries: IdentityEntry[] | undefined;
+    try {
+      entries = identityEntriesOf(rel, source, deduped);
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+      if (e.shape !== "no-header" && e.shape !== "site-before-header") throw e;
+    }
+    try {
+      instrumentOneFile(
+        { path: rel, source, root },
+        deduped,
+        assignMutantIds(new Map([[rel, deduped]])).get(rel) ?? [],
+      );
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+      const { file, shape, objects, lines } = e;
+      if (entries !== undefined) identityEntries.push(...entries); // reserved: a number, no row
+      refusedFiles.push({
+        file,
+        shape,
+        ...(objects !== undefined ? { objects } : {}),
+        ...(lines !== undefined ? { lines } : {}),
+        sites: deduped.length,
+        ...(entries === undefined
+          ? { looseTuples: deduped.map((spec) => looseIdentityTupleOf(identityFieldsOf(spec, ""))) }
+          : {}),
+      });
+      continue;
+    }
+    if (entries === undefined) {
+      throw new Error(
+        `generateMutationSet: ${rel}: the header rule refused this file but its instrumentation trial did not; the two run the same rule, so this is a LethAL bug (R307)`,
+      );
+    }
+    // Only AFTER the trial: an operator whose only sites sit in refused files deploys nothing.
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
-    identityEntries.push(...identityEntriesOf(rel, source, dedupeSpecs(fileSpecs, tierOf)));
+    identityEntries.push(...entries);
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
@@ -874,7 +938,7 @@ export async function generateMutationSet(
       const uninstrumentableOnly = barren.filter((n) => producedAnywhere.has(n)).sort();
       const nuance =
         uninstrumentableOnly.length > 0
-          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above), so nothing would deploy.`
+          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above)${refusedFiles.length > 0 ? " or in files refused whole (R307)" : ""}, so nothing would deploy.`
           : "";
       throw new Error(
         `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
@@ -945,6 +1009,7 @@ export async function generateMutationSet(
     excludedByLines,
     declarativeSites,
     identityOrdinals: numberIdentityOrdinals(identityEntries),
+    refusedFiles,
   };
 }
 

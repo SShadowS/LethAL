@@ -32,6 +32,8 @@ export {
   MAX_MUTATION_TEXT,
   clipMutationText,
   identityTupleOf,
+  instrumentOneFile,
+  looseIdentityTupleOf,
   assignIdentityOrdinals,
   identitySiteKey,
   identityFieldsOf,
