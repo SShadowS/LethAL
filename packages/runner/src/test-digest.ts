@@ -119,6 +119,11 @@ function subscriberFold(
     for (const t of u.triggers) scanner.reach(t, st);
   }
   lines.push(...reachLines(st));
+  // Parse damage can swallow a whole subscriber codeunit, so it never becomes a unit and is folded
+  // nowhere: with any damaged file, every digest takes the whole-source fallback.
+  const [damaged] = model.damaged;
+  if (damaged !== undefined)
+    st.fallback ??= `${damaged} has parse damage, which can hide a subscriber codeunit`;
   return { hash: sha256(lines.sort().join("\n")), fallback: st.fallback };
 }
 

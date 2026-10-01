@@ -297,6 +297,28 @@ ${procs}}
     expect(digestA(unrelated(files))).not.toBe(digestA(files));
   });
 
+  test("parse damage that swallows a subscriber codeunit puts every test on the fallback", () => {
+    // The unclosed table swallows the codeunit after it: "Sub" never becomes a unit.
+    const broken = `table 50160 "Broken"
+{
+    fields
+    {
+        field(1; "No."; Code[20]
+    }
+
+codeunit 50120 "Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Lib", 'OnSomething', '', false, false)]
+    local procedure OnSomething()
+    begin
+        S := 1;
+    end;
+}
+`;
+    const files = base(T("    procedure A()\n    begin\n    end;\n"), { "B.al": broken });
+    expect(digestA(edit(files, "B.al", "S := 1;", "S := 2;"))).not.toBe(digestA(files));
+  });
+
   test("an UNFOLLOWED edge (Codeunit.Run by id) takes the whole-source fallback", () => {
     const files = base(T("    procedure A()\n    begin\n        Codeunit.Run(50110);\n    end;\n"));
     expect(digestA(unrelated(files))).not.toBe(digestA(files));
