@@ -1,57 +1,73 @@
-# R-392: measure al-runner's predefined symbols per binary, never assume them (short plan)
+# R-392: measure al-runner's predefined symbols every session, never assume them (short plan, r2)
 
-Task: `H:/lethal-coord/tasks/R-392/task.md`. Item: `docs/roadmap/R392.md` (follows R377). Code research:
-`H:/lethal-scratch/R-392/research.md`. Today `AL_RUNNER_PREDEFINED_SYMBOLS` (CLEANSCHEMA1..25, measured on
-v2.12.0) feeds `effectiveBuildSymbols` for every al-runner run, and nothing checks it.
+Task: `H:/lethal-coord/tasks/R-392/task.md`. Item: `docs/roadmap/R392.md` (follows R377). r1 review:
+`H:/lethal-coord/reviews/R-392-plan/review-r1.md`; all five findings are accepted, and each was checked against the code.
 
-## Where the probe runs
-`runAlRunnerCanary` is the wrong place. It runs in `runFromCli`, and its result reaches only the report, never `runSession`.
-`runSession` already spawns al-runner (`provisionOnce` and the contract probe) BEFORE it computes `buildSymbols`.
-So a new `probeAlRunnerPredefinedSymbols` runs there, for the al-runner backend only. Its result is passed as a
-parameter to `effectiveBuildSymbols` AND to `generateMutationSet`, so the existing `BuildSymbolsDivergedError`
-guard still holds. This covers `lethal run`, `campaign` and every itest that calls `runSession`. The `--dry-run`
-path with `--backend al-runner` uses the same function, through the cache (below).
+## Paths that enumerate al-runner mutants (checked)
+- `runSession` (orchestrator.ts): used by `lethal run` and campaign stages, and by every itest. It calls
+  `effectiveBuildSymbols` and then `generateMutationSet`.
+- `printDryRun` (cli.ts) calls `generateMutationSet` DIRECTLY, without going through runSession (r1 finding 1, confirmed).
+- **Do not enumerate al-runner mutants:**
+  - `lethal verify` is bcdev only.
+  - campaign freeze and compare only read reports.
+  - `scripts/campaign/compile-only.ts`, `r214-capture.ts`, `r364-mut-compile.ts`, `measure-gui-guarded.ts` and
+    `probe-alrunner-tables.ts` call `generateMutationSet` with no backend, so they get the alc set. That is
+    documented and not changed here.
 
-## The probe
-One one-shot al-runner run (the `OneShotTransport` the canary uses) on a two-app project generated in a temp dir,
-with no `--define`. The app holds `Mask()`, which appends one label per `#if CLEANSCHEMA<n>` arm for n = 1..40, plus
-`#if CLEANSCHEMA`. The test does `Error('MASK:' + Mask() + ':END')`, and the arms that compiled are read from the
-failure message. This is R377's measured method. A missing `MASK:...:END` marker is a probe failure, never "no symbols".
+## The change
+1. **No constant fallback.** `effectiveBuildSymbols` and `generateMutationSet` take a backend input,
+   `{ kind: "bcdev" } | { kind: "al-runner"; predefined: AlRunnerPredefinedProbe }`. The al-runner variant cannot be
+   built without a probe result, so TypeScript rejects any al-runner call that lacks one. An absent backend still
+   means alc. The constant is renamed `AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0`, and is used ONLY to compare against for
+   the change warning.
+2. **runSession** awaits `probeAlRunnerPredefinedSymbols` for the al-runner backend. It runs after `provisionOnce` and
+   before `effectiveBuildSymbols`, sequentially, with nothing started in parallel. Its result goes to both calls, so
+   the `BuildSymbolsDivergedError` guard still holds.
+3. **printDryRun with `--backend al-runner`** runs the same probe, or refuses by name when it cannot (for example,
+   no al-runner path is configured).
+
+## A complete, checkable probe result (r1 finding 2)
+- **The project:** one one-shot al-runner run with no `--define`, on a two-app project generated in a temp dir. For
+  each candidate `c` in CLEANSCHEMA1..40 plus CLEANSCHEMA, `Mask()` appends `+c` under `#if c` and `-c` under `#else`.
+  There is also an `+ALWAYS` arm under `#if true` and a `+NEVER` arm under `#if LETHALR392NEVER`, which alc and al-runner
+  never define. The test `LethAL R392 Probe.ProbeMask` raises `Error('R392MASK:' + Mask() + ':END')`.
+- **Accept only when all of these hold:**
+  - exactly one result, for that exact test, with status failed;
+  - exactly one `R392MASK:...:END`;
+  - tokens are `+` or `-` with an id in candidates ∪ {ALWAYS, NEVER}, with no repeat and no other token;
+  - EVERY candidate appears exactly once (that is 41, so every arm was compiled and read);
+  - `+ALWAYS` is present and `+NEVER` is absent.
+- **Anything else** is refused with `AlRunnerPredefinedProbeError` (extends `Error` directly), carrying the reason and
+  al-runner's output tail.
+- **The limit, stated:** the probe sees only its candidate range. A predefined symbol outside CLEANSCHEMA1..40 and
+  CLEANSCHEMA would go unseen; R392 records this as a known limit.
 
 ## What a result does
-- **It matches the constant:** use it; nothing is printed.
-- **It differs:** USE THE MEASURED SET, and emit a named warning, `al-runner-predefined-symbols-changed`, listing what
-  was added and removed against the v2.12.0 list. Why not refuse: the measured set IS what al-runner builds. Refusing
-  would block every user on each al-runner release that changes the list. Because the measured set goes into
-  `buildSymbols`, it reaches the run row, the fingerprint, history, resume and marks, so a changed list correctly
-  separates the history. The constant stays only as the documented v2.12.0 expectation that the warning compares
-  against.
-- **The probe fails** (spawn error, no marker, or a timeout): REFUSE the run with a named error,
-  `AlRunnerPredefinedProbeError` (extends `Error` directly), giving the cause and al-runner's output tail. The
-  hard-coded list is NEVER used in its place.
+- **Equal to the v2.12.0 list:** it is used, and nothing is printed.
+- **Different:** the MEASURED set is used, and the named warning `al-runner-predefined-symbols-changed` lists what was
+  added and removed. Why not refuse: the measured set IS what al-runner builds, and refusing would block every user
+  on each al-runner release that changes the list. It flows into the run row, the fingerprint, history, resume and marks.
+- **No cache (r1 finding 4).** The probe runs every al-runner session, as R345 chose for the contract probe. Its
+  wall time is measured on the first live run and written into R392. If it is over 15 s, a cache becomes a follow-up
+  item, with the validations r1 lists (symbols checked on read, an atomic write, a byte-level binary identity, and
+  fake-home tests).
 
-## Cache, once per binary build
-- **Key:** al-runner's `--version` line, plus the resolved binary path and its size and mtime. A new release changes the
-  version; a re-installed binary changes the mtime. Either one is a cache miss, so the probe runs again.
-- **Location:** `~/.lethal/al-runner-probe/<sha256(key)>.json`, holding `{ key, symbols, measuredAt }`. The directory is
-  injectable (the test preload hides the real home, R264).
-- **Contents are checked on read:** a corrupt file, or one whose key differs, is a miss, never a match.
-- **Cost:** measured on the first live run and written into R392, as the probe's wall time on this machine. The
-  R377 runs suggest one compile plus run, a few seconds; after the first run per binary it costs one stat call.
+## R-387 (r1 finding 3)
+R-387 merges FIRST. R-392 then extends R-387's `cliDefaultMechanismFailures` to allow exactly ONE one-shot spawn whose
+`--test` is `LethAL R392 Probe.ProbeMask`, per backend, next to its provision sentinel. Red-checks:
+- removing the probe spawn fails the "probe ran" assertion;
+- adding an ordinary one-shot `--test` still fails the gate;
+- a second probe spawn fails too.
 
-## Tests (TDD, fake al-runner through the canary's `scriptedSpawn` seam; red-check each hunk)
-1. Match: the fake reports 1..25. `buildSymbols` holds 1..25, and no warning is emitted.
-2. Mismatch: the fake reports 1..26 without 25. `buildSymbols` holds the MEASURED set, and the named warning lists
-   +CLEANSCHEMA26 and -CLEANSCHEMA25. An `#if CLEANSCHEMA26` arm is then enumerated as al-runner builds it. Red-check:
-   making the function return the constant turns this test red.
-3. Probe failure (no marker): runSession refuses with `AlRunnerPredefinedProbeError`. Red-check: a fallback to the
-   constant turns this test red.
-4. Cache: a second session with the same key does not spawn the probe (checked with a call counter). A changed
-   version or mtime does spawn it. A corrupt cache file is a miss.
-5. bcdev: no probe and no change (the existing R214 control).
-6. `--dry-run --backend al-runner` takes the same path (cache hit; with no cache, a probe or a named refusal).
-Live: one `itest:alrunner` run, after asking for the al-runner go and reporting at STOP. Expected: no frozen figure
-moves (v2.12.0 matches the constant, so it is the match path), and the probe's wall time is recorded.
+## Tests (TDD with a fake al-runner, the canary's `scriptedSpawn`; red-check each hunk)
+- The match, mismatch and refuse paths, with the partial cases: a missing candidate, a repeat, an unknown token, no
+  ALWAYS, NEVER present, two masks, the wrong test, and a passed status.
+- **Order (r1 finding 5):** a runSession test with call-order counters proves probe -> effectiveBuildSymbols ->
+  fingerprint -> generateMutationSet, and that the probe finished before the next call.
+- The dry-run probe and its refusal.
+- bcdev is untouched (it never spawns the probe).
 
-## Out of scope
-The report field for the effective set (R381); bcdev or alc, which predefine nothing.
+## Live, and limits
+One `itest:alrunner` run, after the orchestrator's go and with STOP reported. It should take the match path, with no
+frozen figure moving, and it records the probe's wall time. R345's risk across sessions (two sessions running al-runner
+at once) remains. This plan only keeps its own probe sequential within one session.
