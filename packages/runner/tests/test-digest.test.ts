@@ -383,6 +383,38 @@ codeunit 50120 "Sub"
       expect(onFallback(callExt('        R: Record "TT";\n', "ExtLib.InsertRec(R);"))).toBe(true);
     });
 
+    test("a Variant argument folds every test-app table, with its triggers, and takes no fallback", () => {
+      const files = base(
+        T(
+          '    procedure A()\n    var\n        ExtLib: Codeunit "Dep Lib";\n        R: Record "TT";\n        V: Variant;\n    begin\n        V := R;\n        ExtLib.Store(V);\n    end;\n',
+        ),
+        {
+          "TT.al": TABLE(
+            '    trigger OnInsert()\n    var\n        L: Codeunit "Lib";\n    begin\n        L.Help();\n    end;\n',
+          ),
+        },
+      );
+      expectReached(files, "TT.al", "L.Help();", "L.Help(); L.Help();");
+      expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+    });
+
+    test("StartSession with a codeunit VARIABLE falls back; with Codeunit::X it walks X's OnRun", () => {
+      const run = (vars: string, call: string) =>
+        base(
+          T(
+            `    procedure A()\n    var\n        S: Integer;\n${vars}    begin\n        ${call}\n    end;\n`,
+          ),
+        );
+      for (const call of [
+        "StartSession(S, CuId);",
+        "Session.StartSession(S, CuId);",
+        "TaskScheduler.CreateTask(CuId, 0);",
+      ])
+        expect(onFallback(run("        CuId: Integer;\n", call))).toBe(true);
+      // Control: by reference it resolves, and Lib's OnRun calls Help.
+      expectReached(run("", 'StartSession(S, Codeunit::"Lib");'), "Lib.al", "G := 2;", "G := 3;");
+    });
+
     test("negative: only literals and a dependency's record take no fallback", () => {
       const files = callExt(
         '        SH: Record "Sales Header";\n',

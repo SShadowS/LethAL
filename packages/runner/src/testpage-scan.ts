@@ -195,12 +195,14 @@ type Site =
 /**
  * R-371: an argument that can name a test-app object, as plain facts: an object reference
  * (`Report::"X"`, `Database::"T"`), a plain name (a variable, read against the caller's scope
- * later), or `this`. Every other argument shape (a literal, an expression, a field) is dropped.
+ * later), `this`, or an integer literal (a codeunit id, read only for a run by id). Every other
+ * argument shape (an expression, a field) is dropped. `at` is the argument's position.
  */
 type ArgFact =
-  | { readonly k: "ref"; readonly kind: string; readonly name: string }
-  | { readonly k: "name"; readonly name: string }
-  | { readonly k: "this" };
+  | { readonly k: "ref"; readonly at: number; readonly kind: string; readonly name: string }
+  | { readonly k: "name"; readonly at: number; readonly name: string }
+  | { readonly k: "int"; readonly at: number; readonly value: string }
+  | { readonly k: "this"; readonly at: number };
 
 const NO_ARGS: readonly ArgFact[] = Object.freeze([]);
 
@@ -714,14 +716,16 @@ function argInfo(call: ALSyntaxNode): {
   const real = list === undefined ? [] : realChildren(list);
   const first = real[0];
   let argFacts: ArgFact[] | undefined;
-  for (const a of real) {
+  for (const [at, a] of real.entries()) {
     let f: ArgFact | undefined;
     if (a.rawKind === "database_reference") {
       const m = /^\s*(\w+)\s*::\s*(.+?)\s*$/.exec(a.text);
       if (m?.[1] !== undefined && m[2] !== undefined)
-        f = { k: "ref", kind: m[1].toLowerCase(), name: m[2] };
+        f = { k: "ref", at, kind: m[1].toLowerCase(), name: m[2] };
+    } else if (a.rawKind === "integer") {
+      f = { k: "int", at, value: a.text.trim() };
     } else if (NAME_KINDS.has(a.rawKind) || a.rawKind === "keyword_identifier") {
-      f = a.text.toLowerCase() === "this" ? { k: "this" } : { k: "name", name: a.text };
+      f = a.text.toLowerCase() === "this" ? { k: "this", at } : { k: "name", at, name: a.text };
     }
     if (f === undefined) continue;
     argFacts ??= [];
@@ -875,6 +879,16 @@ const SYSTEM_ROOTS = new Set([
   "companyproperty",
   "requestoptionspage",
 ]);
+
+/** R-371: a type whose value may be a record of any table (folded, not fallen back). */
+const HOLDS_RECORD = /^\s*(variant|recordref|fieldref)\b/i;
+/** R-371: the position(s) of the codeunit-id arguments of a platform run by id, by `root.member`;
+ *  the bare `StartSession` is `reachBare`'s. */
+const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
+  "session.startsession": [1],
+  "taskscheduler.createtask": [0, 1],
+};
+const NO_RUN: ReadonlySet<number> = new Set();
 
 export class Scanner {
   /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
@@ -1227,7 +1241,8 @@ export class Scanner {
     // is handed a reference to a test-app object (`StartSession(Id, Codeunit::"X")`): the
     // platform may run that object, which the walk does not follow.
     if (site.withRecv.length === 0) {
-      this.passesTestApp(p, site.argFacts, true, site.name, st);
+      const ran = nn === "startsession" ? this.runById(site.argFacts, site.args, [1], site.name, st) : NO_RUN;
+      this.passesTestApp(p, site.argFacts, true, site.name, st, ran);
       return;
     }
     // Case 7 (I4): through every enclosing with-target's declared types; case 19 when unknown.
@@ -1281,7 +1296,10 @@ export class Scanner {
         return;
       }
       // A system call handed a reference to a test-app object may run it (`TaskScheduler`).
-      this.passesTestApp(p, site.argFacts, true, `${receiver}.${member}`, st);
+      const at = RUN_BY_ID[`${key}.${nm}`];
+      const ran =
+        at === undefined ? NO_RUN : this.runById(site.argFacts, args, at, `${receiver}.${member}`, st);
+      this.passesTestApp(p, site.argFacts, true, `${receiver}.${member}`, st, ran);
       // Outside a codeunit, AL declares names the walk may not type (`Rec` on a page extension, a
       // report extension's data items): a call on one that could run test-app code falls back.
       if (
@@ -1338,8 +1356,10 @@ export class Scanner {
     refsOnly: boolean,
     label: string,
     st: ReachState,
+    skipAt: ReadonlySet<number> = NO_RUN,
   ): void {
     for (const f of facts) {
+      if (skipAt.has(f.at) || f.k === "int") continue;
       let what: string | undefined;
       if (f.k === "ref") {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
@@ -1349,6 +1369,11 @@ export class Scanner {
       else {
         const key = this.norm(f.name);
         const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
+        // A Variant or RecordRef may hold a record of any test-app table: every test-app table,
+        // with its triggers and what they reach, is folded in (an unfollowed edge there falls
+        // back). Stated limit: a Variant holding a test-app codeunit or interface, run by the
+        // external code, is not seen.
+        if (types?.some((t) => HOLDS_RECORD.test(ARRAY_OF.exec(t)?.[1] ?? t))) this.foldTables(st);
         const held = types?.find((t) => this.holdsTestApp(t));
         if (held !== undefined) what = `${f.name} (${held.trim()})`;
       }
@@ -1357,6 +1382,37 @@ export class Scanner {
         return;
       }
     }
+  }
+
+  /** Every test-app table and tableextension, entered: its parts, its triggers, what they reach. */
+  private foldTables(st: ReachState): void {
+    for (const u of this.tableUnits) if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+  }
+
+  /**
+   * A platform call that runs a codeunit by id (`StartSession`, `TaskScheduler.CreateTask`): the
+   * codeunit argument at each position in `at` is followed into its OnRun when it is a
+   * `Codeunit::X` reference or an id literal naming a test-app codeunit, is EXTERNAL (or no
+   * codeunit, 0) otherwise, and falls back when it is a variable or an expression. Returns the
+   * positions it handled, so the ruling on arguments does not read them again.
+   */
+  private runById(
+    facts: readonly ArgFact[],
+    args: number,
+    at: readonly number[],
+    label: string,
+    st: ReachState,
+  ): ReadonlySet<number> {
+    for (const i of at) {
+      if (i >= args) continue;
+      const f = facts.find((x) => x.at === i);
+      if (f?.k === "ref" && f.kind === "codeunit")
+        for (const u of this.unitsNamed(f.name)) this.runUnit(u, st);
+      else if (f?.k === "int") for (const u of this.byNameAll(f.value)) this.runUnit(u, st);
+      // A variable, or an expression (which keeps no fact).
+      else fallBack(st, `${label} runs a codeunit given by a variable or an expression`);
+    }
+    return new Set(at);
   }
 
   /** Whether the test app itself declares (not only extends) the `kind` object `raw` names. */
@@ -1368,9 +1424,7 @@ export class Scanner {
   /** Whether a variable of declared type `rawType` can hold a test-app object. */
   private holdsTestApp(rawType: string): boolean {
     const type = ARRAY_OF.exec(rawType)?.[1] ?? rawType;
-    // ponytail: a Variant or RecordRef that holds a test-app object is not counted (the ruling
-    // names codeunits, records and object references). Counting them put every DC test on the
-    // fallback (194 Variant arguments); closing it needs the value's source, a data-flow walk.
+    // A Variant or RecordRef is not a fallback: `passesTestApp` folds every test-app table instead.
     if (/^\s*interface\b/i.test(type)) return true;
     const m = OBJ_TYPE.exec(type);
     const kw = m?.[1]?.toLowerCase();
