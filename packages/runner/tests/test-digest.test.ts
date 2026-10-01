@@ -526,6 +526,32 @@ codeunit 50120 "Sub"
     });
   });
 
+  // External review r1 #2: a call chained on a codeunit a test-app table procedure returns.
+  describe("a codeunit returned by a test-app table procedure", () => {
+    const MOCK =
+      "codeunit 50101 \"Mock\"\n{\n    procedure Go()\n    begin\n        Message('a');\n    end;\n}\n";
+    const TAB = TABLE(
+      "",
+      '    procedure MakeMock(): Codeunit "Mock"\n    var\n        M: Codeunit "Mock";\n    begin\n        exit(M);\n    end;\n',
+    );
+    const files = (body: string) =>
+      base(
+        T(
+          `    procedure A()\n    var\n        R: Record "TT";\n        DepCU: Codeunit "Dep CU";\n    begin\n        ${body}\n    end;\n`,
+        ),
+        { "TT.al": TAB, "M.al": MOCK },
+      );
+
+    test("R.MakeMock().Go() walks Go in the returned codeunit", () => {
+      expectReached(files("R.MakeMock().Go();"), "M.al", "Message('a');", "Message('b');");
+    });
+
+    test("DepCU.Process(R.MakeMock()) hands a test-app codeunit out, so it falls back (R390)", () => {
+      const f = files("DepCU.Process(R.MakeMock());");
+      expect(digestA(unrelated(f))).not.toBe(digestA(f));
+    });
+  });
+
   // External review r1 #1: each reached hash is bound to its procedure and object.
   test("swapping the bodies of same-named procedures in two reached codeunits changes the digest", () => {
     const lib = (id: number, name: string, msg: string) =>

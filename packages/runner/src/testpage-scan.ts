@@ -1690,8 +1690,13 @@ export class Scanner {
         return `a ${r.kind}`;
       case "name": {
         const key = this.norm(r.name);
-        if (key === "this") return [`Codeunit ${p.unit.id}`];
-        return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? [])];
+        if (key === "this") {
+          if (p.unit.kind === "codeunit") return [`Codeunit ${p.unit.id}`];
+          // In a table or tableextension `this` is the record; elsewhere it is not modelled.
+          if (p.unit.kind.startsWith("table")) return [...(p.unit.implicit.get("rec") ?? [])];
+          return `this in a ${p.unit.kind}`;
+        }
+        return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key) ?? [])];
       }
       case "either": {
         const out: string[] = [];
@@ -1720,8 +1725,21 @@ export class Scanner {
         const name = this.norm(r.member);
         const out: string[] = [];
         for (const t of recvTypes) {
-          if (!CODEUNIT_TYPE.test(t)) continue;
-          for (const u of this.unitsFor(t))
+          // External review r1 #2: a procedure of a test-app table, page or other object (or a
+          // test-app extension of one) can return a test-app codeunit too. An object the test
+          // app does not declare or extend is a dependency's, and cannot return a test-app type.
+          let owners: Unit[];
+          if (CODEUNIT_TYPE.test(t)) owners = this.unitsFor(t);
+          else {
+            const m = OBJ_TYPE.exec(ARRAY_OF.exec(t)?.[1] ?? t);
+            const kw = m?.[1]?.toLowerCase();
+            const raw = m?.[2];
+            owners =
+              kw === undefined || raw === undefined
+                ? []
+                : this.objectsNamed(KIND_OF[kw] ?? kw, raw);
+          }
+          for (const u of owners)
             for (const c of u.procs)
               if (c.name === name && c.params === r.args && c.returnType !== undefined)
                 out.push(c.returnType);
