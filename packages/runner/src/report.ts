@@ -28,7 +28,7 @@ import {
 } from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
 import type { CoverageAttribution } from "./selection";
-import { identityKeyOf, memberGroupNameOf, serializeKey } from "./selection";
+import { identityKeyOf, isCarryDisabled, memberGroupNameOf, serializeKey } from "./selection";
 import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
@@ -2292,14 +2292,19 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const marks = statics.equivalenceMarks;
   let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
   if (marks !== undefined && marks.length > 0) {
+    const carryOff = input.outcomes.map((o) => isCarryDisabled(o.mutant, statics.carryDisabled));
     const marked: EquivalenceMarkReport = applyEquivalenceMarks(
       marks,
-      mutants.map((m) => ({
-        batchIndex: m.batchIndex,
-        mutantCode: m.mutantCode,
-        identity: markIdentityOf(m),
-        verdict: m.verdict,
-      })),
+      // R307 section 3: a mutant whose carry is disabled is not offered to any mark, so a mark on
+      // its key reads stale this run. `mutants[i]` was built from `input.outcomes[i]`.
+      mutants
+        .filter((_, i) => carryOff[i] !== true)
+        .map((m) => ({
+          batchIndex: m.batchIndex,
+          mutantCode: m.mutantCode,
+          identity: markIdentityOf(m),
+          verdict: m.verdict,
+        })),
       // R325: this report's keys are made by this build.
       IDENTITY_SCHEME,
     );

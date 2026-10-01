@@ -205,6 +205,14 @@ saved mutant verdict that such a test took part in (it killed the mutant, or it 
 tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
 test, and says so in a `resume-testpage-rescored` warning.
 
+A file LethAL cannot instrument is refused whole and published unchanged (R307). When it was refused
+because no object name could be read from it, a mutant elsewhere that matches one of its sites
+apart from the object name could hold a key an earlier run gave that file. For that run such a
+mutant is not skipped by `--skip-known-survivors`, not carried by `--resume` or `--resume-run`, and
+takes no equivalence mark (a mark on its key reads stale). The `identity-carry-disabled` warning
+names the file and the count, and the refused file's row says "identity carry disabled for N
+mutant(s)". Its key is still recorded, so the next run without the refusal carries it normally.
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.

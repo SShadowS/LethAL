@@ -355,6 +355,12 @@ export interface RefusedFile extends FileRefusalFields {
    * reserved in `identityOrdinals` instead.
    */
   readonly looseTuples?: readonly string[];
+  /**
+   * R307 section 3 (fail closed): how many of this run's deployed mutants share a loose tuple with
+   * this file's `looseTuples`, and so carry no verdict across runs this session (history, resume,
+   * equivalence marks). Present only when `looseTuples` is and the count is above zero.
+   */
+  readonly carryDisabled?: number;
 }
 
 export interface MutationSetResult {
@@ -960,6 +966,25 @@ export async function generateMutationSet(
       "line-narrowed-run",
       `[lethal] the line filter narrowed this run to ${lineRanges.length} line range(s); ${excludedByLines} mutation site(s) on other lines were excluded. The score below covers those lines ONLY — it is not a project score.`,
     );
+  }
+  // R307 section 3 (fail closed, I3): a header-rule refusal reserved no exact entry, so a deployed
+  // mutant sharing one of its loose tuples may hold a key a prior run gave a site of the refused
+  // file. Counted here, per refused file; `runSession` turns carry off for each such mutant.
+  if (refusedFiles.some((r) => r.looseTuples !== undefined)) {
+    const deployedLoose = files.flatMap((f) =>
+      dedupeSpecs(f.specs, tierOf).map((spec) => looseIdentityTupleOf(identityFieldsOf(spec, ""))),
+    );
+    for (const [i, r] of refusedFiles.entries()) {
+      if (r.looseTuples === undefined) continue;
+      const loose = new Set(r.looseTuples);
+      const count = deployedLoose.filter((t) => loose.has(t)).length;
+      if (count === 0) continue;
+      refusedFiles[i] = { ...r, carryDisabled: count };
+      warn(
+        "identity-carry-disabled",
+        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. Their keys are still recorded, so the next run without this refusal carries them normally (R307).`,
+      );
+    }
   }
   if (skipped.length > 0) {
     const total = skipped.reduce((n, s) => n + s.sites, 0);
@@ -4437,7 +4462,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { preprocessorSymbols: cfg.preprocessorSymbols }
       : {}),
   });
-  const resumeState = resolveResume(
+  const resolvedResume = resolveResume(
     cfg,
     backendName,
     configFingerprint,
@@ -4512,6 +4537,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
     identityOrdinals,
+    refusedFiles,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4521,6 +4547,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
   });
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R307 section 3 (fail closed, I3): the loose tuples of every header-rule refusal. A mutant
+  // matching one is not skipped by history, not carried by resume and takes no equivalence mark
+  // this run (`isCarryDisabled`); its key is still written. Undefined when nothing is disabled.
+  const looseRefused = refusedFiles.flatMap((r) =>
+    r.carryDisabled !== undefined ? (r.looseTuples ?? []) : [],
+  );
+  const carryDisabled = looseRefused.length > 0 ? new Set(looseRefused) : undefined;
+  const resumeState =
+    resolvedResume === undefined || carryDisabled === undefined
+      ? resolvedResume
+      : { ...resolvedResume, index: { ...resolvedResume.index, carryDisabled } };
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
   const coverageRefused = coverageRefusedObjects(allFiles);
@@ -5003,6 +5040,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       );
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
+        ...(carryDisabled !== undefined ? { carryDisabled } : {}),
       });
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
@@ -5861,6 +5899,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.equivalenceMarks !== undefined && cfg.equivalenceMarks.length > 0
       ? { equivalenceMarks: cfg.equivalenceMarks }
       : {}),
+    ...(carryDisabled !== undefined ? { carryDisabled } : {}),
     // R101(c): ALWAYS carried, including as `[]`. "No symbol was defined" is the statement a reader
     // needs when a project has an `#if` — it is the difference between measuring the branch the
     // customer ships and measuring the other one, and the report was silent about it.

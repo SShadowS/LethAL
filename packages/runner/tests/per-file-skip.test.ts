@@ -151,7 +151,13 @@ describe("R307: one refused row per shape, the rest of the run intact", () => {
             kinds: bad.kinds,
             sites: name === "injector" ? 6 : 3,
             reason: "instrumentation-refused",
-            detail: `${bad.shape} in ${BADFILE}: ${bad.detail}`,
+            // R307 T6: a header-rule refusal reserves no exact entry, and its BODY is a loose twin
+            // of the good file's three sites, so their cross-run carry is disabled and counted.
+            detail: `${bad.shape} in ${BADFILE}: ${bad.detail}${
+              name === "noHeader" || name === "siteBeforeHeader"
+                ? "; identity carry disabled for 3 mutant(s)"
+                : ""
+            }`,
           },
         ]);
         const detail = excluded.files[0]?.detail ?? "";

@@ -20,6 +20,8 @@ export type ExclusionReason = "not-instrumentable" | "declarative" | "instrument
 export interface RefusedExcludedFile extends FileRefusalFields {
   readonly kinds: string;
   readonly sites: number;
+  /** R307 section 3: mutants elsewhere whose cross-run carry this refusal disabled (`RefusedFile`). */
+  readonly carryDisabled?: number;
 }
 
 export interface ExcludedSiteFile {
@@ -94,14 +96,18 @@ export function buildExcludedSites(input: {
       kinds: f.kinds,
       sites: f.sites,
       reason: "instrumentation-refused" as const,
-      detail: formatRefusal(
+      detail: `${formatRefusal(
         new FileRefusedError("", {
           file: f.file,
           shape: f.shape,
           ...(f.objects !== undefined ? { objects: f.objects } : {}),
           ...(f.lines !== undefined ? { lines: f.lines } : {}),
         }),
-      ),
+      )}${
+        f.carryDisabled !== undefined
+          ? `; identity carry disabled for ${f.carryDisabled} mutant(s)`
+          : ""
+      }`,
     })),
   ];
   return {

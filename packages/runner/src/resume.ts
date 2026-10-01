@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
 import type { LineRange } from "./line-filter";
-import { type CoverageAttribution, identityKeyOf, serializeKey } from "./selection";
+import {
+  type CoverageAttribution,
+  identityKeyOf,
+  isCarryDisabled,
+  serializeKey,
+} from "./selection";
 import type { MutantVerdict, MutantVerdictRow, RunnerKind } from "./store";
 
 /**
@@ -133,6 +138,12 @@ export interface ResumeIndex {
    * blocks every mutant behind it. `--retry-stranded` overrides.
    */
   readonly strandedKeys: ReadonlySet<string>;
+  /**
+   * R307 section 3 (fail closed): loose tuples of files this run refused under the header rule. A
+   * mutant matching one is neither carried nor skipped as stranded (`isCarryDisabled`). Set by
+   * `runSession` after generation; absent means nothing is disabled.
+   */
+  readonly carryDisabled?: ReadonlySet<string>;
 }
 
 /**
@@ -262,6 +273,7 @@ export function batchCarriesEntirely(
 
 /** R53: whether THIS run's mutant is one a prior run stranded the tier on — see `strandedKeys`. */
 export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean {
+  if (isCarryDisabled(m, index.carryDisabled)) return false;
   return index.strandedKeys.has(serializeKey(identityKeyOf(m)));
 }
 
@@ -277,6 +289,7 @@ export function carriedVerdictFor(
   index: ResumeIndex,
   m: MutantManifestEntry,
 ): CarriedVerdict | undefined {
+  if (isCarryDisabled(m, index.carryDisabled)) return undefined;
   const carried = index.carryable.get(serializeKey(identityKeyOf(m)));
   // R318: a renamed split member's key did not move when R318 gave it coverage, so a
   // `no-coverage` recorded before R318 (when nothing could attribute coverage to it) would carry.
