@@ -115,6 +115,7 @@ import {
   type BuildBackend,
   BuildSymbolsDivergedError,
   effectiveBuildSymbols,
+  predefinedSymbolsHint,
   sameBuildSymbols,
 } from "./preprocessor-symbols";
 import {
@@ -3230,7 +3231,7 @@ function assertSameBuildSymbols(
   if (row === null) throw new Error(`${flag}: no such run in this database`);
   if (row.buildSymbols !== null && sameBuildSymbols(row.buildSymbols, buildSymbols)) return;
   throw new Error(
-    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
+    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(row.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
   );
 }
 
@@ -3294,7 +3295,7 @@ function resolveResume(
       });
       if (otherBuild !== null) {
         throw new Error(
-          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
+          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(otherBuild.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
         );
       }
       throw new Error(
@@ -5056,7 +5057,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             emit({
               type: "warning",
               code: "history-build-symbols-changed",
-              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(old.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
             });
           },
           coverageModeChanged: (old) => {

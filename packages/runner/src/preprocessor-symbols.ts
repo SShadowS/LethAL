@@ -94,6 +94,23 @@ export const AL_RUNNER_PREDEFINED_SYMBOLS: readonly string[] = Array.from(
   (_, i) => `CLEANSCHEMA${i + 1}`,
 );
 
+/** R377: the text to append to a message that shows two different symbol sets. It is non-empty
+ *  only when the two sets differ by EXACTLY al-runner's predefined symbols (an al-runner build
+ *  against an alc build of the same project). A `null` set (not recorded) gets no hint. */
+export function predefinedSymbolsHint(
+  a: readonly string[] | null,
+  b: readonly string[] | null,
+): string {
+  if (a === null || b === null) return "";
+  const inA = new Set(a);
+  const inB = new Set(b);
+  const diff = new Set([...inA, ...inB].filter((s) => inA.has(s) !== inB.has(s)));
+  const same =
+    diff.size === AL_RUNNER_PREDEFINED_SYMBOLS.length &&
+    AL_RUNNER_PREDEFINED_SYMBOLS.every((s) => diff.has(s));
+  return same ? " (al-runner predefines CLEANSCHEMA1..CLEANSCHEMA25, R377)" : "";
+}
+
 /** The compiler a build symbol set is computed for: `bcdev` is alc, `al-runner` is al-runner. */
 export type BuildBackend = "bcdev" | "al-runner";
 

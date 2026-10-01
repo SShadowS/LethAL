@@ -11,8 +11,9 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { printDryRun } from "../src/cli";
+import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
-import { AL_RUNNER_PREDEFINED_SYMBOLS } from "../src/preprocessor-symbols";
+import { AL_RUNNER_PREDEFINED_SYMBOLS, predefinedSymbolsHint } from "../src/preprocessor-symbols";
 import { ResultsStore } from "../src/store";
 
 /**
@@ -141,6 +142,16 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
     expect([...AL_RUNNER_PREDEFINED_SYMBOLS].sort()).toEqual(CLEANSCHEMA_1_TO_25);
   });
 
+  test("predefinedSymbolsHint fires only when the sets differ by exactly the predefines", () => {
+    const hint = " (al-runner predefines CLEANSCHEMA1..CLEANSCHEMA25, R377)";
+    const p = AL_RUNNER_PREDEFINED_SYMBOLS;
+    expect(predefinedSymbolsHint([], p)).toBe(hint);
+    expect(predefinedSymbolsHint([...p, "X"], ["X"])).toBe(hint);
+    expect(predefinedSymbolsHint(["X"], p)).toBe("");
+    expect(predefinedSymbolsHint(["X"], ["Y"])).toBe("");
+    expect(predefinedSymbolsHint(null, p)).toBe("");
+  });
+
   test("an al-runner run builds only al-runner's arms and records its set; bcdev keeps alc's", async () => {
     await withProject(async (root) => {
       const store = new ResultsStore(":memory:");
@@ -162,9 +173,15 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       // History: the latest finished (bcdev) run is not history for an al-runner build. The stub
       // reads no test app, so both rows get one hash here, leaving the symbols as the only
       // difference `priorSurvivorKeys` can refuse on; the bcdev set is the control.
-      (store as unknown as { db: { run(sql: string): void } }).db.run(
-        "UPDATE runs SET test_app_hash = 'same-test-app'",
-      );
+      const db = (
+        store as unknown as {
+          db: { run(sql: string): void; query(sql: string): { get(): unknown } };
+        }
+      ).db;
+      const natural = db.query("SELECT test_app_hash AS h FROM runs WHERE id = 2").get() as {
+        h: string | null;
+      };
+      db.run("UPDATE runs SET test_app_hash = 'same-test-app'");
       const refusedOnSymbols = (symbols: readonly string[]) => {
         let changed = false;
         store.priorSurvivorKeys(join(root, "app"), "procedure", "same-test-app", symbols, {
@@ -175,6 +192,27 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
         return changed;
       };
       expect([refusedOnSymbols(CLEANSCHEMA_1_TO_25), refusedOnSymbols([])]).toEqual([true, false]);
+
+      // The history warning names the al-runner predefines when they are the whole difference.
+      // Put run 2's own test-app hash back, so the symbols are the only thing the session can refuse on.
+      db.run(`UPDATE runs SET test_app_hash = ${natural.h === null ? "NULL" : `'${natural.h}'`}`);
+      const events: RunEvent[] = [];
+      await runSession({
+        backend: new StubBackend(false),
+        store,
+        projectDir: join(root, "app"),
+        testDir: join(root, "tests"),
+        instrumentedDir: join(root, "instr-ar"),
+        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+        skipKnownSurvivors: true,
+        emit: [(e) => events.push(e)],
+      });
+      const warned = events.find(
+        (e) => e.type === "warning" && e.code === "history-build-symbols-changed",
+      );
+      expect(warned && "message" in warned ? warned.message : "").toMatch(
+        /was built with preprocessor symbols \(none\), and this build uses CLEANSCHEMA1,.*\(al-runner predefines CLEANSCHEMA1\.\.CLEANSCHEMA25, R377\)\. /,
+      );
       store.close();
     });
   }, 60_000);

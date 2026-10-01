@@ -107,16 +107,20 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
   });
 
   test("R214: one key may be ruled on under two symbol sets, and each applies only in its own build", () => {
+    // The pre-committed SA key (r214-precommitment, "The baseline diff, by key"): L13 under
+    // [LETHALA] and L15 under [LETHALB] both carry it.
+    const KEY_SA =
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1";
     const parsed = parseEquivalenceMarks(
       file([
-        { key: KEY_A, reason: "L13", preprocessorSymbols: ["LETHALA"] },
-        { key: KEY_A, reason: "L15", preprocessorSymbols: ["LETHALB"] },
+        { key: KEY_SA, reason: "L13", preprocessorSymbols: ["LETHALA"] },
+        { key: KEY_SA, reason: "L15", preprocessorSymbols: ["LETHALB"] },
       ]),
       "m.json",
     );
     expect(parsed).toHaveLength(2);
     const mutant = (verdict: string) => [
-      { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict },
+      { batchIndex: 0, mutantCode: "M0001", identity: KEY_SA, verdict },
     ];
     const a = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALA"]);
     expect(a.matched.map((m) => m.reason)).toEqual(["L13"]);

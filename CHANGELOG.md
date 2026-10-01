@@ -49,6 +49,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   changed `#if` is one more way to do that, see R391. An al-runner run's set also includes the
   `CLEANSCHEMA1` to `CLEANSCHEMA25` that al-runner predefines (measured on 2.12.0, R377), so an
   al-runner run and a bcdev run of one project share no history; `run --dry-run` takes `--backend`.
+  A mark for an al-runner run must list that whole set (the 25 symbols plus any the project
+  defines); a mark without them covers only a build with no symbols, so one mark cannot cover both
+  backends, and LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
