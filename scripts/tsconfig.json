@@ -91,6 +91,20 @@
     "r289-probe/sidecar.ts",
     "r289-probe/sidecar.test.ts",
     "roadmap-index.ts",
-    "roadmap-index.test.ts"
+    "roadmap-index.test.ts",
+    "roadmap-next-id.ts",
+    "roadmap-next-id.test.ts",
+    "roadmap-set.ts",
+    "roadmap-set.test.ts",
+    "verify.ts",
+    "verify.test.ts",
+    "coord-status.ts",
+    "coord-status.test.ts",
+    "report-summary.ts",
+    "report-summary.test.ts",
+    "report-diff.ts",
+    "report-diff.test.ts",
+    "store-query.ts",
+    "store-query.test.ts"
   ]
 }
