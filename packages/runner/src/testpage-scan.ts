@@ -723,7 +723,9 @@ function argInfo(call: ALSyntaxNode): {
     } else if (NAME_KINDS.has(a.rawKind) || a.rawKind === "keyword_identifier") {
       f = a.text.toLowerCase() === "this" ? { k: "this" } : { k: "name", name: a.text };
     }
-    if (f !== undefined) (argFacts ??= []).push(f);
+    if (f === undefined) continue;
+    argFacts ??= [];
+    argFacts.push(f);
   }
   return {
     args: real.length,
