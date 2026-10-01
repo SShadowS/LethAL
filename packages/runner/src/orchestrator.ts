@@ -982,7 +982,7 @@ export async function generateMutationSet(
       refusedFiles[i] = { ...r, carryDisabled: count };
       warn(
         "identity-carry-disabled",
-        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. Their keys are still recorded, so the next run without this refusal carries them normally (R307).`,
+        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. A mutant an earlier run stranded on is still skipped (R53), so nothing that hung before runs again. Their keys are still recorded, so the next run without this refusal carries them normally. Keep any equivalence mark that reads stale this run: the marks file is untouched and the mark applies again once the refusal is gone (R307).`,
       );
     }
   }

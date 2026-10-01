@@ -140,7 +140,7 @@ export interface ResumeIndex {
   readonly strandedKeys: ReadonlySet<string>;
   /**
    * R307 section 3 (fail closed): loose tuples of files this run refused under the header rule. A
-   * mutant matching one is neither carried nor skipped as stranded (`isCarryDisabled`). Set by
+   * mutant matching one is not carried (`isCarryDisabled`), but a stranded skip still holds. Set by
    * `runSession` after generation; absent means nothing is disabled.
    */
   readonly carryDisabled?: ReadonlySet<string>;
@@ -273,7 +273,9 @@ export function batchCarriesEntirely(
 
 /** R53: whether THIS run's mutant is one a prior run stranded the tier on — see `strandedKeys`. */
 export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean {
-  if (isCarryDisabled(m, index.carryDisabled)) return false;
+  // R307: deliberately NOT gated by `carryDisabled`. A stranded skip records `error`, which carries
+  // no verdict, skips no survivor and applies no mark, so it is already fail-closed; lifting it
+  // would re-run a mutant that hung before (R53 skips even an ambiguous stranded key).
   return index.strandedKeys.has(serializeKey(identityKeyOf(m)));
 }
 

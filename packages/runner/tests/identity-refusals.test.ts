@@ -209,8 +209,8 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
   });
 });
 
-describe("R307 T6 (b), unit: a disabled carry also lifts a stranded skip", () => {
-  test("wasStranded is false for a mutant whose loose tuple is disabled; the control is true", async () => {
+describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
+  test("wasStranded stays true for a mutant whose loose tuple is disabled (R53: never re-run a hang)", async () => {
     const { root, projectDir } = await twinProject(TABLE_AL);
     const set = await generateMutationSet(projectDir, { emit: () => {} });
     const m = (await manifestRows(root, set)).find((x) => x.operatorName === OP);
@@ -223,8 +223,17 @@ describe("R307 T6 (b), unit: a disabled carry also lifts a stranded skip", () =>
     };
     expect(wasStranded(index, m)).toBe(true);
     expect(wasStranded({ ...index, carryDisabled: new Set([looseIdentityTupleOf(m)]) }, m)).toBe(
-      false,
+      true,
     );
+    // ...while the same disabled set does stop the verdict carrying.
+    const carrying = {
+      ...index,
+      carryable: new Map([[keyOfEntry(m), { verdict: "survived" as const, durationMs: 1 }]]),
+    };
+    expect(carriedVerdictFor(carrying, m)?.verdict).toBe("survived");
+    expect(
+      carriedVerdictFor({ ...carrying, carryDisabled: new Set([looseIdentityTupleOf(m)]) }, m),
+    ).toBeUndefined();
   });
 });
 
@@ -414,6 +423,8 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain(`${BAD_FILE} was refused (no-header)`);
     expect(warned[0]).toContain("so 3 mutant(s) elsewhere");
+    expect(warned[0]).toContain("A mutant an earlier run stranded on is still skipped (R53)");
+    expect(warned[0]).toContain("Keep any equivalence mark that reads stale this run");
     const excluded = buildExcludedSites({
       skipped: set.skipped,
       declarative: set.declarativeSites,
