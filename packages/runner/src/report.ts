@@ -224,6 +224,7 @@ export type Caveat =
   | "line-narrowed"
   | "tests-narrowed"
   | "uninstrumentable-files"
+  | "files-refused"
   | "stale-test-app"
   | "tests-permission-refused"
   | "tests-testpage-unsupported"
@@ -323,6 +324,16 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "A project whose skipped files hold a large share of its code can otherwise read as a " +
       "confident, near-complete score while most of the project was never measured at all.",
     basis: "R5",
+  },
+  "files-refused": {
+    meaning:
+      "Some files were refused whole at instrumentation (R307): a rule the instrumenter could not " +
+      "satisfy for that file, named in `excludedSites` with reason `instrumentation-refused`. The " +
+      "file ran unmutated, so `mutationScore` is computed WITHOUT its sites.",
+    entailedNegative:
+      "Does not mean the other files are unreliable: each file is refused or kept on its own, " +
+      "and a kept file's verdicts are unaffected by a refused neighbour.",
+    basis: "R307",
   },
   "stale-test-app": {
     meaning:
@@ -2423,6 +2434,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
+  // R307: files refused whole by the instrumentation trial. See CAVEAT_INTERPRETATIONS["files-refused"].
+  const refusedRows = (input.excludedSites?.files ?? []).filter(
+    (f) => f.reason === "instrumentation-refused",
+  );
+  if (refusedRows.length > 0) caveats.push("files-refused");
   // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
@@ -2566,7 +2582,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.exclude !== undefined ||
     input.operators !== undefined ||
     input.lines !== undefined ||
-    (input.testsOnly !== undefined && input.testsOnly.length > 0);
+    (input.testsOnly !== undefined && input.testsOnly.length > 0) ||
+    // R307: a refused file's sites were never mutated, so the score is not a whole-project score.
+    refusedRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
   const reliability =
@@ -2605,6 +2623,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (input.lines !== undefined
       ? `, ${input.lines.ranges.length} line range(s) only (${input.lines.excludedSiteCount} site(s) on other lines excluded)`
       : "");
+  const refusedFilesText =
+    refusedRows.length > 0
+      ? `; ${refusedRows.length} file(s) refused, ${refusedRows.reduce((n, f) => n + f.sites, 0)} site(s) not mutated`
+      : "";
   const refusedText =
     testPageRefusedTests.length > 0
       ? ` and ${testPageRefusedTests.length} refused before sending (TestPage), not run`
@@ -2629,7 +2651,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     validity: {
       reliability,
       caveats,
-      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${baselineText}`,
+      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${refusedFilesText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
       executionContexts,

@@ -259,6 +259,7 @@ describe("Caveat union", () => {
       "line-narrowed": true,
       "tests-narrowed": true,
       "uninstrumentable-files": true,
+      "files-refused": true,
       "stale-test-app": true,
       "tests-permission-refused": true,
       "tests-testpage-unsupported": true,
@@ -274,7 +275,7 @@ describe("Caveat union", () => {
       "all-errors": true,
       "session-warm": true,
     };
-    expect(Object.keys(all).length).toBe(20);
+    expect(Object.keys(all).length).toBe(21);
   });
 });
 

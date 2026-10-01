@@ -10,14 +10,28 @@
  * The two views are the ONLY way the legacy fields are produced (`buildReport` consumes them, not
  * the raw arrays), so they cannot drift into a parallel implementation that agrees by accident.
  */
-import { type FileRefusalFields, FileRefusedError, formatRefusal } from "@lethal/engine";
+import { FileRefusedError, formatRefusal } from "@lethal/engine";
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
 export type ExclusionReason = "not-instrumentable" | "declarative" | "instrumentation-refused";
 
 /** R307: one file `generateMutationSet`'s trial refused whole, with its object kinds and site count. */
-export interface RefusedExcludedFile extends FileRefusalFields {
+export interface RefusedExcludedFile {
+  // The engine's `FileRefusalFields`, spelled out rather than imported: the schema generator
+  // follows neither an `extends` nor a reference into another package. Assignable both ways.
+  readonly file: string;
+  readonly shape:
+    | "overlap"
+    | "unsupported-kind"
+    | "latch-owner"
+    | "no-anchor"
+    | "no-header"
+    | "object-mix"
+    | "site-before-header";
+  readonly objects?: readonly { readonly type: string; readonly id: number; readonly name: string }[];
+  /** 1-based first and last line (two numbers; an array because the generator has no tuples). */
+  readonly lines?: readonly number[];
   readonly kinds: string;
   readonly sites: number;
   /** R307 section 3: mutants elsewhere whose cross-run carry this refusal disabled (`RefusedFile`). */
@@ -101,7 +115,9 @@ export function buildExcludedSites(input: {
           file: f.file,
           shape: f.shape,
           ...(f.objects !== undefined ? { objects: f.objects } : {}),
-          ...(f.lines !== undefined ? { lines: f.lines } : {}),
+          ...(f.lines?.[0] !== undefined && f.lines[1] !== undefined
+            ? { lines: [f.lines[0], f.lines[1]] as [number, number] }
+            : {}),
         }),
       )}${
         f.carryDisabled !== undefined

@@ -63,6 +63,7 @@
               "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
+              "files-refused",
               "stale-test-app",
               "tests-permission-refused",
               "tests-testpage-unsupported",

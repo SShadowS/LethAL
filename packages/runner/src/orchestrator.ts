@@ -8,6 +8,7 @@ import {
   type ALSyntaxNode,
   type FileRefusalFields,
   FileRefusedError,
+  formatRefusal,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
@@ -778,6 +779,8 @@ export async function generateMutationSet(
   let excludedByLines = 0;
   const producedAnywhere = new Set<string>();
   const producedInstrumentable = new Set<string>();
+  // R307: operators that found sites in a file refused whole, for the barren-operator message.
+  const producedInRefused = new Set<string>();
   // Sites an operator claimed that are not inside executable AL — see the drop below. The total
   // feeds the warning; the per-file rows feed `SessionReport.declarativeSites` (R144), because a
   // bare total cannot tell a reader whether the refusal touched anything they care about.
@@ -901,6 +904,7 @@ export async function generateMutationSet(
       );
     } catch (e) {
       if (!(e instanceof FileRefusedError)) throw e;
+      for (const spec of fileSpecs) producedInRefused.add(spec.operatorName);
       const { file, shape, objects, lines } = e;
       if (entries !== undefined) identityEntries.push(...entries); // reserved: a number, no row
       refusedFiles.push({
@@ -936,6 +940,12 @@ export async function generateMutationSet(
       );
     }
   }
+  // R307 section 5: refusing only when nothing is left to measure.
+  if (refusedFiles.length > 0 && files.length === 0) {
+    throw new Error(
+      `every file with mutation sites was refused at instrumentation (R307), so there is nothing to measure: ${refusedFiles.map((r) => formatRefusal(new FileRefusedError("", r))).join(" | ")}`,
+    );
+  }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
   // baseline and report a null score with no failures — "nothing to fix" rather than "that
@@ -947,7 +957,7 @@ export async function generateMutationSet(
       const uninstrumentableOnly = barren.filter((n) => producedAnywhere.has(n)).sort();
       const nuance =
         uninstrumentableOnly.length > 0
-          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above)${refusedFiles.length > 0 ? " or in files refused whole (R307)" : ""}, so nothing would deploy.`
+          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above)${uninstrumentableOnly.some((n) => producedInRefused.has(n)) ? " or in files refused whole (R307; they are named in the instrumentation-refused-files warning and the report's excludedSites)" : ""}, so nothing would deploy.`
           : "";
       throw new Error(
         `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
@@ -985,6 +995,13 @@ export async function generateMutationSet(
         `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. A mutant an earlier run stranded on is still skipped (R53), so nothing that hung before runs again. Their keys are still recorded, so the next run without this refusal carries them normally. Keep any equivalence mark that reads stale this run: the marks file is untouched and the mark applies again once the refusal is gone (R307).`,
       );
     }
+  }
+  if (refusedFiles.length > 0) {
+    const where = refusedFiles.map((r) => `${r.file} (${r.shape}, ${r.sites} site(s))`).join(", ");
+    warn(
+      "instrumentation-refused-files",
+      `[lethal] refused ${refusedFiles.length} file(s) whole at instrumentation; they run unmutated and the score covers the other files only: ${where}.`,
+    );
   }
   if (skipped.length > 0) {
     const total = skipped.reduce((n, s) => n + s.sites, 0);
@@ -4595,6 +4612,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByExclude,
     excludedByOperator,
     ...(cfg.lines !== undefined ? { excludedByLines } : {}),
+    // R307: no looseTuples in the stream: they are a carry detail, not report data.
+    ...(refusedFiles.length > 0
+      ? {
+          refusedFiles: refusedFiles.map((r) => ({
+            file: r.file,
+            shape: r.shape,
+            ...(r.objects !== undefined ? { objects: r.objects } : {}),
+            ...(r.lines !== undefined ? { lines: r.lines } : {}),
+            kinds: r.kinds,
+            sites: r.sites,
+            ...(r.carryDisabled !== undefined ? { carryDisabled: r.carryDisabled } : {}),
+          })),
+        }
+      : {}),
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for.

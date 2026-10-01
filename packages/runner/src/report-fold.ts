@@ -1,7 +1,7 @@
 import type { BackendCapabilities } from "./backend";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
-import { type ExcludedSites, buildExcludedSites } from "./excluded-sites";
+import { type ExcludedSites, type RefusedExcludedFile, buildExcludedSites } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
@@ -224,6 +224,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
+  let refusedFiles: readonly RefusedExcludedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let excludedByOnly = 0;
   let excludedByExclude = 0;
@@ -310,6 +311,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         sawMutationSetGenerated = true;
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
+        refusedFiles = e.refusedFiles ?? [];
         declarativeSiteFiles = e.declarativeSiteFiles;
         excludedByOnly = e.excludedByOnly;
         excludedByExclude = e.excludedByExclude;
@@ -587,6 +589,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     excludedSites: buildExcludedSites({
       skipped: notInstrumentedFiles,
       declarative: declarativeSiteFiles,
+      refused: refusedFiles,
       totalFiles,
     }),
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count
