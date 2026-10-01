@@ -266,10 +266,10 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * Registered gate baselines that have never been recorded. Its gate still REFUSES to start without
  * the file (R332); this list only lets the offline wiring test tell "pre-committed, waiting for its
  * one record run" from "missing". The commit that records a file removes it from here, and the
- * wiring test fails while a listed file exists. R387's CLI-default leg, pre-committed in
- * docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md.
+ * wiring test fails while a listed file exists. Empty: R387's CLI-default leg was recorded
+ * 2026-10-01 (al-runner.cli-default.baseline.json).
  */
-export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner.cli-default.baseline.json"];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [
