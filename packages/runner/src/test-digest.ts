@@ -88,11 +88,21 @@ export interface TestDigestParts {
 
 const short = (h: string): string => h.slice(0, 16);
 
-function reachLines(st: ReachState): string[] {
+/**
+ * Each reached procedure's span hash and object's parts hash, BOUND to its identity (`Proc.key`,
+ * the unit's key): two codeunits whose same-named procedures swap bodies run different code, and
+ * a sorted list of unbound hashes would only exchange two entries (external review r1 #1).
+ */
+function reachLines(st: ReachState, keys: ReadonlyMap<Unit, string>): string[] {
   const out: string[] = [];
-  for (const p of st.procs) out.push(`P ${p.spanHash}`);
-  for (const u of st.units) out.push(`U ${u.partsHash}`);
+  for (const p of st.procs) out.push(`P ${p.key} ${p.spanHash}`);
+  for (const u of st.units) out.push(`U ${keys.get(u) ?? unitKeyMissing(u)} ${u.partsHash}`);
   return out;
+}
+
+/** A unit outside the model's key map is a caller-contract violation, never an unkeyed line. */
+function unitKeyMissing(u: Unit): never {
+  throw new Error(`test-digest.ts: ${u.display} (${u.file}) has no unit key`);
 }
 
 /**
@@ -106,17 +116,19 @@ function reachLines(st: ReachState): string[] {
 export function subscriberFold(
   scanner: Scanner,
   model: TestAppModel,
+  keys: ReadonlyMap<Unit, string> = unitKeys(model),
 ): { hash: string; fallback: string | undefined; reached: ReachState } {
+  const key = (u: Unit): string => keys.get(u) ?? unitKeyMissing(u);
   const st = newReachState();
   const lines: string[] = [];
   for (const u of model.units) {
     if (!u.subscriber) continue;
-    lines.push(`C ${u.textHash}`);
+    lines.push(`C ${key(u)} ${u.textHash}`);
     for (const p of [...u.procs, ...u.triggers]) scanner.reach(p, st);
   }
   for (const u of model.objects) {
     if (!u.kind.endsWith("extension")) continue;
-    lines.push(`E ${u.textHash}`);
+    lines.push(`E ${key(u)} ${u.textHash}`);
     // Its triggers and the page parts it adds, with the rest of its base object's test-app code.
     scanner.foldObject(u, st);
   }
@@ -124,11 +136,11 @@ export function subscriberFold(
   // dependency's included: every implementation a test-app enum or enumextension names.
   for (const u of model.objects) {
     if (u.implementations.length === 0) continue;
-    lines.push(`I ${u.textHash}`);
+    lines.push(`I ${key(u)} ${u.textHash}`);
     for (const raw of u.implementations)
       scanner.foldImplementation(raw, `${u.display} implementation ${raw}`, st);
   }
-  lines.push(...reachLines(st));
+  lines.push(...reachLines(st, keys));
   // Parse damage can swallow a whole subscriber codeunit, so it never becomes a unit and is folded
   // nowhere: with any damaged file, every digest takes the whole-source fallback.
   const [damaged] = model.damaged;
@@ -148,15 +160,18 @@ function declsOf(model: TestAppModel, t: TestMethodRef): Proc[] {
 /** The per-model facts every test's digest reads, computed once. */
 interface DigestContext {
   readonly scanner: Scanner;
+  readonly keys: ReadonlyMap<Unit, string>;
   readonly subscribers: { hash: string; fallback: string | undefined };
   readonly app: string;
 }
 
 function contextOf(model: TestAppModel): DigestContext {
   const scanner = new Scanner(model);
+  const keys = unitKeys(model);
   return {
     scanner,
-    subscribers: subscriberFold(scanner, model),
+    keys,
+    subscribers: subscriberFold(scanner, model, keys),
     app: sha256(model.fileHashes.join("\n")),
   };
 }
@@ -213,14 +228,14 @@ export function testDigestsOfModel(
   for (const t of tests) {
     if (++n % 1024 === 0) Bun.gc(false);
     const st = walkTest(ctx.scanner, model, t);
-    const lines = reachLines(st);
+    const lines = reachLines(st, ctx.keys);
     lines.push(`S ${ctx.subscribers.hash}`, `D ${inputs.dependencies}`, `B ${build}`);
     if (onFallback(ctx, st)) lines.push(`A ${ctx.app}`);
     digests[testDigestKey(t)] = `${PREFIX}${sha256(lines.sort().join("\n"))}`;
   }
   const procs: Record<string, string> = {};
   const objects: Record<string, string> = {};
-  for (const [u, k] of unitKeys(model)) {
+  for (const [u, k] of ctx.keys) {
     for (const p of [...u.procs, ...u.triggers]) procs[p.key] = short(p.spanHash);
     objects[k] = short(u.partsHash);
   }
@@ -282,7 +297,7 @@ export function explainNewTests(
 ): { causes: Map<NewTestCause, number>; changedProcs: string[] } {
   const causes = new Map<NewTestCause, number>();
   const ctx = contextOf(model);
-  const keys = unitKeys(model);
+  const { keys } = ctx;
   const build = short(sha256(inputs.buildInputs));
   const testKeys = new Set<string>();
   for (const { ref, recorded } of tests) {

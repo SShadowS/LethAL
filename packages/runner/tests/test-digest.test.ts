@@ -526,6 +526,41 @@ codeunit 50120 "Sub"
     });
   });
 
+  // External review r1 #1: each reached hash is bound to its procedure and object.
+  test("swapping the bodies of same-named procedures in two reached codeunits changes the digest", () => {
+    const lib = (id: number, name: string, msg: string) =>
+      `codeunit ${id} "${name}"
+{
+    procedure Go()
+    begin
+        Message('${msg}');
+    end;
+}
+`;
+    const files = base(
+      T(
+        `    procedure A()
+    var
+        L1: Codeunit "Lib1";
+        L2: Codeunit "Lib2";
+    begin
+        L1.Go();
+        L2.Go();
+    end;
+`,
+      ),
+      { "Lib1.al": lib(50111, "Lib1", "a"), "Lib2.al": lib(50112, "Lib2", "b") },
+    );
+    const swapped = {
+      ...files,
+      "Lib1.al": lib(50111, "Lib1", "b"),
+      "Lib2.al": lib(50112, "Lib2", "a"),
+    };
+    const was = digestA(files);
+    expect(digestA(swapped)).not.toBe(was);
+    expect(digestA(unrelated(files))).toBe(was);
+  });
+
   test("negative: an unreached codeunit's globals are not in the digest", () => {
     const files = base(callsLib);
     expect(digestA(edit(files, "Other.al", "OG: Integer;", "OG: Decimal;"))).toBe(digestA(files));
