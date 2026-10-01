@@ -8,7 +8,12 @@
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { BcDevMcpBackend } from "../../packages/runner/src/bcdev-backend";
-import { buildBackend, loadDryRunConfig } from "../../packages/runner/src/cli";
+import {
+  buildBackend,
+  loadDryRunConfig,
+  resolveSelectorIds,
+  validateSelectorIdsConfig,
+} from "../../packages/runner/src/cli";
 import {
   DependencyUnreadableError,
   bcdevDependencyFingerprint,
@@ -29,6 +34,11 @@ const backend = await buildBackend(
   { backendKind: "bcdev", projectDir, testDir },
   configFile,
   projectDir,
+  undefined,
+  {},
+  // The config's selector ids, as `lethal run` resolves them; the defaults fall outside a
+  // fixture's own id range.
+  resolveSelectorIds({}, validateSelectorIdsConfig(configFile.selectorIds)),
 );
 if (!(backend instanceof BcDevMcpBackend))
   throw new Error("the config did not build a bcdev backend");
