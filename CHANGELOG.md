@@ -13,6 +13,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **al-runner runs now measure the preprocessor symbols al-runner predefines, every session**
+  (R392): one one-shot al-runner run of a generated probe project, after provisioning and before
+  anything is generated, instead of assuming the `CLEANSCHEMA1`..`CLEANSCHEMA25` list measured on
+  v2.12.0 (R377). The measured set decides which `#if` arms are mutated and is the run's recorded
+  build identity. A set that differs from the v2.12.0 list is used, with the named warning
+  `al-runner-predefined-symbols-changed` listing what was added and removed. A probe that cannot
+  give a complete answer REFUSES the run (`AlRunnerPredefinedProbeError`). `lethal run --dry-run
+  --backend al-runner` now SPAWNS al-runner for the same probe (before, it was offline), and
+  refuses by name when the config names no `alRunner.alRunnerPath`. The probe's cost is measured on
+  the first live run, see R392.
+
 - **`lethal run` removes its temp scratch folder after a clean run** (R360): the installed
   batch's files now live in the results database, checked against a digest of the instrumented
   payload, so `lethal verify` refuses a run recorded before this build ("recorded before R360"):
