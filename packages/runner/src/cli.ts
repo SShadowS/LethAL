@@ -4485,7 +4485,6 @@ function alRunnerStatusFor(
         instrumentedDir: "",
         testDir: "",
         selectorObjectId: 0,
-        ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
       },
       ...(spawn !== undefined ? ([spawn] as const) : ([] as const)),
     );
