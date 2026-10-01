@@ -353,6 +353,42 @@ ${procs}}
     expectReached(files, "Lib.al", "G := 2;", "G := 3;");
   });
 
+  test("a bare call from a tableextension to a procedure of its test-app base table is walked", () => {
+    const tab = `table 50131 "Tab"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure BaseHelper()
+    var
+        L: Codeunit "Lib";
+    begin
+        L.Help();
+    end;
+}
+`;
+    const ext = `tableextension 50132 "TabExt" extends "Tab"
+{
+    procedure ExtProc()
+    begin
+        BaseHelper();
+    end;
+}
+`;
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        R: Record "Tab";\n    begin\n        R.ExtProc();\n    end;\n',
+      ),
+      { "Tab.al": tab, "TabExt.al": ext },
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+    // At an arity the base table does not declare, the call is not known to be a built-in.
+    const odd = edit(files, "TabExt.al", "BaseHelper();", "BaseHelper(1);");
+    expect(digestA(unrelated(odd))).not.toBe(digestA(odd));
+  });
+
   test("ruling B, case 16: a trigger-capable call on a test-app record walks its triggers", () => {
     const files = base(
       T(

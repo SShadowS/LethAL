@@ -1105,6 +1105,29 @@ export class Scanner {
     return matched;
   }
 
+  /**
+   * A bare or `this.` call in `u`'s own code. In a codeunit it resolves to the codeunit's own
+   * procedures only. In any other object it can also resolve to a procedure of the object it
+   * extends, or that its base declares (a tableextension's code calling its table's procedure),
+   * so every test-app unit under the same base key is searched. A name one of them declares at no
+   * arity that matched is not known to be a built-in, so it falls back. Returns whether the call
+   * was handled (walked, or fallen back).
+   */
+  private reachOwn(u: Unit, rawName: string, args: number, st: ReachState): boolean {
+    if (this.reachCalls(u, rawName, args, st)) return true;
+    if (u.kind === "codeunit" || u.baseKey === undefined) return false;
+    const name = this.norm(rawName);
+    const kin = this.otherByBase.get(u.baseKey) ?? [];
+    let matched = false;
+    for (const k of kin) if (k !== u && this.reachCalls(k, rawName, args, st)) matched = true;
+    if (matched) return true;
+    if (kin.some((k) => k.procs.some((c) => c.name === name))) {
+      fallBack(st, `${u.display} calls ${rawName}, which its object declares at no arity that matches`);
+      return true;
+    }
+    return false;
+  }
+
   /** `X.Run()` on a test-app codeunit, or `Codeunit.Run(Codeunit::X)`: its OnRun trigger. */
   private runUnit(u: Unit, st: ReachState): void {
     this.reachUnit(u, st);
@@ -1112,7 +1135,7 @@ export class Scanner {
   }
 
   private reachBare(p: Proc, site: Extract<Site, { kind: "bare" }>, st: ReachState): void {
-    if (this.reachCalls(p.unit, site.name, site.args, st)) return;
+    if (this.reachOwn(p.unit, site.name, site.args, st)) return;
     // Ruling 1 (R-371 r2): Bind/UnbindSubscription is NOT an edge. What it binds is a test-app
     // subscriber codeunit, and every such codeunit, with everything it reaches, is already in
     // EVERY test's digest (`subscriberFold` in test-digest.ts). Treating it as UNFOLLOWED would
@@ -1162,7 +1185,7 @@ export class Scanner {
     }
     const key = this.norm(site.recv.name);
     if (key === "this") {
-      this.reachCalls(p.unit, member, args, st);
+      this.reachOwn(p.unit, member, args, st);
       return;
     }
     const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
