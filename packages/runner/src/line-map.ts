@@ -169,6 +169,16 @@ export function manifestObjectKeys(
 }
 
 /**
+ * R-307 section 4: `assertManifestObjectsDeclared`'s refusal. Typed so the publish fence can tell
+ * it is a CONFIRMED terminal failure: it is raised before anything is published (bcdev indexes
+ * before publish; al-runner publishes nothing), so the fence tombstones the attempt rather than
+ * latching the tier for recycle. Extends `Error` directly, like every typed error here.
+ */
+export class ManifestDeclarationError extends Error {
+  override readonly name = "ManifestDeclarationError";
+}
+
+/**
  * R-307 section 4: the batch manifest's objects against the declarations coverage resolves
  * through, checked once per deploy, before any baseline.
  *
@@ -190,12 +200,12 @@ export function assertManifestObjectsDeclared(
         const why =
           "every declared object's source is written by LethAL and must be mappable. " +
           "This is a LethAL bug, not a problem with the project under test.";
-        throw new Error(
+        throw new ManifestDeclarationError(
           `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}`,
         );
       }
     } else if (!exempt.has(key)) {
-      throw new Error(
+      throw new ManifestDeclarationError(
         `a mutant is attributed to ${key}, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.`,
       );
     }
@@ -848,12 +858,19 @@ export async function coverageRefusedFromSources(
 }
 
 /**
- * R-307: the object keys of `<dir>/mutant-manifest.json`'s mutants, or an empty set when the dir
- * has no manifest (a hand-built fixture, as `readRenamedMemberNames`). An unreadable one throws.
+ * R-307: the object keys of `<dir>/mutant-manifest.json`'s mutants. STRICT: a missing manifest
+ * throws too, unlike `readRenamedMemberNames`, because the caller checks these keys and an empty
+ * set would pass that check with nothing checked.
  */
 export async function readManifestObjectKeys(dir: string): Promise<Set<string>> {
   const mutants = await readManifestMutants(dir);
-  return mutants === undefined ? new Set() : manifestObjectKeys(mutants);
+  if (mutants === undefined) {
+    // Fix round 1: an absent manifest would check nothing, and empty-vs-anything "matches".
+    throw new ManifestDeclarationError(
+      `line-map: ${join(dir, "mutant-manifest.json")} does not exist, so the batch's mutant objects cannot be checked against its declarations`,
+    );
+  }
+  return manifestObjectKeys(mutants);
 }
 
 /** Forward slashes, so a path quoted to a user reads the same on every platform. */

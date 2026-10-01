@@ -53,6 +53,7 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
@@ -8188,6 +8189,31 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(client.endPublishArgs[0]?.outcome).toBe("failed");
     expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
     // The assertion that actually matters: no durable tier quarantine for a CONFIRMED failure.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a ManifestDeclarationError (R-307 section 4) is a confirmed terminal: EndPublish once as failed, no recycle record", async () => {
+    // The manifest-vs-declarations check refuses BEFORE anything is published. As a plain Error it
+    // fell to the "UNKNOWN result" branch: marker left set, `container-needs-recycle` written, and
+    // the next session's publish blocked by a publish that never happened.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    // The REAL check raises it, so a plain `Error` there would fail this test, not only a missing
+    // case in the fence's classifier.
+    const backend = leaseBackend({
+      deploy: async () => {
+        assertManifestObjectsDeclared(["codeunit:50145"], new Set(), undefined, new Set());
+        return null;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toThrow(
+      "a mutant is attributed to codeunit:50145, which the compiled app does not declare.",
+    );
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    // `recordRecycle` is the only writer of this record: null means it was never called.
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 

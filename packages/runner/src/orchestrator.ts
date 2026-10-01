@@ -108,7 +108,7 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { coverageRefusedObjects } from "./line-map";
+import { ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -3049,7 +3049,8 @@ class LeaseSession {
  * ever constructs one when `decidePublishOutcome` already returned `"failed"`, so there is no
  * separate outcome field to re-check, unlike `DeploymentError` which also carries `indeterminate`/
  * `anomalous`), and a version conflict (BC named the installed version verbatim — a deterministic
- * rejection), and `EnvToolNotStartedError` (R237: the env tool's process was never created).
+ * rejection), `EnvToolNotStartedError` (R237: the env tool's process was never created), and
+ * `ManifestDeclarationError` (R-307: the manifest refused against the declarations, pre-publish).
  * R250: the conflict counts only as BC's whole sentence naming THIS publish's app, publisher and
  * attempted version (`confirmedDowngradeRefusal`): `attempted` when the caller knows
  * it, else the identity an `EnvToolError` carries. With neither, a quoted phrase proves nothing.
@@ -3064,6 +3065,8 @@ function isConfirmedTerminalPublishFailure(err: unknown, attempted?: PublishIden
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
   if (err instanceof PublishFailedError) return true;
+  // R-307 section 4: the manifest-vs-declarations refusal fires before any publish.
+  if (err instanceof ManifestDeclarationError) return true;
   // R237: the env tool never started, so nothing reached the server. A started tool that timed
   // out, was killed or exited non-zero is a plain EnvToolError and stays uncertain below.
   if (err instanceof EnvToolNotStartedError) return true;

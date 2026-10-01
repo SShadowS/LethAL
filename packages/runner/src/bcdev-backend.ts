@@ -35,6 +35,7 @@ import type { Lease } from "./lease";
 import {
   type AlSource,
   type LineMap,
+  ManifestDeclarationError,
   assertManifestObjectsDeclared,
   buildLineMap,
   coverageRefusedFromSources,
@@ -801,6 +802,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     try {
       await this.indexInstalled(artifact);
     } catch (err) {
+      if (err instanceof ManifestDeclarationError) throw err; // R-307: the real cause, not "unreadable"
       throw new InstalledArtifactError(
         "local-copy-unreadable",
         `indexing ${artifact.appPath}: ${describeThrown(err)}`,

@@ -312,7 +312,7 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
 // al-runner invocation. The spawn counter is the phase-order evidence: a lazy build would only run
 // after that invocation, which the counter would show as 1.
 describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (R-307)", () => {
-  async function deployThenBaseline(codeunitIds: readonly number[]) {
+  async function deployThenBaseline(codeunitIds: readonly number[] | "no-manifest") {
     const dir = scratch("lethal-r307-alrunner-batch-");
     await writeFile(
       join(dir, "One.Codeunit.al"),
@@ -320,14 +320,17 @@ describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (
       "utf8",
     );
     await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
-    await writeFile(
-      join(dir, "mutant-manifest.json"),
-      JSON.stringify({
-        artifactId: "a".repeat(32),
-        mutants: codeunitIds.map((codeunitId) => ({ objectType: "codeunit", codeunitId })),
-      }),
-      "utf8",
-    );
+    if (codeunitIds !== "no-manifest") {
+      await writeFile(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({
+          artifactId: "a".repeat(32),
+          mutants: codeunitIds.map((codeunitId) => ({ objectType: "codeunit", codeunitId })),
+        }),
+        "utf8",
+      );
+    }
+    const workDir = scratch("lethal-r307-alrunner-work-");
     const { calls, spawn } = okSpawn({
       tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
       passed: 1,
@@ -339,7 +342,7 @@ describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (
     const backend = new AlRunnerBackend(
       {
         alRunnerPath: "al-runner",
-        instrumentedDir: scratch("lethal-r307-alrunner-work-"),
+        instrumentedDir: workDir,
         testDir: "/tests",
         selectorObjectId: 50000,
         coverage: "al-runner",
@@ -355,7 +358,7 @@ describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (
       err = e;
     }
     await backend.close();
-    return { err, invocations: calls.length };
+    return { err, invocations: calls.length, activeDir: join(workDir, "active") };
   }
 
   test("an undeclared manifest object throws at deploy, before any baseline invocation", async () => {
@@ -364,6 +367,15 @@ describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (
     expect(invocations).toBe(0);
     expect((err as Error | undefined)?.message).toBe(
       "a mutant is attributed to codeunit:79160, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.",
+    );
+  });
+
+  test("fix round 1: with coverage on, a MISSING manifest is refused at deploy, naming its path", async () => {
+    // An absent manifest checked as an empty key set would pass with nothing checked.
+    const { err, invocations, activeDir } = await deployThenBaseline("no-manifest");
+    expect(invocations).toBe(0);
+    expect((err as Error | undefined)?.message).toBe(
+      `line-map: ${join(activeDir, "mutant-manifest.json")} does not exist, so the batch's mutant objects cannot be checked against its declarations`,
     );
   });
 
