@@ -302,11 +302,21 @@ export async function validateSelectorIdsForProject(
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
+/** `--backend`'s one validation, for `run` and `run --dry-run` alike. */
+function parseBackendKind(raw: string | undefined): "bcdev" | "al-runner" {
+  if (raw === undefined || raw === "") {
+    throw new Error('missing required --backend <"bcdev" | "al-runner">');
+  }
+  if (raw !== "bcdev" && raw !== "al-runner") {
+    throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner")`);
+  }
+  return raw;
+}
+
 /** R266: the execution flags `lethal run --dry-run` refuses by name. `--out` is not here: it
  *  writes the dry-run listing. */
 export const DRY_RUN_REFUSED = [
   "tests",
-  "backend",
   "progress-out",
   "workers",
   "compile-concurrency",
@@ -361,6 +371,9 @@ export interface DryRunCliConfig {
   /** Issue #21: true when `--config` was passed. Only then is a missing file an error; the
    *  defaulted path may be absent, since sizing a job comes before any server config exists. */
   readonly configExplicit?: true;
+  /** R377: `--backend`, optional here. It changes which `#if` arms are listed, because al-runner
+   *  predefines symbols alc does not. Absent lists alc's build. */
+  readonly backendKind?: "bcdev" | "al-runner";
 }
 
 export interface RunCliConfig {
@@ -919,8 +932,10 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              writes the listing as JSON: {files, sites, deployed, perFile[{file,
                              sites, deployed}], batches[{index, sites[{file, line, operator,
                              deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
-                             execution flag (--tests, --backend, --workers ...) is refused with
-                             --dry-run, because a dry run executes nothing
+                             execution flag (--tests, --workers ...) is refused with
+                             --dry-run, because a dry run executes nothing. --backend is
+                             optional: al-runner predefines CLEANSCHEMA1..25, so it can change
+                             which #if arms are listed (absent lists alc's build)
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -1883,6 +1898,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...(values.config !== undefined ? { configExplicit: true as const } : {}),
+      ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
       ...only,
       ...exclude,
       ...operators,
@@ -1895,13 +1911,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error("missing required --tests <dir> (omit only together with --dry-run)");
   }
 
-  const backendArg = values.backend;
-  if (backendArg === undefined || backendArg === "") {
-    throw new Error('missing required --backend <"bcdev" | "al-runner">');
-  }
-  if (backendArg !== "bcdev" && backendArg !== "al-runner") {
-    throw new Error(`unknown --backend "${backendArg}" (expected "bcdev" or "al-runner")`);
-  }
+  const backendArg = parseBackendKind(values.backend);
 
   const workers = values.workers === undefined ? 1 : Number(values.workers);
   if (!Number.isInteger(workers) || workers < 1)
@@ -3051,6 +3061,8 @@ export async function printDryRun(
     readonly outPath?: string;
     /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
     readonly preprocessorSymbols?: readonly string[];
+    /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
+    readonly backendKind?: "bcdev" | "al-runner";
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
@@ -3067,6 +3079,7 @@ export async function printDryRun(
       ...(paths.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: paths.preprocessorSymbols }
         : {}),
+      ...(paths.backendKind !== undefined ? { backend: paths.backendKind } : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -5325,6 +5338,7 @@ async function main(): Promise<number> {
       ...(dryRunConfig?.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
         : {}),
+      ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
     });
     return 0;
   }

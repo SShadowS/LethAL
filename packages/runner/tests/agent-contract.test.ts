@@ -649,7 +649,9 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     const para = own.slice(own.indexOf("`lethal run --dry-run` executes nothing"));
     const bare = ["run", "--project", "P", "--dry-run"];
     const flags = ticks(para)
-      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out")
+      .filter(
+        (t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out" && t !== "--backend",
+      )
       .map((t) => t.slice(2));
     expect(flags.length).toBeGreaterThan(0);
     for (const f of flags) {
@@ -658,6 +660,11 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       expect(() => parseCliConfig(argv), `--${f}`).toThrow(/has no effect with --dry-run/);
     }
     expect(parseCliConfig([...bare, "--out", "plan.json"])).toMatchObject({ outPath: "plan.json" });
+    // R377: the paragraph says `--backend` is read there, not refused.
+    expect(para).toContain("`--backend` is optional there");
+    expect(parseCliConfig([...bare, "--backend", "al-runner"])).toMatchObject({
+      backendKind: "al-runner",
+    });
   });
 
   test("the run exit sentences are exitCodeForReport's and main's", () => {

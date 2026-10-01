@@ -81,14 +81,34 @@ export async function appJsonSymbols(
   return validateSymbolList(raw, path);
 }
 
-/** The build's effective symbols: sorted and de-duplicated, so two equal sets compare equal. */
+/**
+ * R377: the symbols al-runner PREDEFINES when it compiles a project, with no `--define` and nothing
+ * in `app.json`: exactly CLEANSCHEMA1 .. CLEANSCHEMA25. Measured on al-runner v2.12.0 (2026-10-01,
+ * one probe arm per candidate; CLEANSCHEMA26 and up, CLEANSCHEMA, NOTCLEANSCHEMA25 are NOT defined).
+ * alc predefines nothing. A fact about that one release: nothing re-checks it per session yet (R392).
+ * LethAL never passes these as `--define` (al-runner already has them); they feed only its own arm
+ * evaluation and the recorded build identity.
+ */
+export const AL_RUNNER_PREDEFINED_SYMBOLS: readonly string[] = Array.from(
+  { length: 25 },
+  (_, i) => `CLEANSCHEMA${i + 1}`,
+);
+
+/** The compiler a build symbol set is computed for: `bcdev` is alc, `al-runner` is al-runner. */
+export type BuildBackend = "bcdev" | "al-runner";
+
+/** The build's effective symbols: sorted and de-duplicated, so two equal sets compare equal.
+ *  `backend` is required so no caller can forget it: an al-runner build also has al-runner's
+ *  predefined symbols (R377), an alc build does not. */
 export async function effectiveBuildSymbols(
   projectDir: string,
   configSymbols: readonly string[],
   snapshot: ReadonlyMap<string, Buffer> | undefined,
+  backend: BuildBackend,
 ): Promise<readonly string[]> {
   const fromApp = await appJsonSymbols(projectDir, snapshot);
-  return [...new Set([...fromApp, ...configSymbols])].sort();
+  const predefined = backend === "al-runner" ? AL_RUNNER_PREDEFINED_SYMBOLS : [];
+  return [...new Set([...fromApp, ...configSymbols, ...predefined])].sort();
 }
 
 /** R214: `runSession` recorded one effective symbol set and generation enumerated under another.

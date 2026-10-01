@@ -112,6 +112,7 @@ import {
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
 import {
+  type BuildBackend,
   BuildSymbolsDivergedError,
   effectiveBuildSymbols,
   sameBuildSymbols,
@@ -475,6 +476,12 @@ export interface MutationSetOptions {
    * arm", which would re-open R214 for any caller that forgets it.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R377: the compiler the build is for. `al-runner` adds al-runner's predefined symbols
+   * (`AL_RUNNER_PREDEFINED_SYMBOLS`) to the effective set; absent means `bcdev`, i.e. alc, which
+   * predefines nothing.
+   */
+  readonly backend?: BuildBackend;
 }
 
 /**
@@ -754,6 +761,7 @@ export async function generateMutationSet(
     projectDir,
     options.preprocessorSymbols ?? [],
     snapshot,
+    options.backend ?? "bcdev",
   );
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
@@ -4451,10 +4459,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
   // parses. Recorded on the run and compared by history, resume and marks: a key names a site
   // within one build.
+  // R377: the backend name is decided once, here, and the same value reaches generation below.
+  const backendName: BuildBackend = caps.authoritative ? "bcdev" : "al-runner";
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
     cfg.preprocessorSymbols ?? [],
     sourceSnapshot,
+    backendName,
   );
   const symbolsWarning = marksSymbolsWarning(
     marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
@@ -4464,7 +4475,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });
   }
 
-  const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
   // knew would abort.
@@ -4567,6 +4577,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     preprocessorSymbols: sourceSymbols,
+    backend: backendName,
     emit,
   });
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated

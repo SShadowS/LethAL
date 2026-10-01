@@ -146,7 +146,9 @@ has the complete set.
 | `--survivors` | `verify` |
 
 `lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
-`--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
+`--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
+optional there and changes the listing: al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25`,
+which alc does not, so it can build different `#if` arms (absent lists alc's build). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
