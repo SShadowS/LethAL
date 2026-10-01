@@ -432,3 +432,67 @@ declines instead.
 The r1 tools `$P/pp.ts`, `predict.ts`, `poison.ts`, `run-predict.sh`, `before.sh`, `prove.sh`
 matched their r1 prefixes (`b012da98`, `8a56b31a`, `ab3f70cf`, `174d89d2`, `50dc5da1`, `a1e78e2c`)
 and were superseded by the `$Q` copies above.
+
+## Clarifications (2026-10-01)
+
+Added after the final whole-branch review. Nothing above is changed; this section corrects one
+claim and makes the corpus check re-runnable from the repo.
+
+**(a) "The committed files need nothing on `H:`" was wrong as written.** The listing files and
+expected captures are committed, but two of the tools that produced them, `$Q/pp.ts` and
+`$Q/presence.ts`, existed only on `H:` and were pinned by SHA-256 alone. The accurate statement:
+
+- **Checking** the committed listings needs nothing on `H:`: their SHA-256 is in the table under
+  "Listing files", and their rows and per-file digests are plain text (`files.tsv`, gzipped
+  `rows.tsv`) that a product capture of the corpus root can be diffed against. The corpus roots
+  themselves are on `U:`.
+- **Regenerating** them needs the `$Q` tools, pinned by SHA-256 in "Tools". `pp.ts` and
+  `presence.ts` are now committed as `scripts/r214/pp.ts` and `scripts/r214/presence.ts`,
+  byte for byte, with the pinned SHA-256 (`ea1212e9...a71d932` and `a87e1f27...4bf0dc`, checked
+  2026-10-01). They are NOT edited, so they still import the engine by the absolute path
+  `H:/LethAL-wt/lane-preproc/packages/engine/src/...`; on another checkout, change that prefix in a
+  copy and expect the copy's SHA-256 to differ. `$Q/predict.ts` and `$P/keymoves.ts` are still only
+  on `H:`. `scripts/r214-capture.ts` has moved since its pinned SHA-256: the pinned bytes are
+  `git show 3ed7be4b:scripts/r214-capture.ts`, and later commits (including this review's R-307
+  guard) changed it.
+
+**(b) The exact commands**, from `$Q/step7.sh` (capture, per corpus) and `$Q/step9.sh` (listing),
+with `$Q/pp.ts` and `$Q/presence.ts` replaced by their committed copies. Run from the repo root,
+one corpus at a time, BaseApp alone. `R=H:/LethAL-wt/lane-preproc`, `P=H:/lethal-scratch/R-214/plan`,
+`Q=H:/lethal-scratch/R-214/plan-r2`, `O=H:/lethal-scratch/R-214/corpus`.
+
+| c | root | S1 (`s1`, comma-separated) |
+| --- | --- | --- |
+| dc | `U:/Git/DC/Cloud` | `CLEAN27,CLEAN28` |
+| sysapp | `U:/Git/BC.History/System Application` | `CLEAN26,CLEAN27,CLEAN28,CLEANSCHEMA27,CLEANSCHEMA29,CLEANSCHEMA31` |
+| bcf | `U:/Git/BC.History/BusinessFoundation` | `CLEAN27,CLEAN28,CLEANSCHEMA27` |
+| baseapp | `U:/Git/BC.History/BaseApp` | `CLEAN26,CLEAN27,CLEAN28,CLEAN29,CLEANSCHEMA25,CLEANSCHEMA26,CLEANSCHEMA27,CLEANSCHEMA28,CLEANSCHEMA29,CLEANSCHEMA30,CLEANSCHEMA31` |
+
+Capture, for one corpus (`step7.sh <c> <root> <s1>`; set 0 is `""`, set 1 is `s1`; dc's
+`app.json` adds `BC20` to `BC27` to both):
+
+```bash
+mkdir -p "$O" "$R/docs/superpowers/specs/r214-corpus"
+for i in 0 1; do s=$([ $i = 0 ] && echo "" || echo "$s1")
+  rm -rf "$O/twin-$c-$i" "$O/full-$c-$i"
+  bun "$R/scripts/r214/pp.ts" "$root" "$s" "$O/twin-$c-$i" "$O/regions-$c-$i.json" --full "$O/full-$c-$i"
+  if [ $i = 0 ]; then
+    bun "$R/scripts/r214-capture.ts" "$root" --raw-out "$O/before-$c.raw" --raw-files "$O/regions-$c-0.json" > "$O/before-$c.txt" 2> "$O/before-$c.err"
+  fi
+  bun "$R/scripts/r214-capture.ts" "$O/twin-$c-$i" --raw-out "$O/twin-$c-$i.raw" --raw-files "$O/regions-$c-$i.json" > "$O/twin-$c-$i.txt" 2> "$O/twin-$c-$i.err"
+  bun "$R/scripts/r214-capture.ts" "$O/full-$c-$i" > "$O/full-$c-$i.txt" 2> "$O/full-$c-$i.err"
+  bun "$Q/predict.ts" "$O/before-$c.txt" "$O/twin-$c-$i.txt" "$O/regions-$c-$i.json" "$O/before-$c.raw" "$O/twin-$c-$i.raw" > "$O/expect-$c-$i.txt" 2> "$O/predict-$c-$i.log"
+  bun "$R/scripts/r214/presence.ts" "$O/expect-$c-$i.txt" "$O/full-$c-$i.txt" "$O/regions-$c-$i.json" "$root" "$O/full-$c-$i" > "$O/presence-$c-$i.txt"
+  bun "$P/keymoves.ts" "$O/before-$c.txt" "$O/expect-$c-$i.txt" > "$O/keymoves-$c-$i.txt"
+  bun "$R/scripts/r214-capture.ts" "$root" --symbols "$s" > /dev/null 2> "$O/master-peak-$c-$i.err"
+done
+```
+
+Listing, for one corpus and set (`step9.sh`), with the BaseApp flag (Ruling T1-h):
+
+```bash
+D="$R/docs/superpowers/specs/r214-corpus"
+extra=(); [ "$c" = baseapp ] && extra=(--directive-members-only)
+bun scripts/r214-capture.ts --listing "$D" --label "$c.$i" --from-expected "$O/expect-$c-$i.txt" --presence "$O/presence-$c-$i.txt" --regions "$O/regions-$c-$i.json" --root "$root" "${extra[@]}"
+sha256sum "$D"/*
+```
