@@ -10,10 +10,17 @@
  * The two views are the ONLY way the legacy fields are produced (`buildReport` consumes them, not
  * the raw arrays), so they cannot drift into a parallel implementation that agrees by accident.
  */
+import { type FileRefusalFields, FileRefusedError, formatRefusal } from "@lethal/engine";
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
-export type ExclusionReason = "not-instrumentable" | "declarative";
+export type ExclusionReason = "not-instrumentable" | "declarative" | "instrumentation-refused";
+
+/** R307: one file `generateMutationSet`'s trial refused whole, with its object kinds and site count. */
+export interface RefusedExcludedFile extends FileRefusalFields {
+  readonly kinds: string;
+  readonly sites: number;
+}
 
 export interface ExcludedSiteFile {
   readonly file: string;
@@ -60,6 +67,8 @@ export interface ExcludedSites {
 export function buildExcludedSites(input: {
   readonly skipped: readonly NotInstrumentedFile[];
   readonly declarative: readonly DeclarativeSiteFile[];
+  /** R307: files refused whole. Optional so every existing caller is unchanged. */
+  readonly refused?: readonly RefusedExcludedFile[];
   readonly totalFiles: number;
 }): ExcludedSites {
   // Mapped explicitly, field by field — never `{ ...f, reason }` — so a field later added to
@@ -79,6 +88,20 @@ export function buildExcludedSites(input: {
       kinds: f.kinds,
       sites: f.sites,
       reason: "declarative" as const,
+    })),
+    ...(input.refused ?? []).map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: "instrumentation-refused" as const,
+      detail: formatRefusal(
+        new FileRefusedError("", {
+          file: f.file,
+          shape: f.shape,
+          ...(f.objects !== undefined ? { objects: f.objects } : {}),
+          ...(f.lines !== undefined ? { lines: f.lines } : {}),
+        }),
+      ),
     })),
   ];
   return {

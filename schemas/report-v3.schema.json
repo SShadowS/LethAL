@@ -624,7 +624,8 @@
                 "type": "string",
                 "enum": [
                   "not-instrumentable",
-                  "declarative"
+                  "declarative",
+                  "instrumentation-refused"
                 ]
               },
               "detail": {

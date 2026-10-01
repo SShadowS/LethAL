@@ -345,6 +345,8 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  * is published uninstrumented. The fields are the `FileRefusedError`'s own (no source text).
  */
 export interface RefusedFile extends FileRefusalFields {
+  /** Object kind(s) the file declares, from `describeObjectKinds` (the same text `skipped` rows carry). */
+  readonly kinds: string;
   /** Its post-filter, deduped site count: the mutants it would have deployed. */
   readonly sites: number;
   /**
@@ -900,6 +902,7 @@ export async function generateMutationSet(
         shape,
         ...(objects !== undefined ? { objects } : {}),
         ...(lines !== undefined ? { lines } : {}),
+        kinds: describeObjectKinds(root),
         sites: deduped.length,
         ...(entries === undefined
           ? { looseTuples: deduped.map((spec) => looseIdentityTupleOf(identityFieldsOf(spec, ""))) }
