@@ -37,8 +37,15 @@ const procCount = new Map<Proc, number>();
 const unitCount = new Map<Unit, number>();
 let fallback = 0;
 const why = new Map<string, number>();
+// Digest size: the reached procedures plus reached object parts per test (the walk's own lines,
+// before the folded closure, which every test shares).
+let sizeSum = 0;
+let sizeMax = 0;
 for (const t of tests) {
   const st = walkTest(scanner, model, t);
+  const size = st.procs.size + st.units.size;
+  sizeSum += size;
+  sizeMax = Math.max(sizeMax, size);
   if (closureFallback || st.fallback !== undefined) {
     fallback += 1;
     const kind = (st.fallback ?? "closure").replace(
@@ -73,6 +80,9 @@ const over = (xs: number[]): string =>
   `${((100 * xs.filter((n) => n > 50).length) / Math.max(1, xs.length)).toFixed(1)}%`;
 console.log(
   `${label}: ${T} tests; broad fallback ${fallback} (${((100 * fallback) / T).toFixed(1)}%), subscriber closure on the fallback: ${closureFallback ? "yes" : "no"}`,
+);
+console.log(
+  `  digest size (reached procedures + object parts): avg ${(sizeSum / Math.max(1, tests.length)).toFixed(1)}, max ${sizeMax}`,
 );
 console.log(
   `  fallback by first reason: ${[...why].map(([k, n]) => `${k} ${n}`).join(", ") || "none"}`,
