@@ -6,8 +6,10 @@
  * any al-runner session on the fixture. A difference is a finding and a stop: never edit a row to
  * match a run.
  *
- * All three builds score 5 killed / 8 survived and each pair differs on 8 of 13 mutants, so a
- * transport that compiled the wrong build would pass any count check. Compared per mutant.
+ * Since R214 each build has 9 mutants, 5 killed / 4 survived: the seven outside the arms plus its
+ * own arm's two. Two builds share seven rows and differ on 4 of their verdicts, and each has two
+ * rows the others lack, so a transport that compiled the wrong build fails on the rows AND on the
+ * count. Pre-committed in docs/superpowers/specs/2026-09-29-r214-precommitment.md.
  *
  * Kept out of `al-runner.itest.ts` because that script runs its gate at import (R186).
  */
@@ -57,10 +59,6 @@ export const EXPECTED_BY_SET: Readonly<Record<string, readonly SymbolRow[]>> = {
     s(11, SI),
     k(13, RV),
     k(13, SA),
-    s(15, RV),
-    s(15, SA),
-    s(17, RV),
-    s(17, SA),
   ],
   "[LETHALB]": [
     k(8, EB),
@@ -70,12 +68,8 @@ export const EXPECTED_BY_SET: Readonly<Record<string, readonly SymbolRow[]>> = {
     k(10, SI),
     s(11, RA),
     s(11, SI),
-    s(13, RV),
-    s(13, SA),
     k(15, RV),
     k(15, SA),
-    s(17, RV),
-    s(17, SA),
   ],
 };
 
@@ -91,10 +85,6 @@ export const EXPECTED_NO_DEFINE: readonly SymbolRow[] = [
   s(10, SI),
   k(11, RA),
   k(11, SI),
-  s(13, RV),
-  s(13, SA),
-  s(15, RV),
-  s(15, SA),
   k(17, RV),
   k(17, SA),
 ];
@@ -169,6 +159,6 @@ export function assertSymbolBuild(
   assert.deepEqual(
     actual.sort(byLineThenOperator),
     [...expected].sort(byLineThenOperator),
-    `R321 ${leg} ${label}: per-mutant verdicts differ from the pre-committed table (docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md)`,
+    `R321 ${leg} ${label}: per-mutant verdicts differ from the pre-committed table (docs/superpowers/specs/2026-09-29-r214-precommitment.md, "R321, new tables"; before R214: docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md)`,
   );
 }
