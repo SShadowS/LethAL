@@ -763,6 +763,7 @@ describe("runSession", () => {
             sourceSha256: "5".repeat(64),
             installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
             identityScheme: IDENTITY_SCHEME,
+            buildSymbols: [],
             coverageMode: "procedure",
             targets: [
               {
