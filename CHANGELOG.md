@@ -55,7 +55,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
   resume from scheme-2 runs are refused by name (R325).
 - **Existing `lethal.equivalent.json` files need an `"identityScheme"` field** (R325), set to the
-  report's own `identityScheme` (4 since R318, see above). Identity keys now
+  report's own `identityScheme` (the current scheme, see above). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
   so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is
