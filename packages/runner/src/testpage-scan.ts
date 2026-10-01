@@ -332,6 +332,9 @@ export interface Proc {
   readonly key: string;
   /** R-371: carries an `[EventSubscriber]` attribute. */
   readonly subscriber: boolean;
+  /** R-371: every `Codeunit::X` name and every integer literal of 1000 or more in the body, as
+   *  written: where a codeunit id an Integer can carry may come from (`Scanner.foldIdTargets`). */
+  readonly idRefs: readonly string[];
 }
 
 /** R-371: one parse of the test app, as plain facts, shared by the TestPage scan and the digest. */
@@ -529,6 +532,7 @@ function procOf(
   return {
     unit,
     sites: block === undefined ? undefined : callSites(block),
+    idRefs: block === undefined ? NO_IDS : idRefsIn(block),
     name: normalizeAlName(id2.text),
     display,
     params: params.length,
@@ -761,6 +765,24 @@ function argInfo(call: ALSyntaxNode): {
   };
 }
 
+const NO_IDS: readonly string[] = Object.freeze([]);
+
+/** `Proc.idRefs`: `Codeunit::X` names and integer literals of 1000 or more under `block`. */
+function idRefsIn(block: ALSyntaxNode): readonly string[] {
+  let out: string[] | undefined;
+  visit(block, (n) => {
+    let v: string | undefined;
+    if (n.rawKind === "database_reference") {
+      const m = /^\s*codeunit\s*::\s*(.+?)\s*$/i.exec(n.text);
+      v = m?.[1];
+    } else if (n.rawKind === "integer" && n.text.trim().length >= 4) v = n.text.trim();
+    if (v === undefined) return;
+    out ??= [];
+    out.push(v);
+  });
+  return out ?? NO_IDS;
+}
+
 /** The call sites under `block`, in the pre-order the traversal used to visit them live. */
 function callSites(block: ALSyntaxNode): Site[] {
   const out: Site[] = [];
@@ -923,6 +945,8 @@ export class Scanner {
   private readonly procNames = new Set<string>();
   /** R-371: any file of the test app has parse damage. */
   private readonly anyDamage: boolean;
+  /** R-371: a test-app codeunit's id is below 1000, which `Proc.idRefs` does not keep. */
+  private readonly lowIds: boolean;
   /** `normalizeAlName` per distinct text, once: a walk asks for the same few names millions of
    *  times on a large suite, and each answer was a fresh string (R-371's RSS measurement). */
   private readonly normCache = new Map<string, string>();
@@ -958,6 +982,7 @@ export class Scanner {
       (u) => u.kind === "table" || u.kind === "tableextension",
     );
     this.anyDamage = model.damaged.length > 0;
+    this.lowIds = model.units.some((u) => u.id < 1000);
   }
 
   /**
@@ -1388,7 +1413,13 @@ export class Scanner {
     skipAt: ReadonlySet<number> = NO_RUN,
   ): void {
     for (const f of facts) {
-      if (skipAt.has(f.at) || f.k === "int") continue;
+      if (skipAt.has(f.at)) continue;
+      // External review r1 #3: an external callee can run a codeunit by the id it is handed.
+      if (f.k === "int") {
+        if (!refsOnly && this.byNameAll(f.value).length > 0)
+          fallBack(st, `${label} is handed ${f.value}, a test-app codeunit's id, by ${p.display}`);
+        continue;
+      }
       let what: string | undefined;
       if (f.k === "ref") {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
@@ -1460,6 +1491,31 @@ export class Scanner {
     if (typeof types === "string") return `an argument of unknown type (${types})`;
     const held = types.find((t) => this.holdsTestApp(t));
     return held === undefined ? undefined : `a value of ${held.trim()}`;
+  }
+
+  /**
+   * R-371 (external review r1 #3): every test-app codeunit a reached procedure names as a value
+   * (`Codeunit::X`, or its literal id), folded whole, with what it reaches. Code outside the walk
+   * can run a codeunit by an id it is handed, through an Integer argument, a field it reads back
+   * or a global, and the walk does not follow values. Iterates to a fixpoint (a `Set` visits what
+   * is added while it is iterated). `extra` are procedures whose ids count although they were not
+   * reached (the test codeunit's other methods, whose writes the test can read back). With a
+   * test-app codeunit whose id is below 1000 (`idRefs` keeps no such literal), every test-app
+   * codeunit is folded. Stated limit: an id read from the platform (an AllObj loop) is not seen.
+   */
+  foldIdTargets(st: ReachState, extra: readonly Proc[] = []): void {
+    const fold = (raw: string): void => {
+      for (const u of this.byNameAll(this.norm(raw))) {
+        this.reachUnit(u, st);
+        for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
+      }
+    };
+    if (this.lowIds) {
+      for (const list of this.byKey.values()) for (const u of list) fold(String(u.id));
+      return;
+    }
+    for (const p of extra) for (const r of p.idRefs) fold(r);
+    for (const p of st.procs) for (const r of p.idRefs) fold(r);
   }
 
   /** R-371: an object folded into every digest: entered, with its parts (`enterObject`). */

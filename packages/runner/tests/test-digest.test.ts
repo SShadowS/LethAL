@@ -552,6 +552,50 @@ codeunit 50120 "Sub"
     });
   });
 
+  // External review r1 #3: an external callee can run a test-app codeunit by its id.
+  describe("a test-app codeunit id handed to code the walk does not follow", () => {
+    const MOCK =
+      "codeunit 50101 \"Mock\"\n{\n    trigger OnRun()\n    begin\n        Message('a');\n    end;\n}\n";
+    const files = (vars: string, body: string, extra = "") =>
+      base(
+        T(
+          `    procedure A()\n    var\n        DepCU: Codeunit "Dep CU";\n${vars}    begin\n${body}    end;\n`,
+          extra,
+        ),
+        { "M.al": MOCK },
+      );
+    const mockEdit = (f: Files) => edit(f, "M.al", "Message('a');", "Message('b');");
+
+    test("a literal id of a test-app codeunit is an UNFOLLOWED edge", () => {
+      const f = files("", "        DepCU.RunById(50101);\n");
+      expect(digestA(unrelated(f))).not.toBe(digestA(f));
+      // Control: a literal that is no test-app codeunit's id.
+      const g = files("", "        DepCU.RunById(42);\n");
+      expect(digestA(unrelated(g))).toBe(digestA(g));
+    });
+
+    test("an Integer variable carrying Codeunit::X folds X into the digest", () => {
+      const f = files(
+        "        Id: Integer;\n",
+        '        Id := Codeunit::"Mock";\n        DepCU.RunById(Id);\n',
+      );
+      const was = digestA(f);
+      expect(digestA(mockEdit(f))).not.toBe(was);
+      expect(digestA(unrelated(f))).toBe(was);
+    });
+
+    test("an id another method of the test codeunit stores (read back from the database) folds it too", () => {
+      const f = files(
+        "",
+        "        DepCU.RunFromSetup();\n",
+        '\n    local procedure StoreId()\n    var\n        Id: Integer;\n    begin\n        Id := Codeunit::"Mock";\n    end;\n',
+      );
+      const was = digestA(f);
+      expect(digestA(mockEdit(f))).not.toBe(was);
+      expect(digestA(unrelated(f))).toBe(was);
+    });
+  });
+
   // External review r1 #1: each reached hash is bound to its procedure and object.
   test("swapping the bodies of same-named procedures in two reached codeunits changes the digest", () => {
     const lib = (id: number, name: string, msg: string) =>

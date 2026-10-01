@@ -140,6 +140,8 @@ export function subscriberFold(
     for (const raw of u.implementations)
       scanner.foldImplementation(raw, `${u.display} implementation ${raw}`, st);
   }
+  // A test-app codeunit the folded code names as a value can be run by id from anywhere.
+  scanner.foldIdTargets(st);
   lines.push(...reachLines(st, keys));
   // Parse damage can swallow a whole subscriber codeunit, so it never becomes a unit and is folded
   // nowhere: with any damaged file, every digest takes the whole-source fallback.
@@ -191,6 +193,12 @@ export function walkTest(scanner: Scanner, model: TestAppModel, t: TestMethodRef
     // CODEUNIT.Run of the test codeunit (extensions/lethal-control RunMany.Codeunit.al).
     for (const tr of d.unit.triggers) if (tr.name === "onrun") scanner.reach(tr, st);
   }
+  // External review r1 #3: a test-app codeunit this test's code names as a value (its own
+  // codeunit's other methods included) can be run by id by code the walk does not follow.
+  scanner.foldIdTargets(
+    st,
+    [...new Set(decls.map((d) => d.unit))].flatMap((u) => [...u.procs, ...u.triggers]),
+  );
   return st;
 }
 
