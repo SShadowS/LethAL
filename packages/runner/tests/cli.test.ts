@@ -65,6 +65,7 @@ import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
+import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
@@ -2006,6 +2007,7 @@ describe("issue #22: the restore notice names the version to beat", () => {
 // runFromCli and runSession; only the backend is a fake (no deploy, every test passes).
 describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   class PassingBackend implements ExecutionBackend {
+    readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
       return { coverage: "none", deploy: "none", isolation: "session", authoritative: false };
     }
@@ -2240,6 +2242,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
 // reaching it with the folder already gone proves verify read the stored files.
 describe("lethal run then lethal verify on one store (R358)", () => {
   class DeployingBackend implements ExecutionBackend {
+    readonly measurePredefinedSymbols = measuredV2_12; // R392
     capabilities(): BackendCapabilities {
       return { coverage: "none", deploy: "publish", isolation: "session", authoritative: false };
     }

@@ -19,6 +19,7 @@ import { generateMutationSet, operatorTiers, runSession } from "../src/orchestra
 import { buildReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
+import { measuredV2_12 } from "./helpers/al-runner-predefined";
 
 /**
  * Issue #19 (R227): a line-scoped mutant filter for PR runs. Two properties are load-bearing:
@@ -332,6 +333,7 @@ describe("runSession: the line filter reaches both the mutant set AND the report
   };
 
   class StubBackend implements ExecutionBackend {
+    readonly measurePredefinedSymbols = measuredV2_12; // R392
     private activations: Array<string | null> = [];
     capabilities(): BackendCapabilities {
       return RUN_CAPS;

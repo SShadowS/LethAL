@@ -17,6 +17,7 @@ import {
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "./al-runner-coverage";
+import { probeAlRunnerPredefinedSymbols } from "./al-runner-predefined-probe";
 import {
   AlRunnerServer,
   type ServerProcessHandle,
@@ -48,6 +49,7 @@ import type {
   TestOutcome,
   TestVerdict,
 } from "./backend";
+import type { AlRunnerPredefinedProbe } from "./preprocessor-symbols";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
@@ -391,6 +393,19 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   alRunnerPath(): string {
     return this.cfg.alRunnerPath;
+  }
+
+  /**
+   * R392 — measure the preprocessor symbols this al-runner predefines: one one-shot run of the
+   * generated probe project, through this backend's own spawn. `runSession` calls it once, after
+   * `provisionOnce`, and hands it the directory provisioning reported. Throws
+   * `AlRunnerPredefinedProbeError` on any incomplete answer.
+   */
+  measurePredefinedSymbols(platformAppsDir?: string): Promise<AlRunnerPredefinedProbe> {
+    return probeAlRunnerPredefinedSymbols(this.cfg.alRunnerPath, {
+      spawn: this.spawn,
+      ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
+    });
   }
 
   observedMissingImplementation(): AlRunnerMissingImplementation | undefined {

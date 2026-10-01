@@ -120,7 +120,7 @@ const CANARY_TESTS_CODEUNIT_ID = 50001;
 // app, purely so the data app's single-id range does not have to widen across the tests app's id.
 const CANARY_WRITER_CODEUNIT_ID = 50002;
 
-function baseAppJson(overrides: {
+export function baseAppJson(overrides: {
   id: string;
   name: string;
   idFrom: number;
@@ -351,12 +351,16 @@ export interface AlRunnerCanaryFsOps {
   ) => Promise<void>;
 }
 
-const defaultFsOps: AlRunnerCanaryFsOps = {
+export const defaultFsOps: AlRunnerCanaryFsOps = {
   mkdtemp: (prefix) => mkdtemp(prefix),
   rm: (path, opts) => rm(path, opts),
 };
 
-async function cleanUpQuietly(root: string, fsOps: AlRunnerCanaryFsOps): Promise<void> {
+export async function cleanUpQuietly(
+  root: string,
+  fsOps: AlRunnerCanaryFsOps,
+  label = "al-runner canary",
+): Promise<void> {
   try {
     // maxRetries/retryDelay mirrors AlRunnerBackend.deploy()'s identical delete
     // (al-runner-backend.ts): on Windows, deleting a directory a warm al-runner process, an
@@ -368,7 +372,7 @@ async function cleanUpQuietly(root: string, fsOps: AlRunnerCanaryFsOps): Promise
     // successfully-computed result (see the doc comment below) or crash the session — it just
     // leaves a stray temp directory behind, reported so an operator can find it.
     console.warn(
-      `[lethal] al-runner canary: could not clean up its scratch directory ${root} (harmless; ` +
+      `[lethal] ${label}: could not clean up its scratch directory ${root} (harmless; ` +
         `session continues): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
