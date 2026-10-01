@@ -1,6 +1,12 @@
-import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import type {
+  ALSyntaxNode,
+  FileRefusalFields,
+  FileRefusalShape,
+  MutationSpec,
+} from "@lethal/engine";
 import {
   ALNodeKind,
+  FileRefusedError,
   declarationMembers,
   findFirst,
   isObjectContainer,
@@ -94,8 +100,9 @@ function injectReachLatches(
     const body = owner?.children.find((n) => n.kind === ALNodeKind.block);
     const begin = body?.children[0];
     if (owner === null || begin === undefined) {
-      throw new Error(
+      throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: every procedure, both split-header procedure shapes and every trigger own their body (R301, R316).`,
+        refusal(filePath, "latch-owner", c.root),
       );
     }
     const known = byOwner.get(owner.startIndex);
@@ -114,8 +121,9 @@ function injectReachLatches(
       const ends = preambleArmHeaderEnds(owner);
       if (ends === null) {
         // `placeReach` refuses these members, so no statement-grain marker can reach here.
-        throw new Error(
+        throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a split-header procedure whose #if arms each have their own var section, and not every arm's header end was found (R316).`,
+          refusal(filePath, "no-anchor", owner),
         );
       }
       for (const end of ends)
@@ -139,8 +147,9 @@ function injectReachLatches(
       const anchor = splitVarHoistAnchor(owner);
       if (anchor === null) {
         // `placeReach` refuses these members, so no statement-grain marker can reach here.
-        throw new Error(
+        throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a member whose var section is split by #if in a shape with no latch placement (R303).`,
+          refusal(filePath, "no-anchor", owner),
         );
       }
       rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` var ${latch}: Boolean;`);
@@ -158,8 +167,9 @@ function injectReachLatches(
     if (vars !== undefined) {
       const anchor = latchAnchorInVarSection(vars);
       if (anchor === undefined) {
-        throw new Error(
+        throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a var section that does not end in a declaration has no var keyword to anchor the latch \`${latch}\` after.`,
+          refusal(filePath, "no-anchor", owner),
         );
       }
       rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` ${latch}: Boolean;`);
@@ -465,8 +475,9 @@ function injectSelectorVarIntoObject(
       anchor = c;
     }
     if (anchor === undefined) {
-      throw new Error(
+      throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath}: its var section has no \`var\` keyword to anchor the selector var after.`,
+        refusal(filePath, "no-anchor", existingVar, object),
       );
     }
     rewrites.set(
@@ -481,8 +492,9 @@ function injectSelectorVarIntoObject(
   // unsupported-kind branch above does — the guard calls are already emitted, so returning here
   // ships AL that cannot compile.
   if (members.length === 0) {
-    throw new Error(
+    throw new FileRefusedError(
       `compileSchemataForFile: cannot instrument ${filePath} — its object declaration has no members to anchor the selector var against, yet mutation guards were emitted for it.`,
+      refusal(filePath, "no-anchor", object, object),
     );
   }
 
@@ -512,8 +524,9 @@ function injectSelectorVarIntoObject(
     // Unreachable — `members.length === 0` threw above — but a silent return here would ship the
     // already-emitted guard calls with no declaration in scope (AL0118), exactly like the two
     // branches above. Same failure, same answer.
-    throw new Error(
+    throw new FileRefusedError(
       `compileSchemataForFile: cannot instrument ${filePath} — no member to anchor the selector var after, yet mutation guards were emitted for it.`,
+      refusal(filePath, "no-anchor", object, object),
     );
   }
   rewrites.set(
@@ -549,6 +562,26 @@ function enclosingObjectDeclaration(node: ALSyntaxNode): ALSyntaxNode | null {
     current = current.parent;
   }
   return null;
+}
+
+/** R307: the structured fields of a per-file refusal: `at`'s 1-based lines and the object it sits
+ *  in. Names and ids only, never source text, so `formatRefusal` can put them in a report. */
+function refusal(
+  file: string,
+  shape: FileRefusalShape,
+  at: ALSyntaxNode,
+  object: ALSyntaxNode | null = enclosingObjectDeclaration(at),
+): FileRefusalFields {
+  const lines: [number, number] = [at.startPosition.row + 1, at.endPosition.row + 1];
+  const id = Number.parseInt(object?.childForFieldName("object_id")?.text ?? "", 10);
+  if (object === null || Number.isNaN(id)) return { file, shape, lines };
+  const name = (object.childForFieldName("object_name")?.text ?? "").replace(/^"(.*)"$/, "$1");
+  return {
+    file,
+    shape,
+    objects: [{ type: object.rawKind.replace(/_declaration$/, ""), id, name }],
+    lines,
+  };
 }
 
 /**
@@ -595,8 +628,9 @@ function injectMutationSelectorVar(
         "`assertNoUnsupportedObjectMix`); a caller building its own file list must apply the " +
         "same filters, or add selector-var support for this object kind.";
       const kindText = object === null ? "no enclosing AL object declaration" : object.rawKind;
-      throw new Error(
+      throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath} — a mutation guard sits inside ${kindText}, and ${why}`,
+        refusal(filePath, "unsupported-kind", spec.before, object),
       );
     }
     objects.set(object.startIndex, object);

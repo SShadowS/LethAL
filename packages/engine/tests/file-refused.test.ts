@@ -10,7 +10,12 @@ describe("formatRefusal", () => {
       "overlap in src/A.al: two rewrites of this file overlap; lines 3-6",
     ],
     [
-      new FileRefusedError("x", { file: "src/A.al", shape: "unsupported-kind", objects, lines: [4, 4] }),
+      new FileRefusedError("x", {
+        file: "src/A.al",
+        shape: "unsupported-kind",
+        objects,
+        lines: [4, 4],
+      }),
       'unsupported-kind in src/A.al: a mutation guard sits in an object that cannot carry the selector var; objects codeunit:50100 "Good One"; lines 4-4',
     ],
     [
@@ -43,6 +48,31 @@ describe("formatRefusal", () => {
       expect(formatRefusal(err)).toBe(expected);
     });
   }
+
+  it("copies no source line of the refused file into any detail", () => {
+    // The refused file the `cases` above describe: its header and members, as AL writes them.
+    const source = `codeunit 50100 "Good One"
+{
+    procedure Compute(Amount: Decimal): Decimal
+    begin
+        exit(Amount * 2);
+    end;
+}
+
+page 50101 "P"
+{
+    PageType = Card;
+}`;
+    const lines = source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 12);
+    expect(lines.length).toBeGreaterThan(3);
+    for (const [err] of cases) {
+      const detail = formatRefusal(err);
+      for (const line of lines) expect(detail).not.toContain(line);
+    }
+  });
 
   it("extends Error directly and keeps the throw text as its message", () => {
     const e = new FileRefusedError("the thrown text", { file: "f", shape: "no-header" });

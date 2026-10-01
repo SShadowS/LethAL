@@ -13,6 +13,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
+import { FileRefusedError } from "@lethal/engine";
 import { buildComponents } from "../src/components";
 import { REACH_MARKER, reachGrainOf } from "../src/dispatch";
 import { assignMutantIds } from "../src/ids";
@@ -23,6 +24,7 @@ import {
   assignIdentityOrdinals,
   attributeHeader,
   gapIdOf,
+  identityEntriesOf,
   identityTupleOf,
   runIdentityOrdinals,
   scanDeclaredObjects,
@@ -1154,6 +1156,16 @@ page 51053 "Not Injectable"
         expect(message).toContain("Mixed.Kind.al");
         expect(message).toContain("codeunit 51052");
         expect(message).toContain("page 51053");
+        // R307: a per-file refusal, typed, naming every object the file declares.
+        expect(thrown).toBeInstanceOf(FileRefusedError);
+        if (!(thrown instanceof FileRefusedError)) return;
+        expect(thrown.file).toBe("Mixed.Kind.al");
+        expect(thrown.shape).toBe("object-mix");
+        expect(thrown.objects).toEqual([
+          { type: "codeunit", id: 51052, name: "Injectable" },
+          { type: "page", id: 51053, name: "Not Injectable" },
+        ]);
+        expect(thrown.lines).toBeUndefined();
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
@@ -1362,6 +1374,52 @@ page 51053 "Not Injectable"
       // One offset earlier still belongs to the first (previous) object.
       const justBeforeSecondHeader = attributeHeader(headers, fakeSpecAt(99), "test.al");
       expect(justBeforeSecondHeader.id).toBe(1);
+    });
+
+    // R307: a site before every header is a per-file refusal, typed, with the site's lines.
+    it("refuses a site before the first header with a typed site-before-header refusal", () => {
+      const headers: readonly ObjectHeader[] = [
+        { type: "codeunit", id: 2, name: "B", startIndex: 100 },
+      ];
+      const spec = {
+        before: {
+          startIndex: 5,
+          startPosition: { row: 0, column: 5 },
+          endPosition: { row: 1, column: 2 },
+        },
+      } as unknown as MutationSpec;
+      let thrown: unknown;
+      try {
+        attributeHeader(headers, spec, "src/Early.al");
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(FileRefusedError);
+      if (!(thrown instanceof FileRefusedError)) return;
+      expect(thrown.message).toContain("sits before this file's first AL object header");
+      expect(thrown.file).toBe("src/Early.al");
+      expect(thrown.shape).toBe("site-before-header");
+      expect(thrown.objects).toBeUndefined();
+      expect(thrown.lines).toEqual([1, 2]);
+    });
+  });
+
+  // R307: the header rule finding no header is a per-file refusal, typed.
+  describe("objectHeadersOf (through identityEntriesOf)", () => {
+    it("refuses a file with no object header with a typed no-header refusal", () => {
+      let thrown: unknown;
+      try {
+        identityEntriesOf("src/NoHeader.al", "// only a comment\n", []);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(FileRefusedError);
+      if (!(thrown instanceof FileRefusedError)) return;
+      expect(thrown.message).toContain("file has no AL object header");
+      expect(thrown.file).toBe("src/NoHeader.al");
+      expect(thrown.shape).toBe("no-header");
+      expect(thrown.objects).toBeUndefined();
+      expect(thrown.lines).toBeUndefined();
     });
   });
 });

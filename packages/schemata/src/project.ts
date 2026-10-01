@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  FileRefusedError,
   type MutationSpec,
   astSubtreeHash,
   gapBlockOf,
@@ -504,7 +505,11 @@ function objectHeadersOf(source: string, filePath: string): readonly ObjectHeade
   // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
   // between calls (a plain `.exec` loop on OBJECT_HEADER would).
   const matches = [...stripAlComments(source).matchAll(OBJECT_HEADER)];
-  if (matches.length === 0) throw new Error(`${filePath}: file has no AL object header`);
+  if (matches.length === 0)
+    throw new FileRefusedError(`${filePath}: file has no AL object header`, {
+      file: filePath,
+      shape: "no-header",
+    });
   return matches.map((m) => {
     const type = m[1];
     if (type === undefined) {
@@ -547,8 +552,13 @@ function assertNoUnsupportedObjectMix(headers: readonly ObjectHeader[], filePath
   const found = headers.map((h) => `${h.type} ${h.id} ${h.name}`);
   const unsupportedKinds = [...new Set(unsupported.map((h) => h.type))].join(", ");
   const why = `LethAL attributes mutants per object only when every object in the file can carry the injected selector var (a codeunit or a table). This file also declares a ${unsupportedKinds}, and dropping only that object's mutants (rather than refusing the whole file) is not yet implemented. Split them into one file each.`;
-  throw new Error(
+  throw new FileRefusedError(
     `writeInstrumentedProject: cannot instrument ${filePath} — it mixes ${found.join("; ")} in one file. ${why}`,
+    {
+      file: filePath,
+      shape: "object-mix",
+      objects: headers.map(({ type, id, name }) => ({ type, id, name })),
+    },
   );
 }
 
@@ -579,8 +589,13 @@ export function attributeHeader(
     // Unreachable via the normal pipeline (spec generation walks nodes inside the parsed
     // objects), but a caller-constructed spec whose `before` sits before every header would
     // otherwise silently fall through to `undefined` — fail loudly instead.
-    throw new Error(
+    throw new FileRefusedError(
       `${filePath}: mutation site at offset ${spec.before.startIndex} sits before this file's first AL object header — cannot attribute it to an object.`,
+      {
+        file: filePath,
+        shape: "site-before-header",
+        lines: [spec.before.startPosition.row + 1, spec.before.endPosition.row + 1],
+      },
     );
   }
   return best;

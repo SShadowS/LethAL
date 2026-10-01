@@ -50,10 +50,8 @@ const SENTENCE: Record<FileRefusalShape, string> = {
   "latch-owner": "a reach marker sits outside any member that could declare its latch",
   "no-anchor": "no place was found to declare the selector var or reach latch",
   "no-header": "the object header rule found no object header",
-  "object-mix":
-    "an object that can carry the selector var shares the file with one that cannot",
-  "site-before-header":
-    "a mutation site sits before the first object header the header rule found",
+  "object-mix": "an object that can carry the selector var shares the file with one that cannot",
+  "site-before-header": "a mutation site sits before the first object header the header rule found",
 };
 
 /** R307: the refused row's `detail`, from the structured fields only. `type:id` never occurs in

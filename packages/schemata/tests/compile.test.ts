@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import {
   ALNodeKind,
+  FileRefusedError,
   declarationMembers,
   findAll,
   findEnclosingStatement,
@@ -801,6 +802,13 @@ describe("compileSchemataForFile — selector var injection into table objects",
     const message = thrown instanceof Error ? thrown.message : "";
     expect(message).toContain("MyPort.XmlPort.al");
     expect(message).toContain("AL0118");
+    // R307: a per-file refusal, typed, with the file's own object and the guarded line.
+    expect(thrown).toBeInstanceOf(FileRefusedError);
+    if (!(thrown instanceof FileRefusedError)) return;
+    expect(thrown.file).toBe("MyPort.XmlPort.al");
+    expect(thrown.shape).toBe("unsupported-kind");
+    expect(thrown.objects).toEqual([{ type: "xmlport", id: 50100, name: "My Port" }]);
+    expect(thrown.lines).toEqual([11, 11]);
   });
 
   it("does NOT throw when there are no specs — an unmutated page emits no guards to strand", () => {
@@ -3269,5 +3277,18 @@ describe("The injector's guard: a statement marker with no owning member still t
     expect(() => compileSchemataForFile("L := 1", before, [s])).toThrow(
       "a reach marker sits outside any procedure or trigger body",
     );
+    // R307: a per-file refusal, typed. No enclosing object, so no `objects`.
+    let thrown: unknown;
+    try {
+      compileSchemataForFile("L := 1", before, [s], undefined, "src/Detached.al");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(FileRefusedError);
+    if (!(thrown instanceof FileRefusedError)) return;
+    expect(thrown.file).toBe("src/Detached.al");
+    expect(thrown.shape).toBe("latch-owner");
+    expect(thrown.objects).toBeUndefined();
+    expect(thrown.lines).toEqual([1, 1]);
   });
 });
