@@ -10,8 +10,9 @@
  * - for every object it reaches, the object's parts outside its procedures (header, properties,
  *   globals and their initialisation, triggers), or a non-codeunit object's whole text; a
  *   non-codeunit object's triggers are walked whenever its code can run (cases 14 to 16);
- * - every test-app event-subscriber codeunit, automatic and manual, whole, with everything it
- *   reaches (`subscriberFold`): an event can run one from anywhere;
+ * - every test-app event-subscriber codeunit, automatic and manual, and every test-app extension
+ *   object, whole, with everything it reaches (`subscriberFold`): an event can run a subscriber
+ *   from anywhere, and a dependency's own code can fire an extension's triggers;
  * - the dependency fingerprint and the test app's build inputs (digest-inputs.ts);
  * - when the test, or the subscriber fold, has an edge the walk cannot follow (UNFOLLOWED, fail
  *   closed), the WHOLE test-app source: every `.al` file's normalised text.
@@ -94,9 +95,12 @@ function reachLines(st: ReachState): string[] {
 }
 
 /**
- * Every test-app subscriber codeunit, whole, and everything its procedures and triggers reach.
- * Folded into EVERY digest: an event can run a subscriber from any code, and a manual one is bound
- * by BindSubscription, which the walk deliberately does not treat as an edge (ruling 1).
+ * Every test-app subscriber codeunit, whole, and everything its procedures and triggers reach;
+ * and every test-app extension object (tableextension, pageextension, ...), whole, and everything
+ * its triggers reach. Folded into EVERY digest: an event can run a subscriber from any code, a
+ * manual one is bound by BindSubscription, which the walk deliberately does not treat as an edge
+ * (ruling 1), and an extension's triggers on a dependency's object fire from that dependency's
+ * code, which the walk never sees.
  */
 function subscriberFold(
   scanner: Scanner,
@@ -108,6 +112,11 @@ function subscriberFold(
     if (!u.subscriber) continue;
     lines.push(`C ${u.textHash}`);
     for (const p of [...u.procs, ...u.triggers]) scanner.reach(p, st);
+  }
+  for (const u of model.objects) {
+    if (!u.kind.endsWith("extension")) continue;
+    lines.push(`E ${u.textHash}`);
+    for (const t of u.triggers) scanner.reach(t, st);
   }
   lines.push(...reachLines(st));
   return { hash: sha256(lines.sort().join("\n")), fallback: st.fallback };

@@ -253,6 +253,50 @@ ${procs}}
     expectReached(files, "Sub.al", "S := 1;", "S := 2;");
   });
 
+  // A dependency's own code can fire a test-app extension's triggers on its object, so every
+  // extension object is in every digest, with what its triggers reach.
+  test("a test-app tableextension or pageextension trigger is in every digest", () => {
+    const tableExt = `tableextension 50140 "SLExt" extends "Sales Line"
+{
+    trigger OnAfterInsert()
+    var
+        L: Codeunit "Lib";
+    begin
+        L.Help();
+        E := 1;
+    end;
+}
+`;
+    const pageExt = `pageextension 50141 "CCExt" extends "Customer Card"
+{
+    trigger OnOpenPage()
+    begin
+        PE := 1;
+    end;
+}
+`;
+    const files = base(T("    procedure A()\n    begin\n    end;\n"), {
+      "SLExt.al": tableExt,
+      "CCExt.al": pageExt,
+    });
+    expectReached(files, "SLExt.al", "E := 1;", "E := 2;");
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+    expectReached(files, "CCExt.al", "PE := 1;", "PE := 2;");
+  });
+
+  test("an UNFOLLOWED edge in an extension trigger puts every test on the fallback", () => {
+    const tableExt = `tableextension 50140 "SLExt" extends "Sales Line"
+{
+    trigger OnAfterInsert()
+    begin
+        Codeunit.Run(50110);
+    end;
+}
+`;
+    const files = base(T("    procedure A()\n    begin\n    end;\n"), { "SLExt.al": tableExt });
+    expect(digestA(unrelated(files))).not.toBe(digestA(files));
+  });
+
   test("an UNFOLLOWED edge (Codeunit.Run by id) takes the whole-source fallback", () => {
     const files = base(T("    procedure A()\n    begin\n        Codeunit.Run(50110);\n    end;\n"));
     expect(digestA(unrelated(files))).not.toBe(digestA(files));
