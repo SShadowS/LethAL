@@ -333,7 +333,7 @@ const PLATFORM_APPS_PKG_CACHE =
 
 /** Separator and trailing-separator insensitive, and case-insensitive on win32 — the three ways one
  *  directory gets two spellings. Used ONLY to compare; the reported path stays verbatim. */
-function normalisePlatformAppsPath(p: string): string {
+export function normalisePlatformAppsPath(p: string): string {
   const unified = p.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? unified.toLowerCase() : unified;
 }

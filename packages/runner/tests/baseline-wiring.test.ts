@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "typescript";
-import { GATE_BASELINES, SYMBOL_BASELINES } from "../itest/baseline-guard";
+import { GATE_BASELINES, PENDING_FIRST_RECORD, SYMBOL_BASELINES } from "../itest/baseline-guard";
 import { SYMBOL_SETS } from "../itest/symbol-fixture";
 
 /**
@@ -316,6 +316,7 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "al-runner.itest.ts": {
     BASELINE_PATH: "al-runner.baseline.json",
     LAYOUT_BASELINE_PATH: "al-runner.layout.baseline.json",
+    CLI_DEFAULT_BASELINE_PATH: "al-runner.cli-default.baseline.json",
   },
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },
   "envtool.itest.ts": { BASELINE_PATH: "envtool.baseline.json" },
@@ -373,7 +374,12 @@ describe("R332 wiring: real call sites, not text", () => {
     const committed = readdirSync(ITEST)
       .filter((f) => f.endsWith(".baseline.json"))
       .sort();
-    expect([...Object.keys(GATE_BASELINES), ...SYMBOL_BASELINES].sort()).toEqual(committed);
+    const registered = [...Object.keys(GATE_BASELINES), ...SYMBOL_BASELINES];
+    expect(registered.filter((n) => !PENDING_FIRST_RECORD.includes(n)).sort()).toEqual(committed);
+    // R387: a pending name must be a registered gate baseline that is NOT committed yet, so the
+    // list cannot hide a typo or outlive the record run that fills it.
+    expect(PENDING_FIRST_RECORD.filter((n) => GATE_BASELINES[n] === undefined)).toEqual([]);
+    expect(PENDING_FIRST_RECORD.filter((n) => committed.includes(n))).toEqual([]);
   });
 
   test("every registered gate baseline has a writing gate checked below; every reader names one", () => {

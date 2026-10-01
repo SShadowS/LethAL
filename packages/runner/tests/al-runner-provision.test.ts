@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { AL_RUNNER_PROVISION_SENTINEL, AlRunnerBackend } from "../src/al-runner-backend";
+import {
+  AL_RUNNER_PROVISION_SENTINEL,
+  AlRunnerBackend,
+  provisionArgv,
+} from "../src/al-runner-backend";
 import type { SpawnFn } from "../src/publisher";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -84,6 +88,43 @@ describe("AlRunnerBackend.provisionOnce (R128)", () => {
     const filterIndex = argv.indexOf("--test");
     expect(filterIndex).toBeGreaterThanOrEqual(0);
     expect(argv[filterIndex + 1]).toBe(AL_RUNNER_PROVISION_SENTINEL);
+  });
+
+  test("R387: provisionOnce spawns exactly provisionArgv(cfg), the argv the gate's allow-list uses", async () => {
+    const { calls, spawn } = spyingSpawn({ exitCode: 0, stdout: "", stderr: WARM });
+    await (await makeBackend(spawn)).provisionOnce();
+    expect(calls.map((c) => c.argv)).toEqual([
+      provisionArgv({ alRunnerPath: "al-runner", testDir: "/tests", packagesDir: "/packages" }),
+    ]);
+  });
+
+  test("R387: provisionArgv reproduces the live provisioning argv (2026-10-01) for the gate's config", () => {
+    const tests = "U:\\Git\\LethAL-wt\\r387\\fixtures\\sandbox-tests";
+    expect(provisionArgv({ alRunnerPath: "C:\\al-runner.exe", testDir: tests })).toEqual([
+      "C:\\al-runner.exe",
+      "--output-json",
+      "--isolation",
+      "test",
+      "--test",
+      "Codeunit0.__lethal_provision_only__",
+      "--auto-provision",
+      tests,
+    ]);
+  });
+
+  test("R387: provisionArgv's only test filter is the literal sentinel, so it can never run a real test", () => {
+    // The literal on purpose, not the exported constant: the gate's allow-list and provisionOnce
+    // share provisionArgv, so a sentinel that started matching a real test would pass both together.
+    const argv = provisionArgv({
+      alRunnerPath: "al-runner",
+      testDir: "/tests",
+      packagesDir: "/packages",
+      preprocessorSymbols: ["LETHALA"],
+    });
+    expect(argv.filter((a) => a === "--test")).toHaveLength(1);
+    expect(argv.filter((a) => a.startsWith("--test") && a !== "--test")).toEqual([]);
+    expect(argv[argv.indexOf("--test") + 1]).toBe("Codeunit0.__lethal_provision_only__");
+    expect(argv.filter((a) => a.includes("__lethal_provision_only__"))).toHaveLength(1);
   });
 
   test("reports `downloaded` only when the runner actually fetched something", async () => {

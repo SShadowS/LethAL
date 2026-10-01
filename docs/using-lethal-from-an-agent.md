@@ -99,12 +99,22 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
-CONDITIONAL. LethAL reads al-runner's own coverage output (R220), but one file declaring more than one
-object disables it for the whole run (upstream #3713), and then an unreached mutant comes back
-survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
+default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
+`"alRunner": { "coverage": "al-runner" }`, and one file declaring more than one object (upstream
+#3713) or holding a `#if`-wrapped object turns it off for the whole run, with a warning naming the
+file. Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
+
+**al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
+`serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
+three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile
+per batch). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
+per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
+slow or unmeasured setting; until coverage is on by default it always names `coverage`. `lethal
+doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
+error after one suite deadline of at least 10 minutes, not a per-test timeout.
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one

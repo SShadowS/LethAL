@@ -278,7 +278,12 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
 
   test("a two-arm wrapped object counts as ONE object for the multi-object guard", async () => {
     const dir = await bundle({ "src/B2.Codeunit.al": R298_TWO_ARM });
-    expect(await alRunnerCoverageSupport(dir)).toEqual({ supported: true, multiObjectFiles: [] });
+    // R387: listed as wrapped, by the index's own rule, so the CLI can fall back to no coverage.
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: true,
+      multiObjectFiles: [],
+      wrappedObjectFiles: ["src/B2.Codeunit.al"],
+    });
   });
 
   test("a bare object plus a wrapped one IS two objects for the guard", async () => {
@@ -286,6 +291,16 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     expect(await alRunnerCoverageSupport(dir)).toEqual({
       supported: false,
       multiObjectFiles: ["src/Mixed.Codeunit.al"],
+      wrappedObjectFiles: ["src/Mixed.Codeunit.al"],
+    });
+  });
+
+  test("R387: a clean project lists no file in either list", async () => {
+    const dir = await bundle({ "src/A.Codeunit.al": "codeunit 50100 A\n{\n}\n" });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: true,
+      multiObjectFiles: [],
+      wrappedObjectFiles: [],
     });
   });
 });
@@ -489,7 +504,11 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
         "src/Other.Codeunit.al": R298_PLAIN,
       };
       const dir = await bundle(files);
-      expect(await alRunnerCoverageSupport(dir)).toEqual({ supported: true, multiObjectFiles: [] });
+      expect(await alRunnerCoverageSupport(dir)).toEqual({
+        supported: true,
+        multiObjectFiles: [],
+        wrappedObjectFiles: ["src/T.Table.al"],
+      });
       const index = await buildAlRunnerCoverageIndex(dir);
       expect(index.refusedFiles).toEqual(["src/T.Table.al"]);
       await initParser();
