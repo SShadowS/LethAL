@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import { testsInAlSource } from "../src/discovery";
 import { testDigestKey, testDigestsOfSources } from "../src/test-digest";
+import { buildTestAppModel } from "../src/testpage-scan";
 
 beforeAll(async () => {
   await initParser();
@@ -69,6 +70,17 @@ describe("R-278: testDigestsOfSources", () => {
     const base = digestOf(arms("        X := 1;\n", "        X := 2;\n"));
     expect(digestOf(arms("        X := 9;\n", "        X := 2;\n"))).not.toBe(base);
     expect(digestOf(arms("        X := 1;\n", "        X := 9;\n"))).not.toBe(base);
+  });
+
+  test("R-371: every procedure key is unique across the app, a codeunit in two #if arms included", () => {
+    const text = `#if CLEAN
+${unit(A)}#else
+${unit(A)}#endif
+`;
+    const model = buildTestAppModel([{ path: "T.al", text }]);
+    const keys = model.units.flatMap((u) => [...u.procs, ...u.triggers].map((p) => p.key));
+    expect(keys.length).toBe(2);
+    expect(new Set(keys).size).toBe(2);
   });
 
   test("a discovered test the parser cannot find throws, never digests nothing", () => {

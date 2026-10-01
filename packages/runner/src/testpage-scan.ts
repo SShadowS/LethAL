@@ -306,7 +306,9 @@ export interface Proc {
   readonly handlers: readonly string[];
   /** R-371: SHA-256 of the procedure's span, its attributes included (R-278's span). */
   readonly spanHash: string;
-  /** R-371: unique within the test app: `[<kind> ]<id>:<display>`, `#<n>` for a repeat. */
+  /** R-371: unique within the test app: `[<kind> ]<id>:<display>`, `#<n>` for a repeat (one
+   *  counter over the whole app, so two `#if` arms of one object get two keys). Read only to
+   *  explain a too-many-new-tests refusal, never to decide a verdict. */
   readonly key: string;
   /** R-371: carries an `[EventSubscriber]` attribute. */
   readonly subscriber: boolean;
@@ -499,9 +501,11 @@ function procOf(
   const attributes = attributesOf(p);
   const handlerList = attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h);
   const display = `${unit.display}.${id2.text}`;
-  const seen = keys.get(display.toLowerCase()) ?? 0;
-  keys.set(display.toLowerCase(), seen + 1);
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
+  const suffix = isTrigger ? " (trigger)" : "";
+  const keyBase = `${kind}${unit.id}:${display}${suffix}`.toLowerCase();
+  const seen = keys.get(keyBase) ?? 0;
+  keys.set(keyBase, seen + 1);
   return {
     unit,
     sites: block === undefined ? undefined : callSites(block),
@@ -515,7 +519,7 @@ function procOf(
       .map((h) => normalizeAlName(h.trim()))
       .filter((h) => h.length > 0),
     spanHash: sha256(normalizeSource(source.slice(spanStart(p), p.endIndex))),
-    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${isTrigger ? " (trigger)" : ""}`,
+    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`,
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
   };
 }
@@ -535,6 +539,7 @@ function buildUnit(
   node: ALSyntaxNode,
   errors: readonly ErrorSite[],
   source: string,
+  keys: Map<string, number>,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
@@ -567,7 +572,6 @@ function buildUnit(
     baseKey: undefined,
     parts: [],
   };
-  const keys = new Map<string, number>();
   if (body !== undefined) {
     const members = flattenPreproc(body.namedChildren).flatMap((c) =>
       c.rawKind.endsWith("var_section") ? [c, ...procsInVarSection(c)] : [c],
@@ -610,6 +614,7 @@ function buildObjectUnit(
   kind: string,
   baseKey: string | undefined,
   extendsText: string | undefined,
+  keys: Map<string, number>,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const nameText = nameNode(node)?.text ?? "";
@@ -668,7 +673,6 @@ function buildObjectUnit(
     baseKey,
     parts,
   };
-  const keys = new Map<string, number>();
   const walk = (n: ALSyntaxNode): void => {
     if (n.rawKind === "procedure" || n.rawKind === "trigger_declaration") {
       const proc = procOf(n, unit, source, null, keys);
@@ -1440,6 +1444,7 @@ function scanFile(
   units: Unit[],
   suspect: string[],
   others: Unit[],
+  keys: Map<string, number>,
 ): void {
   const root = wrapRoot(parsed);
   const errors = errorOffsets(root);
@@ -1448,7 +1453,7 @@ function scanFile(
   );
   for (const o of objects) {
     if (o.rawKind === "codeunit_declaration") {
-      units.push(buildUnit(path, o, errors, source));
+      units.push(buildUnit(path, o, errors, source, keys));
       continue;
     }
     // R-371: every other object, for the digest's walk. The TestPage scan never reads these.
@@ -1473,6 +1478,7 @@ function scanFile(
         isExt ? `${base}extension` : base,
         baseKey,
         extendsText,
+        keys,
       ),
     );
   }
@@ -1505,10 +1511,12 @@ export function buildTestAppModel(
   const suspect: string[] = [];
   const damaged: string[] = [];
   const fileHashes: string[] = [];
+  // One counter for the whole app, so `Proc.key` is unique across it (`#if` arms, duplicates).
+  const keys = new Map<string, number>();
   for (const f of files) {
     const parsed = parseAL(f.text);
     if (wrapRoot(parsed).hasError) damaged.push(f.path);
-    scanFile(f.path, f.text, parsed, units, suspect, objects);
+    scanFile(f.path, f.text, parsed, units, suspect, objects, keys);
     fileHashes.push(sha256(normalizeSource(f.text)));
   }
   return { units, objects, suspect, damaged, fileHashes: fileHashes.sort() };
