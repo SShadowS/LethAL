@@ -1283,6 +1283,7 @@ export async function runVerify(
     }
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
+    const { projectPath } = source;
     const plan = await planVerify({
       source,
       manifest,
@@ -1290,7 +1291,7 @@ export async function runVerify(
       sourceTestDigests: store.testDigests(source.runId),
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
-      dependencies: () => verifyDependencyFingerprint(backend, args.testDir, source.projectPath),
+      dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
