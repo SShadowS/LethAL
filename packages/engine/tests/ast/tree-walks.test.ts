@@ -2,10 +2,10 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import type { ALSyntaxNode } from "../../src";
 import {
   ALNodeKind,
+  findAll,
   findEnclosingCodeBlock,
   findEnclosingProcedure,
   findEnclosingStatement,
-  findAll,
   findFirst,
   gapBlockOf,
   inMemberBody,

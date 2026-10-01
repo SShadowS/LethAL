@@ -2191,6 +2191,42 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(lines.has(6)).toBe(true);
     expect(lines.has(8)).toBe(false);
   });
+
+  // The test above calls printDryRun directly, so it cannot see main() drop the config's symbols on
+  // the way. This one runs the real CLI as a subprocess, which is the only way to reach main().
+  test("R214: `lethal run --dry-run --config` lists the arm the config's symbols build", async () => {
+    const { root, projectDir } = await r214Project();
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
+    const outPath = join(root, "dry-run.json");
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "run",
+        "--project",
+        projectDir,
+        "--dry-run",
+        "--config",
+        configPath,
+        "--db",
+        join(root, "lethal.sqlite"),
+        "--out",
+        outPath,
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toContain("(symbols: X)");
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+      batches: { sites: { line: number }[] }[];
+    };
+    const lines = new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    expect(lines.has(6)).toBe(true);
+    expect(lines.has(8)).toBe(false);
+  }, 60_000);
 });
 
 // R358 review C1, then R360: a clean `lethal run` removes its scratch folder, and `lethal verify`

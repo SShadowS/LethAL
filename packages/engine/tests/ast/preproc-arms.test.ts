@@ -157,6 +157,24 @@ describe("R214: evaluateArms follows alc's measured grammar", () => {
     expect(inactiveLines(src, ["DROP", "OUTER"])).toEqual([15, 21]);
   });
 
+  test("equal counts at different lines still refuse the file (marker positions, not counts)", () => {
+    // Measured with the native parser: a mid-line `#if A` is a marker on line 5 that the
+    // directive-line scan does not see, and the `#if B` inside the block comment is a directive
+    // line on line 8 that the tree does not mark. Two lines, two markers, different lines.
+    const src = body("        X := 1; #if A\n        X := 2;\n/*\n#if B\n*/\n#endif");
+    expect(inactiveLines(src, [])).toBe(
+      "undecided: marker-mismatch (2 directive lines, 2 markers)",
+    );
+    // The same with an ERROR: the `#endif` inside a string literal is swallowed by an ERROR node
+    // (no marker) and the mid-line `#if A` is a marker inside that ERROR.
+    const err = body(
+      "        X := 1; #if A\n        X := 2;\n        Message('\n#endif');\n        X := 3;",
+    );
+    expect(inactiveLines(err, [])).toBe(
+      "undecided: marker-mismatch (1 directive lines, 1 markers)",
+    );
+  });
+
   test("a directive-looking line in a block comment refuses the file (row 49)", () => {
     expect(inactiveLines(body("/*\n#if A\n*/\n        X := 1;\n/*\n#endif\n*/"), [])).toMatch(
       /^undecided: marker-mismatch \(2 directive lines, 0 markers\)$/,
