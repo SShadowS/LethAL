@@ -2450,7 +2450,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.testsOnly !== undefined && input.testsOnly.length > 0) caveats.push("tests-narrowed");
   if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
   // R307: files refused whole by the instrumentation trial. See CAVEAT_INTERPRETATIONS["files-refused"].
-  const refusedRows = (input.excludedSites?.files ?? []).filter(
+  const refusedRows = input.excludedSites.files.filter(
     (f) => f.reason === "instrumentation-refused",
   );
   if (refusedRows.length > 0) caveats.push("files-refused");

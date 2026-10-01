@@ -218,7 +218,13 @@ saved mutant verdict that such a test took part in (it killed the mutant, or it 
 tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
 test, and says so in a `resume-testpage-rescored` warning.
 
-A file LethAL cannot instrument is refused whole and published unchanged (R307). When it was refused
+A file LethAL cannot instrument is refused whole and published unchanged (R307). The run goes on
+with the other files, so the score does not cover the refused file's sites: `reliability` is
+`narrowed` (or `narrowed-degraded`), `validity.caveats` carries `files-refused`,
+`scoreDescribes` says "N file(s) refused, M site(s) not mutated", the
+`instrumentation-refused-files` warning names each file, and `excludedSites` has one row per file
+with reason `instrumentation-refused` and the cause in `detail`. When every file with mutation sites
+is refused, nothing is left to measure and the run exits `1`, naming each file. When it was refused
 because no object name could be read from it, a mutant elsewhere that matches one of its sites
 apart from the object name could hold a key an earlier run gave that file. For that run such a
 mutant is not skipped by `--skip-known-survivors`, not carried by `--resume` or `--resume-run`, and

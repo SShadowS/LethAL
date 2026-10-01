@@ -56,7 +56,7 @@ const SENTENCE: Record<FileRefusalShape, string> = {
 
 /** R307: the refused row's `detail`, from the structured fields only. `type:id` never occurs in
  *  AL, so no header line of the refused file is copied. */
-export function formatRefusal(err: FileRefusedError): string {
+export function formatRefusal(err: FileRefusalFields): string {
   let out = `${err.shape} in ${err.file}: ${SENTENCE[err.shape]}`;
   if (err.objects !== undefined && err.objects.length > 0) {
     out += `; objects ${err.objects.map((o) => `${o.type}:${o.id} ${JSON.stringify(o.name)}`).join(", ")}`;

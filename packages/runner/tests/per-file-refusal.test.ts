@@ -63,6 +63,25 @@ const NO_HEADER_AL = `codeunit 79305 Ærø
 }
 `;
 
+/** Holds code but is not a carrier kind, so it is skipped (not refused). Its `SetRange` is a
+ *  `void-method-call` site, a shape `Mixed.al` does not hold. */
+const XMLPORT_AL = `xmlport 79306 "Only Xmlport"
+{
+    schema
+    {
+        textelement(Root)
+        {
+            trigger OnBeforePassVariable()
+            var
+                Other: Record "Other Table";
+            begin
+                Other.SetRange("No.", 'A');
+            end;
+        }
+    }
+}
+`;
+
 async function withProject(
   files: Readonly<Record<string, string>>,
   body: (projectDir: string) => Promise<void>,
@@ -83,6 +102,7 @@ async function withProject(
 const GOOD = join("src", "Good.Codeunit.al");
 const MIXED = join("src", "Mixed.al");
 const NO_HEADER = join("src", "Odd.al");
+const XMLPORT = join("src", "Only.XmlPort.al");
 
 beforeAll(async () => {
   await initParser();
@@ -134,8 +154,39 @@ describe("R307: the per-file trial", () => {
       expect(message).toContain("no deployable mutation site");
       expect(message).toContain('"lethal.flip-boolean-literal"');
       expect(message).not.toContain('"lethal.remove-assignment"');
-      expect(message).toContain("or in files refused whole (R307)");
+      // The refused file is named in the message itself: the run stops here, before the
+      // instrumentation-refused-files warning or any report could name it.
+      expect(message).toContain(
+        `"lethal.flip-boolean-literal" DID find sites, but only in files refused whole at instrumentation (R307): ${MIXED} (object-mix), so nothing would deploy.`,
+      );
+      // No not-instrumentable file held its sites, so the skip list is not offered as the reason.
+      expect(message).not.toContain("no selector var can be injected into");
     }));
+
+  test("I4: a refused file holding none of the barren operator's sites is not named", () =>
+    withProject(
+      { [GOOD]: GOOD_AL, [MIXED]: MIXED_AL, [XMLPORT]: XMLPORT_AL },
+      async (projectDir) => {
+        // Mixed.al IS refused under this selection: its empty-block site reaches the trial.
+        const control = await generateMutationSet(projectDir, {
+          operators: ["empty-block"],
+          emit: () => {},
+        });
+        expect(control.refusedFiles.map((r) => r.file)).toEqual([MIXED]);
+        const err = await generateMutationSet(projectDir, {
+          operators: ["empty-block", "void-method-call"],
+          emit: () => {},
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        const message = err instanceof Error ? err.message : "";
+        expect(message).toContain(
+          `"lethal.void-method-call" DID find sites, but only in files no selector var can be injected into (see the skip list above), so nothing would deploy.`,
+        );
+        expect(message).not.toContain("refused whole");
+      },
+    ));
 
   test("a non-FileRefusedError thrown inside the trial still aborts the run", async () => {
     const spy = spyOn(schemata, "instrumentOneFile").mockImplementation(() => {

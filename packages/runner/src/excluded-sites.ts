@@ -10,7 +10,7 @@
  * The two views are the ONLY way the legacy fields are produced (`buildReport` consumes them, not
  * the raw arrays), so they cannot drift into a parallel implementation that agrees by accident.
  */
-import { FileRefusedError, formatRefusal } from "@lethal/engine";
+import { formatRefusal } from "@lethal/engine";
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
 /** R214: a file whose sites the build's preprocessor symbols decided. `detail` is the effective
@@ -141,16 +141,14 @@ export function buildExcludedSites(input: {
       kinds: f.kinds,
       sites: f.sites,
       reason: "instrumentation-refused" as const,
-      detail: `${formatRefusal(
-        new FileRefusedError("", {
-          file: f.file,
-          shape: f.shape,
-          ...(f.objects !== undefined ? { objects: f.objects } : {}),
-          ...(f.lines?.[0] !== undefined && f.lines[1] !== undefined
-            ? { lines: [f.lines[0], f.lines[1]] as [number, number] }
-            : {}),
-        }),
-      )}${
+      detail: `${formatRefusal({
+        file: f.file,
+        shape: f.shape,
+        ...(f.objects !== undefined ? { objects: f.objects } : {}),
+        ...(f.lines?.[0] !== undefined && f.lines[1] !== undefined
+          ? { lines: [f.lines[0], f.lines[1]] as const }
+          : {}),
+      })}${
         f.carryDisabled !== undefined
           ? `; identity carry disabled for ${f.carryDisabled} mutant(s)`
           : ""

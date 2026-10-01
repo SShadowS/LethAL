@@ -833,8 +833,10 @@ export async function generateMutationSet(
   let excludedByLines = 0;
   const producedAnywhere = new Set<string>();
   const producedInstrumentable = new Set<string>();
-  // R307: operators that found sites in a file refused whole, for the barren-operator message.
-  const producedInRefused = new Set<string>();
+  // R307: which operators found sites in a skipped file, and in each file refused whole, so the
+  // barren-operator message names only the reasons that apply.
+  const producedInSkipped = new Set<string>();
+  const producedInRefused = new Map<string, Set<string>>();
   // Sites an operator claimed that are not inside executable AL — see the drop below. The total
   // feeds the warning; the per-file rows feed `SessionReport.declarativeSites` (R144), because a
   // bare total cannot tell a reader whether the refusal touched anything they care about.
@@ -971,6 +973,7 @@ export async function generateMutationSet(
     if (fileSpecs.length === 0) continue;
     for (const spec of fileSpecs) producedAnywhere.add(spec.operatorName);
     if (!canCarryMutationSelectorVar(root)) {
+      for (const spec of fileSpecs) producedInSkipped.add(spec.operatorName);
       skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
       continue;
     }
@@ -994,8 +997,8 @@ export async function generateMutationSet(
       );
     } catch (e) {
       if (!(e instanceof FileRefusedError)) throw e;
-      for (const spec of fileSpecs) producedInRefused.add(spec.operatorName);
       const { file, shape, objects, lines } = e;
+      producedInRefused.set(file, new Set(fileSpecs.map((spec) => spec.operatorName)));
       if (entries !== undefined) identityEntries.push(...entries); // reserved: a number, no row
       refusedFiles.push({
         file,
@@ -1030,10 +1033,10 @@ export async function generateMutationSet(
       );
     }
   }
-  // R307 section 5: refusing only when nothing is left to measure.
+  // R307 section 5: refusing only when nothing is left to measure. A plain Error (exit 1).
   if (refusedFiles.length > 0 && files.length === 0) {
     throw new Error(
-      `every file with mutation sites was refused at instrumentation (R307), so there is nothing to measure: ${refusedFiles.map((r) => formatRefusal(new FileRefusedError("", r))).join(" | ")}`,
+      `nothing is left to measure: no file with mutation sites could be instrumented, and ${refusedFiles.length} file(s) were refused whole at instrumentation (R307): ${refusedFiles.map(formatRefusal).join(" | ")}`,
     );
   }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
@@ -1045,9 +1048,23 @@ export async function generateMutationSet(
     if (barren.length > 0) {
       const named = barren.map((n) => `"${n}"`).join(", ");
       const uninstrumentableOnly = barren.filter((n) => producedAnywhere.has(n)).sort();
+      // R307: each reason only when a file of that kind held one of these operators' sites. A
+      // refused file is named HERE: the run stops before its warning or any report exists.
+      const where: string[] = [];
+      if (uninstrumentableOnly.some((n) => producedInSkipped.has(n))) {
+        where.push("files no selector var can be injected into (see the skip list above)");
+      }
+      const refusedHere = refusedFiles.filter((r) =>
+        uninstrumentableOnly.some((n) => producedInRefused.get(r.file)?.has(n) === true),
+      );
+      if (refusedHere.length > 0) {
+        where.push(
+          `files refused whole at instrumentation (R307): ${refusedHere.map((r) => `${r.file} (${r.shape})`).join(", ")}`,
+        );
+      }
       const nuance =
         uninstrumentableOnly.length > 0
-          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above)${uninstrumentableOnly.some((n) => producedInRefused.has(n)) ? " or in files refused whole (R307; they are named in the instrumentation-refused-files warning and the report's excludedSites)" : ""}, so nothing would deploy.`
+          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
       throw new Error(
         `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
