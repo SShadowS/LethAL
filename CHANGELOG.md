@@ -36,7 +36,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   digest cover the whole test-app source, so it can only make a test new; so does a test-app object passed to code in another app (R386: on
   BaseApp Test every test is on the whole-source digest today). Microsoft dependencies are
   covered by their declared version only (R385). A Variant holding a test-app codeunit or interface that
-  code in another app runs is not seen (R389). One-time cost: verify refuses a source run from
+  code in another app runs is not seen (R389), nor is a test-app codeunit returned by a
+  table procedure and passed to it (R390). One-time cost: verify refuses a source run from
   before this build as `source-predates-verify`; run `lethal run` again, then verify. Verify refuses
   as `too-many-new-tests` when more tests are new than `--max-new-tests` (default 50) and names the
   number to pass (R384 is the filter large suites need), and as `dependency-unreadable` when a

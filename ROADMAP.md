@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**87 of 370 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 371 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -149,6 +149,7 @@ that ordering is the priority.
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · open, filed 2026-10-01
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
+- **R390** · R-371's reachable-set walk misses a test-app codeunit returned by a table procedure and passed to external code; one item for argument shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 
 ## Product gaps a real project hits
 
