@@ -2335,6 +2335,114 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file
   });
 
+  // R307 Task 7: a refused file is published uninstrumented and its tests still run.
+  const R307_GOOD_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure P1(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+    procedure P2(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+}
+`;
+  // An object-mix file (table + enum + codeunit): the per-file trial refuses it whole.
+  const R307_BAD_AL = `table 79310 "Mixed Table"
+{
+    fields { field(1; Code; Code[20]) { } }
+}
+
+enum 79311 "Mixed Enum"
+{
+    value(0; Zero) { }
+}
+
+codeunit 79312 "Mixed Code"
+{
+    procedure Compute()
+    var
+        Counter: Integer;
+    begin
+        Counter := 1;
+    end;
+}
+`;
+  const R307_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GoodAndBad()
+    begin
+    end;
+
+    [Test]
+    procedure GoodP2ThenBadFails()
+    begin
+    end;
+}
+`;
+
+  test("R307: a refused file is copied byte-identical, keeps its tests' coverage, and a red test in it makes the covered mutants error", async () => {
+    const dirs = await makeProject(R307_TESTS_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), R307_GOOD_AL);
+    await Bun.write(join(dirs.projectDir, "Bad.Mixed.al"), R307_BAD_AL);
+    const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
+      mutant === null && ref.method === "GoodP2ThenBadFails" ? "fail" : "pass",
+    );
+    backend.coverageEntriesFor = (ref) =>
+      ref.method === "GoodAndBad"
+        ? [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P1" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ]
+        : [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P2" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ];
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+      e.match(/^run-\d+-batch-0$/),
+    );
+    expect(batchDirs.length).toBe(1);
+    const batchDir = join(dirs.instrumentedDir, batchDirs[0] as string);
+    expect(await readFile(join(batchDir, "Bad.Mixed.al"), "utf8")).toBe(R307_BAD_AL);
+
+    const p1 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 5);
+    const p2 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 10);
+    expect(p1.length).toBeGreaterThan(0);
+    expect(p2.length).toBeGreaterThan(0);
+    // Good's coverage survives the refusal: P1 is still covered by the green test and scored.
+    for (const m of p1) expect(m.verdict).toBe("survived");
+    // P2's only covering test is red at baseline: never a finding.
+    for (const m of p2) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain("did not pass at baseline");
+      expect(m.failureNote).toContain("Sandbox Tests.GoodP2ThenBadFails");
+    }
+    expect(report.mutants.some((m) => m.file.includes("Bad.Mixed"))).toBe(false);
+  });
+
+  test("R307: a refused file and a good file sharing a basename still abort with the duplicate-basename message", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "a", "Dup.Codeunit.al"), R307_BAD_AL);
+    await Bun.write(
+      join(dirs.projectDir, "b", "Dup.Codeunit.al"),
+      TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
+    );
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /cannot build the batch project: two source files share the basename "Dup\.Codeunit\.al" \(.*Dup\.Codeunit\.al and .*Dup\.Codeunit\.al\)\. Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app\. Rename one of them\./,
+    );
+    expect(backend.deploys.length).toBe(0);
+  });
+
   test("missing app.json aborts with a clear error before deploy", async () => {
     const dirs = await makeProject();
     await rm(join(dirs.projectDir, "app.json"));
