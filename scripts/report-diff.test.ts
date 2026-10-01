@@ -17,9 +17,10 @@ function m(hash: string, verdict: string, extra: Record<string, unknown> = {}) {
   };
 }
 const report = (...mutants: object[]) => ({ mutants }) as unknown as SessionReport;
+const k = (h: string) => `${h}|Sandbox Logic|Clamp|lethal.return-value|1`;
 
-describe("diffReports", () => {
-  test("added, removed and changed (verdict or killingTest) on the baseline key", () => {
+describe("diffReports (the gates' diffMutants)", () => {
+  test("added, removed and changed mutants are each reported", () => {
     const a = report(
       m("h1", "killed", { killingTest: "T1" }),
       m("h2", "survived"),
@@ -30,28 +31,35 @@ describe("diffReports", () => {
       m("h2", "killed", { killingTest: "T1" }),
       m("h4", "survived"),
     );
-    const d = diffReports(a, b);
-    const k = (h: string) => `${h}|Sandbox Logic|Clamp|lethal.return-value|1`;
-    expect(d).toEqual({
-      added: [k("h4")],
-      removed: [k("h3")],
-      changed: [
-        `${k("h1")}: killingTest T1 -> T2`,
-        `${k("h2")}: verdict survived -> killed, killingTest null -> T1`,
-      ],
-    });
-    expect(formatDiff(d, 3, 3).endsWith("DIFFERENT")).toBe(true);
+    const diffs = diffReports(a, b);
+    expect(diffs).toHaveLength(4);
+    expect(diffs.join("\n")).toContain(`mutant ${k("h1")}: killingTest T1 -> T2`);
+    expect(diffs.join("\n")).toContain(`mutant ${k("h2")}: verdict survived -> killed`);
+    expect(diffs.join("\n")).toContain(`mutant ${k("h3")}: present in "before" but missing`);
+    expect(diffs.join("\n")).toContain(`mutant ${k("h4")}: present in "after" but missing`);
+    expect(formatDiff(diffs, 3, 3).endsWith("\nDIFFERENT")).toBe(true);
   });
-  test("identical reports print IDENTICAL; an identity ordinal keeps twins apart", () => {
-    const r = report(m("h1", "killed"), m("h1", "survived", { identityOrdinal: 1 }));
-    expect(formatDiff(diffReports(r, r), 2, 2).endsWith("\nIDENTICAL")).toBe(true);
+
+  test("twins sharing one key on both sides, in either order, are IDENTICAL", () => {
+    const a = report(m("h1", "killed", { killingTest: "T1" }), m("h1", "survived"));
+    const b = report(m("h1", "survived"), m("h1", "killed", { killingTest: "T1" }));
+    const diffs = diffReports(a, b);
+    expect(diffs).toEqual([]);
+    expect(formatDiff(diffs, 2, 2).endsWith("\nIDENTICAL")).toBe(true);
   });
-  test("a duplicate key on either side is refused, naming the key", () => {
-    const dup = report(m("h1", "killed"), m("h1", "survived"));
-    const ok = report(m("h1", "killed"));
-    expect(() => diffReports(dup, ok)).toThrow(/a has duplicate key h1\|Sandbox Logic\|Clamp/);
-    expect(() => diffReports(ok, dup)).toThrow(/b has duplicate key/);
+
+  test("only one twin's verdict changing is DIFFERENT", () => {
+    const a = report(m("h1", "killed", { killingTest: "T1" }), m("h1", "survived"));
+    const b = report(
+      m("h1", "killed", { killingTest: "T1" }),
+      m("h1", "killed", { killingTest: "T1" }),
+    );
+    const diffs = diffReports(a, b);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toContain(`mutant ${k("h1")} [occurrence`);
+    expect(formatDiff(diffs, 2, 2).endsWith("\nDIFFERENT")).toBe(true);
   });
+
   test("empty vs empty is refused, never IDENTICAL", () => {
     expect(() => diffReports(report(), report())).toThrow(ReportDiffRefusal);
   });

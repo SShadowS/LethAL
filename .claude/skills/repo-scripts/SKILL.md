@@ -16,5 +16,5 @@ Run from the repo root. Every one exits non-zero on failure and never prints an 
 | `coord.sh` | `bash scripts/coord.sh <command> [args...]` | Any coord CLI call (`CG_COORD_ROOT` defaults to `H:\lethal-coord`). |
 | `coord-status.ts` | `bun scripts/coord-status.ts` | One view: pause state, open questions, stale list, Doing tasks with their latest checkpoint, Cronus28 and Cronus284 lease holders. |
 | `report-summary.ts` | `bun scripts/report-summary.ts <report.json>` | Totals by verdict and by operator, plus `groupedCalls` / `warmKills`, for a `lethal run --out` report. |
-| `report-diff.ts` | `bun scripts/report-diff.ts <a.json> <b.json>` | Per-mutant diff on the frozen-baseline key (`keyOf`, `packages/runner/itest/mutant-equality.ts`). Exit 0 IDENTICAL, 1 DIFFERENT, 2 refused (duplicate key, or zero mutants on both sides). |
+| `report-diff.ts` | `bun scripts/report-diff.ts <a.json> <b.json>` | Per-mutant diff by the live gates' own compare (`diffMutants`, `packages/runner/itest/mutant-equality.ts`: `keyOf` key, multiset per key, so twins are fine). Exit 0 IDENTICAL, 1 DIFFERENT, 2 refused (zero mutants on both sides). |
 | `store-query.ts` | `bun scripts/store-query.ts <lethal.sqlite> [--run latest\|<id>] verdicts\|runs\|tests` | Read-only look at a results store. "latest" is the highest FINISHED run id; a newer unfinished run is named on stderr. |
