@@ -5,7 +5,7 @@
  *
  * Rewrites ONLY the `status:` frontmatter line of `docs/roadmap/R<nnn>.md`, JSON-encoded (a valid
  * YAML double-quoted scalar, the form `roadmap-index.ts` reads back). Refuses when the file or its
- * status line is missing, and refuses a status containing "pending": that word is the placeholder
+ * status line is missing, and refuses a placeholder sha (`done (pending)`, `done (<sha>)`): the placeholder
  * people write before the commit sha exists, and a row closed as `done (pending)` names nothing.
  * Commit first, then set the status with the real sha.
  */
@@ -23,12 +23,15 @@ import {
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
+/** `done (pending)`, ``done (`pending`)`` or `done (<sha>)`, any case. Other uses of the word pass. */
+const PLACEHOLDER_SHA = /done \((?:pending|`pending`|<sha>)\)/i;
+
 /** Returns `text` with its frontmatter `status:` line replaced. Throws when there is none. */
 export function setStatusLine(text: string, status: string, sourceName: string): string {
   if (status.trim() === "") throw new RoadmapFormatError(`${sourceName}: refusing an empty status`);
-  if (/pending/i.test(status)) {
+  if (PLACEHOLDER_SHA.test(status)) {
     throw new RoadmapFormatError(
-      `refusing status containing "pending" (a placeholder sha?): ${JSON.stringify(status)}. Commit first, then set the real sha.`,
+      `refusing a placeholder sha in ${JSON.stringify(status)}. Commit first, then set the real sha.`,
     );
   }
   const end = text.startsWith("---\n") ? text.indexOf("\n---\n", 3) : -1;

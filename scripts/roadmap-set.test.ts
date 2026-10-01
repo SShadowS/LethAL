@@ -32,8 +32,14 @@ describe("setStatusLine", () => {
       'status: "done (abc1234) · said \\"ok\\" | path C:\\\\x\\\\y, tab\\there"',
     );
   });
-  test("refuses a 'pending' placeholder, an empty status, and a missing status line", () => {
-    expect(() => setStatusLine(ROW, "done (pending)", "R007.md")).toThrow(/pending/);
+  test("the word 'pending' outside a placeholder sha is allowed", () => {
+    const status = "blocked (pending owner ruling)";
+    expect(parseRowFile(setStatusLine(ROW, status, "R007.md"), "R007.md").status).toBe(status);
+  });
+  test("refuses a placeholder sha, an empty status, and a missing status line", () => {
+    for (const s of ["done (pending)", "DONE (`Pending`) measured", "done (<sha>)"]) {
+      expect(() => setStatusLine(ROW, s, "R007.md")).toThrow(/placeholder sha/);
+    }
     expect(() => setStatusLine(ROW, "  ", "R007.md")).toThrow(RoadmapFormatError);
     const noStatus = ROW.replace('status: "open"\n', "");
     expect(() => setStatusLine(noStatus, "done (abc)", "R007.md")).toThrow(/no 'status:' line/);
