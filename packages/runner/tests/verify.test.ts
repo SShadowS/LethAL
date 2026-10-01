@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { initParser, parsesSinceStart } from "@lethal/engine";
 import {
   IDENTITY_SCHEME,
   type MutantManifest,
@@ -10,6 +11,7 @@ import {
 import { InstalledArtifactError } from "../src/artifact";
 import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import { appInputsOfAppJson, readAppJsonInputs } from "../src/digest-inputs";
 import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
@@ -20,9 +22,8 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
-import { appInputsOfAppJson, readAppJsonInputs } from "../src/digest-inputs";
-import { testDigests } from "../src/test-digest";
-import { TestPageScanError } from "../src/testpage-scan";
+import { testDigests, testDigestsOfModel } from "../src/test-digest";
+import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
   INSTALLED_ARTIFACT_REFUSALS,
@@ -40,8 +41,8 @@ import {
   planVerify,
   resolveVerifySource,
   runVerify,
-  verifyExitCode,
   verifyDependencyFingerprint,
+  verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
 import { tinyBundle } from "./helpers/bundle";
@@ -773,6 +774,112 @@ describe("planVerify", () => {
     );
     expect(e.reason).toBe("source-predates-verify");
     expect(e.detail).toContain("test digests");
+  });
+
+  // R-371: a v1 digest (R-278's, no scheme tag) covers the method only; no comparison with it
+  // means anything, so verify refuses once instead of reading every test as edited.
+  test("R-371: a source run that recorded v1 digests is source-predates-verify, naming the scheme", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const v2 = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v1,
+        dependencies: DEPS,
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain("R-278's scheme");
+    expect(e.detail).toContain("once per source run");
+  });
+
+  describe("R-371: --max-new-tests", () => {
+    // One covered survivor and three tests the source run never recorded.
+    const capPlan = (maxNewTests: number) =>
+      planUnchanged({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([
+          { id: 50100, name: "T", methods: ["M"] },
+          { id: 50101, name: "New", methods: ["N1", "N2", "N3"] },
+        ]),
+        maxNewTests,
+      });
+
+    test("exactly at the limit is planned", async () => {
+      const plan = await capPlan(3);
+      expect(keys(plan.newTests)).toEqual(["50101::N1", "50101::N2", "50101::N3"]);
+    });
+
+    test("one above the limit is too-many-new-tests, naming N, the value to pass and the edit class", async () => {
+      const e = await planRefusal(capPlan(2));
+      expect(e.reason).toBe("too-many-new-tests");
+      expect(e.detail).toContain("3 tests are new or edited");
+      expect(e.detail).toContain("pass --max-new-tests 3");
+      expect(e.detail).toContain("added: 3 test(s)");
+    });
+
+    // Ruling 2: the refusal names the edit class, read from the recorded parts.
+    test("a subscriber edit is named by its class and its procedure", async () => {
+      const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
+      const sub = (v: number) =>
+        `codeunit 50120 "Sub"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Lib", 'OnX', '', false, false)]\n    local procedure OnX()\n    begin\n        S := ${v};\n    end;\n}\n`;
+      const dirWith = (s: number) => {
+        const dir = testDir(codeunits);
+        writeFileSync(join(dir, "Sub.al"), sub(s));
+        return dir;
+      };
+      await initParser();
+      const before = dirWith(1);
+      const { digests, parts } = testDigestsOfModel(
+        buildTestAppModel(await readTestAppSources(before)),
+        await discoverTests(before),
+        INPUTS,
+      );
+      const refuse = async (dir: string) =>
+        planRefusal(
+          planVerify({
+            source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+            manifest: manifest([entry("M0001")]),
+            sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+            sourceTestDigests: digests,
+            sourceTestDigestParts: parts,
+            dependencies: DEPS,
+            testDir: dir,
+            maxNewTests: 1,
+          }),
+        );
+      const s = await refuse(dirWith(2));
+      expect(s.reason).toBe("too-many-new-tests");
+      expect(s.detail).toContain("subscriber: 2 test(s)");
+      expect(s.detail).toContain("pass --max-new-tests 2");
+      expect(s.detail).toContain("Changed procedures: Sub.OnX");
+    });
+  });
+
+  // R-371: the TestPage scan and the digests share ONE parse of the test app.
+  test("R-371: planVerify parses each test-app file once", async () => {
+    const dir = testDir([
+      { id: 50100, name: "T", methods: ["M"] },
+      { id: 50101, name: "U", methods: ["K"] },
+    ]);
+    const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
+    const before = parsesSinceStart();
+    await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M"), row(50101, "U", "K")],
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+      testDir: dir,
+    });
+    expect(parsesSinceStart() - before).toBe(2);
   });
 
   test("an empty source baseline is refused, never read as every test new", async () => {
