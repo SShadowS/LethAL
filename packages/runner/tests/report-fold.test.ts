@@ -19,6 +19,7 @@ import { TESTPAGE_REFUSED_DIAGNOSIS, testPageNotRunMessage } from "../src/testpa
 
 const STATICS: FoldStatics = {
   caps: { authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
+  buildSymbols: [],
 };
 
 function seq(events: readonly RunEventInput[]): RunEvent[] {

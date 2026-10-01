@@ -801,12 +801,20 @@ describe("planVerify", () => {
   });
 
   /** Survivors all covered by `T.M`, planned against the given marks file. */
-  function markedPlan(marks: unknown, entries: readonly MutantManifestEntry[]) {
+  function markedPlan(
+    marks: unknown,
+    entries: readonly MutantManifestEntry[],
+    /** R214: the source run's effective build symbols. */
+    buildSymbols: readonly string[] = [],
+  ) {
     return planUnchanged({
-      source: source(
-        project(marks),
-        entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
-      ),
+      source: {
+        ...source(
+          project(marks),
+          entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
+        ),
+        buildSymbols,
+      },
       manifest: manifest(entries),
       sourceBaseline: [row(50100, "T", "M")],
       testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
@@ -840,6 +848,26 @@ describe("planVerify", () => {
     expect(plan.skipped).toEqual([]);
     expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
     expect(plan.marksUnderOtherScheme.map((m) => [m.key, m.identityScheme])).toEqual([[key, 1]]);
+  });
+
+  // R214: a key names a site within one build, so a mark made under other preprocessor symbols
+  // than the source run's build is stale and not applied: the survivor runs.
+  test("a mark made under other build symbols than the source run's is stale, never applied", async () => {
+    const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
+    const marks = (preprocessorSymbols: readonly string[]) => ({
+      identityScheme: IDENTITY_SCHEME,
+      marks: [{ key, reason: "same either way", preprocessorSymbols }],
+    });
+    const other = await markedPlan(marks(["LETHALA"]), [entry("M0001")], ["LETHALB"]);
+    expect(other.skipped).toEqual([]);
+    expect(other.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
+    expect(other.marksUnderOtherScheme.map((m) => [m.key, m.preprocessorSymbols])).toEqual([
+      [key, ["LETHALA"]],
+    ]);
+    // Control: the same mark under the source run's own set is applied.
+    const same = await markedPlan(marks(["LETHALB"]), [entry("M0001")], ["LETHALB"]);
+    expect(same.skipped.map((x) => x.entry.mutantId)).toEqual(["M0001"]);
+    expect(same.marksUnderOtherScheme).toEqual([]);
   });
 
   // Review r1 item 3: an empty target list must not come back looking like "every target was

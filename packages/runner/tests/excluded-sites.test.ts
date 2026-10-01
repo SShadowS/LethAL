@@ -162,7 +162,7 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
         { type: "session-finished", elapsedMs: 10 },
       ] as RunEventInput[]
     ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
-    return buildReport({ caps: CAPS }, events);
+    return buildReport({ caps: CAPS, buildSymbols: [] }, events);
   }
 
   test("the report's own views equal the views of its own excludedSites", () => {

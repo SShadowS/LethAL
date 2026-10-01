@@ -289,6 +289,7 @@ describe("Caveat union", () => {
 describe("buildReport: hangCapable travels the site property path (R196)", () => {
   const STATICS: FoldStatics = {
     caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+    buildSymbols: [],
   };
 
   function seq(events: readonly RunEventInput[]): RunEvent[] {

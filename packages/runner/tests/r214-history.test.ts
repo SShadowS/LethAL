@@ -98,7 +98,7 @@ async function armKey(index: 1 | 2): Promise<string> {
   return key;
 }
 
-function armOf(report: SessionReport, line: 13 | 15): ReportMutant {
+function armOf(report: SessionReport, line: 13 | 15 | 17): ReportMutant {
   const hits = report.mutants.filter(
     (m) => m.line === line && m.operatorName === "lethal.return-value",
   );
@@ -353,6 +353,83 @@ describe("R214 C1: the same key text names a different site in another build", (
   test("marks control: the same mark under [LETHALB] marks it", async () => {
     const report = await markedRun(B);
     expect(armOf(report, 15).readerMark).toBeDefined();
+  });
+});
+
+describe("R214: a current-scheme row with no recorded symbols (NULL) never matches a no-symbol build", () => {
+  // The row is at IDENTITY_SCHEME, so only the symbol guard can refuse it. The build defines no
+  // symbols, so reading NULL as `[]` would match: these fail if NULL is ever read as `[]`.
+  async function nullRow(opts: { finished: boolean; nulled: boolean }) {
+    const stored = await storedRun({ symbols: [], finished: opts.finished });
+    if (opts.nulled) {
+      stored.store.db.run("UPDATE runs SET build_symbols = NULL WHERE id = ?", [stored.runId]);
+    }
+    return stored;
+  }
+
+  test("history: the NULL row's survivor is not skipped, and symbolsChanged says why", async () => {
+    const { dirs, store, runId } = await nullRow({ finished: true, nulled: true });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new SurvivingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: [],
+      skipKnownSurvivors: true,
+      emit: [(e) => events.push(e)],
+    });
+    expect(armOf(report, 17).verdict).toBe("survived");
+    const w = events.flatMap((e) =>
+      e.type === "warning" && e.code === "history-build-symbols-changed" ? [e.message] : [],
+    );
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain(`run ${runId}`);
+    expect(w[0]).toContain("(not recorded)");
+  });
+
+  test("history control: the same row with [] recorded IS skipped", async () => {
+    const { dirs, store } = await nullRow({ finished: true, nulled: false });
+    const report = await runSession({
+      backend: new SurvivingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: [],
+      skipKnownSurvivors: true,
+    });
+    expect(armOf(report, 17).verdict).toBe("known-survivor");
+  });
+
+  test("--resume-run of the NULL row is refused by name", async () => {
+    const { dirs, store, runId } = await nullRow({ finished: false, nulled: true });
+    await expect(
+      runSession({
+        backend: new SurvivingBackend(),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: [],
+        resume: runId,
+      }),
+    ).rejects.toThrow(
+      new RegExp(
+        `--resume-run ${runId} was built with preprocessor symbols \\(not recorded\\).*\\(none\\).*R214`,
+      ),
+    );
+  });
+
+  test("--resume-run control: the same row with [] recorded resumes", async () => {
+    const { dirs, store, runId } = await nullRow({ finished: false, nulled: false });
+    const report = await runSession({
+      backend: new SurvivingBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      preprocessorSymbols: [],
+      resume: runId,
+    });
+    expect(report.resumedFrom?.runId).toBe(runId);
   });
 });
 

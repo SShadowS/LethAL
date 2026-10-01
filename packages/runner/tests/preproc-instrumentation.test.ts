@@ -4453,7 +4453,10 @@ function r351Report(
     { type: "session-finished", elapsedMs: 10 },
   ];
   return buildReport(
-    { caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" } },
+    {
+      caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+      buildSymbols: [],
+    },
     events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),
   );
 }

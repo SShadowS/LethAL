@@ -333,6 +333,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
 
   const statics: FoldStatics = {
     caps: input.caps,
+    buildSymbols: [],
     ...(input.only !== undefined ? { only: { patterns: input.only.patterns } } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.stopHungSessions === true ? { stopHungSessions: true } : {}),

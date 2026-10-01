@@ -68,6 +68,7 @@ function mutant(mutantId: string): MutantManifestEntry {
 function buildScenarioReport(): SessionReport {
   const statics: FoldStatics = {
     caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+    buildSymbols: [],
     only: {
       patterns: [
         "Al/Codeunit/Codeunit 50100 Sales Helper.al",

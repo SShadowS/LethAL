@@ -627,7 +627,8 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       isolation: "session",
     } as const;
     const caveatsOf = (scope: object) =>
-      buildReport({ caps, ...scope }, events).validity.caveats as readonly string[];
+      buildReport({ caps, buildSymbols: [], ...scope }, events).validity
+        .caveats as readonly string[];
     const plain = new Set(caveatsOf({}));
     const scopes = [
       { only: { patterns: ["x"] } },

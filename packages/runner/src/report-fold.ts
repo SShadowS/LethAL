@@ -49,8 +49,8 @@ import type { BatchArtifact } from "./store";
  * happens to arrive after the invalidation in the raw event order.
  */
 export interface FoldStatics {
-  /** R214: the effective build symbols, for matching equivalence marks. Carried only in-process, like R325's scheme; not a report field. */
-  readonly buildSymbols?: readonly string[];
+  /** R214: the effective build symbols, for matching equivalence marks. REQUIRED, so a builder that forgets it fails to compile rather than silently matching `[]`. Carried only in-process, like R325's scheme; not a report field. */
+  readonly buildSymbols: readonly string[];
   readonly caps: BackendCapabilities;
   /**
    * R41: the `--only` narrowing this run was GIVEN, if any — patterns only. How many files that

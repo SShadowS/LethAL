@@ -391,7 +391,7 @@ describe("buildReport — an operator-scoped run says so", () => {
         { type: "session-finished", elapsedMs: 10 },
       ] as RunEventInput[]
     ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
-    return buildReport({ caps: CAPS, ...statics }, events);
+    return buildReport({ caps: CAPS, buildSymbols: [], ...statics }, events);
   }
 
   test("pushes `operator-narrowed`, a caveat distinct from `narrowed`", () => {
