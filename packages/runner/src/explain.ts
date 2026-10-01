@@ -194,10 +194,12 @@ import type { MutantVerdict } from "./store";
  * 8: R252 added the value `not-measured` to `$.survivors[].attribution`, for a survivor of a report
  * whose `coverageMode` is `"none"`. A new value, so it bumps (R233); v7 is frozen.
  *
- * 9: R307 added the caveat value `files-refused` (a file refused whole at instrumentation). A new
- * value, so it bumps (R233); v8 is frozen. R307 added no explain field.
+ * 9: R214 added the caveat value `preproc-files-refused`. A new value, so it bumps (R233).
+ *
+ * 10: R307 added the caveat value `files-refused` (a file refused whole at instrumentation). A new
+ * value, so it bumps (R233); v9 is frozen. R307 added no explain field.
  */
-export const EXPLAIN_SCHEMA_VERSION = 9;
+export const EXPLAIN_SCHEMA_VERSION = 10;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

@@ -223,8 +223,9 @@ const SERVER_READY_DEADLINE_MS = 10 * 60 * 1000;
  */
 const SERVER_SUITE_MIN_DEADLINE_MS = 10 * 60 * 1000;
 
-/** The real daemon, adapted to the handle `AlRunnerServer` consumes. */
-const defaultServerSpawn: ServerSpawnFn = (argv) => {
+/** The real daemon, adapted to the handle `AlRunnerServer` consumes. Exported for R387's gate leg,
+ *  which wraps it to record the argv. */
+export const defaultServerSpawn: ServerSpawnFn = (argv) => {
   const proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const handle: ServerProcessHandle = {
     write: (line) => {
@@ -302,6 +303,26 @@ export interface AlRunnerConfig {
    * `*.al`. See `emitResourceSelector` for the citations and the measurement.
    */
   readonly selectorMode?: "static" | "resource";
+}
+
+/**
+ * The exact argv `provisionOnce` spawns. One function, so `provisionOnce` and the gate's CLI-default
+ * leg (which allows this argv, and only this argv, as a one-shot call under `--server`) cannot drift.
+ */
+export function provisionArgv(
+  cfg: Pick<AlRunnerConfig, "alRunnerPath" | "testDir" | "packagesDir" | "preprocessorSymbols">,
+): string[] {
+  return buildAlRunnerArgv(cfg.alRunnerPath, {
+    sourceDir: cfg.testDir,
+    testDir: cfg.testDir,
+    // A filter that matches nothing. al-runner's `--test` is a substring match (R93), so this
+    // selects zero tests and the invocation exists only for its provisioning side effect.
+    qualifiedTest: AL_RUNNER_PROVISION_SENTINEL,
+    ...(cfg.packagesDir !== undefined ? { packagesDir: cfg.packagesDir } : {}),
+    ...(cfg.preprocessorSymbols !== undefined
+      ? { preprocessorSymbols: cfg.preprocessorSymbols }
+      : {}),
+  });
 }
 
 export class AlRunnerBackend implements ExecutionBackend {
@@ -437,17 +458,7 @@ export class AlRunnerBackend implements ExecutionBackend {
    */
   async provisionOnce(): Promise<AlRunnerProvisionResult> {
     const started = Date.now();
-    const argv = buildAlRunnerArgv(this.cfg.alRunnerPath, {
-      sourceDir: this.cfg.testDir,
-      testDir: this.cfg.testDir,
-      // A filter that matches nothing. al-runner's `--test` is a substring match (R93), so this
-      // selects zero tests and the invocation exists only for its provisioning side effect.
-      qualifiedTest: AL_RUNNER_PROVISION_SENTINEL,
-      ...(this.cfg.packagesDir !== undefined ? { packagesDir: this.cfg.packagesDir } : {}),
-      ...(this.cfg.preprocessorSymbols !== undefined
-        ? { preprocessorSymbols: this.cfg.preprocessorSymbols }
-        : {}),
-    });
+    const argv = provisionArgv(this.cfg);
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const res = await Promise.race([
@@ -956,6 +967,11 @@ export class AlRunnerBackend implements ExecutionBackend {
       }),
       "utf8",
     );
+  }
+
+  /** R-371: the non-Microsoft dependency packages every leg loads come from `packagesDir`. */
+  dependencyPackageDirs(): readonly string[] {
+    return this.cfg.packagesDir !== undefined ? [this.cfg.packagesDir] : [];
   }
 
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {

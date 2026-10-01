@@ -240,6 +240,8 @@ async function main(): Promise<void> {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      // R214: the probe runs on a directive-free fixture, which has no build symbols.
+      buildSymbols: [],
       projectPath: PROJECT_DIR,
       backend: "c0204b-live-probe",
       appVersion: "0.0.0.0",

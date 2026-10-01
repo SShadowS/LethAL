@@ -5,26 +5,28 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v9.schema.json`](explain-v9.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 9 |
-| [`explain-v8.schema.json`](explain-v8.schema.json) | the same, from builds before R307; kept so a stored v8 document stays checkable (v9 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 8 |
+| [`explain-v10.schema.json`](explain-v10.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 10 |
+| [`explain-v9.schema.json`](explain-v9.schema.json) | the same, from builds before R307; kept so a stored v9 document stays checkable (v10 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 9 |
+| [`explain-v8.schema.json`](explain-v8.schema.json) | the same, from builds before R214; kept so a stored v8 document stays checkable (v9 added the caveat `preproc-files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 8 |
 | [`explain-v7.schema.json`](explain-v7.schema.json) | the same, from builds before R252; kept so a stored v7 document stays checkable (v8 added the attribution value `not-measured`) | `EXPLAIN_SCHEMA_VERSION` = 7 |
 | [`explain-v6.schema.json`](explain-v6.schema.json) | the same, from builds before R265; kept so a stored v6 document stays checkable (v7 added the required `survivors[].markKey` and `markIdentityScheme`, and `markKeysStale`) | `EXPLAIN_SCHEMA_VERSION` = 6 |
 | [`explain-v5.schema.json`](explain-v5.schema.json) | the same, from builds before R-236c; kept so a stored v5 document stays checkable (v6 added the caveat `tests-testpage-refused`) | `EXPLAIN_SCHEMA_VERSION` = 5 |
 | [`explain-v4.schema.json`](explain-v4.schema.json) | the same, from builds before GH-24; kept so a stored v4 document stays checkable (its value sets drifted, see `docs/roadmap/R233.md`) | `EXPLAIN_SCHEMA_VERSION` = 4 |
 | [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
-| [`verify-v3.schema.json`](verify-v3.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 3 |
+| [`verify-v4.schema.json`](verify-v4.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 4 |
+| [`verify-v3.schema.json`](verify-v3.schema.json) | the same, from builds before R-371; kept so a stored v3 document stays checkable (v4 added the refusal reasons `too-many-new-tests` and `dependency-unreadable`) | `VERIFY_SCHEMA_VERSION` = 3 |
 | [`verify-v2.schema.json`](verify-v2.schema.json) | the same, from builds before R354; kept so a stored v2 document stays checkable (v3 added the refusal reason `coverage-mode-changed`) | `VERIFY_SCHEMA_VERSION` = 2 |
 | [`verify-v1.schema.json`](verify-v1.schema.json) | the same, from builds before C02-09; kept so a stored v1 document stays checkable (v2 added the refusal reasons `unknown-gap` and `gap-has-no-survivor`) | `VERIFY_SCHEMA_VERSION` = 1 |
 | [`report-v3.schema.json`](report-v3.schema.json) | the JSON report written with `--out` | `REPORT_SCHEMA_VERSION` = 3 |
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the fourteen files, ten are hand-written and four were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v9 and the kept v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v3 and the kept v2 and v1) are hand-written; explain v9, `doctor` and
-verify v3 are pinned against their declarations, and explain v7, explain v6, explain v5, explain v4,
-verify v2 and verify v1 are frozen as they were published. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
+**Of the sixteen files, twelve are hand-written and four were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v10 and the kept v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v4 and the kept v3, v2 and v1) are hand-written; explain v10, `doctor` and
+verify v4 are pinned against their declarations, and explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+verify v3, verify v2 and verify v1 are frozen as they were published. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
 generator last wrote it.
 `SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone
@@ -52,7 +54,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v9.schema.json`, capped and uncapped.
+   `explain-v10.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

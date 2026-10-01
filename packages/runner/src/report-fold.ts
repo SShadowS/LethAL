@@ -1,7 +1,12 @@
 import type { BackendCapabilities } from "./backend";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
-import { type ExcludedSites, type RefusedExcludedFile, buildExcludedSites } from "./excluded-sites";
+import {
+  type ExcludedSites,
+  type PreprocExcludedFile,
+  type RefusedExcludedFile,
+  buildExcludedSites,
+} from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
@@ -49,6 +54,8 @@ import type { BatchArtifact } from "./store";
  * happens to arrive after the invalidation in the raw event order.
  */
 export interface FoldStatics {
+  /** R214: the effective build symbols, for matching equivalence marks. REQUIRED, so a builder that forgets it fails to compile rather than silently matching `[]`. Carried only in-process, like R325's scheme; not a report field. */
+  readonly buildSymbols: readonly string[];
   readonly caps: BackendCapabilities;
   /**
    * R41: the `--only` narrowing this run was GIVEN, if any — patterns only. How many files that
@@ -226,6 +233,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let refusedFiles: readonly RefusedExcludedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
+  let preprocExcludedFiles: readonly PreprocExcludedFile[] = [];
   let excludedByOnly = 0;
   let excludedByExclude = 0;
   let excludedByOperator = 0;
@@ -313,6 +321,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         notInstrumentedFiles = e.notInstrumentedFiles;
         refusedFiles = e.refusedFiles ?? [];
         declarativeSiteFiles = e.declarativeSiteFiles;
+        preprocExcludedFiles = e.preprocExcludedFiles ?? [];
         excludedByOnly = e.excludedByOnly;
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
@@ -589,6 +598,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     excludedSites: buildExcludedSites({
       skipped: notInstrumentedFiles,
       declarative: declarativeSiteFiles,
+      preproc: preprocExcludedFiles,
       refused: refusedFiles,
       totalFiles,
     }),

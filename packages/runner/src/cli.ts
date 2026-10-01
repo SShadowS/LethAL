@@ -36,6 +36,8 @@ import {
   runAlRunnerCanary,
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
+import { alRunnerCoverageSupport } from "./al-runner-coverage";
+import type { ServerSpawnFn } from "./al-runner-server";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
@@ -88,6 +90,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
+import { validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
 import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
@@ -301,11 +304,21 @@ export async function validateSelectorIdsForProject(
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
+/** `--backend`'s one validation, for `run` and `run --dry-run` alike. */
+function parseBackendKind(raw: string | undefined): "bcdev" | "al-runner" {
+  if (raw === undefined || raw === "") {
+    throw new Error('missing required --backend <"bcdev" | "al-runner">');
+  }
+  if (raw !== "bcdev" && raw !== "al-runner") {
+    throw new Error(`unknown --backend "${raw}" (expected "bcdev" or "al-runner")`);
+  }
+  return raw;
+}
+
 /** R266: the execution flags `lethal run --dry-run` refuses by name. `--out` is not here: it
  *  writes the dry-run listing. */
 export const DRY_RUN_REFUSED = [
   "tests",
-  "backend",
   "progress-out",
   "workers",
   "compile-concurrency",
@@ -360,6 +373,9 @@ export interface DryRunCliConfig {
   /** Issue #21: true when `--config` was passed. Only then is a missing file an error; the
    *  defaulted path may be absent, since sizing a job comes before any server config exists. */
   readonly configExplicit?: true;
+  /** R377: `--backend`, optional here. It changes which `#if` arms are listed, because al-runner
+   *  predefines symbols alc does not. Absent lists alc's build. */
+  readonly backendKind?: "bcdev" | "al-runner";
 }
 
 export interface RunCliConfig {
@@ -659,6 +675,8 @@ export interface VerifyCliConfig {
   readonly survivors: readonly string[];
   /** Absent means `<project>/lethal.config.json`, the project the store records for the artifact. */
   readonly configPath?: string;
+  /** R-371: `--max-new-tests <n>`; absent means verify's default (`DEFAULT_MAX_NEW_TESTS`). */
+  readonly maxNewTests?: number;
 }
 
 export interface ExplainCliConfig {
@@ -918,8 +936,10 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              writes the listing as JSON: {files, sites, deployed, perFile[{file,
                              sites, deployed}], batches[{index, sites[{file, line, operator,
                              deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
-                             execution flag (--tests, --backend, --workers ...) is refused with
-                             --dry-run, because a dry run executes nothing
+                             execution flag (--tests, --workers ...) is refused with
+                             --dry-run, because a dry run executes nothing. --backend is
+                             optional: al-runner predefines CLEANSCHEMA1..25, so it can change
+                             which #if arms are listed (absent lists alc's build)
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -1087,6 +1107,10 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
                              separated (repeatable). Required
   --config <path>            default: lethal.config.json in the project the database records.
                              A config with an envTool section is refused
+  --max-new-tests <n>        refuse (too-many-new-tests) when more than n tests are new or edited
+                             since the run (default 50). An edit to a helper, handler, subscriber
+                             or dependency turns every test that reaches it new; the refusal
+                             names the count, the value to pass and what changed
   Every other flag is refused, --out included: the JSON always goes to stdout.
   Exit codes: 0 every survivor killed and every new test stable; 3 quarantined; 4 nothing
   measured (every survivor error); 5 some survivor survived or errored, or a new test is not
@@ -1204,6 +1228,8 @@ export const RUN_FLAGS = {
   // `verify` alone in FLAG_OWNERS. `--survivors` repeats and each value is a comma list.
   artifact: { type: "string" },
   survivors: { type: "string", multiple: true },
+  // R-371: `lethal verify --max-new-tests <n>`. Owned by `verify` alone in FLAG_OWNERS.
+  "max-new-tests": { type: "string" },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
@@ -1327,6 +1353,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It names the survivors `lethal verify` proves killed.",
   },
+  {
+    flag: "max-new-tests",
+    owners: ["verify"],
+    instead: "It caps how many new or edited tests `lethal verify` runs.",
+  },
   ...RUN_ONLY_FLAGS.map((flag) => ({
     flag,
     owners: ["run"] as const,
@@ -1341,6 +1372,7 @@ export const VERIFY_FLAGS: ReadonlySet<string> = new Set([
   "tests",
   "survivors",
   "config",
+  "max-new-tests",
 ]);
 
 /**
@@ -1485,7 +1517,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       const present = typeof given === "boolean" ? given : given !== undefined;
       if (present && !VERIFY_FLAGS.has(flag)) {
         throw new Error(
-          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors and --config. Its JSON goes to stdout.`,
+          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors, --config and --max-new-tests. Its JSON goes to stdout.`,
         );
       }
     }
@@ -1506,6 +1538,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         "missing required --survivors <ids> (<batchIndex>/<mutantCode> ids or gap ids, comma separated)",
       );
     }
+    const maxNewTestsRaw = values["max-new-tests"];
+    if (maxNewTestsRaw !== undefined && !/^\d+$/.test(maxNewTestsRaw)) {
+      throw new Error(
+        `--max-new-tests must be a non-negative integer (a count of tests), not "${maxNewTestsRaw}"`,
+      );
+    }
     return {
       mode: "verify",
       dbPath,
@@ -1513,6 +1551,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       testDir,
       survivors,
       ...(values.config !== undefined && values.config !== "" ? { configPath: values.config } : {}),
+      ...(maxNewTestsRaw !== undefined ? { maxNewTests: Number(maxNewTestsRaw) } : {}),
     };
   }
 
@@ -1882,6 +1921,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       dbPath: values.db ?? join(projectDir, "lethal.sqlite"),
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...(values.config !== undefined ? { configExplicit: true as const } : {}),
+      ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
       ...only,
       ...exclude,
       ...operators,
@@ -1894,13 +1934,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     throw new Error("missing required --tests <dir> (omit only together with --dry-run)");
   }
 
-  const backendArg = values.backend;
-  if (backendArg === undefined || backendArg === "") {
-    throw new Error('missing required --backend <"bcdev" | "al-runner">');
-  }
-  if (backendArg !== "bcdev" && backendArg !== "al-runner") {
-    throw new Error(`unknown --backend "${backendArg}" (expected "bcdev" or "al-runner")`);
-  }
+  const backendArg = parseBackendKind(values.backend);
 
   const workers = values.workers === undefined ? 1 : Number(values.workers);
   if (!Number.isInteger(workers) || workers < 1)
@@ -2078,11 +2112,149 @@ export interface AlRunnerConfigSection {
    * test. Refused from R97 until 2026-09-09; both grounds were re-measured on 2.11.0 first, and
    * the numbers are in `al-runner-server.ts`.
    *
-   * OFF by default. The trade is "the whole suite warm" against "the covering tests cold", which
-   * wins wherever compilation dominates and loses where test execution does, and only the project
-   * knows which suite it has.
+   * ON by default since R387 (`effectiveAlRunnerTransport`); `false` selects the one-shot
+   * transport. `AlRunnerBackend` itself still defaults to off: the default lives in `buildBackend`
+   * only, so code that builds the backend directly (the gate's one-shot legs) is unchanged.
    */
   readonly serverMode?: boolean;
+  /**
+   * R387: R222's selector channel. Defaults to `"resource"` when the server is on and `"static"`
+   * when it is off. That pairing is a POLICY, not a technical need: resource also works one-shot,
+   * but no gate has run one-shot plus resource live, so an explicit choice of it is accepted and
+   * the advisory line names it as unmeasured.
+   */
+  readonly selectorMode?: "static" | "resource";
+  /**
+   * R387: R220's `--coverage`. OFF by default in this release (plan section 2b). When set to
+   * `"al-runner"`, `runFromCli` first asks `alRunnerCoverageSupport` and falls back to `"none"`,
+   * with one named warning, for a project holding a multi-object or `#if`-wrapped object file.
+   */
+  readonly coverage?: "al-runner" | "none";
+}
+
+/** R387: every key the `alRunner` section accepts. Anything else is refused by name. */
+const AL_RUNNER_KEYS: readonly string[] = [
+  "alRunnerPath",
+  "packagesDir",
+  "serverMode",
+  "selectorMode",
+  "coverage",
+];
+
+/**
+ * R387: the transport `buildBackend` gives an al-runner run. The one place the defaults live, so
+ * the backend and the advisory line cannot disagree about them.
+ */
+export function effectiveAlRunnerTransport(c: Partial<AlRunnerConfigSection>): {
+  readonly serverMode: boolean;
+  readonly selectorMode: "static" | "resource";
+  readonly coverage: "al-runner" | "none";
+} {
+  const serverMode = c.serverMode ?? true;
+  return {
+    serverMode,
+    selectorMode: c.selectorMode ?? (serverMode ? "resource" : "static"),
+    coverage: c.coverage ?? "none",
+  };
+}
+
+/**
+ * R387: the ONE advisory line an al-runner run prints, naming each slow or unmeasured setting and
+ * the key that changes it. `undefined` when there is nothing to say. Not a `Caveat`: it changes no
+ * verdict, so it needs no report field.
+ */
+export function alRunnerAdvisory(
+  c: Partial<AlRunnerConfigSection>,
+  /** The files the coverage guard named when it turned a requested coverage off. The user already
+   *  set the coverage key, so the line then says why it is off instead of advising to set it. */
+  coverageTurnedOffFor: readonly string[] = [],
+): string | undefined {
+  const t = effectiveAlRunnerTransport(c);
+  const notes: string[] = [];
+  if (!t.serverMode) {
+    notes.push('serverMode is false (one process per test; "alRunner.serverMode": true is faster)');
+  }
+  if (t.selectorMode === "static") {
+    notes.push(
+      'selectorMode is "static" (a recompile per mutant; "alRunner.selectorMode": "resource" is faster)',
+    );
+  }
+  if (!t.serverMode && t.selectorMode === "resource") {
+    notes.push(
+      'serverMode false with selectorMode "resource" is a combination no gate has measured live',
+    );
+  }
+  if (coverageTurnedOffFor.length > 0) {
+    notes.push(
+      `coverage is "none" (turned off for this run because al-runner's coverage cannot describe ${coverageTurnedOffFor.join(", ")})`,
+    );
+  } else if (t.coverage === "none") {
+    notes.push(
+      'coverage is "none" (every mutant runs every green test; "alRunner.coverage": "al-runner" runs only the covering tests, and reports an unreached mutant no-coverage instead of survived)',
+    );
+  }
+  if (notes.length === 0) return undefined;
+  return `[lethal] al-runner settings: ${notes.join("; ")}.`;
+}
+
+/**
+ * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
+ * is built. al-runner's coverage cannot describe a file declaring more than one object, and the
+ * index drops a file holding a `#if`-wrapped object (`fileHoldsWrappedObject`), so either would turn
+ * real coverage into a false `no-coverage`. Such a run falls back to `"none"` with ONE warning
+ * naming the files. Called once per session, so the warning is not repeated per worker.
+ */
+export async function withAlRunnerCoverageGuard(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  warn: (line: string) => void = console.warn,
+): Promise<LethalConfigFile> {
+  return (await applyAlRunnerCoverageGuard(configFile, projectDir, warn)).config;
+}
+
+/** The guard, also returning the files it named (empty when it did not fall back). */
+async function applyAlRunnerCoverageGuard(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  warn: (line: string) => void,
+): Promise<{ readonly config: LethalConfigFile; readonly named: readonly string[] }> {
+  const section = configFile.alRunner;
+  if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
+  const support = await alRunnerCoverageSupport(projectDir);
+  if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
+    return { config: configFile, named: [] };
+  }
+  const named = [
+    ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
+    ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
+  ];
+  warn(
+    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot describe ${named.join(", ")}, and trusting it would report those objects' mutants no-coverage while tests do reach them.`,
+  );
+  return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
+}
+
+/**
+ * R387: what `runFromCli` does once per al-runner session before any backend is built: validate
+ * the section (the same call `buildBackend` makes), apply the coverage guard, and print the ONE
+ * advisory line. Returns the config every backend of the session is built from. A config with no
+ * `alRunner` section is returned untouched, so `buildBackend` still throws its own targeted error.
+ */
+export async function prepareAlRunnerSession(
+  configFile: LethalConfigFile,
+  projectDir: string,
+  warn: (line: string) => void = console.warn,
+): Promise<LethalConfigFile> {
+  if (configFile.alRunner === undefined) return configFile;
+  validateAlRunnerConfig(configFile.alRunner);
+  const { config: sessionConfig, named } = await applyAlRunnerCoverageGuard(
+    configFile,
+    projectDir,
+    warn,
+  );
+  const advisory = alRunnerAdvisory(sessionConfig.alRunner ?? {}, named);
+  if (advisory !== undefined) warn(advisory);
+  return sessionConfig;
 }
 
 export interface LethalConfigFile {
@@ -2137,9 +2309,6 @@ export interface LethalConfigFile {
   readonly exclude?: readonly string[];
 }
 
-/** Characters that would make a symbol ambiguous to one of the two compilers — see below. */
-const SYMBOL_SEPARATOR_RE = /[,;\s]/;
-
 /**
  * R101(c) — validates `preprocessorSymbols` and returns the list, or `[]` when absent.
  *
@@ -2148,29 +2317,7 @@ const SYMBOL_SEPARATOR_RE = /[,;\s]/;
  * compiled from the wrong branch, silently.
  */
 export function validatePreprocessorSymbols(raw: unknown): readonly string[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    throw new Error(
-      `lethal.config.json: "preprocessorSymbols" must be an array of strings, got ${JSON.stringify(raw)}`,
-    );
-  }
-  const symbols: string[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string" || entry.trim() === "") {
-      throw new Error(
-        `lethal.config.json: "preprocessorSymbols" contains a non-string or empty entry (${JSON.stringify(entry)}) — every entry must be an AL preprocessor symbol`,
-      );
-    }
-    // A symbol carrying a comma, a semicolon or whitespace would either be split by alc's
-    // `/define:A,B` list form into things nobody wrote, or reach al-runner as one unusable token.
-    if (SYMBOL_SEPARATOR_RE.test(entry)) {
-      throw new Error(
-        `lethal.config.json: "preprocessorSymbols" entry ${JSON.stringify(entry)} contains whitespace or a separator — list each symbol as its own array entry`,
-      );
-    }
-    symbols.push(entry);
-  }
-  return symbols;
+  return validateSymbolList(raw, "lethal.config.json");
 }
 
 /**
@@ -2268,6 +2415,28 @@ export function validateAlRunnerConfig(
         "IMPLEMENTED) and rejects it as an unknown option. Remove the field; there is no " +
         "replacement flag to point it at.",
     );
+  }
+  // R387: a misspelled key used to be ignored in silence, so `"servermode": true` ran one-shot.
+  const unknown = Object.keys(raw).filter((k) => !AL_RUNNER_KEYS.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `lethal.config.json "alRunner" section has unknown key(s): ${unknown.join(", ")}. Allowed: ${AL_RUNNER_KEYS.join(", ")}.`,
+    );
+  }
+  const bad: string[] = [];
+  if (raw.serverMode !== undefined && typeof raw.serverMode !== "boolean") {
+    bad.push(`serverMode must be true or false, got ${JSON.stringify(raw.serverMode)}`);
+  }
+  if (raw.selectorMode !== undefined && !["static", "resource"].includes(raw.selectorMode)) {
+    bad.push(
+      `selectorMode must be "static" or "resource", got ${JSON.stringify(raw.selectorMode)}`,
+    );
+  }
+  if (raw.coverage !== undefined && !["al-runner", "none"].includes(raw.coverage)) {
+    bad.push(`coverage must be "al-runner" or "none", got ${JSON.stringify(raw.coverage)}`);
+  }
+  if (bad.length > 0) {
+    throw new Error(`lethal.config.json "alRunner" section: ${bad.join("; ")}`);
   }
   return raw as AlRunnerConfigSection;
 }
@@ -2695,7 +2864,13 @@ export async function buildBackend(
   // R21: injectable so a unit test can drive the "AL extension not found" branch below without a
   // real install — the real default (`defaultAlToolPaths`) reads `~/.vscode/extensions`, which a
   // test cannot control.
-  deps: { alToolPaths?: typeof defaultAlToolPaths } = {},
+  // R387: the two al-runner spawns, so a test, or the gate's CLI-default leg, can see WHICH
+  // transport ran (a `--server` daemon, or one process per test) independently of the config.
+  deps: {
+    alToolPaths?: typeof defaultAlToolPaths;
+    alRunnerSpawn?: SpawnFn;
+    alRunnerServerSpawn?: ServerSpawnFn;
+  } = {},
   // R3: the resolved selector/control/table ids (`resolveSelectorIds`) — trailing, defaulted
   // param so every pre-existing positional call site (tests included) keeps behaving exactly as
   // before without having to name it. `runFromCli` is the one real caller that threads a
@@ -2711,17 +2886,27 @@ export async function buildBackend(
     // earliest point that can catch a bad id for this backend too.
     await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
     const c = validateAlRunnerConfig(configFile.alRunner);
-    return new AlRunnerBackend({
-      alRunnerPath: c.alRunnerPath,
-      instrumentedDir: join(scratchDir, "al-runner-active"),
-      testDir: parsed.testDir,
-      ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
-      selectorObjectId: selectorIds.selectorId,
-      ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
-      // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
-      // select the same branch, or their verdicts describe two different programs.
-      ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
-    });
+    // R387: the defaults are applied HERE and nowhere else. A default in the backend's constructor
+    // would silently turn the gate's one-shot legs, which build the backend directly, into server
+    // legs.
+    const t = effectiveAlRunnerTransport(c);
+    return new AlRunnerBackend(
+      {
+        alRunnerPath: c.alRunnerPath,
+        instrumentedDir: join(scratchDir, "al-runner-active"),
+        testDir: parsed.testDir,
+        ...(c.packagesDir !== undefined ? { packagesDir: c.packagesDir } : {}),
+        selectorObjectId: selectorIds.selectorId,
+        serverMode: t.serverMode,
+        selectorMode: t.selectorMode,
+        coverage: t.coverage,
+        // R101(c): the same list the bcdev path's `alc` step gets below. Both compile paths must
+        // select the same branch, or their verdicts describe two different programs.
+        ...(preprocessorSymbols.length > 0 ? { preprocessorSymbols } : {}),
+      },
+      deps.alRunnerSpawn,
+      deps.alRunnerServerSpawn,
+    );
   }
 
   const c = validateBcDevConfig(configFile.bcdev);
@@ -3073,6 +3258,10 @@ export async function printDryRun(
     readonly exclude?: readonly string[];
     /** R266: write the listing as JSON here. */
     readonly outPath?: string;
+    /** R214: the config's symbols, so a dry run answers for the build the real run compiles. */
+    readonly preprocessorSymbols?: readonly string[];
+    /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
+    readonly backendKind?: "bcdev" | "al-runner";
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
@@ -3086,6 +3275,10 @@ export async function printDryRun(
       ...(exclude !== undefined ? { exclude } : {}),
       ...(operators !== undefined ? { operators } : {}),
       ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
+      ...(paths.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: paths.preprocessorSymbols }
+        : {}),
+      ...(paths.backendKind !== undefined ? { backend: paths.backendKind } : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -3531,6 +3724,9 @@ export async function runFromCli(
     // `undefined` for every bcdev session (this branch never runs) and for the al-runner
     // no-`alRunnerPath` fallback path.
     let alRunnerCanaryResult: AlRunnerCanaryResult | undefined;
+    // R387: the config every backend of this session is built from. Differs from `configFile` only
+    // when the al-runner coverage guard below turned a requested coverage off.
+    let sessionConfig = configFile;
     if (parsed.backendKind === "al-runner") {
       // R123: the contract first — if it has moved, nothing measured after it can be trusted,
       // including the canary. Throws on a divergence; see `announceAlRunnerContract`.
@@ -3555,6 +3751,8 @@ export async function runFromCli(
             "on this path. Remove it, or run with --backend bcdev to have it take effect.",
         );
       }
+      // R387: once per session, here rather than in `buildBackend`, which runs once per worker.
+      sessionConfig = await prepareAlRunnerSession(configFile, parsed.projectDir);
     }
 
     // Task 7: resolves the bcdev section EXACTLY ONCE (see `resolveEnvToolSession`'s doc comment)
@@ -3565,7 +3763,7 @@ export async function runFromCli(
     const resolveSession = deps.resolveEnvToolSession ?? resolveEnvToolSession;
     const { effectiveConfig, envSession, deploy } = await resolveSession(
       parsed,
-      configFile,
+      sessionConfig,
       basename(scratchRoot),
     );
 
@@ -4284,8 +4482,10 @@ function doctorConfigFromEnvTool(
  * inert values. Nothing this function does reads them, and nothing it does writes to disk or spawns
  * anything except `--version`, so it stays inside doctor's read-only boundary by construction.
  *
- * `serverMode: true` is passed through rather than dropped: the constructor REFUSES it (R97/R126),
- * and a config `run` would reject must throw here too rather than being quietly reported on.
+ * The constructor no longer refuses `serverMode: true` (R220 lifted R97/R126's refusal), and
+ * `status()` only runs `--version`, so this check does NOT verify the transport a run would use:
+ * not the `--server` daemon, not the selector mode, not coverage (R387). A config `run` would reject
+ * still throws here, through `validateAlRunnerConfig`.
  */
 function alRunnerStatusFor(
   configFile: LethalConfigFile,
@@ -4301,7 +4501,6 @@ function alRunnerStatusFor(
         instrumentedDir: "",
         testDir: "",
         selectorObjectId: 0,
-        ...(c.serverMode !== undefined ? { serverMode: c.serverMode } : {}),
       },
       ...(spawn !== undefined ? ([spawn] as const) : ([] as const)),
     );
@@ -4403,8 +4602,8 @@ export async function buildDoctorDeps(
     configFile.alRunner !== undefined
   ) {
     // Eagerly, exactly as `buildBackend` does, so a config `run` would reject throws HERE too
-    // (honesty constraint 1) rather than surfacing as a failing check. `serverMode: true` is
-    // refused by `AlRunnerBackend`'s own constructor for the same reason.
+    // (honesty constraint 1) rather than surfacing as a failing check: an unknown key or a bad
+    // `serverMode`/`selectorMode`/`coverage` value (R387). The transport itself is not checked.
     validateAlRunnerConfig(configFile.alRunner);
     const alRunnerProbe = alRunnerStatusFor(configFile, opts.alRunnerSpawn);
     return {
@@ -5037,7 +5236,12 @@ export async function verifyFromCli(
     });
     return print(
       await runVerify(
-        { artifact: parsed.artifact, survivors: parsed.survivors, testDir: parsed.testDir },
+        {
+          artifact: parsed.artifact,
+          survivors: parsed.survivors,
+          testDir: parsed.testDir,
+          ...(parsed.maxNewTests !== undefined ? { maxNewTests: parsed.maxNewTests } : {}),
+        },
         {
           store,
           backend: built,
@@ -5341,6 +5545,10 @@ async function main(): Promise<number> {
       ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
       ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
       ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
+      ...(dryRunConfig?.preprocessorSymbols !== undefined
+        ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
+        : {}),
+      ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
     });
     return 0;
   }

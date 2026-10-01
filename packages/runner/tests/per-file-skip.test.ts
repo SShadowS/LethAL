@@ -142,6 +142,7 @@ describe("R307: one refused row per shape, the rest of the run intact", () => {
         const excluded = buildExcludedSites({
           skipped: set.skipped,
           declarative: set.declarativeSites,
+          preproc: set.preprocExcluded,
           refused: set.refusedFiles,
           totalFiles: set.totalFiles,
         });

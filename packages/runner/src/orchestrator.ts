@@ -8,14 +8,16 @@ import {
   type ALSyntaxNode,
   type FileRefusalFields,
   FileRefusedError,
-  formatRefusal,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
+  evaluateArms,
+  formatRefusal,
   initParser,
   parseAL,
   procedureLikeNameNode,
+  startsInInactiveArm,
   validateSpec,
   visit,
   wrapRoot,
@@ -84,12 +86,23 @@ import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot"
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
+import {
+  DependencyUnreadableError,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  packageFolderReader,
+  publishedPackageReader,
+  readAppJsonInputs,
+  targetOf,
+} from "./digest-inputs";
 import { discoverTests } from "./discovery";
 import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
   type EquivalenceMark,
   marksSchemeWarning,
+  marksSymbolsWarning,
   marksUnderOtherScheme,
+  marksUnderOtherSymbols,
 } from "./equivalence-marks";
 import {
   type BaselineClassification,
@@ -99,6 +112,7 @@ import {
   STREAM_SCHEMA_VERSION,
   createEmitter,
 } from "./events";
+import type { PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import {
   type BeginPublishRefusal,
@@ -117,6 +131,13 @@ import {
   permissionCanaryWarnings,
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
+import {
+  type BuildBackend,
+  BuildSymbolsDivergedError,
+  effectiveBuildSymbols,
+  predefinedSymbolsHint,
+  sameBuildSymbols,
+} from "./preprocessor-symbols";
 import {
   assertUnderCeiling,
   batchCeilingWarning,
@@ -174,7 +195,7 @@ import {
 import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
-import { TestDigestError, testDigestsOfSources } from "./test-digest";
+import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -182,7 +203,12 @@ import {
   orderCoveringTests,
   recordKill,
 } from "./test-order";
-import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
+import {
+  type TestAppModel,
+  buildTestAppModel,
+  readTestAppSources,
+  scanTestPageModel,
+} from "./testpage-scan";
 import {
   describeTestPageUnsupported,
   isTestPageNotRunMessage,
@@ -425,6 +451,11 @@ export interface MutationSetResult {
   readonly identityOrdinals: ReadonlyMap<string, number>;
   /** R307: files the per-file trial refused, in path order. Empty when none was. */
   readonly refusedFiles: readonly RefusedFile[];
+  /** R214: files whose sites the build's preprocessor symbols decided: sites in an arm the build
+   *  compiles out, and files whose directives could not be evaluated as alc does. */
+  readonly preprocExcluded: readonly PreprocExcludedFile[];
+  /** R214: the effective set generation used. */
+  readonly buildSymbols: readonly string[];
 }
 
 export interface MutationSetOptions {
@@ -492,6 +523,21 @@ export interface MutationSetOptions {
    * consumed. The `.al` set is the snapshot's keys; absent, the disk is enumerated and read.
    */
   readonly source?: ReadonlyMap<string, Buffer>;
+  /**
+   * R214: the build's preprocessor symbols as the config gives them (C02-06), the list the compile
+   * step receives. `app.json`'s own `preprocessorSymbols` are added (`effectiveBuildSymbols`), because
+   * alc unions the two (measured, alc 18.0.41), and each file's `#define` / `#undef` apply. A site in
+   * an arm that build compiles out is not generated, and a file whose directives cannot be evaluated
+   * as alc does is not mutated. Absent means `[]`: what alc builds with no `/define`, not "keep every
+   * arm", which would re-open R214 for any caller that forgets it.
+   */
+  readonly preprocessorSymbols?: readonly string[];
+  /**
+   * R377: the compiler the build is for. `al-runner` adds al-runner's predefined symbols
+   * (`AL_RUNNER_PREDEFINED_SYMBOLS`) to the effective set; absent means `bcdev`, i.e. alc, which
+   * predefines nothing.
+   */
+  readonly backend?: BuildBackend;
 }
 
 /**
@@ -767,6 +813,14 @@ export async function generateMutationSet(
     }),
   );
   const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
+  const buildSymbols = await effectiveBuildSymbols(
+    projectDir,
+    options.preprocessorSymbols ?? [],
+    snapshot,
+    options.backend ?? "bcdev",
+  );
+  const preprocExcluded: PreprocExcludedFile[] = [];
+  const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
 
   let excludedByOnly = 0;
   let excludedByExclude = 0;
@@ -805,12 +859,21 @@ export async function generateMutationSet(
     // O(specs x nodes) on a file with many mutation sites. See
     // `buildSpanIndex`'s doc comment in @lethal/engine.
     const spanIndex = buildSpanIndex(root);
+    // R214: sites in an arm this build compiles out are not generated, and a file whose directives
+    // cannot be evaluated exactly as alc does is not mutated at all: no known-uncertain arm is scored.
+    const arms = evaluateArms(root, source, buildSymbols);
+    const inactive = arms.kind === "decided" ? arms.inactive : [];
+    let compiledOutHere = 0;
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
     visit(root, (node) => {
       for (const op of allOperators) {
         if (op.targets(node, ctx)) {
           for (const spec of op.generate(node, ctx)) {
+            if (startsInInactiveArm(inactive, spec.before.startIndex)) {
+              compiledOutHere++;
+              continue;
+            }
             // Reject specs whose `before` isn't a real node in this file's
             // tree — coalescing (Layer 4.3) relies on mutation sites being
             // laminar, which a synthetic multi-node span could violate.
@@ -845,6 +908,33 @@ export async function generateMutationSet(
         file: rel,
         kinds: describeObjectKinds(root),
         sites: declarativeInThisFile,
+      });
+    }
+    // R214: after the declarative row (so a refused file's declarative sites stay in that row,
+    // counted once) and BEFORE the bail below (so a file whose only sites were compiled out or
+    // refused is still recorded).
+    if (arms.kind === "undecided") {
+      warn(
+        "preproc-arms-undecided",
+        `[lethal] ${rel}: a preprocessor directive could not be evaluated exactly as alc does (${arms.reason}), so no mutant is generated in this file (${specs.length} site(s)). It is still compiled and published unchanged. R214.`,
+      );
+      // r3, I5: recorded even at 0 sites, so a refused file never vanishes from the report.
+      preprocExcluded.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: specs.length,
+        reason: "preproc-undecided",
+        detail: arms.reason,
+      });
+      continue;
+    }
+    if (compiledOutHere > 0) {
+      preprocExcluded.push({
+        file: rel,
+        kinds: describeObjectKinds(root),
+        sites: compiledOutHere,
+        reason: "compiled-out",
+        detail: symbolsDetail,
       });
     }
     if (specs.length === 0) continue;
@@ -1016,6 +1106,15 @@ export async function generateMutationSet(
       `[lethal] skipped ${skipped.length} file(s) holding ${total} mutation site(s): ${why}: ${detail}.`,
     );
   }
+  const compiledOut = preprocExcluded.filter((f) => f.reason === "compiled-out");
+  if (compiledOut.length > 0) {
+    const total = compiledOut.reduce((n, f) => n + f.sites, 0);
+    const listed = compiledOut.slice(0, 5).map((f) => `${f.file} (${f.sites})`);
+    warn(
+      "compiled-out-sites",
+      `[lethal] ${total} site(s) in ${compiledOut.length} file(s) sit in #if arms this build compiles out (${symbolsDetail}), so no mutant was generated there (R214): ${listed.join(", ")}${compiledOut.length > 5 ? ", ..." : ""}.`,
+    );
+  }
   if (nonExecutableSites > 0) {
     const where = declarativeSites.map((d) => `${d.file} (${d.kinds}, ${d.sites} site(s))`);
     warn(
@@ -1055,6 +1154,8 @@ export async function generateMutationSet(
     declarativeSites,
     identityOrdinals: numberIdentityOrdinals(identityEntries),
     refusedFiles,
+    preprocExcluded,
+    buildSymbols,
   };
 }
 
@@ -3259,6 +3360,26 @@ function assertSameTestApp(
   );
 }
 
+/** R214: a symbol list for a message. `null` is a row recorded before the column existed. */
+const symbolList = (s: readonly string[] | null): string =>
+  s === null ? "(not recorded)" : s.length === 0 ? "(none)" : s.join(", ");
+
+const SYMBOLS_WHY =
+  "An identity key names a site within one build, so a key can name a different site in another";
+
+/** R214: refuses a resume from a run built under other preprocessor symbols, or unrecorded ones. */
+function assertSameBuildSymbols(
+  row: { readonly buildSymbols: readonly string[] | null } | null,
+  flag: string,
+  buildSymbols: readonly string[],
+): void {
+  if (row === null) throw new Error(`${flag}: no such run in this database`);
+  if (row.buildSymbols !== null && sameBuildSymbols(row.buildSymbols, buildSymbols)) return;
+  throw new Error(
+    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(row.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
+  );
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
@@ -3268,6 +3389,8 @@ function resolveResume(
   /** R247: the test app this session measures against; `undefined` is unknown. */
   testAppHash: string | undefined,
   emit: RunEmitter,
+  /** R214: this build's effective symbols. A run built under another set is never resumed. */
+  buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
 ): { runId: number; index: ResumeIndex } | undefined {
@@ -3308,12 +3431,28 @@ function resolveResume(
           `--resume found an unfinished run for this project and backend, run ${otherMode.runId}, but it was measured under ${describeCoverageMode(otherMode.coverageMode)}, and this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume to run from scratch.`,
         );
       }
+      // R214: likewise for a run built under other preprocessor symbols, or unrecorded ones.
+      const otherBuild = cfg.store.unfinishedRunUnderOtherSymbols({
+        projectPath: cfg.projectDir,
+        backend: backendName,
+        buildSymbols,
+        carryableVerdicts: [...CARRYABLE_VERDICTS],
+      });
+      if (otherBuild !== null) {
+        throw new Error(
+          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(otherBuild.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
+        );
+      }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
       );
     }
     priorRunId = found;
-    assertSameTestApp(cfg.store.getRun(found), "--resume", testAppHash);
+    const foundRow = cfg.store.getRun(found);
+    // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
+    // still never be read as a match.
+    assertSameTestApp(foundRow, "--resume", testAppHash);
+    assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3342,6 +3481,9 @@ function resolveResume(
       );
     }
     assertSameTestApp(row, `--resume-run ${cfg.resume}`, testAppHash);
+    // R214: before the fingerprint (which carries the symbols too and would refuse this run
+    // anyway, as "scoped differently"). NULL is unknown and matches no build.
+    assertSameBuildSymbols(row, `--resume-run ${cfg.resume}`, buildSymbols);
     if (row.configFingerprint !== configFingerprint) {
       throw new Error(
         `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -4426,9 +4568,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R-278: one read of the test sources serves the scan and, where nothing is published (R-372),
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   await initParser();
-  const testSources = await readTestAppSources(cfg.testDir);
+  // R-371: ONE parse of the test sources, shared by the scan and the digests.
+  const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
-    ? scanTestPageSources(testSources, tests)
+    ? scanTestPageModel(testModel, tests)
     : new Map();
   const testPageRefusedNames = tests
     .filter((t) => testPageRefused.has(testKeyOf(t)))
@@ -4446,9 +4589,44 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R247: it also returns this session's test-app identity, recorded on the run and compared by
   // `--resume` and `--skip-known-survivors`.
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
-  const { testAppHash, testDigests } = await testAppIdentity(cfg, tests, testSources, emit);
+  const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
+    cfg,
+    tests,
+    testModel,
+    emit,
+  );
 
-  const backendName = caps.authoritative ? "bcdev" : "al-runner";
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
+  const sourceSymbols = cfg.preprocessorSymbols ?? [];
+  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
+  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
+  // recorded anyway, so the disk is read as before.
+  const sourceSnapshot =
+    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
+  // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
+  // parses. Recorded on the run and compared by history, resume and marks: a key names a site
+  // within one build.
+  // R377: the backend name is decided once, here, and the same value reaches generation below.
+  const backendName: BuildBackend = caps.authoritative ? "bcdev" : "al-runner";
+  const buildSymbols = await effectiveBuildSymbols(
+    cfg.projectDir,
+    cfg.preprocessorSymbols ?? [],
+    sourceSnapshot,
+    backendName,
+  );
+  const symbolsWarning = marksSymbolsWarning(
+    marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
+    buildSymbols,
+  );
+  if (symbolsWarning !== undefined) {
+    emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });
+  }
+
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
   // knew would abort.
@@ -4474,10 +4652,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
-    // C02-06: symbols change what `#if` compiles, which the R192 baseline key cannot see.
-    ...(cfg.preprocessorSymbols !== undefined
-      ? { preprocessorSymbols: cfg.preprocessorSymbols }
-      : {}),
+    // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
+    // breaks a resume.
+    ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
   });
   const resolvedResume = resolveResume(
     cfg,
@@ -4486,16 +4663,19 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     caps.coverage,
     testAppHash,
     emit,
+    buildSymbols,
     testPageRefusedNames,
   );
 
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols,
     coverageMode: caps.coverage,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
     ...(testAppHash !== undefined ? { testAppHash } : {}),
     ...(testDigests !== undefined ? { testDigests } : {}),
+    ...(testDigestParts !== undefined ? { testDigestParts } : {}),
     projectPath: cfg.projectDir,
     backend: backendName,
     configFingerprint,
@@ -4530,18 +4710,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
-  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
-  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
-  // construction (review r1: a separate earlier read let an edit undone before the last read slip
-  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
-  // copies of the uninstrumented files; recorded only when the two agree.
-  const sourceSymbols = cfg.preprocessorSymbols ?? [];
-  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
-  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
-  // recorded anyway, so the disk is read as before.
-  const sourceSnapshot =
-    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -4555,14 +4723,23 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     declarativeSites: declarativeSiteFiles,
     identityOrdinals,
     refusedFiles,
+    preprocExcluded,
+    buildSymbols: generatedSymbols,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
     ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
+    preprocessorSymbols: sourceSymbols,
+    backend: backendName,
     emit,
   });
+  // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
+  // under ever diverge; today both read the same snapshot.
+  if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
+    throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
+  }
   const generateMutationSetMs = Date.now() - generateStartedMs;
   // R307 section 3 (fail closed, I3): the loose tuples of every header-rule refusal. A mutant
   // matching one is not skipped by history, not carried by resume and takes no equivalence mark
@@ -4608,6 +4785,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     instrumentableFiles: allFiles.length,
     notInstrumentedFiles,
     declarativeSiteFiles,
+    preprocExcludedFiles: preprocExcluded,
     excludedByOnly,
     excludedByExclude,
     excludedByOperator,
@@ -4715,6 +4893,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let lastIssuedVersion: string | undefined;
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
+  let historySymbolsWarned = false;
   // R354: likewise for its coverage-mode warning.
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
@@ -5041,32 +5220,44 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.projectDir,
         caps.coverage,
         testAppHash,
-        (old) => {
-          if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historySchemeWarned = true;
-          emit({
-            type: "warning",
-            code: "history-identity-scheme-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
-          });
-        },
-        (old) => {
-          if (historyCoverageModeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historyCoverageModeWarned = true;
-          emit({
-            type: "warning",
-            code: "history-coverage-mode-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
-          });
-        },
-        (old) => {
-          if (historyTestAppWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historyTestAppWarned = true;
-          emit({
-            type: "warning",
-            code: "history-test-app-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
-          });
+        buildSymbols,
+        {
+          schemeChanged: (old) => {
+            if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historySchemeWarned = true;
+            emit({
+              type: "warning",
+              code: "history-identity-scheme-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
+            });
+          },
+          symbolsChanged: (old) => {
+            if (historySymbolsWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historySymbolsWarned = true;
+            emit({
+              type: "warning",
+              code: "history-build-symbols-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}${predefinedSymbolsHint(old.buildSymbols, buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
+            });
+          },
+          coverageModeChanged: (old) => {
+            if (historyCoverageModeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCoverageModeWarned = true;
+            emit({
+              type: "warning",
+              code: "history-coverage-mode-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
+            });
+          },
+          testAppChanged: (old) => {
+            if (historyTestAppWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyTestAppWarned = true;
+            emit({
+              type: "warning",
+              code: "history-test-app-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+            });
+          },
         },
       );
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
@@ -5935,6 +6126,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // needs when a project has an `#if` — it is the difference between measuring the branch the
     // customer ships and measuring the other one, and the report was silent about it.
     preprocessorSymbols: cfg.preprocessorSymbols ?? [],
+    // R214: the effective set, which equivalence marks are matched against.
+    buildSymbols,
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
@@ -6609,7 +6802,7 @@ async function reportPublishedTestApp(
     testAppHash,
     sources:
       files.length > 0
-        ? { kind: "published", files }
+        ? { kind: "published", files, pkg: bytes }
         : {
             kind: "unavailable",
             why: `the published test app "${name}" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source`,
@@ -6621,8 +6814,12 @@ async function reportPublishedTestApp(
 type PublishedTestSources =
   /** The backend publishes nothing (al-runner): the source on disk is what runs. */
   | { readonly kind: "not-published" }
-  /** The published package's own `.al` entries. */
-  | { readonly kind: "published"; readonly files: ReadonlyArray<{ path: string; text: string }> }
+  /** The published package's own `.al` entries, and the package (R-371 reads its manifest). */
+  | {
+      readonly kind: "published";
+      readonly files: ReadonlyArray<{ path: string; text: string }>;
+      readonly pkg: Uint8Array;
+    }
   | { readonly kind: "unavailable"; readonly why: string };
 
 const NO_PUBLISHED_READ =
@@ -6640,9 +6837,13 @@ const UNREADABLE =
 async function testAppIdentity(
   cfg: SessionConfig,
   tests: readonly TestMethodRef[],
-  diskSources: ReadonlyArray<{ path: string; text: string }>,
+  diskModel: TestAppModel,
   emit: RunEmitter,
-): Promise<{ testAppHash: string | undefined; testDigests?: Record<string, string> }> {
+): Promise<{
+  testAppHash: string | undefined;
+  testDigests?: Record<string, string>;
+  testDigestParts?: TestDigestParts;
+}> {
   const { testAppHash, sources } = await reportPublishedTestApp(cfg, tests, emit);
   const none = (why: string) => {
     emit({
@@ -6663,9 +6864,31 @@ async function testAppIdentity(
   }
   if (sources.kind === "unavailable") return none(sources.why);
   try {
-    const files = sources.kind === "published" ? sources.files : diskSources;
-    return { testAppHash, testDigests: testDigestsOfSources(files, tests) };
+    // R-371: the dependency fingerprint and build inputs of the app that RUNS. On a backend that
+    // publishes, the published package's manifest and the server's resident dependency packages;
+    // on al-runner, the test project's app.json and the package folders it is handed.
+    const fetchPackage = cfg.backend.fetchPublishedAppPackage?.bind(cfg.backend);
+    const published = sources.kind === "published";
+    const inputs = published
+      ? appInputsOfPackage(sources.pkg)
+      : await readAppJsonInputs(cfg.testDir);
+    const read =
+      published && fetchPackage !== undefined
+        ? publishedPackageReader(fetchPackage)
+        : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
+    const dependencies = await dependencyFingerprint(inputs, read, await targetOf(cfg.projectDir));
+    const { digests, parts } = testDigestsOfModel(
+      published ? buildTestAppModel(sources.files) : diskModel,
+      tests,
+      { dependencies, buildInputs: inputs.buildInputs },
+    );
+    return { testAppHash, testDigests: digests, testDigestParts: parts };
   } catch (err) {
+    if (err instanceof DependencyUnreadableError) {
+      return none(
+        `the test app's dependencies could not be fingerprinted, so an edit to one would not be seen: ${err.message}`,
+      );
+    }
     if (!(err instanceof TestDigestError)) throw err;
     return none(
       sources.kind === "published"

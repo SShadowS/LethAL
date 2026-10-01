@@ -98,7 +98,6 @@
               "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
-              "files-refused",
               "stale-test-app",
               "tests-permission-refused",
               "tests-testpage-unsupported",
@@ -112,7 +111,8 @@
               "kills-without-assertion",
               "declarative-sites-dropped",
               "all-errors",
-              "session-warm"
+              "session-warm",
+              "preproc-files-refused"
             ]
           },
           "interpretation": { "$ref": "#/$defs/interpretation" }

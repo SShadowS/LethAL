@@ -154,21 +154,37 @@ export interface AlRunnerCoverageIndex {
  * Scanning the SOURCE is sound because instrumentation is one output file per input file, so a
  * file's object COUNT is the same on both sides. See this module's header for why a multi-object
  * file disqualifies the whole run rather than just its own objects.
+ *
+ * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
+ * (`fileHoldsWrappedObject`), so the guard and the index cannot drift. Such a file's objects are
+ * dropped from the index, so trusting coverage would read every one of them `no-coverage`.
+ * `supported` still answers the multi-object question alone, as before: R298 keeps coverage on for
+ * a wrapped file and refuses its objects in selection, by name. The CLI is stricter and falls back
+ * to no coverage when EITHER list is non-empty (`withAlRunnerCoverageGuard`, cli.ts). A file can be
+ * in both lists.
  */
-export async function alRunnerCoverageSupport(
-  projectDir: string,
-): Promise<{ supported: boolean; multiObjectFiles: readonly string[] }> {
+export async function alRunnerCoverageSupport(projectDir: string): Promise<{
+  supported: boolean;
+  multiObjectFiles: readonly string[];
+  wrappedObjectFiles: readonly string[];
+}> {
   await initParser();
   const rels = (await readdir(projectDir, { recursive: true }))
     .map((e) => e.toString())
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
   const multi: string[] = [];
+  const wrapped: string[] = [];
   for (const rel of rels) {
-    const source = await readFile(join(projectDir, rel), "utf8");
-    if (objectsOf(wrapRoot(parseAL(source))).length > 1) multi.push(normalizeSlashes(rel));
+    const root = wrapRoot(parseAL(await readFile(join(projectDir, rel), "utf8")));
+    if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
+    if (objectsOf(root).length > 1) multi.push(normalizeSlashes(rel));
   }
-  return { supported: multi.length === 0, multiObjectFiles: multi };
+  return {
+    supported: multi.length === 0,
+    multiObjectFiles: multi,
+    wrappedObjectFiles: wrapped,
+  };
 }
 
 /**

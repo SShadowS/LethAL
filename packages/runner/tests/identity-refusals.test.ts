@@ -428,6 +428,7 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
     const excluded = buildExcludedSites({
       skipped: set.skipped,
       declarative: set.declarativeSites,
+      preproc: set.preprocExcluded,
       refused: set.refusedFiles,
       totalFiles: set.totalFiles,
     });

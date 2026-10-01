@@ -2,7 +2,13 @@
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "organizeImports": { "enabled": true },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.tsbuildinfo"]
+    "ignore": [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/*.tsbuildinfo",
+      "scripts/r214/pp.ts",
+      "scripts/r214/presence.ts"
+    ]
   },
   "linter": {
     "enabled": true,

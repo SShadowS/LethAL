@@ -99,12 +99,22 @@ killing test and its mutant is reported survived. `--only` and `--exclude` give 
 caveat, `--operator` gives `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` gives `tests-narrowed`.
 
-**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is
-CONDITIONAL. LethAL reads al-runner's own coverage output (R220), but one file declaring more than one
-object disables it for the whole run (upstream #3713), and then an unreached mutant comes back
-survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
+**Backends.** `bcdev` is authoritative. `al-runner` is offline and is NOT: its coverage is OFF by
+default and CONDITIONAL when on. `lethal run` reads al-runner's own coverage output (R220) only with
+`"alRunner": { "coverage": "al-runner" }`, and one file declaring more than one object (upstream
+#3713) or holding a `#if`-wrapped object turns it off for the whole run, with a warning naming the
+file. Without coverage an unreached mutant comes back survived rather than no-coverage. That is one measured route to a false survivor. No measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). Do not quote a score from it. (Its `asserterror` DID
 fail to fail a test in 2026-07; that was fixed upstream in v2 and the startup canary re-measures
 it every session.)
+
+**al-runner settings (R387).** The `alRunner` section accepts `alRunnerPath`, `packagesDir`,
+`serverMode`, `selectorMode` and `coverage`, and refuses any other key by name. With none of the last
+three set, `lethal run` uses `--server` (one daemon per worker) and the resource selector (one compile
+per batch). `"serverMode": false` gives one process per test with the `"static"` selector (a recompile
+per mutant), which is much slower. The run prints one `[lethal] al-runner settings:` line naming any
+slow or unmeasured setting; until coverage is on by default it always names `coverage`. `lethal
+doctor` checks the binary's version only, not the transport. Under `--server` a hung test becomes an
+error after one suite deadline of at least 10 minutes, not a per-test timeout.
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
@@ -144,9 +154,12 @@ has the complete set.
 | `--operator` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
+| `--max-new-tests` | `verify` |
 
 `lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
-`--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
+`--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
+optional there and changes the listing: al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25`,
+which alc does not, so it can build different `#if` arms (absent lists alc's build). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
@@ -225,7 +238,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v9.schema.json](../schemas/explain-v9.schema.json)
+- `lethal explain`: [../schemas/explain-v10.schema.json](../schemas/explain-v10.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -271,7 +284,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 9`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 10`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`.
 
@@ -436,7 +449,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 3`. Schema: [../schemas/verify-v3.schema.json](../schemas/verify-v3.schema.json).
+`verifySchemaVersion: 4`. Schema: [../schemas/verify-v4.schema.json](../schemas/verify-v4.schema.json).
 
 | field | values |
 |---|---|
@@ -513,13 +526,15 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-publish-failed` | Read the detail. |
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
+| `too-many-new-tests` | More tests are new or edited than `--max-new-tests` allows (default 50). The detail names the count, the exact value to pass, what made them new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
+| `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 5, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 6, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. To mark a survivor:
@@ -530,6 +545,15 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
    build's, and a mark written from it would be stale on the next run. Re-run under this build
    first, then take the key from the new report's explain.
+5. If the project's `app.json` or its config defines preprocessor symbols, set the mark's
+   `"preprocessorSymbols"` to that build's symbols (config plus `app.json`, for example
+   `"preprocessorSymbols": ["CLEAN27"]`). A mark without the field means `[]`: it applies only to
+   a build with no symbols. A key names a site within one build, so a mark made under other
+   symbols is reported stale and never applied (R214). A mark for an AL-RUNNER run must list the
+   run's whole effective set, which includes `CLEANSCHEMA1` to `CLEANSCHEMA25` even when the
+   project defines no symbols. Such a mark applies only to an al-runner build; a mark without them
+   applies only to a build with no symbols (for example bcdev), so one mark cannot cover both
+   backends. LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
 
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never
@@ -558,9 +582,15 @@ means a test enters the procedure and never reaches the statement, so it needs a
 than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
 `flaky` or `red` (for `infra-error`, read both runs first: at least one call failed). Verify runs the covering tests the run recorded plus every NEW test: one your edit added, or
 an existing test whose own source (its attributes and its procedure) changed since the run
-(R-278, R258). An edited test gets the same two unmutated runs as an added one. Two blind spots
-remain. An edit to a helper, handler or library procedure the test calls does not make the test
-new (R371): edit the test itself too. On bcdev the run records each test's source from the
+(R-278, R258). A test is also new when anything it runs changed (R371): a test-app procedure or
+handler it reaches, the header, globals or triggers of an object it reaches, ANY event-subscriber
+codeunit in the test app (every test is then new), or a dependency (a non-Microsoft one by the
+package the server holds; a Microsoft one by its version only, so a rebuild at an unchanged version
+is not seen). A test with a call the walk cannot follow (an interface, a `RecordRef` insert, a run by
+id) is new after ANY test-app edit. So one shared-helper edit can make many tests new; above
+`--max-new-tests` (default 50) verify refuses `too-many-new-tests` and names the value that would
+run them. A run recorded before R371 is refused once as `source-predates-verify`. An edited test
+gets the same two unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
 that publishes its own test apps, a package without source) it records none and warns

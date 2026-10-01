@@ -11,7 +11,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Added
+
+- **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
+  (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
+  `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
+  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
+  object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
+  naming the files, because al-runner's coverage cannot describe them.
+- **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
+  slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
+  names `coverage`.
+
 ### Changed
+
+- **`lethal run --backend al-runner` defaults to its fast path** (R387): `serverMode` now defaults to
+  `true` (al-runner's warm `--server` daemon, one per worker) and `selectorMode` to `"resource"`
+  when the server is on (one compile per batch instead of one per mutant). `"serverMode": false`
+  restores one process per test, with the `"static"` selector. An explicit one-shot plus resource
+  is accepted but no gate has measured it. Verdicts are unchanged per mutant on the fixtures the
+  gate measures; under `--server` a hung test becomes an error after one long suite deadline, not a
+  per-test timeout.
+- **BREAKING: an unknown key in the `alRunner` section is refused by name** (R387), listing the
+  allowed keys (`alRunnerPath`, `packagesDir`, `serverMode`, `selectorMode`, `coverage`). A
+  misspelled key used to be ignored in silence. `stubsDir` keeps its own message.
 
 - **`lethal run` removes its temp scratch folder after a clean run** (R360): the installed
   batch's files now live in the results database, checked against a digest of the instrumented
@@ -29,6 +52,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `lethal run` again, then verify. On bcdev the digest is taken from the PUBLISHED test app, the body
   the server runs, not from disk (R372); where that source cannot be read the run records none,
   warns `test-digests-unavailable`, and verify refuses it. al-runner digests the source on disk.
+- **`lethal verify` now sees an edit to anything a test reaches, not only the test method**
+  (R-371, R371): the per-test digest covers the helpers, handlers and objects a test reaches in the
+  test app, every event-subscriber codeunit and extension object and what they reach, the build inputs, and every
+  non-Microsoft dependency by the SHA-256 of its package. A call the walk cannot follow makes the
+  digest cover the whole test-app source, so it can only make a test new; so does a test-app object passed to code in another app (R386: on
+  BaseApp Test every test is on the whole-source digest today). Microsoft dependencies are
+  covered by their declared version only (R385). A Variant holding a test-app codeunit or interface that
+  code in another app runs is not seen (R389), nor is a test-app codeunit whose id the test
+  reads from the platform, such as an `AllObj` loop, or computes, such as `50000 + 101` passed to
+  code in another app that runs it (R390). An unreadable test-app `app.json` is
+  treated like an unreadable dependency. One-time cost: verify refuses a source run from
+  before this build as `source-predates-verify`; run `lethal run` again, then verify. Verify refuses
+  as `too-many-new-tests` when more tests are new than `--max-new-tests` (default 50) and names the
+  number to pass (R384 is the filter large suites need), and as `dependency-unreadable` when a
+  dependency package cannot be read. The verify JSON is now schema v4.
 - **Runs now record the test app they measured against** (R247): `--resume` and `--resume-run`
   refuse by name when the test app changed since the run, a republish that only moved the version
   stamp included. One-time cost: an unfinished run from before this build is refused once, and the
@@ -37,13 +75,28 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
-- **Identity scheme 5** (R374): identity ordinals are now numbered once over the whole run, not
+- **Identity scheme 6** (R374): identity ordinals are now numbered once over the whole run, not
   per batch. Before, two twin mutants (same object, member, operator and code) that
   `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so
   `--skip-known-survivors` could skip one on the other's verdict. Keys move only where batching
   split twins; a one-batch run keeps every key. Every older store stops resuming (`--resume` and
   `--resume-run` refuse it by name), the next `--skip-known-survivors` run skips nothing once, and
-  marks files need `"identityScheme": 5` after re-checking each mark against a fresh report (R325).
+  marks files need `"identityScheme": 6` after re-checking each mark against a fresh report (R325).
+- **Identity scheme 5** (R214): keys can move in any object that holds a `#if`. A mutant in an arm
+  the build's preprocessor symbols compile out is no longer generated, a file whose directives
+  LethAL cannot evaluate as alc does is not mutated at all, and a statement directly inside a
+  statement-level `#if` is now a mutation site, so twin mutants renumber. Runs now record their
+  effective preprocessor symbols (config plus `app.json`), and history, resume and equivalence
+  marks apply only within the same set. Existing marks files need `"identityScheme": 5` after
+  re-checking each mark against a fresh report, and a mark for a project whose `app.json` or config
+  defines symbols needs `"preprocessorSymbols"` naming them. History and resume from older-scheme
+  runs are refused by name (R325). Removing a site can still renumber a twin in another file, and a
+  changed `#if` is one more way to do that, see R391. An al-runner run's set also includes the
+  `CLEANSCHEMA1` to `CLEANSCHEMA25` that al-runner predefines (measured on 2.12.0, R377), so an
+  al-runner run and a bcdev run of one project share no history; `run --dry-run` takes `--backend`.
+  A mark for an al-runner run must list that whole set (the 25 symbols plus any the project
+  defines); a mark without them covers only a build with no symbols, so one mark cannot cover both
+  backends, and LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
@@ -53,7 +106,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
   resume from scheme-2 runs are refused by name (R325).
 - **Existing `lethal.equivalent.json` files need an `"identityScheme"` field** (R325), set to the
-  report's own `identityScheme` (5 since R374, see above). Identity keys now
+  report's own `identityScheme` (the current scheme, see above). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
   so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is

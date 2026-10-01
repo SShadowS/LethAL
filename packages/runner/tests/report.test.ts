@@ -274,8 +274,9 @@ describe("Caveat union", () => {
       "declarative-sites-dropped": true,
       "all-errors": true,
       "session-warm": true,
+      "preproc-files-refused": true,
     };
-    expect(Object.keys(all).length).toBe(21);
+    expect(Object.keys(all).length).toBe(22);
   });
 });
 
@@ -289,6 +290,7 @@ describe("Caveat union", () => {
 describe("buildReport: hangCapable travels the site property path (R196)", () => {
   const STATICS: FoldStatics = {
     caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+    buildSymbols: [],
   };
 
   function seq(events: readonly RunEventInput[]): RunEvent[] {
@@ -327,6 +329,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -360,6 +363,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -394,6 +398,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -442,6 +447,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -538,6 +544,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,

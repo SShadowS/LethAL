@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import type { ALSyntaxNode } from "../../src";
 import {
   ALNodeKind,
+  findAll,
   findEnclosingCodeBlock,
   findEnclosingProcedure,
   findEnclosingStatement,
@@ -784,5 +785,50 @@ ${split("OnRun2", "OnRun")}`);
       if (isProcedureLike(n) && n.children.length > 0) found.push(procedureLikeArmNames(n));
     });
     expect(found).toEqual([["Pick", "Choose Me"]]);
+  });
+});
+
+describe("R214: a statement directly inside a statement-level #if", () => {
+  const src = `codeunit 50001 "P"
+{
+    procedure A(X: Integer)
+    begin
+#if S
+        Helper(X);
+#if T
+        X := 2;
+#endif
+#endif
+        if X > 0 then
+#if S
+            Helper(X)
+#endif
+        ;
+    end;
+
+    local procedure Helper(V: Integer)
+    begin
+    end;
+}
+`;
+  const callAt = (root: ALSyntaxNode, needle: string): ALSyntaxNode => {
+    const at = src.indexOf(needle);
+    const hit = findAll(root, ALNodeKind.procedure_call).find((n) => n.startIndex === at);
+    if (hit === undefined) throw new Error(`no call at ${needle}`);
+    return hit;
+  };
+  it("an arm of a #if in a statement list is a statement list, nested arms too", () => {
+    const root = wrapRoot(parseAL(src));
+    expect(isStatementPosition(callAt(root, "Helper(X);"))).toBe(true);
+    const assign = findFirst(root, ALNodeKind.assignment_statement);
+    if (assign === null) throw new Error("no assignment");
+    expect(isStatementPosition(assign)).toBe(true);
+    expect(isStatementSlot(assign)).toBe(true);
+  });
+  it("an arm of a #if in a single-statement slot is not (a named exclusion, unchanged)", () => {
+    const root = wrapRoot(parseAL(src));
+    const inSlot = callAt(root, "Helper(X)\n#endif");
+    expect(isStatementPosition(inSlot)).toBe(false);
+    expect(isStatementSlot(inSlot)).toBe(false);
   });
 });

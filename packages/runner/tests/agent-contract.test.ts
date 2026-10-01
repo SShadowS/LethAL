@@ -610,6 +610,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
           instrumentableFiles: 1,
           notInstrumentedFiles: [],
           declarativeSiteFiles: [],
+          preprocExcludedFiles: [],
           excludedByOnly: 0,
           excludedByExclude: 0,
           excludedByOperator: 0,
@@ -626,7 +627,8 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       isolation: "session",
     } as const;
     const caveatsOf = (scope: object) =>
-      buildReport({ caps, ...scope }, events).validity.caveats as readonly string[];
+      buildReport({ caps, buildSymbols: [], ...scope }, events).validity
+        .caveats as readonly string[];
     const plain = new Set(caveatsOf({}));
     const scopes = [
       { only: { patterns: ["x"] } },
@@ -647,7 +649,9 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     const para = own.slice(own.indexOf("`lethal run --dry-run` executes nothing"));
     const bare = ["run", "--project", "P", "--dry-run"];
     const flags = ticks(para)
-      .filter((t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out")
+      .filter(
+        (t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out" && t !== "--backend",
+      )
       .map((t) => t.slice(2));
     expect(flags.length).toBeGreaterThan(0);
     for (const f of flags) {
@@ -656,6 +660,11 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
       expect(() => parseCliConfig(argv), `--${f}`).toThrow(/has no effect with --dry-run/);
     }
     expect(parseCliConfig([...bare, "--out", "plan.json"])).toMatchObject({ outPath: "plan.json" });
+    // R377: the paragraph says `--backend` is read there, not refused.
+    expect(para).toContain("`--backend` is optional there");
+    expect(parseCliConfig([...bare, "--backend", "al-runner"])).toMatchObject({
+      backendKind: "al-runner",
+    });
   });
 
   test("the run exit sentences are exitCodeForReport's and main's", () => {
@@ -1098,6 +1107,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
         verdict: m.verdict,
       })),
       IDENTITY_SCHEME,
+      [],
     );
     expect(result.stale).toEqual([]);
     expect(result.contradicted).toEqual([]);
@@ -1133,7 +1143,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       verdict: m.verdict,
     }));
     // Under the report's own scheme every key matches its survivor.
-    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme);
+    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme, []);
     expect(same.stale).toEqual([]);
     expect(same.matched.map((x) => x.mutantCode).sort()).toEqual(
       out.survivors.map((s) => s.mutantCode).sort(),
@@ -1142,7 +1152,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     // run under this build does report every one of those marks stale: the doc's "re-run first".
     expect(out.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
     expect(out.markIdentityScheme).not.toBe(IDENTITY_SCHEME);
-    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME).stale).toHaveLength(marks.length);
+    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, []).stale).toHaveLength(
+      marks.length,
+    );
   });
 
   test("the marks file lives where the doc says and has the documented shape", async () => {

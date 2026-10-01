@@ -43,10 +43,12 @@ const APP_JSON = {
 };
 
 /** Instruments `files` (relative path to AL source) as one project; returns the manifest and each
- *  input file's emitted text, keyed by the same relative path. */
+ *  input file's emitted text, keyed by the same relative path. `symbols` is the build's
+ *  preprocessor symbols (R214: an arm the build compiles out gets no mutant). */
 async function instrument(
   files: Record<string, string>,
   appJsonExtra?: Record<string, unknown>,
+  symbols: readonly string[] = [],
 ): Promise<{
   manifest: MutantManifest;
   emitted: Map<string, string>;
@@ -57,17 +59,16 @@ async function instrument(
   try {
     await writeFile(join(src, "app.json"), JSON.stringify({ ...APP_JSON, ...appJsonExtra }));
     for (const [name, text] of Object.entries(files)) await writeFile(join(src, name), text);
-    const set = await generateMutationSet(src);
-    await writeInstrumentedProject(
-      withRunIdentityOrdinals({
-        targetDir: out,
-        files: set.files,
-        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: APP_JSON.id,
-        operatorTiers,
-      }),
-    );
+    const set = await generateMutationSet(src, { preprocessorSymbols: symbols });
+    await writeInstrumentedProject({
+      targetDir: out,
+      files: set.files,
+      identityOrdinals: set.identityOrdinals,
+      selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+      artifactId: "0123456789abcdef0123456789abcdef",
+      targetAppId: APP_JSON.id,
+      operatorTiers,
+    });
     const manifest = JSON.parse(
       await readFile(join(out, "mutant-manifest.json"), "utf8"),
     ) as MutantManifest;
@@ -1403,30 +1404,44 @@ describe("R298: #if-wrapped objects through the real pipeline", () => {
   });
 
   test("b-two-arm: each arm's entries name that arm's procedure, never the other's", async () => {
+    // R214: one build compiles one arm, so the shape is checked in both builds: [] compiles the
+    // #else arm (AElse), [CLEAN27] the #if arm (AIf). The other arm gets no mutant, and so no
+    // selector (measured: one per build, in the live arm).
     const src = B_REPRO["b-two-arm"];
-    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": src });
     const elseLine = src.split("\n").findIndex((l) => l.startsWith("#else")) + 1;
     expect(elseLine).toBeGreaterThan(1);
-    const before = manifest.mutants.filter((m) => m.startLine < elseLine);
-    const after = manifest.mutants.filter((m) => m.startLine > elseLine);
-    expect(before.length).toBeGreaterThan(0);
-    expect(after.length).toBeGreaterThan(0);
-    expect(before.length + after.length).toBe(manifest.mutants.length);
-    for (const m of manifest.mutants) {
-      expect(m.objectType).toBe("codeunit");
-      expect(m.codeunitId).toBe(50103);
+    const builds: [readonly string[], "AIf" | "AElse"][] = [
+      [[], "AElse"],
+      [["CLEAN27"], "AIf"],
+    ];
+    for (const [symbols, live] of builds) {
+      const { manifest, emitted } = await instrument(
+        { "Repro.Codeunit.al": src },
+        undefined,
+        symbols,
+      );
+      const before = manifest.mutants.filter((m) => m.startLine < elseLine);
+      const after = manifest.mutants.filter((m) => m.startLine > elseLine);
+      const [liveArm, deadArm] = live === "AIf" ? [before, after] : [after, before];
+      expect([live, liveArm.length > 0]).toEqual([live, true]);
+      expect([live, deadArm.length]).toEqual([live, 0]);
+      expect(before.length + after.length).toBe(manifest.mutants.length);
+      for (const m of manifest.mutants) {
+        expect(m.objectType).toBe("codeunit");
+        expect(m.codeunitId).toBe(50103);
+        expect(m.procedureName).toBe(live);
+      }
+      const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
+      expect(new Set(keys).size).toBe(keys.length);
+      const text = emitted.get("Repro.Codeunit.al") ?? "";
+      expect([live, text.split(SELECTOR).length - 1]).toEqual([live, 1]);
+      const selectorAt = text.indexOf(SELECTOR);
+      const elseAt = text.indexOf("\n#else\n");
+      expect([live, live === "AIf" ? selectorAt < elseAt : selectorAt > elseAt]).toEqual([
+        live,
+        true,
+      ]);
     }
-    for (const m of before) {
-      expect(m.procedureName).toBe("AIf");
-      expect(m.procedureName).not.toBe("AElse");
-    }
-    for (const m of after) {
-      expect(m.procedureName).toBe("AElse");
-      expect(m.procedureName).not.toBe("AIf");
-    }
-    const keys = manifest.mutants.map((m) => serializeKey(identityKeyOf(m)));
-    expect(new Set(keys).size).toBe(keys.length);
-    expect((emitted.get("Repro.Codeunit.al") ?? "").split(SELECTOR).length - 1).toBe(2);
   });
 
   test("b-mixed-file: entries carry objectId 50104, 50105 and 50106 by position", async () => {
@@ -1609,6 +1624,18 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
         exit(0);
     end;
 
+    var
+        Glob: Integer;
+#if not CLEAN27
+        Old: Integer;
+#endif
+}
+`;
+  // R214: Twin's var section is two #if blocks in a row, which tree-sitter-al leaves as ERROR nodes
+  // that swallow two of its directive markers, so its file cannot be evaluated as alc does and is
+  // refused whole. It sits in its own file so the members above are still measured.
+  const TWIN = `codeunit 50101 "Repro D Twin"
+{
     procedure Twin(X: Integer): Integer
 #if A
     var K: Integer;
@@ -1621,12 +1648,6 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
             exit(X + 4);
         exit(0);
     end;
-
-    var
-        Glob: Integer;
-#if not CLEAN27
-        Old: Integer;
-#endif
 }
 `;
 
@@ -1635,8 +1656,9 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     try {
       await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
       await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
+      await writeFile(join(dir, "Twin.Codeunit.al"), TWIN);
       const warnings: { code: string; message: string }[] = [];
-      await generateMutationSet(dir, {
+      const set = await generateMutationSet(dir, {
         emit: (e) => {
           if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
         },
@@ -1644,20 +1666,32 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
       const refused = warnings.filter((w) => w.code === "reach-latch-refused");
       expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
         "[lethal] Repro.Codeunit.al: procedure Prag",
-        "[lethal] Repro.Codeunit.al: procedure Twin",
       ]);
-      const [prag, twin] = refused;
+      const [prag] = refused;
       expect(prag?.message).toContain("R303");
       expect(prag?.message).toContain("is not the end of its header");
       expect(prag?.message).not.toContain("did not parse cleanly");
-      // Two #if var blocks in a row: tree-sitter-al leaves ERROR nodes, so the sentence names that.
-      expect(twin?.message).toContain("R313");
-      expect(twin?.message).toContain("var section did not parse cleanly");
-      expect(twin?.message).not.toContain("is not the end of its header");
+      // R214 (ruling T6-a): the unparsed member's file is refused whole, before any latch is
+      // considered, so R313's sentence cannot name it here. R313's sentence stays covered end to end
+      // by R316's P16 test, whose file is decided.
+      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
+        [
+          "Twin.Codeunit.al",
+          "preproc-undecided",
+          "marker-mismatch (4 directive lines, 2 markers)",
+          4,
+        ],
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
+    const { manifest, emitted } = await instrument({
+      "Repro.Codeunit.al": SRC,
+      "Twin.Codeunit.al": TWIN,
+    });
+    // The refused file gets no mutant and is not written.
+    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
+    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
     const grains = new Map<string, Set<string>>();
     for (const m of manifest.mutants) {
       const who = m.triggerName ?? m.procedureName;
@@ -1666,7 +1700,6 @@ describe("R303: a member whose var section is split by #if gets a latch, or is r
     expect(grains.get("OnRun")?.has("statement")).toBe(true);
     expect(grains.get("Pick")?.has("statement")).toBe(true);
     expect([...(grains.get("Prag") ?? [])]).toEqual(["unplaced"]);
-    expect([...(grains.get("Twin") ?? [])]).toEqual(["unplaced"]);
     expect(grains.get("Plain")?.has("statement")).toBe(true);
     const text = emitted.get("Repro.Codeunit.al") ?? "";
     expect(text).toContain("trigger OnRun() var LethALReachLatch: Boolean;");
@@ -1836,6 +1869,16 @@ describe("R316: a split-header procedure whose arms each have their own var sect
         Glob := X + 7;
         exit(Glob);
     end;
+}
+`;
+  // R214 (ruling T6-a): one arm of Twin's var section is two #if blocks in a row, which
+  // tree-sitter-al leaves as ERROR nodes that swallow two of its directive markers, so its file
+  // cannot be evaluated as alc does and is refused whole. It sits in its own file so the members
+  // above are still measured.
+  const TWIN = `codeunit 50101 "Repro P Twin"
+{
+    var
+        Glob: Integer;
 
 #if CLEAN27
     procedure Twin(X: Integer): Integer
@@ -1874,37 +1917,46 @@ describe("R316: a split-header procedure whose arms each have their own var sect
   const pick = member("Pick", "#if CLEAN27", plain.last, "statement");
   const hoist = member("Hoist", "    procedure Hoist(", pick.last, "statement");
   const pick2 = member("Pick2", "#if CLEAN27", hoist.last, "statement");
-  // One arm's var section is two #if blocks in a row, which tree-sitter-al leaves as ERROR nodes
-  // (R313): refused by R313's predicate, which runs before the preamble's own rule.
-  const twin = member("Twin", "#if CLEAN27", pick2.last, "unplaced");
-  const members = [plain, pick, hoist, pick2, twin];
+  // Twin, whose one arm's var section is two #if blocks in a row, is in its own file (TWIN above).
+  const members = [plain, pick, hoist, pick2];
 
-  test("the only reach-latch-refused warning is the unparsed arm's, with R313's sentence", async () => {
+  test("no admitted preamble arm is refused; the unparsed arm's file is refused whole (R214)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r316-"));
     try {
       await writeFile(join(dir, "app.json"), JSON.stringify(APP_JSON));
       await writeFile(join(dir, "Repro.Codeunit.al"), SRC);
+      await writeFile(join(dir, "Twin.Codeunit.al"), TWIN);
       const warnings: { code: string; message: string }[] = [];
-      await generateMutationSet(dir, {
+      const set = await generateMutationSet(dir, {
         emit: (e) => {
           if (e.type === "warning") warnings.push({ code: e.code, message: e.message });
         },
       });
-      const refused = warnings.filter((w) => w.code === "reach-latch-refused");
-      expect(refused.map((w) => w.message.split("'s var section")[0])).toEqual([
-        "[lethal] Repro.Codeunit.al: procedure Twin",
+      expect(warnings.filter((w) => w.code === "reach-latch-refused")).toEqual([]);
+      // R214 (ruling T6-a): Twin's file is refused before any latch is considered, so R313's
+      // sentence cannot name it here. R313's sentence stays covered end to end by P16 below, whose
+      // file is decided.
+      expect(set.preprocExcluded.map((f) => [f.file, f.reason, f.detail, f.sites])).toEqual([
+        [
+          "Twin.Codeunit.al",
+          "preproc-undecided",
+          "marker-mismatch (7 directive lines, 5 markers)",
+          3,
+        ],
       ]);
-      const [w] = refused;
-      expect(w?.message).toContain("did not parse cleanly");
-      expect(w?.message).toContain("R313");
-      expect(w?.message).not.toContain("R316");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
   test("each member's sites carry its grain, and each admitted preamble arm gets its own latch", async () => {
-    const { manifest, emitted } = await instrument({ "Repro.Codeunit.al": SRC });
+    const { manifest, emitted } = await instrument({
+      "Repro.Codeunit.al": SRC,
+      "Twin.Codeunit.al": TWIN,
+    });
+    // The refused file gets no mutant and is not written (R214).
+    expect(manifest.mutants.filter((m) => m.file === "Twin.Codeunit.al")).toEqual([]);
+    expect(emitted.has("Twin.Codeunit.al")).toBe(false);
     // Every mutant sits in exactly one member, each bounded through its closing `end;`.
     for (const m of manifest.mutants) {
       const owners = members.filter((x) => m.startLine >= x.first && m.startLine <= x.last);
@@ -2890,7 +2942,12 @@ describe("R302: split-member sites through the real pipeline", () => {
   });
 
   test("d3: no swap-additive on a name only one arm declares", async () => {
-    const got = rows(await one(T3_D3));
+    // R214 (ruling T6-c): L13 sits in `#if CLEAN27`, so the build [] compiles it out and "no
+    // swap-additive at L13" would hold by R214 alone. [CLEAN27] keeps the arm live, so the absence
+    // is R302's rule (an ambiguous name types as nothing) again.
+    const got = rows(
+      (await instrument({ "Repro.Codeunit.al": T3_D3 }, undefined, ["CLEAN27"])).manifest,
+    );
     expect(got).not.toContain("L13 lethal.swap-additive");
     expect(got).toContain("L15 lethal.return-value");
   });
@@ -3042,13 +3099,15 @@ describe("R330: no typed site from a name declared in an unindexed #if region", 
   beforeAll(async () => {
     await initParser();
   });
-  const ops = async (src: string) =>
-    (await instrument({ "Repro.Codeunit.al": src })).manifest.mutants
+  // R214: `symbols` is the build. i1 and p1 hold their subject in `#if X`, the build the AL0175
+  // above was measured under, so they pass ["X"] to keep that arm live.
+  const ops = async (src: string, symbols: readonly string[] = []) =>
+    (await instrument({ "Repro.Codeunit.al": src }, undefined, symbols)).manifest.mutants
       .map((x) => `${x.procedureName} ${x.operatorName}`)
       .sort();
 
   test("i1: a split member beside a #if-wrapped overload gives Bar no swap-additive", async () => {
-    expect(await ops(R330_I1)).toEqual([
+    expect(await ops(R330_I1, ["X"])).toEqual([
       "Bar lethal.empty-block",
       "Foo lethal.empty-block",
       "Foo lethal.empty-block",
@@ -3061,7 +3120,7 @@ describe("R330: no typed site from a name declared in an unindexed #if region", 
   });
 
   test("p1: master's older plain form gives Bar no swap-additive either", async () => {
-    expect(await ops(R330_P1)).toEqual([
+    expect(await ops(R330_P1, ["X"])).toEqual([
       "Bar lethal.empty-block",
       "Foo lethal.empty-block",
       "Foo lethal.empty-block",
@@ -3272,14 +3331,18 @@ describe("R331: no typed site in an unindexed member, and rule 3 sees #if-wrappe
   beforeAll(async () => {
     await initParser();
   });
-  const ops = async (files: Record<string, string>) =>
-    (await instrument(files)).manifest.mutants.map((x) => x.operatorName).sort();
+  // R214: `symbols` is the build. c1 and c1s hold their subject in `#if X`, the build the AL0175
+  // above was measured under, so they pass ["X"] to keep that arm live.
+  const ops = async (files: Record<string, string>, symbols: readonly string[] = []) =>
+    (await instrument(files, undefined, symbols)).manifest.mutants
+      .map((x) => x.operatorName)
+      .sort();
 
   test("c1: no swap-additive inside a #if-wrapped plain procedure (global in other casing)", async () => {
-    expect(await ops({ "Repro.Codeunit.al": R331_C1 })).toEqual(["lethal.empty-block"]);
+    expect(await ops({ "Repro.Codeunit.al": R331_C1 }, ["X"])).toEqual(["lethal.empty-block"]);
   });
   test("c1s: nor with the global in the same casing", async () => {
-    expect(await ops({ "Repro.Codeunit.al": R331_C1S })).toEqual(["lethal.empty-block"]);
+    expect(await ops({ "Repro.Codeunit.al": R331_C1S }, ["X"])).toEqual(["lethal.empty-block"]);
   });
   const C2_WANT = ["lethal.empty-block", "lethal.void-method-call"];
   test("c2: a #if-wrapped table Validate stops validate-to-assign", async () => {
@@ -4377,6 +4440,7 @@ function r351Report(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
@@ -4396,7 +4460,10 @@ function r351Report(
     { type: "session-finished", elapsedMs: 10 },
   ];
   return buildReport(
-    { caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" } },
+    {
+      caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+      buildSymbols: [],
+    },
     events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),
   );
 }

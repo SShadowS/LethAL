@@ -21,7 +21,7 @@ import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
-import { loadDryRunConfig, restoreNotice } from "../src/cli";
+import { loadDryRunConfig, printDryRun, restoreNotice } from "../src/cli";
 import {
   DRY_RUN_REFUSED,
   FLAG_OWNERS,
@@ -60,6 +60,7 @@ import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
 import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient } from "../src/lease";
+import { generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
@@ -2049,6 +2050,10 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
 `,
     );
     await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Run Verify Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    await writeFile(
       join(testDir, "Tests.Codeunit.al"),
       `codeunit 79100 "Sandbox Tests"
 {
@@ -2090,6 +2095,142 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     // And it is not the hash without the symbol, so the symbol is what is being compared.
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
   });
+
+  // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.
+  const R214_LOGIC = `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+#if X
+        exit(Amount > Budget);
+#else
+        exit(Amount >= Budget);
+#endif
+    end;
+}
+`;
+  async function r214Project(): Promise<{ root: string; projectDir: string; testDir: string }> {
+    const root = scratch("lethal-cli-r214-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Symbols Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(join(projectDir, "Logic.Codeunit.al"), R214_LOGIC);
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    return { root, projectDir, testDir };
+  }
+
+  test("R214: the config's symbols decide which #if arm the session mutates", async () => {
+    const { root, projectDir, testDir } = await r214Project();
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "al-runner",
+      dbPath: join(root, "lethal.sqlite"),
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const report = await runFromCli(parsed, {
+      validateSelectorIdsForProject: async () => {},
+      buildBackend: async () => new PassingBackend(),
+    });
+    expect(report.mutants.some((m) => m.line === 6)).toBe(true);
+    expect(report.mutants.some((m) => m.line === 8)).toBe(false);
+  });
+
+  test("R214: --dry-run counts the sites of the build the config names", async () => {
+    const { root, projectDir } = await r214Project();
+    const paths = { dbPath: join(root, "lethal.sqlite"), configPath: join(root, "none.json") };
+    const outPath = join(root, "dry-run.json");
+    const printed: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      printed.push(args.map(String).join(" "));
+    });
+    try {
+      await printDryRun(projectDir, undefined, { ...paths, outPath, preprocessorSymbols: ["X"] });
+    } finally {
+      log.mockRestore();
+    }
+    const count = Number(/(\d+) mutant site\(s\)/.exec(printed.join("\n"))?.[1]);
+    const sitesWith = async (symbols: readonly string[]) =>
+      (await generateMutationSet(projectDir, { preprocessorSymbols: symbols })).files.reduce(
+        (n, f) => n + f.specs.length,
+        0,
+      );
+    expect(count).toBe(await sitesWith(["X"]));
+    // The two arms hold the same number of sites (measured: 3 and 3), so the count alone cannot
+    // tell the builds apart. The listing's lines can: the X arm is line 6, the #else arm line 8.
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+      batches: { sites: { line: number }[] }[];
+    };
+    const lines = new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    expect(lines.has(6)).toBe(true);
+    expect(lines.has(8)).toBe(false);
+  });
+
+  // The test above calls printDryRun directly, so it cannot see main() drop the config's symbols on
+  // the way. This one runs the real CLI as a subprocess, which is the only way to reach main().
+  test("R214: `lethal run --dry-run --config` lists the arm the config's symbols build", async () => {
+    const { root, projectDir } = await r214Project();
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({ preprocessorSymbols: ["X"] }));
+    const outPath = join(root, "dry-run.json");
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "run",
+        "--project",
+        projectDir,
+        "--dry-run",
+        "--config",
+        configPath,
+        "--db",
+        join(root, "lethal.sqlite"),
+        "--out",
+        outPath,
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(0);
+    expect(stderr).toContain("(symbols: X)");
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+      batches: { sites: { line: number }[] }[];
+    };
+    const lines = new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    expect(lines.has(6)).toBe(true);
+    expect(lines.has(8)).toBe(false);
+  }, 60_000);
 });
 
 // R358 review C1, then R360: a clean `lethal run` removes its scratch folder, and `lethal verify`
@@ -2166,6 +2307,10 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     end;
 }
 `,
+    );
+    await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Run Verify Tests", publisher: "LethAL", version: "1.0.0.0" }),
     );
     await writeFile(
       join(testDir, "Tests.Codeunit.al"),
@@ -2430,6 +2575,21 @@ describe("C02-06: lethal verify (Task 7)", () => {
     });
   });
 
+  test("R-371: --max-new-tests parses a count, is absent unless given, and refuses a non-count", () => {
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "120"])).toMatchObject({
+      maxNewTests: 120,
+    });
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "0"])).toMatchObject({
+      maxNewTests: 0,
+    });
+    expect("maxNewTests" in parseCliConfig(VERIFY_ARGS)).toBe(false);
+    for (const bad of ["-1", "1.5", "abc", ""]) {
+      expect(() => parseCliConfig([...VERIFY_ARGS, `--max-new-tests=${bad}`]), bad).toThrow(
+        /--max-new-tests must be a non-negative integer/,
+      );
+    }
+  });
+
   test("verify refuses every shared flag outside its allowlist, --out and --report included", () => {
     const others = Object.entries(RUN_FLAGS).filter(([flag]) => !VERIFY_FLAGS.has(flag));
     expect(others.map(([f]) => f)).toContain("out");
@@ -2472,6 +2632,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -2522,6 +2683,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -2662,6 +2824,7 @@ const VALUE: Readonly<Record<string, string>> = {
   "control-id": "50101",
   "table-id": "50102",
   format: "mutation-elements",
+  "max-new-tests": "60",
 };
 
 /** MEASURED exemption: flags `run --dry-run` accepts and ignores. R266 emptied it: `--out` now
@@ -2833,7 +2996,15 @@ describe("C02-07: flags are read or refused, never ignored", () => {
       ];
       expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
     }
-    expect(DRY_RUN_REFUSED.length).toBe(18);
+    expect(DRY_RUN_REFUSED.length).toBe(17);
+  });
+
+  test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {
+    const dry = (...extra: string[]) =>
+      parseCliConfig(["run", "--project", "p", "--dry-run", ...extra]);
+    expect(dry("--backend", "al-runner")).toMatchObject({ backendKind: "al-runner" });
+    expect(dry()).not.toHaveProperty("backendKind");
+    expect(() => dry("--backend", "alrunner")).toThrow('unknown --backend "alrunner"');
   });
 
   test("the dry-run exemption is exact", () => {

@@ -29,11 +29,19 @@ const BRANCH_PARENT_KINDS: ReadonlySet<string> = new Set([
  * container, so a statement's parent is the `statement_block` and its
  * grandparent is the `code_block`. Keying on `code_block` alone — as this
  * codebase did under v2.5.0 — silently matches nothing under v3.
+ *
+ * R214: a statement directly inside a statement-level `#if` arm counts too, when that `#if` sits in
+ * a statement list: the arm is itself a statement list. A `#if` in a single-statement slot does not
+ * count, since only its first statement would fill the slot. This moves three consumers:
+ * `wrapIfSingleStatementSlot` (`packages/schemata/src/compile.ts`: no `begin ... end` wrap for an
+ * in-arm statement, correct because the arm is a list), `placeReach`'s P2 (statement grain, R342)
+ * and `isConsumedCodeunitRun` (a bare in-arm `Codeunit.Run` is bare).
  */
 export function isStatementPosition(node: ALSyntaxNode): boolean {
   const parent = node.parent;
   if (parent === null) return false;
-  return parent.kind === ALNodeKind.statement_block || parent.kind === ALNodeKind.block;
+  if (parent.kind === ALNodeKind.statement_block || parent.kind === ALNodeKind.block) return true;
+  return parent.rawKind === "preproc_conditional_statement" && isStatementPosition(parent);
 }
 
 /**

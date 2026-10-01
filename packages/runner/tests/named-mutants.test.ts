@@ -67,6 +67,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -98,6 +99,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const runB = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -216,6 +218,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const runB = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -240,6 +243,7 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
     const runB = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",

@@ -454,9 +454,10 @@ describe("sessionFingerprint (R47)", () => {
   // The value itself moved once, on purpose: R325 put the identity scheme into EVERY digest (it was
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
   // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
-  // it was 4a8c47ac...288a under scheme 3. It moved again for R374, scheme 5; it was 25fdc64a...be4f
-  // under scheme 4.
-  const PINNED = "ef3bb9d1f2134482a63cca3f4fe735ed677e0c5d644ede3979857d1fced7daf5";
+  // it was 4a8c47ac...288a under scheme 3. It moved again for R214 (the next scheme after R318's);
+  // it was 25fdc64a...3be4f under scheme 4. It moved again for R374, scheme 6; it was
+  // ef3bb9d1...daf5 under scheme 5.
+  const PINNED = "b3f6072bff3e2fc4b9ff8038470ef189310efef34722bf153e173ba625600c0e";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -517,6 +518,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -552,6 +554,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -573,6 +576,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -594,6 +598,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -617,6 +622,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const withVerdicts = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -639,6 +645,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -661,6 +668,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const good = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -682,6 +690,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const allErrors = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -715,6 +724,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -754,6 +764,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -859,6 +870,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -915,6 +927,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -939,6 +952,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -960,6 +974,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -978,6 +993,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -1674,6 +1690,7 @@ describe("runSession --resume (R47)", () => {
     const foreign = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/somewhere/else",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -1896,8 +1913,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 5 since R374 (run-wide identity ordinals).
-    expect(IDENTITY_SCHEME).toBe(5);
+    // Pinned by value so a bump is deliberate: 6 since R374 (run-wide identity ordinals).
+    expect(IDENTITY_SCHEME).toBe(6);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -2616,6 +2633,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   /** A run under the OLD naming, relabelled to `scheme` with the fingerprint that scheme computes. */
   async function oldNamingRun(scheme: number, finished: boolean) {
     const root = scratch("lethal-r318-scheme-");
@@ -2634,6 +2652,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       store,
       ...dirs,
       selectorIds,
+      preprocessorSymbols: ["R318A"],
     });
     expect(wrappedOf(first)).toEqual(["20:survived", "21:survived"]);
     const run = store.db.query("SELECT id, backend FROM runs").get() as {
@@ -2649,6 +2668,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       identityScheme: scheme,
       // R354: what runSession computes: it always passes the mode, here the backend's.
       coverageMode: "procedure",
+      preprocessorSymbols: ["R318A"],
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,
@@ -2658,6 +2678,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     return { dirs, store, first, runId: run.id };
   }
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("history: a previous-scheme survivor is executed, and reads no-coverage", async () => {
     const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, true);
     const events: RunEvent[] = [];
@@ -2666,6 +2687,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       store,
       ...dirs,
       selectorIds,
+      preprocessorSymbols: ["R318A"],
       skipKnownSurvivors: true,
       emit: [(e) => events.push(e)],
     });
@@ -2677,6 +2699,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     expect(warned[0]?.type === "warning" ? warned[0].message : "").toContain(`run ${runId}`);
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("history control: at the current scheme the old survivor IS skipped (the false verdict)", async () => {
     const { dirs, store } = await oldNamingRun(IDENTITY_SCHEME, true);
     const events: RunEvent[] = [];
@@ -2685,6 +2708,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       store,
       ...dirs,
       selectorIds,
+      preprocessorSymbols: ["R318A"],
       skipKnownSurvivors: true,
       emit: [(e) => events.push(e)],
     });
@@ -2694,10 +2718,18 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     ).toHaveLength(0);
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("--resume-run: a previous-scheme run is refused by name", async () => {
     const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, false);
     await expect(
-      runSession({ backend: r3Backend("post"), store, ...dirs, selectorIds, resume: runId }),
+      runSession({
+        backend: r3Backend("post"),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: ["R318A"],
+        resume: runId,
+      }),
     ).rejects.toThrow(
       new RegExp(
         `--resume-run ${runId} was keyed under identity scheme ${IDENTITY_SCHEME - 1}.*scheme ${IDENTITY_SCHEME}.*R325`,
@@ -2705,6 +2737,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
     );
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("--resume-run control: at the current scheme the same run resumes", async () => {
     const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME, false);
     const report = await runSession({
@@ -2712,18 +2745,28 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       store,
       ...dirs,
       selectorIds,
+      preprocessorSymbols: ["R318A"],
       resume: runId,
     });
     expect(report.resumedFrom?.runId).toBe(runId);
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("--resume last: a previous-scheme run is named and refused", async () => {
     const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME - 1, false);
     await expect(
-      runSession({ backend: r3Backend("post"), store, ...dirs, selectorIds, resume: "last" }),
+      runSession({
+        backend: r3Backend("post"),
+        store,
+        ...dirs,
+        selectorIds,
+        preprocessorSymbols: ["R318A"],
+        resume: "last",
+      }),
     ).rejects.toThrow(new RegExp(`run ${runId}, .*identity scheme ${IDENTITY_SCHEME - 1}.*R325`));
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("--resume last control: at the current scheme the same run resumes", async () => {
     const { dirs, store, runId } = await oldNamingRun(IDENTITY_SCHEME, false);
     const report = await runSession({
@@ -2731,11 +2774,13 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       store,
       ...dirs,
       selectorIds,
+      preprocessorSymbols: ["R318A"],
       resume: "last",
     });
     expect(report.resumedFrom?.runId).toBe(runId);
   });
 
+  // R214: the code under test sits in #if R318A; the build defines R318A, so its arm is live (orchestrator ruling q-20260930T055856).
   test("marks: a previous-scheme mark on the old survivor is stale, not contradicted", async () => {
     const run = async (identityScheme: number) => {
       const { dirs, first } = await oldNamingRun(identityScheme, true);
@@ -2754,7 +2799,11 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
         store: new ResultsStore(":memory:"),
         ...dirs,
         selectorIds,
-        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+        preprocessorSymbols: ["R318A"],
+        // R214: the mark names the build's symbols, so only its scheme can make it stale.
+        equivalenceMarks: [
+          { key, reason: "same either way", identityScheme, preprocessorSymbols: ["R318A"] },
+        ],
       });
       return { key, marked: report.readerMarkedEquivalent };
     };

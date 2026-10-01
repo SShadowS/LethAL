@@ -1,0 +1,7 @@
+raw 6 deployed 6 skippedFiles 0
+R306Probe.Codeunit.al:6	lethal.empty-block	proc=Compute	hang=-	39470654eade7d5bb5b8bdd0fda24a61881c2b8c20ab38efd97f38dd30dadec9|R306 Probe|Compute|lethal.empty-block|1	105-210	grain=statement	plat=-
+R306Probe.Codeunit.al:7	lethal.remove-assignment	proc=Compute	hang=-	b33128a504176dc0c15bc9455809ffd0e6e8894eb35f3a120fc8417d1212d82c|R306 Probe|Compute|lethal.remove-assignment|1	119-125	grain=statement	plat=-
+R306Probe.Codeunit.al:9	lethal.remove-assignment	proc=Compute	hang=-	8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|R306 Probe|Compute|lethal.remove-assignment|1	147-157	grain=statement	plat=-
+R306Probe.Codeunit.al:9	lethal.swap-additive	proc=Compute	hang=-	7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|R306 Probe|Compute|lethal.swap-additive|1	152-157	grain=statement	plat=-
+R306Probe.Codeunit.al:11	lethal.remove-assignment	proc=Compute	hang=-	0b2cbc6383eedc0c491fc776c5f3d811196ea87e212a775ddcd96dd886761bc4|R306 Probe|Compute|lethal.remove-assignment|1	174-184	grain=statement	plat=-
+R306Probe.Codeunit.al:12	lethal.return-value	proc=Compute	hang=-	40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|R306 Probe|Compute|lethal.return-value|1	194-201	grain=statement	plat=-

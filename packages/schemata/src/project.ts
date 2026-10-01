@@ -128,11 +128,14 @@ export function looseIdentityTupleOf(
  * the R-323 plan). 4: R318, a renamed split member's coverage is attributed by position and a
  * line two members share names nobody, which changes the verdict an unchanged key can carry
  * (history, `--resume`, `--resume-run`, equivalence marks). No key tuple moves; the bump is for
- * changed attribution of unchanged keys. 5: R374, identity ordinals are numbered once over the whole
- * run instead of per batch, so keys move only where batching split twins (two twins in two
- * batches both held ordinal 0 before).
+ * changed attribution of unchanged keys. 5: R214, a mutant in an #if arm the build compiles out is no
+ * longer generated, a file whose directives cannot be evaluated as alc does is not mutated, and a
+ * statement directly inside a statement-level #if became a statement position (measured moves in
+ * the R-214 plan). 6: R374, identity ordinals are numbered once over the whole run instead of per
+ * batch, so keys move only where batching split twins (two twins in two batches both held
+ * ordinal 0 before).
  */
-export const IDENTITY_SCHEME = 5;
+export const IDENTITY_SCHEME = 6;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

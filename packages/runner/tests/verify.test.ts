@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { initParser, parsesSinceStart } from "@lethal/engine";
 import {
   IDENTITY_SCHEME,
   type MutantManifest,
@@ -10,6 +11,11 @@ import {
 import { InstalledArtifactError } from "../src/artifact";
 import type { CoverageMode, TestMethodRef } from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
+import {
+  DependencyUnreadableError,
+  appInputsOfAppJson,
+  readAppJsonInputs,
+} from "../src/digest-inputs";
 import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
@@ -20,8 +26,8 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
-import { testDigests } from "../src/test-digest";
-import { TestPageScanError } from "../src/testpage-scan";
+import { testDigests, testDigestsOfModel } from "../src/test-digest";
+import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
   INSTALLED_ARTIFACT_REFUSALS,
@@ -39,6 +45,7 @@ import {
   planVerify,
   resolveVerifySource,
   runVerify,
+  verifyDependencyFingerprint,
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
@@ -46,6 +53,14 @@ import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+
+/** R-371: a test project's app.json, with no dependency and no build input (a test project
+ *  always has one; a missing one is refused). */
+const TEST_APP_JSON = '{"name":"Tests","publisher":"P","version":"1.0.0.0"}';
+/** R-371: the dependency fingerprint the planVerify fixtures record and verify with. */
+const DEPS = "fixture-dependencies";
+/** R-371: the digest inputs of a test project without an app.json, as `planVerify` reads them. */
+const INPUTS = { dependencies: DEPS, buildInputs: appInputsOfAppJson({}).buildInputs };
 
 const A1 = "a".repeat(32);
 const A2 = "b".repeat(32);
@@ -95,6 +110,7 @@ function oneBatchRun(
   const runId = store.createRun({
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.0",
@@ -184,6 +200,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -202,6 +219,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -294,6 +312,7 @@ describe("resolveVerifySource", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
         projectPath: "P",
         backend: "bcdev",
         appVersion: "0.0.0.0",
@@ -314,6 +333,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -366,6 +386,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -423,6 +444,7 @@ describe("assertSourceUnchanged", () => {
       sourceSha256: await hashTargetSource(dir, SYMBOLS),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       coverageMode: "procedure",
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
@@ -497,6 +519,7 @@ describe("assertSourceUnchanged", () => {
  *  may open a TestPage. */
 function pageTestDir(withGreenA = true): string {
   const dir = scratch("lethal-verify-tp-");
+  writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
   const a = withGreenA ? "    [Test]\n    procedure A()\n    begin\n    end;\n\n" : "";
   writeFileSync(
     join(dir, "50100.Codeunit.al"),
@@ -515,6 +538,7 @@ describe("planVerify", () => {
   /** A temp test project with one real `.al` test codeunit per entry. */
   function testDir(codeunits: readonly Codeunit[]): string {
     const dir = scratch("lethal-verify-tests-");
+    writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
     for (const c of codeunits) {
       const methods = c.methods
         .map((m) => `    [Test]\n    procedure ${m}()\n    begin\n${c.body ?? ""}    end;\n`)
@@ -554,6 +578,7 @@ describe("planVerify", () => {
       sourceSha256: "5".repeat(64),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       coverageMode: "procedure",
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
@@ -570,10 +595,14 @@ describe("planVerify", () => {
   /** `planVerify` against a source run that recorded the test project's CURRENT digests: every
    *  test in it reads as unchanged since the source run (R-278). */
   async function planUnchanged(
-    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests">,
+    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests" | "dependencies">,
   ): Promise<VerifyPlan> {
-    const recorded = await testDigests(a.testDir, await discoverTests(a.testDir));
-    return planVerify({ ...a, sourceTestDigests: recorded });
+    const recorded = await testDigests(a.testDir, await discoverTests(a.testDir), INPUTS);
+    // A source run records a digest for every test it ran (or none): a baseline test that is gone
+    // from the project now still had one then.
+    for (const r of a.sourceBaseline)
+      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??= `v2:${"0".repeat(64)}`;
+    return planVerify({ ...a, sourceTestDigests: recorded, dependencies: DEPS });
   }
 
   async function planRefusal(p: Promise<unknown>): Promise<VerifyError> {
@@ -672,7 +701,7 @@ describe("planVerify", () => {
   /** The digests a source run recorded over `codeunits`, taken before any later edit. */
   async function recordedOver(codeunits: readonly Codeunit[]): Promise<Record<string, string>> {
     const dir = testDir(codeunits);
-    return testDigests(dir, await discoverTests(dir));
+    return testDigests(dir, await discoverTests(dir), INPUTS);
   }
 
   // R258: 50100 A.M is in the source baseline and was edited since, and does not cover the
@@ -690,6 +719,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001"), entry("M0002")]),
       sourceBaseline: [row(50100, "A", "M")],
       sourceTestDigests: await recordedOver(before.slice(0, 1)),
+      dependencies: DEPS,
       testDir: testDir([
         { id: 50100, name: "A", methods: ["M"], body: "        Error('now asserts');\n" },
         { id: 50101, name: "B", methods: ["M"] },
@@ -708,6 +738,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
       sourceTestDigests: await recordedOver([{ id: 50100, name: "T", methods: ["M", "K"] }]),
+      dependencies: DEPS,
       testDir: testDir([
         {
           id: 50100,
@@ -722,18 +753,27 @@ describe("planVerify", () => {
   });
 
   // A non-NULL map that lacks a discovered test's key must never read as "unchanged".
-  test("R-278: a baseline test with no recorded digest in a non-NULL map is new", async () => {
+  // External review r1 #5 (R-371): a run records a digest for every test or for none, so a map
+  // that misses a baseline test, or an empty one, is not a run this build recorded. Before R-371
+  // the missing test was read as new; it is now refused, which is the stricter reading.
+  test("R-371: a baseline test with no recorded digest in a non-NULL map is source-predates-verify", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
     const recorded = await recordedOver(codeunits);
     const { "50100::k": _dropped, ...withoutK } = recorded;
-    const plan = await planVerify({
-      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
-      manifest: manifest([entry("M0001")]),
-      sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
-      sourceTestDigests: withoutK,
-      testDir: testDir(codeunits),
-    });
-    expect(keys(plan.newTests)).toEqual(["50100::K"]);
+    for (const map of [withoutK, {}]) {
+      const e = await planRefusal(
+        planVerify({
+          source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+          manifest: manifest([entry("M0001")]),
+          sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+          sourceTestDigests: map,
+          dependencies: DEPS,
+          testDir: testDir(codeunits),
+        }),
+      );
+      expect(e.reason).toBe("source-predates-verify");
+      expect(e.detail).toContain("50100::K");
+    }
   });
 
   test("R-278: an unchanged test in the source baseline is not new", async () => {
@@ -743,6 +783,7 @@ describe("planVerify", () => {
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
       sourceTestDigests: await recordedOver(codeunits),
+      dependencies: DEPS,
       testDir: testDir(codeunits),
     });
     expect(keys(plan.newTests)).toEqual([]);
@@ -756,11 +797,166 @@ describe("planVerify", () => {
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "T", "M")],
         sourceTestDigests: null,
+        dependencies: DEPS,
         testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
       }),
     );
     expect(e.reason).toBe("source-predates-verify");
     expect(e.detail).toContain("test digests");
+  });
+
+  // R-371: a v1 digest (R-278's, no scheme tag) covers the method only; no comparison with it
+  // means anything, so verify refuses once instead of reading every test as edited.
+  test("R-371: a source run that recorded v1 digests is source-predates-verify, naming the scheme", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const v2 = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v1,
+        dependencies: DEPS,
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain("R-278's scheme");
+    expect(e.detail).toContain("once per source run");
+  });
+
+  // Review r1 #4: verify reads the test project's build inputs from its app.json; an unreadable
+  // one is a dependency-unreadable refusal, never empty inputs.
+  test("R-371: a test project whose app.json is missing is refused, never digested over empty inputs", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const recorded = await recordedOver(codeunits);
+    const dir = testDir(codeunits);
+    rmSync(join(dir, "app.json"));
+    const e = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M")],
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+      testDir: dir,
+      maxNewTests: 1000,
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(DependencyUnreadableError);
+    expect(verifyRefusalOf(e)).toMatchObject({ kind: "refused", reason: "dependency-unreadable" });
+  });
+
+  // R-371: the scheme check reads no package, so it comes before the dependency read: a v1 source
+  // with an unreadable dependency is source-predates-verify, and no package is read at all.
+  test("R-371: a v1 source with an unreadable dependency refuses source-predates-verify, reading no package", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const v2 = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    let reads = 0;
+    const e = await planRefusal(
+      planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v1,
+        dependencies: async () => {
+          reads += 1;
+          throw new DependencyUnreadableError("fixture: the package cannot be read");
+        },
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(reads).toBe(0);
+  });
+
+  describe("R-371: --max-new-tests", () => {
+    // One covered survivor and three tests the source run never recorded.
+    const capPlan = (maxNewTests: number) =>
+      planUnchanged({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([
+          { id: 50100, name: "T", methods: ["M"] },
+          { id: 50101, name: "New", methods: ["N1", "N2", "N3"] },
+        ]),
+        maxNewTests,
+      });
+
+    test("exactly at the limit is planned", async () => {
+      const plan = await capPlan(3);
+      expect(keys(plan.newTests)).toEqual(["50101::N1", "50101::N2", "50101::N3"]);
+    });
+
+    test("one above the limit is too-many-new-tests, naming N, the value to pass and the edit class", async () => {
+      const e = await planRefusal(capPlan(2));
+      expect(e.reason).toBe("too-many-new-tests");
+      expect(e.detail).toContain("3 tests are new or edited");
+      expect(e.detail).toContain("pass --max-new-tests 3");
+      expect(e.detail).toContain("added: 3 test(s)");
+    });
+
+    // Ruling 2: the refusal names the edit class, read from the recorded parts.
+    test("a subscriber edit is named by its class and its procedure", async () => {
+      const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
+      const sub = (v: number) =>
+        `codeunit 50120 "Sub"\n{\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Lib", 'OnX', '', false, false)]\n    local procedure OnX()\n    begin\n        S := ${v};\n    end;\n}\n`;
+      const dirWith = (s: number) => {
+        const dir = testDir(codeunits);
+        writeFileSync(join(dir, "Sub.al"), sub(s));
+        return dir;
+      };
+      await initParser();
+      const before = dirWith(1);
+      const { digests, parts } = testDigestsOfModel(
+        buildTestAppModel(await readTestAppSources(before)),
+        await discoverTests(before),
+        INPUTS,
+      );
+      const refuse = async (dir: string) =>
+        planRefusal(
+          planVerify({
+            source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+            manifest: manifest([entry("M0001")]),
+            sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+            sourceTestDigests: digests,
+            sourceTestDigestParts: parts,
+            dependencies: DEPS,
+            testDir: dir,
+            maxNewTests: 1,
+          }),
+        );
+      const s = await refuse(dirWith(2));
+      expect(s.reason).toBe("too-many-new-tests");
+      expect(s.detail).toContain("subscriber: 2 test(s)");
+      expect(s.detail).toContain("pass --max-new-tests 2");
+      expect(s.detail).toContain("Changed procedures: Sub.OnX");
+    });
+  });
+
+  // R-371: the TestPage scan and the digests share ONE parse of the test app.
+  test("R-371: planVerify parses each test-app file once", async () => {
+    const dir = testDir([
+      { id: 50100, name: "T", methods: ["M"] },
+      { id: 50101, name: "U", methods: ["K"] },
+    ]);
+    const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
+    const before = parsesSinceStart();
+    await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "T", "M"), row(50101, "U", "K")],
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+      testDir: dir,
+    });
+    expect(parsesSinceStart() - before).toBe(2);
   });
 
   test("an empty source baseline is refused, never read as every test new", async () => {
@@ -793,12 +989,20 @@ describe("planVerify", () => {
   });
 
   /** Survivors all covered by `T.M`, planned against the given marks file. */
-  function markedPlan(marks: unknown, entries: readonly MutantManifestEntry[]) {
+  function markedPlan(
+    marks: unknown,
+    entries: readonly MutantManifestEntry[],
+    /** R214: the source run's effective build symbols. */
+    buildSymbols: readonly string[] = [],
+  ) {
     return planUnchanged({
-      source: source(
-        project(marks),
-        entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
-      ),
+      source: {
+        ...source(
+          project(marks),
+          entries.map((e) => ({ mutantCode: e.mutantId, coveringTests: ["T.M"] })),
+        ),
+        buildSymbols,
+      },
       manifest: manifest(entries),
       sourceBaseline: [row(50100, "T", "M")],
       testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
@@ -832,6 +1036,26 @@ describe("planVerify", () => {
     expect(plan.skipped).toEqual([]);
     expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
     expect(plan.marksUnderOtherScheme.map((m) => [m.key, m.identityScheme])).toEqual([[key, 1]]);
+  });
+
+  // R214: a key names a site within one build, so a mark made under other preprocessor symbols
+  // than the source run's build is stale and not applied: the survivor runs.
+  test("a mark made under other build symbols than the source run's is stale, never applied", async () => {
+    const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
+    const marks = (preprocessorSymbols: readonly string[]) => ({
+      identityScheme: IDENTITY_SCHEME,
+      marks: [{ key, reason: "same either way", preprocessorSymbols }],
+    });
+    const other = await markedPlan(marks(["LETHALA"]), [entry("M0001")], ["LETHALB"]);
+    expect(other.skipped).toEqual([]);
+    expect(other.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
+    expect(other.marksUnderOtherScheme.map((m) => [m.key, m.preprocessorSymbols])).toEqual([
+      [key, ["LETHALA"]],
+    ]);
+    // Control: the same mark under the source run's own set is applied.
+    const same = await markedPlan(marks(["LETHALB"]), [entry("M0001")], ["LETHALB"]);
+    expect(same.skipped.map((x) => x.entry.mutantId)).toEqual(["M0001"]);
+    expect(same.marksUnderOtherScheme).toEqual([]);
   });
 
   // Review r1 item 3: an empty target list must not come back looking like "every target was
@@ -1117,6 +1341,7 @@ function installedRun(
   const runId = store.createRun({
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.0",
@@ -1432,6 +1657,7 @@ describe("C02-09: gap ids", () => {
     }
     const testDir = over.testDir ?? scratch("lethal-verify-gap-tests-");
     if (over.testDir === undefined) {
+      writeFileSync(join(testDir, "app.json"), TEST_APP_JSON);
       writeFileSync(
         join(testDir, "50100.Codeunit.al"),
         'codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure M()\n    begin\n    end;\n}\n',
@@ -1453,7 +1679,12 @@ describe("C02-09: gap ids", () => {
     store.db.run("UPDATE runs SET test_digests = ? WHERE id = ?", [
       over.sourceDigests === null
         ? null
-        : JSON.stringify(await testDigests(testDir, await discoverTests(testDir))),
+        : JSON.stringify(
+            await testDigests(testDir, await discoverTests(testDir), {
+              dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
+              buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+            }),
+          ),
       runId,
     ]);
     if (over.sourceCoverage !== undefined) {
@@ -1604,6 +1835,21 @@ describe("C02-09: gap ids", () => {
     const out = await w.verify(["0/M0001"]);
     expect(out.refused?.reason).toBe("source-predates-verify");
     expect(out.refused?.detail).toContain("test digests");
+    expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
+    w.store.close();
+  });
+
+  test("R214: runVerify refuses a source run with no recorded build symbols, before any run row", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when verify refuses");
+      },
+    });
+    // The shape of a row recorded before R214: the column exists but holds NULL, never `[]`.
+    w.store.db.run("UPDATE runs SET build_symbols = NULL");
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused?.reason).toBe("source-predates-verify");
+    expect(out.refused?.detail).toContain("recorded no build symbols (before R214)");
     expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
     w.store.close();
   });

@@ -77,7 +77,8 @@
               "kills-without-assertion",
               "declarative-sites-dropped",
               "all-errors",
-              "session-warm"
+              "session-warm",
+              "preproc-files-refused"
             ]
           }
         },
@@ -626,6 +627,8 @@
                 "enum": [
                   "not-instrumentable",
                   "declarative",
+                  "compiled-out",
+                  "preproc-undecided",
                   "instrumentation-refused"
                 ]
               },

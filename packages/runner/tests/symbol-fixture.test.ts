@@ -97,19 +97,29 @@ describe("R321 symbol fixture tables", () => {
     );
   });
 
-  test("non-vacuity: three builds, same 13 mutants, 5/8 each, pairwise different on 8", () => {
+  test("non-vacuity: three builds, 9 mutants each, 5/4 each, seven shared rows differing pairwise on 4", () => {
     const tables = [rowsOf("[LETHALA]"), rowsOf("[LETHALB]"), EXPECTED_NO_DEFINE];
     const key = (r: SymbolRow) => `${r.line}|${r.operatorName}`;
     for (const t of tables) {
-      expect(t).toHaveLength(13);
-      expect(t.map(key)).toEqual(tables[0]?.map(key) ?? []);
+      expect(t).toHaveLength(9);
       expect(t.filter((r) => r.verdict === "killed")).toHaveLength(5);
     }
+    const shared = (x: readonly SymbolRow[], y: readonly SymbolRow[]) =>
+      x.filter((r) => y.some((o) => key(o) === key(r)));
     const differ = (x: readonly SymbolRow[], y: readonly SymbolRow[]) =>
-      x.filter((r, i) => r.verdict !== y[i]?.verdict).length;
+      shared(x, y).filter((r) => y.find((o) => key(o) === key(r))?.verdict !== r.verdict).length;
     const [ta, tb, tn] = tables;
     if (ta === undefined || tb === undefined || tn === undefined) throw new Error("missing table");
-    expect([differ(ta, tb), differ(ta, tn), differ(tb, tn)]).toEqual([8, 8, 8]);
+    expect([shared(ta, tb).length, shared(ta, tn).length, shared(tb, tn).length]).toEqual([
+      7, 7, 7,
+    ]);
+    expect([differ(ta, tb), differ(ta, tn), differ(tb, tn)]).toEqual([4, 4, 4]);
+  });
+
+  test("the failure message names the R214 pre-commitment", () => {
+    expect(() => assertSymbolBuild(reportOf(rowsOf("[LETHALB]"), A), A, "one-shot")).toThrow(
+      /2026-09-29-r214-precommitment\.md/,
+    );
   });
 
   test("drift: both symbol-sets.json files are the #else build plus SYMBOL_SETS, and every set has a table", () => {

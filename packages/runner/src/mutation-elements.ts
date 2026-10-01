@@ -307,7 +307,10 @@ export async function toMutationElements(
       mutatorName: row.reason,
       location: { start: { line: 1, column: 1 }, end: { line: 1, column: 1 } },
       status: "Ignored" as const,
-      description: `${row.sites} mutation site(s) in this ${row.kinds} were not mutated (${row.reason}). LethAL refused them; they are not untested code.`,
+      description:
+        row.reason === "compiled-out"
+          ? `${row.sites} mutation site(s) in this ${row.kinds} are in #if arms this build does not compile (${row.detail ?? ""}). They are not in the program under test.`
+          : `${row.sites} mutation site(s) in this ${row.kinds} were not mutated (${row.reason}). LethAL refused them; they are not untested code.`,
     };
     if (entry?.mutants === undefined) {
       files[rel] = { language: "al", source, mutants: [ignored] };

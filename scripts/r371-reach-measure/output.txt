@@ -1,0 +1,588 @@
+##### r1 (commit eb250b2c)
+=== DC: U:/Git/DC/Test
+files 145, codeunits 135, procedures 3191, non-codeunit objects 10
+tests discovered 1301, walked 1301, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 458
+event subscriber procedures in the test app (never walked from a test): 17
+time: read 0.1 s, parse 0.5 s, walk 0.2 s; peak RSS 260 MB (219 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 11, p90 41, max 65
+tests with >= 1 edge the walk did not follow: 983 of 1301 (75.6%)
+  codeunit outside the test app: 983 tests (75.6%)
+  with-statement receiver: 181 tests (13.9%)
+  Codeunit.Run: 30 tests (2.3%)
+  procedure in a non-codeunit test-app object: 5 tests (0.4%)
+  BindSubscription (subscribers not followed): 5 tests (0.4%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 964 tests (74.1%)
+most common unfollowed targets (tests hitting each):
+  841  codeunit outside the test app: Codeunit Assert
+  540  codeunit outside the test app: Codeunit "Library - Variable Storage"
+  528  codeunit outside the test app: Codeunit "Library - Purchase"
+  426  codeunit outside the test app: Codeunit "Library - ERM"
+  406  codeunit outside the test app: Codeunit "Library - Lower Permissions"
+  400  codeunit outside the test app: Codeunit "Library - Random"
+  397  codeunit outside the test app: Codeunit "Library - Utility"
+  347  codeunit outside the test app: Codeunit "CDC Capture Management"
+  346  codeunit outside the test app: Codeunit "CDC Record ID Mgt."
+  332  codeunit outside the test app: Codeunit "CDC Approvals Bridge"
+  233  codeunit outside the test app: Codeunit "CDC Document Importer"
+  221  codeunit outside the test app: Codeunit "CDC Temp File Storage"
+  205  codeunit outside the test app: Codeunit "Library - Document Approvals"
+  185  codeunit outside the test app: Codeunit "Workflow Setup"
+  185  codeunit outside the test app: Codeunit "CDC Workflow Setup"
+
+sharing: 2528 of 3191 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 18, p99 169, max 406
+over reached NON-test procedures (1227): p50 4, p90 29, p99 185, max 406
+top 10 procedures by reach:
+  406  CDC Library - Permission.ResetPermissionLogging/0
+  390  CDC Library - DC.GetPurchDocCatCode/1
+  334  CDC Library - DC Document.CreateDocumentValue/6
+  318  CDC Library - DC Document.CreateDCDocument/12
+  318  CDC Library - DC.GetDocTypeForDCDocument/2
+  267  CDC Library - Purchase.CreateVendor/1
+  221  CDC Library - Document Pages.OpenDocumentListAndFindDocument/2
+  205  CDC Library - User Mgt..UpdateUserEmail/1
+  201  CDC Library - Permission.SetSuperPermission/0
+  185  CDC Library - Workflow.EnableDCWorkFlow2/1
+
+handlers reached: 149; codeunit-local helpers (reached only by tests of their own codeunit): 825
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | CDC Library - Permission.ResetPermissionLogging/0 | 406 | 0 | 4872 | 41412 | 406x
+2 p90-shared helper | CDC Match (Test).AdjustRefDocument/3 | 29 | 0 | 348 | 2958 | 29x
+3 median helper | CDC Test Field Trans (Test).CreateTemplateFieldBasedOnTranslation/2 | 4 | 0 | 48 | 408 | 4x
+4 most-shared handler | CDC Storage Models.NotificationHandler/1 | 44 | 0 | 528 | 4488 | 44x
+5 median codeunit-local helper | CDC Register (Test).PurchaserTranslationModalPageHandler/1 | 4 | 0 | 48 | 408 | 4x
+
+SUMMARY | DC | 1301 | 75.6% | 406/29/4 | 406 / 29 / 4 / 44 / 4 | 260 MB | 0.8 s
+
+=== DO: U:/Git/do-rel2/Test
+files 104, codeunits 103, procedures 1695, non-codeunit objects 1
+tests discovered 1287, walked 1287, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 82
+event subscriber procedures in the test app (never walked from a test): 31
+time: read 0.1 s, parse 0.2 s, walk 0.0 s; peak RSS 214 MB (187 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 2, p90 9, max 22
+tests with >= 1 edge the walk did not follow: 1281 of 1287 (99.5%)
+  codeunit outside the test app: 1281 tests (99.5%)
+  BindSubscription (subscribers not followed): 78 tests (6.1%)
+  Codeunit.Run: 20 tests (1.6%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 1260 tests (97.9%)
+most common unfollowed targets (tests hitting each):
+  794  codeunit outside the test app: Codeunit "Library Assert"
+  466  codeunit outside the test app: Codeunit Assert
+  323  codeunit outside the test app: Codeunit Any
+  238  codeunit outside the test app: Codeunit "Library - Sales"
+  129  codeunit outside the test app: Codeunit "Library - Random"
+  114  codeunit outside the test app: Codeunit "CDO Core Event Handler"
+  95  codeunit outside the test app: Codeunit "CDO E-Document Response"
+  71  codeunit outside the test app: Codeunit "CDO Electronic Document Mgt."
+  62  codeunit outside the test app: Codeunit "CDO E-Mail"
+  49  codeunit outside the test app: Codeunit "CDO E-Mail Handler"
+  49  codeunit outside the test app: Codeunit "CDO Functions"
+  45  codeunit outside the test app: Codeunit "Upgrade Tag"
+  43  codeunit outside the test app: Codeunit "CDO E-Mail Template Management"
+  43  codeunit outside the test app: Codeunit "Upgrade Tag Library"
+  42  codeunit outside the test app: Codeunit "CDO Continia License Mgt."
+
+sharing: 1638 of 1695 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 5, p99 42, max 158
+over reached NON-test procedures (351): p50 4, p90 25, p99 104, max 158
+top 10 procedures by reach:
+  158  CDO Library - Setup.InitializeCDOSetup/0
+  152  CDO Library - Email Template.MockEmailTemplateLine/2
+  108  CDO Library - Features.GetProductCode/0
+  104  CDO Library - Email Template.MockEmailTemplateHeader/6
+  85  CDO Library - Features.DisableFeature/1
+  84  CDO Library - Email Template.MockSalesInvoiceEmailTemplate/1
+  75  CDO Library - Output Profile.MockOutputProfile/3
+  73  CDO Library - CDN.CreateSenderProfile/3
+  72  CDO Library - CDN.CreateCDNCustomerSetupForCustomer/2
+  71  CDO Library - Features.EnableFeature/1
+
+handlers reached: 50; codeunit-local helpers (reached only by tests of their own codeunit): 223
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | CDO Library - Setup.InitializeCDOSetup/0 | 158 | 0 | 1896 | 16116 | 158x
+2 p90-shared helper | CDO Email Template Mgt Tests.Initialize/0 | 25 | 0 | 300 | 2550 | 25x
+3 median helper | CDO Library - Payment Link.VerifyPaymentLinkTemplate/3 | 4 | 0 | 48 | 408 | 4x
+4 most-shared handler | CDO Email Editor Page Tests.CancelEmailConfirmHandler/2 | 17 | 0 | 204 | 1734 | 17x
+5 median codeunit-local helper | CDO Set Handled On Posted Test.EnableChangeLogModificationFor/1 | 2 | 0 | 24 | 204 | 2x
+
+SUMMARY | DO | 1287 | 99.5% | 158/25/4 | 158 / 25 / 4 / 17 / 2 | 214 MB | 0.3 s
+
+=== BaseApp: U:/Git/BC.History/BaseApp/Test
+files 1600, codeunits 1486, procedures 89987, non-codeunit objects 109
+tests discovered 40291, walked 40291, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 17098
+event subscriber procedures in the test app (never walked from a test): 549
+time: read 1.8 s, parse 10.2 s, walk 3.6 s; peak RSS 2597 MB (1523 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 10, p90 27, max 78
+tests with >= 1 edge the walk did not follow: 40035 of 40291 (99.4%)
+  codeunit outside the test app: 40025 tests (99.3%)
+  BindSubscription (subscribers not followed): 5008 tests (12.4%)
+  Codeunit.Run: 2052 tests (5.1%)
+  procedure in a non-codeunit test-app object: 46 tests (0.1%)
+  interface dispatch: 44 tests (0.1%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 39946 tests (99.1%)
+most common unfollowed targets (tests hitting each):
+  31767  codeunit outside the test app: Codeunit "Library - Test Initialize"
+  28910  codeunit outside the test app: Codeunit Assert
+  27225  codeunit outside the test app: Codeunit "Library - ERM Country Data"
+  23988  codeunit outside the test app: Codeunit "Library - Random"
+  23563  codeunit outside the test app: Codeunit "Library - Variable Storage"
+  18970  codeunit outside the test app: Codeunit "Library - Inventory"
+  18621  codeunit outside the test app: Codeunit "Library - Utility"
+  18066  codeunit outside the test app: Codeunit "Library - Setup Storage"
+  16953  codeunit outside the test app: Codeunit "Library - Sales"
+  14763  codeunit outside the test app: Codeunit "Library - ERM"
+  11539  codeunit outside the test app: Codeunit "Library - Purchase"
+  7733  codeunit outside the test app: Codeunit "Library - Warehouse"
+  5946  codeunit outside the test app: Codeunit "Application Area Mgmt. Facade"
+  5735  codeunit outside the test app: Codeunit "Application Area Cache"
+  3057  codeunit outside the test app: Codeunit "Library - Manufacturing"
+
+sharing: 88389 of 89987 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 10, p99 70, max 5734
+over reached NON-test procedures (48098): p50 3, p90 19, p99 100, max 5734
+top 10 procedures by reach:
+  5734  Library - Application Area.ClearApplicationAreaCache/0
+  5732  Library - Application Area.DisableApplicationAreaSetup/0
+  3197  Library - Application Area.CreateFoundationSetupForCurrentCompany/1
+  3195  Library - Application Area.EnableFoundationSetupForCurrentCompany/0
+  3194  Library - Application Area.EnableFoundationSetup/0
+  2316  Library - Lower Permissions.PushPermissionSetInternal/2
+  2315  Library - Lower Permissions.PushPermissionSet/1
+  2315  Library - Lower Permissions.OnAfterPushPermissionSet/1
+  1526  Library - Report Dataset.GetFileName/0
+  1524  Library - Report Dataset.GetParametersFileName/0
+
+handlers reached: 7084; codeunit-local helpers (reached only by tests of their own codeunit): 47060
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | Library - Application Area.ClearApplicationAreaCache/0 | 5734 | 0 | 68808 | 584868 | 5734x
+2 p90-shared helper | SCM Warehouse Management II.CreateItemTrackingLine/2 | 19 | 0 | 228 | 1938 | 19x
+3 median helper | ERM Dimension Purchase.CreateSalesOrderPurchasingCode/1 | 3 | 0 | 36 | 306 | 3x
+4 most-shared handler | Bank Pmt. Appl. Algorithm.MessageHandler/1 | 125 | 0 | 1500 | 12750 | 125x
+5 median codeunit-local helper | WF Demo Purch Rtrn Order Appr..MessageHandlerValidateMessage/1 | 2 | 0 | 24 | 204 | 2x
+
+SUMMARY | BaseApp | 40291 | 99.4% | 5734/19/3 | 5734 / 19 / 3 / 125 / 2 | 2597 MB | 15.6 s
+
+=== sandbox-data-tests: fixtures/sandbox-data-tests
+files 1, codeunits 1, procedures 73, non-codeunit objects 0
+tests discovered 68, walked 68, no declaration found 0
+parse-error sites (inside a codeunit or outside every object): 0
+tests carrying [HandlerFunctions]: 0
+event subscriber procedures in the test app (never walked from a test): 0
+time: read 0.0 s, parse 0.0 s, walk 0.0 s; peak RSS 112 MB (109 MB of it reached by the end of parsing)
+
+per test, reachable test-app procedures (incl. the test): p50 1, p90 3, max 4
+tests with >= 1 edge the walk did not follow: 53 of 68 (77.9%)
+  codeunit outside the test app: 53 tests (77.9%)
+  of which a codeunit outside the test app named like a library (/library|assert/i): 4 tests (5.9%)
+most common unfollowed targets (tests hitting each):
+  10  codeunit outside the test app: Codeunit "Data Ops"
+  8  codeunit outside the test app: Codeunit "Data Filter Ops"
+  6  codeunit outside the test app: Codeunit "Data Swap Ops"
+  5  codeunit outside the test app: Codeunit "Data Temporal Ops"
+  4  codeunit outside the test app: Codeunit "Data Flag Ops"
+  3  codeunit outside the test app: Codeunit "Data Commit Ops"
+  3  codeunit outside the test app: Codeunit "Data Find Ops"
+  3  codeunit outside the test app: Codeunit "Data Validate Ops"
+  3  codeunit outside the test app: Codeunit "Library Assert"
+  3  codeunit outside the test app: Codeunit "Data Set Ops"
+  2  codeunit outside the test app: Codeunit "Data Commit Target"
+  2  codeunit outside the test app: Codeunit "Data Assert Ops"
+  2  codeunit outside the test app: Codeunit "Data Shift Ops"
+  2  codeunit outside the test app: Codeunit "Data Reach Ops"
+  1  codeunit outside the test app: Codeunit "Data Blank Ops"
+
+sharing: 73 of 73 procedures are reached by >= 1 test
+tests reaching a procedure (over reached procedures): p50 1, p90 1, p99 13, max 13
+over reached NON-test procedures (5): p50 11, p90 13, p99 13, max 13
+top 10 procedures by reach:
+  13  Data Tests.ClearRelated/1
+  13  Data Tests.AddRelated/3
+  11  Data Tests.ResetMain/3
+  4  Data Tests.DeleteMain/1
+  3  Data Tests.ResetTriggerProbe/2
+  1  Data Tests.BlankNoValidateFails/0 [test]
+  1  Data Tests.InsertDoublesAmountWeak/0 [test]
+  1  Data Tests.NoTriggerValidateRunsWeak/0 [test]
+  1  Data Tests.TooLongNoValidateFails/0 [test]
+  1  Data Tests.ProcessedRequiresCategory/0 [test]
+
+handlers reached: 0; codeunit-local helpers (reached only by tests of their own codeunit): 5
+
+edit | procedure | tests new (reach digest) | tests new (per-method digest today) | extra executions S=10 | S=100 | multiplier vs N=1
+1 most-shared helper | Data Tests.AddRelated/3 | 13 | 0 | 156 | 1326 | 13x
+2 p90-shared helper | Data Tests.AddRelated/3 | 13 | 0 | 156 | 1326 | 13x
+3 median helper | Data Tests.ResetMain/3 | 11 | 0 | 132 | 1122 | 11x
+4 most-shared handler | none | - | - | - | - | -
+5 median codeunit-local helper | Data Tests.ResetMain/3 | 11 | 0 | 132 | 1122 | 11x
+
+SUMMARY | sandbox-data-tests | 68 | 77.9% | 13/13/11 | 13 / 13 / 11 / - / 11 | 112 MB | 0.0 s
+
+##### r2 re-measure (2026-09-30)
+=== DC: U:/Git/DC/Test
+dependency objects: no symbol packages: "not in the test app" is taken as a dependency object
+files 145 (4291215 chars), codeunits 135, codeunit procedures+triggers 3295, non-codeunit objects 10 (16 procedures)
+tests discovered 1301, walked 1301, no declaration found 0; parse-error sites 0
+time: symbols 0.0 s, read+parse 0.5 s, walk 0.3 s; peak RSS 290 MB (after symbols 88 MB, after parse 209 MB)
+
+-- edges (per test, distinct targets; summed over tests)
+followed 41367, external 24293, unfollowed 48
+broad fallback, strict (any UNFOLLOWED edge): 43 of 1301 (3.3%)
+broad fallback, if BindSubscription were not a trigger (subscribers are in every digest anyway): 38 (2.9%)
+tests per UNFOLLOWED kind (and tests where it is the ONLY kind):
+  32 (2.5%), only: 32  RecordRef/FieldRef trigger-capable call
+  5 (0.4%), only: 5  procedure in a non-codeunit test-app object
+  5 (0.4%), only: 5  BindSubscription/UnbindSubscription
+  1 (0.1%), only: 1  object run by id or variable
+most common UNFOLLOWED targets (tests):
+  32  RecordRef/FieldRef trigger-capable call: RecordRef.DELETEALL
+  5  procedure in a non-codeunit test-app object: "CDC Test Parameters Helper".AddParameter
+  5  procedure in a non-codeunit test-app object: "CDC Test Parameters Helper".GetParameterValue
+  3  BindSubscription/UnbindSubscription: CDC Register eDoc. (Test)
+  2  BindSubscription/UnbindSubscription: CDC Module Feature UI
+  1  object run by id or variable: PAGE.RUNMODAL
+most common EXTERNAL targets (tests):
+  841  codeunit Assert
+  601  table "CDC Document"
+  574  table "Purchase Header"
+  571  table "CDC Document Category"
+  540  codeunit "Library - Variable Storage"
+  528  codeunit "Library - Purchase"
+  497  table "CDC Template Field"
+  426  codeunit "Library - ERM"
+with-receivers (I4): 7 bare-call sites inside a with that their own codeunit does not declare; 7 resolve through the with-target's declared type (100.0%), 0 stay UNFOLLOWED
+
+-- subscribers (C2)
+subscriber codeunits 8 (manual binding 3, automatic 5); [EventSubscriber] procedures 17
+codeunits named in a BindSubscription call: 2 (2 of them hold subscribers)
+procedures in subscriber codeunits: 199 of 3311 test-app procedures+triggers (6.0%); chars 125225 of 4291215 (2.9%)
+=> a uniformly random procedure edit touches a subscriber codeunit, turning EVERY test new, with probability 6.0%
+
+-- object parts (C1)
+reached objects per test: avg 4.2, p50 4, p90 8, max 12
+tests reaching an object (over 120 reached objects): p50 10, p90 184, p99 412, max 486
+top 5 objects by reach:
+  486  codeunit CDC Library - DC Document
+  412  tableextension "CDC Vendor Test"
+  406  codeunit CDC Library - Permission
+  404  codeunit CDC Library - DC
+  317  codeunit CDC Test Open All Pages
+edit | procedure | tests reaching the procedure | tests reaching its object (global/header/trigger edit)
+1 most-shared helper | CDC Library - Permission.ResetPermissionLogging/0 | 406 | 406
+2 p90-shared helper | CDC Match (Test).AdjustRefDocument/3 | 29 | 34
+3 median helper | CDC Test Field Trans (Test).CreateTemplateFieldBasedOnTranslation/2 | 4 | 8
+4 most-shared handler | CDC Storage Models.NotificationHandler/1 | 44 | 54
+5 median codeunit-local helper | CDC Register (Test).PurchaserTranslationModalPageHandler/1 | 4 | 59
+
+-- one ordinary edit (N = tests turned new)
+strict: fallback F = 43 (3.3%)
+  procedure edit: p50 44, p90 71, p99 1301, max 1301, P(N>50) 19.6% (over 3311)
+  global/header/trigger edit, per object: p50 51, p90 284, p99 1301, max 1301, P(N>50) 53.8% (over 145)
+relaxed: fallback F = 38 (2.9%)
+  procedure edit: p50 39, p90 66, p99 1301, max 1301, P(N>50) 15.9% (over 3311)
+  global/header/trigger edit, per object: p50 46, p90 279, p99 1301, max 1301, P(N>50) 42.8% (over 145)
+
+SUMMARY | DC | tests 1301 | subscriber share 6.0% | strict F 3.3% | proc 44/71/1301 P>50 19.6% | obj 51/284/1301 P>50 53.8% || relaxed F 2.9% | proc 39/66/1301 P>50 15.9% | obj 46/279/1301 P>50 42.8% | RSS 290 MB | 0.8 s
+
+=== DC: 1 app.json under U:/Git/DC/Test
+implicit (app.json "application"/"platform", resolved by BC to Microsoft apps): application 26.0.0.0 (1 app.json), platform 26.0.0.0 (1 app.json)
+direct dependencies (publisher | name | id | version | app.json files naming it):
+  OTHER | Continia Software | Continia Approvals | 4ec0dd0d-89ca-4266-bdec-c0bdacf923e3 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Business Foundation | bbb72c8a-3abf-478f-9239-a34dbc252d07 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Connector App | 2b9992c2-5eaf-4cdc-b33b-592d917780d2 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Core | 4b915d7e-c02a-435f-85ab-649086c1e002 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Core Internal Activation App | c3755ece-dab0-4d16-987d-040661f18522 | 27.0.0.0 | 1
+  OTHER | Continia Software | Continia Core SMTP Connector | 8ccace4a-e906-43dd-a59a-f8229a3b2909 | 27.0.0.0 | 1
+  OTHER | Continia Software | Continia Delivery Network | 0745e76d-0b72-4641-87c2-ee45db5d2c32 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Document Capture | 6da8dd2f-e698-461f-9147-8e404244dd85 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia Online Connector | d90c350c-df9b-4d16-8871-6f8d7b102f98 | 27.1.0.0 | 1
+  OTHER | Continia Software | Continia System Application | e4b442d0-e8e3-4210-bfca-f1e66686caa0 | 27.1.0.0 | 1
+  MS    | Microsoft | Any | e7320ebb-08b3-4406-b1ec-b4927d3e280b | 23.0.0.0 | 1
+  MS    | Microsoft | Email - SMTP API | 8fc50dfb-d338-4fd9-9499-5e44cc8cbf50 | 23.0.0.0 | 1
+  MS    | Microsoft | Library Assert | dd0be2ea-f733-4d65-bb34-a28f4624fb14 | 23.0.0.0 | 1
+  MS    | Microsoft | Library Variable Storage | 5095f467-0a01-4b99-99d1-9ff1237d286f | 23.0.0.0 | 1
+  MS    | Microsoft | Permissions Mock | 40860557-a18d-42ad-aecb-22b7dd80dc80 | 23.0.0.0 | 1
+  MS    | Microsoft | System Application Test Library | 9856ae4f-d1a7-46ef-89bb-6ef056398228 | 23.0.0.0 | 1
+  MS    | Microsoft | Test Runner | 23de40a6-dfe8-4f80-80db-d70f83ce8caf | 23.0.0.0 | 1
+  MS    | Microsoft | Tests-TestLibraries | 5d86850b-0d76-4eca-bd7b-951ad998e997 | 23.0.0.0 | 1
+no local symbol packages: no transitive closure, no sizes, no hashing
+
+=== DO: U:/Git/do-rel2/Test
+dependency objects: read from 20 symbol packages in U:/Git/do-rel2/Test/.alpackages (18715 kind:name/id keys)
+files 104 (1866510 chars), codeunits 103, codeunit procedures+triggers 1703, non-codeunit objects 1 (0 procedures)
+tests discovered 1287, walked 1287, no declaration found 0; parse-error sites 0
+time: symbols 0.4 s, read+parse 0.2 s, walk 0.1 s; peak RSS 671 MB (after symbols 592 MB, after parse 644 MB)
+
+-- edges (per test, distinct targets; summed over tests)
+followed 3939, external 6295, unfollowed 90
+broad fallback, strict (any UNFOLLOWED edge): 89 of 1287 (6.9%)
+broad fallback, if BindSubscription were not a trigger (subscribers are in every digest anyway): 11 (0.9%)
+tests per UNFOLLOWED kind (and tests where it is the ONLY kind):
+  78 (6.1%), only: 78  BindSubscription/UnbindSubscription
+  6 (0.5%), only: 6  RecordRef/FieldRef trigger-capable call
+  5 (0.4%), only: 5  object declared nowhere visible
+most common UNFOLLOWED targets (tests):
+  23  BindSubscription/UnbindSubscription: CDO Events Tests
+  21  BindSubscription/UnbindSubscription: CDO eDoc Batch Dispatch Tests
+  7  BindSubscription/UnbindSubscription: CDO eDocuments Fallback Tests
+  6  RecordRef/FieldRef trigger-capable call: RecordRef.Modify
+  6  BindSubscription/UnbindSubscription: CDO eDocuments Tests
+  4  BindSubscription/UnbindSubscription: CDO eDoc Export Folder Tests
+  4  object declared nowhere visible: SetHandledOnPostedDocuments.Execute (codeunit "CDO Set Handled On Posted Docs")
+  4  BindSubscription/UnbindSubscription: CDO Email Template Mgt Tests
+  3  BindSubscription/UnbindSubscription: CDO Send on Posting Tests
+  2  BindSubscription/UnbindSubscription: CDO Appended EDoc Fname Tests
+  2  BindSubscription/UnbindSubscription: CDO Core Event Handler Tests
+  2  object declared nowhere visible: SetHandledOnPostedDocuments.IsChangeLogActivated (codeunit "CDO Set Handled On Posted Docs")
+  2  BindSubscription/UnbindSubscription: CDO E-Mail Handler Tests
+  1  BindSubscription/UnbindSubscription: CDO Service Posting Tests
+  1  BindSubscription/UnbindSubscription: CDO Universign eSeal Tests
+most common EXTERNAL targets (tests):
+  794  codeunit "Library Assert"
+  466  codeunit Assert
+  357  table "CDO Setup"
+  328  table Customer
+  323  codeunit Any
+  245  table "CDO E-Mail Template Header"
+  238  codeunit "Library - Sales"
+  213  table "CDO E-Mail Template Line"
+with-receivers (I4): 0 bare-call sites inside a with that their own codeunit does not declare; 0 resolve through the with-target's declared type (0.0%), 0 stay UNFOLLOWED
+
+-- subscribers (C2)
+subscriber codeunits 13 (manual binding 11, automatic 2); [EventSubscriber] procedures 31
+codeunits named in a BindSubscription call: 11 (11 of them hold subscribers)
+procedures in subscriber codeunits: 169 of 1703 test-app procedures+triggers (9.9%); chars 183800 of 1866510 (9.8%)
+=> a uniformly random procedure edit touches a subscriber codeunit, turning EVERY test new, with probability 9.9%
+
+-- object parts (C1)
+reached objects per test: avg 1.9, p50 1, p90 4, max 9
+tests reaching an object (over 98 reached objects): p50 16, p90 46, p99 229, max 229
+top 5 objects by reach:
+  229  codeunit CDO Library - Setup
+  190  codeunit CDO Library - Email Template
+  131  codeunit CDO Library - Output Profile
+  108  codeunit CDO Library - Features
+  88  codeunit CDO Library - CDN
+edit | procedure | tests reaching the procedure | tests reaching its object (global/header/trigger edit)
+1 most-shared helper | CDO Library - Setup.InitializeCDOSetup/0 | 158 | 229
+2 p90-shared helper | CDO Email Template Mgt Tests.Initialize/0 | 25 | 25
+3 median helper | CDO MergeFieldFinder Tests.CreateSalesperson/2 | 4 | 21
+4 most-shared handler | CDO Email Editor Page Tests.CancelEmailConfirmHandler/2 | 17 | 18
+5 median codeunit-local helper | CDO Set Handled On Posted Test.EnableChangeLogModificationFor/1 | 2 | 5
+
+-- one ordinary edit (N = tests turned new)
+strict: fallback F = 89 (6.9%)
+  procedure edit: p50 90, p90 199, p99 1287, max 1287, P(N>50) 100.0% (over 1703)
+  global/header/trigger edit, per object: p50 107, p90 1287, p99 1287, max 1287, P(N>50) 100.0% (over 104)
+relaxed: fallback F = 11 (0.9%)
+  procedure edit: p50 12, p90 163, p99 1287, max 1287, P(N>50) 10.9% (over 1703)
+  global/header/trigger edit, per object: p50 29, p90 1287, p99 1287, max 1287, P(N>50) 22.1% (over 104)
+
+SUMMARY | DO | tests 1287 | subscriber share 9.9% | strict F 6.9% | proc 90/199/1287 P>50 100.0% | obj 107/1287/1287 P>50 100.0% || relaxed F 0.9% | proc 12/163/1287 P>50 10.9% | obj 29/1287/1287 P>50 22.1% | RSS 671 MB | 0.6 s
+
+=== DO: 1 app.json under U:/Git/do-rel2/Test
+implicit (app.json "application"/"platform", resolved by BC to Microsoft apps): application 28.0.0.0 (1 app.json), platform 28.0.0.0 (1 app.json)
+direct dependencies (publisher | name | id | version | app.json files naming it):
+  OTHER | Continia Software | Continia Core | 4b915d7e-c02a-435f-85ab-649086c1e002 | 28.4.0.0 | 1
+  OTHER | Continia Software | Continia Core Internal Activation App | c3755ece-dab0-4d16-987d-040661f18522 | 28.0.0.0 | 1
+  OTHER | Continia Software | Continia Delivery Network | 0745e76d-0b72-4641-87c2-ee45db5d2c32 | 28.4.0.0 | 1
+  OTHER | Continia Software | Continia Document Output | f4b69b55-c90d-4937-8f53-2742898fa948 | 28.4.0.0 | 1
+  OTHER | Continia Software | Continia System Application | e4b442d0-e8e3-4210-bfca-f1e66686caa0 | 28.4.0.0 | 1
+  MS    | Microsoft | Any | e7320ebb-08b3-4406-b1ec-b4927d3e280b | 25.0.0.0 | 1
+  MS    | Microsoft | Library Assert | dd0be2ea-f733-4d65-bb34-a28f4624fb14 | 25.0.0.0 | 1
+  MS    | Microsoft | Permissions Mock | 40860557-a18d-42ad-aecb-22b7dd80dc80 | 25.0.0.0 | 1
+  MS    | Microsoft | System Application Test Library | 9856ae4f-d1a7-46ef-89bb-6ef056398228 | 28.0.0.0 | 1
+  MS    | Microsoft | Test Runner | 23de40a6-dfe8-4f80-80db-d70f83ce8caf | 23.0.0.0 | 1
+  MS    | Microsoft | Tests-TestLibraries | 5d86850b-0d76-4eca-bd7b-951ad998e997 | 25.0.0.0 | 1
+
+closure over 20 local packages in U:/Git/do-rel2/Test/.alpackages (publisher | name | version | direct/transitive | .app bytes):
+  MS    | Microsoft | Any | 28.0.46665.48632 | direct | 21843
+  MS    | Microsoft | Application | 28.0.46665.48632 | transitive | 18903
+  MS    | Microsoft | Application Test Library | 28.0.46665.48632 | transitive | 322118
+  MS    | Microsoft | Base Application | 28.0.46665.48632 | transitive | 46321577
+  MS    | Microsoft | Business Foundation | 28.0.46665.48632 | transitive | 477026
+  MS    | Microsoft | Business Foundation Test Libraries | 28.0.46665.48632 | transitive | 21496
+  OTHER | Continia Software | Continia Connector App | 28.4.0.305675 | transitive | 55856
+  OTHER | Continia Software | Continia Core | 28.4.0.302270 | direct | 2346272
+  OTHER | Continia Software | Continia Core Internal Activation App | 28.0.0.218906 | direct | 29071
+  OTHER | Continia Software | Continia Delivery Network | 28.4.0.334646 | direct | 3847269
+  OTHER | Continia Software | Continia Document Output | 28.4.0.333577 | direct | 8248067
+  OTHER | Continia Software | Continia System Application | 28.4.0.305675 | direct | 235859
+  MS    | Microsoft | Library Assert | 28.0.46665.48632 | direct | 24209
+  MS    | Microsoft | Library Variable Storage | 28.0.46665.48632 | transitive | 21997
+  MS    | Microsoft | Permissions Mock | 28.0.46665.48632 | direct | 20904
+  MS    | Microsoft | System | 28.0.48590.0 | transitive | 4343823
+  MS    | Microsoft | System Application | 28.0.46665.48632 | transitive | 15985079
+  MS    | Microsoft | System Application Test Library | 28.0.46665.48632 | direct | 191513
+  MS    | Microsoft | Test Runner | 28.0.46665.48632 | direct | 109508
+  MS    | Microsoft | Tests-TestLibraries | 28.0.46665.48632 | direct | 308273
+total bytes: Microsoft 68188269 (65.0 MB), non-Microsoft 14762394 (14.1 MB)
+read+SHA-256, non-Microsoft: 6 packages, 14.1 MB, 9 ms; RSS at start 74 MB, peak 89 MB
+read+SHA-256, all: 20 packages, 79.1 MB, 53 ms; RSS at start 74 MB, peak 131 MB
+
+=== BaseApp: U:/Git/BC.History/BaseApp/Test
+dependency objects: no symbol packages: "not in the test app" is taken as a dependency object
+files 1600 (92203217 chars), codeunits 1486, codeunit procedures+triggers 91392, non-codeunit objects 112 (82 procedures)
+tests discovered 40291, walked 40291, no declaration found 0; parse-error sites 0
+time: symbols 0.0 s, read+parse 11.3 s, walk 5.9 s; peak RSS 2782 MB (after symbols 89 MB, after parse 1588 MB)
+
+-- edges (per test, distinct targets; summed over tests)
+followed 596089, external 669169, unfollowed 7869
+broad fallback, strict (any UNFOLLOWED edge): 6382 of 40291 (15.8%)
+broad fallback, if BindSubscription were not a trigger (subscribers are in every digest anyway): 1570 (3.9%)
+tests per UNFOLLOWED kind (and tests where it is the ONLY kind):
+  5057 (12.6%), only: 4812  BindSubscription/UnbindSubscription
+  1054 (2.6%), only: 951  RecordRef/FieldRef trigger-capable call
+  320 (0.8%), only: 222  object run by id or variable
+  180 (0.4%), only: 33  trigger-capable call on a non-codeunit test-app object with code
+  46 (0.1%), only: 1  procedure in a non-codeunit test-app object
+  44 (0.1%), only: 44  interface dispatch
+most common UNFOLLOWED targets (tests):
+  826  BindSubscription/UnbindSubscription: Library - CRM Integration
+  772  RecordRef/FieldRef trigger-capable call: FieldRef.Validate
+  363  RecordRef/FieldRef trigger-capable call: RecordRef.Insert
+  349  BindSubscription/UnbindSubscription: API Mock Events
+  319  RecordRef/FieldRef trigger-capable call: RecordRef.Modify
+  200  BindSubscription/UnbindSubscription: Marketing Contacts
+  188  BindSubscription/UnbindSubscription: Service Orders
+  166  RecordRef/FieldRef trigger-capable call: RecordRef.DeleteAll
+  143  RecordRef/FieldRef trigger-capable call: RecordRef.Delete
+  122  BindSubscription/UnbindSubscription: ERM Intercompany II
+  108  BindSubscription/UnbindSubscription: Document Approval - Users
+  99  BindSubscription/UnbindSubscription: Marketing Interaction
+  99  BindSubscription/UnbindSubscription: DocumentSendingPostTests
+  91  trigger-capable call on a non-codeunit test-app object with code: TableWithDefaultDim.DeleteAll
+  91  trigger-capable call on a non-codeunit test-app object with code: TableWithDimensionSetID.DeleteAll
+most common EXTERNAL targets (tests):
+  31767  codeunit "Library - Test Initialize"
+  28910  codeunit Assert
+  27225  codeunit "Library - ERM Country Data"
+  23988  codeunit "Library - Random"
+  23563  codeunit "Library - Variable Storage"
+  18970  codeunit "Library - Inventory"
+  18621  codeunit "Library - Utility"
+  18066  codeunit "Library - Setup Storage"
+with-receivers (I4): 0 bare-call sites inside a with that their own codeunit does not declare; 0 resolve through the with-target's declared type (0.0%), 0 stay UNFOLLOWED
+
+-- subscribers (C2)
+subscriber codeunits 176 (manual binding 168, automatic 8); [EventSubscriber] procedures 549
+codeunits named in a BindSubscription call: 157 (154 of them hold subscribers)
+procedures in subscriber codeunits: 13384 of 91474 test-app procedures+triggers (14.6%); chars 14228459 of 92203217 (15.4%)
+=> a uniformly random procedure edit touches a subscriber codeunit, turning EVERY test new, with probability 14.6%
+
+-- object parts (C1)
+reached objects per test: avg 1.5, p50 1, p90 2, max 7
+tests reaching an object (over 1475 reached objects): p50 17, p90 79, p99 279, max 5738
+top 5 objects by reach:
+  5738  codeunit Library - Application Area
+  2336  codeunit Library - Lower Permissions
+  1607  codeunit Library - Report Dataset
+  922  codeunit Library - CRM Integration
+  821  codeunit Library - Mock CRM Connection
+edit | procedure | tests reaching the procedure | tests reaching its object (global/header/trigger edit)
+1 most-shared helper | Library - Application Area.ClearApplicationAreaCache/0 | 5734 | 5738
+2 p90-shared helper | SCM Warehouse Management II.ItemTrackingLinesPageHandler/1 | 19 | 92
+3 median helper | ERM Dimension Priority.CreateServiceContract/1 | 3 | 32
+4 most-shared handler | Bank Pmt. Appl. Algorithm.MessageHandler/1 | 125 | 148
+5 median codeunit-local helper | WF Demo Purch Rtrn Order Appr..MessageHandlerValidateMessage/1 | 2 | 12
+
+-- one ordinary edit (N = tests turned new)
+strict: fallback F = 6382 (15.8%)
+  procedure edit: p50 6383, p90 40291, p99 40291, max 40291, P(N>50) 100.0% (over 91474)
+  global/header/trigger edit, per object: p50 6395, p90 40291, p99 40291, max 40291, P(N>50) 100.0% (over 1598)
+relaxed: fallback F = 1570 (3.9%)
+  procedure edit: p50 1571, p90 40291, p99 40291, max 40291, P(N>50) 100.0% (over 91474)
+  global/header/trigger edit, per object: p50 1587, p90 40291, p99 40291, max 40291, P(N>50) 100.0% (over 1598)
+
+SUMMARY | BaseApp | tests 40291 | subscriber share 14.6% | strict F 15.8% | proc 6383/40291/40291 P>50 100.0% | obj 6395/40291/40291 P>50 100.0% || relaxed F 3.9% | proc 1571/40291/40291 P>50 100.0% | obj 1587/40291/40291 P>50 100.0% | RSS 2782 MB | 17.2 s
+
+=== BaseApp: 35 app.json under U:/Git/BC.History/BaseApp/Test
+implicit (app.json "application"/"platform", resolved by BC to Microsoft apps): platform $(app_platformVersion) (35 app.json), application $(app_minimumVersion) (34 app.json)
+direct dependencies (publisher | name | id | version | app.json files naming it):
+  MS    | Microsoft | Any | e7320ebb-08b3-4406-b1ec-b4927d3e280b | $(app_minimumVersion) | 5
+  MS    | Microsoft | Application Test Library | d852d5d2-a39d-4179-baeb-f99a19e32510 | $(app_minimumVersion) | 2
+  MS    | Microsoft | Business Foundation Test Libraries | bee8cf2f-494a-42f4-aabd-650e87934d39 | $(app_minimumVersion) | 12
+  MS    | Microsoft | Library Assert | dd0be2ea-f733-4d65-bb34-a28f4624fb14 | $(app_minimumVersion) | 8
+  MS    | Microsoft | Library Variable Storage | 5095f467-0a01-4b99-99d1-9ff1237d286f | $(app_minimumVersion) | 31
+  MS    | Microsoft | Permissions Mock | 40860557-a18d-42ad-aecb-22b7dd80dc80 | $(app_minimumVersion) | 2
+  MS    | Microsoft | System Application Test Library | 9856ae4f-d1a7-46ef-89bb-6ef056398228 | $(app_minimumVersion) | 25
+  MS    | Microsoft | Tests-TestLibraries | 5d86850b-0d76-4eca-bd7b-951ad998e997 | $(app_minimumVersion) | 32 | another app in this tree
+no local symbol packages: no transitive closure, no sizes, no hashing
+
+=== sandbox-data-tests: fixtures/sandbox-data-tests
+dependency objects: read from 8 symbol packages in U:/Git/LethAL-wt/lane-bugs/fixtures/sandbox-data-tests/.alpackages (15792 kind:name/id keys)
+files 1 (69137 chars), codeunits 1, codeunit procedures+triggers 73, non-codeunit objects 0 (0 procedures)
+tests discovered 68, walked 68, no declaration found 0; parse-error sites 0
+time: symbols 0.4 s, read+parse 0.0 s, walk 0.0 s; peak RSS 591 MB (after symbols 579 MB, after parse 588 MB)
+
+-- edges (per test, distinct targets; summed over tests)
+followed 97, external 102, unfollowed 0
+broad fallback, strict (any UNFOLLOWED edge): 0 of 68 (0.0%)
+broad fallback, if BindSubscription were not a trigger (subscribers are in every digest anyway): 0 (0.0%)
+tests per UNFOLLOWED kind (and tests where it is the ONLY kind):
+most common UNFOLLOWED targets (tests):
+most common EXTERNAL targets (tests):
+  17  table "Data Main"
+  13  table "Data Related"
+  10  codeunit "Data Ops"
+  8  codeunit "Data Filter Ops"
+  7  table "Data Trigger Probe"
+  6  codeunit "Data Swap Ops"
+  5  codeunit "Data Temporal Ops"
+  4  codeunit "Data Flag Ops"
+with-receivers (I4): 0 bare-call sites inside a with that their own codeunit does not declare; 0 resolve through the with-target's declared type (0.0%), 0 stay UNFOLLOWED
+
+-- subscribers (C2)
+subscriber codeunits 0 (manual binding 0, automatic 0); [EventSubscriber] procedures 0
+codeunits named in a BindSubscription call: 0 (0 of them hold subscribers)
+procedures in subscriber codeunits: 0 of 73 test-app procedures+triggers (0.0%); chars 0 of 69137 (0.0%)
+=> a uniformly random procedure edit touches a subscriber codeunit, turning EVERY test new, with probability 0.0%
+
+-- object parts (C1)
+reached objects per test: avg 1.0, p50 1, p90 1, max 1
+tests reaching an object (over 1 reached objects): p50 68, p90 68, p99 68, max 68
+top 5 objects by reach:
+  68  codeunit Data Tests
+edit | procedure | tests reaching the procedure | tests reaching its object (global/header/trigger edit)
+1 most-shared helper | Data Tests.AddRelated/3 | 13 | 68
+2 p90-shared helper | Data Tests.AddRelated/3 | 13 | 68
+3 median helper | Data Tests.ResetMain/3 | 11 | 68
+4 most-shared handler | none | - | -
+5 median codeunit-local helper | Data Tests.ResetMain/3 | 11 | 68
+
+-- one ordinary edit (N = tests turned new)
+strict: fallback F = 0 (0.0%)
+  procedure edit: p50 1, p90 1, p99 13, max 13, P(N>50) 0.0% (over 73)
+  global/header/trigger edit, per object: p50 68, p90 68, p99 68, max 68, P(N>50) 100.0% (over 1)
+relaxed: fallback F = 0 (0.0%)
+  procedure edit: p50 1, p90 1, p99 13, max 13, P(N>50) 0.0% (over 73)
+  global/header/trigger edit, per object: p50 68, p90 68, p99 68, max 68, P(N>50) 100.0% (over 1)
+
+SUMMARY | sandbox-data-tests | tests 68 | subscriber share 0.0% | strict F 0.0% | proc 1/1/13 P>50 0.0% | obj 68/68/68 P>50 100.0% || relaxed F 0.0% | proc 1/1/13 P>50 0.0% | obj 68/68/68 P>50 100.0% | RSS 591 MB | 0.4 s
+
+=== sandbox-data-tests: 1 app.json under fixtures/sandbox-data-tests
+implicit (app.json "application"/"platform", resolved by BC to Microsoft apps): none
+direct dependencies (publisher | name | id | version | app.json files naming it):
+  OTHER | LethAL | LethAL Sandbox Data | aa2f0691-47c3-470e-a351-5bfe955d4f13 | 1.0.0.0 | 1
+  MS    | Microsoft | Library Assert | dd0be2ea-f733-4d65-bb34-a28f4624fb14 | 28.0.0.0 | 1
+
+closure over 8 local packages in U:/Git/LethAL-wt/lane-bugs/fixtures/sandbox-data-tests/.alpackages (publisher | name | version | direct/transitive | .app bytes):
+  OTHER | LethAL | LethAL Sandbox Data | 1.0.0.10 | direct | 55571
+  MS    | Microsoft | Library Assert | 28.0.46665.49944 | direct | 23982
+  MS    | Microsoft | System | 28.0.50283.0 | transitive | 633034
+total bytes: Microsoft 657016 (0.6 MB), non-Microsoft 55571 (0.1 MB)
+local packages outside the closure: Application, Base Application, Business Foundation, System Application, (no manifest)
+read+SHA-256, non-Microsoft: 1 packages, 0.1 MB, 0 ms; RSS at start 74 MB, peak 75 MB
+read+SHA-256, all: 3 packages, 0.7 MB, 1 ms; RSS at start 74 MB, peak 75 MB
+

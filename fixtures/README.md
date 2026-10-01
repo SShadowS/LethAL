@@ -342,13 +342,16 @@ lost its defines would run, so it is compiled and pre-committed, but no gate leg
 Neither `app.json` defines a symbol: al-runner reads a bundle's own `app.json` symbols, which would
 define one on every transport.
 
-All three builds score 5 killed / 8 survived / 0 no-coverage over 13 mutants, and every pair of
-builds disagrees on 8 of the 13. Only a per-mutant comparison can tell them apart. The tables were
-pre-committed in `docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
+Since R214 each build scores 5 killed / 4 survived / 0 no-coverage over 9 mutants: the seven
+outside the `#if` arms plus its own arm's two. Two builds share seven rows and disagree on 4 of
+them, and each has two rows the others lack. Only a per-mutant comparison tells them apart. The
+tables were pre-committed in `docs/superpowers/specs/2026-09-29-r214-precommitment.md` ("R321, new
+tables"); the pre-R214 tables (5 / 8 / 0 over 13) are in
+`docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
 
-Six of the 13 sit in `#if` arms, and any one build compiles out four of them (the R214 shape). The
-six assignment mutants outside the arms discriminate the builds without depending on that. When R214 is fixed, this
-gate needs a new pre-commitment and a re-freeze.
+The source has six mutant sites in `#if` arms, and LethAL no longer generates the other builds' arm
+mutants (R214). The six assignment mutants outside the arms discriminate the builds without
+depending on that.
 
 `.alpackages` is gitignored. Copy `Microsoft_*.app` from `sandbox-tests/.alpackages` into both
 projects, and `alc` the target into `sandbox-symbols-tests/.alpackages`, from current source, before
@@ -511,8 +514,9 @@ warns whenever a non-authoritative backend is selected. Confirm survivors agains
 the startup canary below runs `asserterror I := 1;` through the installed binary and reports
 `asserterror: defect-not-reproduced` (the runner raises `NavNCLAssertErrorException: An error was
 expected inside an ASSERTERROR statement.`, as BC does). What still separates the two backends is
-`coverage: "none"` (on `sandbox-app`, bcdev's 4 no-coverage mutants are run and survive there,
-hence `itest:alrunner`'s 3 / 16 / 0 against bcdev's 3 / 12 / 4) and, on `sandbox-data`,
+coverage (since R220 `itest:alrunner` runs with al-runner's `--coverage` and matches bcdev at
+3 / 12 / 4 per mutant; `lethal run` still defaults to `coverage: "none"`, under which bcdev's 4
+no-coverage mutants are run and survive, 3 / 16 / 0, R387) and, on `sandbox-data`,
 `Codeunit.Run` not scoping a write transaction (R183; the canary's third probe,
 `transactionRollback`, still reports `defect-confirmed`). The measurement above is kept as the
 record of why the canary exists, not as a description of the current binary.
@@ -724,6 +728,14 @@ nested `if`/`while` blocks (confirmed by `packages/builtin-tier1/tests/empty-blo
 
 Both backends must reproduce this table exactly, and two consecutive runs against the same
 backend must be 100% verdict-identical (the determinism exit criterion — design.md §13).
+
+**The table above is the 16-site original and is kept as the derivation.** Later operators took the
+fixture to 19 sites (`SandboxPricing` now holds 4 mutants, `LogAudit` gained three). The frozen
+figures today: `itest:bcdev` 3 / 12 / 4; `itest:alrunner`'s legs with al-runner's `--coverage`
+(R220) 3 / 12 / 4, the same per mutant; and `lethal run --backend al-runner` with its default
+`coverage: "none"` 3 / 16 / 0, which the gate's CLI-default leg pre-commits (R387,
+`docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md`). The per-mutant truth
+is the committed `packages/runner/itest/*.baseline.json`, not this table.
 
 Verify with `bun packages/runner/src/cli.ts run --project fixtures/sandbox-app --dry-run` — it prints `16 mutant site(s)` and, per
 file/line, exactly two `lethal.negate-conditional` sites (`SandboxLogic.Codeunit.al`, in
@@ -1448,7 +1460,14 @@ CLI flags:
   },
   "alRunner": {
     "alRunnerPath": "al-runner",
-    "packagesDir": "C:/path/to/.alpackages"
+    "packagesDir": "C:/path/to/.alpackages",
+    // R387: optional, shown with their defaults. Any other key is refused by name.
+    // serverMode false gives one process per test, and then selectorMode defaults to "static".
+    "serverMode": true,
+    "selectorMode": "resource",
+    // "al-runner" reads al-runner's --coverage; turned off, with a warning, for a project holding
+    // a multi-object file or an #if-wrapped object.
+    "coverage": "none"
   },
   // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather
   // than of a backend. The same list reaches LethAL's own `alc` step (`/define:A,B`) and al-runner
@@ -1535,7 +1554,8 @@ bun packages/runner/src/cli.ts run \
 
 Verified live against the real al-runner binary (2026-07-19), running the full fixture at
 `--workers 1`, `2`, and `4` in turn **with `"serverMode": true` in `lethal.config.local.json`**
-(the warm-process transport, `ServerTransport` — see `al-runner-transport.ts`). **Verdicts were
+(the warm-process transport of that time, `ServerTransport`, which no longer exists: R220's
+`--server` client is `AlRunnerServer` in `al-runner-server.ts`). **Verdicts were
 identical at every worker count** — the exact known-good table (killed 3, survived 13,
 no-coverage 0, score 18.8%) — confirming the per-worker sharding (`shardEvenly`) and isolation
 are correct, not just plausible:
@@ -1546,9 +1566,11 @@ are correct, not just plausible:
 | 2 | 1m13.6s | 3 | 13 | 0 | 18.8% |
 | 4 | 0m59.0s | 3 | 13 | 0 | 18.8% |
 
-**A reader reproducing these numbers with `serverMode` absent (or `false`) — the CLI's own
-default transport — will see roughly 3x slower wall clocks; that is expected, not a
-discrepancy.** `serverMode: true` keeps one al-runner process warm across every test in the
+**These 2026-07-19 measurements are history: 16 sites and 3 / 13 / 0 then, 19 sites and
+3 / 16 / 0 now (coverage off), and since R387 `serverMode` absent means `true`, the CLI's default.**
+At the time, a reader reproducing these numbers with `serverMode` absent (or `false`), then the
+CLI's default transport, would see roughly 3x slower wall clocks; that was expected, not a
+discrepancy. `serverMode: true` keeps one al-runner process warm across every test in the
 session; the default one-shot transport (`OneShotTransport`) pays a fresh process spawn plus a
 full recompile on every single test invocation. Verified live (2026-07-19) at the same three
 worker counts, one-shot transport, `serverMode` explicitly `false`:

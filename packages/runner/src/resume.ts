@@ -331,9 +331,10 @@ export interface SessionFingerprintInput {
   readonly operators?: readonly string[];
   readonly lines?: readonly LineRange[];
   readonly testsOnly?: readonly string[];
-  /** C02-06: the `alc` preprocessor symbols. `#if` branches compile differently under other
-   *  symbols, and R192's baseline key hashes AL bytes only, so a resume across a symbol change
-   *  would carry measurements made under the old ones. */
+  /** C02-06, R214: the EFFECTIVE `alc` preprocessor symbols (config plus app.json), so an app.json
+   *  change also breaks a resume. `#if` branches compile differently under other symbols, and
+   *  R192's baseline key hashes AL bytes only, so a resume across a symbol change would carry
+   *  measurements made under the old ones. */
   readonly preprocessorSymbols?: readonly string[];
   readonly skipKnownSurvivors: boolean;
   /**

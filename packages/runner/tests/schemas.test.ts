@@ -562,6 +562,7 @@ async function buildVerifyHappyPathOutput() {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: projectDir,
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -649,6 +650,16 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect((v2.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(2);
     expect(enumAt(v2, "$.refused.reason")).toContain("gap-has-no-survivor");
     expect(enumAt(v2, "$.refused.reason")).not.toContain("coverage-mode-changed");
+  });
+
+  // R-371: v4 added the refusal reasons `too-many-new-tests` and `dependency-unreadable`. v3 stays
+  // as it was published.
+  test("verify-v3.schema.json is kept as published", () => {
+    const v3 = loadSchema("verify-v3.schema.json");
+    expect((v3.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(3);
+    expect(enumAt(v3, "$.refused.reason")).toContain("coverage-mode-changed");
+    expect(enumAt(v3, "$.refused.reason")).not.toContain("too-many-new-tests");
+    expect(enumAt(v3, "$.refused.reason")).not.toContain("dependency-unreadable");
   });
 
   test("results[].gapId is a declared leaf of the current verify schema", () => {
@@ -835,6 +846,17 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(streamSchema.$id).toContain(`stream-v${STREAM_SCHEMA_VERSION}`);
   });
 
+  test("R214: the report schema names the two preprocessor exclusion reasons", () => {
+    // R307's `instrumentation-refused` follows them.
+    expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
+      "not-instrumentable",
+      "declarative",
+      "compiled-out",
+      "preproc-undecided",
+      "instrumentation-refused",
+    ]);
+  });
+
   test("a report written by THIS build validates against the report schema", () => {
     // Real data, and redacted data: redaction replaces two string fields, so a report that stopped
     // validating afterwards would mean the schema disagrees with the redactor.
@@ -1019,6 +1041,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v10.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1091,6 +1125,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "timings",
         "verifySchemaVersion",
       ],
+      "verify-v4.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
     });
   });
 
@@ -1153,6 +1196,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "declarative-sites-dropped",
         "all-errors",
         "session-warm",
+        "preproc-files-refused",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -1222,8 +1266,9 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v7.schema.json")).toEqual([...v6, "markKey"].sort());
     // R252's v8 changed a value domain, not the required set.
     expect(required("explain-v8.schema.json")).toEqual(required("explain-v7.schema.json"));
-    // R307's v9 added a caveat value, not a required field.
+    // R214's v9 and R307's v10 each added a caveat value, not a required field.
     expect(required("explain-v9.schema.json")).toEqual(required("explain-v8.schema.json"));
+    expect(required("explain-v10.schema.json")).toEqual(required("explain-v9.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

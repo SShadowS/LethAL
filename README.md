@@ -689,13 +689,23 @@ a LethAL feature or a mode.
 - **`al-runner` is not authoritative,** though not for the reason earlier versions of this file
   gave. The 2026-07 finding that its `asserterror` never fails a test was fixed upstream in v2, and
   a startup canary re-measures it against the installed binary every session (`defect-not-reproduced`
-  on v2.10.0.0). Both later reasons have moved too (R220): LethAL now reads al-runner's own
+  on v2.10.0.0). Both later reasons have moved too (R220): LethAL can read al-runner's own
   `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
-  discarded by the error. What remains is that coverage is CONDITIONAL: one file declaring more than
-  one object disables it for the whole run (upstream #3713), and then a mutant no test reaches is
-  run against every test and comes back `survived` rather than `no-coverage`. Conditional coverage is one measured route to a false survivor. No measurement has shown a false
+  discarded by the error. What remains is that coverage is OFF by default and CONDITIONAL when on:
+  `lethal run` uses it only with `"alRunner": { "coverage": "al-runner" }`, and a file declaring more
+  than one object (upstream #3713) or holding a `#if`-wrapped object turns it off for the whole run,
+  with a warning naming the file. Without coverage a mutant no test reaches is run against every
+  test and comes back `survived` rather than `no-coverage`. That is one measured route to a false survivor. No measurement has shown a false
   kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
   that exists but holds a mismatched build is untested (R235). Use it for offline smoke-testing, not for a score.
+- **`al-runner` settings (R387).** The `alRunner` config section takes `alRunnerPath`, `packagesDir`,
+  `serverMode`, `selectorMode` and `coverage`; any other key is refused by name. By default `lethal run`
+  uses al-runner's warm `--server` daemon (one per worker under `--workers`) and the resource selector,
+  which compiles each batch once instead of once per mutant. `"serverMode": false` goes back to one
+  process per test, and then the selector defaults to `"static"`. A run with a slow setting prints one
+  `[lethal] al-runner settings:` line naming it. Verdicts are the same per mutant on the fixtures the
+  gate measures; under `--server` a hung test becomes an error after one long suite deadline (at least
+  10 minutes) rather than a per-test timeout.
 - **A mutant that never terminates is stepped over, not scored.** AL cannot preempt a running loop,
   so LethAL sees only its own abort and cannot tell it from "the server is still working". Such a
   mutant is recorded as an unmeasured error; `--resume` skips it so the run completes rather than
@@ -811,6 +821,6 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 12 survived / 4 no-coverage |
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321) | 3 / 12 / 4; 5 / 8 / 0 per symbol set |
+| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 16 / 0 CLI-default leg (recorded per mutant as pre-committed) |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |

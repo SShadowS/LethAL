@@ -5,6 +5,7 @@ import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
+import { sameBuildSymbols } from "./preprocessor-symbols";
 import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
 
@@ -221,6 +222,9 @@ export interface RunRow {
   /** R325: the identity scheme the run's keys were made under. A row recorded before the column
    *  existed reads as 1. */
   readonly identityScheme: number;
+  /** R214: the effective build symbols the run's keys were made under. `null` on a row recorded
+   *  before the column existed: unknown, and never equal to any set. */
+  readonly buildSymbols: readonly string[] | null;
   /** R354: the coverage mode the run measured under. `null` on a row recorded before the column
    *  existed: unknown, and never equal to any mode. */
   readonly coverageMode: CoverageMode | null;
@@ -261,6 +265,17 @@ function parseCoverageMode(value: string | null, runId: number): CoverageMode | 
   );
 }
 
+/** R214: a stored `build_symbols`, checked. NULL is "unknown" and stays `null`; a value that is
+ *  not a JSON array of strings is a corrupt row and throws. */
+function parseBuildSymbols(value: string | null): readonly string[] | null {
+  if (value === null) return null;
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || parsed.some((s) => typeof s !== "string")) {
+    throw new Error(`store.ts: corrupt "build_symbols" column value ${JSON.stringify(value)}`);
+  }
+  return parsed as string[];
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,7 +294,8 @@ CREATE TABLE IF NOT EXISTS runs (
   identity_scheme INTEGER,
   coverage_mode TEXT,
   test_app_hash TEXT,
-  test_digests TEXT
+  test_digests TEXT,
+  test_digest_parts TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -525,12 +541,16 @@ export class ResultsStore {
       ["runs", "source_sha256 TEXT", runCols],
       // R325: NULL on an older row, and read as scheme 1, the only scheme there was.
       ["runs", "identity_scheme INTEGER", runCols],
+      // R214: NULL on an older row, and read as "unknown", which matches no build.
+      ["runs", "build_symbols TEXT", runCols],
       // R354: NULL on an older row, read as "coverage mode unknown", which never equals a mode.
       ["runs", "coverage_mode TEXT", runCols],
       // R247: NULL on an older row, read as "test app unknown", which never matches.
       ["runs", "test_app_hash TEXT", runCols],
       // R-278: NULL on an older row; verify refuses it as source-predates-verify.
       ["runs", "test_digests TEXT", runCols],
+      // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
+      ["runs", "test_digest_parts TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
       // R360: the instrumented payload digest, and which run pruned the batch's bundle. NULL on an
       // older row, which verify refuses as "recorded before R360", never reads as a value.
@@ -563,6 +583,9 @@ export class ResultsStore {
      *  that records keys made by another build (verify records the SOURCE run's manifest keys)
      *  must say so rather than inherit this build's `IDENTITY_SCHEME`. */
     identityScheme: number;
+    /** R214: the effective preprocessor symbols (config plus app.json) the run's keys were made
+     *  under. Required for the reason identityScheme is. */
+    buildSymbols: readonly string[];
     /** R354: the coverage mode the run measures under (`caps.coverage`). Required, so no run is
      *  recorded without one: a verdict is only comparable to one scored under the same mode. */
     coverageMode: CoverageMode;
@@ -575,13 +598,15 @@ export class ResultsStore {
     /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
      *  which `lethal verify` refuses as a run that predates it. */
     testDigests?: Readonly<Record<string, string>>;
+    /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. */
+    testDigestParts?: unknown;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, resource_key, test_app_hash, test_digests) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -589,10 +614,12 @@ export class ResultsStore {
         info.appVersion,
         info.configFingerprint ?? null,
         info.identityScheme,
+        JSON.stringify([...new Set(info.buildSymbols)].sort()),
         info.coverageMode,
         info.resourceKey ?? null,
         info.testAppHash ?? null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
+        info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
       ) as {
       id: number;
     };
@@ -665,6 +692,32 @@ export class ResultsStore {
     return row === null ? null : { runId: row.id, identityScheme: row.scheme };
   }
 
+  /** R214: the latest unfinished run for this project, backend and scheme that holds something to
+   *  carry but was built under OTHER preprocessor symbols, or unrecorded ones (NULL). `--resume
+   *  last` names it. */
+  unfinishedRunUnderOtherSymbols(q: {
+    projectPath: string;
+    backend: string;
+    buildSymbols: readonly string[];
+    carryableVerdicts: readonly string[];
+  }): { runId: number; buildSymbols: readonly string[] | null } | null {
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
+    const row = this.db
+      .query(
+        `SELECT id, build_symbols FROM runs WHERE project_path = ? AND backend = ? AND COALESCE(identity_scheme, 1) = ? AND (build_symbols IS NULL OR build_symbols <> ?) AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND m.verdict IN (${placeholders})) ORDER BY id DESC LIMIT 1`,
+      )
+      .get(
+        q.projectPath,
+        q.backend,
+        IDENTITY_SCHEME,
+        JSON.stringify([...new Set(q.buildSymbols)].sort()),
+        ...q.carryableVerdicts,
+      ) as { id: number; build_symbols: string | null } | null;
+    return row === null
+      ? null
+      : { runId: row.id, buildSymbols: parseBuildSymbols(row.build_symbols) };
+  }
+
   /**
    * R354: the most recent unfinished run for this project and backend, under this build's identity
    * scheme, that holds something to carry but was measured under ANOTHER coverage mode, or under an
@@ -711,13 +764,23 @@ export class ResultsStore {
     return parsed as Record<string, string>;
   }
 
+  /** R-371: the parts the run's test digests are made of, or `null` when it recorded none. Read
+   *  only to explain a too-many-new-tests refusal; a malformed value throws. */
+  testDigestParts(runId: number): unknown {
+    const row = this.db.query("SELECT test_digest_parts FROM runs WHERE id = ?").get(runId) as {
+      test_digest_parts: string | null;
+    } | null;
+    if (row === null) throw new Error(`store.ts: no run ${runId}`);
+    return row.test_digest_parts === null ? null : JSON.parse(row.test_digest_parts);
+  }
+
   /** R47: one run row by id, or `null`. Used to explain WHY an explicitly named `--resume-run`
    *  cannot be resumed (wrong project, wrong backend, different scope, already finished) rather
    *  than silently finding nothing. */
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, coverage_mode, test_app_hash FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE id = ?",
       )
       .get(runId) as {
       id: number;
@@ -726,6 +789,7 @@ export class ResultsStore {
       config_fingerprint: string | null;
       finished_at: string | null;
       identity_scheme: number;
+      build_symbols: string | null;
       coverage_mode: string | null;
       test_app_hash: string | null;
     } | null;
@@ -737,6 +801,7 @@ export class ResultsStore {
       configFingerprint: row.config_fingerprint,
       finished: row.finished_at !== null,
       identityScheme: row.identity_scheme,
+      buildSymbols: parseBuildSymbols(row.build_symbols),
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
       testAppHash: row.test_app_hash,
     };
@@ -1520,40 +1585,60 @@ export class ResultsStore {
      *  app, or an unknown one (`undefined` here, NULL on the run), is not evidence: a new test is
      *  exactly what might kill it. No key is returned then. */
     testAppHash: string | undefined,
-    /**
-     * R325: called when the latest finished run was keyed under another identity scheme. Its keys
-     * then name nothing reliable in this build (a renumbering can hand one to a different mutant),
-     * so NO key is returned and nothing is skipped; the caller says so.
-     */
-    onSchemeChanged?: (info: { runId: number; identityScheme: number }) => void,
-    /** R354: called when the latest finished run was measured under another coverage mode, or an
-     *  unrecorded one; no key is returned. Checked after the scheme. */
-    onCoverageModeChanged?: (info: { runId: number; coverageMode: CoverageMode | null }) => void,
-    /** R247: called when the test app differs, or is unknown. Checked after the coverage mode. */
-    onTestAppChanged?: (info: { runId: number; testAppHash: string | null }) => void,
+    /** R214: this build's effective symbols. A latest run built under another set, or an
+     *  unrecorded one, yields no keys. */
+    buildSymbols: readonly string[],
+    on: {
+      /**
+       * R325: the latest finished run was keyed under another identity scheme. Its keys then name
+       * nothing reliable in this build (a renumbering can hand one to a different mutant), so NO
+       * key is returned and nothing is skipped; the caller says so.
+       */
+      readonly schemeChanged?: (info: { runId: number; identityScheme: number }) => void;
+      /** R214: the latest finished run was built under other symbols (or before they were
+       *  recorded). Checked last, after the test app. */
+      readonly symbolsChanged?: (info: {
+        runId: number;
+        buildSymbols: readonly string[] | null;
+      }) => void;
+      /** R354: the latest finished run was measured under another coverage mode, or an
+       *  unrecorded one. Checked after the scheme. */
+      readonly coverageModeChanged?: (info: {
+        runId: number;
+        coverageMode: CoverageMode | null;
+      }) => void;
+      /** R247: the test app differs, or is unknown. Checked after the coverage mode. */
+      readonly testAppChanged?: (info: { runId: number; testAppHash: string | null }) => void;
+    } = {},
   ): Set<string> {
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, coverage_mode, test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
       id: number;
       scheme: number;
+      build_symbols: string | null;
       coverage_mode: string | null;
       test_app_hash: string | null;
     } | null;
     if (!run) return new Set();
     if (run.scheme !== IDENTITY_SCHEME) {
-      onSchemeChanged?.({ runId: run.id, identityScheme: run.scheme });
+      on.schemeChanged?.({ runId: run.id, identityScheme: run.scheme });
       return new Set();
     }
     const recorded = parseCoverageMode(run.coverage_mode, run.id);
     if (recorded !== coverageMode) {
-      onCoverageModeChanged?.({ runId: run.id, coverageMode: recorded });
+      on.coverageModeChanged?.({ runId: run.id, coverageMode: recorded });
       return new Set();
     }
     if (run.test_app_hash === null || run.test_app_hash !== testAppHash) {
-      onTestAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
+      on.testAppChanged?.({ runId: run.id, testAppHash: run.test_app_hash });
+      return new Set();
+    }
+    const recordedSymbols = parseBuildSymbols(run.build_symbols);
+    if (recordedSymbols === null || !sameBuildSymbols(recordedSymbols, buildSymbols)) {
+      on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
       return new Set();
     }
     const rows = this.db
