@@ -187,7 +187,23 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(kinds(cliDefaultMechanismFailures(versionPlus, ev, ALLOWED))).toEqual(["server"]);
   });
 
-  test("the allow-list is EXACT: a stray sentinel element or another binary path does not pass", async () => {
+  test("R392: the probe count must EQUAL the backend count (no cache): a second backend's missing probe fails, naming the counts", async () => {
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const [server = []] = record.serverArgv;
+    const twoWithBothProbes: SpawnRecord = {
+      ...record,
+      serverArgv: [server, server],
+      oneShotArgv: [...record.oneShotArgv, probeArgv()],
+    };
+    expect(cliDefaultMechanismFailures(twoWithBothProbes, ev, ALLOWED, 2)).toEqual([]);
+    const twoWithOneProbe: SpawnRecord = { ...twoWithBothProbes, oneShotArgv: record.oneShotArgv };
+    const failures = cliDefaultMechanismFailures(twoWithOneProbe, ev, ALLOWED, 2);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("expected 2");
+    expect(failures[0]).toContain("saw 1");
+  });
+
+  test("the allow-list is EXACT:a stray sentinel element or another binary path does not pass", async () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
     const base: SpawnRecord = { ...record, oneShotArgv: [...record.oneShotArgv, version] };
     const withArgv = (argv: string[]): SpawnRecord => ({
@@ -249,7 +265,7 @@ describe("R387: buildBackend's al-runner defaults", () => {
         oneShotArgv: record.oneShotArgv.filter((a) => !isPredefinedProbeArgv(a, "al-runner.exe")),
       };
       expect(cliDefaultMechanismFailures(noProbe, ev, ALLOWED)).toEqual([
-        "server: R392 probe did not run (expected 1)",
+        "server: expected 1 R392 probe spawn(s) (one per backend), saw 0",
       ]);
     });
 
@@ -265,7 +281,7 @@ describe("R387: buildBackend's al-runner defaults", () => {
       // The probe's argv with a stray element is not the probe's argv.
       const stray: SpawnRecord = { ...record, oneShotArgv: [[...probeArgv(), "--define", "X"]] };
       expect(cliDefaultMechanismFailures(stray, ev, ALLOWED).join("\n")).toContain(
-        "probe did not run",
+        "R392 probe spawn(s) (one per backend), saw 0",
       );
       const pinned: SpawnRecord = { ...record, oneShotArgv: [probeArgv("C:/pin")] };
       expect(cliDefaultMechanismFailures(pinned, ev, ALLOWED)).toEqual([]);
@@ -275,7 +291,7 @@ describe("R387: buildBackend's al-runner defaults", () => {
       const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
       const twice: SpawnRecord = { ...record, oneShotArgv: [...record.oneShotArgv, probeArgv()] };
       expect(cliDefaultMechanismFailures(twice, ev, ALLOWED)).toEqual([
-        "server: expected at most 1 R392 probe spawn(s), saw 2",
+        "server: expected 1 R392 probe spawn(s) (one per backend), saw 2",
       ]);
     });
   });

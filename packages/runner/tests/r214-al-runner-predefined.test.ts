@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -24,6 +24,7 @@ import type { SpawnFn } from "../src/publisher";
 import * as resumeModule from "../src/resume";
 import { ResultsStore } from "../src/store";
 import { fakeProbeSpawn, maskFor, probeFailed } from "./helpers/al-runner-predefined";
+import { alRunnerStdout } from "./helpers/al-runner-stdout";
 
 /**
  * R214 revise finding 3 (R377): al-runner 2.12.0 predefines CLEANSCHEMA1..CLEANSCHEMA25 when it
@@ -385,6 +386,50 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       const probed = await dryRun(["--config", config]);
       expect(probed.code).not.toBe(0);
       expect(probed.stderr).toContain("could not measure al-runner's predefined");
+    });
+  }, 60_000);
+
+  // R392 review r1: the SUCCESS path through main(). The al-runner is a tiny script that prints the
+  // probe's failing result, so main() forwards the config's path, the probe runs, and the listing prints.
+  test("`lethal run --dry-run --backend al-runner` through main() succeeds with a probe that answers", async () => {
+    await withProject(async (root) => {
+      const cli = join(import.meta.dir, "..", "src", "cli.ts");
+      const answer = join(root, "probe-answer.txt");
+      await Bun.write(
+        answer,
+        alRunnerStdout({ tests: probeFailed(maskFor(new Set(CLEANSCHEMA_1_TO_25))) }),
+      );
+      const win = process.platform === "win32";
+      const fake = join(root, win ? "fake-al-runner.cmd" : "fake-al-runner.sh");
+      await Bun.write(
+        fake,
+        win ? `@type "${answer}"\r\n@exit /b 1\r\n` : `#!/bin/sh\ncat "${answer}"\nexit 1\n`,
+      );
+      if (!win) await chmod(fake, 0o755);
+      const config = join(root, "lethal.config.json");
+      await Bun.write(config, JSON.stringify({ alRunner: { alRunnerPath: fake } }));
+      const proc = Bun.spawn(
+        [
+          "bun",
+          cli,
+          "run",
+          "--project",
+          join(root, "app"),
+          "--dry-run",
+          "--backend",
+          "al-runner",
+          "--db",
+          join(root, "lethal.sqlite"),
+          "--config",
+          config,
+        ],
+        { stdout: "pipe", stderr: "pipe", env: process.env },
+      );
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      expect(await proc.exited, stderr).toBe(0);
+      expect(stderr).not.toContain("R392");
+      expect(stdout).toMatch(/mutants?/i);
     });
   }, 60_000);
 });

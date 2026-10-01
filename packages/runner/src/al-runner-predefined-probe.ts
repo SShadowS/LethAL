@@ -137,9 +137,11 @@ export class AlRunnerPredefinedProbeError extends Error {
   constructor(
     readonly reason: string,
     readonly outputTail: string,
+    cause?: unknown,
   ) {
     super(
       `R392: could not measure al-runner's predefined preprocessor symbols: ${reason}. Refusing to run: the arms this build compiles, and the build identity the run records, would be a guess. al-runner said: ${outputTail}`,
+      cause !== undefined ? { cause } : undefined,
     );
     this.name = "AlRunnerPredefinedProbeError";
   }
@@ -151,14 +153,18 @@ const tail = (s: string): string => (s.length > TAIL_CHARS ? `...${s.slice(-TAIL
 /** Strict reader of the probe test's failure message. Throws on anything incomplete. */
 function readMask(message: string, output: string): readonly string[] {
   const refuse = (reason: string) => new AlRunnerPredefinedProbeError(reason, output);
-  // A second, unterminated `R392MASK:` inside the one match is caught below as an unknown token.
+  // Count marker STARTS as well as complete masks: a stray, unterminated second `R392MASK:` anywhere
+  // refuses, even beside one complete mask.
   const masks = [...message.matchAll(/R392MASK:([\s\S]*?):END/g)];
+  const starts = message.split("R392MASK:").length - 1;
   const body = masks[0]?.[1];
-  if (masks.length !== 1 || body === undefined) {
+  if (masks.length !== 1 || starts !== 1 || body === undefined) {
     throw refuse(
-      `expected exactly one R392MASK:...:END in the failure message, found ${masks.length}`,
+      `expected exactly one R392MASK:...:END in the failure message, found ${masks.length} complete and ${starts} start(s)`,
     );
   }
+  // Token ORDER inside the mask is intentionally immaterial: ids and signs decide the set, so a
+  // shuffled but complete mask measures the same answer. Missing, repeated or unknown tokens refuse.
   const known = new Set([...AL_RUNNER_PREDEFINED_CANDIDATES, "ALWAYS"]);
   const seen = new Map<string, boolean>();
   for (const token of body.split(/\s+/).filter((t) => t !== "")) {
@@ -241,6 +247,10 @@ export function isPredefinedProbeArgv(argv: readonly string[], alRunnerPath: str
   return want.length === argv.length && want.every((x, i) => x === argv[i]);
 }
 
+/**
+ * Every failure path (setup, send, decode, spawn error, timeout) surfaces as
+ * `AlRunnerPredefinedProbeError`, the original error kept as `cause`.
+ */
 export async function probeAlRunnerPredefinedSymbols(
   alRunnerPath: string,
   opts: {
@@ -249,6 +259,26 @@ export async function probeAlRunnerPredefinedSymbols(
     readonly platformAppsDir?: string;
     readonly fsOps?: AlRunnerCanaryFsOps;
   } = {},
+): Promise<AlRunnerPredefinedProbe> {
+  try {
+    return await measureOnce(alRunnerPath, opts);
+  } catch (err) {
+    if (err instanceof AlRunnerPredefinedProbeError) throw err;
+    throw new AlRunnerPredefinedProbeError(
+      `the probe failed unexpectedly (${err instanceof Error ? err.message : String(err)})`,
+      "",
+      err,
+    );
+  }
+}
+
+async function measureOnce(
+  alRunnerPath: string,
+  opts: {
+    readonly spawn?: SpawnFn;
+    readonly platformAppsDir?: string;
+    readonly fsOps?: AlRunnerCanaryFsOps;
+  },
 ): Promise<AlRunnerPredefinedProbe> {
   const fsOps = opts.fsOps ?? defaultFsOps;
   const root = await fsOps.mkdtemp(join(tmpdir(), "lethal-r392-probe-"));

@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import { defaultFsOps } from "../src/al-runner-canary";
 import {
   AL_RUNNER_PREDEFINED_CANDIDATES,
   AL_RUNNER_PREDEFINED_PROBE_TEST,
@@ -109,11 +110,7 @@ describe("probeAlRunnerPredefinedSymbols (R392)", () => {
     ["no ALWAYS", failed(full.replace("+ALWAYS ", "")), /ALWAYS/],
     ["NEVER present", failed(maskFor(V2_12, { tail: "+NEVER " })), /never-defined NEVER/],
     ["two masks", failed(`${full} ${full}`), /exactly one/],
-    [
-      "a second, unterminated mask inside the first",
-      failed(`R392MASK: ${full}`),
-      /unknown token "R392MASK:/,
-    ],
+    ["a second, unterminated mask inside the first", failed(`R392MASK: ${full}`), /exactly one/],
     ["no mask", failed("BOOM"), /exactly one/],
     ["an unterminated mask", failed(full.replace(":END", "")), /exactly one/],
     ["the wrong test", failed(full, "Codeunit1.Other"), /Codeunit1\.Other/],
@@ -164,16 +161,84 @@ describe("probeAlRunnerPredefinedSymbols (R392)", () => {
     expect([...probe.symbols]).toEqual([...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort());
   });
 
-  test("the transport is closed even when send throws", async () => {
-    const send = spyOn(OneShotTransport.prototype, "send").mockRejectedValue(new Error("boom"));
+  test("the transport is closed even when send throws, and the failure is the named error with its cause", async () => {
+    const boom = new Error("boom");
+    const send = spyOn(OneShotTransport.prototype, "send").mockRejectedValue(boom);
     const close = spyOn(OneShotTransport.prototype, "close");
     try {
-      await expect(probeAlRunnerPredefinedSymbols("al-runner")).rejects.toThrow("boom");
+      const err = await probeAlRunnerPredefinedSymbols("al-runner").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerPredefinedProbeError);
+      expect((err as Error).cause).toBe(boom);
+      expect((err as Error).message).toContain("boom");
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
       send.mockRestore();
       close.mockRestore();
     }
+  });
+
+  test("a setup failure (the scratch directory) is the named error with its cause", async () => {
+    const boom = new Error("disk full");
+    const err = await probeAlRunnerPredefinedSymbols("al-runner", {
+      fsOps: {
+        ...defaultFsOps,
+        mkdtemp: async () => {
+          throw boom;
+        },
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerPredefinedProbeError);
+    expect((err as Error).cause).toBe(boom);
+  });
+
+  test("a malformed transport answer (decode) is the named error with its cause", async () => {
+    const send = spyOn(OneShotTransport.prototype, "send").mockResolvedValue({
+      kind: "tests",
+      tests: undefined,
+    } as never);
+    try {
+      const err = await probeAlRunnerPredefinedSymbols("al-runner").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlRunnerPredefinedProbeError);
+      expect((err as Error).cause).toBeInstanceOf(TypeError);
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  test("a spawn error and a non-JSON answer are the named error too", async () => {
+    const thrown = await probeAlRunnerPredefinedSymbols("al-runner", {
+      spawn: async () => {
+        throw new Error("ENOENT");
+      },
+    }).catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(AlRunnerPredefinedProbeError);
+    const garbage = await probeAlRunnerPredefinedSymbols("al-runner", {
+      spawn: async () => ({ exitCode: 1, stdout: "not json", stderr: "" }),
+    }).catch((e: unknown) => e);
+    expect(garbage).toBeInstanceOf(AlRunnerPredefinedProbeError);
+  });
+
+  test("a stray unterminated R392MASK: start refuses even beside one complete mask", async () => {
+    const full = maskFor(V2_12);
+    for (const message of [`${full} R392MASK: tail`, `R392MASK: head ${full}`]) {
+      const err = await refusal(failed(message));
+      expect(err.message).toMatch(/exactly one R392MASK/);
+    }
+  });
+
+  test("token ORDER inside the mask is immaterial: ids and signs decide, a shuffled mask is accepted", async () => {
+    const body = maskFor(V2_12)
+      .replace(/^R392MASK:/, "")
+      .replace(/ ?:END$/, "");
+    const shuffled = body
+      .split(" ")
+      .filter((t) => t !== "")
+      .reverse()
+      .join(" ");
+    const probe = await probeAlRunnerPredefinedSymbols("al-runner", {
+      spawn: fakeSpawn(failed(`R392MASK:${shuffled}:END`)).spawn,
+    });
+    expect([...probe.symbols]).toEqual([...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort());
   });
 
   test("a refusal carries al-runner's output tail", async () => {

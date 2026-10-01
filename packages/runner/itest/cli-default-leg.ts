@@ -193,9 +193,9 @@ export function cliDefaultMechanismFailures(
       `server: expected no one-shot run besides the allowed provisioning, --version and R392 probe argvs, saw ${other.length}: ${other.map((a) => a.join(" ")).join(" | ")}`,
     );
   }
-  if (probes === 0) out.push(`server: R392 probe did not run (expected ${backends})`);
-  else if (probes > backends) {
-    out.push(`server: expected at most ${backends} R392 probe spawn(s), saw ${probes}`);
+  // EQUAL, not "at least one": there is no probe cache, so every backend probes exactly once.
+  if (probes !== backends) {
+    out.push(`server: expected ${backends} R392 probe spawn(s) (one per backend), saw ${probes}`);
   }
   allowedOneShot.forEach((a, i) => {
     const n = seen[i] ?? 0;
