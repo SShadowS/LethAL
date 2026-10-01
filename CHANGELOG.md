@@ -29,6 +29,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `lethal run` again, then verify. On bcdev the digest is taken from the PUBLISHED test app, the body
   the server runs, not from disk (R372); where that source cannot be read the run records none,
   warns `test-digests-unavailable`, and verify refuses it. al-runner digests the source on disk.
+- **`lethal verify` now sees an edit to anything a test reaches, not only the test method**
+  (R-371, R371): the per-test digest covers the helpers, handlers and objects a test reaches in the
+  test app, every event-subscriber codeunit and what it reaches, the build inputs, and every
+  non-Microsoft dependency by the SHA-256 of its package. A call the walk cannot follow makes the
+  digest cover the whole test-app source, so it can only make a test new. Microsoft dependencies are
+  covered by their declared version only (R376). One-time cost: verify refuses a source run from
+  before this build as `source-predates-verify`; run `lethal run` again, then verify. Verify refuses
+  as `too-many-new-tests` when more tests are new than `--max-new-tests` (default 50) and names the
+  number to pass (R375 is the filter large suites need), and as `dependency-unreadable` when a
+  dependency package cannot be read. The verify JSON is now schema v4.
 - **Runs now record the test app they measured against** (R247): `--resume` and `--resume-run`
   refuse by name when the test app changed since the run, a republish that only moved the version
   stamp included. One-time cost: an unfinished run from before this build is refused once, and the
