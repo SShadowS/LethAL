@@ -7,6 +7,13 @@ import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
+import {
+  DependencyUnreadableError,
+  dependencyFingerprint,
+  publishedPackageReader,
+  readAppJsonInputs,
+  targetOf,
+} from "./digest-inputs";
 import { discoverTests } from "./discovery";
 import {
   type EquivalenceMark,
@@ -43,8 +50,16 @@ import {
   TestAppError,
   type TestAppRefusal,
 } from "./test-app-publish";
-import { testDigestKey, testDigestsOfSources } from "./test-digest";
-import { readTestAppSources, scanTestPageSources } from "./testpage-scan";
+import {
+  type NewTestCause,
+  TEST_DIGEST_SCHEME,
+  explainNewTests,
+  isCurrentDigest,
+  parseDigestParts,
+  testDigestKey,
+  testDigestsOfModel,
+} from "./test-digest";
+import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
@@ -79,6 +94,10 @@ export const VERIFY_REFUSALS = [
   "test-app-resident-unreadable",
   // R354: the source run was measured under another coverage mode, or an unrecorded one.
   "coverage-mode-changed",
+  // R-371: more tests are new or edited than --max-new-tests allows.
+  "too-many-new-tests",
+  // R-371: a non-Microsoft dependency's package on the server could not be read and hashed.
+  "dependency-unreadable",
 ] as const;
 
 export type VerifyRefusal = (typeof VERIFY_REFUSALS)[number];
@@ -140,6 +159,8 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
     "copy the gap id and its artifactId from one lethal explain gap of the run that published this artifact; an edited or moved block, or other line endings, give a new id, and only the run's last batch stays installed",
   "gap-has-no-survivor":
     "every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap",
+  "dependency-unreadable":
+    "check the dev credentials with lethal doctor, and that every non-Microsoft dependency of the test app is installed on the server",
 };
 
 /**
@@ -165,6 +186,9 @@ export function verifyRefusalOf(
   // reaches here means verify built a bad call. A bug, rethrown (exit 1), never a refusal.
   if (err instanceof EquivalenceMarksError) {
     return refused("equivalence-marks-unreadable", err.message);
+  }
+  if (err instanceof DependencyUnreadableError) {
+    return refused("dependency-unreadable", err.message);
   }
   if (err instanceof InstalledArtifactError) {
     return refused(INSTALLED_ARTIFACT_REFUSALS[err.reason], err.message);
@@ -651,9 +675,20 @@ export async function planVerify(a: {
   /** R-278: the source run's recorded test digests (`store.testDigests`); `null` for a run that
    *  predates them, which is refused. */
   readonly sourceTestDigests: Readonly<Record<string, string>> | null;
+  /** R-371: the parts those digests are made of (`store.testDigestParts`); only explains a
+   *  too-many-new-tests refusal. */
+  readonly sourceTestDigestParts?: unknown;
   readonly testDir: string;
+  /** R-371: this verify's dependency fingerprint (`verifyDependencyFingerprint`), or a function
+   *  that reads it. A function is called only after every refusal that reads no package (the
+   *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
+   *  and costs no download. */
+  readonly dependencies: string | (() => Promise<string>);
+  /** R-371: refuse above this many new tests. Default `DEFAULT_MAX_NEW_TESTS`. */
+  readonly maxNewTests?: number;
 }): Promise<VerifyPlan> {
   const { source, manifest, sourceBaseline, sourceTestDigests, testDir } = a;
+  const maxNewTests = a.maxNewTests ?? DEFAULT_MAX_NEW_TESTS;
   // An empty target list would return the same `requests: []` as "every target was skipped", and
   // only the second is a real answer. A skipped-all plan always has a non-empty `skipped`.
   if (source.targets.length === 0) {
@@ -730,6 +765,36 @@ export async function planVerify(a: {
     );
   }
 
+  // R-371 (external review r1 #5): a source run records a digest for every test or for none, so
+  // an empty map or one that misses a baseline test is not a run this build recorded.
+  const undigested = sourceBaseline.filter(
+    (r) =>
+      sourceTestDigests[testDigestKey({ codeunitId: r.codeunitId, method: r.method })] ===
+      undefined,
+  );
+  if (Object.keys(sourceTestDigests).length === 0 || undigested.length > 0) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded test digests for ${Object.keys(sourceTestDigests).length} test(s) but none for ${undigested.length} of its ${sourceBaseline.length} baseline test(s)${
+        undigested.length > 0
+          ? ` (${undigested
+              .slice(0, 5)
+              .map((r) => `${r.codeunitId}::${r.method}`)
+              .join(", ")})`
+          : ""
+      }, so an edited test cannot be told from an unchanged one; run lethal run again, then verify`,
+    );
+  }
+
+  // R-371: a digest of another scheme covers other things, so no comparison with it means
+  // anything. The test is on the values, not a column: every digest of one run has one scheme.
+  if (Object.values(sourceTestDigests).some((d) => !isCurrentDigest(d))) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded its test digests under R-278's scheme, which covers each test's own method only. This build's digests (scheme ${TEST_DIGEST_SCHEME}, R-371) also cover every helper, handler, subscriber and dependency a test reaches, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
+    );
+  }
+
   const discovered = await discoverTests(testDir);
   const baselineKeys = new Set(
     sourceBaseline.map((r) =>
@@ -741,9 +806,14 @@ export async function planVerify(a: {
   // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
   // VERIFY_REFUSALS keeps its value set.
   await initParser();
-  const testSources = await readTestAppSources(testDir);
-  const refusedWhy = scanTestPageSources(testSources, discovered);
-  const digestsNow = testDigestsOfSources(testSources, discovered);
+  // R-371: ONE parse serves the scan and the digests.
+  const model = buildTestAppModel(await readTestAppSources(testDir));
+  const refusedWhy = scanTestPageModel(model, discovered);
+  const inputs = {
+    dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
+    buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+  };
+  const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
   // A test the source run recorded no digest for is new: `undefined` is never "unchanged".
   const isNew = (ref: TestMethodRef) => {
@@ -765,6 +835,28 @@ export async function planVerify(a: {
   const isRefused = (ref: TestMethodRef) => testPageRefused.has(testKeyOf(ref));
   const newTests = discovered.filter((ref) => isNew(ref) && !isRefused(ref));
   const refusedNew = discovered.filter((ref) => isNew(ref) && isRefused(ref));
+  if (newTests.length > maxNewTests) {
+    const { causes, changedProcs } = explainNewTests(
+      model,
+      inputs,
+      newTests.map((ref) => ({
+        ref,
+        recorded: baselineKeys.has(testKeyOf(ref)) && recorded.has(testDigestKey(ref)),
+      })),
+      parseDigestParts(a.sourceTestDigestParts ?? null),
+    );
+    throw new VerifyError(
+      "too-many-new-tests",
+      tooManyNewTestsDetail(
+        source,
+        running.length,
+        newTests.length,
+        maxNewTests,
+        causes,
+        changedProcs,
+      ),
+    );
+  }
 
   // Decision 5, ruling 10: a covering NAME picks exactly one source baseline row, and the test
   // project must still hold that row's (codeunitId, method) under the same codeunit name.
@@ -844,10 +936,69 @@ export async function planVerify(a: {
   };
 }
 
+/** R-371: `--max-new-tests`' default: above every measured p90 edit (the plan's table). */
+export const DEFAULT_MAX_NEW_TESTS = 50;
+
+/** R-371: the words the too-many-new-tests refusal uses for each cause. */
+const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
+  added: "added or renamed tests",
+  test: "the test's own method edited",
+  procedure: "a procedure it reaches edited",
+  object:
+    "an object it reaches edited outside its procedures (header, properties, globals, triggers)",
+  subscriber:
+    "a subscriber codeunit edited (every subscriber is in every test's digest, so every test is new)",
+  fallback:
+    "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
+  dependency: "a dependency changed",
+  build: "an app.json build input changed",
+  reach: "which procedures it reaches changed",
+  unknown: "the source run recorded no parts to compare against",
+};
+
+function tooManyNewTestsDetail(
+  source: VerifySource,
+  survivors: number,
+  n: number,
+  max: number,
+  causes: ReadonlyMap<NewTestCause, number>,
+  changedProcs: readonly string[],
+): string {
+  const why = [...causes]
+    .sort((x, y) => y[1] - x[1])
+    .map(([c, k]) => `${c}: ${k} test(s), ${CAUSE_WORDS[c]}`)
+    .join("; ");
+  const shown = changedProcs.slice(0, 5);
+  const more =
+    changedProcs.length > shown.length ? ` and ${changedProcs.length - shown.length} more` : "";
+  const helpers = shown.length > 0 ? ` Changed procedures: ${shown.join(", ")}${more}.` : "";
+  return `${n} tests are new or edited since run ${source.runId}, above --max-new-tests ${max}. Each runs twice unmutated and joins every survivor's request, about ${survivors * n + 2 * n} extra test runs for ${survivors} survivor(s). Edit classes: ${why}.${helpers} To run them all, pass --max-new-tests ${n}; or run lethal run again so this source is the recorded one`;
+}
+
+/**
+ * R-371: this verify's dependency fingerprint, over the test project's app.json (the test app
+ * verify compiles and publishes) and the packages the server holds for its non-Microsoft
+ * dependencies, read one at a time through the same /packages read as R-372. Throws
+ * `DependencyUnreadableError` (refused as `dependency-unreadable`) when one cannot be read.
+ */
+export async function verifyDependencyFingerprint(
+  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage">,
+  testDir: string,
+  projectPath: string,
+): Promise<string> {
+  const fetchPackage = backend.fetchPublishedAppPackage?.bind(backend);
+  return dependencyFingerprint(
+    await readAppJsonInputs(testDir),
+    fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
+    await targetOf(projectPath),
+  );
+}
+
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons.
  *  3 since R354 added the refusal reason `coverage-mode-changed`: a new value, so it bumps (R233);
- *  v2 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 3;
+ *  v2 is frozen. 4 since R-371 added `too-many-new-tests` and `dependency-unreadable`; v3 is
+ *  frozen. */
+export const VERIFY_SCHEMA_VERSION = 4;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
@@ -1106,6 +1257,8 @@ export async function runVerify(
     readonly artifact: string;
     readonly survivors: readonly string[];
     readonly testDir: string;
+    /** R-371: `--max-new-tests`; default `DEFAULT_MAX_NEW_TESTS`. */
+    readonly maxNewTests?: number;
   },
   deps: VerifyDeps,
 ): Promise<VerifyOutput> {
@@ -1181,12 +1334,16 @@ export async function runVerify(
     }
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
+    const { projectPath } = source;
     const plan = await planVerify({
       source,
       manifest,
       sourceBaseline: store.baselineTests(source.runId),
       sourceTestDigests: store.testDigests(source.runId),
+      sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
+      dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
+      ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
     const marksWarning = marksSchemeWarning(

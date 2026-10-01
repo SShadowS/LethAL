@@ -652,6 +652,16 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(v2, "$.refused.reason")).not.toContain("coverage-mode-changed");
   });
 
+  // R-371: v4 added the refusal reasons `too-many-new-tests` and `dependency-unreadable`. v3 stays
+  // as it was published.
+  test("verify-v3.schema.json is kept as published", () => {
+    const v3 = loadSchema("verify-v3.schema.json");
+    expect((v3.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(3);
+    expect(enumAt(v3, "$.refused.reason")).toContain("coverage-mode-changed");
+    expect(enumAt(v3, "$.refused.reason")).not.toContain("too-many-new-tests");
+    expect(enumAt(v3, "$.refused.reason")).not.toContain("dependency-unreadable");
+  });
+
   test("results[].gapId is a declared leaf of the current verify schema", () => {
     expect([...schemaLeafPaths(verifySchema)]).toContain("$.results[].gapId");
   });
@@ -1093,6 +1103,15 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "verifySchemaVersion",
       ],
       "verify-v3.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      "verify-v4.schema.json": [
         "counts",
         "exitCode",
         "newTests",

@@ -2050,6 +2050,10 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
 `,
     );
     await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Run Verify Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    await writeFile(
       join(testDir, "Tests.Codeunit.al"),
       `codeunit 79100 "Sandbox Tests"
 {
@@ -2303,6 +2307,10 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     end;
 }
 `,
+    );
+    await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Run Verify Tests", publisher: "LethAL", version: "1.0.0.0" }),
     );
     await writeFile(
       join(testDir, "Tests.Codeunit.al"),
@@ -2567,6 +2575,21 @@ describe("C02-06: lethal verify (Task 7)", () => {
     });
   });
 
+  test("R-371: --max-new-tests parses a count, is absent unless given, and refuses a non-count", () => {
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "120"])).toMatchObject({
+      maxNewTests: 120,
+    });
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "0"])).toMatchObject({
+      maxNewTests: 0,
+    });
+    expect("maxNewTests" in parseCliConfig(VERIFY_ARGS)).toBe(false);
+    for (const bad of ["-1", "1.5", "abc", ""]) {
+      expect(() => parseCliConfig([...VERIFY_ARGS, `--max-new-tests=${bad}`]), bad).toThrow(
+        /--max-new-tests must be a non-negative integer/,
+      );
+    }
+  });
+
   test("verify refuses every shared flag outside its allowlist, --out and --report included", () => {
     const others = Object.entries(RUN_FLAGS).filter(([flag]) => !VERIFY_FLAGS.has(flag));
     expect(others.map(([f]) => f)).toContain("out");
@@ -2801,6 +2824,7 @@ const VALUE: Readonly<Record<string, string>> = {
   "control-id": "50101",
   "table-id": "50102",
   format: "mutation-elements",
+  "max-new-tests": "60",
 };
 
 /** MEASURED exemption: flags `run --dry-run` accepts and ignores. R266 emptied it: `--out` now
