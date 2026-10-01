@@ -11,7 +11,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Added
+
+- **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
+  (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
+  `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
+  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
+  object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
+  naming the files, because al-runner's coverage cannot describe them.
+- **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
+  slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
+  names `coverage`.
+
 ### Changed
+
+- **`lethal run --backend al-runner` defaults to its fast path** (R387): `serverMode` now defaults to
+  `true` (al-runner's warm `--server` daemon, one per worker) and `selectorMode` to `"resource"`
+  when the server is on (one compile per batch instead of one per mutant). `"serverMode": false`
+  restores one process per test, with the `"static"` selector. An explicit one-shot plus resource
+  is accepted but no gate has measured it. Verdicts are unchanged per mutant on the fixtures the
+  gate measures; under `--server` a hung test becomes an error after one long suite deadline, not a
+  per-test timeout.
+- **BREAKING: an unknown key in the `alRunner` section is refused by name** (R387), listing the
+  allowed keys (`alRunnerPath`, `packagesDir`, `serverMode`, `selectorMode`, `coverage`). A
+  misspelled key used to be ignored in silence. `stubsDir` keeps its own message.
 
 - **`lethal run` removes its temp scratch folder after a clean run** (R360): the installed
   batch's files now live in the results database, checked against a digest of the instrumented
