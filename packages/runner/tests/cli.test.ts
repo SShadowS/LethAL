@@ -2430,6 +2430,21 @@ describe("C02-06: lethal verify (Task 7)", () => {
     });
   });
 
+  test("R-371: --max-new-tests parses a count, is absent unless given, and refuses a non-count", () => {
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "120"])).toMatchObject({
+      maxNewTests: 120,
+    });
+    expect(parseCliConfig([...VERIFY_ARGS, "--max-new-tests", "0"])).toMatchObject({
+      maxNewTests: 0,
+    });
+    expect("maxNewTests" in parseCliConfig(VERIFY_ARGS)).toBe(false);
+    for (const bad of ["-1", "1.5", "abc", ""]) {
+      expect(() => parseCliConfig([...VERIFY_ARGS, `--max-new-tests=${bad}`]), bad).toThrow(
+        /--max-new-tests must be a non-negative integer/,
+      );
+    }
+  });
+
   test("verify refuses every shared flag outside its allowlist, --out and --report included", () => {
     const others = Object.entries(RUN_FLAGS).filter(([flag]) => !VERIFY_FLAGS.has(flag));
     expect(others.map(([f]) => f)).toContain("out");
