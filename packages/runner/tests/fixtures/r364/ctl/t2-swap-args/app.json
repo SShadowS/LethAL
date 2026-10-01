@@ -1,1 +1,8 @@
-{"id":"3fb1deba-cd0d-4437-b8be-4fa28577fb4c","name":"t2-swap-args","publisher":"p","version":"1.0.0.0","idRanges":[{"from":50000,"to":50100}],"runtime":"16.0"}
+{
+  "id": "3fb1deba-cd0d-4437-b8be-4fa28577fb4c",
+  "name": "t2-swap-args",
+  "publisher": "p",
+  "version": "1.0.0.0",
+  "idRanges": [{ "from": 50000, "to": 50100 }],
+  "runtime": "16.0"
+}

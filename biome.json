@@ -2,7 +2,8 @@
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "organizeImports": { "enabled": true },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.tsbuildinfo"]
+    // scripts/r214/** is pinned byte for byte (SHA-256) by the R214 pre-commitment: never format it.
+    "ignore": ["**/dist/**", "**/node_modules/**", "**/*.tsbuildinfo", "scripts/r214/**"]
   },
   "linter": {
     "enabled": true,
