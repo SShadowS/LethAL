@@ -10,9 +10,10 @@
  * - for every object it reaches, the object's parts outside its procedures (header, properties,
  *   globals and their initialisation, triggers), or a non-codeunit object's whole text; a
  *   non-codeunit object's triggers are walked whenever its code can run (cases 14 to 16);
- * - every test-app event-subscriber codeunit, automatic and manual, and every test-app extension
- *   object, whole, with everything it reaches (`subscriberFold`): an event can run a subscriber
- *   from anywhere, and a dependency's own code can fire an extension's triggers;
+ * - every test-app event-subscriber codeunit, automatic and manual, every test-app extension
+ *   object, and every enum implementation codeunit, whole, with everything it reaches
+ *   (`subscriberFold`): an event can run a subscriber from anywhere, and a dependency's own code
+ *   can fire an extension's triggers or run an enum value's implementation;
  * - the dependency fingerprint and the test app's build inputs (digest-inputs.ts);
  * - when the test, or the subscriber fold, has an edge the walk cannot follow (UNFOLLOWED, fail
  *   closed), the WHOLE test-app source: every `.al` file's normalised text.
@@ -116,7 +117,16 @@ export function subscriberFold(
   for (const u of model.objects) {
     if (!u.kind.endsWith("extension")) continue;
     lines.push(`E ${u.textHash}`);
-    for (const t of u.triggers) scanner.reach(t, st);
+    // Its triggers and the page parts it adds, with the rest of its base object's test-app code.
+    scanner.foldObject(u, st);
+  }
+  // An enum value's implementation codeunit can be run by any code handed the value, a
+  // dependency's included: every implementation a test-app enum or enumextension names.
+  for (const u of model.objects) {
+    if (u.implementations.length === 0) continue;
+    lines.push(`I ${u.textHash}`);
+    for (const raw of u.implementations)
+      scanner.foldImplementation(raw, `${u.display} implementation ${raw}`, st);
   }
   lines.push(...reachLines(st));
   // Parse damage can swallow a whole subscriber codeunit, so it never becomes a unit and is folded

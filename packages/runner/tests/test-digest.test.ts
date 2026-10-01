@@ -424,6 +424,108 @@ codeunit 50120 "Sub"
     });
   });
 
+  // Review round 3: each shape kept a test's digest identical across an edit to a test-app
+  // codeunit "Mock" that code outside the walk can run.
+  describe("review round 3: test-app code run from outside the walk", () => {
+    const MOCK =
+      'codeunit 50101 "Mock" implements "IDep"\n{\n    procedure Go()\n    begin\n        Message(\'a\');\n    end;\n}\n';
+    const withMock = (test: string, more: Files = {}) => base(test, { "M.al": MOCK, ...more });
+    const mockEdit = (files: Files) => edit(files, "M.al", "Message('a');", "Message('b');");
+    const onFallback = (files: Files) => digestA(unrelated(files)) !== digestA(files);
+    const test1 = (vars: string, body: string) =>
+      T(`    procedure A()\n    var\n${vars}    begin\n${body}    end;\n`);
+    const DEP = '        DepCU: Codeunit "Dep CU";\n';
+
+    test("item 1: a parenthesised, subscripted or collected mock passed out falls back", () => {
+      for (const [vars, body] of [
+        ['        Mock: Codeunit "Mock";\n', "        DepCU.Process((Mock));\n"],
+        ['        Mocks: array[2] of Codeunit "Mock";\n', "        DepCU.Process(Mocks[1]);\n"],
+        [
+          '        Mock: Codeunit "Mock";\n        L: List of [Interface "IDep"];\n',
+          "        L.Add(Mock);\n        DepCU.Process(L);\n",
+        ],
+        [
+          '        Mock: Codeunit "Mock";\n        L: List of [Interface "IDep"];\n',
+          "        L.Add(Mock);\n        DepCU.Process(L.Get(1));\n",
+        ],
+      ] as const)
+        expect(onFallback(withMock(test1(DEP + vars, body)))).toBe(true);
+      // Control: a parenthesised literal and a dependency's record are not test-app objects.
+      const control = test1(
+        `${DEP}        SH: Record "Sales Header";\n`,
+        '        DepCU.Process((1), SH, SH."No.");\n',
+      );
+      expect(onFallback(withMock(control))).toBe(false);
+    });
+
+    test("item 2: a bare or this. call to a dependency base's procedure reads every argument", () => {
+      for (const call of ["DepProc(Mock);", "this.DepProc(Mock);"]) {
+        const ext = `tableextension 50102 "X" extends "Dep Table"\n{\n    trigger OnModify()\n    var\n        Mock: Codeunit "Mock";\n    begin\n        ${call}\n    end;\n}\n`;
+        const files = withMock(test1("", "        X := 1;\n"), { "X.al": ext });
+        expect(onFallback(files)).toBe(true);
+      }
+    });
+
+    test("item 3: an enum value's implementation codeunit is in every digest", () => {
+      const enumExt = `enumextension 50102 "X" extends "Dep Enum"\n{\n    value(50100; Mock) { Implementation = "IDep" = "Mock"; }\n}\n`;
+      const files = withMock(
+        test1(
+          `${DEP}        E: Enum "Dep Enum";\n`,
+          "        E := E::Mock;\n        DepCU.Process(E);\n",
+        ),
+        { "X.al": enumExt },
+      );
+      const was = digestA(files);
+      expect(digestA(mockEdit(files))).not.toBe(was);
+      expect(digestA(unrelated(files))).toBe(was);
+      // An implementation the test app does not declare, by one plain name, is EXTERNAL; by a
+      // namespace-qualified name it cannot be checked, so every test falls back.
+      const dep = edit(files, "X.al", '= "Mock";', '= "Dep Impl";');
+      expect(onFallback(dep)).toBe(false);
+      const qualified = edit(files, "X.al", '= "Mock";', '= My.Ns."Dep Impl";');
+      expect(onFallback(qualified)).toBe(true);
+    });
+
+    test("item 4: a page part a pageextension adds to a dependency's page is in every digest", () => {
+      const ext = `pageextension 50102 "X" extends "Dep Page"\n{\n    layout\n    {\n        addlast(Content)\n        {\n            part(Sub; "Sub") { }\n        }\n    }\n}\n`;
+      const sub = `page 50104 "Sub"\n{\n    trigger OnOpenPage()\n    var\n        M: Codeunit "Mock";\n    begin\n        M.Go();\n    end;\n}\n`;
+      const files = withMock(test1(DEP, "        DepCU.OpenIt();\n"), {
+        "X.al": ext,
+        "Sub.al": sub,
+      });
+      const was = digestA(files);
+      expect(digestA(mockEdit(files))).not.toBe(was);
+      expect(digestA(unrelated(files))).toBe(was);
+    });
+
+    test("item 5: CurrPage.EnqueueBackgroundTask with a variable falls back; with Codeunit::X walks OnRun", () => {
+      const page = (arg: string) =>
+        `page 50103 "P"\n{\n    trigger OnOpenPage()\n    var\n        TaskId: Integer;\n        Id: Integer;\n    begin\n        CurrPage.EnqueueBackgroundTask(TaskId, ${arg});\n    end;\n}\n`;
+      const t = test1("", '        Page.Run(Page::"P");\n');
+      expect(onFallback(withMock(t, { "P.al": page("Id") }))).toBe(true);
+      expectReached(
+        withMock(t, { "P.al": page('Codeunit::"Lib"') }),
+        "Lib.al",
+        "G := 2;",
+        "G := 3;",
+      );
+    });
+
+    test("item 6: a built-in type's method handed Codeunit::X of a test-app codeunit falls back", () => {
+      for (const [v, call] of [
+        ["N: Notification", "N.AddAction('x', Codeunit::\"Mock\", 'Go');"],
+        ["E: ErrorInfo", "E.AddAction('x', Codeunit::\"Mock\", 'Go');"],
+      ] as const)
+        expect(onFallback(withMock(test1(`        ${v};\n`, `        ${call}\n`)))).toBe(true);
+      // Control: a dependency's codeunit there is not a test-app object.
+      const dep = test1(
+        "        N: Notification;\n",
+        "        N.AddAction('x', Codeunit::\"Dep CU\", 'Go');\n",
+      );
+      expect(onFallback(withMock(dep))).toBe(false);
+    });
+  });
+
   test("negative: an unreached codeunit's globals are not in the digest", () => {
     const files = base(callsLib);
     expect(digestA(edit(files, "Other.al", "OG: Integer;", "OG: Decimal;"))).toBe(digestA(files));

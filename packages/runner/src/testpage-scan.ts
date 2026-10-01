@@ -200,9 +200,9 @@ type Site =
  */
 type ArgFact =
   | { readonly k: "ref"; readonly at: number; readonly kind: string; readonly name: string }
-  | { readonly k: "name"; readonly at: number; readonly name: string }
   | { readonly k: "int"; readonly at: number; readonly value: string }
-  | { readonly k: "this"; readonly at: number };
+  /** Any other argument but a literal or an operator's result: its shape, read in the caller. */
+  | { readonly k: "expr"; readonly at: number; readonly recv: Recv };
 
 const NO_ARGS: readonly ArgFact[] = Object.freeze([]);
 
@@ -305,6 +305,9 @@ export interface Unit {
   /** R-371: the target of every `part(Name; Target)` in the object (a page's subpages), as
    *  written; `""` when the target could not be read. Empty for a codeunit. */
   readonly parts: readonly string[];
+  /** R-371, an enum or enumextension: every implementation codeunit it names, as written
+   *  (`Implementation = "I" = "C"` on a value, `DefaultImplementation`, ...). */
+  readonly implementations: readonly string[];
 }
 
 export interface Proc {
@@ -588,6 +591,7 @@ function buildUnit(
     textHash: sha256(normalizeSource(text)),
     baseKey: undefined,
     parts: [],
+    implementations: [],
   };
   if (body !== undefined) {
     const members = flattenPreproc(body.namedChildren).flatMap((c) =>
@@ -609,6 +613,18 @@ function buildUnit(
     }
   }
   return unitShell;
+}
+
+/** `<x>Implementation = "I" = "C", "J" = D;`: every `C` and `D`, as written. */
+function implementationsIn(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\b\w*Implementation\s*=\s*([^;]*);/gi)) {
+    for (const pair of (m[1] ?? "").match(/(?:"[^"]*"|[^,"])+/g) ?? []) {
+      const impl = /=\s*("[^"]*"|[^=]+?)\s*$/.exec(pair)?.[1];
+      out.push(impl ?? "");
+    }
+  }
+  return out;
 }
 
 /** A report, query or xmlport data item's name and table: `dataitem(Name; Table)`. */
@@ -689,6 +705,7 @@ function buildObjectUnit(
     textHash: hash,
     baseKey,
     parts,
+    implementations: kind.startsWith("enum") ? implementationsIn(text) : [],
   };
   const walk = (n: ALSyntaxNode): void => {
     if (n.rawKind === "procedure" || n.rawKind === "trigger_declaration") {
@@ -724,8 +741,9 @@ function argInfo(call: ALSyntaxNode): {
         f = { k: "ref", at, kind: m[1].toLowerCase(), name: m[2] };
     } else if (a.rawKind === "integer") {
       f = { k: "int", at, value: a.text.trim() };
-    } else if (NAME_KINDS.has(a.rawKind) || a.rawKind === "keyword_identifier") {
-      f = a.text.toLowerCase() === "this" ? { k: "this", at } : { k: "name", at, name: a.text };
+    } else {
+      const recv = toRecv(a);
+      if (recv.k !== "value") f = { k: "expr", at, recv };
     }
     if (f === undefined) continue;
     argFacts ??= [];
@@ -887,7 +905,10 @@ const HOLDS_RECORD = /^\s*(variant|recordref|fieldref)\b/i;
 const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
   "session.startsession": [1],
   "taskscheduler.createtask": [0, 1],
+  "currpage.enqueuebackgroundtask": [1],
 };
+/** R-371: `List of [...]` and `Dictionary of [...]`, with the element types' text. */
+const COLLECTION_OF = /^\s*(?:list|dictionary)\s+of\s*\[([\s\S]*)\]\s*$/i;
 const NO_RUN: ReadonlySet<number> = new Set();
 
 export class Scanner {
@@ -1243,7 +1264,11 @@ export class Scanner {
     if (site.withRecv.length === 0) {
       const ran =
         nn === "startsession" ? this.runById(site.argFacts, site.args, [1], site.name, st) : NO_RUN;
-      this.passesTestApp(p, site.argFacts, true, site.name, st, ran);
+      // In an extension, a name no test-app unit under its base declares may be a procedure of
+      // the DEPENDENCY's base object, which runs code the walk does not follow: every argument
+      // is read, not only object references.
+      const inExtension = p.unit.kind.endsWith("extension");
+      this.passesTestApp(p, site.argFacts, !inExtension, site.name, st, ran);
       return;
     }
     // Case 7 (I4): through every enclosing with-target's declared types; case 19 when unknown.
@@ -1285,7 +1310,8 @@ export class Scanner {
     }
     const key = this.norm(site.recv.name);
     if (key === "this") {
-      this.reachOwn(p.unit, member, args, st);
+      if (!this.reachOwn(p.unit, member, args, st) && p.unit.kind.endsWith("extension"))
+        this.passesTestApp(p, site.argFacts, false, `this.${member}`, st);
       return;
     }
     const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
@@ -1368,9 +1394,35 @@ export class Scanner {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
           what = `${f.kind}::${f.name}`;
       } else if (refsOnly) continue;
-      else if (f.k === "this") what = "this";
-      else {
-        const key = this.norm(f.name);
+      else what = this.argHolds(p, f.recv, st);
+      if (what !== undefined) {
+        fallBack(st, `${label} is handed ${what}, a test-app object, by ${p.display}`);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Whether an argument's value can be a test-app object, in words, or undefined when it cannot.
+   * Fail closed: a shape the walk does not model counts. A name is typed through the caller's
+   * scope (`this` is the caller's own object); a subscript or member of an array or a collection
+   * whose element can hold a test-app object counts; a call or member is typed by its return.
+   */
+  private argHolds(p: Proc, r: Recv, st: ReachState): string | undefined {
+    switch (r.k) {
+      case "value":
+        return undefined;
+      case "opaque":
+        return `an argument of a shape the walk does not model (${r.kind})`;
+      case "either":
+        for (const o of r.options) {
+          const w = this.argHolds(p, o, st);
+          if (w !== undefined) return w;
+        }
+        return undefined;
+      case "name": {
+        const key = this.norm(r.name);
+        if (key === "this") return "this";
         const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
         // A Variant or RecordRef may hold a record of any test-app table: every test-app table,
         // with its triggers and what they reach, is folded in (an unfollowed edge there falls
@@ -1378,13 +1430,57 @@ export class Scanner {
         // external code, is not seen.
         if (types?.some((t) => HOLDS_RECORD.test(ARRAY_OF.exec(t)?.[1] ?? t))) this.foldTables(st);
         const held = types?.find((t) => this.holdsTestApp(t));
-        if (held !== undefined) what = `${f.name} (${held.trim()})`;
+        return held === undefined ? undefined : `${r.name} (${held.trim()})`;
       }
-      if (what !== undefined) {
-        fallBack(st, `${label} is handed ${what}, a test-app object, by ${p.display}`);
-        return;
+      case "index":
+      case "member": {
+        const base = r.k === "index" ? r.base : r.recv;
+        const baseTypes =
+          base.k === "name" && this.norm(base.name) !== "this"
+            ? (p.scope.get(this.norm(base.name)) ??
+              p.unit.globals.get(this.norm(base.name)) ??
+              p.unit.implicit.get(this.norm(base.name)) ??
+              [])
+            : this.typesOf(p, base);
+        if (typeof baseTypes === "string") return `an argument of unknown type (${baseTypes})`;
+        const coll = baseTypes.find(
+          (t) => (ARRAY_OF.test(t) || COLLECTION_OF.test(t)) && this.holdsTestApp(t),
+        );
+        if (coll !== undefined) return `an element of ${coll.trim()}`;
+        if (r.k === "index") return undefined;
+        break;
       }
+      case "call":
+        // A name no test-app object declares is a built-in or a dependency's procedure, and
+        // neither can return a test-app type (a dependency cannot name one).
+        if (!this.procNames.has(this.norm(r.name))) return undefined;
+        break;
     }
+    const types = this.typesOf(p, r);
+    if (typeof types === "string") return `an argument of unknown type (${types})`;
+    const held = types.find((t) => this.holdsTestApp(t));
+    return held === undefined ? undefined : `a value of ${held.trim()}`;
+  }
+
+  /** R-371: an object folded into every digest: entered, with its parts (`enterObject`). */
+  foldObject(u: Unit, st: ReachState): void {
+    this.reachUnit(u, st);
+    if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+  }
+
+  /**
+   * R-371: an enum's implementation codeunit, folded into every digest: every procedure and
+   * trigger of every test-app codeunit the name can be, and what they reach. A name the test app
+   * does not declare is EXTERNAL only under `outside`'s condition. Returns the units found.
+   */
+  foldImplementation(raw: string, label: string, st: ReachState): Unit[] {
+    const us = this.unitsNamed(raw);
+    for (const u of us) {
+      this.reachUnit(u, st);
+      for (const c of [...u.procs, ...u.triggers]) this.reach(c, st);
+    }
+    if (us.length === 0) this.outside("codeunit", raw, label, st);
+    return us;
   }
 
   /** Every test-app table and tableextension, entered: its parts, its triggers, what they reach. */
@@ -1427,8 +1523,11 @@ export class Scanner {
   /** Whether a variable of declared type `rawType` can hold a test-app object. */
   private holdsTestApp(rawType: string): boolean {
     const type = ARRAY_OF.exec(rawType)?.[1] ?? rawType;
-    // A Variant or RecordRef is not a fallback: `passesTestApp` folds every test-app table instead.
+    // A Variant or RecordRef is not a fallback: `argHolds` folds every test-app table instead.
     if (/^\s*interface\b/i.test(type)) return true;
+    const elements = COLLECTION_OF.exec(type)?.[1];
+    if (elements !== undefined)
+      return (elements.match(/(?:"[^"]*"|[^,"])+/g) ?? []).some((e) => this.holdsTestApp(e));
     const m = OBJ_TYPE.exec(type);
     const kw = m?.[1]?.toLowerCase();
     const raw = m?.[2];
@@ -1553,7 +1652,12 @@ export class Scanner {
     const m = OBJ_TYPE.exec(type);
     const kw = m?.[1]?.toLowerCase();
     const raw = m?.[2];
-    if (kw === undefined || raw === undefined) return; // a built-in type's method: not an edge
+    if (kw === undefined || raw === undefined) {
+      // A built-in type's method: not an edge, unless it is handed a reference to a test-app
+      // object it may run (`Notification.AddAction(..., Codeunit::"X", ...)`).
+      this.passesTestApp(p, argFacts, true, label, st);
+      return;
+    }
     const kind = KIND_OF[kw] ?? kw;
     if (kind === "codeunit") {
       const targets = this.unitsNamed(raw);
