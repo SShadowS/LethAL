@@ -129,6 +129,13 @@ export function watchResourceSelector(
   return ev;
 }
 
+/*
+ * THE ONE-SHOT ALLOW-LIST under `--server` lives here and in `cliDefaultMechanismFailures` below,
+ * and nowhere else: the provision sentinel (`AL_RUNNER_PROVISION_SENTINEL`) and `isVersionProbe`.
+ * A new legitimate one-shot call (a named probe) is added HERE, by exact argv, never by a looser
+ * pattern; every other one-shot spawn under `--server` must keep failing the check.
+ */
+
 /** `status()`'s probe: exactly the binary and `--version`, nothing else. */
 const isVersionProbe = (argv: readonly string[]): boolean =>
   argv.length === 2 && argv[1] === "--version";
