@@ -160,14 +160,27 @@ const { writeInstrumentedProject } = await import(`${repo}/packages/schemata/src
 
 const out = await mkdtemp(join(tmpdir(), "r214-sites-"));
 const set = await generateMutationSet(projectDir, { preprocessorSymbols: symbols });
-await writeInstrumentedProject({
-  targetDir: out,
-  files: set.files,
-  selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-  artifactId: "0123456789abcdef0123456789abcdef",
-  targetAppId: "00000000-0000-0000-0000-000000000000",
-  operatorTiers,
-});
+// Loaded by dynamic import, so `bun run typecheck` never sees this call. R-307 (the code lane) makes
+// an `identityOrdinals` option required; until this script passes it, say so instead of crashing
+// with an unexplained TypeError.
+try {
+  await writeInstrumentedProject({
+    targetDir: out,
+    files: set.files,
+    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    artifactId: "0123456789abcdef0123456789abcdef",
+    targetAppId: "00000000-0000-0000-0000-000000000000",
+    operatorTiers,
+  });
+} catch (err) {
+  if (err instanceof TypeError || /identityOrdinals/.test(String(err))) {
+    throw new Error(
+      `scripts/r214-capture.ts: writeInstrumentedProject failed, most likely because R-307 made an option this script does not pass (identityOrdinals) required. Update this script for R-307; it does not support it yet. Cause: ${String(err)}`,
+      { cause: err },
+    );
+  }
+  throw err;
+}
 const m = JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8"));
 const raw = set.files.reduce((n: number, f: { specs: unknown[] }) => n + f.specs.length, 0);
 console.log(`raw ${raw} deployed ${m.mutants.length} skippedFiles ${set.skipped.length}`);

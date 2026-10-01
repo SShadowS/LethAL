@@ -41,6 +41,8 @@ export interface ExcludedSiteFile {
    *    a file whose specs are entirely filtered away leaves the list altogether, because
    *    `generateMutationSet`'s `if (fileSpecs.length === 0) continue;` precedes its
    *    `canCarryMutationSelectorVar` check.
+   *  - `compiled-out` (R214) counts RAW specs, before validation, dedup and the operator or line
+   *    filters.
    *
    * Changing either is a separate decision with its own live-gate consequences.
    */

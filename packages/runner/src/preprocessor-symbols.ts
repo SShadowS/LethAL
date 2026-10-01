@@ -91,6 +91,18 @@ export async function effectiveBuildSymbols(
   return [...new Set([...fromApp, ...configSymbols])].sort();
 }
 
+/** R214: `runSession` recorded one effective symbol set and generation enumerated under another.
+ *  Both read the same snapshot, so this is a defect, never a user error: the run's history,
+ *  resume and marks would be scoped to a build the mutants did not come from. */
+export class BuildSymbolsDivergedError extends Error {
+  constructor(recorded: readonly string[], generated: readonly string[]) {
+    super(
+      `R214: the run records preprocessor symbols [${recorded.join(", ")}] but generation used [${generated.join(", ")}]; refusing to run under a symbol set its mutants were not enumerated with.`,
+    );
+    this.name = "BuildSymbolsDivergedError";
+  }
+}
+
 /** Whether two symbol lists name the same build. Order and repeats do not matter; case does. */
 export function sameBuildSymbols(a: readonly string[], b: readonly string[]): boolean {
   const x = [...new Set(a)].sort();

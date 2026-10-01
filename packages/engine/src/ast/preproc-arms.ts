@@ -123,7 +123,8 @@ export function evaluateArms(
   symbols: readonly string[],
 ): ArmEvaluation {
   // R214 I7: a file with no directive line costs one scan and no walk (93% of corpus files, measured).
-  const lines = source.match(DIRECTIVE_LINE)?.length ?? 0;
+  const matches = [...source.matchAll(DIRECTIVE_LINE)];
+  const lines = matches.length;
   if (lines === 0) return { kind: "decided", inactive: [] };
   const defined = new Set(symbols);
   /** One open `#if`: whether its outer region is built, whether an arm was taken, whether the
@@ -140,7 +141,21 @@ export function evaluateArms(
   let closedAt: number | null = null;
   try {
     const markers = markersOf(root);
-    if (markers.length !== lines) {
+    // Positions, not counts: a marker the line scan misses (mid-line `#if`) and a directive line the
+    // tree does not mark (inside a comment) cancel out in a count. 1-based line of each match.
+    const directiveRows = new Set<number>();
+    let row = 1;
+    let scanned = 0;
+    for (const m of matches) {
+      for (; scanned < m.index; scanned++) if (source.charCodeAt(scanned) === 10) row++;
+      directiveRows.add(row);
+    }
+    const markerRows = new Set(markers.map(lineOf));
+    if (
+      markers.length !== lines ||
+      markerRows.size !== directiveRows.size ||
+      [...markerRows].some((r) => !directiveRows.has(r))
+    ) {
       throw new UndecidedArm(
         `marker-mismatch (${lines} directive lines, ${markers.length} markers)`,
       );

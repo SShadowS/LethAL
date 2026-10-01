@@ -111,7 +111,11 @@ import {
   permissionCanaryWarnings,
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
-import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
+import {
+  BuildSymbolsDivergedError,
+  effectiveBuildSymbols,
+  sameBuildSymbols,
+} from "./preprocessor-symbols";
 import {
   assertUnderCeiling,
   batchCeilingWarning,
@@ -4555,6 +4559,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
     preprocExcluded,
+    buildSymbols: generatedSymbols,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4564,6 +4569,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     preprocessorSymbols: sourceSymbols,
     emit,
   });
+  // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
+  // under ever diverge; today both read the same snapshot.
+  if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
+    throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
+  }
   const generateMutationSetMs = Date.now() - generateStartedMs;
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
