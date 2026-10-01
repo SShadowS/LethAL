@@ -5,6 +5,8 @@ import {
   type ResourceEvidence,
   type SpawnRecord,
   cliDefaultMechanismFailures,
+  expectedOneShotArgvs,
+  platformAppsAgreement,
   recordSpawns,
   watchResourceSelector,
 } from "../itest/cli-default-leg";
@@ -113,13 +115,17 @@ async function drive(alRunner: NonNullable<LethalConfigFile["alRunner"]>): Promi
   return { backend, record: rec.record, ev };
 }
 
+/** The one-shot argvs the gate allows for `drive()`'s config (`runConfig`'s testDir is "/tests"). */
+const ALLOWED = expectedOneShotArgvs({ alRunnerPath: "al-runner.exe", testDir: "/tests" });
+const [provision = [], version = []] = ALLOWED.map((a) => [...a]);
+
 const kinds = (failures: readonly string[]): string[] =>
   [...new Set(failures.map((f) => f.split(":")[0] ?? ""))].sort();
 
 describe("R387: buildBackend's al-runner defaults", () => {
   test("no transport key: one --server daemon, no one-shot test spawn, resource selector, coverage off", async () => {
     const { backend, record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
-    expect(cliDefaultMechanismFailures(record, ev)).toEqual([]);
+    expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
     expect(record.serverArgv).toEqual([["al-runner.exe", "--server"]]);
     expect(ev.activations).toBe(3);
     expect(ev.alHashes.size).toBe(1);
@@ -130,35 +136,32 @@ describe("R387: buildBackend's al-runner defaults", () => {
     // Measured live 2026-10-01: `runSession` calls `provisionOnce` under `--server` too, a one-shot
     // `--test` whose filter matches no test. The first live record run counted it as a test spawn.
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
-    const provision = ["al-runner.exe", "--test", AL_RUNNER_PROVISION_SENTINEL];
     const withProvision: SpawnRecord = {
       ...record,
       oneShotArgv: [...record.oneShotArgv, provision],
     };
-    expect(cliDefaultMechanismFailures(withProvision, ev)).toEqual([]);
+    expect(cliDefaultMechanismFailures(withProvision, ev, ALLOWED)).toEqual([]);
     const twice: SpawnRecord = {
       ...withProvision,
       oneShotArgv: [...withProvision.oneShotArgv, provision],
     };
-    expect(kinds(cliDefaultMechanismFailures(twice, ev))).toEqual(["server"]);
+    expect(kinds(cliDefaultMechanismFailures(twice, ev, ALLOWED))).toEqual(["server"]);
     const realTest: SpawnRecord = {
       ...withProvision,
       oneShotArgv: [...withProvision.oneShotArgv, ["al-runner.exe", "--test", "Sandbox Tests.X"]],
     };
-    expect(kinds(cliDefaultMechanismFailures(realTest, ev))).toEqual(["server"]);
+    expect(kinds(cliDefaultMechanismFailures(realTest, ev, ALLOWED))).toEqual(["server"]);
   });
 
   test("one-shot calls are an allow-list: --version passes, a whole-suite run with no --test fails", async () => {
     // A whole-suite one-shot run carries no `--test`, so a check that counted `--test` alone would
     // pass it. Only provisioning and `status()`'s exact `[path, "--version"]` are allowed.
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
-    const version = ["al-runner.exe", "--version"];
-    const provision = ["al-runner.exe", "--test", AL_RUNNER_PROVISION_SENTINEL];
     const allowed: SpawnRecord = {
       ...record,
       oneShotArgv: [...record.oneShotArgv, version, provision],
     };
-    expect(cliDefaultMechanismFailures(allowed, ev)).toEqual([]);
+    expect(cliDefaultMechanismFailures(allowed, ev, ALLOWED)).toEqual([]);
     const suite: SpawnRecord = {
       ...allowed,
       oneShotArgv: [
@@ -166,24 +169,66 @@ describe("R387: buildBackend's al-runner defaults", () => {
         ["al-runner.exe", "--isolation", "test", "src", "tests"],
       ],
     };
-    expect(kinds(cliDefaultMechanismFailures(suite, ev))).toEqual(["server"]);
+    expect(kinds(cliDefaultMechanismFailures(suite, ev, ALLOWED))).toEqual(["server"]);
     const versionPlus: SpawnRecord = {
       ...allowed,
       oneShotArgv: [...allowed.oneShotArgv, ["al-runner.exe", "--version", "extra"]],
     };
-    expect(kinds(cliDefaultMechanismFailures(versionPlus, ev))).toEqual(["server"]);
+    expect(kinds(cliDefaultMechanismFailures(versionPlus, ev, ALLOWED))).toEqual(["server"]);
+  });
+
+  test("the allow-list is EXACT: a stray sentinel element or another binary path does not pass", async () => {
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const base: SpawnRecord = { ...record, oneShotArgv: [...record.oneShotArgv, version] };
+    const withArgv = (argv: string[]): SpawnRecord => ({
+      ...base,
+      oneShotArgv: [...base.oneShotArgv, argv],
+    });
+    // (d) the exact provision and version argvs pass (version already in `base`).
+    expect(version).toEqual(["al-runner.exe", "--version"]);
+    expect(cliDefaultMechanismFailures(withArgv(provision), ev, ALLOWED)).toEqual([]);
+    // (a) a real test run that also carries the sentinel as an element.
+    const realWithSentinel = withArgv([
+      "al-runner.exe",
+      "--output-json",
+      "--isolation",
+      "test",
+      "--test",
+      "Sandbox Tests.X",
+      AL_RUNNER_PROVISION_SENTINEL,
+      "--auto-provision",
+      "/tests",
+    ]);
+    expect(kinds(cliDefaultMechanismFailures(realWithSentinel, ev, ALLOWED))).toEqual(["server"]);
+    // (b) a whole-suite run (no --test) carrying the sentinel.
+    const suiteWithSentinel = withArgv([
+      "al-runner.exe",
+      "--output-json",
+      "--isolation",
+      "test",
+      AL_RUNNER_PROVISION_SENTINEL,
+      "/tests",
+    ]);
+    expect(kinds(cliDefaultMechanismFailures(suiteWithSentinel, ev, ALLOWED))).toEqual(["server"]);
+    // (c) the version probe of a different binary, ALONE: beside the real probe it would fail on
+    // the count instead, and pass whether or not the path is checked.
+    const otherVersion: SpawnRecord = {
+      ...record,
+      oneShotArgv: [...record.oneShotArgv, ["other-al-runner.exe", "--version"]],
+    };
+    expect(kinds(cliDefaultMechanismFailures(otherVersion, ev, ALLOWED))).toEqual(["server"]);
   });
 
   test("serverMode: false gives one-shot AND static, so both mechanism checks fail", async () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe", serverMode: false });
-    expect(kinds(cliDefaultMechanismFailures(record, ev))).toEqual(["resource", "server"]);
+    expect(kinds(cliDefaultMechanismFailures(record, ev, ALLOWED))).toEqual(["resource", "server"]);
     expect(record.serverArgv).toEqual([]);
     expect(record.oneShotArgv.filter((a) => a.includes("--test")).length).toBe(3);
   });
 
   test('explicit selectorMode: "static" with the server on fails ONLY the resource check', async () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe", selectorMode: "static" });
-    expect(kinds(cliDefaultMechanismFailures(record, ev))).toEqual(["resource"]);
+    expect(kinds(cliDefaultMechanismFailures(record, ev, ALLOWED))).toEqual(["resource"]);
   });
 
   test("explicit one-shot plus resource is honoured: ONLY the server check fails", async () => {
@@ -192,7 +237,7 @@ describe("R387: buildBackend's al-runner defaults", () => {
       serverMode: false,
       selectorMode: "resource",
     });
-    expect(kinds(cliDefaultMechanismFailures(record, ev))).toEqual(["server"]);
+    expect(kinds(cliDefaultMechanismFailures(record, ev, ALLOWED))).toEqual(["server"]);
   });
 
   test('coverage: "al-runner" reaches the backend', async () => {
@@ -206,6 +251,29 @@ describe("R387: buildBackend's al-runner defaults", () => {
       IDS,
     )) as AlRunnerBackend;
     expect(backend.capabilities().coverage).toBe("al-runner");
+  });
+});
+
+describe("R387: platformAppsAgreement reports the daemon's directory against leg A's", () => {
+  const legA = "C:\\x\\28.1.1.1\\platform-apps";
+  const said = (dir: string) => `[provision] platform apps already complete at ${dir}.\n`;
+  test("agree, including a different spelling of the same directory", () => {
+    expect(platformAppsAgreement(legA, said("C:/x/28.1.1.1/platform-apps/"))).toStartWith(
+      "platform apps: AGREE,",
+    );
+  });
+  test("differ", () => {
+    expect(platformAppsAgreement(legA, said("C:\\x\\28.1.2.2\\platform-apps"))).toBe(
+      `platform apps: DIFFER, leg A ${legA}, daemon C:\\x\\28.1.2.2\\platform-apps`,
+    );
+  });
+  test("not named: no sentence, or only a directory inferred from [bc] selected", () => {
+    const notNamed =
+      "platform apps: the daemon named no platform-app directory on stderr (a stated limit, not inferred)";
+    expect(platformAppsAgreement(legA, "[server] ready\n")).toBe(notNamed);
+    expect(platformAppsAgreement(legA, "[bc] selected BC 28.1.1.1 (C:\\x\\28.1.1.1)\n")).toBe(
+      notNamed,
+    );
   });
 });
 
