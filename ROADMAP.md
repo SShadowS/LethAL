@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**82 of 363 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**83 of 364 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -408,6 +408,7 @@ that ordering is the priority.
 - **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
+- **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · open, filed 2026-10-01
 
 ---
 
