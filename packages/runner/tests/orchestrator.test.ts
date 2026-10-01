@@ -402,7 +402,10 @@ async function makeProject(testAl: string = TEST_AL) {
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), testAl);
-  await Bun.write(join(testDir, "app.json"), '{"name":"Tests","publisher":"P","version":"1.0.0.0"}');
+  await Bun.write(
+    join(testDir, "app.json"),
+    '{"name":"Tests","publisher":"P","version":"1.0.0.0"}',
+  );
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -560,9 +563,7 @@ describe("runSession", () => {
     /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
       const app =
-        from !== undefined
-          ? appInputsOfPackage(from)
-          : await readAppJsonInputs(dirs.testDir);
+        from !== undefined ? appInputsOfPackage(from) : await readAppJsonInputs(dirs.testDir);
       return {
         dependencies: await dependencyFingerprint(
           app,

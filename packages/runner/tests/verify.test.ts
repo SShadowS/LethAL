@@ -1645,8 +1645,7 @@ describe("C02-09: gap ids", () => {
         : JSON.stringify(
             await testDigests(testDir, await discoverTests(testDir), {
               dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
-              buildInputs: (await readAppJsonInputs(testDir))
-                .buildInputs,
+              buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
             }),
           ),
       runId,

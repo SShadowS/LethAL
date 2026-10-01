@@ -73,6 +73,15 @@ import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot"
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
+import {
+  DependencyUnreadableError,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  packageFolderReader,
+  publishedPackageReader,
+  readAppJsonInputs,
+  targetOf,
+} from "./digest-inputs";
 import { discoverTests } from "./discovery";
 import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
@@ -122,15 +131,6 @@ import {
   publishedTestAppWarning,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
-import {
-  DependencyUnreadableError,
-  appInputsOfPackage,
-  dependencyFingerprint,
-  packageFolderReader,
-  publishedPackageReader,
-  readAppJsonInputs,
-  targetOf,
-} from "./digest-inputs";
 import { buildReport } from "./report";
 import type {
   DeclarativeSiteFile,
