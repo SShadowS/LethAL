@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 373 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 393 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -84,7 +84,7 @@ that ordering is the priority.
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
-- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, filed 2026-09-08, measured; WIDENED 2026-09-09, the same construct also LOSES sites, and that half was…
+- **R214** · Site enumeration ignores preprocessor directives, so a mutant can be planted in an `#if` branch the compiler never builds and can never be killed · [R214.md](docs/roadmap/R214.md) · open, narrowed 2026-10-01 (8a8a8ebe..959d7f20): no mutant in a compiled-out arm, undecidable files refused…
 - **R215** · `tree-sitter-al` shapes an enum's `Implementation` mapping as a comparison; LethAL's declarative guard already drops it, and this row records that rather than a defect · [R215.md](docs/roadmap/R215.md) · open, filed 2026-09-08, severity CORRECTED the same day: not a LethAL defect
 - **R218** · `census-operator-sites.ts` did not sort its file list, so the grammar-bump proof instrument produced spurious per-site diffs · [R218.md](docs/roadmap/R218.md) · done (see the 4.3.0 bump), filed and fixed 2026-09-09
 - **R223** · Every env-gated itest exits 0 when it skips, so a caller reading exit codes cannot tell a passed gate from one that never contacted BC · [R223.md](docs/roadmap/R223.md) · open, NARROWED twice: 2026-09-18 all seven live gates emit receipts and exit non-zero on a challenged skip…
@@ -109,7 +109,7 @@ that ordering is the priority.
 - **R279** · GH-24's reach latch may emit a second `var` section when a procedure's var section holds only comments (unmeasured) · [R279.md](docs/roadmap/R279.md) · open
 - **R281** · Skipping `OnDelete` can leave child rows that a later statement collides with, so R138's "writes less, cannot add an error" reasoning does not hold for shipped `Delete(true)` mutants (unmeasured) · [R281.md](docs/roadmap/R281.md) · open
 - **R284** · `asserterror Arr[1].Method(...)`: tree-sitter makes `[1].Method(...)` its own statement, and `void-method-call` plants a mutant on that fragment that leaves `asserterror Arr;` (compile unmeasured) · [R284.md](docs/roadmap/R284.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#26, upstream 209d038)
-- **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · open, filed 2026-09-27, measured by the issue #6 cross-check
+- **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · done (84f72d33) for its four inactive-arm mutants; the block-body empty-block loss stays open, see R304 and…
 - **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#27, upstream 551829e)
 - **R289** · itest:hang M0004 is sometimes not stopped (StopHungRunAt flake), second recurrence · [R289.md](docs/roadmap/R289.md) · closed 2026-09-28, ruling: not reproducible on a restarted server with a separate probe user; P1 3/3 PASS…
 - **R294** · `resolveVarRef` returns null for every member-expression receiver: `isMemberName` compares rebuilt wrapper nodes by reference · [R294.md](docs/roadmap/R294.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
@@ -137,19 +137,24 @@ that ordering is the priority.
 - **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29, reported upstream
 - **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
 - **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
+- **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · done (38a82a55)
+- **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
 - **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
 - **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
 - **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · done (33364019..b6ddf1b6)
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · done (1c20c306)
+- **R378** · Member-wide analyses (the write-transaction and hang tags) still read arms the build compiles out · [R378.md](docs/roadmap/R378.md) · open, filed 2026-10-01
 - **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
 - **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · done (7d6fc37b)
 - **R362** · A refused `BeginPublish` inside a lease hook warns `after-lease-acquired-uncertain`, which says there is no proof the server stopped · [R362.md](docs/roadmap/R362.md) · done (6e5eef0a)
+- **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · open, filed 2026-09-30
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · open, filed 2026-10-01
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
+- **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
 
 ## Product gaps a real project hits
 
@@ -251,7 +256,16 @@ that ordering is the priority.
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · open, filed 2026-09-29
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · open, filed 2026-09-29, priority low
+- **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · open, filed 2026-10-01
+- **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
+- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · open, filed 2026-10-01
+- **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
+- **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
+- **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30
+- **R368** · `split-call-statement`: a call statement whose first line is inside `#if` gets no `void-method-call` · [R368.md](docs/roadmap/R368.md) · open, filed 2026-09-30
+- **R369** · `cond-var-typing`: declarations inside a `var`-section `#if` are invisible to the semantic layer, and the tree can stretch that `#if` over whole members · [R369.md](docs/roadmap/R369.md) · open, filed 2026-09-30
+- **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · open, filed 2026-09-30
 - **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · done (ecf0f1d1, 4ee63129)
 - **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · open
 - **R384** · lethal verify sends every new test to every survivor, so a shared-helper edit on a large suite trips too-many-new-tests; a per-survivor reachability filter would bend that curve · [R384.md](docs/roadmap/R384.md) · open, filed 2026-10-01
@@ -409,10 +423,16 @@ that ordering is the priority.
 - **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · open, filed 2026-09-29
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
+- **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
+- **R393** · A unit test that times out can still finish later and write its snapshot under the NEXT test's name, so a plain `bun test` rewrites a tracked .snap file with a bogus entry · [R393.md](docs/roadmap/R393.md) · open, filed 2026-10-01
 - **R350** · `redact-campaign-report.ts --check` ignores the first-party allowlist, so the check CLAUDE.md mandates before committing a report exits 1 on both first-party sample reports · [R350.md](docs/roadmap/R350.md) · done (512715b1)
+- **R377** · al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25` and alc does not, so a `#if not CLEANSCHEMA<n>` arm is still generated and compiled out on al-runner · [R377.md](docs/roadmap/R377.md) · done (0a9ba1d7)
 - **R352** · al-runner 2.12.0 compiles a test against a dependency built under other --define symbols · [R352.md](docs/roadmap/R352.md) · open, filed 2026-09-30
+- **R392** · al-runner's predefined preprocessor symbols are a hard-coded list measured on v2.12.0; nothing checks a newer al-runner's list per session · [R392.md](docs/roadmap/R392.md) · open, filed 2026-10-01
+- **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · open, filed 2026-10-01
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
 - **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · done (64488c59)
+- **R382** · `scripts/r214-capture.ts` must be updated when R-307 lands: `writeInstrumentedProject` gains a required `identityOrdinals` · [R382.md](docs/roadmap/R382.md) · open, filed 2026-10-01
 - **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)

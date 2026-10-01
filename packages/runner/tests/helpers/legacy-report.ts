@@ -145,6 +145,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     // R144: legacy fixtures predate the declarative-site list and none of them describes a project
     // with a declarative surface, so an empty list is the honest conversion, not a default.
     declarativeSiteFiles: input.declarativeSites ?? [],
+    preprocExcludedFiles: [],
     excludedByOnly: input.only?.excludedFileCount ?? 0,
     excludedByExclude: 0,
     excludedByOperator: 0,
@@ -332,6 +333,7 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
 
   const statics: FoldStatics = {
     caps: input.caps,
+    buildSymbols: [],
     ...(input.only !== undefined ? { only: { patterns: input.only.patterns } } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.stopHungSessions === true ? { stopHungSessions: true } : {}),

@@ -28,20 +28,6 @@
     "errorClass": null
   },
   {
-    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1|2",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
     "key": "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Symbol Logic|Rate|lethal.remove-assignment|1",
     "verdict": "survived",
     "killingTest": null,
@@ -66,20 +52,6 @@
     "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1",
     "verdict": "killed",
     "killingTest": "RateSmall",
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1|1",
-    "verdict": "survived",
-    "killingTest": null,
-    "coverageFiltered": false,
-    "errorClass": null
-  },
-  {
-    "key": "c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|Symbol Logic|Rate|lethal.return-value|1|2",
-    "verdict": "survived",
-    "killingTest": null,
     "coverageFiltered": false,
     "errorClass": null
   },

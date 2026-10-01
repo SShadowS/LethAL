@@ -106,6 +106,45 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
     ).toThrow(/duplicate key/);
   });
 
+  test("R214: one key may be ruled on under two symbol sets, and each applies only in its own build", () => {
+    // The pre-committed SA key (r214-precommitment, "The baseline diff, by key"): L13 under
+    // [LETHALA] and L15 under [LETHALB] both carry it.
+    const KEY_SA =
+      "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1";
+    const parsed = parseEquivalenceMarks(
+      file([
+        { key: KEY_SA, reason: "L13", preprocessorSymbols: ["LETHALA"] },
+        { key: KEY_SA, reason: "L15", preprocessorSymbols: ["LETHALB"] },
+      ]),
+      "m.json",
+    );
+    expect(parsed).toHaveLength(2);
+    const mutant = (verdict: string) => [
+      { batchIndex: 0, mutantCode: "M0001", identity: KEY_SA, verdict },
+    ];
+    const a = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALA"]);
+    expect(a.matched.map((m) => m.reason)).toEqual(["L13"]);
+    expect(a.stale.map((m) => m.reason)).toEqual(["L15"]);
+    const b = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALB"]);
+    expect(b.matched.map((m) => m.reason)).toEqual(["L15"]);
+    expect(b.stale.map((m) => m.reason)).toEqual(["L13"]);
+  });
+
+  test("R214: the same key under the same set is refused, however the set is spelled", () => {
+    const dup = (a?: string[], b?: string[]) =>
+      parseEquivalenceMarks(
+        file([
+          { key: KEY_A, reason: "x", ...(a ? { preprocessorSymbols: a } : {}) },
+          { key: KEY_A, reason: "y", ...(b ? { preprocessorSymbols: b } : {}) },
+        ]),
+        "m.json",
+      );
+    expect(() => dup(["LETHALA"], ["LETHALA"])).toThrow(/duplicate key.*LETHALA/s);
+    expect(() => dup(["B", "A"], ["A", "B", "A"])).toThrow(/duplicate key.*A, B/s);
+    expect(() => dup(undefined, [])).toThrow(/duplicate key/);
+    expect(() => dup([], undefined)).toThrow(/duplicate key/);
+  });
+
   test("a missing `marks` array is refused, and so is a bare array file", () => {
     expect(() => parseEquivalenceMarks("{}", "m.json")).toThrow(/missing required "marks"/);
     expect(() => parseEquivalenceMarks("[]", "m.json")).toThrow(/expected an object/);
@@ -137,6 +176,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
       ],
       2,
+      [],
     );
     expect(r.matched).toEqual([]);
     expect(r.contradicted).toEqual([]);
@@ -151,6 +191,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
+      [],
     );
     expect(r.matched.map((m) => m.mutantCode)).toEqual(["M0001", "M0002"]);
     expect(r.stale).toEqual([]);
@@ -164,6 +205,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       marks,
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
       2,
+      [],
     );
     expect(r.stale.map((s) => s.key)).toEqual([KEY_B]);
   });
@@ -178,6 +220,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
+      [],
     );
     expect(r.contradicted).toEqual([
       {
@@ -197,6 +240,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       [marks[0] as EquivalenceMark],
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
       2,
+      [],
     );
     expect(r.matched).toHaveLength(1);
     expect(r.contradicted).toEqual([]);
@@ -209,6 +253,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       [marks[0] as EquivalenceMark],
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
       2,
+      [],
     );
     expect(r.contradicted.map((c) => c.verdict)).toEqual(["no-coverage"]);
   });

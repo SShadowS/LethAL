@@ -604,6 +604,7 @@ async function main(): Promise<void> {
           const runId = store.createRun({
             coverageMode: backend.capabilities().coverage,
             identityScheme: IDENTITY_SCHEME,
+            buildSymbols: [],
             projectPath: PROJECT_DIR,
             backend: "itest-verify-scale-restore",
             appVersion: "0.0.0.0",

@@ -102,6 +102,7 @@ function survivedReport(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
@@ -124,6 +125,7 @@ function survivedReport(
   return buildReport(
     {
       caps: { authoritative: true, coverage: "none", deploy: "publish", isolation: "session" },
+      buildSymbols: [],
       ...(marks !== undefined ? { equivalenceMarks: marks } : {}),
     },
     events.map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent),

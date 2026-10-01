@@ -385,6 +385,41 @@
             }
           }
         },
+        "preprocExcludedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites",
+              "reason",
+              "detail"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "compiled-out",
+                  "preproc-undecided"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "excludedByOnly": {
           "type": "number"
         },

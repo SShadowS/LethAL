@@ -39,6 +39,7 @@ function buildStore(): string {
       backend: "bcdev",
       appVersion: "1.0.0.0",
       identityScheme: 1,
+      buildSymbols: [],
       coverageMode: "procedure",
     });
   const ref = { codeunitId: 50100, codeunitName: "Logic Tests", method: "ClampWorks" };

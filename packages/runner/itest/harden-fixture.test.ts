@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import { IDENTITY_SCHEME, type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
-import { parseEquivalenceMarks } from "../src/equivalence-marks";
+import { applyEquivalenceMarks, parseEquivalenceMarks } from "../src/equivalence-marks";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -140,6 +140,21 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
     expect(hit.identityOrdinal ?? 0).toBe(0);
     expect(hit.triggerName).toBeUndefined();
     expect(hit.procedureName).toBe(s5.scope);
+    // R214: the mark still applies under the new scheme to the build the harden gate runs, which
+    // has no preprocessor symbols. A mark that went stale here would lose the planted equivalent.
+    const applied = applyEquivalenceMarks(
+      marks,
+      m.mutants.map((e) => ({
+        batchIndex: 0,
+        mutantCode: e.mutantId,
+        identity: serializeKey(identityKeyOf(e)),
+        verdict: "survived",
+      })),
+      IDENTITY_SCHEME,
+      [],
+    );
+    expect(applied.matched.map((x) => x.key)).toEqual([mark.key]);
+    expect(applied.stale).toEqual([]);
   });
 
   test("C02-03: only the planted equivalent's operator declares an equivalence risk", () => {

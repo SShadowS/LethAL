@@ -157,7 +157,9 @@ has the complete set.
 | `--max-new-tests` | `verify` |
 
 `lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
-`--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
+`--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
+optional there and changes the listing: al-runner predefines `CLEANSCHEMA1` to `CLEANSCHEMA25`,
+which alc does not, so it can build different `#if` arms (absent lists alc's build). The other
 exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,
 operator, deployed}]}], notInstrumented[{file, kinds, sites}]}`. `sites` counts raw mutation sites;
@@ -228,7 +230,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v8.schema.json](../schemas/explain-v8.schema.json)
+- `lethal explain`: [../schemas/explain-v9.schema.json](../schemas/explain-v9.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -274,7 +276,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 8`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 9`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`.
 
@@ -524,7 +526,7 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 4, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 5, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. To mark a survivor:
@@ -535,6 +537,15 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
    build's, and a mark written from it would be stale on the next run. Re-run under this build
    first, then take the key from the new report's explain.
+5. If the project's `app.json` or its config defines preprocessor symbols, set the mark's
+   `"preprocessorSymbols"` to that build's symbols (config plus `app.json`, for example
+   `"preprocessorSymbols": ["CLEAN27"]`). A mark without the field means `[]`: it applies only to
+   a build with no symbols. A key names a site within one build, so a mark made under other
+   symbols is reported stale and never applied (R214). A mark for an AL-RUNNER run must list the
+   run's whole effective set, which includes `CLEANSCHEMA1` to `CLEANSCHEMA25` even when the
+   project defines no symbols. Such a mark applies only to an al-runner build; a mark without them
+   applies only to a build with no symbols (for example bcdev), so one mark cannot cover both
+   backends. LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
 
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never

@@ -189,6 +189,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -223,6 +224,7 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: scheme,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",

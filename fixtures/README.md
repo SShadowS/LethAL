@@ -342,13 +342,16 @@ lost its defines would run, so it is compiled and pre-committed, but no gate leg
 Neither `app.json` defines a symbol: al-runner reads a bundle's own `app.json` symbols, which would
 define one on every transport.
 
-All three builds score 5 killed / 8 survived / 0 no-coverage over 13 mutants, and every pair of
-builds disagrees on 8 of the 13. Only a per-mutant comparison can tell them apart. The tables were
-pre-committed in `docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
+Since R214 each build scores 5 killed / 4 survived / 0 no-coverage over 9 mutants: the seven
+outside the `#if` arms plus its own arm's two. Two builds share seven rows and disagree on 4 of
+them, and each has two rows the others lack. Only a per-mutant comparison tells them apart. The
+tables were pre-committed in `docs/superpowers/specs/2026-09-29-r214-precommitment.md` ("R321, new
+tables"); the pre-R214 tables (5 / 8 / 0 over 13) are in
+`docs/superpowers/specs/2026-09-29-r321-symbol-fixture-precommitment.md`.
 
-Six of the 13 sit in `#if` arms, and any one build compiles out four of them (the R214 shape). The
-six assignment mutants outside the arms discriminate the builds without depending on that. When R214 is fixed, this
-gate needs a new pre-commitment and a re-freeze.
+The source has six mutant sites in `#if` arms, and LethAL no longer generates the other builds' arm
+mutants (R214). The six assignment mutants outside the arms discriminate the builds without
+depending on that.
 
 `.alpackages` is gitignored. Copy `Microsoft_*.app` from `sandbox-tests/.alpackages` into both
 projects, and `alc` the target into `sandbox-symbols-tests/.alpackages`, from current source, before
