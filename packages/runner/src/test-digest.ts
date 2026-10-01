@@ -102,10 +102,10 @@ function reachLines(st: ReachState): string[] {
  * (ruling 1), and an extension's triggers on a dependency's object fire from that dependency's
  * code, which the walk never sees.
  */
-function subscriberFold(
+export function subscriberFold(
   scanner: Scanner,
   model: TestAppModel,
-): { hash: string; fallback: string | undefined } {
+): { hash: string; fallback: string | undefined; reached: ReachState } {
   const st = newReachState();
   const lines: string[] = [];
   for (const u of model.units) {
@@ -124,7 +124,7 @@ function subscriberFold(
   const [damaged] = model.damaged;
   if (damaged !== undefined)
     st.fallback ??= `${damaged} has parse damage, which can hide a subscriber codeunit`;
-  return { hash: sha256(lines.sort().join("\n")), fallback: st.fallback };
+  return { hash: sha256(lines.sort().join("\n")), fallback: st.fallback, reached: st };
 }
 
 /** EVERY codeunit with the test's id and EVERY procedure of its name (all `#if` arms). */
@@ -152,7 +152,7 @@ function contextOf(model: TestAppModel): DigestContext {
 }
 
 /** Walks one test. Throws `TestDigestError` when the parser found no declaration for it. */
-function walkTest(ctx: DigestContext, model: TestAppModel, t: TestMethodRef): ReachState {
+export function walkTest(scanner: Scanner, model: TestAppModel, t: TestMethodRef): ReachState {
   const decls = declsOf(model, t);
   if (decls.length === 0) {
     throw new TestDigestError(
@@ -161,10 +161,10 @@ function walkTest(ctx: DigestContext, model: TestAppModel, t: TestMethodRef): Re
   }
   const st = newReachState();
   for (const d of decls) {
-    ctx.scanner.reach(d, st);
+    scanner.reach(d, st);
     // The test codeunit's own OnRun runs before every method: each method is its own
     // CODEUNIT.Run of the test codeunit (extensions/lethal-control RunMany.Codeunit.al).
-    for (const tr of d.unit.triggers) if (tr.name === "onrun") ctx.scanner.reach(tr, st);
+    for (const tr of d.unit.triggers) if (tr.name === "onrun") scanner.reach(tr, st);
   }
   return st;
 }
@@ -202,7 +202,7 @@ export function testDigestsOfModel(
   let n = 0;
   for (const t of tests) {
     if (++n % 1024 === 0) Bun.gc(false);
-    const st = walkTest(ctx, model, t);
+    const st = walkTest(ctx.scanner, model, t);
     const lines = reachLines(st);
     lines.push(`S ${ctx.subscribers.hash}`, `D ${inputs.dependencies}`, `B ${build}`);
     if (onFallback(ctx, st)) lines.push(`A ${ctx.app}`);
@@ -282,7 +282,7 @@ export function explainNewTests(
     else {
       const decls = declsOf(model, ref);
       for (const d of decls) testKeys.add(d.key);
-      const st = walkTest(ctx, model, ref);
+      const st = walkTest(ctx.scanner, model, ref);
       for (const p of st.procs)
         if (was.procs[p.key] !== short(p.spanHash))
           mine.add(decls.includes(p) ? "test" : "procedure");

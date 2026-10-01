@@ -178,6 +178,8 @@ type Site =
       readonly withRecv: readonly Recv[];
       /** R-371: the first argument's text, read only for `Codeunit::X` in an object run. */
       readonly arg0: string | undefined;
+      /** R-371: the arguments that can name a test-app object (`ArgFact`). */
+      readonly argFacts: readonly ArgFact[];
     }
   /** `receiver.member`, called or not; `recv` is the receiver's shape, a bare name when plain. */
   | {
@@ -187,7 +189,20 @@ type Site =
       readonly member: string;
       readonly args: number;
       readonly arg0: string | undefined;
+      readonly argFacts: readonly ArgFact[];
     };
+
+/**
+ * R-371: an argument that can name a test-app object, as plain facts: an object reference
+ * (`Report::"X"`, `Database::"T"`), a plain name (a variable, read against the caller's scope
+ * later), or `this`. Every other argument shape (a literal, an expression, a field) is dropped.
+ */
+type ArgFact =
+  | { readonly k: "ref"; readonly kind: string; readonly name: string }
+  | { readonly k: "name"; readonly name: string }
+  | { readonly k: "this" };
+
+const NO_ARGS: readonly ArgFact[] = Object.freeze([]);
 
 /**
  * A receiver expression as plain facts, enough to ask "which codeunit could this value be?"
@@ -690,21 +705,47 @@ function buildObjectUnit(
  * (`Codeunit::X`, which R-371's walk reads for an object run); `""` for any other first argument,
  * so no argument's text is kept that nothing reads.
  */
-function argInfo(call: ALSyntaxNode): { args: number; arg0: string | undefined } {
+function argInfo(call: ALSyntaxNode): {
+  args: number;
+  arg0: string | undefined;
+  argFacts: readonly ArgFact[];
+} {
   const list = call.namedChildren.find((c) => c.rawKind === "argument_list");
   const real = list === undefined ? [] : realChildren(list);
   const first = real[0];
+  let argFacts: ArgFact[] | undefined;
+  for (const a of real) {
+    let f: ArgFact | undefined;
+    if (a.rawKind === "database_reference") {
+      const m = /^\s*(\w+)\s*::\s*(.+?)\s*$/.exec(a.text);
+      if (m?.[1] !== undefined && m[2] !== undefined)
+        f = { k: "ref", kind: m[1].toLowerCase(), name: m[2] };
+    } else if (NAME_KINDS.has(a.rawKind) || a.rawKind === "keyword_identifier") {
+      f = a.text.toLowerCase() === "this" ? { k: "this" } : { k: "name", name: a.text };
+    }
+    if (f !== undefined) (argFacts ??= []).push(f);
+  }
   return {
     args: real.length,
     arg0:
-      first === undefined ? undefined : first.rawKind === "database_reference" ? first.text.trim() : "",
+      first === undefined
+        ? undefined
+        : first.rawKind === "database_reference"
+          ? first.text.trim()
+          : "",
+    argFacts: argFacts ?? NO_ARGS,
   };
 }
 
 /** The call sites under `block`, in the pre-order the traversal used to visit them live. */
 function callSites(block: ALSyntaxNode): Site[] {
   const out: Site[] = [];
-  const member = (m: ALSyntaxNode, args: number, arg0: string | undefined): void => {
+  const member = (
+    m: ALSyntaxNode,
+    args: number,
+    arg0: string | undefined,
+    argFacts: readonly ArgFact[],
+  ): void => {
     const [receiver, name] = realChildren(m);
     if (receiver === undefined || name === undefined) return;
     out.push({
@@ -714,19 +755,26 @@ function callSites(block: ALSyntaxNode): Site[] {
       member: name.text,
       args,
       arg0,
+      argFacts,
     });
   };
-  const bare = (n: ALSyntaxNode, name: string, args: number, arg0: string | undefined): void => {
+  const bare = (
+    n: ALSyntaxNode,
+    name: string,
+    args: number,
+    arg0: string | undefined,
+    argFacts: readonly ArgFact[],
+  ): void => {
     const withRecv = withTargets(n);
-    out.push({ kind: "bare", name, args, inWith: withRecv.length > 0, withRecv, arg0 });
+    out.push({ kind: "bare", name, args, inWith: withRecv.length > 0, withRecv, arg0, argFacts });
   };
   visit(block, (n) => {
     if (n.rawKind === "call_expression") {
       const fn = n.childForFieldName("function");
-      const { args, arg0 } = argInfo(n);
+      const { args, arg0, argFacts } = argInfo(n);
       if (fn === null) return;
-      if (NAME_KINDS.has(fn.rawKind)) bare(n, fn.text, args, arg0);
-      else if (fn.rawKind === "member_expression") member(fn, args, arg0);
+      if (NAME_KINDS.has(fn.rawKind)) bare(n, fn.text, args, arg0, argFacts);
+      else if (fn.rawKind === "member_expression") member(fn, args, arg0, argFacts);
       return;
     }
     if (n.rawKind === "member_expression") {
@@ -735,12 +783,12 @@ function callSites(block: ALSyntaxNode): Site[] {
         parent !== null &&
         parent.rawKind === "call_expression" &&
         parent.childForFieldName("function")?.startIndex === n.startIndex;
-      if (!isCallee) member(n, 0, undefined);
+      if (!isCallee) member(n, 0, undefined, NO_ARGS);
       return;
     }
     if (n.rawKind === "call_statement") {
       const id = nameNode(n);
-      if (id !== undefined) bare(n, id.text, 0, undefined);
+      if (id !== undefined) bare(n, id.text, 0, undefined, NO_ARGS);
     }
   });
   return out;
@@ -869,7 +917,9 @@ export class Scanner {
       if (!u.kind.endsWith("extension")) add(this.otherByBase, `${kind}:${u.id}`, u);
       for (const p of u.procs) this.procNames.add(p.name);
     }
-    this.tableUnits = model.objects.filter((u) => u.kind === "table" || u.kind === "tableextension");
+    this.tableUnits = model.objects.filter(
+      (u) => u.kind === "table" || u.kind === "tableextension",
+    );
     this.anyDamage = model.damaged.length > 0;
   }
 
@@ -1146,7 +1196,10 @@ export class Scanner {
     for (const k of kin) if (k !== u && this.reachCalls(k, rawName, args, st)) matched = true;
     if (matched) return true;
     if (kin.some((k) => k.procs.some((c) => c.name === name))) {
-      fallBack(st, `${u.display} calls ${rawName}, which its object declares at no arity that matches`);
+      fallBack(
+        st,
+        `${u.display} calls ${rawName}, which its object declares at no arity that matches`,
+      );
       return true;
     }
     return false;
@@ -1168,8 +1221,13 @@ export class Scanner {
     if (nn === "bindsubscription" || nn === "unbindsubscription") return;
     // A bare name its own object does not declare, outside any `with`, is a built-in function:
     // only a built-in compiles there. Not an edge. (A built-in such as `Modify` in a table's code
-    // can fire the object's own triggers, which `reach` walks on entering the object.)
-    if (site.withRecv.length === 0) return;
+    // can fire the object's own triggers, which `reach` walks on entering the object.) Unless it
+    // is handed a reference to a test-app object (`StartSession(Id, Codeunit::"X")`): the
+    // platform may run that object, which the walk does not follow.
+    if (site.withRecv.length === 0) {
+      this.passesTestApp(p, site.argFacts, true, site.name, st);
+      return;
+    }
     // Case 7 (I4): through every enclosing with-target's declared types; case 19 when unknown.
     const types: string[] = [];
     for (const r of site.withRecv) {
@@ -1184,7 +1242,7 @@ export class Scanner {
       }
       types.push(...t);
     }
-    for (const t of types) this.reachOn(t, "(with)", site.name, site.args, st);
+    for (const t of types) this.reachOn(t, "(with)", site.name, site.args, st, p, site.argFacts);
   }
 
   private reachMember(p: Proc, site: Extract<Site, { kind: "member" }>, st: ReachState): void {
@@ -1204,7 +1262,7 @@ export class Scanner {
         fallBack(st, `${p.display} calls ${receiver}.${member}, whose receiver's type is unknown`);
         return;
       }
-      for (const t of types) this.reachOn(t, receiver, member, args, st);
+      for (const t of types) this.reachOn(t, receiver, member, args, st, p, site.argFacts);
       return;
     }
     const key = this.norm(site.recv.name);
@@ -1217,9 +1275,11 @@ export class Scanner {
       // An undeclared root is a type or system name (the scan's rule). The only call edges from
       // one are object runs (cases 5, 9 and 11).
       if (RUN_ROOTS.has(key) && RUN_MEMBER.test(member)) {
-        this.objectRun(key, arg0, `${receiver}.${member}`, st);
+        this.objectRun(key, arg0, `${receiver}.${member}`, st, p, site.argFacts);
         return;
       }
+      // A system call handed a reference to a test-app object may run it (`TaskScheduler`).
+      this.passesTestApp(p, site.argFacts, true, `${receiver}.${member}`, st);
       // Outside a codeunit, AL declares names the walk may not type (`Rec` on a page extension, a
       // report extension's data items): a call on one that could run test-app code falls back.
       if (
@@ -1230,11 +1290,18 @@ export class Scanner {
         fallBack(st, `${p.display} calls ${receiver}.${member}, whose receiver's type is unknown`);
       return;
     }
-    for (const t of types) this.reachOn(t, receiver, member, args, st);
+    for (const t of types) this.reachOn(t, receiver, member, args, st, p, site.argFacts);
   }
 
   /** `Codeunit.Run(Codeunit::X)` and friends: by name, resolved; by id or variable, case 11. */
-  private objectRun(root: string, arg0: string | undefined, label: string, st: ReachState): void {
+  private objectRun(
+    root: string,
+    arg0: string | undefined,
+    label: string,
+    st: ReachState,
+    p: Proc,
+    argFacts: readonly ArgFact[],
+  ): void {
     const m =
       arg0 === undefined ? null : /^(codeunit|page|report|xmlport|query)\s*::\s*(.+)$/i.exec(arg0);
     const kind = m?.[1]?.toLowerCase();
@@ -1250,7 +1317,64 @@ export class Scanner {
         return;
       }
     } else if (this.testAppObject(kind, raw, "run", 0, label, st)) return;
-    this.outside(kind, raw, label, st);
+    this.outside(kind, raw, label, st, p, argFacts);
+  }
+
+  /**
+   * The ruling on arguments (R-371): a test-app object handed to code the walk does not follow
+   * (an EXTERNAL call, or a platform call) can have its code run there, unseen: a mock codeunit
+   * through an interface parameter, a record whose triggers the callee fires, a report the callee
+   * runs. Such a call is UNFOLLOWED. Read: an object reference to a test-app object; with
+   * `refsOnly` false also `this` and a variable whose declared type is a test-app codeunit,
+   * record, page or other object, or an Interface (its implementation may be a test-app
+   * codeunit, which is not known here). An extension's object is not counted: every
+   * test-app extension is in every digest already (`subscriberFold`).
+   */
+  private passesTestApp(
+    p: Proc,
+    facts: readonly ArgFact[],
+    refsOnly: boolean,
+    label: string,
+    st: ReachState,
+  ): void {
+    for (const f of facts) {
+      let what: string | undefined;
+      if (f.k === "ref") {
+        if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
+          what = `${f.kind}::${f.name}`;
+      } else if (refsOnly) continue;
+      else if (f.k === "this") what = "this";
+      else {
+        const key = this.norm(f.name);
+        const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
+        const held = types?.find((t) => this.holdsTestApp(t));
+        if (held !== undefined) what = `${f.name} (${held.trim()})`;
+      }
+      if (what !== undefined) {
+        fallBack(st, `${label} is handed ${what}, a test-app object, by ${p.display}`);
+        return;
+      }
+    }
+  }
+
+  /** Whether the test app itself declares (not only extends) the `kind` object `raw` names. */
+  private isTestAppObject(kind: string, raw: string): boolean {
+    if (kind === "codeunit") return this.unitsNamed(raw).length > 0;
+    return this.objectsNamed(kind, raw).some((u) => !u.kind.endsWith("extension"));
+  }
+
+  /** Whether a variable of declared type `rawType` can hold a test-app object. */
+  private holdsTestApp(rawType: string): boolean {
+    const type = ARRAY_OF.exec(rawType)?.[1] ?? rawType;
+    // ponytail: a Variant or RecordRef that holds a test-app object is not counted (the ruling
+    // names codeunits, records and object references). Counting them put every DC test on the
+    // fallback (194 Variant arguments); closing it needs the value's source, a data-flow walk.
+    if (/^\s*interface\b/i.test(type)) return true;
+    const m = OBJ_TYPE.exec(type);
+    const kw = m?.[1]?.toLowerCase();
+    const raw = m?.[2];
+    if (kw === undefined || raw === undefined) return false;
+    return this.isTestAppObject(KIND_OF[kw] ?? kw, raw);
   }
 
   /** Every test-app unit declaring or extending the `kind` object `raw` names, by name or id. */
@@ -1289,7 +1413,8 @@ export class Scanner {
     if (named.length > 0) {
       let matched = false;
       for (const u of named) if (this.reachCalls(u, member, args, st)) matched = true;
-      if (!matched) fallBack(st, `${label} names a procedure of ${kind} ${raw.trim()} at no arity it declares`);
+      if (!matched)
+        fallBack(st, `${label} names a procedure of ${kind} ${raw.trim()} at no arity it declares`);
       return us.some((u) => !u.kind.endsWith("extension"));
     }
     // Case 16: a call that can fire a trigger walks EVERY trigger of the object and of the test
@@ -1313,7 +1438,14 @@ export class Scanner {
    * declaration, or when the reference is not one plain name the resolver could check (an id, a
    * namespace-qualified name, any other shape): the orchestrator's condition on EXTERNAL.
    */
-  private outside(kind: string, raw: string, label: string, st: ReachState): void {
+  private outside(
+    kind: string,
+    raw: string,
+    label: string,
+    st: ReachState,
+    p?: Proc,
+    argFacts: readonly ArgFact[] = NO_ARGS,
+  ): void {
     if (this.anyDamage) {
       fallBack(
         st,
@@ -1324,7 +1456,7 @@ export class Scanner {
         st,
         `${label} names ${kind} ${raw.trim()}, which is not one plain name the test app's objects can be checked against`,
       );
-    }
+    } else if (p !== undefined) this.passesTestApp(p, argFacts, false, label, st);
   }
 
   private reachOn(
@@ -1333,6 +1465,8 @@ export class Scanner {
     member: string,
     args: number,
     st: ReachState,
+    p: Proc,
+    argFacts: readonly ArgFact[],
   ): void {
     const type = ARRAY_OF.exec(rawType)?.[1] ?? rawType;
     const nm = this.norm(member);
@@ -1352,7 +1486,8 @@ export class Scanner {
       // is not known statically, a test-app trigger can only be in one of those objects, and a
       // dependency's table is EXTERNAL through the dependency fingerprint.
       if (RECORD_TRIGGER.has(nm)) {
-        for (const u of this.tableUnits) if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
+        for (const u of this.tableUnits)
+          if (u.baseKey !== undefined) this.enterObject(u.baseKey, st);
       }
       return;
     }
@@ -1370,11 +1505,11 @@ export class Scanner {
         }
         return;
       }
-      this.outside("codeunit", raw, label, st);
+      this.outside("codeunit", raw, label, st, p, argFacts);
       return;
     }
     if (this.testAppObject(kind, raw, member, args, label, st)) return;
-    this.outside(kind, raw, label, st);
+    this.outside(kind, raw, label, st, p, argFacts);
   }
 
   /**

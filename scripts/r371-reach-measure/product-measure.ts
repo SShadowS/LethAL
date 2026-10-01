@@ -9,14 +9,14 @@
 //   object): tests that reach the object, or every test when a subscriber reaches it or it is a
 //   subscriber codeunit, plus every fallback test.
 // Prints counts only, never AL source (this repo is PUBLIC).
-import { initParser, normalizeAlName } from "../../packages/engine/src/index";
+import { initParser } from "../../packages/engine/src/index";
 import { discoverTests } from "../../packages/runner/src/discovery";
+import { subscriberFold, walkTest } from "../../packages/runner/src/test-digest";
 import {
   type Proc,
   Scanner,
   type Unit,
   buildTestAppModel,
-  newReachState,
   readTestAppSources,
 } from "../../packages/runner/src/testpage-scan";
 
@@ -28,24 +28,21 @@ const tests = await discoverTests(dir);
 const model = buildTestAppModel(await readTestAppSources(dir));
 const scanner = new Scanner(model);
 
-const closure = newReachState();
-for (const u of model.units)
-  if (u.subscriber) for (const p of [...u.procs, ...u.triggers]) scanner.reach(p, closure);
-const closureFallback = closure.fallback !== undefined;
+// The product's own fold (subscribers, extension objects, the parse-damage rule) and per-test walk.
+const fold = subscriberFold(scanner, model);
+const closure = fold.reached;
+const closureFallback = fold.fallback !== undefined;
 
 const procCount = new Map<Proc, number>();
 const unitCount = new Map<Unit, number>();
 let fallback = 0;
 const why = new Map<string, number>();
 for (const t of tests) {
-  const st = newReachState();
-  for (const u of model.units.filter((x) => x.id === t.codeunitId))
-    for (const p of u.procs.filter((x) => x.name === normalizeAlName(t.method)))
-      scanner.reach(p, st);
+  const st = walkTest(scanner, model, t);
   if (closureFallback || st.fallback !== undefined) {
     fallback += 1;
     const kind = (st.fallback ?? "closure").replace(
-      /^.*? (calls|runs|names|dispatches|is called|may run|on a|inside|is not in|does not parse|handler)\b.*$/,
+      /^.*? (calls|runs|names|dispatches|is called|may run|on a|inside|is not in|does not parse|handler|is handed|has parse damage)\b.*$/,
       "$1",
     );
     why.set(kind, (why.get(kind) ?? 0) + 1);
@@ -59,10 +56,10 @@ const all = [...model.units, ...model.objects];
 const procN: number[] = [];
 const objN: number[] = [];
 for (const u of all) {
-  const everyTest = u.subscriber || closure.units.has(u);
+  const everyTest = u.subscriber || u.kind.endsWith("extension") || closure.units.has(u);
   objN.push(everyTest ? T : Math.min(T, (unitCount.get(u) ?? 0) + fallback));
   for (const p of [...u.procs, ...u.triggers]) {
-    const inClosure = closure.procs.has(p) || u.subscriber;
+    const inClosure = closure.procs.has(p) || u.subscriber || u.kind.endsWith("extension");
     // Another object's parts are its whole text: a procedure edit there is an object edit.
     const reached = u.kind === "codeunit" ? (procCount.get(p) ?? 0) : (unitCount.get(u) ?? 0);
     procN.push(inClosure ? T : Math.min(T, reached + fallback));
@@ -87,5 +84,5 @@ console.log(
   `  object edit (${objN.length}): p50 ${pct(objN, 0.5)}, p90 ${pct(objN, 0.9)}, max ${Math.max(...objN)}, P(N>50) ${over(objN)}`,
 );
 console.log(
-  `  subscriber closure: ${closure.procs.size} procedures, ${closure.units.size} objects`,
+  `  subscriber closure: ${closure.procs.size} procedures, ${closure.units.size} objects; its fallback: ${fold.fallback ?? "none"}`,
 );

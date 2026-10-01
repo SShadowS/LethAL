@@ -356,6 +356,42 @@ codeunit 50120 "Sub"
     expect(digestA(unrelated(files))).toBe(digestA(files));
   });
 
+  // The ruling on arguments: a test-app object handed to an EXTERNAL call can have its code run
+  // there, which the walk cannot see, so the call is UNFOLLOWED.
+  describe("a test-app object passed to an EXTERNAL call takes the fallback", () => {
+    const REP = 'report 50170 "Test Rep"\n{\n    dataset\n    {\n    }\n}\n';
+    const callExt = (vars: string, call: string) =>
+      base(
+        T(
+          `    procedure A()\n    var\n        ExtLib: Codeunit "Dep Lib";\n${vars}    begin\n        ${call}\n    end;\n`,
+        ),
+        { "Rep.al": REP, "TT.al": TABLE("") },
+      );
+    const onFallback = (files: Files) => digestA(unrelated(files)) !== digestA(files);
+
+    test("(b) a test-app codeunit variable, such as a mock behind an interface parameter", () => {
+      expect(onFallback(callExt('        Mock: Codeunit "Lib";\n', "ExtLib.Process(Mock);"))).toBe(
+        true,
+      );
+    });
+
+    test('(c) an object reference to a test-app object, Report::"Test Rep"', () => {
+      expect(onFallback(callExt("", 'ExtLib.RunReport(Report::"Test Rep");'))).toBe(true);
+    });
+
+    test("(d) a record of a test-app table", () => {
+      expect(onFallback(callExt('        R: Record "TT";\n', "ExtLib.InsertRec(R);"))).toBe(true);
+    });
+
+    test("negative: only literals and a dependency's record take no fallback", () => {
+      const files = callExt(
+        '        SH: Record "Sales Header";\n',
+        "ExtLib.InsertRec(SH, 1, 'x', Database::\"Sales Header\");",
+      );
+      expect(onFallback(files)).toBe(false);
+    });
+  });
+
   test("negative: an unreached codeunit's globals are not in the digest", () => {
     const files = base(callsLib);
     expect(digestA(edit(files, "Other.al", "OG: Integer;", "OG: Decimal;"))).toBe(digestA(files));
