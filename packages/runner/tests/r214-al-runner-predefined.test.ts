@@ -407,11 +407,21 @@ describe("R392: runSession measures al-runner's predefined symbols", () => {
         return realFingerprint(input);
       });
       const store = new ResultsStore(":memory:");
+      // The probe waits on a promise this test releases, so "finished first" does not rest on a timer.
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let started: () => void = () => {};
+      const probeStarted = new Promise<void>((r) => {
+        started = r;
+      });
       try {
-        await session(root, store, false, {
+        const running = session(root, store, false, {
           backend: new StubBackend(false, async () => {
             order.push("probe:start");
-            await new Promise((r) => setTimeout(r, 50));
+            started();
+            await gate;
             order.push("probe:end");
             return { symbols: [...CLEANSCHEMA_1_TO_25] };
           }),
@@ -421,7 +431,15 @@ describe("R392: runSession measures al-runner's predefined symbols", () => {
             },
           ],
         });
+        await probeStarted;
+        // Let everything that is not waiting on the probe run. A fire-and-forget probe would have
+        // reached effectiveBuildSymbols by now.
+        for (let i = 0; i < 200; i++) await new Promise((r) => setImmediate(r));
+        expect(order.some((o) => o.startsWith("effectiveBuildSymbols"))).toBe(false);
+        release();
+        await running;
       } finally {
+        release();
         effective.mockRestore();
         fingerprint.mockRestore();
         store.close();

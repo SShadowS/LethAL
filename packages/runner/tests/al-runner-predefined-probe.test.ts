@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { AlRunnerBackend } from "../src/al-runner-backend";
@@ -9,6 +9,7 @@ import {
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
 } from "../src/al-runner-predefined-probe";
+import { OneShotTransport } from "../src/al-runner-transport";
 import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 import {
   probeFailed as failed,
@@ -141,6 +142,25 @@ describe("probeAlRunnerPredefinedSymbols (R392)", () => {
     expect(calls).toHaveLength(1);
     expect(argv[0]).toBe("C:/tools/al-runner.exe");
     expect(argv[argv.indexOf("--package-cache") + 1]).toBe("C:/pin");
+  });
+
+  test("text before and after the mask, and CRLF line endings, are accepted (a decision)", async () => {
+    const mask = maskFor(V2_12).replace(/ /g, "\r\n");
+    const { spawn } = fakeSpawn(failed(`Assertion failed\r\nR392 says: ${mask} trailing text\r\n`));
+    const probe = await probeAlRunnerPredefinedSymbols("al-runner", { spawn });
+    expect([...probe.symbols]).toEqual([...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort());
+  });
+
+  test("the transport is closed even when send throws", async () => {
+    const send = spyOn(OneShotTransport.prototype, "send").mockRejectedValue(new Error("boom"));
+    const close = spyOn(OneShotTransport.prototype, "close");
+    try {
+      await expect(probeAlRunnerPredefinedSymbols("al-runner")).rejects.toThrow("boom");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      send.mockRestore();
+      close.mockRestore();
+    }
   });
 
   test("a refusal carries al-runner's output tail", async () => {

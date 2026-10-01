@@ -197,15 +197,19 @@ export async function probeAlRunnerPredefinedSymbols(
   try {
     const { sourceDir, testDir } = await writePredefinedProbeProject(root);
     const transport = new OneShotTransport(alRunnerPath, opts.spawn ?? defaultSpawn);
-    const res = await transport.send({
-      sourceDir,
-      testDir,
-      qualifiedTest: AL_RUNNER_PREDEFINED_PROBE_TEST,
-      testTimeoutSeconds: PROBE_TEST_TIMEOUT_SECONDS,
-      deadlineMs: PROBE_DEADLINE_MS,
-      ...(opts.platformAppsDir !== undefined ? { platformAppsDir: opts.platformAppsDir } : {}),
-    });
-    await transport.close();
+    let res: Awaited<ReturnType<OneShotTransport["send"]>>;
+    try {
+      res = await transport.send({
+        sourceDir,
+        testDir,
+        qualifiedTest: AL_RUNNER_PREDEFINED_PROBE_TEST,
+        testTimeoutSeconds: PROBE_TEST_TIMEOUT_SECONDS,
+        deadlineMs: PROBE_DEADLINE_MS,
+        ...(opts.platformAppsDir !== undefined ? { platformAppsDir: opts.platformAppsDir } : {}),
+      });
+    } finally {
+      await transport.close();
+    }
     if (res.kind === "deadline") {
       throw new AlRunnerPredefinedProbeError(
         `the probe did not finish within ${PROBE_DEADLINE_MS} ms`,

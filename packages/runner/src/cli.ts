@@ -929,7 +929,7 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
-  --dry-run                  list what would be mutated; execute nothing. Reports both the raw
+  --dry-run                  list what would be mutated; execute no tests. Reports both the raw
                              mutation-site count and the DEPLOYED count (they differ), plus this
                              server's measured publish bracket. It never creates a results database;
                              when one already exists AND the config names a bcdev server to look the
@@ -939,9 +939,11 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              sites, deployed}], batches[{index, sites[{file, line, operator,
                              deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
                              execution flag (--tests, --workers ...) is refused with
-                             --dry-run, because a dry run executes nothing. --backend is
-                             optional: al-runner predefines CLEANSCHEMA1..25, so it can change
-                             which #if arms are listed (absent lists alc's build)
+                             --dry-run, because a dry run executes no tests. --backend is
+                             optional. With --backend al-runner a dry run runs al-runner ONCE to
+                             measure the preprocessor symbols it predefines (R392), needs
+                             alRunner.alRunnerPath in the config and refuses without it, and lists
+                             the #if arms for the MEASURED set (absent lists alc's build)
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard

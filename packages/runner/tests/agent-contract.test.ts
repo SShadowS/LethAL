@@ -646,7 +646,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
 
   test("the dry-run paragraph names flags dry-run really refuses, and --out it really reads", () => {
     const own = flowed(ownText(read(REFERENCE), "Which subcommand reads which flag (checked)"));
-    const para = own.slice(own.indexOf("`lethal run --dry-run` executes nothing"));
+    const para = own.slice(own.indexOf("`lethal run --dry-run` executes no tests"));
     const bare = ["run", "--project", "P", "--dry-run"];
     const flags = ticks(para)
       .filter(
