@@ -48,6 +48,7 @@ import type {
   TestOutcome,
   TestVerdict,
 } from "./backend";
+import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { defaultSpawn } from "./publisher";
 import type { SpawnFn } from "./publisher";
 
@@ -770,6 +771,20 @@ export class AlRunnerBackend implements ExecutionBackend {
     // rather than with whatever this helper would say about the same broken file.
     if (this.selectorMode() === "resource") {
       await this.installResourceSelector(activeDir, artifactId);
+    }
+    // R-307 section 4: with coverage on, the index is built HERE, before any baseline, rather than
+    // lazily after the first test, so the manifest's objects are checked against its parsed
+    // declarations first. A holds by construction (map and `declared` come from one parse) and is
+    // checked anyway; B is exempt only for the index's own refused and multi-object files.
+    if ((this.cfg.coverage ?? "none") !== "none") {
+      const index = await buildAlRunnerCoverageIndex(activeDir);
+      this.coverageIndex = index;
+      assertManifestObjectsDeclared(
+        await readManifestObjectKeys(activeDir),
+        index.declared,
+        index.lineMap.mappedKeys(),
+        index.exempt,
+      );
     }
     // In-memory backend: nothing is compiled or published, so there is no artifact to
     // describe — the orchestrator records provenance only for publishing backends.

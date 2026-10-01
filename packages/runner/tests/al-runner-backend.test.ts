@@ -307,6 +307,73 @@ ${"    // pad\n".repeat(pad)}    procedure Reached()
   });
 });
 
+// R-307 section 4 (e). With coverage on, deploy() builds the index EAGERLY and checks the manifest's
+// objects against its parsed declarations, so an undeclared one throws before the baseline's first
+// al-runner invocation. The spawn counter is the phase-order evidence: a lazy build would only run
+// after that invocation, which the counter would show as 1.
+describe("AlRunnerBackend.deploy: manifest objects against parsed declarations (R-307)", () => {
+  async function deployThenBaseline(codeunitIds: readonly number[]) {
+    const dir = scratch("lethal-r307-alrunner-batch-");
+    await writeFile(
+      join(dir, "One.Codeunit.al"),
+      'codeunit 79150 "Probe One"\n{\n    procedure Reached()\n    begin\n        exit;\n    end;\n}\n',
+      "utf8",
+    );
+    await writeFile(join(dir, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(dir, "mutant-manifest.json"),
+      JSON.stringify({
+        artifactId: "a".repeat(32),
+        mutants: codeunitIds.map((codeunitId) => ({ objectType: "codeunit", codeunitId })),
+      }),
+      "utf8",
+    );
+    const { calls, spawn } = okSpawn({
+      tests: [{ name: QUALIFIED, status: "pass", durationMs: 1 }],
+      passed: 1,
+      failed: 0,
+      errors: 0,
+      total: 1,
+      exitCode: 0,
+    });
+    const backend = new AlRunnerBackend(
+      {
+        alRunnerPath: "al-runner",
+        instrumentedDir: scratch("lethal-r307-alrunner-work-"),
+        testDir: "/tests",
+        selectorObjectId: 50000,
+        coverage: "al-runner",
+      },
+      spawn,
+    );
+    let err: unknown;
+    try {
+      // The orchestrator's order: deploy, then the baseline run.
+      await backend.deploy(dir);
+      await backend.run(ref, { coverage: "none", timeoutMs: 5000 });
+    } catch (e) {
+      err = e;
+    }
+    await backend.close();
+    return { err, invocations: calls.length };
+  }
+
+  test("an undeclared manifest object throws at deploy, before any baseline invocation", async () => {
+    const { err, invocations } = await deployThenBaseline([79150, 79160]);
+    // First, so a lazy build fails on the ORDER: the baseline's invocation already happened.
+    expect(invocations).toBe(0);
+    expect((err as Error | undefined)?.message).toBe(
+      "a mutant is attributed to codeunit:79160, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.",
+    );
+  });
+
+  test("control: a declared one deploys and the baseline runs once", async () => {
+    const { err, invocations } = await deployThenBaseline([79150]);
+    expect(err).toBeUndefined();
+    expect(invocations).toBe(1);
+  });
+});
+
 describe("AlRunnerBackend.compileCheck", () => {
   // al-runner has no publish step of its own — deploy() is already just a local file copy, and
   // the actual `alc` invocation happens lazily inside run(), per test. So bisection's

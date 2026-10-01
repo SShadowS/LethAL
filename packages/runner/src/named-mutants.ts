@@ -3,7 +3,7 @@ import { InstalledArtifactError } from "./artifact";
 import type { BoundArtifact, TestMethodRef } from "./backend";
 import { describeThrown } from "./describe-error";
 import { openInstalledBundle } from "./installed-bundle";
-import { renamedMemberNamesOf } from "./line-map";
+import { manifestObjectKeys, renamedMemberNamesOf } from "./line-map";
 import { testKeyOf } from "./selection";
 import { PRUNED_BY_ENV_TEARDOWN, type ResultsStore } from "./store";
 
@@ -156,6 +156,7 @@ export async function loadInstalledArtifact(
       appJsonText: stored.appJsonText,
       alSources: stored.alSources,
       renamedMemberNames: renamedMemberNamesOf(manifest.mutants),
+      manifestObjectKeys: manifestObjectKeys(manifest.mutants),
     },
     manifest,
   };

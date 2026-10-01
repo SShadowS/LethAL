@@ -131,6 +131,14 @@ export interface AlRunnerCoverageIndex {
    * declared set, or `multiObjectFiles`.
    */
   readonly refusedFiles: readonly string[];
+  /** R-307 section 4: the parsed declarations, `type:id` lower-cased: Direction B's `declared`. */
+  readonly declared: ReadonlySet<string>;
+  /**
+   * R-307 section 4: every object of `refusedFiles` (`refusedObjectsOfFile`, so exactly
+   * `coverageRefusedObjects` over this bundle) and of `multiObjectFiles` (upstream #3713):
+   * Direction B's exemption.
+   */
+  readonly exempt: ReadonlySet<string>;
 }
 
 /**
@@ -186,6 +194,7 @@ export async function buildAlRunnerCoverageIndex(
   const refusedFiles: string[] = [];
   const entries = [];
   const declared = new Set<string>();
+  const exempt = new Set<string>();
 
   for (const rel of rels) {
     const source = await readFile(join(instrumentedDir, rel), "utf8");
@@ -193,7 +202,8 @@ export async function buildAlRunnerCoverageIndex(
     if (fileHoldsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
-      for (const reason of refusedObjectsOfFile(root, file).values()) {
+      for (const [key, reason] of refusedObjectsOfFile(root, file)) {
+        exempt.add(key);
         console.warn(`[lethal] ${reason}`);
       }
       continue;
@@ -203,6 +213,7 @@ export async function buildAlRunnerCoverageIndex(
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
       multiObjectFiles.push(normalizeSlashes(rel));
+      for (const o of objects) exempt.add(`${o.objectType.toLowerCase()}:${o.objectId}`);
       continue;
     }
     const only = objects[0];
@@ -221,6 +232,8 @@ export async function buildAlRunnerCoverageIndex(
     lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir)),
     multiObjectFiles,
     refusedFiles,
+    declared,
+    exempt,
   };
 }
 
