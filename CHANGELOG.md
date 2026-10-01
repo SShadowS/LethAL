@@ -52,6 +52,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 5** (R214): keys can move in any object that holds a `#if`. A mutant in an arm
+  the build's preprocessor symbols compile out is no longer generated, a file whose directives
+  LethAL cannot evaluate as alc does is not mutated at all, and a statement directly inside a
+  statement-level `#if` is now a mutation site, so twin mutants renumber. Runs now record their
+  effective preprocessor symbols (config plus `app.json`), and history, resume and equivalence
+  marks apply only within the same set. Existing marks files need `"identityScheme": 5` after
+  re-checking each mark against a fresh report, and a mark for a project whose `app.json` or config
+  defines symbols needs `"preprocessorSymbols"` naming them. History and resume from older-scheme
+  runs are refused by name (R325). Removing a site can still renumber a twin in another file, and a
+  changed `#if` is one more way to do that, see R391. An al-runner run's set also includes the
+  `CLEANSCHEMA1` to `CLEANSCHEMA25` that al-runner predefines (measured on 2.12.0, R377), so an
+  al-runner run and a bcdev run of one project share no history; `run --dry-run` takes `--backend`.
+  A mark for an al-runner run must list that whole set (the 25 symbols plus any the project
+  defines); a mark without them covers only a build with no symbols, so one mark cannot cover both
+  backends, and LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
@@ -61,7 +76,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   files need `"identityScheme": 3` after re-checking each mark against a fresh report. History and
   resume from scheme-2 runs are refused by name (R325).
 - **Existing `lethal.equivalent.json` files need an `"identityScheme"` field** (R325), set to the
-  report's own `identityScheme` (4 since R318, see above). Identity keys now
+  report's own `identityScheme` (the current scheme, see above). Identity keys now
   carry a scheme version, because an engine change can renumber twin mutants and hand an old key to
   a different mutant with the source unchanged. A marks file without the field is read as scheme 1,
   so every mark in it is reported stale (warning `equivalence-marks-identity-scheme`) and none is

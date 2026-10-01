@@ -12,8 +12,22 @@
  */
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
+/** R214: a file whose sites the build's preprocessor symbols decided. `detail` is the effective
+ *  symbols for `compiled-out` and the reason code for `preproc-undecided`; never source text. */
+export interface PreprocExcludedFile {
+  readonly file: string;
+  readonly kinds: string;
+  readonly sites: number;
+  readonly reason: "compiled-out" | "preproc-undecided";
+  readonly detail: string;
+}
+
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
-export type ExclusionReason = "not-instrumentable" | "declarative";
+export type ExclusionReason =
+  | "not-instrumentable"
+  | "declarative"
+  | "compiled-out"
+  | "preproc-undecided";
 
 export interface ExcludedSiteFile {
   readonly file: string;
@@ -27,13 +41,16 @@ export interface ExcludedSiteFile {
    *    a file whose specs are entirely filtered away leaves the list altogether, because
    *    `generateMutationSet`'s `if (fileSpecs.length === 0) continue;` precedes its
    *    `canCarryMutationSelectorVar` check.
+   *  - `compiled-out` (R214) counts RAW specs, before validation, dedup and the operator or line
+   *    filters.
    *
    * Changing either is a separate decision with its own live-gate consequences.
    */
   readonly sites: number;
   readonly reason: ExclusionReason;
   /**
-   * Free-text detail for reasons that have one. Neither current reason does.
+   * Free-text detail for reasons that have one. R214's two reasons carry one: the effective
+   * symbols, or a reason code. Neither is source text.
    *
    * MUST NEVER carry target source (no `originalText`, no snippet of the excluded site's AL):
    * `scripts/redact-campaign-report.ts` redacts only `originalText`/`mutatedText` inside
@@ -60,6 +77,7 @@ export interface ExcludedSites {
 export function buildExcludedSites(input: {
   readonly skipped: readonly NotInstrumentedFile[];
   readonly declarative: readonly DeclarativeSiteFile[];
+  readonly preproc: readonly PreprocExcludedFile[];
   readonly totalFiles: number;
 }): ExcludedSites {
   // Mapped explicitly, field by field — never `{ ...f, reason }` — so a field later added to
@@ -79,6 +97,13 @@ export function buildExcludedSites(input: {
       kinds: f.kinds,
       sites: f.sites,
       reason: "declarative" as const,
+    })),
+    ...input.preproc.map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: f.reason,
+      detail: f.detail,
     })),
   ];
   return {

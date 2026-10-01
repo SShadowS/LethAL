@@ -1,0 +1,8 @@
+{
+  "id": "5088fd4a-4326-47c5-9d0b-210918dd0b7e",
+  "name": "P",
+  "publisher": "p",
+  "version": "1.0.0.0",
+  "idRanges": [{ "from": 50000, "to": 50100 }],
+  "runtime": "16.0"
+}

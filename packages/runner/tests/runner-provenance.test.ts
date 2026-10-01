@@ -220,6 +220,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -245,6 +246,7 @@ describe("ResultsStore runner provenance (R69 Phase 2 Task 5)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -302,6 +304,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
         projectPath: "/p",
         backend: "bcdev",
         appVersion: "1",
@@ -329,6 +332,7 @@ CREATE TABLE IF NOT EXISTS mutants (
       const runId = store.createRun({
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
         projectPath: "/p",
         backend: "bcdev",
         appVersion: "1",

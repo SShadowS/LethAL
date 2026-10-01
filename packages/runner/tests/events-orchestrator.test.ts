@@ -66,6 +66,7 @@ function driveRecordOverFakeStore(emit: RunEmitter): readonly MutantManifestEntr
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -119,6 +120,7 @@ function driveOneCarriedRecord(emit: RunEmitter): void {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -215,6 +217,7 @@ describe("emitted mutant events agree with recorded outcomes", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
         projectPath: "/p",
         backend: "bcdev",
         appVersion: "1.0.0.0",

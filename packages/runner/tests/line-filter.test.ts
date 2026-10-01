@@ -269,6 +269,7 @@ describe("the report and the fingerprint", () => {
           instrumentableFiles: 1,
           notInstrumentedFiles: [],
           declarativeSiteFiles: [],
+          preprocExcludedFiles: [],
           excludedByOnly: 0,
           excludedByExclude: 0,
           excludedByOperator: 0,
@@ -279,13 +280,17 @@ describe("the report and the fingerprint", () => {
       ] as RunEventInput[]
     ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
     const r = buildReport(
-      { caps: CAPS, lines: { ranges: [{ file: FILE, start: 5, end: 5 }] } },
+      { caps: CAPS, buildSymbols: [], lines: { ranges: [{ file: FILE, start: 5, end: 5 }] } },
       events,
     );
     expect(r.lines !== undefined && "changedSince" in r.lines).toBe(false);
     // GH-25: the source rides the statics into the report unchanged.
     const sourced = buildReport(
-      { caps: CAPS, lines: { ranges: [{ file: FILE, start: 5, end: 5 }], changedSince: SRC } },
+      {
+        caps: CAPS,
+        buildSymbols: [],
+        lines: { ranges: [{ file: FILE, start: 5, end: 5 }], changedSince: SRC },
+      },
       events,
     );
     expect(sourced.lines).toEqual({
@@ -297,7 +302,7 @@ describe("the report and the fingerprint", () => {
     expect(r.validity.reliability).toBe("narrowed");
     expect(r.lines).toEqual({ ranges: [{ file: FILE, start: 5, end: 5 }], excludedSiteCount: 7 });
     expect(renderConsole(r)).toContain(`NARROWED (lines): ${FILE}:5-5`);
-    const plain = buildReport({ caps: CAPS }, events);
+    const plain = buildReport({ caps: CAPS, buildSymbols: [] }, events);
     expect(plain.validity.caveats).not.toContain("line-narrowed");
     expect(plain.lines).toBeUndefined();
   });

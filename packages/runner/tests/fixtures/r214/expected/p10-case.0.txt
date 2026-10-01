@@ -1,0 +1,4 @@
+raw 3 deployed 3 skippedFiles 0
+CaseSym.Codeunit.al:4	lethal.empty-block	proc=Run	hang=-	d69dbe3bf92f2ccea936a1ff41213b6ea55814de79a8ee2a4932d599253dd745|P10 Case|Run|lethal.empty-block|1	62-138	grain=statement	plat=-
+CaseSym.Codeunit.al:8	lethal.swap-additive	proc=Run	hang=-	7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|P10 Case|Run|lethal.swap-additive|1	116-121	grain=statement	plat=-
+CaseSym.Codeunit.al:8	lethal.void-method-call	proc=Run	hang=-	c1df5a953a5ac98f0c6db13e4197e04ce1c178b0483e4253cf03c724af9d57e5|P10 Case|Run|lethal.void-method-call|1	109-122	grain=statement	plat=-

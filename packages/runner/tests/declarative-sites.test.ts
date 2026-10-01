@@ -154,6 +154,7 @@ describe("generateMutationSet — declarative sites are counted, not just warned
 
 const STATICS: FoldStatics = {
   caps: { authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
+  buildSymbols: [],
 };
 
 function foldWith(
@@ -169,6 +170,7 @@ function foldWith(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles,
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,

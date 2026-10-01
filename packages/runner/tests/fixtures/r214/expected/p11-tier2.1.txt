@@ -1,0 +1,8 @@
+raw 9 deployed 7 skippedFiles 0
+T2.Codeunit.al:6	lethal.empty-block	proc=Run	hang=-	86be0f6f81a57f4181f5be98e3b7b4f5ef488f18f13a136557e30e80d2da8e4c|P11 Ops|Run|lethal.empty-block|1	101-328	grain=statement	plat=-
+T2.Codeunit.al:7	lethal.void-method-call	proc=Run	hang=-	21b9d09e6b335a9ea96efe2e73caa285daff8086160ab3e20da1f26d24269d6f|P11 Ops|Run|lethal.void-method-call|1	115-125	grain=statement	plat=-
+T2.Codeunit.al:8	lethal.remove-assignment	proc=Run	hang=-	7052aa07f68059f9f96cf877243b0092ae5ffc0fd6ce937d65d34c466b9ed5f5|P11 Ops|Run|lethal.remove-assignment|1	135-148	grain=statement	plat=-
+T2.Codeunit.al:9	lethal.void-method-call	proc=Run	hang=-	4dccf5b80cf87be0431db6bae9612c9151fb6ab4e7837321fa3e0a3da23d0d13|P11 Ops|Run|lethal.void-method-call|1	158-170	grain=statement	plat=-
+T2.Codeunit.al:10	lethal.remove-commit	proc=Run	hang=-	2c803bfacb04b831e6e6f26b4d200a42bad5b7cdb0014239df7d51bbeeb65aad|P11 Ops|Run|lethal.remove-commit|1	180-188	grain=statement	plat=-
+T2.Codeunit.al:12	lethal.remove-setrange	proc=Run	hang=-	2e821ee40319483c2f98a63dec7173245c4b6530d33ff195266e1d190ff97472|P11 Ops|Run|lethal.remove-setrange|1	208-229	grain=statement	plat=-
+T2.Codeunit.al:13	lethal.void-method-call	proc=Run	hang=-	af5e05e493b1e18d5246ef602f85ebc1d4a2ffcde6818ba091d874213b2d4cd6|P11 Ops|Run|lethal.void-method-call|1	239-258	grain=statement	plat=-

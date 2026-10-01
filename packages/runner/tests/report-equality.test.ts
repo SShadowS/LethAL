@@ -68,6 +68,7 @@ function mutant(mutantId: string): MutantManifestEntry {
 function buildScenarioReport(): SessionReport {
   const statics: FoldStatics = {
     caps: { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true },
+    buildSymbols: [],
     only: {
       patterns: [
         "Al/Codeunit/Codeunit 50100 Sales Helper.al",
@@ -92,6 +93,7 @@ function buildScenarioReport(): SessionReport {
       excludedByExclude: 0,
       excludedByOperator: 0,
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       notInstrumentedFiles: [
         {
           file: "Al/Page/Page 50120 Sales Approval Card.al",

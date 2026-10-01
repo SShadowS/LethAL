@@ -341,6 +341,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "hangCapableCount": 0,
         "instrumentableFiles": 2,
         "notInstrumentedFiles": [],
+        "preprocExcludedFiles": [],
         "seq": 9,
         "siteCount": 6,
         "totalFiles": 2,

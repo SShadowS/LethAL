@@ -1,0 +1,5 @@
+raw 4 deployed 4 skippedFiles 0
+Slot.Codeunit.al:4	lethal.empty-block	proc=Run	hang=-	935063d8c36f268a6b5b5732770160a3b5b29913562a91eefbb010b582a51109|P8 Slot|Run|lethal.empty-block|1	61-202	grain=statement	plat=-
+Slot.Codeunit.al:5	lethal.conditional-boundary	proc=Run	hang=-	9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|P8 Slot|Run|lethal.conditional-boundary|1	78-83	grain=statement	plat=-
+Slot.Codeunit.al:12	lethal.swap-additive	proc=Run	hang=-	eef6d8e81fd4fed479dc4d361b5659773e7bc7701c4979e492d5698229e30863|P8 Slot|Run|lethal.swap-additive|1	187-192	grain=statement	plat=-
+Slot.Codeunit.al:12	lethal.void-method-call	proc=Run	hang=-	43ce36a04a9e2b2d4f03ba4bdb33a9471efbb76f149839540e526fa5c85a9093|P8 Slot|Run|lethal.void-method-call|1	180-193	grain=statement	plat=-

@@ -19,6 +19,7 @@ import { TESTPAGE_REFUSED_DIAGNOSIS, testPageNotRunMessage } from "../src/testpa
 
 const STATICS: FoldStatics = {
   caps: { authoritative: true, coverage: "procedure", deploy: "publish", isolation: "session" },
+  buildSymbols: [],
 };
 
 function seq(events: readonly RunEventInput[]): RunEvent[] {
@@ -58,6 +59,7 @@ function baseEvents(): RunEventInput[] {
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
@@ -109,6 +111,7 @@ function buildWithBaseline(
       instrumentableFiles: 1,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
@@ -161,6 +164,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -187,6 +191,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -211,6 +216,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 0,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -235,6 +241,7 @@ describe("foldEvents — mandatory events, throwing rather than defaulting", () 
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -278,6 +285,7 @@ describe("foldEvents — R54, a carried verdict never reaches the mutant clock",
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -345,6 +353,7 @@ describe("foldEvents — R106, an absent coverage-split is not a measured zero",
     instrumentableFiles: 1,
     notInstrumentedFiles: [],
     declarativeSiteFiles: [],
+    preprocExcludedFiles: [],
     excludedByOnly: 0,
     excludedByExclude: 0,
     excludedByOperator: 0,
@@ -414,6 +423,7 @@ describe("foldEvents — R86, a kill's own account of why it died", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -464,6 +474,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -501,6 +512,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -553,6 +565,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -588,6 +601,7 @@ describe("foldEvents — batch-invalidated rewrites history", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -622,6 +636,7 @@ describe("foldEvents — the R35 kill-confirmation path (not just baseline class
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -658,6 +673,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 1,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 4,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -684,6 +700,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 5,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 891,
@@ -711,6 +728,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 5,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 891,
@@ -732,6 +750,7 @@ describe("foldEvents — statics reunited with learned facts", () => {
         instrumentableFiles: 2,
         notInstrumentedFiles: [],
         declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
@@ -761,6 +780,7 @@ describe("foldEvents: C02-02, artifacts[] names every published batch's identity
       instrumentableFiles: 2,
       notInstrumentedFiles: [],
       declarativeSiteFiles: [],
+      preprocExcludedFiles: [],
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
@@ -1034,5 +1054,30 @@ describe("foldEvents, R231: unplaceable mutants are qualified by batch", () => {
     expect(folded.unplaceableMutants).toEqual(["0/M0001", "1/M0001"]);
     expect(folded.unplaceableMutants.length).toBe(folded.unplaceableCount);
     expect(folded.unplaceableCount).toBe(2);
+  });
+});
+
+describe("foldEvents — a stream written before R214", () => {
+  test("a mutation-set-generated line WITHOUT preprocExcludedFiles folds to no preproc rows and no caveat", () => {
+    const events = seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 1,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+    const report = buildReport(STATICS, events);
+    expect(report.excludedSites?.files ?? []).toEqual([]);
+    expect(report.validity.caveats).not.toContain("preproc-files-refused");
   });
 });
