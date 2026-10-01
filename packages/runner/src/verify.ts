@@ -7,6 +7,13 @@ import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
+import {
+  DependencyUnreadableError,
+  dependencyFingerprint,
+  publishedPackageReader,
+  readAppJsonInputs,
+  targetOf,
+} from "./digest-inputs";
 import { discoverTests } from "./discovery";
 import {
   type EquivalenceMark,
@@ -40,13 +47,6 @@ import {
   TestAppError,
   type TestAppRefusal,
 } from "./test-app-publish";
-import {
-  DependencyUnreadableError,
-  dependencyFingerprint,
-  publishedPackageReader,
-  readAppJsonInputs,
-  targetOf,
-} from "./digest-inputs";
 import {
   type NewTestCause,
   TEST_DIGEST_SCHEME,
@@ -751,6 +751,27 @@ export async function planVerify(a: {
     );
   }
 
+  // R-371 (external review r1 #5): a source run records a digest for every test or for none, so
+  // an empty map or one that misses a baseline test is not a run this build recorded.
+  const undigested = sourceBaseline.filter(
+    (r) =>
+      sourceTestDigests[testDigestKey({ codeunitId: r.codeunitId, method: r.method })] ===
+      undefined,
+  );
+  if (Object.keys(sourceTestDigests).length === 0 || undigested.length > 0) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${source.runId} recorded test digests for ${Object.keys(sourceTestDigests).length} test(s) but none for ${undigested.length} of its ${sourceBaseline.length} baseline test(s)${
+        undigested.length > 0
+          ? ` (${undigested
+              .slice(0, 5)
+              .map((r) => `${r.codeunitId}::${r.method}`)
+              .join(", ")})`
+          : ""
+      }, so an edited test cannot be told from an unchanged one; run lethal run again, then verify`,
+    );
+  }
+
   // R-371: a digest of another scheme covers other things, so no comparison with it means
   // anything. The test is on the values, not a column: every digest of one run has one scheme.
   if (Object.values(sourceTestDigests).some((d) => !isCurrentDigest(d))) {
@@ -812,7 +833,14 @@ export async function planVerify(a: {
     );
     throw new VerifyError(
       "too-many-new-tests",
-      tooManyNewTestsDetail(source, running.length, newTests.length, maxNewTests, causes, changedProcs),
+      tooManyNewTestsDetail(
+        source,
+        running.length,
+        newTests.length,
+        maxNewTests,
+        causes,
+        changedProcs,
+      ),
     );
   }
 
@@ -902,7 +930,8 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
   added: "added or renamed tests",
   test: "the test's own method edited",
   procedure: "a procedure it reaches edited",
-  object: "an object it reaches edited outside its procedures (header, properties, globals, triggers)",
+  object:
+    "an object it reaches edited outside its procedures (header, properties, globals, triggers)",
   subscriber:
     "a subscriber codeunit edited (every subscriber is in every test's digest, so every test is new)",
   fallback:
@@ -926,7 +955,8 @@ function tooManyNewTestsDetail(
     .map(([c, k]) => `${c}: ${k} test(s), ${CAUSE_WORDS[c]}`)
     .join("; ");
   const shown = changedProcs.slice(0, 5);
-  const more = changedProcs.length > shown.length ? ` and ${changedProcs.length - shown.length} more` : "";
+  const more =
+    changedProcs.length > shown.length ? ` and ${changedProcs.length - shown.length} more` : "";
   const helpers = shown.length > 0 ? ` Changed procedures: ${shown.join(", ")}${more}.` : "";
   return `${n} tests are new or edited since run ${source.runId}, above --max-new-tests ${max}. Each runs twice unmutated and joins every survivor's request, about ${survivors * n + 2 * n} extra test runs for ${survivors} survivor(s). Edit classes: ${why}.${helpers} To run them all, pass --max-new-tests ${n}; or run lethal run again so this source is the recorded one`;
 }

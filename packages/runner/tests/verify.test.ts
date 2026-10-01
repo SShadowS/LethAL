@@ -590,6 +590,10 @@ describe("planVerify", () => {
     a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests" | "dependencies">,
   ): Promise<VerifyPlan> {
     const recorded = await testDigests(a.testDir, await discoverTests(a.testDir), INPUTS);
+    // A source run records a digest for every test it ran (or none): a baseline test that is gone
+    // from the project now still had one then.
+    for (const r of a.sourceBaseline)
+      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??= `v2:${"0".repeat(64)}`;
     return planVerify({ ...a, sourceTestDigests: recorded, dependencies: DEPS });
   }
 
@@ -741,19 +745,27 @@ describe("planVerify", () => {
   });
 
   // A non-NULL map that lacks a discovered test's key must never read as "unchanged".
-  test("R-278: a baseline test with no recorded digest in a non-NULL map is new", async () => {
+  // External review r1 #5 (R-371): a run records a digest for every test or for none, so a map
+  // that misses a baseline test, or an empty one, is not a run this build recorded. Before R-371
+  // the missing test was read as new; it is now refused, which is the stricter reading.
+  test("R-371: a baseline test with no recorded digest in a non-NULL map is source-predates-verify", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
     const recorded = await recordedOver(codeunits);
     const { "50100::k": _dropped, ...withoutK } = recorded;
-    const plan = await planVerify({
-      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
-      manifest: manifest([entry("M0001")]),
-      sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
-      sourceTestDigests: withoutK,
-      dependencies: DEPS,
-      testDir: testDir(codeunits),
-    });
-    expect(keys(plan.newTests)).toEqual(["50100::K"]);
+    for (const map of [withoutK, {}]) {
+      const e = await planRefusal(
+        planVerify({
+          source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+          manifest: manifest([entry("M0001")]),
+          sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
+          sourceTestDigests: map,
+          dependencies: DEPS,
+          testDir: testDir(codeunits),
+        }),
+      );
+      expect(e.reason).toBe("source-predates-verify");
+      expect(e.detail).toContain("50100::K");
+    }
   });
 
   test("R-278: an unchanged test in the source baseline is not new", async () => {
