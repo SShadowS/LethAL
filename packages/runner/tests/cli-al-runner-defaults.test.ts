@@ -9,19 +9,21 @@ import {
   watchResourceSelector,
 } from "../itest/cli-default-leg";
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
+import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
   buildBackend,
   effectiveAlRunnerTransport,
   prepareAlRunnerSession,
+  runFromCli,
   validateAlRunnerConfig,
   withAlRunnerCoverageGuard,
 } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { fakeAlRunnerServer } from "./helpers/fake-al-runner-server";
-import { scratchDirs } from "./helpers/scratch";
+import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 /**
  * R387: `buildBackend` gives an al-runner run `--server` and the resource selector by default.
@@ -30,6 +32,8 @@ import { scratchDirs } from "./helpers/scratch";
  * own mechanism failure here.
  */
 const scratch = scratchDirs();
+// runFromCli keeps its `lethal-XXXXXX` scratch folder when the run throws, as the tests below make it.
+removeRunScratchAfterAll();
 const IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const TEST = { name: "Codeunit79100.A", status: "pass" };
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "A" };
@@ -400,5 +404,83 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     await expect(
       prepareAlRunnerSession({ alRunner: { alRunnerPath: "a", typo: 1 } as never }, "unused"),
     ).rejects.toThrow(/unknown key\(s\): typo/);
+  });
+});
+
+/**
+ * R387 review: the guard must run on the REAL entry point. `buildBackend` passes `coverage` straight
+ * through, so a `runFromCli` that skipped `prepareAlRunnerSession` would hand al-runner's coverage a
+ * project it cannot describe. Everything that would spawn al-runner is injected.
+ */
+describe("R387: runFromCli applies the coverage guard before any backend is built", () => {
+  const CANARY: AlRunnerCanaryResult = {
+    asserterror: "defect-not-reproduced",
+    tableGlobalVar: "defect-not-reproduced",
+    transactionRollback: "defect-not-reproduced",
+  };
+
+  async function coverageReachingBuild(files: Record<string, string>): Promise<{
+    readonly coverage: string | undefined;
+    readonly warnings: readonly string[];
+  }> {
+    const projectDir = await alProject(files);
+    const configPath = join(projectDir, "lethal.config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({ alRunner: { alRunnerPath: "C:/al-runner.exe", coverage: "al-runner" } }),
+      "utf8",
+    );
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir: projectDir,
+      backendKind: "al-runner",
+      dbPath: ":memory:",
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    let coverage: string | undefined;
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    let warnings: string[] = [];
+    try {
+      await expect(
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          runAlRunnerContractProbe: async () => ({
+            facts: [],
+            measuredProvisioning: "auto-provision",
+            bannerOnStdout: true,
+          }),
+          runAlRunnerCanary: async () => CANARY,
+          buildBackend: async (_p, configFile) => {
+            coverage = configFile.alRunner?.coverage;
+            throw new Error("stop before a real backend build");
+          },
+        }),
+      ).rejects.toThrow("stop before a real backend build");
+      warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    return { coverage, warnings };
+  }
+
+  test("a multi-object file reaches buildBackend with coverage none, and the named warning prints", async () => {
+    const { coverage, warnings } = await coverageReachingBuild({ "Two.Codeunit.al": TWO_OBJECTS });
+    expect(coverage).toBe("none");
+    const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
+    expect(guard).toHaveLength(1);
+    expect(guard[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("an #if-wrapped object reaches buildBackend with coverage none, and the named warning prints", async () => {
+    const { coverage, warnings } = await coverageReachingBuild({ "B.Codeunit.al": TWO_ARM });
+    expect(coverage).toBe("none");
+    const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
+    expect(guard).toHaveLength(1);
+    expect(guard[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
   });
 });
