@@ -59,6 +59,13 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+import {
+  appInputsOfAppJson,
+  appInputsOfPackage,
+  dependencyFingerprint,
+  readAppJsonInputs,
+  targetOf,
+} from "../src/digest-inputs";
 import { discoverTests } from "../src/discovery";
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
@@ -100,17 +107,16 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
-import {
-  appInputsOfAppJson,
-  appInputsOfPackage,
-  dependencyFingerprint,
-  readAppJsonInputs,
-  targetOf,
-} from "../src/digest-inputs";
 import { testDigestsOfSources } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
-import { type VerifyDeps, VerifyError, planVerify, runVerify } from "../src/verify";
+import {
+  type VerifyDeps,
+  VerifyError,
+  planVerify,
+  runVerify,
+  verifyDependencyFingerprint,
+} from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -540,7 +546,11 @@ describe("runSession", () => {
     };
 
     async function r372Run(
-      read: Uint8Array | null | undefined,
+      read:
+        | Uint8Array
+        | null
+        | undefined
+        | ((app: { readonly name: string }) => Promise<Uint8Array | null | undefined>),
       extra: Partial<SessionConfig> = {},
       fetch = true,
     ) {
@@ -550,7 +560,9 @@ describe("runSession", () => {
         "IsOverBudget",
       ]);
       const backend = fetch
-        ? Object.assign(stub, { fetchPublishedAppPackage: async () => read })
+        ? Object.assign(stub, {
+            fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
+          })
         : stub;
       const store = new ResultsStore(":memory:");
       const events: RunEvent[] = [];
@@ -681,6 +693,111 @@ describe("runSession", () => {
       );
       expect(digestWarning).toEqual([]);
       store.close();
+    });
+
+    // R-371: a non-Microsoft dependency is fingerprinted by the bytes of the package the server
+    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify.
+    describe("R-371: a non-Microsoft dependency of the published test app", () => {
+      const DEP_ID = "55555555-5555-5555-5555-555555555555";
+      const DEP = { id: DEP_ID, name: "Dep Lib", publisher: "Partner", version: "1.0.0.0" };
+      const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+      // Published body = disk body, so only the dependency can make K new.
+      const TESTS_PKG = new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+          "src/SandboxTests.Codeunit.al": NEW_AL,
+        }),
+      );
+      const depPkg = (build: string) =>
+        new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" Version="1.0.0.0" /></Package>`,
+            "src/Dep.al": `// build ${build}`,
+          }),
+        );
+      const serverWith = (dep: Uint8Array | null) => async (app: { readonly name: string }) =>
+        app.name === DEP.name ? dep : TESTS_PKG;
+
+      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
+      async function newAtVerify(
+        r: Awaited<ReturnType<typeof r372Run>>,
+        dep: Uint8Array,
+      ): Promise<string[]> {
+        const { dirs, store, runId } = r;
+        const recorded = store.testDigests(runId);
+        const plan = await planVerify({
+          source: {
+            runId,
+            projectPath: dirs.projectDir,
+            artifactSha256: "0".repeat(64),
+            sourceSha256: "5".repeat(64),
+            installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+            identityScheme: IDENTITY_SCHEME,
+            coverageMode: "procedure",
+            targets: [
+              {
+                batchIndex: 0,
+                mutantCode: "M0001",
+                coveringTests: [`${K.codeunitName}.${K.method}`],
+              },
+            ],
+          },
+          manifest: {
+            selectorIds,
+            artifactId: "a".repeat(32),
+            mutants: [
+              {
+                mutantId: "M0001",
+                file: "SandboxLogic.Codeunit.al",
+                startIndex: 10,
+                endIndex: 20,
+                startLine: 3,
+                operatorName: "lethal.negate-conditional",
+                operatorVersion: "1.0.0",
+                astHash: "hash-M0001",
+                objectType: "codeunit",
+                codeunitId: 79000,
+                codeunitName: "Sandbox Logic",
+                procedureName: "IsOverBudget",
+                originalText: "a",
+                mutatedText: "b",
+              },
+            ],
+          },
+          sourceBaseline: store.baselineTests(runId),
+          sourceTestDigests: recorded,
+          testDir: dirs.testDir,
+          dependencies: await verifyDependencyFingerprint(
+            { fetchPublishedAppPackage: serverWith(dep) },
+            dirs.testDir,
+            dirs.projectDir,
+          ),
+        });
+        return plan.newTests.map((t) => t.method);
+      }
+
+      test("the same package at verify reads K as unchanged; a rebuild at the same version reads it as new", async () => {
+        const r = await r372Run(serverWith(depPkg("one")));
+        expect(r.digestWarning).toEqual([]);
+        expect(r.store.testDigests(r.runId)).not.toBeNull();
+        // verify reads the dependency list from the test project's app.json.
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP] }),
+        );
+        expect(await newAtVerify(r, depPkg("one"))).toEqual([]);
+        expect(await newAtVerify(r, depPkg("two"))).toEqual([K.method]);
+        r.store.close();
+      });
+
+      test("an unreadable dependency package records NULL digests and says why", async () => {
+        const { store, runId, digestWarning } = await r372Run(serverWith(null));
+        expect(store.testDigests(runId)).toBeNull();
+        expect(digestWarning).toHaveLength(1);
+        expect(digestWarning[0]).toContain("dependencies could not be fingerprinted");
+        expect(digestWarning[0]).toContain("Dep Lib");
+        store.close();
+      });
     });
   });
 
