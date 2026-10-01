@@ -1241,7 +1241,8 @@ export class Scanner {
     // is handed a reference to a test-app object (`StartSession(Id, Codeunit::"X")`): the
     // platform may run that object, which the walk does not follow.
     if (site.withRecv.length === 0) {
-      const ran = nn === "startsession" ? this.runById(site.argFacts, site.args, [1], site.name, st) : NO_RUN;
+      const ran =
+        nn === "startsession" ? this.runById(site.argFacts, site.args, [1], site.name, st) : NO_RUN;
       this.passesTestApp(p, site.argFacts, true, site.name, st, ran);
       return;
     }
@@ -1298,7 +1299,9 @@ export class Scanner {
       // A system call handed a reference to a test-app object may run it (`TaskScheduler`).
       const at = RUN_BY_ID[`${key}.${nm}`];
       const ran =
-        at === undefined ? NO_RUN : this.runById(site.argFacts, args, at, `${receiver}.${member}`, st);
+        at === undefined
+          ? NO_RUN
+          : this.runById(site.argFacts, args, at, `${receiver}.${member}`, st);
       this.passesTestApp(p, site.argFacts, true, `${receiver}.${member}`, st, ran);
       // Outside a codeunit, AL declares names the walk may not type (`Rec` on a page extension, a
       // report extension's data items): a call on one that could run test-app code falls back.
