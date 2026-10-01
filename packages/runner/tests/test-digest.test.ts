@@ -199,6 +199,16 @@ ${procs}}
     expectReached(files, "Lib.al", "G := 2;", "G := 3;");
   });
 
+  test("the test codeunit's own OnRun, which runs before every method", () => {
+    const files = base(
+      T(
+        "    procedure A()\n    begin\n    end;\n",
+        '\n    var\n        L: Codeunit "Lib";\n\n    trigger OnRun()\n    begin\n        L.Help();\n    end;\n',
+      ),
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
   test("a reached codeunit's globals, header properties and triggers", () => {
     const files = base(callsLib);
     expectReached(files, "Lib.al", "G: Integer;", "G: Decimal;");

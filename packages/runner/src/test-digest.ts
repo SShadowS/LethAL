@@ -146,7 +146,12 @@ function walkTest(ctx: DigestContext, model: TestAppModel, t: TestMethodRef): Re
     );
   }
   const st = newReachState();
-  for (const d of decls) ctx.scanner.reach(d, st);
+  for (const d of decls) {
+    ctx.scanner.reach(d, st);
+    // The test codeunit's own OnRun runs before every method: each method is its own
+    // CODEUNIT.Run of the test codeunit (extensions/lethal-control RunMany.Codeunit.al).
+    for (const tr of d.unit.triggers) if (tr.name === "onrun") ctx.scanner.reach(tr, st);
+  }
   return st;
 }
 
