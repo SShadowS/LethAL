@@ -82,3 +82,234 @@ describe("R-278: testDigestsOfSources", () => {
     ).toThrow(/found no procedure of that name/);
   });
 });
+
+// R-371 M6: each edge kind as the ONLY path from the test to the edited code. Every case also
+// edits an unreached codeunit ("Other") and expects NO change, so a test that took the
+// whole-source fallback (where any edit changes the digest) cannot pass any case here.
+describe("R-371: the reachable-set digest", () => {
+  const T = (body: string, extra = "") =>
+    `codeunit 50100 "T"\n{\n    Subtype = Test;\n\n    [Test]\n${body}\n${extra}}\n`;
+  const LIB = `codeunit 50110 "Lib"
+{
+    SingleInstance = false;
+
+    var
+        G: Integer;
+
+    trigger OnRun()
+    begin
+        G := 1;
+        Help();
+    end;
+
+    procedure Help()
+    begin
+        G := 2;
+    end;
+}
+`;
+  const OTHER = `codeunit 50199 "Other"
+{
+    var
+        OG: Integer;
+
+    procedure Z()
+    begin
+        OG := 1;
+    end;
+}
+`;
+  const TABLE = (trigger: string, procs = "") => `table 50130 "TT"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+${trigger}
+${procs}}
+`;
+  type Files = Record<string, string>;
+  const base = (test: string, more: Files = {}): Files => ({
+    "T.al": test,
+    "Lib.al": LIB,
+    "Other.al": OTHER,
+    ...more,
+  });
+  function digestA(files: Files): string | undefined {
+    const list = Object.entries(files).map(([path, text]) => ({ path, text }));
+    const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
+    return testDigestsOfSources(list, tests, I)["50100::a"];
+  }
+  /** `files` with one exact substring of one file replaced; throws when it is not there. */
+  function edit(files: Files, path: string, from: string, to: string): Files {
+    const text = files[path];
+    if (text === undefined || !text.includes(from)) throw new Error(`${from} not in ${path}`);
+    return { ...files, [path]: text.replace(from, to) };
+  }
+  const unrelated = (files: Files) => edit(files, "Other.al", "OG := 1;", "OG := 9;");
+  /** The edit turns A new, and an unreached edit does not (A is not on the fallback). */
+  function expectReached(files: Files, path: string, from: string, to: string): void {
+    const was = digestA(files);
+    expect(was).toMatch(/^v2:/);
+    expect(digestA(edit(files, path, from, to))).not.toBe(was);
+    expect(digestA(unrelated(files))).toBe(was);
+  }
+  const callsLib = T(
+    '    procedure A()\n    var\n        L: Codeunit "Lib";\n    begin\n        L.Help();\n    end;\n',
+  );
+
+  test("a same-codeunit helper", () => {
+    const files = base(
+      T(
+        "    procedure A()\n    begin\n        Helper();\n    end;\n",
+        "\n    local procedure Helper()\n    begin\n        X := 1;\n    end;\n",
+      ),
+    );
+    expectReached(files, "T.al", "X := 1;", "X := 2;");
+  });
+
+  test("a helper in another test-app codeunit", () => {
+    expectReached(base(callsLib), "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  test("a [HandlerFunctions] handler", () => {
+    const files = base(
+      T(
+        "    [HandlerFunctions('ConfirmYes')]\n    procedure A()\n    begin\n    end;\n",
+        "\n    [ConfirmHandler]\n    procedure ConfirmYes(Question: Text[1024]; var Reply: Boolean)\n    begin\n        Reply := true;\n    end;\n",
+      ),
+    );
+    expectReached(files, "T.al", "Reply := true;", "Reply := false;");
+  });
+
+  test("a bare call inside a with-statement, resolved through the target's declared type", () => {
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        L: Codeunit "Lib";\n    begin\n        with L do\n            Help();\n    end;\n',
+      ),
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  test("Codeunit.Run(Codeunit::X) walks X's OnRun", () => {
+    const files = base(
+      T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Lib");\n    end;\n'),
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  test("a reached codeunit's globals, header properties and triggers", () => {
+    const files = base(callsLib);
+    expectReached(files, "Lib.al", "G: Integer;", "G: Decimal;");
+    expectReached(files, "Lib.al", "SingleInstance = false;", "SingleInstance = true;");
+    expectReached(files, "Lib.al", "G := 1;", "G := 7;"); // OnRun: never called, still covered
+  });
+
+  test("an event-subscriber codeunit is in every digest", () => {
+    const sub = `codeunit 50120 "Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Lib", 'OnSomething', '', false, false)]
+    local procedure OnSomething()
+    begin
+        S := 1;
+    end;
+}
+`;
+    const files = base(T("    procedure A()\n    begin\n    end;\n"), { "Sub.al": sub });
+    expectReached(files, "Sub.al", "S := 1;", "S := 2;");
+  });
+
+  // Ruling 1: BindSubscription is NOT an edge, which is safe only because every subscriber
+  // codeunit, a manual one included, is in every digest.
+  test("ruling 1: a manual subscriber bound by BindSubscription is covered, and the bind takes no fallback", () => {
+    const sub = `codeunit 50121 "Manual Sub"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Lib", 'OnSomething', '', false, false)]
+    local procedure OnSomething()
+    begin
+        S := 1;
+    end;
+}
+`;
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        M: Codeunit "Manual Sub";\n    begin\n        BindSubscription(M);\n        UnbindSubscription(M);\n    end;\n',
+      ),
+      { "Sub.al": sub },
+    );
+    expectReached(files, "Sub.al", "S := 1;", "S := 2;");
+  });
+
+  test("an UNFOLLOWED edge (Codeunit.Run by id) takes the whole-source fallback", () => {
+    const files = base(T("    procedure A()\n    begin\n        Codeunit.Run(50110);\n    end;\n"));
+    expect(digestA(unrelated(files))).not.toBe(digestA(files));
+  });
+
+  test("EXTERNAL needs one plain name: a codeunit by id or namespace-qualified takes the fallback", () => {
+    for (const type of ["Codeunit 50999", 'Codeunit My.Ns."Dep Lib"']) {
+      const files = base(
+        T(
+          `    procedure A()\n    var\n        L: ${type};\n    begin\n        L.Foo();\n    end;\n`,
+        ),
+      );
+      expect(digestA(unrelated(files))).not.toBe(digestA(files));
+    }
+  });
+
+  test("negative: a classified EXTERNAL edge (a plain name the test app does not declare) takes no fallback", () => {
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        L: Codeunit "Dep Lib";\n    begin\n        L.Foo();\n    end;\n',
+      ),
+    );
+    expect(digestA(unrelated(files))).toBe(digestA(files));
+  });
+
+  test("negative: an unreached codeunit's globals are not in the digest", () => {
+    const files = base(callsLib);
+    expect(digestA(edit(files, "Other.al", "OG: Integer;", "OG: Decimal;"))).toBe(digestA(files));
+  });
+
+  // Ruling B: cases 14, 15 and 16 are FOLLOWED by walking the object's code.
+  test("ruling B, case 14: a trigger-capable RecordRef call walks every test-app table's triggers", () => {
+    const files = base(
+      T(
+        "    procedure A()\n    var\n        RR: RecordRef;\n    begin\n        RR.Open(50130);\n        RR.Modify(true);\n    end;\n",
+      ),
+      { "TT.al": TABLE("    trigger OnModify()\n    begin\n        M := 1;\n    end;\n") },
+    );
+    expectReached(files, "TT.al", "M := 1;", "M := 2;");
+  });
+
+  test("ruling B, case 15: a test-app table's procedure is walked into what it calls", () => {
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        R: Record "TT";\n    begin\n        R.DoIt();\n    end;\n',
+      ),
+      {
+        "TT.al": TABLE(
+          "",
+          '    procedure DoIt()\n    var\n        L: Codeunit "Lib";\n    begin\n        L.Help();\n    end;\n',
+        ),
+      },
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  test("ruling B, case 16: a trigger-capable call on a test-app record walks its triggers", () => {
+    const files = base(
+      T(
+        '    procedure A()\n    var\n        R: Record "TT";\n    begin\n        R.Insert(true);\n    end;\n',
+      ),
+      {
+        "TT.al": TABLE(
+          '    trigger OnInsert()\n    var\n        L: Codeunit "Lib";\n    begin\n        L.Help();\n    end;\n',
+        ),
+      },
+    );
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+});
