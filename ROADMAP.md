@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**97 of 380 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**99 of 383 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -264,6 +264,8 @@ that ordering is the priority.
 - **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · open, filed 2026-09-30
 - **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · open
 - **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · open
+- **R387** · `lethal run --backend al-runner` defaults to its slowest path (one-shot, recompile per mutant, no coverage), and two of the three fast switches have no CLI or config surface · [R387.md](docs/roadmap/R387.md) · open, filed 2026-10-01
+- **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 
 ## Backends and tooling
 
@@ -425,6 +427,7 @@ that ordering is the priority.
 - **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
+- **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · open, filed 2026-10-01
 
 ---
 
