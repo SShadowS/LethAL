@@ -2390,6 +2390,7 @@ codeunit 79312 "Mixed Code"
     const dirs = await makeProject(R307_TESTS_AL);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), R307_GOOD_AL);
     await Bun.write(join(dirs.projectDir, "Bad.Mixed.al"), R307_BAD_AL);
+    // The baseline failure of GoodP2ThenBadFails is set by this fake, not caused by Bad's source.
     const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
       mutant === null && ref.method === "GoodP2ThenBadFails" ? "fail" : "pass",
     );
@@ -2403,6 +2404,11 @@ codeunit 79312 "Mixed Code"
             { objectType: "Codeunit", objectId: 79000, procedure: "P2" },
             { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
           ];
+    // Bad really is refused by the per-file trial (so the checks below are about a refused file).
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      ["Bad.Mixed.al", "object-mix"],
+    ]);
     const store = new ResultsStore(":memory:");
     const report = await runSession({ backend, store, ...dirs, selectorIds });
 
@@ -2435,6 +2441,11 @@ codeunit 79312 "Mixed Code"
       join(dirs.projectDir, "b", "Dup.Codeunit.al"),
       TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
     );
+    // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      [join("a", "Dup.Codeunit.al"), "object-mix"],
+    ]);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     const store = new ResultsStore(":memory:");
     await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
