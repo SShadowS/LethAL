@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**99 of 383 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**100 of 384 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -151,6 +151,7 @@ that ordering is the priority.
 - **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · open, filed 2026-09-30
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
+- **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
 
 ## Product gaps a real project hits
 

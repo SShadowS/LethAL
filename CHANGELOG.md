@@ -45,7 +45,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   marks apply only within the same set. Existing marks files need `"identityScheme": 5` after
   re-checking each mark against a fresh report, and a mark for a project whose `app.json` or config
   defines symbols needs `"preprocessorSymbols"` naming them. History and resume from older-scheme
-  runs are refused by name (R325).
+  runs are refused by name (R325). Removing a site can still renumber a twin in another file, and a
+  changed `#if` is one more way to do that, see R391.
 - **Identity scheme 4** (R318): no key moves, but a renamed split member's coverage is now
   attributed, and a line two members share names nobody, so a verdict recorded under scheme 3 may
   say something this build would not. Marks files need `"identityScheme": 4` after re-checking each
