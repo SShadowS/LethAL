@@ -2662,6 +2662,7 @@ const VALUE: Readonly<Record<string, string>> = {
   "control-id": "50101",
   "table-id": "50102",
   format: "mutation-elements",
+  "max-new-tests": "60",
 };
 
 /** MEASURED exemption: flags `run --dry-run` accepts and ignores. R266 emptied it: `--out` now
