@@ -164,12 +164,6 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
         `${at}: "reason" is required and must be non-empty. A mark without a stated reason is an unexplained subtraction from the survivor list, and nobody can review it later.`,
       );
     }
-    if (seen.has(key)) {
-      throw new EquivalenceMarksError(
-        `${at}: duplicate key, already marked earlier in this file. Two rulings about one mutant cannot both be applied, and picking one silently is the guess this project refuses.`,
-      );
-    }
-    seen.add(key);
     const markedBy = e.markedBy;
     const markedOn = e.markedOn;
     let symbols: readonly string[] | undefined;
@@ -180,6 +174,16 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
         throw new EquivalenceMarksError(err instanceof Error ? err.message : String(err));
       }
     }
+    // R214: one key can name different mutants in different builds, so a duplicate is the same key
+    // under the same canonical symbol set (absent reads as []).
+    const setLabel = (symbols ?? []).join(", ");
+    const identity = JSON.stringify([key, symbols ?? []]);
+    if (seen.has(identity)) {
+      throw new EquivalenceMarksError(
+        `${at}: duplicate key under preprocessor symbols [${setLabel}], already marked earlier in this file (key ${key}). Two rulings about one mutant cannot both be applied, and picking one silently is the guess this project refuses.`,
+      );
+    }
+    seen.add(identity);
     return {
       key,
       reason: reason.trim(),

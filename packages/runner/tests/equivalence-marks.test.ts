@@ -106,6 +106,41 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
     ).toThrow(/duplicate key/);
   });
 
+  test("R214: one key may be ruled on under two symbol sets, and each applies only in its own build", () => {
+    const parsed = parseEquivalenceMarks(
+      file([
+        { key: KEY_A, reason: "L13", preprocessorSymbols: ["LETHALA"] },
+        { key: KEY_A, reason: "L15", preprocessorSymbols: ["LETHALB"] },
+      ]),
+      "m.json",
+    );
+    expect(parsed).toHaveLength(2);
+    const mutant = (verdict: string) => [
+      { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict },
+    ];
+    const a = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALA"]);
+    expect(a.matched.map((m) => m.reason)).toEqual(["L13"]);
+    expect(a.stale.map((m) => m.reason)).toEqual(["L15"]);
+    const b = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALB"]);
+    expect(b.matched.map((m) => m.reason)).toEqual(["L15"]);
+    expect(b.stale.map((m) => m.reason)).toEqual(["L13"]);
+  });
+
+  test("R214: the same key under the same set is refused, however the set is spelled", () => {
+    const dup = (a?: string[], b?: string[]) =>
+      parseEquivalenceMarks(
+        file([
+          { key: KEY_A, reason: "x", ...(a ? { preprocessorSymbols: a } : {}) },
+          { key: KEY_A, reason: "y", ...(b ? { preprocessorSymbols: b } : {}) },
+        ]),
+        "m.json",
+      );
+    expect(() => dup(["LETHALA"], ["LETHALA"])).toThrow(/duplicate key.*LETHALA/s);
+    expect(() => dup(["B", "A"], ["A", "B", "A"])).toThrow(/duplicate key.*A, B/s);
+    expect(() => dup(undefined, [])).toThrow(/duplicate key/);
+    expect(() => dup([], undefined)).toThrow(/duplicate key/);
+  });
+
   test("a missing `marks` array is refused, and so is a bare array file", () => {
     expect(() => parseEquivalenceMarks("{}", "m.json")).toThrow(/missing required "marks"/);
     expect(() => parseEquivalenceMarks("[]", "m.json")).toThrow(/expected an object/);
