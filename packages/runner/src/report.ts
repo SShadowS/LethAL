@@ -2315,6 +2315,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       })),
       // R325: this report's keys are made by this build.
       IDENTITY_SCHEME,
+      // R214: and under this build's effective symbols.
+      statics.buildSymbols ?? [],
     );
     readerMarkedEquivalent = {
       matched: [...marked.matched].sort(byBatchThenCode).map((m) => ({

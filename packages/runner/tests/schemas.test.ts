@@ -562,6 +562,7 @@ async function buildVerifyHappyPathOutput() {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: projectDir,
       backend: "bcdev",
       appVersion: "0.0.0.0",

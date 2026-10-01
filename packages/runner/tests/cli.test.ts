@@ -2573,6 +2573,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -2623,6 +2624,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: project,
       backend: "bcdev",
       appVersion: "0.0.0.0",

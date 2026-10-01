@@ -522,6 +522,11 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
    build's, and a mark written from it would be stale on the next run. Re-run under this build
    first, then take the key from the new report's explain.
+5. If the project's `app.json` or its config defines preprocessor symbols, set the mark's
+   `"preprocessorSymbols"` to that build's symbols (config plus `app.json`, for example
+   `"preprocessorSymbols": ["CLEAN27"]`). A mark without the field means `[]`: it applies only to
+   a build with no symbols. A key names a site within one build, so a mark made under other
+   symbols is reported stale and never applied (R214).
 
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never

@@ -13,7 +13,9 @@ import {
   EquivalenceMarksError,
   loadEquivalenceMarks,
   marksSchemeWarning,
+  marksSymbolsWarning,
   marksUnderOtherScheme,
+  marksUnderOtherSymbols,
 } from "./equivalence-marks";
 import { createEmitter } from "./events";
 import { type GapRow, tallyGaps } from "./gaps";
@@ -31,6 +33,7 @@ import {
   qualifiedTestName,
   runNamedMutants,
 } from "./orchestrator";
+import { sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
@@ -232,6 +235,9 @@ export interface VerifySource {
   /** R325: the identity scheme the source run's manifest keys were made under. A reader mark is
    *  applied only when it was made under the same one. */
   readonly identityScheme: number;
+  /** R214: the source run's effective build symbols, or null when not recorded (then no mark
+   *  applies). */
+  readonly buildSymbols: readonly string[] | null;
   /** R354: the coverage mode the source run measured under; `null` for a run from before R354. */
   readonly coverageMode: CoverageMode | null;
   readonly targets: ReadonlyArray<{
@@ -548,6 +554,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     sourceSha256,
     installed,
     identityScheme: run.identityScheme,
+    buildSymbols: run.buildSymbols,
     coverageMode: run.coverageMode,
     targets,
   };
@@ -623,7 +630,8 @@ export interface VerifyPlan {
   readonly notRun: ReadonlyMap<string, readonly string[]>;
   /** R-236c: mutant codes with no method left once the refused ones are taken out. */
   readonly allRefused: ReadonlySet<string>;
-  /** R325: marks made under an identity scheme other than the source run's. None is applied. */
+  /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
+   *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
 }
 
@@ -667,7 +675,13 @@ export async function planVerify(a: {
   // Decision 6. A missing file is no marks; a malformed or unreadable one throws.
   // R325: a mark made under another identity scheme may name another mutant; it is not applied.
   const marks = (await loadEquivalenceMarks(source.projectPath)) ?? [];
-  const staleMarks = marksUnderOtherScheme(marks, source.identityScheme);
+  // R214: likewise a mark made under other preprocessor symbols than the source run's build.
+  const staleMarks = marks.filter(
+    (m) =>
+      m.identityScheme !== source.identityScheme ||
+      source.buildSymbols === null ||
+      !sameBuildSymbols(m.preprocessorSymbols ?? [], source.buildSymbols),
+  );
   const markByKey = new Map(
     marks.filter((m) => !staleMarks.includes(m)).map((m) => [m.key, m] as const),
   );
@@ -1157,6 +1171,14 @@ export async function runVerify(
         }, but verify measures under coverage mode ${coverageMode}. Its survived and no-coverage verdicts and its covering-test lists were attributed under that mode, so they do not say which tests reach a mutant under this one (R354). Run lethal run again under this configuration, then verify with its artifact id.`,
       );
     }
+    // R214: a run recorded before its build symbols were cannot tie its keys to one build. Never
+    // read as `[]`.
+    if (source.buildSymbols === null) {
+      throw new VerifyError(
+        "source-predates-verify",
+        `run ${source.runId} recorded no build symbols (before R214), so its keys cannot be tied to one build; run lethal run again, then verify`,
+      );
+    }
     await assertSourceUnchanged(source, deps.preprocessorSymbols, args.testDir);
     const { artifact, manifest } = await loadInstalledArtifact(store, source.installed);
     const plan = await planVerify({
@@ -1167,12 +1189,26 @@ export async function runVerify(
       testDir: args.testDir,
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
-    const marksWarning = marksSchemeWarning(plan.marksUnderOtherScheme, source.identityScheme);
+    const marksWarning = marksSchemeWarning(
+      marksUnderOtherScheme(plan.marksUnderOtherScheme, source.identityScheme),
+      source.identityScheme,
+    );
     if (marksWarning !== undefined && deps.emit !== undefined) {
       createEmitter(deps.emit)({
         type: "warning",
         code: "equivalence-marks-identity-scheme",
         message: marksWarning,
+      });
+    }
+    const symbolsWarning = marksSymbolsWarning(
+      marksUnderOtherSymbols(plan.marksUnderOtherScheme, source.buildSymbols),
+      source.buildSymbols,
+    );
+    if (symbolsWarning !== undefined && deps.emit !== undefined) {
+      createEmitter(deps.emit)({
+        type: "warning",
+        code: "equivalence-marks-build-symbols",
+        message: symbolsWarning,
       });
     }
 
@@ -1185,6 +1221,8 @@ export async function runVerify(
       verifyRunId = store.createRun({
         // R325: the rows this run records carry the SOURCE run's manifest keys.
         identityScheme: source.identityScheme,
+        // R214: the rows carry the SOURCE run's keys, so they carry its build too.
+        buildSymbols: source.buildSymbols,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The

@@ -95,6 +95,7 @@ function oneBatchRun(
   const runId = store.createRun({
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.0",
@@ -184,6 +185,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -202,6 +204,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -294,6 +297,7 @@ describe("resolveVerifySource", () => {
       const runId = store.createRun({
         coverageMode: "procedure",
         identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
         projectPath: "P",
         backend: "bcdev",
         appVersion: "0.0.0.0",
@@ -314,6 +318,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -366,6 +371,7 @@ describe("resolveVerifySource", () => {
     const runId = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "P",
       backend: "bcdev",
       appVersion: "0.0.0.0",
@@ -423,6 +429,7 @@ describe("assertSourceUnchanged", () => {
       sourceSha256: await hashTargetSource(dir, SYMBOLS),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       coverageMode: "procedure",
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
@@ -554,6 +561,7 @@ describe("planVerify", () => {
       sourceSha256: "5".repeat(64),
       installed: { fromRunId: 1, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       coverageMode: "procedure",
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
@@ -1117,6 +1125,7 @@ function installedRun(
   const runId = store.createRun({
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.0",
@@ -1604,6 +1613,21 @@ describe("C02-09: gap ids", () => {
     const out = await w.verify(["0/M0001"]);
     expect(out.refused?.reason).toBe("source-predates-verify");
     expect(out.refused?.detail).toContain("test digests");
+    expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
+    w.store.close();
+  });
+
+  test("R214: runVerify refuses a source run with no recorded build symbols, before any run row", async () => {
+    const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+      runNamed: async () => {
+        throw new Error("runNamed must not be called when verify refuses");
+      },
+    });
+    // The shape of a row recorded before R214: the column exists but holds NULL, never `[]`.
+    w.store.db.run("UPDATE runs SET build_symbols = NULL");
+    const out = await w.verify(["0/M0001"]);
+    expect(out.refused?.reason).toBe("source-predates-verify");
+    expect(out.refused?.detail).toContain("recorded no build symbols (before R214)");
     expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
     w.store.close();
   });

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { sameBuildSymbols, validateSymbolList } from "./preprocessor-symbols";
 
 /**
  * R172 proposal 3 — let a reader record that a particular survivor is an EQUIVALENT MUTANT, and
@@ -63,6 +64,12 @@ export interface EquivalenceMark {
    * is reported stale and never matched or contradicted.
    */
   readonly identityScheme: number;
+  /**
+   * R214: the effective preprocessor symbols (config plus app.json) the key was made under. After
+   * R214 a key names a site within one build, so a mark applies only to a build with exactly this
+   * set. ABSENT means `[]`: the mark applies only to a build with no symbols.
+   */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 /** The minimum a caller must know about a mutant to match marks against it. Deliberately
@@ -165,10 +172,19 @@ export function parseEquivalenceMarks(text: string, sourceName: string): Equival
     seen.add(key);
     const markedBy = e.markedBy;
     const markedOn = e.markedOn;
+    let symbols: readonly string[] | undefined;
+    if (e.preprocessorSymbols !== undefined) {
+      try {
+        symbols = [...new Set(validateSymbolList(e.preprocessorSymbols, at))].sort();
+      } catch (err) {
+        throw new EquivalenceMarksError(err instanceof Error ? err.message : String(err));
+      }
+    }
     return {
       key,
       reason: reason.trim(),
       identityScheme,
+      ...(symbols !== undefined ? { preprocessorSymbols: symbols } : {}),
       ...(typeof markedBy === "string" && markedBy.trim() !== "" ? { markedBy } : {}),
       ...(typeof markedOn === "string" && markedOn.trim() !== "" ? { markedOn } : {}),
     };
@@ -215,12 +231,34 @@ export function marksSchemeWarning(
   return `[lethal] ${stale.length} equivalence mark(s) were made under identity scheme ${schemes.join(", ")}, and this run's mutants are keyed under identity scheme ${identityScheme}. A key can name a different mutant across schemes (an engine change can renumber ordinals), so each is reported stale and none is matched or contradicted. Re-check each mark against this run's report, then set "identityScheme": ${identityScheme} in ${EQUIVALENCE_MARKS_FILENAME} (R325).`;
 }
 
+/** R214: the marks made under a symbol set other than `buildSymbols`, the effective set of the
+ *  build their mutants come from. An absent set is `[]`. */
+export function marksUnderOtherSymbols(
+  marks: readonly EquivalenceMark[],
+  buildSymbols: readonly string[],
+): EquivalenceMark[] {
+  return marks.filter((m) => !sameBuildSymbols(m.preprocessorSymbols ?? [], buildSymbols));
+}
+
+/** R214: the warning for `marksUnderOtherSymbols`'s result, or `undefined` when it is empty. */
+export function marksSymbolsWarning(
+  stale: readonly EquivalenceMark[],
+  buildSymbols: readonly string[],
+): string | undefined {
+  if (stale.length === 0) return undefined;
+  const symbols = buildSymbols.length > 0 ? buildSymbols.join(", ") : "none";
+  return `[lethal] ${stale.length} equivalence mark(s) were made under other preprocessor symbols than this build's (${symbols}). An identity key names a site within one build, so each is reported stale and none is matched or contradicted. Re-check each mark against this run's report, then set its "preprocessorSymbols" in ${EQUIVALENCE_MARKS_FILENAME} (R214).`;
+}
+
 /** Match a set of marks against this run's mutants. Pure; the caller decides what to print. */
 export function applyEquivalenceMarks(
   marks: readonly EquivalenceMark[],
   mutants: readonly MarkableMutant[],
   /** R325: the identity scheme `mutants` were keyed under. A mark made under another is stale. */
   identityScheme: number,
+  /** R214: the effective build symbols `mutants` come from. A mark made under another set is
+   *  stale; an absent mark set is `[]`. */
+  buildSymbols: readonly string[],
 ): EquivalenceMarkReport {
   const byIdentity = new Map<string, MarkableMutant>();
   for (const m of mutants) byIdentity.set(m.identity, m);
@@ -230,7 +268,10 @@ export function applyEquivalenceMarks(
   const contradicted: ContradictedMark[] = [];
 
   for (const mark of marks) {
-    if (mark.identityScheme !== identityScheme) {
+    if (
+      mark.identityScheme !== identityScheme ||
+      !sameBuildSymbols(mark.preprocessorSymbols ?? [], buildSymbols)
+    ) {
       stale.push(mark);
       continue;
     }

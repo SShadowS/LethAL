@@ -1013,6 +1013,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
           const runId = cfg.store.createRun({
             coverageMode: "procedure",
             identityScheme: IDENTITY_SCHEME,
+            buildSymbols: [],
             projectPath: "P",
             backend: "bcdev",
             appVersion: "0.0.0.0",

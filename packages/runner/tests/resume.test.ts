@@ -517,6 +517,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -552,6 +553,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -573,6 +575,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -594,6 +597,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -617,6 +621,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const withVerdicts = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -639,6 +644,7 @@ describe("ResultsStore resume queries (R47)", () => {
     store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -661,6 +667,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const good = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -682,6 +689,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const allErrors = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
@@ -715,6 +723,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -754,6 +763,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -859,6 +869,7 @@ describe("ResultsStore resume queries (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -915,6 +926,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -939,6 +951,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -960,6 +973,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -978,6 +992,7 @@ describe("ResultsStore.invalidateBatch (R47)", () => {
     const id = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -1674,6 +1689,7 @@ describe("runSession --resume (R47)", () => {
     const foreign = store.createRun({
       coverageMode: "procedure",
       identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
       projectPath: "/somewhere/else",
       backend: "bcdev",
       appVersion: "1.0.0.0",
@@ -2781,7 +2797,10 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
         ...dirs,
         selectorIds,
         preprocessorSymbols: ["R318A"],
-        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+        // R214: the mark names the build's symbols, so only its scheme can make it stale.
+        equivalenceMarks: [
+          { key, reason: "same either way", identityScheme, preprocessorSymbols: ["R318A"] },
+        ],
       });
       return { key, marked: report.readerMarkedEquivalent };
     };

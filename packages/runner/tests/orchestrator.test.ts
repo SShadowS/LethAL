@@ -563,6 +563,7 @@ describe("runSession", () => {
           sourceSha256: "5".repeat(64),
           installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
           identityScheme: IDENTITY_SCHEME,
+          buildSymbols: [],
           coverageMode: "procedure",
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
         },
@@ -4498,7 +4499,10 @@ describe("runSession — Layer 5A deployment identity", () => {
         preprocessorSymbols: ["CLEAN24"],
         resume: run.id,
       }),
-    ).rejects.toThrow(/was scoped differently from this session/);
+      // R214: refused by name, before the fingerprint's generic "scoped differently".
+    ).rejects.toThrow(
+      /was built with preprocessor symbols CLEAN24, CLEAN25, but this build uses CLEAN24\..*R214/,
+    );
     store.close();
   });
 });
@@ -5008,6 +5012,7 @@ async function seedPriorSurvivor(
     testAppHash: (await testAppHashFor(undefined, dirs.testDir)) ?? "",
     projectPath: dirs.projectDir,
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     backend: "bcdev",
     appVersion: "0.0.0.1",
   });
@@ -6549,6 +6554,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       dirs.projectDir,
       backend.capabilities().coverage,
       await testAppHashFor(undefined, dirs.testDir),
+      [],
     );
     expect(keys.size).toBe(0);
     store.close();
@@ -12073,6 +12079,7 @@ async function installedFixture(
   const runId = store.createRun({
     coverageMode: "procedure",
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols: [],
     projectPath: dirs.projectDir,
     backend: "named-mutants-test",
     appVersion: "0.0.0.0",

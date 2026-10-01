@@ -1099,6 +1099,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
         verdict: m.verdict,
       })),
       IDENTITY_SCHEME,
+      [],
     );
     expect(result.stale).toEqual([]);
     expect(result.contradicted).toEqual([]);
@@ -1134,7 +1135,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
       verdict: m.verdict,
     }));
     // Under the report's own scheme every key matches its survivor.
-    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme);
+    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme, []);
     expect(same.stale).toEqual([]);
     expect(same.matched.map((x) => x.mutantCode).sort()).toEqual(
       out.survivors.map((s) => s.mutantCode).sort(),
@@ -1143,7 +1144,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     // run under this build does report every one of those marks stale: the doc's "re-run first".
     expect(out.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
     expect(out.markIdentityScheme).not.toBe(IDENTITY_SCHEME);
-    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME).stale).toHaveLength(marks.length);
+    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, []).stale).toHaveLength(
+      marks.length,
+    );
   });
 
   test("the marks file lives where the doc says and has the documented shape", async () => {

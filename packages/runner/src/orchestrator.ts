@@ -80,7 +80,9 @@ import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
   type EquivalenceMark,
   marksSchemeWarning,
+  marksSymbolsWarning,
   marksUnderOtherScheme,
+  marksUnderOtherSymbols,
 } from "./equivalence-marks";
 import {
   type BaselineClassification,
@@ -109,7 +111,7 @@ import {
   permissionCanaryWarnings,
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
-import { effectiveBuildSymbols } from "./preprocessor-symbols";
+import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import {
   assertUnderCeiling,
   batchCeilingWarning,
@@ -3200,6 +3202,26 @@ function assertSameTestApp(
   );
 }
 
+/** R214: a symbol list for a message. `null` is a row recorded before the column existed. */
+const symbolList = (s: readonly string[] | null): string =>
+  s === null ? "(not recorded)" : s.length === 0 ? "(none)" : s.join(", ");
+
+const SYMBOLS_WHY =
+  "An identity key names a site within one build, so a key can name a different site in another";
+
+/** R214: refuses a resume from a run built under other preprocessor symbols, or unrecorded ones. */
+function assertSameBuildSymbols(
+  row: { readonly buildSymbols: readonly string[] | null } | null,
+  flag: string,
+  buildSymbols: readonly string[],
+): void {
+  if (row === null) throw new Error(`${flag}: no such run in this database`);
+  if (row.buildSymbols !== null && sameBuildSymbols(row.buildSymbols, buildSymbols)) return;
+  throw new Error(
+    `${flag} was built with preprocessor symbols ${symbolList(row.buildSymbols)}, but this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop the resume flag to run from scratch.`,
+  );
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
@@ -3209,6 +3231,8 @@ function resolveResume(
   /** R247: the test app this session measures against; `undefined` is unknown. */
   testAppHash: string | undefined,
   emit: RunEmitter,
+  /** R214: this build's effective symbols. A run built under another set is never resumed. */
+  buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
 ): { runId: number; index: ResumeIndex } | undefined {
@@ -3249,12 +3273,28 @@ function resolveResume(
           `--resume found an unfinished run for this project and backend, run ${otherMode.runId}, but it was measured under ${describeCoverageMode(otherMode.coverageMode)}, and this session measures under coverage mode ${coverageMode}. ${COVERAGE_MODE_WHY} (R354). Drop --resume to run from scratch.`,
         );
       }
+      // R214: likewise for a run built under other preprocessor symbols, or unrecorded ones.
+      const otherBuild = cfg.store.unfinishedRunUnderOtherSymbols({
+        projectPath: cfg.projectDir,
+        backend: backendName,
+        buildSymbols,
+        carryableVerdicts: [...CARRYABLE_VERDICTS],
+      });
+      if (otherBuild !== null) {
+        throw new Error(
+          `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
+        );
+      }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
       );
     }
     priorRunId = found;
-    assertSameTestApp(cfg.store.getRun(found), "--resume", testAppHash);
+    const foundRow = cfg.store.getRun(found);
+    // R214: the fingerprint carries the symbols, but a row recorded before the column (NULL) must
+    // still never be read as a match.
+    assertSameTestApp(foundRow, "--resume", testAppHash);
+    assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3283,6 +3323,9 @@ function resolveResume(
       );
     }
     assertSameTestApp(row, `--resume-run ${cfg.resume}`, testAppHash);
+    // R214: before the fingerprint (which carries the symbols too and would refuse this run
+    // anyway, as "scoped differently"). NULL is unknown and matches no build.
+    assertSameBuildSymbols(row, `--resume-run ${cfg.resume}`, buildSymbols);
     if (row.configFingerprint !== configFingerprint) {
       throw new Error(
         `--resume-run ${cfg.resume} was scoped differently from this session (--only/--tests-only/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -4389,6 +4432,34 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const { testAppHash, testDigests } = await testAppIdentity(cfg, tests, testSources, emit);
 
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
+  const sourceSymbols = cfg.preprocessorSymbols ?? [];
+  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
+  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
+  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
+  // recorded anyway, so the disk is read as before.
+  const sourceSnapshot =
+    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
+  // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
+  // parses. Recorded on the run and compared by history, resume and marks: a key names a site
+  // within one build.
+  const buildSymbols = await effectiveBuildSymbols(
+    cfg.projectDir,
+    cfg.preprocessorSymbols ?? [],
+    sourceSnapshot,
+  );
+  const symbolsWarning = marksSymbolsWarning(
+    marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
+    buildSymbols,
+  );
+  if (symbolsWarning !== undefined) {
+    emit({ type: "warning", code: "equivalence-marks-build-symbols", message: symbolsWarning });
+  }
+
   const backendName = caps.authoritative ? "bcdev" : "al-runner";
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
@@ -4415,10 +4486,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
-    // C02-06: symbols change what `#if` compiles, which the R192 baseline key cannot see.
-    ...(cfg.preprocessorSymbols !== undefined
-      ? { preprocessorSymbols: cfg.preprocessorSymbols }
-      : {}),
+    // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
+    // breaks a resume.
+    ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
   });
   const resumeState = resolveResume(
     cfg,
@@ -4427,11 +4497,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     caps.coverage,
     testAppHash,
     emit,
+    buildSymbols,
     testPageRefusedNames,
   );
 
   const runId = cfg.store.createRun({
     identityScheme: IDENTITY_SCHEME,
+    buildSymbols,
     coverageMode: caps.coverage,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
@@ -4471,18 +4543,6 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
-  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
-  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
-  // construction (review r1: a separate earlier read let an edit undone before the last read slip
-  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
-  // copies of the uninstrumented files; recorded only when the two agree.
-  const sourceSymbols = cfg.preprocessorSymbols ?? [];
-  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
-  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
-  // recorded anyway, so the disk is read as before.
-  const sourceSnapshot =
-    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -4632,6 +4692,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let lastIssuedVersion: string | undefined;
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
+  let historySymbolsWarned = false;
   // R354: likewise for its coverage-mode warning.
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
@@ -4957,32 +5018,44 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         cfg.projectDir,
         caps.coverage,
         testAppHash,
-        (old) => {
-          if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historySchemeWarned = true;
-          emit({
-            type: "warning",
-            code: "history-identity-scheme-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
-          });
-        },
-        (old) => {
-          if (historyCoverageModeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historyCoverageModeWarned = true;
-          emit({
-            type: "warning",
-            code: "history-coverage-mode-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
-          });
-        },
-        (old) => {
-          if (historyTestAppWarned || !(cfg.skipKnownSurvivors ?? false)) return;
-          historyTestAppWarned = true;
-          emit({
-            type: "warning",
-            code: "history-test-app-changed",
-            message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
-          });
+        buildSymbols,
+        {
+          schemeChanged: (old) => {
+            if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historySchemeWarned = true;
+            emit({
+              type: "warning",
+              code: "history-identity-scheme-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was keyed under identity scheme ${old.identityScheme}, and this build keys under identity scheme ${IDENTITY_SCHEME}. An identity key can name a different mutant across schemes (an engine change can renumber ordinals), so no survivor from it is skipped: every mutant is executed (R325).`,
+            });
+          },
+          symbolsChanged: (old) => {
+            if (historySymbolsWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historySymbolsWarned = true;
+            emit({
+              type: "warning",
+              code: "history-build-symbols-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was built with preprocessor symbols ${symbolList(old.buildSymbols)}, and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY}, and no survivor from it is skipped: every mutant is executed (R214).`,
+            });
+          },
+          coverageModeChanged: (old) => {
+            if (historyCoverageModeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCoverageModeWarned = true;
+            emit({
+              type: "warning",
+              code: "history-coverage-mode-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured under ${describeCoverageMode(old.coverageMode)}, and this session measures under coverage mode ${caps.coverage}. A survivor under one mode is not a survivor under another (off to on it may be no-coverage; on to off it faces more tests), so no survivor from it is skipped: every mutant is executed (R354).`,
+            });
+          },
+          testAppChanged: (old) => {
+            if (historyTestAppWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyTestAppWarned = true;
+            emit({
+              type: "warning",
+              code: "history-test-app-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+            });
+          },
         },
       );
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
@@ -5847,6 +5920,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // needs when a project has an `#if` — it is the difference between measuring the branch the
     // customer ships and measuring the other one, and the report was silent about it.
     preprocessorSymbols: cfg.preprocessorSymbols ?? [],
+    // R214: the effective set, which equivalence marks are matched against.
+    buildSymbols,
   };
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —

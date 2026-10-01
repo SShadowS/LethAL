@@ -137,6 +137,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
       ],
       2,
+      [],
     );
     expect(r.matched).toEqual([]);
     expect(r.contradicted).toEqual([]);
@@ -151,6 +152,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
+      [],
     );
     expect(r.matched.map((m) => m.mutantCode)).toEqual(["M0001", "M0002"]);
     expect(r.stale).toEqual([]);
@@ -164,6 +166,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       marks,
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
       2,
+      [],
     );
     expect(r.stale.map((s) => s.key)).toEqual([KEY_B]);
   });
@@ -178,6 +181,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
         { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
       ],
       2,
+      [],
     );
     expect(r.contradicted).toEqual([
       {
@@ -197,6 +201,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       [marks[0] as EquivalenceMark],
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
       2,
+      [],
     );
     expect(r.matched).toHaveLength(1);
     expect(r.contradicted).toEqual([]);
@@ -209,6 +214,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
       [marks[0] as EquivalenceMark],
       [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
       2,
+      [],
     );
     expect(r.contradicted.map((c) => c.verdict)).toEqual(["no-coverage"]);
   });
