@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import { AL_RUNNER_PREDEFINED_PROBE_TEST } from "../src/al-runner-predefined-probe";
 import { runSession } from "../src/orchestrator";
+import { AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0 } from "../src/preprocessor-symbols";
 import type { SpawnFn } from "../src/publisher";
 import { ResultsStore } from "../src/store";
+import { fakeProbeSpawn, maskFor, probeFailed } from "./helpers/al-runner-predefined";
 import { alRunnerStdout } from "./helpers/al-runner-stdout";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -77,6 +80,12 @@ function fakeAlRunner(activeDir: string): SpawnFn {
     const t = argv.indexOf("--test");
     const wanted = t >= 0 ? argv[t + 1] : undefined;
     if (wanted === undefined) return { exitCode: 0, stdout: "", stderr: "" }; // provisioning
+    if (wanted === AL_RUNNER_PREDEFINED_PROBE_TEST) {
+      // R392: the session's predefined-symbol probe, answered as v2.12.0 would.
+      return fakeProbeSpawn(
+        probeFailed(maskFor(new Set(AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0))),
+      ).spawn(argv);
+    }
     const o = argv.indexOf("--coverage-out");
     const out = o >= 0 ? argv[o + 1] : undefined;
     if (out !== undefined) {

@@ -198,16 +198,13 @@ describe("R214: the effective build symbols", () => {
         "/p",
         ["bc20", "CLEAN27"],
         snap({ preprocessorSymbols: ["BC20"] }),
-        "bcdev",
+        { kind: "bcdev" },
       ),
     ).toEqual(["BC20", "CLEAN27", "bc20"]);
     expect(
-      await effectiveBuildSymbols(
-        "/p",
-        ["BC20", "BC20"],
-        snap({ preprocessorSymbols: ["BC20"] }),
-        "bcdev",
-      ),
+      await effectiveBuildSymbols("/p", ["BC20", "BC20"], snap({ preprocessorSymbols: ["BC20"] }), {
+        kind: "bcdev",
+      }),
     ).toEqual(["BC20"]);
     expect(sameBuildSymbols(["B", "A"], ["A", "B", "A"])).toBe(true);
     expect(sameBuildSymbols(["A"], ["a"])).toBe(false);

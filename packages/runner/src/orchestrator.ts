@@ -37,6 +37,7 @@ import {
 } from "@lethal/schemata";
 import type { AlRunnerProvisionResult } from "./al-runner-backend";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
+import { predefinedSymbolsChangedWarning } from "./al-runner-predefined-probe";
 import type { AlRunnerBcBuild } from "./al-runner-transport";
 import {
   confirmedDowngradeRefusal,
@@ -121,6 +122,7 @@ import {
 } from "./permission-canary";
 import { Semaphore, shardEvenly } from "./pool";
 import {
+  type AlRunnerPredefinedProbe,
   type BuildBackend,
   BuildSymbolsDivergedError,
   effectiveBuildSymbols,
@@ -492,9 +494,9 @@ export interface MutationSetOptions {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
-   * R377: the compiler the build is for. `al-runner` adds al-runner's predefined symbols
-   * (`AL_RUNNER_PREDEFINED_SYMBOLS`) to the effective set; absent means `bcdev`, i.e. alc, which
-   * predefines nothing.
+   * R377: the compiler the build is for. `al-runner` adds the predefined symbols its session
+   * MEASURED (R392, `probeAlRunnerPredefinedSymbols`) to the effective set; absent means `bcdev`,
+   * i.e. alc, which predefines nothing.
    */
   readonly backend?: BuildBackend;
 }
@@ -776,7 +778,7 @@ export async function generateMutationSet(
     projectDir,
     options.preprocessorSymbols ?? [],
     snapshot,
-    options.backend ?? "bcdev",
+    options.backend ?? { kind: "bcdev" },
   );
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
@@ -4323,9 +4325,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R147 — set once, from the provisioning run below, and read again when the worker backends are
   // built so that every instance executing a mutant sends the SAME argv as the baseline.
   let platformAppsDir: string | undefined;
+  // R392: the directory provisioning reported, whether or not the backend took the pin, so the
+  // one-shot predefined-symbol probe below does not pay --auto-provision (as R149's re-probe does).
+  let provisionedPlatformAppsDir: string | undefined;
   const provisioner = cfg.backend as { provisionOnce?: () => Promise<AlRunnerProvisionResult> };
   if (provisioner.provisionOnce !== undefined) {
     const provisioned = await provisioner.provisionOnce();
+    provisionedPlatformAppsDir = provisioned.platformAppsDir;
     // R147 — pin the platform-app directory this provisioning run reported, so that no LATER
     // invocation pays for provisioning again. Measured 2026-08-15 on al-runner 2.1.2.0, on a FULLY
     // warm cache: `--auto-provision` costs 17.1 s and re-downloads 2 x 115 MB on EVERY invocation,
@@ -4406,6 +4412,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     }
   }
 
+  // R392: MEASURE al-runner's predefined symbols, every al-runner session, after provisioning and
+  // before anything computes the build's symbols. Awaited, with nothing else in flight. A probe that
+  // cannot give a complete answer throws AlRunnerPredefinedProbeError and the run is refused.
+  // Structural, like `provisionOnce`: only the al-runner backend can answer.
+  let buildBackend: BuildBackend = { kind: "bcdev" };
+  if (!caps.authoritative) {
+    const prober = cfg.backend as {
+      measurePredefinedSymbols?: (platformAppsDir?: string) => Promise<AlRunnerPredefinedProbe>;
+    };
+    if (typeof prober.measurePredefinedSymbols !== "function") {
+      throw new Error(
+        "runSession: this al-runner backend cannot measure the preprocessor symbols al-runner predefines (it has no measurePredefinedSymbols), so the build's arms are unknown; refusing rather than assuming a list (R392).",
+      );
+    }
+    const predefined = await prober.measurePredefinedSymbols(provisionedPlatformAppsDir);
+    const changed = predefinedSymbolsChangedWarning(predefined);
+    if (changed !== undefined) {
+      emit({ type: "warning", code: "al-runner-predefined-symbols-changed", message: changed });
+    }
+    buildBackend = { kind: "al-runner", predefined };
+  }
+
   // NOTE: a prior preflight here scanned [Test] codeunit sources for
   // `TestIsolation = Function;` and aborted session-isolation backends when
   // it was missing. That was factually wrong: `TestIsolation` is a
@@ -4480,13 +4508,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
   // parses. Recorded on the run and compared by history, resume and marks: a key names a site
   // within one build.
-  // R377: the backend name is decided once, here, and the same value reaches generation below.
-  const backendName: BuildBackend = caps.authoritative ? "bcdev" : "al-runner";
+  // R377: the backend is decided once (above, with R392's measured set), and the same value
+  // reaches generation below.
+  const backendName = buildBackend.kind;
   const buildSymbols = await effectiveBuildSymbols(
     cfg.projectDir,
     cfg.preprocessorSymbols ?? [],
     sourceSnapshot,
-    backendName,
+    buildBackend,
   );
   const symbolsWarning = marksSymbolsWarning(
     marksUnderOtherSymbols(cfg.equivalenceMarks ?? [], buildSymbols),
@@ -4599,7 +4628,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     preprocessorSymbols: sourceSymbols,
-    backend: backendName,
+    backend: buildBackend,
     emit,
   });
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated

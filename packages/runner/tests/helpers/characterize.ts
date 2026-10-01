@@ -53,6 +53,11 @@ export function recording(inner: ExecutionBackend, trace: Trace, tag: string): E
       if (innerClose !== undefined) await innerClose();
     },
   });
+  // R392: forwarded untraced, so the frozen traces stay what they were before the probe existed.
+  const measure = (
+    inner as { measurePredefinedSymbols?: (pin?: string) => Promise<unknown> }
+  ).measurePredefinedSymbols?.bind(inner);
+  if (measure !== undefined) Object.assign(b, { measurePredefinedSymbols: measure });
   const many = inner.runMany?.bind(inner);
   if (many !== undefined) {
     b.runMany = async (o) => {

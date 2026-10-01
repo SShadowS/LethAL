@@ -36,6 +36,10 @@ import {
   runAlRunnerCanary,
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
+import {
+  predefinedSymbolsChangedWarning,
+  probeAlRunnerPredefinedSymbols,
+} from "./al-runner-predefined-probe";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
@@ -88,7 +92,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
-import { validateSymbolList } from "./preprocessor-symbols";
+import { type BuildBackend, validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
 import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
@@ -3084,13 +3088,32 @@ export async function printDryRun(
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
     readonly backendKind?: "bcdev" | "al-runner";
+    /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
+    readonly alRunnerPath?: string;
   },
+  spawn: SpawnFn = defaultSpawn,
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
   const exclude = paths.exclude;
+  // R392: an al-runner listing needs the symbols al-runner predefines, so it MEASURES them, which
+  // spawns al-runner once. A dry run that cannot measure refuses rather than assuming a list.
+  let backend: BuildBackend | undefined;
+  if (paths.backendKind === "al-runner") {
+    if (paths.alRunnerPath === undefined) {
+      throw new Error(
+        `lethal run --dry-run --backend al-runner runs al-runner once to measure the preprocessor symbols it predefines (R392), and the config (${paths.configPath}) names no alRunner.alRunnerPath. Set it, or drop --backend al-runner to list alc's build.`,
+      );
+    }
+    const predefined = await probeAlRunnerPredefinedSymbols(paths.alRunnerPath, { spawn });
+    const changed = predefinedSymbolsChangedWarning(predefined);
+    if (changed !== undefined) console.warn(changed);
+    backend = { kind: "al-runner", predefined };
+  } else if (paths.backendKind === "bcdev") {
+    backend = { kind: "bcdev" };
+  }
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
       ...(only !== undefined ? { only } : {}),
@@ -3100,7 +3123,7 @@ export async function printDryRun(
       ...(paths.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: paths.preprocessorSymbols }
         : {}),
-      ...(paths.backendKind !== undefined ? { backend: paths.backendKind } : {}),
+      ...(backend !== undefined ? { backend } : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -5365,6 +5388,9 @@ async function main(): Promise<number> {
         ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
         : {}),
       ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+      ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
+        ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
+        : {}),
     });
     return 0;
   }
