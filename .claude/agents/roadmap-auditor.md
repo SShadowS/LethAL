@@ -2,6 +2,7 @@
 name: roadmap-auditor
 description: Audits ROADMAP.md rows against repository evidence — do cited files and commits exist, do frozen gate figures match the itests, are "done" claims supported. Read-only. Use before trusting the roadmap as the durable record, after landing an item, or when a roadmap claim is about to be acted on.
 tools: Read, Grep, Glob, Bash
+model: sonnet
 ---
 
 # Roadmap auditor
