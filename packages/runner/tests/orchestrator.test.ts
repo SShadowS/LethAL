@@ -59,6 +59,12 @@ import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
+import {
+  appInputsOfPackage,
+  dependencyFingerprint,
+  readAppJsonInputs,
+  targetOf,
+} from "../src/digest-inputs";
 import { discoverTests } from "../src/discovery";
 // Namespace import purely so the two-batch test can `spyOn` `planArtifacts` — Bun's ESM
 // implementation makes that reach `runSession`'s own intra-module call site, which is the only way
@@ -103,7 +109,13 @@ import {
 import { testDigestsOfSources } from "../src/test-digest";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
-import { type VerifyDeps, VerifyError, planVerify, runVerify } from "../src/verify";
+import {
+  type VerifyDeps,
+  VerifyError,
+  planVerify,
+  runVerify,
+  verifyDependencyFingerprint,
+} from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -390,6 +402,10 @@ async function makeProject(testAl: string = TEST_AL) {
   await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
   await Bun.write(join(projectDir, "app.json"), APP_JSON);
   await Bun.write(join(testDir, "SandboxTests.Codeunit.al"), testAl);
+  await Bun.write(
+    join(testDir, "app.json"),
+    '{"name":"Tests","publisher":"P","version":"1.0.0.0"}',
+  );
   return { projectDir, testDir, instrumentedDir };
 }
 
@@ -472,6 +488,34 @@ describe("runSession", () => {
 
   // R-278 fix round 1: discovery (a regex) finds a test the digest's parser cannot. The run still
   // measures; it records NO digests (NULL, never a partial map) and says so in a warning.
+  // Review r1 #4: an unreadable test-project app.json records no digests, never digests over
+  // empty build inputs.
+  test("R-371: a missing test-project app.json leaves the run's digests NULL and says why", async () => {
+    const dirs = await makeProject();
+    await rm(join(dirs.testDir, "app.json"));
+    const backend = new StubBackend(
+      { coverage: "none", deploy: "none", isolation: "full-reset", authoritative: false },
+      (mutant) => (mutant === null ? "pass" : "fail"),
+    );
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const [run] = store.db.query("SELECT id FROM runs").all() as Array<{ id: number }>;
+    if (run === undefined) throw new Error("no run row");
+    expect(store.testDigests(run.id)).toBeNull();
+    const warning = events.find(
+      (e) => e.type === "warning" && e.code === "test-digests-unavailable",
+    );
+    expect(warning?.type === "warning" ? warning.message : "").toContain("app.json");
+    store.close();
+  });
+
   test("R-278: a test the digest cannot parse leaves the run's digests NULL, warns, and the run completes", async () => {
     const dirs = await makeProject();
     await Bun.write(
@@ -516,9 +560,26 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
+    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json. */
+    const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
+      const app =
+        from !== undefined ? appInputsOfPackage(from) : await readAppJsonInputs(dirs.testDir);
+      return {
+        dependencies: await dependencyFingerprint(
+          app,
+          async () => null,
+          await targetOf(dirs.projectDir),
+        ),
+        buildInputs: app.buildInputs,
+      };
+    };
 
     async function r372Run(
-      read: Uint8Array | null | undefined,
+      read:
+        | Uint8Array
+        | null
+        | undefined
+        | ((app: { readonly name: string }) => Promise<Uint8Array | null | undefined>),
       extra: Partial<SessionConfig> = {},
       fetch = true,
     ) {
@@ -528,7 +589,9 @@ describe("runSession", () => {
         "IsOverBudget",
       ]);
       const backend = fetch
-        ? Object.assign(stub, { fetchPublishedAppPackage: async () => read })
+        ? Object.assign(stub, {
+            fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
+          })
         : stub;
       const store = new ResultsStore(":memory:");
       const events: RunEvent[] = [];
@@ -550,10 +613,16 @@ describe("runSession", () => {
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);
       const recorded = store.testDigests(runId);
+      const inputs = await inputsFor(dirs, OLD_PKG);
       expect(recorded).toEqual(
-        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K]) as Record<string, string>,
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs) as Record<
+          string,
+          string
+        >,
       );
-      expect(recorded).not.toEqual(testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]));
+      expect(recorded).not.toEqual(
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K], inputs),
+      );
       expect(digestWarning).toEqual([]);
       const plan = await planVerify({
         source: {
@@ -591,6 +660,7 @@ describe("runSession", () => {
         sourceBaseline: store.baselineTests(runId),
         sourceTestDigests: recorded,
         testDir: dirs.testDir,
+        dependencies: inputs.dependencies,
       });
       expect(store.baselineTests(runId).map((t) => t.method)).toEqual([K.method]);
       expect(plan.newTests.map((t) => t.method)).toEqual([K.method]);
@@ -646,12 +716,117 @@ describe("runSession", () => {
     });
 
     test("a backend that publishes nothing (al-runner) still records the disk digests", async () => {
-      const { store, runId, digestWarning } = await r372Run(undefined, {}, false);
+      const { dirs, store, runId, digestWarning } = await r372Run(undefined, {}, false);
       expect(store.testDigests(runId)).toEqual(
-        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K]),
+        testDigestsOfSources([{ path: "new.al", text: NEW_AL }], [K], await inputsFor(dirs)),
       );
       expect(digestWarning).toEqual([]);
       store.close();
+    });
+
+    // R-371: a non-Microsoft dependency is fingerprinted by the bytes of the package the server
+    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify.
+    describe("R-371: a non-Microsoft dependency of the published test app", () => {
+      const DEP_ID = "55555555-5555-5555-5555-555555555555";
+      const DEP = { id: DEP_ID, name: "Dep Lib", publisher: "Partner", version: "1.0.0.0" };
+      const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+      // Published body = disk body, so only the dependency can make K new.
+      const TESTS_PKG = new Uint8Array(
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+          "src/SandboxTests.Codeunit.al": NEW_AL,
+        }),
+      );
+      const depPkg = (build: string) =>
+        new Uint8Array(
+          buildFakeAppWithEntries({
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" Version="1.0.0.0" /></Package>`,
+            "src/Dep.al": `// build ${build}`,
+          }),
+        );
+      const serverWith = (dep: Uint8Array | null) => async (app: { readonly name: string }) =>
+        app.name === DEP.name ? dep : TESTS_PKG;
+
+      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
+      async function newAtVerify(
+        r: Awaited<ReturnType<typeof r372Run>>,
+        dep: Uint8Array,
+      ): Promise<string[]> {
+        const { dirs, store, runId } = r;
+        const recorded = store.testDigests(runId);
+        const plan = await planVerify({
+          source: {
+            runId,
+            projectPath: dirs.projectDir,
+            artifactSha256: "0".repeat(64),
+            sourceSha256: "5".repeat(64),
+            installed: { fromRunId: runId, batchIndex: 0, appPath: "x.app", instrumentedDir: "d" },
+            identityScheme: IDENTITY_SCHEME,
+            coverageMode: "procedure",
+            targets: [
+              {
+                batchIndex: 0,
+                mutantCode: "M0001",
+                coveringTests: [`${K.codeunitName}.${K.method}`],
+              },
+            ],
+          },
+          manifest: {
+            selectorIds,
+            artifactId: "a".repeat(32),
+            mutants: [
+              {
+                mutantId: "M0001",
+                file: "SandboxLogic.Codeunit.al",
+                startIndex: 10,
+                endIndex: 20,
+                startLine: 3,
+                operatorName: "lethal.negate-conditional",
+                operatorVersion: "1.0.0",
+                astHash: "hash-M0001",
+                objectType: "codeunit",
+                codeunitId: 79000,
+                codeunitName: "Sandbox Logic",
+                procedureName: "IsOverBudget",
+                originalText: "a",
+                mutatedText: "b",
+              },
+            ],
+          },
+          sourceBaseline: store.baselineTests(runId),
+          sourceTestDigests: recorded,
+          testDir: dirs.testDir,
+          dependencies: await verifyDependencyFingerprint(
+            { fetchPublishedAppPackage: serverWith(dep) },
+            dirs.testDir,
+            dirs.projectDir,
+          ),
+        });
+        return plan.newTests.map((t) => t.method);
+      }
+
+      test("the same package at verify reads K as unchanged; a rebuild at the same version reads it as new", async () => {
+        const r = await r372Run(serverWith(depPkg("one")));
+        expect(r.digestWarning).toEqual([]);
+        expect(r.store.testDigests(r.runId)).not.toBeNull();
+        // verify reads the dependency list from the test project's app.json.
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP] }),
+        );
+        expect(await newAtVerify(r, depPkg("one"))).toEqual([]);
+        expect(await newAtVerify(r, depPkg("two"))).toEqual([K.method]);
+        r.store.close();
+      });
+
+      test("an unreadable dependency package records NULL digests and says why", async () => {
+        const { store, runId, digestWarning } = await r372Run(serverWith(null));
+        expect(store.testDigests(runId)).toBeNull();
+        expect(digestWarning).toHaveLength(1);
+        expect(digestWarning[0]).toContain("dependencies could not be fingerprinted");
+        expect(digestWarning[0]).toContain("Dep Lib");
+        store.close();
+      });
     });
   });
 

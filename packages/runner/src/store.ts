@@ -279,7 +279,8 @@ CREATE TABLE IF NOT EXISTS runs (
   identity_scheme INTEGER,
   coverage_mode TEXT,
   test_app_hash TEXT,
-  test_digests TEXT
+  test_digests TEXT,
+  test_digest_parts TEXT
 );
 CREATE TABLE IF NOT EXISTS mutants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -531,6 +532,8 @@ export class ResultsStore {
       ["runs", "test_app_hash TEXT", runCols],
       // R-278: NULL on an older row; verify refuses it as source-predates-verify.
       ["runs", "test_digests TEXT", runCols],
+      // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
+      ["runs", "test_digest_parts TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
       // R360: the instrumented payload digest, and which run pruned the batch's bundle. NULL on an
       // older row, which verify refuses as "recorded before R360", never reads as a value.
@@ -575,13 +578,15 @@ export class ResultsStore {
     /** R-278: every discovered test's source digest, by `testDigestKey`. Absent is recorded NULL,
      *  which `lethal verify` refuses as a run that predates it. */
     testDigests?: Readonly<Record<string, string>>;
+    /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. */
+    testDigestParts?: unknown;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, resource_key, test_app_hash, test_digests) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -593,6 +598,7 @@ export class ResultsStore {
         info.resourceKey ?? null,
         info.testAppHash ?? null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
+        info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
       ) as {
       id: number;
     };
@@ -709,6 +715,16 @@ export class ResultsStore {
       throw new Error(`store.ts: run ${runId} has a corrupt "test_digests" column value`);
     }
     return parsed as Record<string, string>;
+  }
+
+  /** R-371: the parts the run's test digests are made of, or `null` when it recorded none. Read
+   *  only to explain a too-many-new-tests refusal; a malformed value throws. */
+  testDigestParts(runId: number): unknown {
+    const row = this.db.query("SELECT test_digest_parts FROM runs WHERE id = ?").get(runId) as {
+      test_digest_parts: string | null;
+    } | null;
+    if (row === null) throw new Error(`store.ts: no run ${runId}`);
+    return row.test_digest_parts === null ? null : JSON.parse(row.test_digest_parts);
   }
 
   /** R47: one run row by id, or `null`. Used to explain WHY an explicitly named `--resume-run`

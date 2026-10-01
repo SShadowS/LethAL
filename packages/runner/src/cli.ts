@@ -659,6 +659,8 @@ export interface VerifyCliConfig {
   readonly survivors: readonly string[];
   /** Absent means `<project>/lethal.config.json`, the project the store records for the artifact. */
   readonly configPath?: string;
+  /** R-371: `--max-new-tests <n>`; absent means verify's default (`DEFAULT_MAX_NEW_TESTS`). */
+  readonly maxNewTests?: number;
 }
 
 export interface ExplainCliConfig {
@@ -1087,6 +1089,10 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
                              separated (repeatable). Required
   --config <path>            default: lethal.config.json in the project the database records.
                              A config with an envTool section is refused
+  --max-new-tests <n>        refuse (too-many-new-tests) when more than n tests are new or edited
+                             since the run (default 50). An edit to a helper, handler, subscriber
+                             or dependency turns every test that reaches it new; the refusal
+                             names the count, the value to pass and what changed
   Every other flag is refused, --out included: the JSON always goes to stdout.
   Exit codes: 0 every survivor killed and every new test stable; 3 quarantined; 4 nothing
   measured (every survivor error); 5 some survivor survived or errored, or a new test is not
@@ -1204,6 +1210,8 @@ export const RUN_FLAGS = {
   // `verify` alone in FLAG_OWNERS. `--survivors` repeats and each value is a comma list.
   artifact: { type: "string" },
   survivors: { type: "string", multiple: true },
+  // R-371: `lethal verify --max-new-tests <n>`. Owned by `verify` alone in FLAG_OWNERS.
+  "max-new-tests": { type: "string" },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
@@ -1327,6 +1335,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It names the survivors `lethal verify` proves killed.",
   },
+  {
+    flag: "max-new-tests",
+    owners: ["verify"],
+    instead: "It caps how many new or edited tests `lethal verify` runs.",
+  },
   ...RUN_ONLY_FLAGS.map((flag) => ({
     flag,
     owners: ["run"] as const,
@@ -1341,6 +1354,7 @@ export const VERIFY_FLAGS: ReadonlySet<string> = new Set([
   "tests",
   "survivors",
   "config",
+  "max-new-tests",
 ]);
 
 /**
@@ -1485,7 +1499,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       const present = typeof given === "boolean" ? given : given !== undefined;
       if (present && !VERIFY_FLAGS.has(flag)) {
         throw new Error(
-          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors and --config. Its JSON goes to stdout.`,
+          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors, --config and --max-new-tests. Its JSON goes to stdout.`,
         );
       }
     }
@@ -1506,6 +1520,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         "missing required --survivors <ids> (<batchIndex>/<mutantCode> ids or gap ids, comma separated)",
       );
     }
+    const maxNewTestsRaw = values["max-new-tests"];
+    if (maxNewTestsRaw !== undefined && !/^\d+$/.test(maxNewTestsRaw)) {
+      throw new Error(
+        `--max-new-tests must be a non-negative integer (a count of tests), not "${maxNewTestsRaw}"`,
+      );
+    }
     return {
       mode: "verify",
       dbPath,
@@ -1513,6 +1533,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       testDir,
       survivors,
       ...(values.config !== undefined && values.config !== "" ? { configPath: values.config } : {}),
+      ...(maxNewTestsRaw !== undefined ? { maxNewTests: Number(maxNewTestsRaw) } : {}),
     };
   }
 
@@ -5037,7 +5058,12 @@ export async function verifyFromCli(
     });
     return print(
       await runVerify(
-        { artifact: parsed.artifact, survivors: parsed.survivors, testDir: parsed.testDir },
+        {
+          artifact: parsed.artifact,
+          survivors: parsed.survivors,
+          testDir: parsed.testDir,
+          ...(parsed.maxNewTests !== undefined ? { maxNewTests: parsed.maxNewTests } : {}),
+        },
         {
           store,
           backend: built,

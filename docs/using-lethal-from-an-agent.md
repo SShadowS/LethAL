@@ -144,6 +144,7 @@ has the complete set.
 | `--operator` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
+| `--max-new-tests` | `verify` |
 
 `lethal run --dry-run` executes nothing, so it refuses every execution flag by name (`--tests`,
 `--backend`, `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). The one
@@ -428,7 +429,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 3`. Schema: [../schemas/verify-v3.schema.json](../schemas/verify-v3.schema.json).
+`verifySchemaVersion: 4`. Schema: [../schemas/verify-v4.schema.json](../schemas/verify-v4.schema.json).
 
 | field | values |
 |---|---|
@@ -505,6 +506,8 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-publish-failed` | Read the detail. |
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
+| `too-many-new-tests` | More tests are new or edited than `--max-new-tests` allows (default 50). The detail names the count, the exact value to pass, what made them new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
+| `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
@@ -550,9 +553,15 @@ means a test enters the procedure and never reaches the statement, so it needs a
 than a stronger assertion. The test must pass twice on the unmutated build, or verify reports it
 `flaky` or `red` (for `infra-error`, read both runs first: at least one call failed). Verify runs the covering tests the run recorded plus every NEW test: one your edit added, or
 an existing test whose own source (its attributes and its procedure) changed since the run
-(R-278, R258). An edited test gets the same two unmutated runs as an added one. Two blind spots
-remain. An edit to a helper, handler or library procedure the test calls does not make the test
-new (R371): edit the test itself too. On bcdev the run records each test's source from the
+(R-278, R258). A test is also new when anything it runs changed (R371): a test-app procedure or
+handler it reaches, the header, globals or triggers of an object it reaches, ANY event-subscriber
+codeunit in the test app (every test is then new), or a dependency (a non-Microsoft one by the
+package the server holds; a Microsoft one by its version only, so a rebuild at an unchanged version
+is not seen). A test with a call the walk cannot follow (an interface, a `RecordRef` insert, a run by
+id) is new after ANY test-app edit. So one shared-helper edit can make many tests new; above
+`--max-new-tests` (default 50) verify refuses `too-many-new-tests` and names the value that would
+run them. A run recorded before R371 is refused once as `source-predates-verify`. An edited test
+gets the same two unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
 that publishes its own test apps, a package without source) it records none and warns
