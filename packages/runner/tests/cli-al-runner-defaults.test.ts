@@ -144,6 +144,32 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(kinds(cliDefaultMechanismFailures(realTest, ev))).toEqual(["server"]);
   });
 
+  test("one-shot calls are an allow-list: --version passes, a whole-suite run with no --test fails", async () => {
+    // A whole-suite one-shot run carries no `--test`, so a check that counted `--test` alone would
+    // pass it. Only provisioning and `status()`'s exact `[path, "--version"]` are allowed.
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const version = ["al-runner.exe", "--version"];
+    const provision = ["al-runner.exe", "--test", AL_RUNNER_PROVISION_SENTINEL];
+    const allowed: SpawnRecord = {
+      ...record,
+      oneShotArgv: [...record.oneShotArgv, version, provision],
+    };
+    expect(cliDefaultMechanismFailures(allowed, ev)).toEqual([]);
+    const suite: SpawnRecord = {
+      ...allowed,
+      oneShotArgv: [
+        ...allowed.oneShotArgv,
+        ["al-runner.exe", "--isolation", "test", "src", "tests"],
+      ],
+    };
+    expect(kinds(cliDefaultMechanismFailures(suite, ev))).toEqual(["server"]);
+    const versionPlus: SpawnRecord = {
+      ...allowed,
+      oneShotArgv: [...allowed.oneShotArgv, ["al-runner.exe", "--version", "extra"]],
+    };
+    expect(kinds(cliDefaultMechanismFailures(versionPlus, ev))).toEqual(["server"]);
+  });
+
   test("serverMode: false gives one-shot AND static, so both mechanism checks fail", async () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe", serverMode: false });
     expect(kinds(cliDefaultMechanismFailures(record, ev))).toEqual(["resource", "server"]);

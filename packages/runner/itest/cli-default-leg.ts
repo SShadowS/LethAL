@@ -129,6 +129,15 @@ export function watchResourceSelector(
   return ev;
 }
 
+/** `status()`'s probe: exactly the binary and `--version`, nothing else. */
+const isVersionProbe = (argv: readonly string[]): boolean =>
+  argv.length === 2 && argv[1] === "--version";
+
+/** Every one-shot argv without the binary path, for the leg's log line. */
+export function oneShotArgvSummary(record: SpawnRecord): string[] {
+  return record.oneShotArgv.map((a) => a.slice(1).join(" "));
+}
+
 /** Every mechanism failure at once, so a red-check shows each default that did not take effect. */
 export function cliDefaultMechanismFailures(
   record: SpawnRecord,
@@ -150,10 +159,22 @@ export function cliDefaultMechanismFailures(
   if (provisioning > backends) {
     out.push(`server: expected at most ${backends} provisioning spawn(s), saw ${provisioning}`);
   }
-  const tests = record.oneShotArgv.filter(
-    (a) => a.includes("--test") && !a.includes(AL_RUNNER_PROVISION_SENTINEL),
-  ).length;
-  if (tests !== 0) out.push(`server: expected no one-shot test spawn, saw ${tests}`);
+  // An ALLOW-LIST, not a `--test` filter: a one-shot whole-suite run carries no `--test` at all, so
+  // counting `--test` alone would miss it. Under `--server` the only one-shot calls are the
+  // provisioning call above and `status()`'s `[path, "--version"]` probe (`runSession` calls it
+  // first). Anything else is a one-shot run the daemon should have made.
+  const other = record.oneShotArgv.filter(
+    (a) => !a.includes(AL_RUNNER_PROVISION_SENTINEL) && !isVersionProbe(a),
+  );
+  if (other.length !== 0) {
+    out.push(
+      `server: expected no one-shot run besides provisioning and --version, saw ${other.length}: ${other.map((a) => a.slice(1).join(" ")).join(" | ")}`,
+    );
+  }
+  const versions = record.oneShotArgv.filter(isVersionProbe).length;
+  if (versions > backends) {
+    out.push(`server: expected at most ${backends} --version probe(s), saw ${versions}`);
+  }
   if (resource.activations === 0) out.push("resource: no activate() was observed");
   out.push(...resource.problems.map((p) => `resource: ${p}`));
   // At most one per deploy: two batches with byte-identical text would share one compile.

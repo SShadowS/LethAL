@@ -62,6 +62,7 @@ import {
   daemonPlatformAppsLines,
   expectedCliDefaultShape,
   legShape,
+  oneShotArgvSummary,
   recordSpawns,
   watchResourceSelector,
 } from "./cli-default-leg";
@@ -681,6 +682,7 @@ async function runCliDefaultLeg(legA: SessionReport): Promise<SessionReport> {
     console.log(
       `  cli-default mechanism: ${rec.record.serverArgv.length} daemon spawn(s), ${rec.record.oneShotArgv.length} one-shot spawn(s), ${resource.deploys} deploy(s), ${resource.activations} activation(s), ${resource.alHashes.size} distinct *.al text(s)`,
     );
+    for (const argv of oneShotArgvSummary(rec.record)) console.log(`    one-shot argv: ${argv}`);
     // R387 plan 2a: server mode declines R147's pin, so the build and the platform apps can differ
     // from leg A's. RECORDED and printed, never asserted away. The daemon's own words only; nothing
     // is inferred when it does not name a directory.
