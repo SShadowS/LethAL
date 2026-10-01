@@ -10,9 +10,21 @@
  * pass/skip/fail counts, and the names of failing tests. The full output of a failing step goes to
  * a log file whose path is printed. Exits non-zero on any failure, or when the test summary cannot
  * be read: an unreadable summary is never reported as a pass.
+ *
+ * R393 (snapshot late write). A test that times out keeps running, and its late `toMatchSnapshot()`
+ * is filed under the NEXT test's name, silently adding a wrong entry to a tracked `.snap`. Two guards,
+ * both for verify.ts users ONLY (a plain `bun test` is not protected by either):
+ *   1. The `bun test` child runs with `CI=true` in its env, set before bun starts (bun reads CI once at
+ *      launch; a preload that sets it is too late). Then a snapshot that does not exist yet is REFUSED
+ *      instead of written. Set LETHAL_TEST_ALLOW_SNAPSHOT_CREATE=1 to drop it (the output says so).
+ *      To add a snapshot on purpose, run `bun test --update-snapshots <file>` yourself.
+ *   2. The belt: `git status --porcelain -- '*.snap'` (staged, unstaged and untracked) plus a hash of
+ *      each listed file, taken before and after the test step. Any `.snap` that changed DURING the run
+ *      fails verify.ts and is named. A `.snap` that was already dirty before is not blamed.
  */
 
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,6 +88,104 @@ export function parseTestSummary(output: string): TestSummary | null {
   };
 }
 
+export const ALLOW_SNAPSHOT_CREATE = "LETHAL_TEST_ALLOW_SNAPSHOT_CREATE";
+
+/** The env for the `bun test` child: `CI=true` unless the opt-out is set. */
+export function testChildEnv(
+  base: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  if (base[ALLOW_SNAPSHOT_CREATE] === "1") return { ...base };
+  return { ...base, CI: "true" };
+}
+
+/** path -> `<porcelain status>:<content hash>` for every staged, unstaged or untracked `.snap`. */
+export type SnapState = Map<string, string>;
+
+export function parseSnapState(porcelain: string, read: (path: string) => string): SnapState {
+  const state: SnapState = new Map();
+  for (const line of porcelain.split(/\r?\n/)) {
+    if (line.length < 4) continue;
+    const path = line.slice(3).replace(/^"|"$/g, "");
+    state.set(path, `${line.slice(0, 2)}:${read(path)}`);
+  }
+  return state;
+}
+
+/** The `.snap` files whose state differs between the two snapshots (changed, added or cleaned). */
+export function snapChanges(before: SnapState, after: SnapState): string[] {
+  const names = new Set([...before.keys(), ...after.keys()]);
+  return [...names].filter((n) => before.get(n) !== after.get(n)).sort();
+}
+
+function readSnapState(): SnapState {
+  const r = Bun.spawnSync(["git", "status", "--porcelain", "--", "*.snap"], {
+    cwd: REPO_ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if ((r.exitCode ?? 1) !== 0) {
+    throw new Error(`git status failed (exit ${r.exitCode}): ${r.stderr.toString()}`);
+  }
+  return parseSnapState(r.stdout.toString(), (p) => {
+    const full = join(REPO_ROOT, p);
+    return existsSync(full)
+      ? createHash("sha1").update(readFileSync(full)).digest("hex")
+      : "deleted";
+  });
+}
+
+export interface TestStepIo {
+  exec(cmd: string[], env: Record<string, string | undefined>): { code: number; output: string };
+  snapState(): SnapState;
+  env: Record<string, string | undefined>;
+  log(output: string): string;
+}
+
+/** The `bun test` step with both R393 guards. Returns the lines to print and the exit code. */
+export function testStep(
+  paths: readonly string[],
+  io: TestStepIo,
+): { code: number; lines: string[] } {
+  const lines: string[] = [];
+  const optOut = io.env[ALLOW_SNAPSHOT_CREATE] === "1";
+  lines.push(
+    optOut
+      ? `snapshot guard: OFF (${ALLOW_SNAPSHOT_CREATE}=1), a missing snapshot will be written`
+      : "snapshot guard: CI=true for the test child, a missing snapshot is refused",
+  );
+  const before = io.snapState();
+  const t = io.exec(["bun", "test", ...paths], testChildEnv(io.env));
+  const after = io.snapState();
+  const summary = parseTestSummary(t.output);
+  const scope = paths.length === 0 ? "all" : paths.join(" ");
+  let code = 0;
+  if (summary === null) {
+    lines.push(
+      `test (${scope}): FAIL, no pass/fail summary in output (exit ${t.code}), log ${io.log(t.output)}`,
+    );
+    code = 1;
+  } else {
+    const ok = t.code === 0 && summary.fail === 0;
+    const counts = `${summary.pass} pass / ${summary.skip} skip / ${summary.fail} fail${summary.todo > 0 ? ` / ${summary.todo} todo` : ""}`;
+    lines.push(
+      `test (${scope}): ${ok ? "ok" : "FAIL"} ${counts}${ok ? "" : ` (exit ${t.code}), log ${io.log(t.output)}`}`,
+    );
+    for (const name of summary.failing) lines.push(`  (fail) ${name}`);
+    if (!ok) code = 1;
+  }
+  const changed = snapChanges(before, after);
+  if (changed.length > 0) {
+    lines.push(`snapshot belt: FAIL, ${changed.length} .snap file(s) changed DURING the test run:`);
+    for (const f of changed) lines.push(`  ${f}`);
+    lines.push(
+      "  A timed-out test can write its snapshot under the next test's name (R393). Review with `git diff`, revert it,",
+      "  or add a snapshot on purpose with `bun test --update-snapshots <file>`.",
+    );
+    code = 1;
+  }
+  return { code, lines };
+}
+
 function run(cmd: string[]): { code: number; output: string } {
   const r = Bun.spawnSync(cmd, { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode ?? 1, output: `${r.stdout.toString()}${r.stderr.toString()}` };
@@ -114,22 +224,17 @@ function main(argv: readonly string[]): number {
   }
   console.log(`clean dist: removed ${removed.length} (${removed.join(", ") || "none present"})`);
 
-  const t = run(["bun", "test", ...paths]);
-  const summary = parseTestSummary(t.output);
-  const scope = paths.length === 0 ? "all" : paths.join(" ");
-  if (summary === null) {
-    console.log(
-      `test (${scope}): FAIL, no pass/fail summary in output (exit ${t.code}), log ${saveLog("test", t.output)}`,
-    );
-    return 1;
-  }
-  const ok = t.code === 0 && summary.fail === 0;
-  const counts = `${summary.pass} pass / ${summary.skip} skip / ${summary.fail} fail${summary.todo > 0 ? ` / ${summary.todo} todo` : ""}`;
-  console.log(
-    `test (${scope}): ${ok ? "ok" : "FAIL"} ${counts}${ok ? "" : ` (exit ${t.code}), log ${saveLog("test", t.output)}`}`,
-  );
-  for (const name of summary.failing) console.log(`  (fail) ${name}`);
-  return ok ? 0 : 1;
+  const step = testStep(paths, {
+    exec: (cmd, env) => {
+      const r = Bun.spawnSync(cmd, { cwd: REPO_ROOT, env, stdout: "pipe", stderr: "pipe" });
+      return { code: r.exitCode ?? 1, output: `${r.stdout.toString()}${r.stderr.toString()}` };
+    },
+    snapState: readSnapState,
+    env: process.env,
+    log: (o) => saveLog("test", o),
+  });
+  for (const l of step.lines) console.log(l);
+  return step.code;
 }
 
 if (import.meta.main) {
