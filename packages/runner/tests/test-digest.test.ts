@@ -411,6 +411,43 @@ codeunit 50120 "Sub"
     expect(digestA(unrelated(odd))).not.toBe(digestA(odd));
   });
 
+  test("a page part's page runs with its host page: its triggers are walked", () => {
+    const page = (part: string) => `page 50150 "P"
+{
+    layout
+    {
+        area(Content)
+        {
+            part(Lines; ${part}) { }
+        }
+    }
+}
+`;
+    const subPage = `page 50151 "SubP"
+{
+    trigger OnOpenPage()
+    var
+        L: Codeunit "Lib";
+    begin
+        L.Help();
+    end;
+}
+`;
+    const files = base(
+      T('    procedure A()\n    begin\n        Page.Run(Page::"P");\n    end;\n'),
+      { "P.al": page('"SubP"'), "SubP.al": subPage },
+    );
+    expectReached(files, "SubP.al", "L.Help();", "L.Help(); L.Help();");
+    expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+    // A part the test app does not declare, by one plain name, is a dependency's page: EXTERNAL.
+    const external = edit(files, "P.al", '"SubP"', '"Dep Page"');
+    expect(digestA(unrelated(external))).toBe(digestA(external));
+    // A namespace-qualified or numeric target does not parse in this grammar, so it falls back
+    // through the parse-damage rule.
+    const qualified = edit(files, "P.al", '"SubP"', 'My.Ns."Dep Page"');
+    expect(digestA(unrelated(qualified))).not.toBe(digestA(qualified));
+  });
+
   test("ruling B, case 16: a trigger-capable call on a test-app record walks its triggers", () => {
     const files = base(
       T(

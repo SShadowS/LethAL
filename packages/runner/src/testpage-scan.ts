@@ -285,6 +285,9 @@ export interface Unit {
   /** R-371, non-codeunit units: `<kind>:<normalised name>` of the object it declares or, for an
    *  extension, extends. The units under one base key are one object's code. */
   readonly baseKey: string | undefined;
+  /** R-371: the target of every `part(Name; Target)` in the object (a page's subpages), as
+   *  written; `""` when the target could not be read. Empty for a codeunit. */
+  readonly parts: readonly string[];
 }
 
 export interface Proc {
@@ -562,6 +565,7 @@ function buildUnit(
     partsHash: sha256(partsText(source, node)),
     textHash: sha256(normalizeSource(text)),
     baseKey: undefined,
+    parts: [],
   };
   const keys = new Map<string, number>();
   if (body !== undefined) {
@@ -631,7 +635,12 @@ function buildObjectUnit(
     addType(implicit, "Rec", recType);
     addType(implicit, "xRec", recType);
   }
+  const parts: string[] = [];
   visit(node, (x) => {
+    if (x.rawKind === "part_section") {
+      const target = realChildren(x).filter((c) => c.rawKind !== "part_keyword")[1];
+      parts.push(target === undefined || target.rawKind === "declaration_body" ? "" : target.text);
+    }
     if (DATA_ITEM_KIND.test(x.rawKind)) {
       const m = DATA_ITEM.exec(x.text);
       if (m?.[1] !== undefined && m[2] !== undefined) addType(implicit, m[1], `Record ${m[2]}`);
@@ -657,6 +666,7 @@ function buildObjectUnit(
     partsHash: hash,
     textHash: hash,
     baseKey,
+    parts,
   };
   const keys = new Map<string, number>();
   const walk = (n: ALSyntaxNode): void => {
@@ -1089,6 +1099,16 @@ export class Scanner {
     for (const u of this.otherByBase.get(baseKey) ?? []) {
       this.reachUnit(u, st);
       for (const t of u.triggers) this.reach(t, st);
+      // A page part's page runs with its host: its code is entered too. A part the test app does
+      // not declare is a dependency's page (EXTERNAL) only by the same condition as any object.
+      for (const raw of u.parts) {
+        const found = this.objectsNamed("page", raw);
+        for (const f of found) {
+          this.reachUnit(f, st);
+          if (f.baseKey !== undefined) this.enterObject(f.baseKey, st);
+        }
+        if (found.length === 0) this.outside("page", raw, `${u.display} part ${raw}`, st);
+      }
     }
   }
 
@@ -1229,6 +1249,16 @@ export class Scanner {
     this.outside(kind, raw, label, st);
   }
 
+  /** Every test-app unit declaring or extending the `kind` object `raw` names, by name or id. */
+  private objectsNamed(kind: string, raw: string): Unit[] {
+    return [
+      ...new Set([
+        ...(this.otherByBase.get(`${kind}:${lastSegment(raw)}`) ?? []),
+        ...(/^\s*\d+\s*$/.test(raw) ? (this.otherByBase.get(`${kind}:${raw.trim()}`) ?? []) : []),
+      ]),
+    ];
+  }
+
   /**
    * A member on a variable of a non-codeunit test-app object, or of a dependency's object a
    * test-app extension extends (cases 6, 15, 16). True when a test-app object declares the object
@@ -1243,12 +1273,7 @@ export class Scanner {
     label: string,
     st: ReachState,
   ): boolean {
-    const us = [
-      ...new Set([
-        ...(this.otherByBase.get(`${kind}:${lastSegment(raw)}`) ?? []),
-        ...(/^\s*\d+\s*$/.test(raw) ? (this.otherByBase.get(`${kind}:${raw.trim()}`) ?? []) : []),
-      ]),
-    ];
+    const us = this.objectsNamed(kind, raw);
     if (us.length === 0) return false;
     for (const u of us) this.reachUnit(u, st);
     const nm = this.norm(member);
