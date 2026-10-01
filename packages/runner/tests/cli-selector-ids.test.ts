@@ -144,7 +144,12 @@ describe("buildBackend — R3/R4 selector id validation wiring", () => {
 
   it("al-runner: honors the resolved selectorId as the emitted selector's object id", async () => {
     const dir = await writeTempProject(DEFAULT_RANGE);
-    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
+    // R387: "static" explicitly. The default is now "resource", whose activate() writes a resource
+    // file rather than the selector, so the no-deploy path below would test nothing. The resource
+    // twin follows.
+    const configFile: LethalConfigFile = {
+      alRunner: { alRunnerPath: "al-runner.exe", selectorMode: "static" },
+    };
     const customIds = { selectorId: 79150, controlId: 79151, tableId: 79152 };
     const backend = (await buildBackend(
       runConfig(dir, "al-runner"),
@@ -174,6 +179,41 @@ describe("buildBackend — R3/R4 selector id validation wiring", () => {
     // would still construct an `AlRunnerBackend` successfully (an `instanceof` check alone can't
     // tell), but would bake object id 79199 instead of the resolved 79150 into the emitted source.
     expect(selectorSrc).not.toContain('codeunit 79199 "Mutation Selector"');
+  });
+
+  it("al-runner (R387, the default resource selector): deploy() installs the resolved selectorId", async () => {
+    const dir = await writeTempProject(DEFAULT_RANGE);
+    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
+    const customIds = { selectorId: 79150, controlId: 79151, tableId: 79152 };
+    const backend = (await buildBackend(
+      runConfig(dir, "al-runner"),
+      configFile,
+      dir,
+      undefined,
+      {},
+      customIds,
+    )) as AlRunnerBackend;
+    // deploy() FIRST: the resource selector is installed there, once per batch, and activate()
+    // only rewrites the resource file, so without it this would prove nothing about the layout.
+    const batch = join(dir, "batch");
+    await mkdir(batch, { recursive: true });
+    await writeFile(join(batch, "app.json"), JSON.stringify({ id: "x" }), "utf8");
+    await writeFile(join(batch, "MutationSelector.Codeunit.al"), "placeholder", "utf8");
+    await writeFile(
+      join(batch, "mutant-manifest.json"),
+      JSON.stringify({ artifactId: "c".repeat(32), mutants: [] }),
+      "utf8",
+    );
+    await backend.deploy(batch);
+    await backend.activate("M0001");
+    const active = join(dir, "al-runner-active", "active");
+    const selectorSrc = await readFile(join(active, "MutationSelector.Codeunit.al"), "utf8");
+    expect(selectorSrc).toContain(`codeunit ${customIds.selectorId} "Mutation Selector"`);
+    expect(selectorSrc).not.toContain('codeunit 79199 "Mutation Selector"');
+    expect(await readFile(join(active, "LethALResources", "active-mutant.txt"), "utf8")).toBe(
+      "M0001",
+    );
+    await backend.close();
   });
 
   it("bcdev: refuses an id colliding with the target's existing objects, once alc/altool are found", async () => {
