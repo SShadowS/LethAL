@@ -389,12 +389,17 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
     });
   }, 60_000);
 
-  // R392 review r1: the SUCCESS path through main(). The al-runner is a tiny script that prints the
-  // probe's failing result, so main() forwards the config's path, the probe runs, and the listing prints.
+  // R392 review r1: the SUCCESS path through main(). The al-runner is a tiny script that records its
+  // argv and prints the probe's failing result, so main() forwards the config's path, the probe runs,
+  // and the listing prints. Review r2: the fake answers CLEANSCHEMA1..25, under which al-runner
+  // builds only the `#else` call (line 8) and alc only the `#if not CLEANSCHEMA25` call (line 6), so
+  // the listing says which build was enumerated, and the argv record says the probe ran exactly once.
   test("`lethal run --dry-run --backend al-runner` through main() succeeds with a probe that answers", async () => {
     await withProject(async (root) => {
       const cli = join(import.meta.dir, "..", "src", "cli.ts");
       const answer = join(root, "probe-answer.txt");
+      const calls = join(root, "fake-al-runner-calls.txt");
+      const listing = join(root, "dry-run.json");
       await Bun.write(
         answer,
         alRunnerStdout({ tests: probeFailed(maskFor(new Set(CLEANSCHEMA_1_TO_25))) }),
@@ -403,7 +408,9 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       const fake = join(root, win ? "fake-al-runner.cmd" : "fake-al-runner.sh");
       await Bun.write(
         fake,
-        win ? `@type "${answer}"\r\n@exit /b 1\r\n` : `#!/bin/sh\ncat "${answer}"\nexit 1\n`,
+        win
+          ? `@echo %*>>"${calls}"\r\n@type "${answer}"\r\n@exit /b 1\r\n`
+          : `#!/bin/sh\necho "$@" >> "${calls}"\ncat "${answer}"\nexit 1\n`,
       );
       if (!win) await chmod(fake, 0o755);
       const config = join(root, "lethal.config.json");
@@ -422,6 +429,8 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
           join(root, "lethal.sqlite"),
           "--config",
           config,
+          "--out",
+          listing,
         ],
         { stdout: "pipe", stderr: "pipe", env: process.env },
       );
@@ -430,6 +439,20 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       expect(await proc.exited, stderr).toBe(0);
       expect(stderr).not.toContain("R392");
       expect(stdout).toMatch(/mutants?/i);
+      // Exactly one al-runner call, and it is the probe.
+      const recorded = (await Bun.file(calls).text()).split(/\r?\n/).filter((l) => l.trim() !== "");
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toContain("--test Codeunit50101.ProbeMask");
+      // al-runner's build was listed (line 8), not alc's (line 6).
+      const parsed = JSON.parse(await Bun.file(listing).text()) as {
+        batches: { sites: { line: number; operator: string }[] }[];
+      };
+      const voidLines = parsed.batches
+        .flatMap((b) => b.sites)
+        .filter((s) => s.operator === VOID_CALL)
+        .map((s) => s.line)
+        .sort((a, b) => a - b);
+      expect(voidLines).toEqual([8]);
     });
   }, 60_000);
 });
