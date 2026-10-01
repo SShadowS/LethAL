@@ -21,6 +21,8 @@ import {
   type InstalledArtifactRef,
   type NamedMutantRequest,
   loadInstalledArtifact,
+  predatesR360Detail,
+  prunedDetail,
 } from "./named-mutants";
 import {
   type LeaseSessionConfig,
@@ -121,6 +123,9 @@ export const INSTALLED_ARTIFACT_REFUSALS: Readonly<
   "local-copy-unreadable": "artifact-files-unusable",
   "local-copy-differs": "artifact-files-unusable",
   "manifest-differs": "artifact-files-unusable",
+  "payload-differs": "artifact-files-unusable",
+  "payload-too-large": "artifact-files-unusable",
+  replaced: "artifact-files-unusable",
   mismatch: "stale-artifact",
   unavailable: "artifact-identity-unavailable",
   // The backend cannot attach to an installed artifact: only bcdev can, and verify is bcdev only.
@@ -147,7 +152,7 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
   "stale-artifact":
     "the server holds another build now; run lethal run again, then verify with its artifact id",
   "artifact-files-unusable":
-    "the run's local .app or instrumented files are gone or changed; run lethal run again, then verify",
+    "the run's installed files in the store are pruned, over a limit or changed; run lethal run again, then verify",
   "unknown-gap":
     "copy the gap id and its artifactId from one lethal explain gap of the run that published this artifact; an edited or moved block, or other line endings, give a new id, and only the run's last batch stays installed",
   "gap-has-no-survivor":
@@ -316,19 +321,31 @@ function installedOf(store: ResultsStore, artifactId: string) {
     );
   }
   // Checked BEFORE reading any mutant row: a store from before C02-06 must get this typed
-  // refusal, not batchMutantRows' throw on an old row.
-  const { appPath, instrumentedDir, sourceSha256 } = rec;
-  if (appPath === null || instrumentedDir === null || sourceSha256 === null) {
+  // refusal, not batchMutantRows' throw on an old row. R360: the installed files are the stored
+  // bundle, so a row without its payload digest predates R360 (no path fallback), and a pruned
+  // row names the run that replaced it. `loadInstalledArtifact` refuses both again, typed.
+  const { sourceSha256 } = rec;
+  if (rec.payloadSha256 === null) {
+    throw new VerifyError("source-predates-verify", predatesR360Detail(rec.runId, rec.batchIndex));
+  }
+  if (rec.bundlePrunedBy !== null) {
     throw new VerifyError(
-      "source-predates-verify",
-      `run ${rec.runId} did not record its installed files or its source hash. That happens when the run was recorded before lethal verify existed, its source changed during the run, the run stopped before the last batch, or its source tree was unreadable; run lethal run again, then verify`,
+      "artifact-files-unusable",
+      prunedDetail(rec.runId, rec.batchIndex, rec.bundlePrunedBy, rec.resourceKey),
     );
   }
+  if (sourceSha256 === null) {
+    throw new VerifyError(
+      "source-predates-verify",
+      `run ${rec.runId} did not record its source hash. That happens when the run was recorded before lethal verify existed, its source changed during the run, the run stopped before the last batch, or its source tree was unreadable; run lethal run again, then verify`,
+    );
+  }
+  // R360: labels for messages only; the bytes come from the store.
   const installed: InstalledArtifactRef = {
     fromRunId: rec.runId,
     batchIndex: rec.batchIndex,
-    appPath,
-    instrumentedDir,
+    appPath: rec.appPath ?? "(not recorded)",
+    instrumentedDir: rec.instrumentedDir ?? "(not recorded)",
   };
   return { rec, sourceSha256, installed };
 }

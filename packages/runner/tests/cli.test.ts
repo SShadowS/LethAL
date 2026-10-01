@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { describe, expect, spyOn, test } from "bun:test";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
@@ -57,11 +58,13 @@ import { EnvToolClient } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
 import type { RunEvent } from "../src/events";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
+import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src/installed-bundle";
 import { LeaseClient } from "../src/lease";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import { VERIFY_EXIT } from "../src/verify";
+import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -2089,12 +2092,11 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
   });
 });
 
-// R358 review C1: `lethal run` KEEPS its scratch folder because the store records the installed
-// batch's `.app` and instrumented folder inside it and `lethal verify` reads them back. Driven
-// through the REAL runFromCli, runSession and verifyFromCli against one store; only the backends
-// are fakes. The verify fake stops at `compileTestApp`, the first backend call after
-// `loadInstalledArtifact`, so reaching it proves verify read the run's files. With the run's
-// scratch folder removed, verify instead prints an `artifact-files-unusable` refusal.
+// R358 review C1, then R360: a clean `lethal run` removes its scratch folder, and `lethal verify`
+// reads the installed batch's files from the store (step 3d's bundle). Driven through the REAL
+// runFromCli, runSession and verifyFromCli against one store; only the backends are fakes. The
+// verify fake stops at `compileTestApp`, the first backend call after `loadInstalledArtifact`, so
+// reaching it with the folder already gone proves verify read the stored files.
 describe("lethal run then lethal verify on one store (R358)", () => {
   class DeployingBackend implements ExecutionBackend {
     capabilities(): BackendCapabilities {
@@ -2134,7 +2136,11 @@ describe("lethal run then lethal verify on one store (R358)", () => {
   // --selector-id overrides below, exactly the case verify used to fail on.
   const OVERRIDES: SelectorConfig = { selectorId: 79050, controlId: 79051, tableId: 79052 };
 
-  async function runThenArtifact() {
+  /** `lethal-XXXXXX` run folders in this test process's private temp folder (the R358 preload). */
+  const runFolders = () =>
+    new Set(readdirSync(tmpdir()).filter((e) => /^lethal-[A-Za-z0-9]{6}$/.test(e)));
+
+  async function runThenArtifact(backend: ExecutionBackend = new DeployingBackend()) {
     const root = scratch("lethal-run-verify-");
     const projectDir = join(root, "app");
     const testDir = join(root, "tests");
@@ -2202,7 +2208,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         allowExpiringEnv: false,
         selectorIdOverrides: OVERRIDES,
       },
-      { buildBackend: async () => new DeployingBackend() },
+      { buildBackend: async () => backend },
     );
     const survivor = report.mutants.find((m) => m.verdict === "survived");
     const artifactId = report.artifacts?.[0]?.artifactId;
@@ -2259,8 +2265,11 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     return { outcome, printed, handed, reachedWith };
   }
 
-  test("verify reads the installed batch's files the run left behind", async () => {
+  test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
+    const before = runFolders();
     const ctx = await runThenArtifact();
+    // R360: the clean run removed its scratch folder, so nothing verify reads can come from it.
+    expect([...runFolders()].filter((e) => !before.has(e))).toEqual([]);
     const v = await verifyOnce(ctx);
     expect(v.printed).toBe("");
     expect(v.outcome).toBe("R358 fake: verify reached compileTestApp");
@@ -2290,19 +2299,35 @@ describe("lethal run then lethal verify on one store (R358)", () => {
 
   test("R261: a manifest without selector ids refuses by name before any backend is built", async () => {
     const ctx = await runThenArtifact();
+    // A manifest with no ids, re-hashed into the trusted record so only the missing ids differ.
+    // R360: the manifest verify reads is the stored bundle's, so the bundle and its payload
+    // digest are rewritten, not a file in the (removed) scratch folder.
     const store = new ResultsStore(ctx.dbPath);
     const rec = store.artifactRecordById(ctx.artifactId);
+    const rows = rec === null ? null : store.installedBundle(rec.runId, rec.batchIndex);
+    if (rec === null || rows === null || rec.payloadSha256 === null) {
+      throw new Error("R261 fixture: no stored bundle");
+    }
+    const opened = openInstalledBundle(rows, {
+      runId: rec.runId,
+      batchIndex: rec.batchIndex,
+      payloadSha256: rec.payloadSha256,
+    });
+    const { selectorIds: _dropped, ...rest } = JSON.parse(opened.manifestText);
+    const rewritten = bundleOfParts({
+      appBytes: opened.appBytes,
+      appJsonText: opened.appJsonText,
+      manifestText: JSON.stringify(rest),
+      files: opened.alSources,
+    });
     store.close();
-    if (rec?.instrumentedDir == null) throw new Error("R261 fixture: no instrumented dir");
-    // A manifest with no ids, re-hashed into the trusted record so only the missing ids differ.
-    const manifestPath = join(rec.instrumentedDir, "mutant-manifest.json");
-    const { selectorIds: _dropped, ...rest } = JSON.parse(await readFile(manifestPath, "utf8"));
-    await writeFile(manifestPath, JSON.stringify(rest));
     const db = new Database(ctx.dbPath);
-    db.query("UPDATE batch_artifacts SET manifest_sha256 = ? WHERE artifact_id = ?").run(
-      Bun.SHA256.hash(JSON.stringify(rest), "hex"),
-      ctx.artifactId,
-    );
+    db.query(
+      "UPDATE batch_artifacts SET manifest_sha256 = ?, payload_sha256 = ? WHERE artifact_id = ?",
+    ).run(Bun.SHA256.hash(JSON.stringify(rest), "hex"), rewritten.payloadSha256, ctx.artifactId);
+    db.query(
+      "UPDATE installed_bundles SET manifest_gz = ? WHERE run_id = ? AND batch_index = ?",
+    ).run(rewritten.manifestGz, rec.runId, rec.batchIndex);
     db.close();
     const v = await verifyOnce(ctx);
     expect(v.handed).toEqual([]);
@@ -2337,6 +2362,30 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     ).rejects.toBe(buildErr);
     expect(scratchRoot).toBeDefined();
     expect(existsSync(scratchRoot ?? "")).toBe(false);
+  });
+
+  test("R360 I4: a published .app that vanished fails the run by name and keeps its folder", async () => {
+    class VanishingBackend extends DeployingBackend {
+      override async deploy(dir: string): Promise<CompiledArtifact | null> {
+        const compiled = await super.deploy(dir);
+        if (compiled !== null) await rm(compiled.appPath);
+        return compiled;
+      }
+    }
+    const before = runFolders();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const err = await runThenArtifact(new VanishingBackend()).catch((e: unknown) => e);
+    const warned = warn.mock.calls.map((c) => c.join(" "));
+    warn.mockRestore();
+    expect(err).toBeInstanceOf(InstalledBundleError);
+    expect((err as Error).message).toContain("fake.app");
+    const kept = [...runFolders()].filter((e) => !before.has(e));
+    expect(kept).toHaveLength(1);
+    expect(
+      warned.some((w) =>
+        w.includes(`[lethal] kept scratch folder ${join(tmpdir(), kept[0] ?? "")}`),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -2428,6 +2477,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.0.0",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
@@ -2477,6 +2527,7 @@ describe("C02-06: lethal verify (Task 7)", () => {
       appVersion: "0.0.0.0",
     });
     store.recordArtifact(runId, {
+      bundle: tinyBundle(),
       batchIndex: 0,
       appVersion: "1.0.0.0",
       appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",

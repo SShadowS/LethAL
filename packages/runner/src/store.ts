@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
+import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
 import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
 
@@ -228,6 +230,19 @@ export interface RunRow {
   readonly testAppHash: string | null;
 }
 
+/**
+ * R360 I-1: the `bundle_pruned_by` value for a bundle dropped because the environment it was
+ * installed on was deleted at env-tool teardown. Run ids start at 1, so 0 names no run.
+ */
+export const PRUNED_BY_ENV_TEARDOWN = 0;
+
+/**
+ * Review M-8: how long a write waits for another process's write lock before SQLITE_BUSY. A
+ * BaseApp-sized bundle transaction was measured at 0.6 s (R360 I5), so 5 s covers it several times
+ * over while a writer that is really stuck still fails loudly within seconds.
+ */
+export const STORE_BUSY_TIMEOUT_MS = 5000;
+
 /** R354: the closed set a `coverage_mode` column may hold. Exhaustive by type. */
 const COVERAGE_MODES: Record<CoverageMode, true> = {
   none: true,
@@ -344,11 +359,29 @@ CREATE TABLE IF NOT EXISTS batch_artifacts (
   -- C02-04b: SHA-256 of JSON.stringify(the manifest the compiler was given). NULL on a row written
   -- before the column existed, which trustedArtifactRecord's callers refuse rather than trust.
   manifest_sha256 TEXT,
-  -- C02-06: where step 3d's compiled package and batch dir are, for lethal verify. Not identity:
-  -- verify re-hashes the files against the row. NULL on an older row, which verify refuses.
+  -- C02-06: where step 3d found the compiled package and batch dir. Provenance only since R360:
+  -- verify reads the stored bundle (installed_bundles), never these paths.
   app_path TEXT,
   instrumented_dir TEXT,
   PRIMARY KEY (run_id, batch_index)
+);
+-- R360: the installed batch's files, kept in the store so the run's temp folder can be removed.
+-- Looked up by exact (run_id, batch_index) only. One row per .al file, so neither side ever builds
+-- one giant string. Pruned by recordArtifact (the same run's lower batches) and by finishRun.
+CREATE TABLE IF NOT EXISTS installed_bundles (
+  run_id INTEGER NOT NULL,
+  batch_index INTEGER NOT NULL,
+  app_bytes BLOB NOT NULL,
+  app_json_text TEXT NOT NULL,
+  manifest_gz BLOB NOT NULL,
+  PRIMARY KEY (run_id, batch_index)
+);
+CREATE TABLE IF NOT EXISTS installed_bundle_files (
+  run_id INTEGER NOT NULL,
+  batch_index INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  text_gz BLOB NOT NULL,
+  PRIMARY KEY (run_id, batch_index, path)
 );
 `;
 
@@ -369,6 +402,7 @@ export class ResultsStore {
   constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = new Database(dbPath, { create: true });
+    this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
     this.migrate();
@@ -501,6 +535,13 @@ export class ResultsStore {
       // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
       ["runs", "test_digest_parts TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
+      // R360: the instrumented payload digest, and which run pruned the batch's bundle. NULL on an
+      // older row, which verify refuses as "recorded before R360", never reads as a value.
+      ["batch_artifacts", "payload_sha256 TEXT", baCols],
+      ["batch_artifacts", "bundle_pruned_by INTEGER", baCols],
+      // R360: the quarantine resource key of the run's server; NULL for al-runner and for a
+      // backend with no server. `finishRun` prunes within (app_id, resource_key).
+      ["runs", "resource_key TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -528,6 +569,9 @@ export class ResultsStore {
     /** R354: the coverage mode the run measures under (`caps.coverage`). Required, so no run is
      *  recorded without one: a verdict is only comparable to one scored under the same mode. */
     coverageMode: CoverageMode;
+    /** R360: `quarantineResourceKey` of the run's server. Absent (al-runner, a backend with no
+     *  server) writes NULL, which groups with NULL when `finishRun` prunes. */
+    resourceKey?: string;
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
@@ -541,8 +585,8 @@ export class ResultsStore {
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, test_app_hash, test_digests, test_digest_parts) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -551,6 +595,7 @@ export class ResultsStore {
         info.configFingerprint ?? null,
         info.identityScheme,
         info.coverageMode,
+        info.resourceKey ?? null,
         info.testAppHash ?? null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
         info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
@@ -827,12 +872,103 @@ export class ResultsStore {
     }));
   }
 
+  /**
+   * Stamps the run finished and, in the same transaction, prunes installed bundles (R360 I1) in
+   * the finishing run's group, the runs with its `app_id` and `resource_key` (`IS`, so NULL groups
+   * with NULL). The group's most recently PUBLISHED bundle (highest `installed_bundles` rowid, i.e.
+   * insert order) is the build on the server and is never pruned, whichever run finishes last
+   * (review r1 #2: an older run finishing after a newer one must not prune the newer bundle).
+   * Every OLDER-published bundle goes if its run is finished or started no later than this one
+   * (ruling Q1); an unfinished run that started after this one keeps its bundle. `runSession` calls
+   * this only for a run that did not throw and did not latch unsafe, so a failed run prunes nothing.
+   */
   finishRun(runId: number, info: { batchCount: number; baselineGreen: boolean }): void {
+    const tx = this.db.transaction(() => {
+      this.db
+        .query(
+          "UPDATE runs SET finished_at = datetime('now'), batch_count = ?, baseline_green = ? WHERE id = ?",
+        )
+        .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
+      const doomed = this.db
+        .query(
+          "SELECT i.run_id, i.batch_index FROM installed_bundles i " +
+            "JOIN runs o ON o.id = i.run_id JOIN runs me ON me.id = ? " +
+            "WHERE o.app_id IS me.app_id AND o.resource_key IS me.resource_key " +
+            "AND (o.finished_at IS NOT NULL OR o.id <= me.id) " +
+            "AND i.rowid < (SELECT MAX(l.rowid) FROM installed_bundles l " +
+            "JOIN runs lr ON lr.id = l.run_id " +
+            "WHERE lr.app_id IS me.app_id AND lr.resource_key IS me.resource_key)",
+        )
+        .all(runId) as Array<{ run_id: number; batch_index: number }>;
+      for (const d of doomed) this.pruneBundle(d.run_id, d.batch_index, runId);
+    });
+    tx();
+    this.checkpoint();
+  }
+
+  /**
+   * R360 I-1: the env-tool session deleted the environment whose quarantine resource key is
+   * `resourceKey`, so no bundle installed there can be verified again. Drops every one, of any
+   * run, and marks it `PRUNED_BY_ENV_TEARDOWN`. Returns how many were dropped.
+   */
+  dropBundlesOfResource(resourceKey: string): number {
+    const tx = this.db.transaction(() => {
+      const doomed = this.db
+        .query(
+          "SELECT i.run_id, i.batch_index FROM installed_bundles i " +
+            "JOIN runs r ON r.id = i.run_id WHERE r.resource_key = ?",
+        )
+        .all(resourceKey) as Array<{ run_id: number; batch_index: number }>;
+      for (const d of doomed) this.pruneBundle(d.run_id, d.batch_index, PRUNED_BY_ENV_TEARDOWN);
+      return doomed.length;
+    });
+    const n = tx();
+    this.checkpoint();
+    return n;
+  }
+
+  /** R360: drops one batch's bundle and records which run pruned it. */
+  private pruneBundle(runId: number, batchIndex: number, prunedBy: number): void {
     this.db
-      .query(
-        "UPDATE runs SET finished_at = datetime('now'), batch_count = ?, baseline_green = ? WHERE id = ?",
-      )
-      .run(info.batchCount, info.baselineGreen ? 1 : 0, runId);
+      .query("DELETE FROM installed_bundle_files WHERE run_id = ? AND batch_index = ?")
+      .run(runId, batchIndex);
+    this.db
+      .query("DELETE FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+      .run(runId, batchIndex);
+    this.db
+      .query("UPDATE batch_artifacts SET bundle_pruned_by = ? WHERE run_id = ? AND batch_index = ?")
+      .run(prunedBy, runId, batchIndex);
+  }
+
+  /** Review r1 #4: a busy checkpoint is reported once per store, not on every write. */
+  private walBusyWarned = false;
+
+  /**
+   * R360 I5, measured: a bundle write grows the WAL to about the bundle's size and SQLite never
+   * truncates it by itself, so the store checkpoints after writing and after pruning.
+   * Best-effort: the busy timeout is off for this one statement, so a reader holding the WAL makes
+   * it report busy at once rather than stall the run for `STORE_BUSY_TIMEOUT_MS`. A busy result is
+   * NOT cleanup (review r1 #4): it warns once, naming the WAL's size, and the next checkpoint retries.
+   */
+  private checkpoint(): void {
+    this.db.exec("PRAGMA busy_timeout = 0;");
+    let row: { busy: number } | null;
+    try {
+      row = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number } | null;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
+    }
+    if (row === null || row.busy === 0 || this.walBusyWarned) return;
+    this.walBusyWarned = true;
+    let size = "an unknown number of";
+    try {
+      size = String(statSync(`${this.dbPath}-wal`).size);
+    } catch {
+      // No readable -wal file: the size stays unknown, the warning still names the file.
+    }
+    console.warn(
+      `[lethal] could not truncate ${this.dbPath}-wal (${size} bytes): another connection is reading the results database, so the space stays in use until a later checkpoint succeeds (R360)`,
+    );
   }
 
   /**
@@ -851,9 +987,13 @@ export class ResultsStore {
       sha256: string;
       /** C02-04b: SHA-256 of JSON.stringify(compiled.mutantManifest). Absent writes NULL. */
       manifestSha256?: string;
-      /** C02-06: the compiled package and the batch dir it was built from. Absent writes NULL. */
+      /** C02-06: the compiled package and the batch dir it was built from. Absent writes NULL.
+       *  Since R360 provenance only: verify reads `bundle`, never these paths. */
       appPath?: string;
       instrumentedDir?: string;
+      /** R360 I4: the batch's installed files and their payload digest. REQUIRED: a published
+       *  batch without its bundle has nothing left to verify once its temp folder is removed. */
+      bundle: InstalledBundleWrite;
     },
   ): void {
     // One transaction: the run-row UPDATE (last batch wins, unchanged) and the batch_artifacts
@@ -870,7 +1010,7 @@ export class ResultsStore {
         .query(
           "INSERT INTO batch_artifacts " +
             "(run_id, batch_index, artifact_id, artifact_sha256, app_version, manifest_sha256, " +
-            "app_path, instrumented_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "app_path, instrumented_dir, payload_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           runId,
@@ -881,9 +1021,64 @@ export class ResultsStore {
           info.manifestSha256 ?? null,
           info.appPath ?? null,
           info.instrumentedDir ?? null,
+          info.bundle.payloadSha256,
         );
+      const { bundle } = info;
+      this.db
+        .query(
+          "INSERT INTO installed_bundles (run_id, batch_index, app_bytes, app_json_text, manifest_gz) " +
+            "VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(runId, info.batchIndex, bundle.appBytes, bundle.appJsonText, bundle.manifestGz);
+      const insertFile = this.db.query(
+        "INSERT INTO installed_bundle_files (run_id, batch_index, path, text_gz) VALUES (?, ?, ?, ?)",
+      );
+      for (const f of bundle.files) insertFile.run(runId, info.batchIndex, f.path, f.textGz);
+      // Ruling Q2: this publish replaced the same run's lower batches on the server, so their
+      // bundles go now. Another run's bundle is only ever pruned by `finishRun`.
+      const lower = this.db
+        .query("SELECT batch_index FROM installed_bundles WHERE run_id = ? AND batch_index < ?")
+        .all(runId, info.batchIndex) as Array<{ batch_index: number }>;
+      for (const l of lower) this.pruneBundle(runId, l.batch_index, runId);
     });
     tx();
+    this.checkpoint();
+  }
+
+  /** Review M-1: whether one batch's bundle is stored, by exact `(runId, batchIndex)`, without
+   *  loading it. */
+  hasInstalledBundle(runId: number, batchIndex: number): boolean {
+    return (
+      this.db
+        .query("SELECT 1 FROM installed_bundles WHERE run_id = ? AND batch_index = ?")
+        .get(runId, batchIndex) !== null
+    );
+  }
+
+  /** R360: one batch's stored bundle, by exact `(runId, batchIndex)`; `null` when none is stored. */
+  installedBundle(runId: number, batchIndex: number): InstalledBundleRows | null {
+    const head = this.db
+      .query(
+        "SELECT app_bytes, app_json_text, manifest_gz FROM installed_bundles " +
+          "WHERE run_id = ? AND batch_index = ?",
+      )
+      .get(runId, batchIndex) as {
+      app_bytes: Uint8Array;
+      app_json_text: string;
+      manifest_gz: Uint8Array;
+    } | null;
+    if (head === null) return null;
+    const files = this.db
+      .query(
+        "SELECT path, text_gz FROM installed_bundle_files WHERE run_id = ? AND batch_index = ?",
+      )
+      .all(runId, batchIndex) as Array<{ path: string; text_gz: Uint8Array }>;
+    return {
+      appBytes: head.app_bytes,
+      appJsonText: head.app_json_text,
+      manifestGz: head.manifest_gz,
+      files: files.map((f) => ({ path: f.path, textGz: f.text_gz })),
+    };
   }
 
   /**
@@ -902,10 +1097,17 @@ export class ResultsStore {
     sha256: string;
     manifestSha256: string | null;
     appId: string | null;
+    /** R360: NULL on a row written before R360. */
+    payloadSha256: string | null;
+    /** R360: the run that pruned this batch's bundle, or null. */
+    bundlePrunedBy: number | null;
+    /** R360: the run's quarantine resource key; null when it recorded no server. */
+    resourceKey: string | null;
   } | null {
     const row = this.db
       .query(
-        "SELECT b.artifact_id, b.artifact_sha256, b.manifest_sha256, r.app_id " +
+        "SELECT b.artifact_id, b.artifact_sha256, b.manifest_sha256, r.app_id, " +
+          "b.payload_sha256, b.bundle_pruned_by, r.resource_key " +
           "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id " +
           "WHERE b.run_id = ? AND b.batch_index = ?",
       )
@@ -914,6 +1116,9 @@ export class ResultsStore {
       artifact_sha256: string;
       manifest_sha256: string | null;
       app_id: string | null;
+      payload_sha256: string | null;
+      bundle_pruned_by: number | null;
+      resource_key: string | null;
     } | null;
     if (row === null) return null;
     // A NULL app_id is returned, not thrown: the caller (`loadInstalledArtifact`) refuses it as
@@ -923,6 +1128,9 @@ export class ResultsStore {
       sha256: row.artifact_sha256,
       manifestSha256: row.manifest_sha256,
       appId: row.app_id,
+      payloadSha256: row.payload_sha256,
+      bundlePrunedBy: row.bundle_pruned_by,
+      resourceKey: row.resource_key,
     };
   }
 
@@ -967,12 +1175,19 @@ export class ResultsStore {
     sourceSha256: string | null;
     appPath: string | null;
     instrumentedDir: string | null;
+    /** R360: NULL on a row written before R360. */
+    payloadSha256: string | null;
+    /** R360: the run that pruned this batch's bundle, or null. */
+    bundlePrunedBy: number | null;
+    /** R360: the run's quarantine resource key; null when it recorded no server. */
+    resourceKey: string | null;
   } | null {
     const rows = this.db
       .query(
         "SELECT b.run_id, r.project_path, b.batch_index, " +
           "(SELECT MAX(h.batch_index) FROM batch_artifacts h WHERE h.run_id = b.run_id) AS highest, " +
-          "b.artifact_sha256, r.source_sha256, b.app_path, b.instrumented_dir " +
+          "b.artifact_sha256, r.source_sha256, b.app_path, b.instrumented_dir, " +
+          "b.payload_sha256, b.bundle_pruned_by, r.resource_key " +
           "FROM batch_artifacts b JOIN runs r ON r.id = b.run_id WHERE b.artifact_id = ?",
       )
       .all(artifactId) as Array<{
@@ -984,6 +1199,9 @@ export class ResultsStore {
       source_sha256: string | null;
       app_path: string | null;
       instrumented_dir: string | null;
+      payload_sha256: string | null;
+      bundle_pruned_by: number | null;
+      resource_key: string | null;
     }>;
     if (rows.length > 1) {
       throw new DuplicateArtifactRecordError(
@@ -1001,6 +1219,9 @@ export class ResultsStore {
       sourceSha256: row.source_sha256,
       appPath: row.app_path,
       instrumentedDir: row.instrumented_dir,
+      payloadSha256: row.payload_sha256,
+      bundlePrunedBy: row.bundle_pruned_by,
+      resourceKey: row.resource_key,
     };
   }
 

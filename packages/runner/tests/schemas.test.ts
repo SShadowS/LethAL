@@ -46,6 +46,7 @@ import {
   type VerifyOutput,
   runVerify,
 } from "../src/verify";
+import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
@@ -574,6 +575,7 @@ async function buildVerifyHappyPathOutput() {
       manifestSha256: Bun.SHA256.hash(manifestText, "hex"),
       appPath,
       instrumentedDir,
+      bundle: await bundleFor(instrumentedDir, appPath),
     });
     store.recordSourceHash(runId, await hashTargetSource(projectDir, preprocessorSymbols));
     store.recordMutant(runId, {
