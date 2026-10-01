@@ -8,7 +8,7 @@ import {
   recordSpawns,
   watchResourceSelector,
 } from "../itest/cli-default-leg";
-import type { AlRunnerBackend } from "../src/al-runner-backend";
+import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
@@ -120,6 +120,28 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(ev.activations).toBe(3);
     expect(ev.alHashes.size).toBe(1);
     expect(backend.capabilities().coverage).toBe("none");
+  });
+
+  test("the provisioning call (sentinel --test) is not a test spawn; a second one, or a real --test, fails", async () => {
+    // Measured live 2026-10-01: `runSession` calls `provisionOnce` under `--server` too, a one-shot
+    // `--test` whose filter matches no test. The first live record run counted it as a test spawn.
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const provision = ["al-runner.exe", "--test", AL_RUNNER_PROVISION_SENTINEL];
+    const withProvision: SpawnRecord = {
+      ...record,
+      oneShotArgv: [...record.oneShotArgv, provision],
+    };
+    expect(cliDefaultMechanismFailures(withProvision, ev)).toEqual([]);
+    const twice: SpawnRecord = {
+      ...withProvision,
+      oneShotArgv: [...withProvision.oneShotArgv, provision],
+    };
+    expect(kinds(cliDefaultMechanismFailures(twice, ev))).toEqual(["server"]);
+    const realTest: SpawnRecord = {
+      ...withProvision,
+      oneShotArgv: [...withProvision.oneShotArgv, ["al-runner.exe", "--test", "Sandbox Tests.X"]],
+    };
+    expect(kinds(cliDefaultMechanismFailures(realTest, ev))).toEqual(["server"]);
   });
 
   test("serverMode: false gives one-shot AND static, so both mechanism checks fail", async () => {

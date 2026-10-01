@@ -25,6 +25,7 @@ import {
   SELECTOR_RESOURCE_NAME,
   SELECTOR_RESOURCE_NONE,
 } from "@lethal/schemata";
+import { AL_RUNNER_PROVISION_SENTINEL } from "../src/al-runner-backend";
 import type { ServerProcessHandle, ServerSpawnFn } from "../src/al-runner-server";
 import type { ExecutionBackend } from "../src/backend";
 import type { SpawnFn } from "../src/publisher";
@@ -139,7 +140,19 @@ export function cliDefaultMechanismFailures(
   if (servers !== backends) {
     out.push(`server: expected ${backends} --server spawn(s), saw ${servers}`);
   }
-  const tests = record.oneShotArgv.filter((a) => a.includes("--test")).length;
+  // `provisionOnce` is a one-shot call with a `--test` filter that matches NO test (the sentinel),
+  // made for its provisioning side effect only; it runs in server mode too. Measured live
+  // 2026-10-01: it was the one `--test` spawn under `--server`. Every OTHER `--test` spawn is a
+  // test run the daemon should have made.
+  const provisioning = record.oneShotArgv.filter((a) =>
+    a.includes(AL_RUNNER_PROVISION_SENTINEL),
+  ).length;
+  if (provisioning > backends) {
+    out.push(`server: expected at most ${backends} provisioning spawn(s), saw ${provisioning}`);
+  }
+  const tests = record.oneShotArgv.filter(
+    (a) => a.includes("--test") && !a.includes(AL_RUNNER_PROVISION_SENTINEL),
+  ).length;
   if (tests !== 0) out.push(`server: expected no one-shot test spawn, saw ${tests}`);
   if (resource.activations === 0) out.push("resource: no activate() was observed");
   out.push(...resource.problems.map((p) => `resource: ${p}`));
