@@ -1,13 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   type AlRunnerCanaryFsOps,
   baseAppJson,
   cleanUpQuietly,
   defaultFsOps,
 } from "./al-runner-canary";
-import { OneShotTransport, qualifiedTestName } from "./al-runner-transport";
+import { OneShotTransport, buildAlRunnerArgv, qualifiedTestName } from "./al-runner-transport";
 import {
   AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0,
   type AlRunnerPredefinedProbe,
@@ -183,6 +183,64 @@ const PROBE_TEST_TIMEOUT_SECONDS = 60;
 // Generous: without a pin (a dry run) al-runner may provision artifacts inside this call.
 const PROBE_DEADLINE_MS = 30 * 60 * 1000;
 
+/** The probe's request (before the timeout fields): the ONE place its argv inputs are decided. */
+export function predefinedProbeRequest(
+  sourceDir: string,
+  testDir: string,
+  platformAppsDir?: string,
+): Parameters<typeof buildAlRunnerArgv>[1] {
+  return {
+    sourceDir,
+    testDir,
+    qualifiedTest: AL_RUNNER_PREDEFINED_PROBE_TEST,
+    ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
+  };
+}
+
+/** The exact argv the probe spawns. The probe and the gate's allow-list both come through here. */
+export function predefinedProbeArgv(
+  alRunnerPath: string,
+  sourceDir: string,
+  testDir: string,
+  platformAppsDir?: string,
+): string[] {
+  return buildAlRunnerArgv(
+    alRunnerPath,
+    predefinedProbeRequest(sourceDir, testDir, platformAppsDir),
+  );
+}
+
+/**
+ * True when `argv` is EXACTLY what the probe spawns. The scratch directories are random, so they are
+ * read back out of the argv (and must be `<tmp>/lethal-r392-probe-*\/src` and `\/tests`), then the
+ * whole argv is rebuilt with `predefinedProbeArgv` and compared element for element.
+ */
+export function isPredefinedProbeArgv(argv: readonly string[], alRunnerPath: string): boolean {
+  const t = argv.indexOf("--test");
+  if (t < 0 || argv[t + 1] !== AL_RUNNER_PREDEFINED_PROBE_TEST) return false;
+  const first = t + 2 + (argv[t + 2] === "--auto-provision" ? 1 : 0);
+  const src = argv[first];
+  const tests = argv[first + 1];
+  if (src === undefined || tests === undefined) return false;
+  const root = dirname(src);
+  if (
+    basename(src) !== "src" ||
+    basename(tests) !== "tests" ||
+    dirname(tests) !== root ||
+    !basename(root).startsWith("lethal-r392-probe-")
+  ) {
+    return false;
+  }
+  const pin = argv[argv.indexOf("--package-cache") + 1];
+  const want = predefinedProbeArgv(
+    alRunnerPath,
+    src,
+    tests,
+    argv.includes("--package-cache") ? pin : undefined,
+  );
+  return want.length === argv.length && want.every((x, i) => x === argv[i]);
+}
+
 export async function probeAlRunnerPredefinedSymbols(
   alRunnerPath: string,
   opts: {
@@ -200,12 +258,9 @@ export async function probeAlRunnerPredefinedSymbols(
     let res: Awaited<ReturnType<OneShotTransport["send"]>>;
     try {
       res = await transport.send({
-        sourceDir,
-        testDir,
-        qualifiedTest: AL_RUNNER_PREDEFINED_PROBE_TEST,
+        ...predefinedProbeRequest(sourceDir, testDir, opts.platformAppsDir),
         testTimeoutSeconds: PROBE_TEST_TIMEOUT_SECONDS,
         deadlineMs: PROBE_DEADLINE_MS,
-        ...(opts.platformAppsDir !== undefined ? { platformAppsDir: opts.platformAppsDir } : {}),
       });
     } finally {
       await transport.close();

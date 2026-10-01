@@ -6,6 +6,7 @@ import {
   AL_RUNNER_PREDEFINED_CANDIDATES,
   AL_RUNNER_PREDEFINED_PROBE_TEST,
   AlRunnerPredefinedProbeError,
+  isPredefinedProbeArgv,
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
 } from "../src/al-runner-predefined-probe";
@@ -48,6 +49,18 @@ describe("probeAlRunnerPredefinedSymbols (R392)", () => {
     expect(argv).not.toContain("--define");
     expect(argv).not.toContain("--server");
     expect(argv[argv.indexOf("--test") + 1]).toBe(AL_RUNNER_PREDEFINED_PROBE_TEST);
+  });
+
+  test("R392: the argv the probe really spawns is accepted by the gate's isPredefinedProbeArgv, pinned or not", async () => {
+    for (const platformAppsDir of [undefined, "C:/pin"]) {
+      const { calls, spawn } = fakeSpawn(failed(maskFor(V2_12)));
+      await probeAlRunnerPredefinedSymbols("al-runner", {
+        spawn,
+        ...(platformAppsDir !== undefined ? { platformAppsDir } : {}),
+      });
+      expect(isPredefinedProbeArgv(calls[0] ?? [], "al-runner")).toBe(true);
+      expect(isPredefinedProbeArgv(calls[0] ?? [], "other")).toBe(false);
+    }
   });
 
   test("the scratch project is removed afterwards", async () => {

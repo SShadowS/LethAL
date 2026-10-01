@@ -26,6 +26,7 @@ import {
   SELECTOR_RESOURCE_NONE,
 } from "@lethal/schemata";
 import { provisionArgv } from "../src/al-runner-backend";
+import { isPredefinedProbeArgv } from "../src/al-runner-predefined-probe";
 import type { ServerProcessHandle, ServerSpawnFn } from "../src/al-runner-server";
 import {
   normalisePlatformAppsPath,
@@ -175,15 +176,26 @@ export function cliDefaultMechanismFailures(
   // calls `status()` first. Anything else is a one-shot run the daemon should have made.
   const seen = allowedOneShot.map(() => 0);
   const other: string[][] = [];
+  // R392: the predefined-symbol probe is the one other allowed one-shot spawn, exactly once per
+  // backend and REQUIRED (a session that skipped it would run on an assumed symbol list). Its
+  // scratch dirs are random, so `isPredefinedProbeArgv` rebuilds the argv from `predefinedProbeArgv`.
+  // The binary path is the first element of every allowed argv (they all come from one config).
+  const alRunnerPath = allowedOneShot[0]?.[0] ?? "";
+  let probes = 0;
   for (const argv of record.oneShotArgv) {
     const i = allowedOneShot.findIndex((a) => sameArgv(a, argv));
-    if (i < 0) other.push(argv);
-    else seen[i] = (seen[i] ?? 0) + 1;
+    if (i >= 0) seen[i] = (seen[i] ?? 0) + 1;
+    else if (isPredefinedProbeArgv(argv, alRunnerPath)) probes += 1;
+    else other.push(argv);
   }
   if (other.length !== 0) {
     out.push(
-      `server: expected no one-shot run besides the allowed provisioning and --version argvs, saw ${other.length}: ${other.map((a) => a.join(" ")).join(" | ")}`,
+      `server: expected no one-shot run besides the allowed provisioning, --version and R392 probe argvs, saw ${other.length}: ${other.map((a) => a.join(" ")).join(" | ")}`,
     );
+  }
+  if (probes === 0) out.push(`server: R392 probe did not run (expected ${backends})`);
+  else if (probes > backends) {
+    out.push(`server: expected at most ${backends} R392 probe spawn(s), saw ${probes}`);
   }
   allowedOneShot.forEach((a, i) => {
     const n = seen[i] ?? 0;
