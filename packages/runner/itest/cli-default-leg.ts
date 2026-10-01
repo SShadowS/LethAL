@@ -14,7 +14,7 @@
  *
  * Pre-committed in docs/superpowers/specs/2026-10-01-r387-cli-default-leg-precommitment.md. Kept out
  * of `al-runner.itest.ts` because that script runs its gate at import (R186), and so the checks can
- * be unit-tested offline (`cli-default-leg.test.ts`).
+ * be unit-tested offline (`packages/runner/tests/cli-al-runner-defaults.test.ts`).
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";

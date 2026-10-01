@@ -821,6 +821,6 @@ per-mutant baseline**, where a differing verdict is a regression, never "close e
 | `LETHAL_ITEST_BCDEV=1 bun run itest:bcdev` | End-to-end verdicts against real BC | 3 killed / 12 survived / 4 no-coverage |
 | `LETHAL_ITEST_TABLES=1 bun run itest:tables` | Tier-2 operators, table-trigger and extension-object mutation | 299 / 63 / 15 over 377 deployed |
 | `LETHAL_ITEST_ENVTOOL=1 bun run itest:envtool` | An externally-owned environment, reached through config | 3 / 12 / 4 |
-| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 16 / 0 CLI-default leg (pre-committed, not yet recorded) |
+| `LETHAL_ITEST_ALRUNNER=1 bun run itest:alrunner` | The al-runner backend, plus `sandbox-symbols` under `[LETHALA]` and `[LETHALB]` (R321), plus the CLI's own defaults (R387) | 3 / 12 / 4; 5 / 8 / 0 per symbol set; 3 / 16 / 0 CLI-default leg (recorded per mutant as pre-committed) |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:lease` | Lease lifecycle, contention, recovery | n/a |
 | `LETHAL_ITEST_BCDEV=1 bun run itest:stale-publish` | Publish serialization and staleness | n/a |
