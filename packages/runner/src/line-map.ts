@@ -573,21 +573,67 @@ export function isTopLevelObject(node: ALSyntaxNode): boolean {
 }
 
 /**
- * R383: how many objects a file declares, of ANY kind, `#if`-wrapped arms flattened (R298). The
- * arms of one wrapped object are ONE object, so they are counted by kind plus `object_id`, or the
- * header line for a kind with no id (an interface). An `ERROR` node is always its own object.
+ * R383 r2 ruling: object kinds that carry no code, so one AFTER a file's first object shifts no
+ * covered line. An explicit allow-list by AL semantics, NOT by the grammar: tree-sitter-al 4.4.1
+ * gives every one of these the shared `declaration_body` (`grammar.js` 475 `permissionset_declaration:
+ * _object_with_id(...)`, 487 `enum_declaration`, 529 `entitlement_declaration`; `interface_body` at
+ * 559 is `repeat1(choice($._body_element, $.interface_procedure))`), and `node-types.json` lists
+ * `procedure` and `trigger_declaration` among `declaration_body`'s and `interface_body`'s children.
+ * So the grammar shows NO kind code-free, `enumextension` included, and none is added beyond the
+ * ruling's list; `holdsCode` backs the list up by refusing an allow-listed node that parsed with code.
  */
-export function fileObjectCount(root: ALSyntaxNode): number {
-  const seen = new Set<string>();
+const CODE_FREE_KINDS: ReadonlySet<string> = new Set([
+  "permissionset_declaration",
+  "permissionsetextension_declaration",
+  "enum_declaration",
+  "interface_declaration",
+  "entitlement_declaration",
+]);
+
+/** Node kinds that hold executable code (or a procedure split across `#if` arms). */
+const CODE_KINDS: ReadonlySet<string> = new Set([
+  "procedure",
+  "trigger_declaration",
+  "code_block",
+  "preproc_split_procedure",
+  "preproc_split_procedure_preamble",
+]);
+
+function holdsCode(node: ALSyntaxNode): boolean {
+  return node.namedChildren.some((c) => CODE_KINDS.has(c.rawKind) || holdsCode(c));
+}
+
+/**
+ * R383: the objects a file declares, of ANY kind, in source order, `#if`-wrapped arms flattened
+ * (R298). The arms of one wrapped object are ONE object, so they are merged by kind plus
+ * `object_id`, or the header line for a kind with no id (an interface). An `ERROR` node is always
+ * its own object.
+ */
+function fileObjects(root: ALSyntaxNode): ALSyntaxNode[] {
+  const seen = new Map<string, ALSyntaxNode>();
   for (const node of objectDeclarationsOf(root)) {
     if (!isTopLevelObject(node)) continue;
     const tag =
       node.rawKind === "ERROR"
         ? `@${node.startPosition.row}:${node.startPosition.column}`
         : (node.childForFieldName("object_id")?.text ?? node.text.split("\n")[0]?.trim() ?? "");
-    seen.add(`${node.rawKind}:${tag.toLowerCase()}`);
+    const key = `${node.rawKind}:${tag.toLowerCase()}`;
+    if (!seen.has(key)) seen.set(key, node);
   }
-  return seen.size;
+  return [...seen.values()];
+}
+
+/**
+ * R383 r2 ruling, the ONE predicate the al-runner coverage guard, the CLI fallback and the index
+ * skip share: is this file refused as multi-object? al-runner reports every object after a file's
+ * first in the wrong frame, so a file is refused UNLESS every object after the first is code-free
+ * (`CODE_FREE_KINDS`, with no code node inside). The first object may be any kind. Anything else
+ * after it refuses, an `ERROR` or an unknown kind included (fail-closed).
+ */
+export function refusedAsMultiObject(root: ALSyntaxNode): boolean {
+  return fileObjects(root)
+    .slice(1)
+    .some((n) => !CODE_FREE_KINDS.has(n.rawKind) || holdsCode(n));
 }
 
 /**
@@ -651,7 +697,7 @@ export function fileLineMapEntries(
  * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
  * first object in this frame but every later object in a mixed source/instrumented frame
  * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
- * files with one object only (of any kind, `fileObjectCount`), so its base is 1.
+ * files whose only object with code is the first (`refusedAsMultiObject`), so its base is 1.
  *
  * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
  * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
@@ -694,8 +740,9 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
  * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
  * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
- * enum, an interface): al-runner drops the whole file's hits (and since R383 r2 the multi-object
- * guard counts the enum too and refuses coverage for the run), and without the
+ * enum, an interface): coverage stays on for the file's other objects (a code-free enum after the
+ * table does not make the file multi-object, `refusedAsMultiObject`), al-runner drops the whole
+ * file's hits, and without the
  * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
  * safe direction.
  */

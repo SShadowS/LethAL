@@ -28,10 +28,12 @@
  * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
  * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
  * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
- * gated to table triggers. An object of ANY kind counts (`fileObjectCount`): an enum then a
- * codeunit makes the codeunit a later object. Prevalence, measured (R383.md): on the gate fixtures
- * only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe` trip this; on Continia
- * Document Output one file does, three permission sets in `CDOPermissions.al`.
+ * gated to table triggers. The rule (`refusedAsMultiObject`, R383 r2 ruling): a file is refused
+ * unless every object after its first is code-free (a permission set, permission set extension,
+ * enum, interface or entitlement). So an enum then a codeunit is refused, the codeunit being a
+ * later object with code; a codeunit then permission sets is not. Prevalence, measured (R383.md):
+ * on the gate fixtures only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe`
+ * trip this, and no file on DC, System Application, Business Foundation, BaseApp or CDO does.
  *
  * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
  * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
@@ -51,9 +53,9 @@ import {
   type LineMapEntry,
   fileHoldsWrappedObject,
   fileLineMapEntries,
-  fileObjectCount,
   objectIdentityOf,
   readRenamedMemberNames,
+  refusedAsMultiObject,
   refusedObjectsOfFile,
   resolveFileLine,
 } from "./line-map";
@@ -105,7 +107,8 @@ export interface AlRunnerCoverageIndex {
   readonly byFile: ReadonlyMap<string, readonly LineMapEntry[]>;
   readonly lineMap: LineMap;
   /**
-   * Project-relative paths declaring more than one object of any kind. Non-empty disables coverage, and such a
+   * Project-relative paths refused as multi-object (`refusedAsMultiObject`: an object with code
+   * after the file's first). Non-empty disables coverage, and such a
    * file is not indexed unless `admitMultiObjectFiles` was passed (R383).
    */
   readonly multiObjectFiles: readonly string[];
@@ -163,9 +166,9 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
   for (const rel of rels) {
     const root = wrapRoot(parseAL(await readFile(join(projectDir, rel), "utf8")));
     if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
-    // R383 r2: objects of EVERY kind count. An enum then a codeunit puts the codeunit second, and
-    // al-runner reports a later object in the wrong frame whatever the first one is.
-    if (fileObjectCount(root) > 1) multi.push(normalizeSlashes(rel));
+    // R383 r2: the same predicate as the index skip below. An enum then a codeunit puts the
+    // codeunit second, and al-runner reports a later object in the wrong frame whatever the first.
+    if (refusedAsMultiObject(root)) multi.push(normalizeSlashes(rel));
   }
   return {
     supported: multi.length === 0,
@@ -216,7 +219,7 @@ export async function buildAlRunnerCoverageIndex(
       }
       continue;
     }
-    if (fileObjectCount(root) > 1) {
+    if (refusedAsMultiObject(root)) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
       multiObjectFiles.push(normalizeSlashes(rel));

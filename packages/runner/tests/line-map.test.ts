@@ -9,10 +9,10 @@ import {
   LineMap,
   buildLineMap,
   fileLineMapEntries,
-  fileObjectCount,
   lineMapFromSources,
   objectIdentityOf,
   readRenamedMemberNames,
+  refusedAsMultiObject,
   renamedMemberNamesOf,
   resolveFileLine,
 } from "../src/line-map";
@@ -882,34 +882,104 @@ describe("R383: fileLineMapEntries partitions on every top-level object", () => 
     ]);
     const entries = fileLineMapEntries(root, objectIdentityOf);
     expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([[50121, 1]]);
-    expect(fileObjectCount(root)).toBe(1);
+    // A pragma counted as an object would be a non-code-free object after the codeunit.
+    expect(refusedAsMultiObject(root)).toBe(false);
   });
 });
 
-describe("R383 r2: fileObjectCount counts objects of every kind", () => {
+/**
+ * R383 r2 ruling: a file is refused UNLESS every object after its first is code-free (an
+ * allow-listed kind with no code node inside). The first object may be any kind.
+ */
+describe("R383 r2: refusedAsMultiObject", () => {
   beforeAll(async () => {
     await initParser();
   });
 
-  test("an enum, an interface or a permission set before a codeunit makes two objects", () => {
-    for (const first of [
-      "enum 50120 E\n{\n    value(0; A) { }\n}\n",
-      'interface "I Probe"\n{\n    procedure Q();\n}\n',
+  const CODEUNIT = "codeunit 50121 C\n{\n    procedure P()\n    begin\n    end;\n}\n";
+  const parsed = (src: string) => wrapRoot(parseAL(src));
+  const CODE_FREE: [string, string, string][] = [
+    [
+      "permissionset",
+      "permissionset_declaration",
       "permissionset 50122 PS\n{\n    Assignable = true;\n}\n",
-    ]) {
-      expect(fileObjectCount(wrapRoot(parseAL(`${first}codeunit 50121 C\n{\n}\n`)))).toBe(2);
-    }
+    ],
+    [
+      "permissionsetextension",
+      "permissionsetextension_declaration",
+      "permissionsetextension 50123 PSX extends PS\n{\n}\n",
+    ],
+    ["enum", "enum_declaration", "enum 50120 E\n{\n    value(0; A) { }\n}\n"],
+    ["interface", "interface_declaration", 'interface "I Probe"\n{\n    procedure Q();\n}\n'],
+    ["entitlement", "entitlement_declaration", 'entitlement "E Probe"\n{\n    Type = Role;\n}\n'],
+  ];
+
+  for (const [label, kind, src] of CODE_FREE) {
+    test(`a codeunit then ${label} is ADMITTED`, () => {
+      const root = parsed(`${CODEUNIT}${src}`);
+      expect(root.namedChildren.map((n) => n.rawKind)).toEqual(["codeunit_declaration", kind]);
+      expect(refusedAsMultiObject(root)).toBe(false);
+    });
+  }
+
+  test("a codeunit then three permission sets (CDOPermissions.al's shape plus code) is ADMITTED", () => {
+    const ps = (id: number) => `permissionset ${id} P${id}\n{\n    Assignable = true;\n}\n`;
+    expect(refusedAsMultiObject(parsed(`${CODEUNIT}${ps(1)}${ps(2)}${ps(3)}`))).toBe(false);
+    expect(refusedAsMultiObject(parsed(`${ps(1)}${ps(2)}${ps(3)}`))).toBe(false);
   });
 
-  test("namespace, using and comment lines are not objects", () => {
-    const src = "namespace A.B;\nusing X.Y;\n// c\n/* m */\ncodeunit 50121 C\n{\n}\n";
-    expect(fileObjectCount(wrapRoot(parseAL(src)))).toBe(1);
+  const CODE_BEARING: [string, string, string][] = [
+    [
+      "a query with a trigger",
+      "query_declaration",
+      'query 50130 Q\n{\n    elements\n    {\n        dataitem(D; "Customer") { }\n    }\n\n    trigger OnBeforeOpen()\n    begin\n    end;\n}\n',
+    ],
+    [
+      "an xmlport",
+      "xmlport_declaration",
+      "xmlport 50131 X\n{\n    schema\n    {\n        textelement(Root) { }\n    }\n}\n",
+    ],
+    ["a second codeunit", "codeunit_declaration", 'codeunit 50124 "C Two"\n{\n}\n'],
+    [
+      "an enumextension (not on the list)",
+      "enumextension_declaration",
+      "enumextension 50125 EX extends E\n{\n    value(1; B) { }\n}\n",
+    ],
+  ];
+  for (const [label, kind, src] of CODE_BEARING) {
+    test(`a codeunit then ${label} is REFUSED`, () => {
+      const root = parsed(`${CODEUNIT}${src}`);
+      expect(root.namedChildren.map((n) => n.rawKind)).toEqual(["codeunit_declaration", kind]);
+      expect(refusedAsMultiObject(root)).toBe(true);
+    });
+  }
+
+  test("an enum then a codeunit is REFUSED: the codeunit is the later object, and it has code", () => {
+    expect(
+      refusedAsMultiObject(parsed(`enum 50120 E\n{\n    value(0; A) { }\n}\n${CODEUNIT}`)),
+    ).toBe(true);
   });
 
-  test("the two arms of one wrapped interface are ONE object", () => {
-    const arm = 'interface "I Probe"\n{\n    procedure Q();\n}\n';
-    const src = `#if CLEAN27\n${arm}#else\n${arm}#endif\n`;
-    expect(fileObjectCount(wrapRoot(parseAL(src)))).toBe(1);
+  test("an ERROR after a codeunit is REFUSED (fail-closed)", () => {
+    const root = parsed(`${CODEUNIT}%%% not AL {\n`);
+    expect(root.namedChildren.map((n) => n.rawKind)).toContain("ERROR");
+    expect(refusedAsMultiObject(root)).toBe(true);
+  });
+
+  test("an allow-listed kind that parsed WITH code is REFUSED (the grammar accepts it)", () => {
+    const enumWithCode = "enum 50120 E\n{\n    procedure X()\n    begin\n    end;\n}\n";
+    expect(refusedAsMultiObject(parsed(`${CODEUNIT}${enumWithCode}`))).toBe(true);
+  });
+
+  test("one object, or a namespace, using and comments before it, is not multi-object", () => {
+    expect(refusedAsMultiObject(parsed(CODEUNIT))).toBe(false);
+    const src = `namespace A.B;\nusing X.Y;\n// c\n/* m */\n${CODEUNIT}`;
+    expect(refusedAsMultiObject(parsed(src))).toBe(false);
+  });
+
+  test("the two arms of one wrapped codeunit are ONE object", () => {
+    const src = `#if CLEAN27\n${CODEUNIT}#else\n${CODEUNIT}#endif\n`;
+    expect(refusedAsMultiObject(parsed(src))).toBe(false);
   });
 });
 
