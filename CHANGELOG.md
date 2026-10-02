@@ -33,12 +33,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   bcdev matched the admission's pre-committed table; al-runner did not. So the whole-run refusal
   stays, and the `al-runner-coverage-unsupported` warning now names that reason (and R300's for a
   `#if`-wrapped file). Position-based resolution of every row (both transports) is built and tested
-  offline, kept off until upstream fixes the frame (R407). An object of ANY kind now counts
-  (an enum, interface, permission set or extension, not only a codeunit, table, page and the
-  other kinds with a coverage identity), since a codeunit after an enum is a later object too.
-  Measured: this adds one refused file on Continia Document Output (`CDOPermissions.al`, three
-  permission sets) and none on DC, System Application, Business Foundation, BaseApp or the
-  fixtures. A coverage row for a file the index skipped (multi-object, `#if`-wrapped, or with no
+  offline, kept off until upstream fixes the frame (R407). The rule is now: a file is refused
+  unless every object after its first is code-free (a permission set, permission set extension,
+  enum, interface or entitlement holding no procedure or trigger). So an enum then a codeunit is
+  refused, which it was not before, since only kinds with a coverage identity were counted; a
+  codeunit then permission sets is not. Measured: no refused file is added or removed on DC,
+  System Application, Business Foundation, BaseApp, Continia Document Output or the fixtures. A
+  coverage row for a file the index skipped (multi-object, `#if`-wrapped, or with no
   indexed object) now stops at that file instead of matching a shorter path another file owns.
 - **Three platform-kill tags ignore code the build compiles out** (R378):
   - **The tags:** `write-txn-codeunit-run` on `remove-commit`, plus `run-trigger-skipped-insert` and `run-trigger-forced` on `swap-modify-flag`. These tags are set from a whole procedure or from the receiver table's triggers.
