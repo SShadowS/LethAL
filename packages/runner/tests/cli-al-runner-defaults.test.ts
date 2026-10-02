@@ -513,12 +513,22 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(warned[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
   });
 
-  test("a multi-object file falls back to none", async () => {
+  test("R383: a multi-object file is ADMITTED: coverage stays on and nothing is warned", async () => {
     const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
     const warned: string[] = [];
     const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    expect(out.alRunner?.coverage).toBe("al-runner");
+    expect(warned).toEqual([]);
+  });
+
+  test("R383: a multi-object file beside a wrapped one: falls back, naming ONLY the wrapped file", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS, "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
     expect(out.alRunner?.coverage).toBe("none");
-    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
+    expect(warned[0]).not.toContain("Two.Codeunit.al");
   });
 
   test("a clean project keeps coverage on and warns nothing", async () => {
@@ -616,12 +626,10 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     return { coverage, warnings };
   }
 
-  test("a multi-object file reaches buildBackend with coverage none, and the named warning prints", async () => {
+  test("R383: a multi-object file reaches buildBackend with coverage al-runner, and no guard warning", async () => {
     const { coverage, warnings } = await coverageReachingBuild({ "Two.Codeunit.al": TWO_OBJECTS });
-    expect(coverage).toBe("none");
-    const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
-    expect(guard).toHaveLength(1);
-    expect(guard[0]).toContain("Two.Codeunit.al (more than one object)");
+    expect(coverage).toBe("al-runner");
+    expect(warnings.filter((w) => w.includes("al-runner-coverage-unsupported"))).toEqual([]);
   });
 
   test("an #if-wrapped object reaches buildBackend with coverage none, and the named warning prints", async () => {

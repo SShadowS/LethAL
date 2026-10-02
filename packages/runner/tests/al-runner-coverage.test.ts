@@ -67,6 +67,15 @@ async function bundle(files: Record<string, string>): Promise<string> {
   return dir;
 }
 
+/** Each indexed file's objects, `(type, id)` only, in file order. */
+function identities(
+  index: Awaited<ReturnType<typeof buildAlRunnerCoverageIndex>>,
+): { objectType: string; objectId: number }[][] {
+  return [...index.byFile.values()].map((es) =>
+    es.map((e) => ({ objectType: e.objectType, objectId: e.objectId })),
+  );
+}
+
 const ONE_OBJECT = `codeunit 79150 "Probe One"
 {
     procedure Reached(): Integer
@@ -112,19 +121,23 @@ describe("buildAlRunnerCoverageIndex", () => {
     const dir = await bundle({ "src/One.Codeunit.al": ONE_OBJECT });
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual([]);
-    expect([...index.byFile.values()]).toEqual([{ objectType: "Codeunit", objectId: 79150 }]);
+    expect(identities(index)).toEqual([[{ objectType: "Codeunit", objectId: 79150 }]]);
   });
 
-  test("NAMES a file declaring two objects, which is what disables coverage for the run", async () => {
-    // The upstream defect this guards: al-runner reports one Cobertura class per FILE and loses
-    // every object after the first, so a mutant in the second object would get no entry and
-    // `coverageFilter` would report it `no-coverage` rather than running it. Measured on 2.11.0.
+  test("R383: NAMES a file declaring two objects, and now INDEXES both objects, in order", async () => {
+    // al-runner #3713 (2.11.0 lost every object after a file's first) is gone on v2.12.0, measured
+    // on both transports (R383.md). The file is still REPORTED, and both objects are indexed.
     const two = `${ONE_OBJECT}\ncodeunit 79151 "Probe Two"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
     const dir = await bundle({ "src/Two.Codeunit.al": two });
     const index = await buildAlRunnerCoverageIndex(dir);
     expect(index.multiObjectFiles).toEqual(["src/Two.Codeunit.al"]);
-    // And it is not indexed, so nothing can accidentally resolve against half of it.
-    expect(index.byFile.size).toBe(0);
+    expect(identities(index)).toEqual([
+      [
+        { objectType: "Codeunit", objectId: 79150 },
+        { objectType: "Codeunit", objectId: 79151 },
+      ],
+    ]);
+    expect(index.lineMap.declares("Codeunit", 79151)).toBe(true);
   });
 });
 
@@ -279,8 +292,9 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("a two-arm wrapped object counts as ONE object for the multi-object guard", async () => {
     const dir = await bundle({ "src/B2.Codeunit.al": R298_TWO_ARM });
     // R387: listed as wrapped, by the index's own rule, so the CLI can fall back to no coverage.
+    // R383: `supported` is gone; it answered the multi-object question alone, and that refusal is
+    // dropped. The lists stay, the wrapped one still drives the CLI fallback.
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
       multiObjectFiles: [],
       wrappedObjectFiles: ["src/B2.Codeunit.al"],
     });
@@ -289,7 +303,6 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("a bare object plus a wrapped one IS two objects for the guard", async () => {
     const dir = await bundle({ "src/Mixed.Codeunit.al": R298_MIXED });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: false,
       multiObjectFiles: ["src/Mixed.Codeunit.al"],
       wrappedObjectFiles: ["src/Mixed.Codeunit.al"],
     });
@@ -298,7 +311,6 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("R387: a clean project lists no file in either list", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": "codeunit 50100 A\n{\n}\n" });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
-      supported: true,
       multiObjectFiles: [],
       wrappedObjectFiles: [],
     });
@@ -505,7 +517,6 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       };
       const dir = await bundle(files);
       expect(await alRunnerCoverageSupport(dir)).toEqual({
-        supported: true,
         multiObjectFiles: [],
         wrappedObjectFiles: ["src/T.Table.al"],
       });
@@ -559,6 +570,511 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       expect(split.covered.size).toBe(0);
       expect(split.untargetedTriggerCount).toBe(0);
       expect([...split.refused.keys()]).toEqual(["M1", "M2"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/**
+ * R383: multi-object files, both transports. al-runner v2.12.0 reports FILE-relative lines on
+ * both (measured, R383.md), and the line map is keyed OBJECT-relative, so every row is resolved by
+ * POSITION (`resolveFileLine`) before a procedure is looked up.
+ */
+
+/** The probe's own `two/app/Two.Codeunit.al`, verbatim. A: 1-11, B: 13-23 (bases 1 and 12). */
+const PROBE_TWO = `codeunit 50100 ProbeA
+{
+    procedure RunA(): Integer
+    var
+        x: Integer;
+    begin
+        x := 1;
+        x := x + 10;
+        exit(x);
+    end;
+}
+
+codeunit 50101 ProbeB
+{
+    procedure RunB(): Integer
+    var
+        y: Integer;
+    begin
+        y := 2;
+        y := y + 20;
+        exit(y);
+    end;
+}
+`;
+
+/** The probe's `s1.xml` (A+B in one file, a test calling only B), trimmed to its two classes. */
+const PROBE_S1 = `<coverage line-rate="0.2857" branch-rate="0" lines-covered="4" lines-valid="14" version="1.0">
+  <packages>
+    <package name="al-source" line-rate="0.2857" branch-rate="0">
+      <classes>
+        <class name="Two.Codeunit" filename="two/app/Two.Codeunit.al" line-rate="0.5000" branch-rate="0">
+          <lines>
+            <line number="7" hits="0" />
+            <line number="8" hits="0" />
+            <line number="9" hits="0" />
+            <line number="19" hits="1" />
+            <line number="20" hits="1" />
+            <line number="21" hits="1" />
+          </lines>
+        </class>
+        <class name="T.Codeunit" filename="two/tests/T.Codeunit.al" line-rate="0.1250" branch-rate="0">
+          <lines>
+            <line number="19" hits="1" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>`;
+
+/** The probe's `server-two.json`, test `OnlyB`, trimmed to the fields LethAL reads. */
+const PROBE_SERVER_ONLY_B = {
+  test: "Codeunit50110.OnlyB",
+  coverage: [
+    {
+      file: "C:/Users/SShadowS/AppData/Local/Temp/claude/r383probe/two/app/Two.Codeunit.al",
+      statements: [
+        { id: 0, scope: "RunB", line: 19, hits: 1 },
+        { id: 1, scope: "RunB", line: 20, hits: 1 },
+        { id: 2, scope: "RunB", line: 21, hits: 1 },
+      ],
+    },
+    {
+      file: "C:/Users/SShadowS/AppData/Local/Temp/claude/r383probe/two/tests/T.Codeunit.al",
+      statements: [{ id: 0, scope: "OnlyB", line: 19, hits: 1 }],
+    },
+  ],
+};
+
+/** What both transports must make of a test that reached B's three statements and nothing else. */
+const ONLY_B = [8, 9, 10].map((line) => ({
+  objectType: "Codeunit",
+  objectId: 50101,
+  procedure: "RunB",
+  line,
+}));
+
+const variantsOf = (src: string): [string, string][] => [
+  ["LF", src],
+  ["CRLF", src.replace(/\n/g, "\r\n")],
+  ["BOM", `\uFEFF${src}`],
+];
+
+/** A server record: every statement hit once, in one file. */
+const serverOne = (
+  file: string,
+  statements: { scope?: string; line?: number }[],
+  test = "Codeunit50140.T",
+) => ({ test, coverage: [{ file, statements: statements.map((s) => ({ ...s, hits: 1 })) }] });
+
+describe("R383: a multi-object file's rows resolve by position, on both transports", () => {
+  test("Cobertura: the probe's s1.xml covers B.RunB only, at object-relative lines (LF, CRLF, BOM)", async () => {
+    for (const [label, src] of variantsOf(PROBE_TWO)) {
+      const index = await buildAlRunnerCoverageIndex(
+        await bundle({ "two/app/Two.Codeunit.al": src }),
+      );
+      expect([label, alRunnerCoverageFrom(parseCobertura(PROBE_S1), index).entries]).toEqual([
+        label,
+        ONLY_B,
+      ]);
+    }
+  });
+
+  test("--server: the probe's OnlyB record covers B.RunB only (LF, CRLF, BOM)", async () => {
+    for (const [label, src] of variantsOf(PROBE_TWO)) {
+      const index = await buildAlRunnerCoverageIndex(
+        await bundle({ "two/app/Two.Codeunit.al": src }),
+      );
+      expect([label, alRunnerCoverageFromServer(PROBE_SERVER_ONLY_B, index).entries]).toEqual([
+        label,
+        ONLY_B,
+      ]);
+    }
+  });
+
+  test("a table extension then a page extension in one file, on both transports", async () => {
+    //  1 tableextension 50130 ...   9 pageextension 50131 ...
+    //  5         exit(1);          13         exit(2);
+    const src = `tableextension 50130 "TExt" extends Customer
+{
+    procedure TouchT(): Integer
+    begin
+        exit(1);
+    end;
+}
+
+pageextension 50131 "PExt" extends "Customer Card"
+{
+    procedure TouchP(): Integer
+    begin
+        exit(2);
+    end;
+}
+`;
+    const want = [
+      { objectType: "TableExtension", objectId: 50130, procedure: "TouchT", line: 5 },
+      // The page extension bases at 8 (the blank line after the first ends at 7), so file line 13
+      // is object line 6.
+      { objectType: "PageExtension", objectId: 50131, procedure: "TouchP", line: 6 },
+    ];
+    for (const [label, text] of variantsOf(src)) {
+      const index = await buildAlRunnerCoverageIndex(await bundle({ "src/Ext.al": text }));
+      const cob = alRunnerCoverageFrom(
+        [5, 13].map((line) => ({ file: "src/Ext.al", line, hits: 1 })),
+        index,
+      );
+      const srv = alRunnerCoverageFromServer(
+        serverOne("src/Ext.al", [
+          { scope: "TouchT", line: 5 },
+          { scope: "TouchP", line: 13 },
+        ]),
+        index,
+      );
+      expect([label, cob.entries, srv.entries]).toEqual([label, want, want]);
+    }
+  });
+
+  test("a blank line between objects, or B's header, yields no member evidence", async () => {
+    const index = await buildAlRunnerCoverageIndex(
+      await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }),
+    );
+    const cob = alRunnerCoverageFrom(
+      [12, 13, 14].map((line) => ({ file: "two/app/Two.Codeunit.al", line, hits: 1 })),
+      index,
+    );
+    // 12 is the gap: no entry at all. 13 and 14 are B's own header: object-level, never A's.
+    expect(cob.entries).toEqual([
+      { objectType: "Codeunit", objectId: 50101, line: 2 },
+      { objectType: "Codeunit", objectId: 50101, line: 3 },
+    ]);
+  });
+});
+
+describe("R383: covering sets are keyed by (file, type, id), never by a procedure name alone", () => {
+  const T1 = { codeunitId: 50140, codeunitName: "Tests", method: "T1" };
+  const T2 = { codeunitId: 50140, codeunitName: "Tests", method: "T2" };
+  const mutant = (
+    mutantId: string,
+    file: string,
+    objectType: string,
+    codeunitId: number,
+    procedureName: string,
+  ) => ({
+    mutantId,
+    file,
+    startIndex: 10,
+    endIndex: 20,
+    startLine: 1,
+    operatorName: "empty-block",
+    operatorVersion: "1.0.0",
+    astHash: "h",
+    originalText: "x",
+    mutatedText: "",
+    objectType,
+    codeunitId,
+    codeunitName: "N",
+    procedureName,
+  });
+  /** M1 and M2's covering tests under both transports, T1 hitting `hit1` and T2 hitting `hit2`. */
+  const covering = async (
+    files: Record<string, string>,
+    hit1: { file: string; line: number; scope: string },
+    hit2: { file: string; line: number; scope: string },
+    mutants: ReturnType<typeof mutant>[],
+  ): Promise<string[][]> => {
+    const index = await buildAlRunnerCoverageIndex(await bundle(files));
+    const out: string[][] = [];
+    for (const transport of ["cobertura", "server"]) {
+      const cov = (h: typeof hit1) =>
+        transport === "cobertura"
+          ? alRunnerCoverageFrom([{ file: h.file, line: h.line, hits: 1 }], index)
+          : alRunnerCoverageFromServer(
+              serverOne(h.file, [{ scope: h.scope, line: h.line }]),
+              index,
+            );
+      const split = coverageFilter(
+        mutants,
+        buildCoverageIndex([
+          { ref: T1, coverage: cov(hit1) },
+          { ref: T2, coverage: cov(hit2) },
+        ]),
+        [T1, T2],
+        undefined,
+        false,
+      );
+      out.push(
+        mutants.map(
+          (m) =>
+            `${transport} ${m.mutantId} ${(split.covered.get(m.mutantId) ?? []).map((t) => t.method).join(",") || "-"}`,
+        ),
+      );
+    }
+    return out;
+  };
+  const RUN = (id: number, name: string, value: number) =>
+    `codeunit ${id} ${name}\n{\n    procedure Run(): Integer\n    begin\n        exit(${value});\n    end;\n}\n`;
+
+  test("same name, two objects of ONE file: Run in X and Run in Y get different covering sets", async () => {
+    // X: lines 1-7 (`exit(1)` at 5). Y: lines 8-14 (`exit(2)` at 12, object line 5).
+    const file = "src/XY.Codeunit.al";
+    expect(
+      await covering(
+        { [file]: `${RUN(50100, "X", 1)}${RUN(50101, "Y", 2)}` },
+        { file, line: 5, scope: "Run" },
+        { file, line: 12, scope: "Run" },
+        [
+          mutant("M1", file, "codeunit", 50100, "Run"),
+          mutant("M2", file, "codeunit", 50101, "Run"),
+        ],
+      ),
+    ).toEqual([
+      ["cobertura M1 T1", "cobertura M2 T2"],
+      ["server M1 T1", "server M2 T2"],
+    ]);
+  });
+
+  test("same name, two files: each file's Run is covered by its own test", async () => {
+    expect(
+      await covering(
+        { "src/X.Codeunit.al": RUN(50100, "X", 1), "src/Y.Codeunit.al": RUN(50101, "Y", 2) },
+        { file: "src/X.Codeunit.al", line: 5, scope: "Run" },
+        { file: "src/Y.Codeunit.al", line: 5, scope: "Run" },
+        [
+          mutant("M1", "src/X.Codeunit.al", "codeunit", 50100, "Run"),
+          mutant("M2", "src/Y.Codeunit.al", "codeunit", 50101, "Run"),
+        ],
+      ),
+    ).toEqual([
+      ["cobertura M1 T1", "cobertura M2 T2"],
+      ["server M1 T1", "server M2 T2"],
+    ]);
+  });
+
+  test("same id, two kinds: codeunit 50100 and table 50100 in one file are two keys", async () => {
+    //  1 codeunit 50100 C ... `exit(1)` at 5, ends 7. 8 table 50100 T, `Touch`'s `exit(2)` at 17.
+    const file = "src/Same.al";
+    const src = `${RUN(50100, "C", 1)}table 50100 T
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    procedure Touch(): Integer
+    begin
+        exit(2);
+    end;
+}
+`;
+    expect(
+      await covering(
+        { [file]: src },
+        { file, line: 5, scope: "Run" },
+        { file, line: 17, scope: "Touch" },
+        [mutant("M1", file, "codeunit", 50100, "Run"), mutant("M2", file, "table", 50100, "Touch")],
+      ),
+    ).toEqual([
+      ["cobertura M1 T1", "cobertura M2 T2"],
+      ["server M1 T1", "server M2 T2"],
+    ]);
+  });
+});
+
+describe("R383: the --server procedure rule (r3 Design 3)", () => {
+  /** One object occupying lines 1-7, put before the shape for the multi-object case. */
+  const BEFORE = `codeunit 50099 "Before"\n{\n    procedure Lead(): Integer\n    begin\n        exit(0);\n    end;\n}\n\n`;
+  const shapes = (src: string): [string, string][] => [
+    ["single", src],
+    ["multi", `${BEFORE}${src}`],
+  ];
+  /** `--server` entries as `type:id procedure`, for statements found by a needle in the text. */
+  const run = async (src: string, statements: { scope: string; needle: string }[]) => {
+    const index = await buildAlRunnerCoverageIndex(await bundle({ "src/R.al": src }));
+    const lines = src.split("\n");
+    const at = (needle: string) => lines.findIndex((l) => l.includes(needle)) + 1;
+    const map = alRunnerCoverageFromServer(
+      serverOne(
+        "src/R.al",
+        statements.map((s) => ({ scope: s.scope, line: at(s.needle) })),
+      ),
+      index,
+    );
+    return map.entries.map((e) => `${e.objectType}:${e.objectId} ${e.procedure ?? "-"}`);
+  };
+
+  test("a trigger statement (lookup names nothing) is kept, with the object and procedure: scope", async () => {
+    const table = `table 50110 "Trig T"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+
+    trigger OnInsert()
+    begin
+        Message('x');
+    end;
+}
+`;
+    for (const [label, src] of shapes(table)) {
+      expect([label, await run(src, [{ scope: "OnInsert", needle: "Message('x')" }])]).toEqual([
+        label,
+        ["Table:50110 OnInsert"],
+      ]);
+    }
+  });
+
+  // R318's shapes, as written in preproc-instrumentation.test.ts.
+  const R3 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := 1;
+        if X > 1 then
+            Glob := X + 1;
+        Glob := Glob + 2;
+        exit(Glob + K);
+    end;
+
+#if R318A
+    procedure Choose(T: Text): Integer
+    begin
+        exit(StrLen(T) + 1);
+    end;
+#endif
+
+    procedure Plain(X: Integer): Integer
+    begin
+        exit(X + 3);
+    end;
+
+    var
+        Glob: Integer;
+}
+`;
+  const R4 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Alpha(X: Integer): Integer
+#else
+    procedure Beta(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K);
+    end;
+
+#if R318A
+    procedure Beta(X: Integer): Integer
+#else
+    procedure Gamma(X: Integer): Integer
+#endif
+    var
+        L: Integer;
+    begin
+        L := X + 2;
+        exit(L);
+    end;
+}
+`;
+  const R10 = `codeunit 50100 "Repro R"
+{
+#if R318A
+    procedure Pick(X: Integer): Integer
+#else
+    procedure Choose(X: Integer): Integer
+#endif
+    var
+        K: Integer;
+    begin
+        K := X + 1;
+        exit(K); end; procedure Other(X: Integer): Integer begin exit(X + 7); end;
+
+    procedure After(X: Integer): Integer
+    begin
+        exit(X + 5);
+    end;
+}
+`;
+
+  test("a renamed #if arm (R318 r3): the compiled arm's scope is re-keyed to the member, before any comparison", async () => {
+    for (const [label, src] of shapes(R3)) {
+      expect([
+        label,
+        await run(src, [
+          { scope: "Choose", needle: "Glob := Glob + 2;" },
+          // Not one of the member's own arm names, on its own line: kept, as R318 rules (review M2).
+          { scope: "Plain", needle: "Glob := Glob + 2;" },
+          { scope: "Plain", needle: "exit(X + 3)" },
+        ]),
+      ]).toEqual([label, ["Codeunit:50100 Pick", "Codeunit:50100 Plain", "Codeunit:50100 Plain"]]);
+    }
+  });
+
+  test("a renamed #if arm (R318 r4): the server's Beta is the member spanned as Alpha", async () => {
+    for (const [label, src] of shapes(R4)) {
+      expect([
+        label,
+        await run(src, [
+          { scope: "Beta", needle: "K := X + 1;" },
+          { scope: "Gamma", needle: "L := X + 2;" },
+        ]),
+      ]).toEqual([label, ["Codeunit:50100 Alpha", "Codeunit:50100 Gamma"]]);
+    }
+  });
+
+  test("a line two declarations share (R318 r10): OtherOnly keeps scope Other", async () => {
+    for (const [label, src] of shapes(R10)) {
+      expect([
+        label,
+        await run(src, [
+          { scope: "Other", needle: "procedure Other(" },
+          { scope: "Choose", needle: "procedure Other(" },
+          { scope: "After", needle: "exit(X + 5)" },
+        ]),
+      ]).toEqual([
+        label,
+        ["Codeunit:50100 Other", "Codeunit:50100 Choose", "Codeunit:50100 After"],
+      ]);
+    }
+  });
+
+  test("a disagreeing scope: POSITION wins, the statement is kept, and one warning names it", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const index = await buildAlRunnerCoverageIndex(
+        await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }),
+      );
+      const map = alRunnerCoverageFromServer(
+        serverOne("two/app/Two.Codeunit.al", [
+          { scope: "RunA", line: 19 },
+          { scope: "RunB", line: 20 },
+        ]),
+        index,
+      );
+      expect(map.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 8 },
+        { objectType: "Codeunit", objectId: 50101, procedure: "RunB", line: 9 },
+      ]);
+      const said = warn.mock.calls.map((c) => String(c[0]));
+      expect(said).toHaveLength(1);
+      for (const part of ["two/app/Two.Codeunit.al", "19", "RunA", "RunB"]) {
+        expect(said[0]).toContain(part);
+      }
     } finally {
       warn.mockRestore();
     }
