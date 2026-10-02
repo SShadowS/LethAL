@@ -1,6 +1,40 @@
-# R-402: the hang tag reads loop-condition operands in active `#if` arms (short plan, r2)
+# R-402: the hang tag reads loop-condition operands in active `#if` arms (short plan, r3)
 
 Task: `H:/lethal-coord/tasks/R-402/task.md`. Item: `docs/roadmap/R402.md`. Branch `lethal/lane-preproc`, from master 0ef6652f. Offline.
+
+## Revision r3 (`H:/lethal-coord/reviews/R-402-plan/reject-r2.md`)
+
+| Point | r3 change | Where |
+|---|---|---|
+| 1. The refusal checked only the gap between siblings | The rule now also takes the previous statement's LAST non-trivia leaf. If that leaf is `;`, the statement owns its terminator and nothing is refused. The rule never searches descendants for a `;` | §2(a) |
+| 2. Trivia | The trivia are named and measured. Comments, `#pragma` and `#region`/`#endregion` attach as SIBLINGS between the statement and the `#if`, and the rule skips them | §2(a), table C |
+| 3. Legitimate cases with no separator | Three such cases were parsed and alc-compiled, and all are admitted: an empty `#if` before `end`, a comment-only `#if` before `end`, and an arm that supplies its own `;` | §2(a), table C |
+| 4. Controls | 14 controls are added, all compiled under 4 builds and each tied to a red-check. The S4e assertion now depends on the build | table C, §4 |
+| 5. Corpus classification | Every newly refused corpus file is classed as a real continuation or a conservative refusal, with its lost sites. If conservative refusals are not rare, I STOP and report before submitting | §3 |
+
+### Table C: boundary controls, measured on master 0ef6652f (scratch `sweep.ts` + `boundary.ts`)
+
+"Before" is the chain of siblings in front of the statement-level `#if` container (`preproc_conditional_statement`), back to the first non-trivia node. "Leaf" is that node's last leaf. `src` is the unmutated source compiled with alc, and `art` is the instrumented artifact compiled with alc, each under `[]`, `[X]`, `[Y]` and `[X,Y]`.
+
+| Control | Before | Leaf | src | art | Rule result |
+|---|---|---|---|---|---|
+| c1 owned terminator `if A < 10 then A := A + 1;` then `#if X Foo(B); #endif` | `if_statement , ;` | `;` | ok | ok | admit (separator) |
+| c2 empty `#if X #endif` before `end`, previous statement unterminated | `assignment_statement` | `1` | ok | ok | admit (every arm empty) |
+| c2b comment-only arm before `end` | `assignment_statement` | `1` | ok | ok | admit (every arm is trivia) |
+| c3 the arm supplies the separator `#if X ; Foo(B) #endif ;` | `assignment_statement` | `1` | ok | ok | admit (every non-empty arm starts with `;`) |
+| c4 `#if` as a `then` branch | `then_keyword` | `then` | ok | ok | admit (the previous node is not a statement) |
+| c4b `#if` as an `else` branch | `else_keyword` | `else` | ok | ok | admit |
+| c5 `#if` in a case branch body | `:` | `:` | ok | ok | admit |
+| c5b `#if` between case branches (`preproc_conditional_case`) | `case_branch` | `;` | ok | ok | out of the rule (not a statement container) |
+| c6 `;` inside both arms, after a terminated statement | `assignment_statement , ;` | `;` | ok | ok | admit |
+| c7 `A := A + 1; // done` then `#if` | `assignment_statement , ; , comment` | (trivia skipped) `;` | ok | ok | admit |
+| c7b S4 with `// tail follows` before the `#if` | `repeat_statement , comment` | `)` | ok | **FAIL [X]** | **refuse** |
+| c7c `#pragma` between | `assignment_statement , ; , pragma` | `;` | ok | ok | admit |
+| c7d `#region` between | `assignment_statement , ; , preproc_region` | `;` | ok | ok | admit |
+| c8 S4 with `#elif Y or (C > 3)` | `repeat_statement` | `)` | ok | **FAIL [X], [Y], [X,Y]** | **refuse** |
+| S4e `until (A > 10);` then `#if X Foo(B); #endif` | `repeat_statement , ;` | `;` | ok | ok | admit; `Foo(B)` is a site under `[X]` only |
+
+No measured shape had a statement OWNING its `;` before a statement-level `#if`. In every statement list the `;` is a sibling. The last-leaf check is kept, as the review requires, and it is red-checked with a hand-built tree.
 
 ## Revision r2: what changed (`H:/lethal-coord/reviews/R-402-plan/reject-r1.md`)
 
@@ -45,9 +79,15 @@ The unmutated source compiles under every build for every shape.
 ## 2. Fix
 
 **(a) S4 refusal, in `evaluateArms`.** It is the R214 evaluator, so the existing `preproc-undecided` row, warning and caveat all apply.
-- A statement-level `preproc_conditional_statement` whose nearest preceding sibling, skipping comments, is a STATEMENT, with no `;` token between the two, continues that statement. The tree misplaces that code, so the whole file is `undecided` with the reason `directive-continues-statement at line N`.
-- The rule is separator-aware by construction. S4, S4b, S4c and S4d are refused. S4e, which has a `;`, is not.
-- A `#if` that follows `begin`, `then`, `else`, `do` or `;` is untouched.
+- **The rule (r3).** For each statement-level `preproc_conditional_statement` P:
+  1. **Trivia.** Walk back over P's preceding siblings, skipping trivia: `comment` (and the grammar's other comment kinds), `pragma`, `preproc_region` and `preproc_endregion`. The first other sibling is PREV.
+  2. **Admit** when PREV is absent, is a `;` token, is a keyword or `:`, or is not a statement node. That covers `begin`, `then`, `else`, `do`, a case label, and another preproc container.
+  3. **Admit** when PREV's last leaf, skipping trivia leaves, is `;`. That is a terminator the statement owns.
+  4. **Admit** when every arm of P is empty or trivia-only, or when every non-empty arm's first non-trivia token is `;`. Both of those are legitimate AL (c2, c2b and c3 compile).
+  5. **Otherwise refuse:** the whole file is `undecided` with the reason `directive-continues-statement at line N`. An arm's content continues an unterminated statement, and the tree has misplaced it.
+- **Scope.** The rule applies only to `preproc_conditional_statement`. Case-level containers (`preproc_conditional_case`) parse their branches structurally and are not misplaced (c5b).
+- **Limit.** A `preproc_conditional_statement` whose PREV is another preproc container is admitted. Its content cannot be judged without evaluating the earlier container's arms, and no such continuation shape was found.
+- S4, S4b, S4c, S4d, c7b and c8 are refused. S4e and every control in table C are admitted.
 - Correct structural ownership of the tail is a grammar change (tree-sitter-al). It will be filed as its own item for when the grammar gains it, so a refusal is not the permanent answer.
 
 **(b) One arm-aware operand walk** replaces `identifiersIn` for each enclosing loop. It reads:
@@ -63,7 +103,7 @@ The walk is recursive, so tails and list elements nested inside the condition (S
 - **The S4 refusal** removes every site of an affected file, and that changes sites, hashes and ordinals in that file. It is the R214 refusal path, which reports the file.
 - **Before submit:** run `scripts/r214-capture.ts`, master 0ef6652f against the branch, on DC, SysApp, BCF and BaseApp, S0 and S1, plus the pinned `fixtures/r214/expected` captures. List every change by cause:
   - (i) `hang=` going from `-` to `loop-condition-target` (S1 to S3 shapes) or the reverse (S9 to S11 over-tags removed), each site listed with its shape;
-  - (ii) newly undecided files with `directive-continues-statement`, each listed with its line;
+  - (ii) newly undecided files with `directive-continues-statement`, each listed with its line and classed as a REAL continuation (the `#if` arm's content is an expression tail of the previous statement) or a CONSERVATIVE refusal (legitimate AL the rule refuses), with the sites lost per file. If conservative refusals are more than rare (more than 2 files, or more than 1% of the newly refused sites), I STOP and report to the orchestrator before submitting;
   - any other change is a STOP.
   - Peak memory must stay at most 110% of master's.
 - **Gate fixtures:** none has a directive inside a loop, and none has a statement-level `#if` after an unterminated statement. The pinned captures must stay byte-identical.
@@ -76,8 +116,9 @@ The walk is recursive, so tails and list elements nested inside the condition (S
   - S3 `[]`: B tagged. S3 `[X]`: B untagged.
   - S9, S10 and S11 `[]`: B untagged. Under `[X]`: B tagged.
   - S14 `[X]`: B tagged. S14 `[]`: no B site.
-  - S4, S4b, S4c and S4d (every build): the file is refused with a `preproc-undecided` row whose detail starts `directive-continues-statement`.
-  - S4e: not refused, and `Foo(B)` keeps its `void-method-call` site.
+  - S4, S4b, S4c, S4d, c7b and c8 (every build): the file is refused with a `preproc-undecided` row whose detail starts `directive-continues-statement`.
+  - S4e: not refused. `Foo(B)`'s `void-method-call` site EXISTS under `[X]` and does NOT exist under `[]`.
+  - Every admitted control in table C (c1, c2, c2b, c3, c4, c4b, c5, c5b, c6, c7, c7c and c7d): no `preproc-undecided` row, and the sites the sweep listed exist in the builds where it listed them.
   - S8, S12 and S13: their existing `preproc-undecided` rows (`marker-mismatch`).
 - **Classifier unit test** (builtin-tier1): `classifyHangCapable` on S1 with a context whose `armOf` answers "undecided": B is tagged.
 - **Red-checks:**
@@ -85,6 +126,12 @@ The walk is recursive, so tails and list elements nested inside the condition (S
   - Drop the inactive skip: the S1 `[]`, S2 and S3 `[X]` untagged rows and S9 to S11 `[]` go red.
   - Skip on `!== "active"` instead of `=== "inactive"`: the undecided classifier test goes red.
   - Read directive conditions: a row whose directive symbol is also a variable name (`#if B`) goes red.
-  - Remove the continuation rule: the S4 rows go red.
-  - Ignore the `;` check: the S4e control goes red.
+  - Remove the continuation rule: the S4, c7b and c8 rows go red.
+  - Remove the sibling-separator check (step 2's `;`): S4e, c1 and c6 go red.
+  - Remove the trivia skip: c7b goes red, because a comment PREV is not a statement and the file is admitted. c7, c7c and c7d also go red, because PREV is then the comment and not the `;`.
+  - Remove the owned-terminator check (step 3): a hand-built-tree unit test goes red. It is a statement node whose last leaf is `;`, followed by a continuing arm, and it must be admitted.
+  - Remove the empty or trivia-only arm admission: c2 and c2b go red.
+  - Remove the `;`-first admission: c3 goes red.
+  - Apply the rule to `preproc_conditional_case`: c5b goes red.
+- **Compile backing:** every control and shape is in `scripts/r402-shape-sweep.ts`. On the branch, every admitted shape's artifact must compile under all four builds, and every refused shape must emit no artifact for its file.
 - **Compile-backed:** `scripts/r402-shape-sweep.ts` runs on the branch before submit. Every emitted artifact must compile under every build; the output goes in the submit note. It needs alc, so it is a script and not a unit test.
