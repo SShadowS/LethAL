@@ -1495,7 +1495,7 @@ CLI flags:
     "serverMode": true,
     "selectorMode": "resource",
     // "al-runner" reads al-runner's --coverage; turned off, with a warning, for a project holding
-    // a multi-object file or an #if-wrapped object.
+    // an #if-wrapped object (a multi-object file is admitted since R383).
     "coverage": "none"
   },
   // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather

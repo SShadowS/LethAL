@@ -89,7 +89,7 @@ export function parseCobertura(xml: string): readonly CoberturaLine[] {
 /**
  * Every object a file declares, in source order, `#if`-wrapped ones included (R298). The arms of
  * one wrapped object are ONE object: each compile builds exactly one arm, so a two-arm wrapper
- * declaring the same `(type, id)` twice must not trip the multi-object guard. Counted by
+ * declaring the same `(type, id)` twice must not be reported as a multi-object file. Counted by
  * `(type, id)`, never by node.
  */
 function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {

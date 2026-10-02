@@ -579,8 +579,8 @@ export function buildAlRunnerArgv(
     // neither -- `--coverage` alone would write `./cobertura.xml` into the process's working
     // directory, where concurrent invocations would overwrite each other's answers and a run
     // would attribute one test's coverage to another. Still a flag rather than always-on because
-    // the backend disables coverage for a project al-runner cannot report it correctly for (a
-    // multi-object file, see `al-runner-coverage.ts`), and an argv that asked for coverage the
+    // the CLI disables coverage for a project LethAL cannot place it for (a `#if`-wrapped object,
+    // see `al-runner-coverage.ts`; a multi-object file until R383), and an argv that asked for coverage the
     // session then ignored would be a lie in the one artifact a reader replays by hand.
     ...(req.coverageOut !== undefined ? ["--coverage", "--coverage-out", req.coverageOut] : []),
     // Bundle dirs are POSITIONAL and repeatable in v2; multiple dirs run sequentially and

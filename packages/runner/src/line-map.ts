@@ -652,9 +652,10 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
  * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
  * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
- * enum, an interface): the multi-object guard then counts one object and leaves coverage on, al-runner
- * drops the whole file's hits, and without the union the bare table's trigger mutants would reach
- * the all-green fallback. Over-refusing is the safe direction.
+ * enum, an interface): coverage stays on for the file's other objects (the multi-object guard,
+ * gone since R383, counted one object here), al-runner drops the whole file's hits, and without the
+ * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
+ * safe direction.
  */
 export function coverageRefusedObjects(
   files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],

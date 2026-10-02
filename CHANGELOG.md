@@ -16,15 +16,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
-  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
-  object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
-  naming the files, because al-runner's coverage cannot describe them.
+  stays off by default. When it is on, a project holding a `#if`-wrapped object runs with coverage
+  `"none"` instead, with one `al-runner-coverage-unsupported` warning naming the files (a
+  multi-object file did too until R383, below).
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
 
 ### Changed
 
+- **al-runner coverage now admits a file declaring more than one object** (R383). al-runner's
+  upstream #3713 (every object after a file's first was lost) is fixed, measured on v2.12.0 on both
+  transports, which report FILE-relative lines. Each covered line is now resolved by position to the
+  object that holds it and converted by that object's base line, on the Cobertura and the `--server`
+  path alike, so `alRunner.coverage: "al-runner"` is no longer turned off for such a project. Only a
+  file holding a `#if`-wrapped object still turns it off (R298, pending R300), and the
+  `al-runner-coverage-unsupported` warning now says why. `alRunnerCoverageSupport` no longer returns
+  `supported`.
 - **al-runner runs now measure the preprocessor symbols al-runner predefines, every session**
   (R392): one one-shot al-runner run of a generated probe project, after provisioning and before
   anything is generated, instead of assuming the `CLEANSCHEMA1`..`CLEANSCHEMA25` list measured on
@@ -128,6 +136,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   codes, since one procedure's mutants are always in one batch. `lethal export` uses the same id, so
   a multi-batch export no longer repeats mutant ids. `lethal explain` still reads v2 reports, and
   `schemas/report-v2.schema.json` is frozen beside the new `report-v3.schema.json`.
+
+### Fixed
+
+- **A codeunit after an enum, interface or permission set in the same file got the wrong base line**
+  (R383). The line map moved a file's base line only past objects with a coverage identity, so every
+  covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture
+  had the shape). Every top-level object now moves the base.
 
 
 ## [0.1.0-alpha.3] — 2026-08-27
