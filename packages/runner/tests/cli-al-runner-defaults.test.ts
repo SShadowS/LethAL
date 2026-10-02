@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type ResourceEvidence,
@@ -12,6 +13,7 @@ import {
 } from "../itest/cli-default-leg";
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
+import { isPredefinedProbeArgv, predefinedProbeArgv } from "../src/al-runner-predefined-probe";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
@@ -112,7 +114,15 @@ async function drive(alRunner: NonNullable<LethalConfigFile["alRunner"]>): Promi
     expect(v.outcome).toBe("pass");
   }
   await backend.close();
+  // `runSession` runs the R392 probe once per session; this driver does not, so record its argv.
+  rec.record.oneShotArgv.push(probeArgv());
   return { backend, record: rec.record, ev };
+}
+
+/** The argv the R392 probe spawns for `drive()`'s binary, with scratch dirs shaped as the probe's. */
+function probeArgv(pin?: string): string[] {
+  const root = join(tmpdir(), "lethal-r392-probe-test");
+  return predefinedProbeArgv("al-runner.exe", join(root, "src"), join(root, "tests"), pin);
 }
 
 /** The one-shot argvs the gate allows for `drive()`'s config (`runConfig`'s testDir is "/tests"). */
@@ -177,7 +187,23 @@ describe("R387: buildBackend's al-runner defaults", () => {
     expect(kinds(cliDefaultMechanismFailures(versionPlus, ev, ALLOWED))).toEqual(["server"]);
   });
 
-  test("the allow-list is EXACT: a stray sentinel element or another binary path does not pass", async () => {
+  test("R392: the probe count must EQUAL the backend count (no cache): a second backend's missing probe fails, naming the counts", async () => {
+    const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+    const [server = []] = record.serverArgv;
+    const twoWithBothProbes: SpawnRecord = {
+      ...record,
+      serverArgv: [server, server],
+      oneShotArgv: [...record.oneShotArgv, probeArgv()],
+    };
+    expect(cliDefaultMechanismFailures(twoWithBothProbes, ev, ALLOWED, 2)).toEqual([]);
+    const twoWithOneProbe: SpawnRecord = { ...twoWithBothProbes, oneShotArgv: record.oneShotArgv };
+    const failures = cliDefaultMechanismFailures(twoWithOneProbe, ev, ALLOWED, 2);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("expected 2");
+    expect(failures[0]).toContain("saw 1");
+  });
+
+  test("the allow-list is EXACT:a stray sentinel element or another binary path does not pass", async () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
     const base: SpawnRecord = { ...record, oneShotArgv: [...record.oneShotArgv, version] };
     const withArgv = (argv: string[]): SpawnRecord => ({
@@ -223,7 +249,51 @@ describe("R387: buildBackend's al-runner defaults", () => {
     const { record, ev } = await drive({ alRunnerPath: "al-runner.exe", serverMode: false });
     expect(kinds(cliDefaultMechanismFailures(record, ev, ALLOWED))).toEqual(["resource", "server"]);
     expect(record.serverArgv).toEqual([]);
-    expect(record.oneShotArgv.filter((a) => a.includes("--test")).length).toBe(3);
+    expect(
+      record.oneShotArgv.filter(
+        (a) => a.includes("--test") && !isPredefinedProbeArgv(a, "al-runner.exe"),
+      ).length,
+    ).toBe(3);
+  });
+
+  describe("R392: the predefined-symbol probe is allowed exactly once per backend, and required", () => {
+    test("(a) the probe spawn removed: fails with 'probe did not run'", async () => {
+      const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+      expect(cliDefaultMechanismFailures(record, ev, ALLOWED)).toEqual([]);
+      const noProbe: SpawnRecord = {
+        ...record,
+        oneShotArgv: record.oneShotArgv.filter((a) => !isPredefinedProbeArgv(a, "al-runner.exe")),
+      };
+      expect(cliDefaultMechanismFailures(noProbe, ev, ALLOWED)).toEqual([
+        "server: expected 1 R392 probe spawn(s) (one per backend), saw 0",
+      ]);
+    });
+
+    test("(b) an ordinary one-shot --test beside the probe still fails; a pinned probe passes", async () => {
+      const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+      const ordinary: SpawnRecord = {
+        ...record,
+        oneShotArgv: [...record.oneShotArgv, ["al-runner.exe", "--test", "Sandbox Tests.X"]],
+      };
+      const failures = cliDefaultMechanismFailures(ordinary, ev, ALLOWED);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toContain("saw 1: al-runner.exe --test Sandbox Tests.X");
+      // The probe's argv with a stray element is not the probe's argv.
+      const stray: SpawnRecord = { ...record, oneShotArgv: [[...probeArgv(), "--define", "X"]] };
+      expect(cliDefaultMechanismFailures(stray, ev, ALLOWED).join("\n")).toContain(
+        "R392 probe spawn(s) (one per backend), saw 0",
+      );
+      const pinned: SpawnRecord = { ...record, oneShotArgv: [probeArgv("C:/pin")] };
+      expect(cliDefaultMechanismFailures(pinned, ev, ALLOWED)).toEqual([]);
+    });
+
+    test("(c) a SECOND probe spawn fails", async () => {
+      const { record, ev } = await drive({ alRunnerPath: "al-runner.exe" });
+      const twice: SpawnRecord = { ...record, oneShotArgv: [...record.oneShotArgv, probeArgv()] };
+      expect(cliDefaultMechanismFailures(twice, ev, ALLOWED)).toEqual([
+        "server: expected 1 R392 probe spawn(s) (one per backend), saw 2",
+      ]);
+    });
   });
 
   test('explicit selectorMode: "static" with the server on fails ONLY the resource check', async () => {

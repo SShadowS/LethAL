@@ -37,6 +37,10 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
+import {
+  predefinedSymbolsChangedWarning,
+  probeAlRunnerPredefinedSymbols,
+} from "./al-runner-predefined-probe";
 import type { ServerSpawnFn } from "./al-runner-server";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
@@ -90,7 +94,7 @@ import {
 } from "./orchestrator";
 import type { SessionConfig } from "./orchestrator";
 import { PermissionCanaryClient, runPermissionCanary } from "./permission-canary";
-import { validateSymbolList } from "./preprocessor-symbols";
+import { type BuildBackend, validateSymbolList } from "./preprocessor-symbols";
 import { createNdjsonSink } from "./progress-ndjson";
 import { createProgressRenderer } from "./progress-renderer";
 import { clearPublishCeiling, knownCeiling } from "./publish-ceiling";
@@ -927,7 +931,7 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
   --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
-  --dry-run                  list what would be mutated; execute nothing. Reports both the raw
+  --dry-run                  list what would be mutated; execute no tests. Reports both the raw
                              mutation-site count and the DEPLOYED count (they differ), plus this
                              server's measured publish bracket. It never creates a results database;
                              when one already exists AND the config names a bcdev server to look the
@@ -937,9 +941,11 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              sites, deployed}], batches[{index, sites[{file, line, operator,
                              deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
                              execution flag (--tests, --workers ...) is refused with
-                             --dry-run, because a dry run executes nothing. --backend is
-                             optional: al-runner predefines CLEANSCHEMA1..25, so it can change
-                             which #if arms are listed (absent lists alc's build)
+                             --dry-run, because a dry run executes no tests. --backend is
+                             optional. With --backend al-runner a dry run runs al-runner ONCE to
+                             measure the preprocessor symbols it predefines (R392), needs
+                             alRunner.alRunnerPath in the config and refuses without it, and lists
+                             the #if arms for the MEASURED set (absent lists alc's build)
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -3262,13 +3268,32 @@ export async function printDryRun(
     readonly preprocessorSymbols?: readonly string[];
     /** R377: the backend whose build is listed; absent is alc's (`bcdev`). */
     readonly backendKind?: "bcdev" | "al-runner";
+    /** R392: the config's al-runner binary, probed once when `backendKind` is `al-runner`. */
+    readonly alRunnerPath?: string;
   },
+  spawn: SpawnFn = defaultSpawn,
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
   // "how big is this going to be" would be worse than useless if it answered for a wider scope
   // than the one the real run will use.
   const operators = paths.operators;
   const exclude = paths.exclude;
+  // R392: an al-runner listing needs the symbols al-runner predefines, so it MEASURES them, which
+  // spawns al-runner once. A dry run that cannot measure refuses rather than assuming a list.
+  let backend: BuildBackend | undefined;
+  if (paths.backendKind === "al-runner") {
+    if (paths.alRunnerPath === undefined) {
+      throw new Error(
+        `lethal run --dry-run --backend al-runner runs al-runner once to measure the preprocessor symbols it predefines (R392), and the config (${paths.configPath}) names no alRunner.alRunnerPath. Set it, or drop --backend al-runner to list alc's build.`,
+      );
+    }
+    const predefined = await probeAlRunnerPredefinedSymbols(paths.alRunnerPath, { spawn });
+    const changed = predefinedSymbolsChangedWarning(predefined);
+    if (changed !== undefined) console.warn(changed);
+    backend = { kind: "al-runner", predefined };
+  } else if (paths.backendKind === "bcdev") {
+    backend = { kind: "bcdev" };
+  }
   const { files, skipped, totalFiles, excludedByOnly, excludedByOperator, excludedByLines } =
     await generateMutationSet(projectDir, {
       ...(only !== undefined ? { only } : {}),
@@ -3278,7 +3303,7 @@ export async function printDryRun(
       ...(paths.preprocessorSymbols !== undefined
         ? { preprocessorSymbols: paths.preprocessorSymbols }
         : {}),
-      ...(paths.backendKind !== undefined ? { backend: paths.backendKind } : {}),
+      ...(backend !== undefined ? { backend } : {}),
     });
   const sites = sitesOf(files);
   const artifacts = planArtifacts(files);
@@ -5549,6 +5574,9 @@ async function main(): Promise<number> {
         ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
         : {}),
       ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+      ...(dryRunConfig?.alRunner?.alRunnerPath !== undefined
+        ? { alRunnerPath: dryRunConfig.alRunner.alRunnerPath }
+        : {}),
     });
     return 0;
   }

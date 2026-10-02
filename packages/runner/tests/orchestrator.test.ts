@@ -56,6 +56,7 @@ import type {
 import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
+import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { bundleFor, tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -268,6 +269,7 @@ const APP_JSON = JSON.stringify(
 const TESTS_APP = { name: "Sandbox Tests", publisher: "LethAL", version: "1.0.0.2" };
 
 class StubBackend implements ExecutionBackend {
+  readonly measurePredefinedSymbols = measuredV2_12; // R392
   activations: Array<string | null> = [];
   deploys: string[] = [];
   /**
@@ -1306,6 +1308,7 @@ ${TRIGGER_TABLE_AL}#endif
   test("R35 Fix 1: a PASSING baseline verdict with a permission-shaped failureMessage does NOT land in permissionsRefused", async () => {
     const dirs = await makeProject();
     class PassWithFailureMessageBackend implements ExecutionBackend {
+      readonly measurePredefinedSymbols = measuredV2_12; // R392
       activations: Array<string | null> = [];
       capabilities() {
         return CAPS_NST;
@@ -1498,6 +1501,7 @@ const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
 `;
 
 class QualificationBackend implements ExecutionBackend {
+  readonly measurePredefinedSymbols = measuredV2_12; // R392
   activations: Array<string | null> = [];
   deploys: string[] = [];
   ranActive = 0; // active (mutant !== null) run count — proves a scheduled mutant executed
@@ -2746,6 +2750,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
    * procedure coverage list — every green test runs under every mutant regardless.
    */
   class BudgetProbeBackend implements ExecutionBackend {
+    readonly measurePredefinedSymbols = measuredV2_12; // R392
     activations: Array<string | null> = [];
     readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
     constructor(private readonly baselineDurationMs: number) {}
@@ -4129,6 +4134,7 @@ const PHASE_VERIFIER_CFG = {
  * artifact id surviving anywhere in the orchestrator fails every one of these tests loudly.
  */
 class PhaseBackend implements ExecutionBackend {
+  readonly measurePredefinedSymbols = measuredV2_12; // R392
   readonly calls: string[] = [];
   lastCompiledVersion: string | undefined;
   /** C02-02: the exact object each successful deploy() call returned, one entry per batch, in
@@ -5636,6 +5642,7 @@ describe("runSession — Task 7: only a typed AlcCompileError may be bisected", 
  * which mutant a given subset still carries, not on call order alone.
  */
 class CompilePublishVerifyBackend implements ExecutionBackend {
+  readonly measurePredefinedSymbols = measuredV2_12; // R392
   compileViaDeployCalls = 0;
   compileViaCheckCalls = 0;
   publisherCalls = 0;
@@ -5804,7 +5811,8 @@ describe("runSession — Task 7b: bisection's compile-only seam (spec §10 count
 // ————————————————————————————————————————————————————————————————————————
 
 function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBackend {
-  return {
+  // R392: answers the predefined-symbol probe when a test makes it non-authoritative.
+  const backend: ExecutionBackend = {
     capabilities: () => CAPS_NST,
     status: async () => ({ ok: true, details: "fake" }),
     deploy: async () => null,
@@ -5826,6 +5834,7 @@ function fakeBackend(overrides: Partial<ExecutionBackend> = {}): ExecutionBacken
     }),
     ...overrides,
   };
+  return Object.assign(backend, { measurePredefinedSymbols: measuredV2_12 });
 }
 
 function aRef(): TestMethodRef {
@@ -12222,6 +12231,7 @@ const MIRROR_TESTS_AL = `codeunit 79101 "Zulu Tests"
  * `deadline-exceeded` + `in-flight-unknown`, everything else passes; each attests `observedAny`.
  */
 class NamedFake implements ExecutionBackend {
+  readonly measurePredefinedSymbols = measuredV2_12; // R392
   /** Every artifact `attach` was handed, in call order. */
   readonly attached: BoundArtifact[] = [];
   private active: string | null = null;

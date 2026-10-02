@@ -22,6 +22,7 @@ import {
 import { buildReport, renderConsole } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { ResultsStore } from "../src/store";
+import { measuredV2_12 } from "./helpers/al-runner-predefined";
 
 /**
  * R127. `--operator <name>` narrows which OPERATORS contribute mutants, so a question about one
@@ -488,6 +489,7 @@ describe("runSession — --operator reaches both the mutant set AND the report",
 `;
 
   class StubBackend implements ExecutionBackend {
+    readonly measurePredefinedSymbols = measuredV2_12; // R392
     private activations: Array<string | null> = [];
     capabilities(): BackendCapabilities {
       return RUN_CAPS;
