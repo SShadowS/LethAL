@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { REACH_MARKER, writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
  * GH-24. `reachGrainOf` claims it never throws on a shape the operators emit and that only
@@ -42,7 +42,7 @@ describe("GH-24: reach grain over every fixture", () => {
           await writeInstrumentedProject({
             targetDir: dir,
             files: set.files,
-            identityOrdinals: set.identityOrdinals,
+            identityOrdinals: identityOrdinalsOf(set),
             selectorIds: { selectorId: 79997, controlId: 79998, tableId: 79999 },
             artifactId: "0123456789abcdef0123456789abcdef",
             targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",

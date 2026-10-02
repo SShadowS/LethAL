@@ -11,7 +11,12 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+  runSession,
+} from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 
@@ -64,7 +69,7 @@ async function capture(projectDir: string, symbols: readonly string[]) {
     await writeInstrumentedProject({
       targetDir: out,
       files: set.files,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "00000000-0000-0000-0000-000000000000",

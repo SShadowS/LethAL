@@ -55,7 +55,7 @@ export interface WriteInput {
   readonly gapIdOf?: typeof gapIdOf;
   /**
    * R374: every mutant's identity ordinal, numbered ONCE over the whole run (`runIdentityOrdinals`,
-   * or `generateMutationSet`'s `identityOrdinals`), keyed by `identitySiteKey`. Required: a batch
+   * or the runner's `identityOrdinalsOf` for a generated set), keyed by `identitySiteKey`. Required: a batch
    * that numbered its own rows would give twins in two batches the same key. A row with no entry
    * is refused, never defaulted to 0.
    */
@@ -178,7 +178,9 @@ export function identitySiteKey(
   endIndex: number,
   operatorName: string,
 ): string {
-  return `${file}\0${startIndex}\0${endIndex}\0${operatorName}`;
+  // R400: `join`, not a template literal: the same value, built flat. A template string held as a
+  // Map key keeps its pieces alive (a rope), and the run-wide ordinal Map holds one per mutant.
+  return [file, startIndex, endIndex, operatorName].join("\0");
 }
 
 /** R374: the identity fields the writer's row carries for `spec`, from ONE place, so a run-wide
@@ -203,10 +205,11 @@ export function identityFieldsOf(
 
 /** R374: one mutant (or one reserved refused-file site) in the run-wide numbering. */
 export interface IdentityEntry {
-  /** `identitySiteKey` of the site. */
-  readonly key: string;
   readonly file: string;
   readonly startIndex: number;
+  /** With `file`, `startIndex` and `operatorName`, rebuilds the site's `identitySiteKey` at
+   *  numbering time, so the entry does not hold a second copy of it (R400). */
+  readonly endIndex: number;
   readonly operatorName: string;
   /** `identityTupleOf` of the site's `identityFieldsOf`. */
   readonly tuple: string;
@@ -223,9 +226,9 @@ export function identityEntriesOf(
   return deduped.map((spec) => {
     const header = attributeHeader(headers, spec, path);
     return {
-      key: identitySiteKey(path, spec.before.startIndex, spec.before.endIndex, spec.operatorName),
       file: path,
       startIndex: spec.before.startIndex,
+      endIndex: spec.before.endIndex,
       operatorName: spec.operatorName,
       tuple: identityTupleOf(identityFieldsOf(spec, header.name)),
     };
@@ -248,29 +251,32 @@ export function numberIdentityOrdinals(entries: readonly IdentityEntry[]): Map<s
   const next = new Map<string, number>();
   const out = new Map<string, number>();
   for (const e of order) {
-    if (out.has(e.key)) {
+    const key = identitySiteKey(e.file, e.startIndex, e.endIndex, e.operatorName);
+    if (out.has(key)) {
       throw new Error(
-        `numberIdentityOrdinals: two mutants share one site key ${JSON.stringify(e.key)}, so a run-wide identity ordinal cannot name one of them`,
+        `numberIdentityOrdinals: two mutants share one site key ${JSON.stringify(key)}, so a run-wide identity ordinal cannot name one of them`,
       );
     }
     const n = next.get(e.tuple) ?? 0;
-    out.set(e.key, n);
+    out.set(key, n);
     next.set(e.tuple, n + 1);
   }
   return out;
 }
 
-/** R374: the run-wide ordinals of `files`, deduped as the writer dedupes them. For callers that
- *  write instrumented files they built themselves (scripts, tests); a real run takes
- *  `generateMutationSet`'s `identityOrdinals`. */
+/** R374: the run-wide ordinals of `files`, deduped as the writer dedupes them, plus `reserved`
+ *  (R307: the entries of files refused whole, which take a number and get no row). A real run
+ *  passes `generateMutationSet`'s files and reserved entries (`identityOrdinalsOf`, runner). */
 export function runIdentityOrdinals(
   files: readonly InstrumentedFile[],
   operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
+  reserved: readonly IdentityEntry[] = [],
 ): Map<string, number> {
   const tierOf: TierResolver = (name) => operatorTiers.get(name);
-  return numberIdentityOrdinals(
-    files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
-  );
+  return numberIdentityOrdinals([
+    ...files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
+    ...reserved,
+  ]);
 }
 
 export interface MutantManifestEntry {
@@ -745,7 +751,7 @@ function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
 }
 
 /** R374: `input` with its run-wide ordinals numbered over `input.files` alone. For a caller that
- *  writes ONE hand-built file set (tests, scripts); a real run passes `generateMutationSet`'s. */
+ *  writes ONE hand-built file set (tests, scripts); a real run passes `identityOrdinalsOf`'s. */
 export function withRunIdentityOrdinals(input: Omit<WriteInput, "identityOrdinals">): WriteInput {
   return { ...input, identityOrdinals: runIdentityOrdinals(input.files, input.operatorTiers) };
 }

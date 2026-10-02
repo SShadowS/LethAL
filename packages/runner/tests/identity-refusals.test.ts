@@ -20,7 +20,13 @@ import type {
 } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { buildExcludedSites } from "../src/excluded-sites";
-import { generateMutationSet, operatorTiers, planArtifacts, runSession } from "../src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+  planArtifacts,
+  runSession,
+} from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { buildResumeIndex, carriedVerdictFor, wasStranded } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -131,7 +137,7 @@ async function manifestRows(
     await writeInstrumentedProject({
       targetDir: dir,
       files: batch,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: twinSelectorIds,
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "4a7d1c52-8b8e-4f0e-9f41-3c6b2d1e5a70",
@@ -248,9 +254,11 @@ describe("R307 T6 (c): against --exclude Bad, only a twin of a reserved entry di
     expect(refused.refusedFiles.map((r) => r.file)).toEqual([TABLE_FILE]);
     expect(excluded.refusedFiles).toEqual([]);
     // Every reserved entry is a site of the refused file; the excluded run reserves none.
-    const reserved = [...refused.identityOrdinals.keys()].filter((k) => k.includes(TABLE_FILE));
+    const reserved = [...identityOrdinalsOf(refused).keys()].filter((k) => k.includes(TABLE_FILE));
     expect(reserved.length).toBe(refused.refusedFiles[0]?.sites ?? -1);
-    expect([...excluded.identityOrdinals.keys()].some((k) => k.includes(TABLE_FILE))).toBe(false);
+    expect([...identityOrdinalsOf(excluded).keys()].some((k) => k.includes(TABLE_FILE))).toBe(
+      false,
+    );
 
     const a = await manifestRows(root, refused);
     const b = await manifestRows(root, excluded);

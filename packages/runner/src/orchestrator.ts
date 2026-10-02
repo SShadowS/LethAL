@@ -42,8 +42,8 @@ import {
   instrumentOneFile,
   isMutableSite,
   looseIdentityTupleOf,
-  numberIdentityOrdinals,
   reachLatchRefusedOwner,
+  runIdentityOrdinals,
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
@@ -448,10 +448,12 @@ export interface MutationSetResult {
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
   /**
-   * R374: every deployed mutant's identity ordinal, numbered ONCE over the whole run and keyed by
-   * `identitySiteKey`. `writeInstrumentedProject` requires it, so no batch numbers its own twins.
+   * R307: the exact identity entries of every file the trial refused (empty for a header-rule
+   * refusal, which has `looseTuples` instead). They take a run-wide ordinal and get no row.
+   * The ordinals themselves are NOT numbered here (R400): `identityOrdinalsOf` numbers them where
+   * they are consumed, so a dry run never builds them and the loop holds no per-mutant entry.
    */
-  readonly identityOrdinals: ReadonlyMap<string, number>;
+  readonly reservedIdentityEntries: readonly IdentityEntry[];
   /** R307: files the per-file trial refused, in path order. Empty when none was. */
   readonly refusedFiles: readonly RefusedFile[];
   /** R214: files whose sites the build's preprocessor symbols decided: sites in an arm the build
@@ -733,6 +735,19 @@ export function reachLatchRefusals(specs: readonly MutationSpec[]): {
   return [...byStart.values()].sort((x, y) => x.start - y.start);
 }
 
+/**
+ * R374: the run-wide identity ordinals of a generated set: every deployed mutant plus the reserved
+ * entries of refused files, numbered ONCE. Called where the ordinals are consumed (`runSession`,
+ * before any batch is written; scripts that write a set), never inside `generateMutationSet`, so
+ * a dry run never builds them (R400). The sort in `numberIdentityOrdinals` is global and stable,
+ * and ties come from one file only, so this numbers exactly as the in-loop numbering did.
+ */
+export function identityOrdinalsOf(
+  set: Pick<MutationSetResult, "files" | "reservedIdentityEntries">,
+): Map<string, number> {
+  return runIdentityOrdinals(set.files, operatorTiers, set.reservedIdentityEntries);
+}
+
 export async function generateMutationSet(
   projectDir: string,
   options: MutationSetOptions = {},
@@ -854,8 +869,9 @@ export async function generateMutationSet(
   // bare total cannot tell a reader whether the refusal touched anything they care about.
   let nonExecutableSites = 0;
   const declarativeSites: DeclarativeSiteFile[] = [];
-  // R374: one entry per deployed mutant, numbered once over the whole run after the loop.
-  const identityEntries: IdentityEntry[] = [];
+  // R307: the exact entries of refused files only. A deployed file's entries are built when the
+  // ordinals are numbered (`identityOrdinalsOf`), not held across this loop (R400).
+  const reservedIdentityEntries: IdentityEntry[] = [];
   const refusedFiles: RefusedFile[] = [];
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
@@ -991,17 +1007,12 @@ export async function generateMutationSet(
       continue;
     }
     // R307: the writer's own per-file steps, run once here as a trial. A `FileRefusedError` refuses
-    // THIS file whole; anything else is a LethAL bug and still aborts the run. The exact identity
-    // entries are computed first: a header-rule refusal (no object name) has none, and records
-    // loose tuples instead (fail closed, I3).
+    // THIS file whole; anything else is a LethAL bug and still aborts the run. Only a refused file
+    // has its exact identity entries computed here, to reserve them: a header-rule refusal (no
+    // object name) has none, and records loose tuples instead (fail closed, I3). The trial runs
+    // the same header rule (`objectHeadersOf` + `attributeHeader`), so a file it accepts always
+    // has entries (R400: they are built at numbering time, not here).
     const deduped = dedupeSpecs(fileSpecs, tierOf);
-    let entries: IdentityEntry[] | undefined;
-    try {
-      entries = identityEntriesOf(rel, source, deduped);
-    } catch (e) {
-      if (!(e instanceof FileRefusedError)) throw e;
-      if (e.shape !== "no-header" && e.shape !== "site-before-header") throw e;
-    }
     try {
       instrumentOneFile(
         { path: rel, source, root },
@@ -1011,8 +1022,15 @@ export async function generateMutationSet(
     } catch (e) {
       if (!(e instanceof FileRefusedError)) throw e;
       const { file, shape, objects, lines } = e;
+      let entries: IdentityEntry[] | undefined;
+      try {
+        entries = identityEntriesOf(rel, source, deduped);
+      } catch (err) {
+        if (!(err instanceof FileRefusedError)) throw err;
+        if (err.shape !== "no-header" && err.shape !== "site-before-header") throw err;
+      }
       producedInRefused.set(file, new Set(fileSpecs.map((spec) => spec.operatorName)));
-      if (entries !== undefined) identityEntries.push(...entries); // reserved: a number, no row
+      if (entries !== undefined) reservedIdentityEntries.push(...entries); // a number, no row
       refusedFiles.push({
         file,
         shape,
@@ -1026,15 +1044,9 @@ export async function generateMutationSet(
       });
       continue;
     }
-    if (entries === undefined) {
-      throw new Error(
-        `generateMutationSet: ${rel}: the header rule refused this file but its instrumentation trial did not; the two run the same rule, so this is a LethAL bug (R307)`,
-      );
-    }
     // Only AFTER the trial: an operator whose only sites sit in refused files deploys nothing.
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
-    identityEntries.push(...entries);
     for (const r of reachLatchRefusals(fileSpecs)) {
       warn(
         "reach-latch-refused",
@@ -1182,7 +1194,7 @@ export async function generateMutationSet(
     excludedByOperator,
     excludedByLines,
     declarativeSites,
-    identityOrdinals: numberIdentityOrdinals(identityEntries),
+    reservedIdentityEntries,
     refusedFiles,
     preprocExcluded,
     buildSymbols,
@@ -1674,7 +1686,7 @@ async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly subset?: readonly MutantManifestEntry[];
-  /** R374: the run-wide ordinals from `generateMutationSet`. */
+  /** R374: the run-wide ordinals from `identityOrdinalsOf`. */
   readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
@@ -4778,7 +4790,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
-    identityOrdinals,
+    reservedIdentityEntries,
     refusedFiles,
     preprocExcluded,
     buildSymbols: generatedSymbols,
@@ -4792,6 +4804,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backend: buildBackend,
     emit,
   });
+  // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
+  // which then held one entry per mutant until its end (R400). Still inside the generate phase.
+  const identityOrdinals = identityOrdinalsOf({ files: allFiles, reservedIdentityEntries });
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
   // under ever diverge; today both read the same snapshot.
   if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {

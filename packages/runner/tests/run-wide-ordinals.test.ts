@@ -18,7 +18,13 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import type { RunEvent } from "../src/events";
-import { generateMutationSet, operatorTiers, planArtifacts, runSession } from "../src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+  planArtifacts,
+  runSession,
+} from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { serializeKey } from "../src/selection";
@@ -148,7 +154,7 @@ describe("R374: identity ordinals are numbered over the whole run", () => {
       await writeInstrumentedProject({
         targetDir: dir,
         files: batch,
-        identityOrdinals: set.identityOrdinals,
+        identityOrdinals: identityOrdinalsOf(set),
         selectorIds,
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: "4a7d1c52-8b8e-4f0e-9f41-3c6b2d1e5a70",
@@ -482,6 +488,7 @@ describe("R374: no gate fixture's identity ordinal moves", () => {
         ...(c.only !== undefined ? { only: c.only } : {}),
         emit: () => {},
       });
+      const runWideOrdinals = identityOrdinalsOf(set);
       const batches = planArtifacts(set.files, {
         ...(c.maxGuardsPerBatch !== undefined ? { maxGuardsPerBatch: c.maxGuardsPerBatch } : {}),
         emit: () => {},
@@ -491,12 +498,12 @@ describe("R374: no gate fixture's identity ordinal moves", () => {
       for (const batch of batches) {
         for (const [key, perBatch] of runIdentityOrdinals(batch, operatorTiers)) {
           seen++;
-          const runWide = set.identityOrdinals.get(key);
+          const runWide = runWideOrdinals.get(key);
           if (runWide !== perBatch) moved.push(`${JSON.stringify(key)}: ${perBatch} -> ${runWide}`);
         }
       }
       expect(moved).toEqual([]);
-      expect(seen).toBe(set.identityOrdinals.size);
+      expect(seen).toBe(runWideOrdinals.size);
       expect(seen).toBeGreaterThan(0);
     }, 60_000);
   }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 // C02-09: the gap-id predictions over sandbox-app, through the real operator set and the real
 // writer. They live here, not in schemata, because the runner owns spec generation.
@@ -17,7 +17,7 @@ async function manifestOfFixture(name: string): Promise<MutantManifest> {
     await writeInstrumentedProject({
       targetDir: dir,
       files: set.files,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 79997, controlId: 79998, tableId: 79999 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",

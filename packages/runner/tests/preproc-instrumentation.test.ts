@@ -19,7 +19,12 @@ import type { TestMethodRef } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { explain } from "../src/explain";
 import { buildLineMap, lineMapFromSources, renamedMemberAttempts } from "../src/line-map";
-import { generateMutationSet, operatorTiers, reachLatchRefusals } from "../src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+  reachLatchRefusals,
+} from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
 import {
   buildCoverageIndex,
@@ -63,7 +68,7 @@ async function instrument(
     await writeInstrumentedProject({
       targetDir: out,
       files: set.files,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: APP_JSON.id,

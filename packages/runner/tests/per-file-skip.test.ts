@@ -6,7 +6,7 @@ import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildExcludedSites } from "../src/excluded-sites";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
  * R307 Task 4: one test per refusal shape. Each asserts the exact refused row, that the good file
@@ -120,7 +120,7 @@ async function writeAndReadManifest(set: Awaited<ReturnType<typeof generateMutat
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       operatorTiers,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
     });
     return {
       written: (await readdir(out)).sort(),

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
  * R307 Task 3: `generateMutationSet` runs the writer's own per-file steps (`instrumentOneFile`) as
@@ -131,12 +131,14 @@ describe("R307: the per-file trial", () => {
         for (const t of noHeader?.looseTuples ?? [])
           expect(t).toMatch(/^[0-9a-f]{64}\|R\|lethal\.[a-z-]+\|1$/);
         // 3 deployed + 3 reserved; the no-header file takes no number.
-        expect(set.identityOrdinals.size).toBe(6);
-        const reserved = [...set.identityOrdinals.keys()].filter((k) => k.startsWith(`${MIXED}\0`));
-        expect(reserved).toHaveLength(3);
-        expect([...set.identityOrdinals.keys()].some((k) => k.startsWith(`${NO_HEADER}\0`))).toBe(
-          false,
+        expect(identityOrdinalsOf(set).size).toBe(6);
+        const reserved = [...identityOrdinalsOf(set).keys()].filter((k) =>
+          k.startsWith(`${MIXED}\0`),
         );
+        expect(reserved).toHaveLength(3);
+        expect(
+          [...identityOrdinalsOf(set).keys()].some((k) => k.startsWith(`${NO_HEADER}\0`)),
+        ).toBe(false);
       },
     ));
 
@@ -229,7 +231,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       operatorTiers,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(

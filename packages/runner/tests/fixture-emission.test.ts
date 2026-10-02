@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
  * R-297 review r1 (minor): the fixture byte-identity claim was a scratch comparison. RUST-03 S1.5
@@ -161,7 +161,7 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
     await writeInstrumentedProject({
       targetDir,
       files: set.files,
-      identityOrdinals: set.identityOrdinals,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds,
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "00000000-0000-0000-0000-000000000000",
