@@ -331,6 +331,17 @@ export class LineMap {
     }
     return undefined;
   }
+
+  /**
+   * R383: is `lineNo` inside a RENAMED split member's span? There R318's rule
+   * (`renamedMemberAt`) decides alone, both halves: an own arm name is re-keyed, any other scope is
+   * kept as some other member's statement. No counter: an object with none exits at once.
+   */
+  inRenamedSpan(objectType: string, objectId: number, lineNo: number): boolean {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined || entry.renamed.length === 0) return false;
+    return entry.renamed.some((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
+  }
 }
 
 /**
@@ -585,10 +596,40 @@ export function fileLineMapEntries(
       previousEndLine = node.endPosition.row + 1;
       continue;
     }
-    if (!push(node, afterWrapper)) continue;
+    push(node, afterWrapper);
+    // R383: EVERY top-level object moves the base, indexed or not. An enum, an interface or a
+    // permission set has no coverage identity but still holds lines, so a codeunit after one is
+    // numbered from one past its end. Namespace, using and comment lines are not objects: a leading
+    // comment belongs to the object after it, as measured (`LineMapEntry.baseLine`).
+    if (NOT_AN_OBJECT.has(node.rawKind) || node.rawKind.startsWith("preproc_")) continue;
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
+}
+
+/**
+ * R383: a FILE-relative line, as al-runner reports it on both transports (measured on v2.12.0), to
+ * the object whose declaration holds it and the OBJECT-relative line the line map is keyed on.
+ *
+ * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
+ * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
+ * line between objects, an enum's lines) and for a refused object's lines: no coverage entry at all,
+ * never a guess. Keyed by `(objectType, objectId)`, never by a procedure name or a bare id.
+ */
+export function resolveFileLine(
+  entries: readonly LineMapEntry[],
+  fileLine: number,
+): { objectType: string; objectId: number; objectLine: number } | undefined {
+  for (const e of entries) {
+    if (fileLine < e.root.startPosition.row + 1 || fileLine > e.root.endPosition.row + 1) continue;
+    if (e.refused !== undefined) return undefined;
+    return {
+      objectType: e.objectType,
+      objectId: e.objectId,
+      objectLine: fileLine - e.baseLine + 1,
+    };
+  }
+  return undefined;
 }
 
 /**

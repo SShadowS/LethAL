@@ -2133,7 +2133,8 @@ export interface AlRunnerConfigSection {
   /**
    * R387: R220's `--coverage`. OFF by default in this release (plan section 2b). When set to
    * `"al-runner"`, `runFromCli` first asks `alRunnerCoverageSupport` and falls back to `"none"`,
-   * with one named warning, for a project holding a multi-object or `#if`-wrapped object file.
+   * with one named warning, for a project holding a `#if`-wrapped object file (since R383, not for
+   * a multi-object one).
    */
   readonly coverage?: "al-runner" | "none";
 }
@@ -2192,7 +2193,7 @@ export function alRunnerAdvisory(
   }
   if (coverageTurnedOffFor.length > 0) {
     notes.push(
-      `coverage is "none" (turned off for this run because al-runner's coverage cannot describe ${coverageTurnedOffFor.join(", ")})`,
+      `coverage is "none" (turned off for this run because LethAL cannot yet place al-runner's coverage lines in ${coverageTurnedOffFor.join(", ")})`,
     );
   } else if (t.coverage === "none") {
     notes.push(
@@ -2205,10 +2206,11 @@ export function alRunnerAdvisory(
 
 /**
  * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
- * is built. al-runner's coverage cannot describe a file declaring more than one object, and the
- * index drops a file holding a `#if`-wrapped object (`fileHoldsWrappedObject`), so either would turn
- * real coverage into a false `no-coverage`. Such a run falls back to `"none"` with ONE warning
- * naming the files. Called once per session, so the warning is not repeated per worker.
+ * is built. The index drops a file holding a `#if`-wrapped object (`fileHoldsWrappedObject`, R298,
+ * pending R300), which would turn real coverage into a false `no-coverage`, so such a run falls
+ * back to `"none"` with ONE warning naming the files. A multi-object file no longer does (R383:
+ * al-runner #3713 is fixed upstream, and each row is resolved to its object by position). Called
+ * once per session, so the warning is not repeated per worker.
  */
 export async function withAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
@@ -2227,15 +2229,12 @@ async function applyAlRunnerCoverageGuard(
   const section = configFile.alRunner;
   if (section?.coverage !== "al-runner") return { config: configFile, named: [] };
   const support = await alRunnerCoverageSupport(projectDir);
-  if (support.multiObjectFiles.length === 0 && support.wrappedObjectFiles.length === 0) {
-    return { config: configFile, named: [] };
-  }
-  const named = [
-    ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
-    ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
-  ];
+  // R383: a multi-object file no longer turns coverage off (al-runner #3713 is fixed upstream,
+  // measured on v2.12.0); each row is resolved to its object by position.
+  if (support.wrappedObjectFiles.length === 0) return { config: configFile, named: [] };
+  const named = support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`);
   warn(
-    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot describe ${named.join(", ")}, and trusting it would report those objects' mutants no-coverage while tests do reach them.`,
+    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. LethAL cannot yet place al-runner's coverage lines in ${named.join(", ")} (how a compiled #if arm is numbered is not measured, R300), and trusting it would report those objects' mutants no-coverage while tests do reach them.`,
   );
   return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
 }

@@ -229,10 +229,12 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
+    // R383: a multi-object file is admitted; only an #if-wrapped one still turns the CLI's coverage
+    // off, so that is what a gate fixture must not hold.
     const support = await alRunnerCoverageSupport(fixture.projectDir);
-    if (!support.supported) {
+    if (support.wrappedObjectFiles.length > 0) {
       throw new Error(
-        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
+        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.wrappedObjectFiles.join(", ")}`,
       );
     }
     const backend = new AlRunnerBackend({
