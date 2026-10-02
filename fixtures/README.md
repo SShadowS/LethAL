@@ -387,22 +387,25 @@ from current source before compiling. al-runner compiles both from source and ne
 ## sandbox-multiobject (R383)
 
 A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
-single-object control, `MultiControl.Codeunit.al`. al-runner reports coverage lines FILE-relative
-(measured on v2.12.0) and LethAL's line map is keyed OBJECT-relative, so every covered line of
-`Multi B` is resolved to its object and converted by `Multi B`'s base line before a procedure is
-looked up (`resolveFileLine`). The tests reach only `Multi B.Reached` and the control; `Multi A`
-and `Multi B.Unreached` are never called, so their mutants must read `no-coverage`. Before R383 a
-multi-object file turned al-runner coverage off for the whole run, and those same mutants read
-`survived`.
+single-object control, `MultiControl.Codeunit.al`. The tests reach only `Multi B.Reached` and the
+control; `Multi A` and `Multi B.Unreached` are never called.
+
+On bcdev their mutants read `no-coverage`, measured 2026-10-02 against
+`docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md`. On al-runner the file turns
+coverage off for the whole run: al-runner v2.12.0-main.c39ad5de reports every object after a
+file's first in a mixed source/instrumented frame (`Multi B`'s lines come back 17 too low, three of
+them inside `Multi A`; R383, `packages/runner/tests/r383-real-frame.test.ts`). So the
+`itest:alrunner` legs assert that refusal (one `al-runner-coverage-unsupported` warning naming
+`MultiPair.Codeunit.al`, `coverageMode: "none"`) and match
+`docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md`, where those mutants
+read `survived`. The first table becomes al-runner's too once upstream fixes the frame (R407).
 
 `Unreached`'s declaration sits on the line right after `Reached`'s last statement (`exit(X); end;`),
 so in the SOURCE a base one line off moves that covered statement into `Unreached`. In the
-instrumented text the emitter's closing lines sit between them, so the live leg does not see a
+instrumented text the emitter's closing lines sit between them, so a live leg does not see a
 one-line error; `packages/runner/tests/line-map.test.ts` and `al-runner-coverage.test.ts` pin the
-exact conversion offline. The live leg sees a wrong frame or a wrong object.
-`packages/runner/tests/multiobject-fixture.test.ts` fails offline if the twelve mutants or their
-owners move. The per-mutant verdicts, killing tests and covering tests are pre-committed in
-`docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md`.
+exact conversion offline. `packages/runner/tests/multiobject-fixture.test.ts` fails offline if the
+twelve mutants or their owners move, or if the guard stops refusing the fixture.
 
 `.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
 `alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
@@ -1495,7 +1498,7 @@ CLI flags:
     "serverMode": true,
     "selectorMode": "resource",
     // "al-runner" reads al-runner's --coverage; turned off, with a warning, for a project holding
-    // an #if-wrapped object (a multi-object file is admitted since R383).
+    // a multi-object file or an #if-wrapped object.
     "coverage": "none"
   },
   // R101(c): AL preprocessor symbols, TOP-LEVEL because they are a property of the PROJECT rather

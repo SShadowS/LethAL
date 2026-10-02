@@ -16,23 +16,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
-  stays off by default. When it is on, a project holding a `#if`-wrapped object runs with coverage
-  `"none"` instead, with one `al-runner-coverage-unsupported` warning naming the files (a
-  multi-object file did too until R383, below).
+  stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
+  object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
+  naming the files and the reason (see R383 below).
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
 
 ### Changed
 
-- **al-runner coverage now admits a file declaring more than one object** (R383). al-runner's
-  upstream #3713 (every object after a file's first was lost) is fixed, measured on v2.12.0 on both
-  transports, which report FILE-relative lines. Each covered line is now resolved by position to the
-  object that holds it and converted by that object's base line, on the Cobertura and the `--server`
-  path alike, so `alRunner.coverage: "al-runner"` is no longer turned off for such a project. Only a
-  file holding a `#if`-wrapped object still turns it off (R298, pending R300), and the
-  `al-runner-coverage-unsupported` warning now says why. `alRunnerCoverageSupport` no longer returns
-  `supported`.
+- **A file declaring more than one object still turns al-runner coverage off, for a new reason**
+  (R383). Upstream #3713 (every object after a file's first was lost) is fixed. But on the pinned
+  al-runner v2.12.0-main.c39ad5de those objects' lines come back in a mixed frame: when a source
+  project with the same app id is reachable, a later object's line is reported as (previous object's
+  end in the SOURCE) + (distance in the INSTRUMENTED text), so it can land in an earlier object.
+  bcdev matched the admission's pre-committed table; al-runner did not. So the whole-run refusal
+  stays, and the `al-runner-coverage-unsupported` warning now names that reason (and R300's for a
+  `#if`-wrapped file). Position-based resolution of every row (both transports) is built and tested
+  offline, kept off until upstream fixes the frame (R407).
 - **al-runner runs now measure the preprocessor symbols al-runner predefines, every session**
   (R392): one one-shot al-runner run of a generated probe project, after provisioning and before
   anything is generated, instead of assuming the `CLEANSCHEMA1`..`CLEANSCHEMA25` list measured on
@@ -142,7 +143,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **A codeunit after an enum, interface or permission set in the same file got the wrong base line**
   (R383). The line map moved a file's base line only past objects with a coverage identity, so every
   covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture
-  had the shape). Every top-level object now moves the base.
+  has the shape, re-checked: no file under `fixtures/` holds an unindexed object at all). Every
+  top-level object now moves the base.
 
 
 ## [0.1.0-alpha.3] — 2026-08-27

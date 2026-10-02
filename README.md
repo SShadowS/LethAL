@@ -692,10 +692,12 @@ a LethAL feature or a mode.
   on v2.10.0.0). Both later reasons have moved too (R220): LethAL can read al-runner's own
   `--coverage`, and on 2.11.0 the canary reports that a row written inside `Codeunit.Run` IS
   discarded by the error. What remains is that coverage is OFF by default and CONDITIONAL when on:
-  `lethal run` uses it only with `"alRunner": { "coverage": "al-runner" }`, and a file holding a
-  `#if`-wrapped object turns it off for the whole run, with a warning naming the file (R298, pending
-  R300). A file declaring more than one object no longer does (R383: upstream #3713 is fixed,
-  measured on v2.12.0, and LethAL places each line in its own object). Without coverage a mutant no test reaches is run against every
+  `lethal run` uses it only with `"alRunner": { "coverage": "al-runner" }`, and a file declaring more
+  than one object or holding a `#if`-wrapped object turns it off for the whole run, with a warning
+  naming the file. The multi-object reason moved in R383: upstream #3713 (objects after a file's
+  first were lost) is fixed, but al-runner v2.12.0-main.c39ad5de reports those objects' lines in a
+  frame LethAL cannot convert, so they land in the wrong object (R407 tracks re-admission). The
+  `#if` reason is R298, pending R300. Without coverage a mutant no test reaches is run against every
   test and comes back `survived` rather than `no-coverage`. That is one measured route to a false survivor. No measurement has shown a false
   kill from this backend, but none rules one out either; in particular, a pinned platform-app directory
   that exists but holds a mismatched build is untested (R235). Use it for offline smoke-testing, not for a score.
