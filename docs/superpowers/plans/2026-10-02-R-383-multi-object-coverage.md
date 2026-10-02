@@ -1,116 +1,152 @@
-# R-383: admit multi-object files to al-runner coverage (short plan)
+# R-383: admit multi-object files to al-runner coverage (short plan, r2)
 
 Roadmap: `docs/roadmap/R383.md`, section "Measured 2026-10-02".
 - **Measured** on al-runner v2.12.0: upstream #3713 is gone on both the one-shot and the `--server`
   transports.
-- **Not yet measured** on the upstream-main source build (`H:/al-runner-builds/c39ad5de`). Task 0
-  re-runs the probe there before anything is built.
-- **Guard unchanged by this plan's commit:** nothing is built until this plan is approved.
+- **Not yet measured** on the upstream-main source build (`H:/al-runner-builds/c39ad5de`, which
+  reports `v2.12.0-main.c39ad5de`).
+- **Guard unchanged by this plan's commit.**
+
+r2 answers review r1 (`H:/lethal-coord/reviews/R-383-plan/review-r1.md`, findings 1 to 5, as
+ruled in `reject-r1.md`).
 
 ## What is true today (read)
 
 - **The refusal is in two places:**
   - `alRunnerCoverageSupport` (`al-runner-coverage.ts:176`), called by the CLI guard
     (`cli.ts:2229-2230`) and by `itest:alrunner` (`al-runner.itest.ts:232-236`);
-  - the index skip in `buildAlRunnerCoverageIndex` (`al-runner-coverage.ts:218-223`).
+  - the index skip (`al-runner-coverage.ts:218-223`).
 - **One object per file is assumed** by:
   - `byFile` and `objectForFile` (`:123`, `:276-288`);
   - the raw file-relative line passed to `lineMap.lookup` (Cobertura path, `:314`);
-  - the raw line passed to `lineMap.renamedMemberAt` (server path, `:369`).
-- **Why that works today:** `line-map.ts` stores procedure spans OBJECT-relative
-  (`spansOf`, `:346-357`, using `baseLine = previousEndLine + 1` from `fileLineMapEntries`,
-  `:558-591`). For a single-object file the base line is 1, so file-relative and object-relative
-  coincide. That is the only reason passing the raw line works.
-- **bcdev already handles multi-object files,** because BC itself reports object-relative lines
-  (`bcdev-backend.ts:1090`).
-- **The `#if`-wrapped-file refusal is a separate question** (R298, pending R300). It is NOT touched.
-- **No frozen gate figure can move.** Every al-runner leg uses single-object fixtures with no
-  root-level `#if`. The only multi-object fixture file is `sandbox-coverage-probe`, which has no
-  test app and no gate.
+  - the raw line passed to `renamedMemberAt` (server path, `:369`). The server path also takes
+    `scope`, a procedure NAME, as the procedure (`:348-385`).
+- **`line-map.ts` stores spans object-relative** (`spansOf`, `:346-357`), using
+  `baseLine = previousEndLine + 1` from `fileLineMapEntries` (`:558-591`).
+- **BUG (review 1):** `fileLineMapEntries` advances `previousEndLine` only for objects with a
+  coverage identity (`objectIdentityOf`, `:670-694`, skips enums, interfaces and permission sets).
+  So a codeunit after an enum in the same file gets the WRONG base. This is latent today on bcdev,
+  which uses the same entries for BC's object-relative lines.
+- **bcdev passes BC's own object-relative lines** (`bcdev-backend.ts:1090`).
+- **The `#if`-wrapped refusal (R298, pending R300) stays,** in the CLI guard and in the index skip.
+  So does the existing refusal for an object after an object-holding `#if` wrapper
+  (`line-map.ts:558-591`).
+- **No frozen gate figure can move:** every al-runner leg uses single-object fixtures. Admitting a
+  multi-object file mainly moves its UNREACHED mutants from `survived` to `no-coverage`
+  (`selection.ts:431-570`).
 
-## Design (one mapping, transport-independent)
+## Design
 
-1. **One resolver.** A new pure function in `line-map.ts`, beside `fileLineMapEntries`:
+1. **Partition on EVERY top-level object** (review 1).
+   - `fileLineMapEntries` advances `previousEndLine` past every top-level declaration, indexed or
+     not: enums, interfaces, permission sets, extensions and anything else.
+   - It emits entries only for the indexed ones, as today.
+   - This fixes the latent bcdev base for files where an unindexed object comes first.
+   - The object-after-`#if`-wrapper refusal is kept unchanged.
+2. **One transport-independent resolver** in `line-map.ts`:
    `resolveFileLine(entries, fileLine) -> { objectType, objectId, objectLine } | undefined`.
-   - It picks the object whose FILE span (its declaration node's start and end rows) contains
-     `fileLine`.
-   - It returns `objectLine = fileLine - baseLine + 1`, using the SAME `baseLine` that `spansOf`
-     used to store that object's spans.
-   - Because it uses the identical base on both sides, the conversion is self-consistent whatever
-     BC's own rule is. It does not depend on R58's BC measurements being right for al-runner.
-   - A line outside every counted object, or inside an object the index refuses, returns
-     `undefined`.
-2. **Both transports call it.** `byFile` keeps the file's whole entry list instead of one object.
-   The Cobertura path (`:314`) and the server path (`:369`) both resolve `(object, objectLine)`
-   through the resolver before `lookup` and `renamedMemberAt`. The transport only supplies a file
-   and a file-relative line, which both report today, so a move to another al-runner build changes
-   nothing here if that build keeps the frame. Task 0 checks that.
-3. **Partition by every top-level object.** The base line must count every top-level declaration,
-   including the kinds `objectIdentityOf` does not count (enum, interface, permissionset). Otherwise
-   a codeunit after an enum in the same file gets the wrong base. Task 1 checks what
-   `fileLineMapEntries` does today, and pins it by test either way.
-4. **Drop only the multi-object half of the guard,** in both places:
-   - `supported` no longer depends on `multiObjectFiles`;
-   - the CLI guard falls back on `#if`-wrapped files only;
-   - `multiObjectFiles` is kept as a reported list, not a refusal.
-   The guard's warning text and R-387's advisory change to match.
+   - It SELECTS the object whose declaration-node FILE span contains `fileLine`.
+   - It CONVERTS with the same `baseLine` that `spansOf` used: `objectLine = fileLine - baseLine + 1`.
+   - It returns `undefined` for a line in a gap between objects, in an unindexed object, or in a
+     refused object. A gap therefore yields NO coverage entry.
+   - Keys are always the file path plus `(objectType, objectId)`, never a procedure name and never a
+     bare id.
+3. **Both transports resolve by POSITION.**
+   - **Cobertura:** each `<line>` is resolved through `resolveFileLine`, then the procedure comes
+     from `lookup(type, id, objectLine)`.
+   - **Server:** each statement's `line` is resolved the same way, then the procedure comes from
+     `lookup`. The daemon's `scope` is used only as a CROSS-CHECK. If `scope` disagrees with the
+     resolved procedure, the statement is dropped and a warning names it. It never picks the object,
+     so two same-named procedures in two objects of one file cannot be confused. R318's
+     `renamedMemberAt` is called with the resolved object and object line.
+   - The transport supplies only a file and a file-relative line, so moving to another build changes
+     nothing here if that build keeps the frame. Task 0 checks it.
+4. **Guard change:** drop only the multi-object half, in `supported`, the CLI fallback and the
+   index skip. `multiObjectFiles` stays as a reported list. The guard warning and R-387's advisory
+   wording change to match.
 
 ## Tasks
 
-0. **Re-probe on the upstream-main build** (needs al-runner; ask for the go). Run the same S1 to S4
-   shapes on `c39ad5de`, plus the R-387 `--server` path. Record the build in every line. If the
-   frame or the result differs from v2.12.0, stop and report.
-1. **Offline, TDD, every test red-checked:**
-   - the resolver: two objects, three objects, an enum between two codeunits, a line in the gap
-     between objects, a line in a refused object;
-   - both transport paths: a multi-object Cobertura fixture and a server payload taken from the
-     probe's own outputs (`s1.xml`, `server-two.json`, trimmed into test fixtures), each naming B's
-     procedure for B's lines and A's for A's;
-   - the guard: multi-object is admitted, wrapped is still refused;
-   - the existing refusal tests change from "refused" to "admitted, and mapped to the right object".
-     Every assertion that a wrapped file is refused stays.
-2. **A pre-committed live check.**
-   - Add a fixture pair, `fixtures/sandbox-multiobject` plus `-tests`: one file holding two
-     codeunits, with a test that reaches only the SECOND, plus one single-object file as a control.
-   - Pre-commit its per-mutant table BEFORE any live run:
-     - the first object's mutants are `no-coverage`;
-     - the second's are killed or survived, as their test decides;
+0. **The build question** (review 5). The gates keep running on the global tool, v2.12.0, which
+   `status()` accepts. The source build is NOT admitted by loosening the version check.
+   - If `status()` accepts `v2.12.0-main.c39ad5de` as it stands (the orchestrator is measuring it),
+     the probe from `R383.md` (S1 to S4, both transports) is re-run on it too, and every result names
+     its build.
+   - If `status()` refuses it, a pinned source build would need its own exact-string admission. That
+     is out of scope here, and R-383's results stay v2.12.0-only.
+   - Either way: if the frame or the result differs between builds, stop and report.
+1. **Offline, TDD, every test red-checked.**
+   - **Partition:**
+     - an enum, an interface and a permission set each before a codeunit in one file: the
+       codeunit's base is right;
+     - a namespace or `using` header before the first object: base 1;
+     - the object-after-`#if` refusal is still pinned.
+   - **The resolver:**
+     - two objects and three objects in one file;
+     - a comment or blank gap between objects: `undefined`, and no coverage entry;
+     - a second object's HEADER line (`codeunit 50101 X`, `{`, `var`) never resolves to a member of
+       the first object, and never yields member evidence;
+     - CRLF and BOM files (the parser's rows drive the spans): same answers as LF without a BOM.
+   - **Both transport conversions, each fed the same multi-object source:**
+     - **Cobertura:** a trimmed copy of the probe's `s1.xml`, plus synthetic ones built from it for
+       CRLF, BOM and table/page extensions.
+     - **Server:** a trimmed `server-two.json`, plus synthetic payloads for the same cases.
+     - **Same name, two objects:** two procedures both named `Run` in two objects of ONE file. Their
+       positions give different object ids and different covering sets.
+     - **Same name, two files:** the same procedure name in two files.
+     - **Same id, two kinds:** a codeunit and a table both numbered 50100. They give different keys.
+     - **A disagreeing `scope`:** dropped, with the warning.
+   - **Guard:** multi-object files are admitted, and wrapped files are still refused, in both the CLI
+     and the index.
+   - **The existing refusal tests** change from "refused" to "admitted and mapped". Every
+     wrapped-file assertion stays.
+   - **Two independent red-checks** (review 2):
+     - put the multi-object refusal back: the admission tests go red;
+     - make the conversion off by one (`fileLine - baseLine` or `+ 2`): the exact `objectLine` and
+       boundary tests go red.
+2. **A pre-committed live check** (reviews 2 and 5).
+   - **The fixture pair:** `fixtures/sandbox-multiobject` plus `-tests`.
+     - One file holds codeunit A, then codeunit B.
+     - B has two ADJACENT procedures, `Reached` and `Unreached`. `Reached`'s first statement sits on
+       the line right after `Unreached`'s `end;`, or the other way round. Either way, a base one line
+       off moves a covered statement into the wrong procedure.
+     - A's procedures are unreached.
+     - One single-object file is a control.
+     - The tests reach only `B.Reached`, and the control.
+   - **Predict first.** The per-mutant table (verdict, killing test, and the covering-test set per
+     mutant) is predicted from the fixture source. It is committed as
+     `docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md` BEFORE any live run:
+     - A's and `B.Unreached`'s mutants are `no-coverage`;
+     - `B.Reached`'s are killed or survived, as its test decides;
      - the control is as its test decides.
-   - Derive the table from `itest:bcdev`-style authority: run it once on Cronus28 under a lease,
-     where bcdev's object-relative coverage is the reference. Then add an `itest:alrunner` leg for
-     the pair on the one-shot and `--server` transports. Both must equal the pre-committed table per
-     mutant, killing test included.
-   - This is the only gate that would see a wrong base line. Every other leg is single-object.
-3. **Prose** (in the same branch, except `CLAUDE.md`):
-   - the `al-runner-coverage.ts` header and comments at `:147-148` and `:338-342`;
-   - `al-runner-backend.ts:286-288` and `:649-653`;
-   - `README.md:694-697`;
-   - `docs/using-lethal-from-an-agent.md:103-106`;
-   - `docs/directions-emea-2026-runbook.md:233-236`;
-   - `fixtures/README.md:1468-1469`;
-   - `R220.md` (110-117, 132-137) and `R255.md` (16-17);
-   - R394's wording.
-4. **`authoritative` stays `false`.** Its other reasons still stand: `Codeunit.Run` transaction
-   scope, `--isolation codeunit`, and permissions or company context
-   (`al-runner-backend.ts:636-698`). The coverage reason is removed from its comment.
+   - **Then challenge it.** `bun run compile:fixtures`, then publish the pair on Cronus28 under a
+     lease, then run bcdev, the authority, once. A bcdev difference from the prediction is REPORTED
+     as a finding, not edited into the table.
+   - **Then compare al-runner.** A new `itest:alrunner` leg runs one-shot and `--server` on v2.12.0.
+     Both must equal the PREDICTED table per mutant, covering tests included, and must equal each
+     other. Any disagreement goes to you, unedited.
+   - **The baseline** is recorded once under R332, with the receipt.
+3. **Prose.**
+   - In the build: the `al-runner-coverage.ts` header and comments at `:147-148` and `:338-342`;
+     `al-runner-backend.ts:286-288` and `:649-653`; `README.md:694-697`;
+     `docs/using-lethal-from-an-agent.md:103-106`; `docs/directions-emea-2026-runbook.md:233-236`;
+     `fixtures/README.md:1468-1469`; `R220.md` (110-117, 132-137); `R255.md` (16-17); R394.
+   - `CLAUDE.md:41` goes to you as text (below).
+4. **`authoritative` stays `false`.** Its other reasons stand (`al-runner-backend.ts:636-698`). Only
+   the coverage reason is removed from its comment.
 
-## Prose that is false now (for the orchestrator; I do not edit CLAUDE.md)
+## CLAUDE.md:41, for the owner (unchanged from r1)
 
-- **`CLAUDE.md:41`:** "What keeps the flag false is that coverage is CONDITIONAL — a file declaring
-  more than one object disables it for the whole run, because al-runner loses every object after
-  the first in one (upstream #3713) — and a capability flag that depends on the project's file
-  layout is not a capability."
-  - **On v2.12.0 the cause is gone:** al-runner no longer loses those objects.
-  - **The behaviour still holds until this plan lands:** LethAL's guard still disables coverage, so
-    the "disables it for the whole run" half stays true.
-  - **What stays conditional:** the `#if`-wrapped-file refusal (R298), so the "depends on file
-    layout" argument still holds through that.
-  - **Suggested wording, once the plan lands:** coverage is conditional because a `#if`-wrapped
-    file disables it (R298, pending R300); #3713 is fixed upstream and no longer applies.
-- **The other false passages** are listed in Task 3 and fixed in the build.
+- **Cause, false on v2.12.0:** "because al-runner loses every object after the first in one
+  (upstream #3713)".
+- **Behaviour, true until this lands:** "a file declaring more than one object disables it for the
+  whole run".
+- **Suggested wording once this lands:** coverage is conditional because a `#if`-wrapped file
+  disables it (R298, pending R300); #3713 is fixed upstream (measured on v2.12.0).
 
 ## Out of scope
 
-- The `#if`-wrapped refusal (R298 and R300).
-- Turning coverage on by default (R394, which this plan unblocks only in part).
+- The R298 and R300 `#if` refusal.
+- R394, turning coverage on by default.
 - The `authoritative` flag.
+- Admitting a pinned source build.
