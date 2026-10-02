@@ -84,6 +84,27 @@ describe("R383: al-runner's real frame mis-resolves every object after a file's 
     }
   });
 
+  test("positive control: a hit on A's own line 20 (`exit(X + 7)`) resolves to exactly Multi A.Never 20, on both transports", async () => {
+    // Line 20 is a real row of the captured run (hits 0: no test calls A). Given a hit, it must
+    // land on A at object line 20 (A is first, base 1), not merely somewhere in a set of lines.
+    const real = await cobertura("cobertura-reached-both-ways.xml");
+    const row = real.find((l) => l.line === 20);
+    if (row === undefined) throw new Error("the captured Cobertura lost its line 20 row");
+    const index = await admittedIndex();
+    const exact = [{ objectType: "Codeunit", objectId: A, procedure: "Never", line: 20 }];
+    expect(alRunnerCoverageFrom([{ ...row, hits: 1 }], index).entries).toEqual(exact);
+    const payload = JSON.parse(
+      await readFile(join(DIR, "server-reached-both-ways.json"), "utf8"),
+    ) as ServerPerTestCoverage;
+    const [file] = payload.coverage ?? [];
+    if (file === undefined) throw new Error("the captured --server payload lost its file");
+    const one: ServerPerTestCoverage = {
+      ...payload,
+      coverage: [{ ...file, statements: [{ scope: "Never", line: 20, hits: 1 }] }],
+    };
+    expect(alRunnerCoverageFromServer(one, index).entries).toEqual(exact);
+  });
+
   test("control: in the instrumented frame (fresh app id) every hit resolves to Multi B.Reached", async () => {
     const map = alRunnerCoverageFrom(
       await cobertura("cobertura-fresh-app-id.xml"),

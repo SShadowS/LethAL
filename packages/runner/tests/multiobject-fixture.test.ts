@@ -198,6 +198,15 @@ describe("R383: sandbox-multiobject", () => {
     expect(() => assertMultiObjectRun(report(admittedRun), "admitted")).toThrow(
       /M0003:.*\n.*M0004/,
     );
+    // R383 r2: a duplicated row fails, though every code still matches its expected row.
+    const [first] = EXPECTED_MULTIOBJECT;
+    if (first === undefined) throw new Error("EXPECTED_MULTIOBJECT is empty");
+    expect(() =>
+      assertMultiObjectRun(report([...EXPECTED_MULTIOBJECT, first]), "duplicated"),
+    ).toThrow("13 rows, expected 12");
+    expect(() =>
+      assertMultiObjectRun(report([...EXPECTED_MULTIOBJECT, first]), "duplicated"),
+    ).toThrow(`actual repeats code(s) ${first.code}`);
   });
 
   it("in the source frame, Reached's last statement sits on the line right before Unreached", async () => {

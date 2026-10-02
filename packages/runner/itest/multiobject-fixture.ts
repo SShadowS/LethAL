@@ -212,10 +212,21 @@ function diffRows(
   expected: readonly MultiObjectRow[],
   actual: readonly MultiObjectRow[],
 ): string[] {
+  const out: string[] = [];
+  // Before any Map: a Map keeps one row per code, so a duplicated row would otherwise pass.
+  if (actual.length !== expected.length) {
+    out.push(`${actual.length} rows, expected ${expected.length}`);
+  }
+  for (const [side, rows] of [
+    ["expected", expected],
+    ["actual", actual],
+  ] as const) {
+    const dup = rows.map((r) => r.code).filter((c, i, all) => all.indexOf(c) !== i);
+    if (dup.length > 0) out.push(`${side} repeats code(s) ${[...new Set(dup)].join(", ")}`);
+  }
   const want = new Map(expected.map((r) => [r.code, r]));
   const got = new Map(actual.map((r) => [r.code, r]));
   const codes = [...new Set([...want.keys(), ...got.keys()])].sort();
-  const out: string[] = [];
   for (const code of codes) {
     const e = want.get(code);
     const a = got.get(code);
