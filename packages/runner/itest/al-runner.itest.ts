@@ -43,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
-import { buildBackend } from "../src/cli";
+import { buildBackend, withAlRunnerCoverageGuard } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
@@ -83,6 +83,7 @@ import {
   MULTIOBJECT_SELECTOR_IDS,
   MULTIOBJECT_TEST_DIR,
   assertMultiObjectLegsEqual,
+  assertMultiObjectRefusal,
   assertMultiObjectRun,
   printMultiObjectTable,
 } from "./multiobject-fixture";
@@ -152,6 +153,8 @@ interface GateFixture {
   readonly symbols: readonly string[];
   /** R353: absent on every leg but the layout legs, so the others still run one batch. */
   readonly maxGuardsPerBatch?: number;
+  /** R383: absent means `"al-runner"`; the multi-object legs pass what the CLI guard returned. */
+  readonly coverage?: "al-runner" | "none";
 }
 
 const SANDBOX: GateFixture = {
@@ -239,12 +242,12 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
-    // R383: a multi-object file is admitted; only an #if-wrapped one still turns the CLI's coverage
-    // off, so that is what a gate fixture must not hold.
+    // R383: the multi-object legs pass `coverage: "none"`, as the CLI guard decided for them.
+    const coverage = fixture.coverage ?? "al-runner";
     const support = await alRunnerCoverageSupport(fixture.projectDir);
-    if (support.wrappedObjectFiles.length > 0) {
+    if (coverage === "al-runner" && !support.supported) {
       throw new Error(
-        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.wrappedObjectFiles.join(", ")}`,
+        `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
       );
     }
     const backend = new AlRunnerBackend({
@@ -252,7 +255,7 @@ async function runOnce(
       instrumentedDir: join(scratchRoot, "instrumented"),
       testDir: fixture.testDir,
       selectorObjectId: fixture.selectorIds.selectorId,
-      coverage: "al-runner",
+      coverage,
       ...(serverMode ? { serverMode: true } : {}),
       ...(selectorMode === "resource" ? { selectorMode } : {}),
       // R321: the one-shot argv (`buildAlRunnerArgv`) and the daemon's start argv (R319) read this.
@@ -636,20 +639,34 @@ async function runLayoutLegs(): Promise<SessionReport> {
 }
 
 /**
- * R383: `sandbox-multiobject`, one-shot then `--server`. Two codeunits in one file, reported by
- * al-runner with FILE-relative lines on both transports, so both legs must resolve every covered
- * line to its object by position and convert it by that object's base line. Both must equal the
- * pre-committed table per mutant, covering tests included, and each other.
+ * R383: `sandbox-multiobject`, one-shot then `--server`, under the multi-object REFUSAL. Two
+ * codeunits in one file, whose later object al-runner reports in a frame LethAL cannot undo, so
+ * the CLI guard must turn the requested coverage off, by name, before either leg runs. Both legs
+ * then run with coverage "none" and must equal the pre-committed refusal table per mutant,
+ * covering tests included, and each other.
  *
  * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
  * for `main()` to compare with the frozen baseline LAST, after every table check passed.
  */
 async function runMultiObjectLegs(): Promise<SessionReport> {
+  const warnings: string[] = [];
+  const guarded = await withAlRunnerCoverageGuard(
+    { alRunner: { alRunnerPath, coverage: "al-runner" } },
+    MULTIOBJECT_PROJECT_DIR,
+    (line) => {
+      console.warn(line);
+      warnings.push(line);
+    },
+  );
+  const coverage = guarded.alRunner?.coverage;
+  // Thrown at once: without the refusal there is nothing for the legs to measure.
+  assertMultiObjectRefusal(coverage, warnings);
   const fixture: GateFixture = {
     projectDir: MULTIOBJECT_PROJECT_DIR,
     testDir: MULTIOBJECT_TEST_DIR,
     selectorIds: MULTIOBJECT_SELECTOR_IDS,
     symbols: [],
+    coverage: coverage === "none" ? "none" : "al-runner",
   };
   const failures: string[] = [];
   const check = (what: string, fn: () => void): void => {

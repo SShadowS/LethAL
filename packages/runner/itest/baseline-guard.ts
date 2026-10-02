@@ -273,7 +273,8 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * one record run" from "missing". The commit that records a file removes it from here, and the
  * wiring test fails while a listed file exists. R387's CLI-default leg was recorded 2026-10-01
  * (al-runner.cli-default.baseline.json). R383's multi-object leg is pre-committed in
- * docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md and not yet run.
+ * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md and not yet run
+ * under the restored refusal.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner.multiobject.baseline.json"];
 

@@ -3,8 +3,14 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { EXPECTED_MULTIOBJECT } from "../itest/multiobject-fixture";
+import {
+  EXPECTED_MULTIOBJECT,
+  type MultiObjectRow,
+  assertMultiObjectRefusal,
+  assertMultiObjectRun,
+} from "../itest/multiobject-fixture";
 import { alRunnerCoverageFrom, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
+import { withAlRunnerCoverageGuard } from "../src/cli";
 import { lineMapFromSources } from "../src/line-map";
 import {
   generateMutationSet,
@@ -14,12 +20,14 @@ import {
 } from "../src/orchestrator";
 
 /**
- * R383, offline guard for `fixtures/sandbox-multiobject`'s PURPOSE. The live leg in
- * `itest:alrunner` is pre-committed in
- * docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md, and its table rests on the
- * twelve mutants below and on each covered line of the EMITTED bundle resolving to its own object
- * and procedure. This re-derives both from the code, so a fixture edit or an emitter change that
- * moves them fails here in seconds, not after a live run.
+ * R383, offline guard for `fixtures/sandbox-multiobject`'s PURPOSE. The live legs in
+ * `itest:alrunner` are pre-committed in
+ * docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md (the multi-object
+ * refusal, coverage "none"), and bcdev's in 2026-10-02-r383-multiobject-precommitment.md. Both rest
+ * on the twelve mutants below; the future al-runner admission also rests on each covered line of
+ * the EMITTED bundle resolving to its own object and procedure. This re-derives both from the code,
+ * so a fixture edit or an emitter change that moves them fails here in seconds, not after a live
+ * run.
  */
 
 const PROJECT = resolve(import.meta.dir, "../../../fixtures/sandbox-multiobject");
@@ -115,9 +123,17 @@ describe("R383: sandbox-multiobject", () => {
     expect(sites).toEqual(EXPECTED_MUTANTS.map((m) => m.replace(/ codeunit:\d+/, "")));
   });
 
-  it("the emitted pair is indexed as two objects, and each baseline line resolves to its owner", async () => {
+  it("the emitted pair is NAMED and not indexed by default (the R383 refusal)", async () => {
+    const index = await buildAlRunnerCoverageIndex(get().dir);
+    expect(index.multiObjectFiles).toEqual([PAIR]);
+    expect(index.byFile.has("multipair.codeunit.al")).toBe(false);
+    expect(index.byFile.has("multicontrol.codeunit.al")).toBe(true);
+    expect(alRunnerCoverageFrom([{ file: PAIR, line: 20, hits: 1 }], index).entries).toEqual([]);
+  });
+
+  it("admitted (infrastructure), each baseline line of the emitted pair resolves to its owner", async () => {
     const { dir } = get();
-    const index = await buildAlRunnerCoverageIndex(dir);
+    const index = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
     expect(index.multiObjectFiles).toEqual([PAIR]);
     const lines = (await readFile(join(dir, PAIR), "utf8")).split(/\r?\n/);
     /** The LAST line holding `needle`: the unmutated `else` arm, which the baseline runs. */
@@ -138,6 +154,50 @@ describe("R383: sandbox-multiobject", () => {
       const got = map.entries.map((e) => `${e.objectId} ${e.procedure ?? "-"}`);
       expect([needle, got]).toEqual([needle, [owner]]);
     }
+  });
+
+  it("the real CLI guard refuses the fixture as the legs require: coverage none, one warning naming the pair", async () => {
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(
+      { alRunner: { alRunnerPath: "a", coverage: "al-runner" } },
+      PROJECT,
+      (l) => warned.push(l),
+    );
+    expect(() => assertMultiObjectRefusal(out.alRunner?.coverage, warned)).not.toThrow();
+    // And the check is not vacuous: coverage left on, or no warning, both fail it.
+    expect(() => assertMultiObjectRefusal("al-runner", warned)).toThrow("expected none");
+    expect(() => assertMultiObjectRefusal("none", [])).toThrow("expected ONE");
+  });
+
+  it("the legs' table check passes the refusal table and fails the admitted run's rows", () => {
+    const report = (rows: readonly MultiObjectRow[], coverageMode = "none") => ({
+      coverageMode,
+      baselineGreen: true,
+      batches: 1,
+      mutants: rows.map((r) => ({ ...r, mutantCode: r.code })),
+    });
+    expect(() => assertMultiObjectRun(report(EXPECTED_MULTIOBJECT), "offline")).not.toThrow();
+    expect(() => assertMultiObjectRun(report(EXPECTED_MULTIOBJECT, "al-runner"), "x")).toThrow(
+      "coverageMode is al-runner",
+    );
+    // The first live run of the R383 admission (itest-record.log): A's mutants covered by
+    // ReachedBothWays alone, Unreached's no-coverage. Both must fail the refusal table.
+    const admittedRun = EXPECTED_MULTIOBJECT.map((r) =>
+      r.procedureName === "Unreached"
+        ? { ...r, verdict: "no-coverage" as const, coveringTests: [] }
+        : {
+            ...r,
+            coveringTests: [
+              r.procedureName === "Double"
+                ? "Multi Tests.ControlDoubles"
+                : "Multi Tests.ReachedBothWays",
+            ],
+            coverageAttribution: "exact",
+          },
+    );
+    expect(() => assertMultiObjectRun(report(admittedRun), "admitted")).toThrow(
+      /M0003:.*\n.*M0004/,
+    );
   });
 
   it("in the source frame, Reached's last statement sits on the line right before Unreached", async () => {

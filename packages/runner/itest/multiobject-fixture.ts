@@ -2,14 +2,17 @@
  * R383: the `sandbox-multiobject` fixture's pre-committed per-mutant table and the checks every
  * `itest:alrunner` multi-object leg runs against it.
  *
- * Pre-committed in docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md before any
- * live run on the fixture. A difference is a finding and a stop: never edit a row to match a run.
+ * Pre-committed in docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md
+ * before the refusal was restored. A difference is a finding and a stop: never edit a row to match
+ * a run.
  *
- * `MultiPair.Codeunit.al` holds two codeunits, and al-runner reports its lines file-relative, so
- * every covered line of `Multi B` must be resolved to `Multi B` and converted by its base line.
- * `Multi A` and `Multi B.Unreached` are never called: their mutants read `no-coverage`, which
- * before R383 read `survived` because the file turned coverage off. Covering tests and the
- * attribution are pinned too, because the frozen baseline compares neither.
+ * `MultiPair.Codeunit.al` holds two codeunits. al-runner v2.12.0-main.c39ad5de reports every
+ * object after a file's first in a frame LethAL cannot undo, so the CLI guard turns the requested
+ * coverage off for the whole run, and every mutant runs both green tests. `Multi A` and
+ * `Multi B.Unreached` are never called, so their mutants read `survived` (bcdev, and the future
+ * al-runner admission, read them `no-coverage`: 2026-10-02-r383-multiobject-precommitment.md).
+ * Covering tests and the absent attribution are pinned too, because the frozen baseline compares
+ * neither.
  *
  * Kept out of `al-runner.itest.ts` because that script runs its gate at import (R186).
  */
@@ -21,7 +24,7 @@ export const MULTIOBJECT_TEST_DIR = join(FIXTURES, "sandbox-multiobject-tests");
 /** The top of the target's range, 79800-79849, per the `pickSelectorIds` convention. */
 export const MULTIOBJECT_SELECTOR_IDS = { selectorId: 79849, controlId: 79848, tableId: 79847 };
 
-const SPEC = "docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md";
+const SPEC = "docs/superpowers/specs/2026-10-02-r383-multiobject-refusal-precommitment.md";
 const PAIR = "src/MultiPair.Codeunit.al";
 const CONTROL = "src/MultiControl.Codeunit.al";
 
@@ -35,19 +38,17 @@ export interface MultiObjectRow {
   readonly killingTest?: string;
   /** Full qualified names, compared as a complete set. */
   readonly coveringTests: readonly string[];
-  readonly coverageAttribution?: "exact";
+  readonly coverageAttribution?: string;
 }
 
-const covered = (test: string) => ({
-  coveringTests: [`Multi Tests.${test}`],
-  coverageAttribution: "exact" as const,
-});
+/** Coverage "none": every mutant runs every green test, and no row carries an attribution. */
+const BOTH = ["Multi Tests.ControlDoubles", "Multi Tests.ReachedBothWays"];
 const killedBy = (test: string) => ({
   verdict: "killed" as const,
   killingTest: test,
-  ...covered(test),
+  coveringTests: BOTH,
 });
-const unreached = { verdict: "no-coverage" as const, coveringTests: [] };
+const survives = { verdict: "survived" as const, coveringTests: BOTH };
 
 /** The spec's fixed table, every field written out. Sorted by code. */
 export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
@@ -73,7 +74,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 4,
     operatorName: "lethal.empty-block",
     procedureName: "Never",
-    ...unreached,
+    ...survives,
   },
   {
     code: "M0004",
@@ -81,7 +82,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 5,
     operatorName: "lethal.return-value",
     procedureName: "Never",
-    ...unreached,
+    ...survives,
   },
   {
     code: "M0005",
@@ -89,7 +90,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 5,
     operatorName: "lethal.swap-additive",
     procedureName: "Never",
-    ...unreached,
+    ...survives,
   },
   {
     code: "M0006",
@@ -105,8 +106,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 13,
     operatorName: "lethal.conditional-boundary",
     procedureName: "Reached",
-    verdict: "survived",
-    ...covered("ReachedBothWays"),
+    ...survives,
   },
   {
     code: "M0008",
@@ -138,7 +138,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 17,
     operatorName: "lethal.empty-block",
     procedureName: "Unreached",
-    ...unreached,
+    ...survives,
   },
   {
     code: "M0012",
@@ -146,7 +146,7 @@ export const EXPECTED_MULTIOBJECT: readonly MultiObjectRow[] = [
     line: 18,
     operatorName: "lethal.return-value",
     procedureName: "Unreached",
-    ...unreached,
+    ...survives,
   },
 ];
 
@@ -164,6 +164,7 @@ export interface MultiObjectMutant {
 
 /** The slice of a `SessionReport` these checks read. */
 export interface MultiObjectReport {
+  readonly coverageMode?: string;
   readonly baselineGreen: boolean;
   readonly batches: number;
   readonly mutants: readonly MultiObjectMutant[];
@@ -225,9 +226,39 @@ function diffRows(
   return out;
 }
 
-/** One batch, green baseline, then the pre-committed table per mutant. */
+/**
+ * The refusal itself, before any live run: the CLI guard was asked for `coverage: "al-runner"`
+ * and must hand back `"none"` with exactly one `al-runner-coverage-unsupported` warning naming the
+ * pair and not the single-object control file.
+ */
+export function assertMultiObjectRefusal(
+  coverage: string | undefined,
+  warnings: readonly string[],
+): void {
+  const problems: string[] = [];
+  if (coverage !== "none") problems.push(`the guard returned coverage ${coverage}, expected none`);
+  const guard = warnings.filter((w) => w.includes("al-runner-coverage-unsupported"));
+  if (guard.length !== 1) {
+    problems.push(`expected ONE al-runner-coverage-unsupported warning, got ${guard.length}`);
+  }
+  const [line = ""] = guard;
+  if (!line.includes(`${PAIR} (more than one object)`)) {
+    problems.push(`the warning does not name ${PAIR} (more than one object): ${line}`);
+  }
+  if (line.includes(CONTROL)) problems.push(`the warning names ${CONTROL}: ${line}`);
+  if (problems.length > 0) {
+    throw new Error(
+      `R383 multi-object refusal (${SPEC}):\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+}
+
+/** One batch, green baseline, coverage "none", then the pre-committed table per mutant. */
 export function assertMultiObjectRun(report: MultiObjectReport, leg: string): void {
   const problems: string[] = [];
+  if (report.coverageMode !== "none") {
+    problems.push(`the report's coverageMode is ${report.coverageMode}, expected none`);
+  }
   if (report.batches !== 1) problems.push(`the run planned ${report.batches} batches, expected 1`);
   if (!report.baselineGreen) problems.push("the baseline must be green");
   problems.push(...diffRows(EXPECTED_MULTIOBJECT, multiObjectRows(report)));
