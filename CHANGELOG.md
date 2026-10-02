@@ -37,7 +37,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   unless every object after its first is code-free (a permission set, permission set extension,
   enum, interface or entitlement holding no procedure or trigger). So an enum then a codeunit is
   refused, which it was not before, since only kinds with a coverage identity were counted; a
-  codeunit then permission sets is not. Measured: no refused file is added or removed on DC,
+  codeunit then permission sets is not. An object whose header is split by `#if` (one shared body)
+  counts as an object that carries code, so a plain codeunit followed by one is refused too; such
+  an object as a file's first is simply the first object. Two separate objects are never merged
+  into one, so a second multiline `interface` with a procedure body is seen. Measured: no refused file is added or removed on DC,
   System Application, Business Foundation, BaseApp, Continia Document Output or the fixtures. A
   coverage row for a file the index skipped (multi-object, `#if`-wrapped, or with no
   indexed object) now stops at that file instead of matching a shorter path another file owns.
