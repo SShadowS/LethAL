@@ -191,6 +191,95 @@ describe("buildReport derives both legacy fields from excludedSites (not in para
   });
 });
 
+// R-307 T8b ruling: R-214's undecided-#if refusal and R-307's instrumentation refusal already meet
+// in `buildExcludedSites`; that join is the single refusal shape. Both kinds go in at once.
+describe("one buildExcludedSites call carries both refusal kinds", () => {
+  const preproc = [
+    {
+      file: "src/Undecided.Codeunit.al",
+      kinds: "codeunit_declaration",
+      sites: 4,
+      reason: "preproc-undecided" as const,
+      detail: "unparsed-condition at line 5",
+    },
+  ];
+  const refused = [
+    {
+      file: "src/Refused.Codeunit.al",
+      shape: "no-anchor" as const,
+      kinds: "codeunit_declaration",
+      sites: 2,
+    },
+  ];
+
+  test("rows, and both caveats derived from those rows", () => {
+    const merged = buildExcludedSites({
+      skipped: [],
+      declarative: [],
+      preproc,
+      refused,
+      totalFiles: 10,
+    });
+    expect(merged.files).toEqual([
+      {
+        file: "src/Undecided.Codeunit.al",
+        kinds: "codeunit_declaration",
+        sites: 4,
+        reason: "preproc-undecided",
+        detail: "unparsed-condition at line 5",
+      },
+      {
+        file: "src/Refused.Codeunit.al",
+        kinds: "codeunit_declaration",
+        sites: 2,
+        reason: "instrumentation-refused",
+        detail:
+          "no-anchor in src/Refused.Codeunit.al: no place was found to declare the selector var or reach latch",
+      },
+    ]);
+    expect(merged.siteCount).toBe(6);
+    expect(merged.fileCount).toBe(2);
+
+    // The report folds the same two inputs through buildExcludedSites and derives caveats from it.
+    const events: RunEvent[] = (
+      [
+        {
+          type: "mutation-set-generated",
+          siteCount: 3,
+          deployedCount: 3,
+          hangCapableCount: 0,
+          totalFiles: 10,
+          instrumentableFiles: 8,
+          notInstrumentedFiles: [],
+          declarativeSiteFiles: [],
+          preprocExcludedFiles: preproc,
+          refusedFiles: refused,
+          excludedByOnly: 0,
+          excludedByExclude: 0,
+          excludedByOperator: 0,
+        },
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+        { type: "session-finished", elapsedMs: 10 },
+      ] as RunEventInput[]
+    ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+    const report = buildReport(
+      {
+        caps: {
+          authoritative: true,
+          coverage: "procedure",
+          deploy: "publish",
+          isolation: "session",
+        },
+        buildSymbols: [],
+      },
+      events,
+    );
+    expect(report.excludedSites).toEqual(merged);
+    expect(report.validity.caveats).toContain("preproc-files-refused");
+    expect(report.validity.caveats).toContain("files-refused");
+  });
+});
+
 // The offline half of Task 4's red-check. A second live gate run would prove the same thing and
 // cost a billed environment; this proves it from the two properties that compose to it.
 describe("the notInstrumented gate assertion rejects a gutted view", () => {
