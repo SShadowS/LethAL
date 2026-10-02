@@ -18,6 +18,7 @@ import {
   findAll,
   initParser,
 } from "@lethal/engine";
+import { primaryKeyFields } from "../src/insert-key-assignment";
 import { swapModifyFlag } from "../src/swap-modify-flag";
 import { parseClean, projectContextFor } from "./parse-clean";
 
@@ -200,5 +201,31 @@ describe("R143: the Insert tag follows the target table's OnInsert", () => {
     expect(tagged[0]?.after.text).toBe("Target.Insert(false)");
     expect(untagged[0]?.after.text).toBe("Target.Insert(false)");
     expect(tagged[0]?.operatorVersion).toBe(untagged[0]?.operatorVersion);
+  });
+});
+
+describe("R378 review r1: the primary key is the FIRST active key, readable or not", () => {
+  // No parse yields a `key_declaration` without a `field_list` (measured: `key(PK)`, `key(PK; 1)`
+  // and `key(PK; 'Code')` become ERROR, while `key(PK; )` keeps an EMPTY field_list), so the
+  // unreadable shape is hand-built: an unreadable first key, then a readable `"Code"` key.
+  const node = (rawKind: string, children: ALSyntaxNode[] = [], text = ""): ALSyntaxNode =>
+    ({ rawKind, text, children, namedChildren: children }) as unknown as ALSyntaxNode;
+  const table = node("table_declaration", [
+    node("keys_section", [
+      node("key_declaration", [node("identifier", [], "PK")]),
+      node("key_declaration", [
+        node("identifier", [], "SK"),
+        node("field_list", [node("quoted_identifier", [], '"Code"')]),
+      ]),
+    ]),
+  ]);
+
+  it("stops at an unreadable first active key instead of reading the next one", () => {
+    expect(primaryKeyFields(table)).toEqual([]);
+  });
+
+  it("a key in an inactive arm is still skipped, so the next active key is read", () => {
+    const first = table.children[0]?.children[0];
+    expect(primaryKeyFields(table, (n) => n !== first)).toEqual(["Code"]);
   });
 });

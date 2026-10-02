@@ -67,11 +67,11 @@ export const removeCommit: MutationOperator = {
     return countArguments(node) === 0;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     // R72: a SITE property, decided here because this is the only place that still has the AST.
     // It says which of the operator's two kill mechanisms this site can produce, and it never
     // touches the verdict — see `PlatformKillMechanism`.
-    const platformKillMechanism = detectWriteTxnCodeunitRun(node);
+    const platformKillMechanism = detectWriteTxnCodeunitRun(node, ctx);
     return [
       {
         operatorName: "lethal.remove-commit",

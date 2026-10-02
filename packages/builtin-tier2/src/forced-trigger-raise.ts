@@ -1,9 +1,10 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
-  resolveReceiverTable,
   type SemanticContext,
   type SymbolTable,
+  armOfNode,
+  resolveReceiverTable,
 } from "@lethal/engine";
 
 /**
@@ -88,15 +89,24 @@ export function resolveForcedTrigger(
   if (symbols === undefined) return null;
   const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
   if (table === null) return null;
-  return findTableTrigger(table.node, triggerName);
+  // R378: a trigger declared in an arm this build compiles out is not in the build. An undecided
+  // file keeps today's lookup (only "inactive" is skipped), so no mutant can appear from this.
+  return findTableTrigger(table.node, triggerName, (n) => armOfNode(ctx, n) !== "inactive");
 }
 
-/** Does the trigger body contain a statement that can raise? See the module comment for the list. */
-export function forcedTriggerCanRaise(trigger: ALSyntaxNode): boolean {
+/**
+ * Does the trigger body contain a statement that can raise? See the module comment for the list.
+ *
+ * R378: a call in an arm the build compiles out never runs, so it is skipped. A trigger whose file
+ * is UNDECIDED keeps the tag without a scan: an undecided arm could hold the raise, and for a
+ * screen the unsafe direction is under-tagging.
+ */
+export function forcedTriggerCanRaise(trigger: ALSyntaxNode, ctx?: SemanticContext): boolean {
+  if (armOfNode(ctx, trigger) === "undecided") return true;
   let found = false;
   const walk = (n: ALSyntaxNode): void => {
     if (found) return;
-    if (n.kind === ALNodeKind.procedure_call) {
+    if (n.kind === ALNodeKind.procedure_call && armOfNode(ctx, n) !== "inactive") {
       const name = calleeName(n);
       if (name !== null && RAISE_CAPABLE_METHODS.has(name.toLowerCase())) {
         found = true;
@@ -115,10 +125,15 @@ export function forcedTriggerCanRaise(trigger: ALSyntaxNode): boolean {
  * Direct members only: a field's `OnValidate` sits inside a `field_declaration` inside a
  * `fields_section`, and a recursive search would find one and call it the table's `OnInsert`.
  */
-function findTableTrigger(tableNode: ALSyntaxNode, triggerName: string): ALSyntaxNode | null {
+function findTableTrigger(
+  tableNode: ALSyntaxNode,
+  triggerName: string,
+  isLive: (node: ALSyntaxNode) => boolean,
+): ALSyntaxNode | null {
   const body = tableNode.namedChildren.find((c) => c.rawKind === "declaration_body") ?? tableNode;
   for (const member of body.namedChildren) {
     if (member.rawKind !== "trigger_declaration") continue;
+    if (!isLive(member)) continue;
     const name = member.namedChildren.find(
       (c) => c.rawKind === "identifier" || c.rawKind === "quoted_identifier",
     );
