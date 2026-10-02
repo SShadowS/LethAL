@@ -1,72 +1,110 @@
-# R-378: member-wide analyses skip arms the build compiles out (short plan)
+# R-378: member-wide analyses skip arms the build compiles out (short plan, r2)
 
 Task: `H:/lethal-coord/tasks/R-378/task.md`. Item: `docs/roadmap/R378.md`. Branch `lethal/lane-preproc`, from master b1bc7e2e. Offline only.
 
-## 1. Which analyses read more than their own site
+## Revision r2: what changed, finding by finding (review `H:/lethal-coord/reviews/R-378-plan/review-r1.md`)
 
-I checked every operator, the semantic layer, the runner and schemata. The analyses below set a TAG on a mutant from text outside the site. Each one was run on master through `generateMutationSet`, under `[]` and `[LETHALX]` (a scratch probe, not committed). The table gives what each build should get and what it gets today.
+| Finding | r2 change | Where |
+|---|---|---|
+| 1. The inventory left out readers that change scoring | `testpage-scan`, `discovery`, `line-map` member spans and `test-digest` are named, each ruled "file", with a reason. The list is no longer called exhaustive | §1 table B |
+| 2. "undecided" is not the safe direction for A2 and A3 | A rule per tag for when uncertainty KEEPS the tag. A2 picks the primary key from ACTIVE text, and a test covers the inactive-first-key case | §2, §3 rows A2-key, A2-undecided, A3-undecided |
+| 3. The hang tag's "no path" was overstated | Stated as a measured limit. A4 is dropped: no code change and no test | §1 A4 |
+| 4. The fallback opened up silently | Supplying the map and passing a node whose root is not in it THROWS. Only a context built without a map defaults to "active". Memory is checked on the large corpora | §2, §4 |
+| 5. Missing fixture and controls | `p11-tier2` and every pinned `fixtures/r214/expected/*` capture are in the no-move check. A1 to A3 assert the exact mutant EXISTS in both builds before asserting its tag. The undecided control asserts that the table resolved AND that `evaluateArms` returned undecided | §3, §4 |
 
-| # | Analysis | Reads | Tag | `[]` build today | Defect? |
-|---|---|---|---|---|---|
-| A1 | `detectWriteTxnCodeunitRun` (`builtin-tier2/src/write-txn-codeunit-run.ts:80`), from `remove-commit` | the whole enclosing procedure or trigger, after the `Commit` | `write-txn-codeunit-run` | tagged, although the only `Ok := Codeunit.Run(..)` is in an `#if LETHALX` arm | **yes** |
-| A2 | `onInsertAssignsPrimaryKey` (`builtin-tier2/src/insert-key-assignment.ts:165`), from `insertSkipCanRaise`, from `swap-modify-flag` on `Insert(true)` | the RECEIVER table's `OnInsert` body (another file) | `run-trigger-skipped-insert` | kept, although the only primary-key assignment is in an inactive arm. The control table without that line drops it | **yes** |
-| A3 | `forcedTriggerCanRaise` (`builtin-tier2/src/forced-trigger-raise.ts:95`), from `swap-modify-flag` on an argument-less `Modify()` / `Delete()` / `Insert()` | the receiver table's trigger body (another file) | `run-trigger-forced` | tagged, although the only `Error` in `OnModify` is in an inactive arm | **yes** |
-| A4 | `classifyHangCapable` (`builtin-tier1/src/loop-hazard.ts:176`) | the ANCESTOR loops' conditions only, up to the member | `hangCapable` | not tagged in either build | no path found (below) |
+## 1. Readers that look past their own site
 
-**A4 has no path to inactive text that I can build.** The walk climbs `.parent` only. An ancestor of an active site lies in an inactive range only if a directive sits inside the loop's header:
-- A split header (`#if X while A.. do begin #else while B.. do begin #endif`) makes R214 refuse the whole file (`marker-mismatch`), so no site exists to tag.
-- A directive inside the condition (`while (A < 10) #if X and (B < 5) #endif do`) is not read as part of the condition. `B := B + 1` is untagged in BOTH builds.
+### A. Tags (fixed here)
+A scratch probe ran on master through `generateMutationSet`, under `[]` and `[LETHALX]`, and measured all three of these.
 
-The second shape is a DIFFERENT defect: when the arm is active, the tag is missed. That is the unsafe direction for a hang tag. It is not this item, because it is not "reads inactive text". I will file it as a new roadmap item with the repro. A4 gets a pinning test (below), with no code change.
+| # | Analysis | Reads | Tag | `[]` build on master |
+|---|---|---|---|---|
+| A1 | `detectWriteTxnCodeunitRun` (`builtin-tier2/src/write-txn-codeunit-run.ts:80`), from `remove-commit` | the site's own enclosing body, after the `Commit` | `write-txn-codeunit-run` | tagged from an `Ok := Codeunit.Run(..)` that is only in an `#if LETHALX` arm |
+| A2 | `onInsertAssignsPrimaryKey` / `primaryKeyFields` / `onInsertTrigger` (`builtin-tier2/src/insert-key-assignment.ts:110,124,165`), from `swap-modify-flag` on `Insert(true)` | the receiver table's FIRST `key(...)` and its first `OnInsert` (another file) | `run-trigger-skipped-insert` | kept from a key assignment that is only in an inactive arm. A control table with no such line drops it |
+| A3 | `forcedTriggerCanRaise` / `findTableTrigger` (`builtin-tier2/src/forced-trigger-raise.ts:95,118`), from `swap-modify-flag` on an argument-less `Insert()` / `Modify()` / `Delete()` | the receiver table's trigger body (another file) | `run-trigger-forced` | tagged from an `Error` that is only in an inactive arm of `OnModify` |
 
-**Not tags, so out of R-378. Listed so the review can overrule.**
-- **Project-wide indexes** (`buildSymbolTable`, `receiver.ts` `declaresProcedure` / `projectDeclaresProcedureOnTable`, `TypeTable`). These read inactive declarations. In those cases they REFUSE a site rather than mis-tag one. Examples: a `procedure Commit()` declared only in an inactive arm shadows the built-in. A trigger declared only inside an object-level `#if` is not found, so `R.Delete()` on such a table generates no mutant in either build (measured). Wrong refusals lose sites; they do not tag anything. Fixing them means making the symbol table aware of arms, which is a larger change. I will file one roadmap item for it.
-- **`buildCallerIndex` and `cfgFor`** have no consumer outside tests.
-- **Structural and manifest code** (`reachLatchRefusals`, `canCarryMutationSelectorVar`, coverage line-map, `describeObjectKinds`) places a latch, decides "can carry the selector" or names lines. None of these sets a tag. The selector-carrier case can only refuse a file. I will name these in the same filed item.
-- **Site-local operators** (`shift-integer`, `negate-guard`, `remove-not`, `swap-enum-member` case labels, `return-value`) read only the site's ancestors or one `case`.
+**A4, the hang tag (`classifyHangCapable`, `builtin-tier1/src/loop-hazard.ts:176`): a measured limit, not a fix.** It walks ANCESTOR loops only, but `identifiersIn` (`:123-132`) reads every named descendant of a loop condition and does not check arms. I measured two shapes:
+- a split loop header, where R214 refuses the whole file (`marker-mismatch`);
+- a directive inside a condition (`while (A < 10) #if X and (B < 5) #endif do`), where `B` is not read in either build.
 
-## 2. How each skips inactive nodes, without computing the ranges twice
+I have not shown that every shape keeps inactive operands out of the condition's subtree. R378's close-out will state this as a limit. The second shape's ACTIVE-arm miss is the unsafe direction for a hang tag, so it is filed (C1 below). No A4 test is added: a test that is untagged in both builds has no guard to red-check.
 
-- **One evaluation per file, moved earlier.** `generateMutationSet` today calls `evaluateArms(root, source, buildSymbols)` in its per-file loop (`orchestrator.ts:820`), after `buildSemanticContext` (`:776`). I will compute `buildSymbols` first, run `evaluateArms` ONCE per parsed file into a `Map<root, ArmEvaluation>`, and have the loop read that map instead of calling `evaluateArms` again.
-- **On the context.** `SemanticContext` gains an optional `armOf?(node): "active" | "inactive" | "undecided"`. It climbs `.parent` to the file root, looks the root up in the map, and tests `startsInInactiveArm` on `node.startIndex`.
-  - An `undecided` file answers "undecided" for every node.
-  - Absent means nothing is compiled out (unit tests that build a context by hand).
-  - Root identity is the same object, because the context and the loop are built from the same `parsed` array. A test pins this through `generateMutationSet`.
-  - `buildSemanticContext` takes the map as an optional second argument. Its first argument and its existing callers are unchanged.
-- **Each analysis skips "inactive" only.** "undecided" keeps today's behaviour (read everything), which for all three tags is the over-tagging direction, the direction each one already chose for uncertainty.
-  - A1: `visit` skips a node that is inactive.
-  - A2: assignments and `Validate` calls in an inactive range do not count as assigning the key. The primary key is still read from `keys`. A `keys` section split by `#if` is left as today, and I will note it.
-  - A3: raise-capable calls in an inactive range do not count.
-  - The receiver table in A2 and A3 is in another file, so the lookup uses THAT file's ranges. That is why the map is per root, not per site.
+### B. Readers that change scoring, filed rather than fixed (with the reason)
+- **B1 `testpage-scan.ts` (`:580-603`, `:769-831`, `:1855-1915`).** It scans whole test and helper bodies, all arms, to refuse tests that may open a TestPage. Over-refusal is its safe direction.
+- **B2 `discovery.ts` (`:139-175`).** It finds `[Test]` methods by regex over whole codeunit sections, so a `[Test]` that exists only in a compiled-out arm is discovered.
+- **B3 `test-digest.ts` (`:1-27`, `:182-225`).** It walks procedures and triggers for verify's "was this test edited" decision. Over-including is its safe direction.
+- **Why B1 to B3 are not fixed here.** All three read the TEST app. LethAL computes the effective symbol set for the TARGET only (config symbols plus the target's `app.json`). The test app's own build set is not modelled anywhere, so there is no correct range to skip with.
+  - File: one roadmap item, "test-app readers ignore `#if`; the test app's symbol set is not modelled".
+- **B4 `line-map.ts` member spans (`:370-419`).** These attribute covered lines to members. R301, R316 and R318 already span split members so that "a line belongs to the member whichever arm was compiled". A member declared only in an inactive arm gets a span, but compiled code can put no covered line there. The case not covered is two whole-member arms declaring the same name in one object.
+  - File: its own item, to measure before changing, because it touches coverage attribution, a verdict input.
+- **B5 project-wide indexes** (`buildSymbolTable`, `receiver.ts` `declaresProcedure` and `projectDeclaresProcedureOnTable`, `TypeTable`) **and structural readers** (`reachLatchRefusals`, `canCarryMutationSelectorVar`). These read inactive declarations and in those cases REFUSE a site rather than tag one.
+  - Measured: a trigger inside an object-level `#if` is not found, so `R.Delete()` generates no mutant in either build.
+  - File: one item.
+
+`buildCallerIndex` and `cfgFor` have no consumer outside tests. The site-local operators (`shift-integer`, `negate-guard`, `remove-not`, `swap-enum-member` case labels, `return-value`) read only the site's ancestors or one `case`. This list covers what I found. It is not a proof that nothing else exists.
+
+### C. Also filed
+- **C1:** the hang tag misses a loop-condition operand inside an ACTIVE `#if`, with the measured repro.
+
+## 2. Mechanism, and when uncertainty keeps a tag
+
+- **One evaluation per file, earlier.** In `generateMutationSet`, compute `buildSymbols` first. Then run `evaluateArms(root, source, buildSymbols)` ONCE for every parsed file, including files that `--only` or `--exclude` drop, because those can still be a receiver table. Store the results in `Map<root, ArmEvaluation>`. Pass the map to `buildSemanticContext(files, arms)`, and have the per-file R214 loop read the same map instead of calling `evaluateArms` again.
+- **`SemanticContext.armOf?(node): "active" | "inactive" | "undecided"`.** It climbs `.parent` to the root and looks the root up.
+  - A map is supplied and the root is not in it: throw `Error` naming the node's line. That is a caller-contract violation.
+  - No map: `armOf` is undefined, and callers treat that as "active". This is for contexts built by hand in unit tests.
+- **The rule, per tag.**
+  - **A1:** never sees "undecided", because R214 generates no mutant in an undecided file and A1 reads only the site's own body. It skips "inactive" nodes. Its existing over-flagging rule is unchanged.
+  - **A2:** the tag is kept unless the table is resolved AND it is PROVEN that the build's `OnInsert` does not assign the build's primary key. So:
+    - If the receiver table's file is "undecided", KEEP the tag, and do not scan.
+    - Otherwise, the primary key is the first `key(...)` whose node is "active". The `OnInsert` is the first active one. Assignments and `Validate` calls in inactive ranges do not count.
+    - If no active key is found, KEEP the tag. Today that case answers no tag, which is the direction the module's own comment calls wrong.
+  - **A3:** the module under-tags indirect raises by design (its comment). R-378 does not widen that. It only removes evidence the build cannot run:
+    - If the receiver table's file is "undecided", KEEP the tag, and do not scan.
+    - Otherwise, the trigger is the first active trigger with that name, and raise-capable calls in inactive ranges do not count.
+    - Whether the mutant is GENERATED is unchanged, except that a trigger declaration that is itself inactive no longer counts.
 
 ## 3. Repros (test-first, each red-checked)
 
-These go in `packages/runner/tests/r378-member-wide-arms.test.ts`, through `generateMutationSet` with `preprocessorSymbols`, in the probe's shapes. Each test asserts both builds.
+The tests go in `packages/runner/tests/r378-member-wide-arms.test.ts`, through `generateMutationSet` with `preprocessorSymbols`. Each one first asserts that the named mutant (operator, file and line) EXISTS in BOTH builds, then asserts its tag.
 
-| # | Under `[]` (arm inactive) | Under `[LETHALX]` (arm active) |
+| Row | Build without `LETHALX` | Build with `LETHALX` |
 |---|---|---|
-| A1 | `remove-commit` has no tag | tagged `write-txn-codeunit-run` |
-| A2 | `Insert(true)` has no tag | tagged `run-trigger-skipped-insert` |
-| A3 | `Modify()` has no tag, but the mutant still exists | tagged `run-trigger-forced` |
+| A1 | `remove-commit` exists, no tag | exists, `write-txn-codeunit-run` |
+| A2 | `Insert(true)` exists, no tag | exists, `run-trigger-skipped-insert` |
+| A2-key | the active first key is `"Code"`, which `OnInsert` assigns: tag KEPT | the active first key is `Amount`, which `OnInsert` does not assign: no tag |
+| A3 | `Modify()` exists, no tag | exists, `run-trigger-forced` |
+| A2-undecided | a receiver table with an undecidable directive (`#if LETHALX LETHALY`, `unparsed-condition`) and an `OnInsert` with no key assignment | |
 
-- **A4 pin:** a loop whose condition holds the target only inside an inactive arm stays untagged. No product line guards it, so its red-check is the probe's measurement, stated as such.
-- **Undecided control:** the receiver table holds an undecidable directive, and A2's tag is KEPT.
-- **Red-checks** (with `mutation-red-checker`): for each of A1, A2 and A3, remove that analysis's skip alone; the `[]` half goes red and the `[LETHALX]` half stays green. Separately, make `armOf` always answer "active": all three `[]` halves go red.
+- **A2-key shape:** `#if LETHALX key(PK; Amount) #else key(PK; "Code") #endif`. I will first check that alc compiles it (`/al-compile`) and that R214 decides it.
+- **A2-undecided is a CONTROL.** It must first prove three things:
+  - (a) `buildSemanticContext(...).symbols.resolveObject` resolves that table;
+  - (b) `evaluateArms` returns `undecided` for its file;
+  - (c) the same table WITHOUT the bad directive gives no tag.
+  - Only then does it assert the tag is KEPT.
+- **Throw test:** a context built with a map, asked about a node from a tree that is not in it, throws.
+- **Red-checks** (`mutation-red-checker`):
+  - Remove each skip alone. A1's, A2's and A3's no-`LETHALX` halves go red.
+  - Revert A2's active-key choice: A2-key goes red.
+  - Remove the "undecided keeps the tag" branch: A2-undecided goes red.
+  - Remove the throw: the throw test goes red.
+  - Make `armOf` always answer "active": every no-`LETHALX` half goes red.
 
 The loop runs `bun scripts/verify.ts` and biome on the touched files.
 
-## 4. Can a fixture's tag or verdict move?
+## 4. Can a fixture's tag, verdict or memory move?
 
-- Only `fixtures/sandbox-symbols` (and its tests) has `#if`. It has no `Commit`, `Codeunit.Run`, `Insert`, `Modify`, `Delete` or loop. Every other fixture has no directive, so `armOf` answers "active" everywhere, and A1 to A3 read exactly what they read today.
-- No gate figure moves, and no gate would see this, so no pre-commitment is needed.
-- **Check before submit:** `scripts/r214-capture.ts` on every fixture (both R321 sets for `sandbox-symbols`), before and after. The `plat=` and `hang=` columns must be identical. The result goes in the submit note.
-- Tags move no verdict anywhere: a tag is reported beside a kill (`platformArtifactKills`) and never changes it.
-- No identity key moves, because a tag is not part of the key (`identityKeyOf`, `selection.ts:36`). So there is no scheme bump.
-- Operator versions stay unchanged, because a tag is not the mutated text. If the review wants a minor bump on `remove-commit` and `swap-modify-flag`, it is two lines plus `operator-version-invariant.test.ts`.
+- **Pinned captures.** Every `packages/runner/tests/fixtures/r214/expected/*.txt` (including `p11-tier2.0.txt` and `.1.txt`, whose line 6 is `plat=-`) and `fixture-sandbox-symbols.*` must stay byte-identical. The existing r214 capture test asserts this.
+  - `p11-tier2`'s later `Codeunit.Run` is a bare statement. It is not a consumed one, so A1 does not tag it in either build.
+- **Gate fixtures.** Only `fixtures/sandbox-symbols` has `#if`, and it holds no `Commit`, `Codeunit.Run`, `Insert`, `Modify`, `Delete` or loop. No gate figure moves and no pre-commitment is needed.
+- **Verdicts and keys.** A tag never moves a verdict: it is reported beside a kill. It is not in `identityKeyOf` (`selection.ts:36`), so there is no scheme bump.
+- **Operator versions** are unchanged. If the review wants a minor bump, it is two lines plus `operator-version-invariant.test.ts`.
+- **Large corpora.** `r214-capture.ts` on the R214 corpora (DC and BaseApp, sets S0 and S1, per `docs/superpowers/specs/2026-09-29-r214-precommitment.md` §Corpora), run sequentially:
+  - (a) Peak memory on a no-listing run must be at most 110% of master b1bc7e2e's, measured the same way the same day. The map adds one small range list per file, and the roots are already held.
+  - (b) The `plat=` changes are listed per corpus. These are the expected fixes, and none of them is a verdict.
+  - (c) Raw and deployed counts must be identical. A3 can drop a mutant only when its trigger declaration is inactive. Any count change is listed and explained.
+  - The corpora are on `U:`, and `H:/lethal-scratch` holds no product code.
 
 ## 5. Also in the build
 - A CHANGELOG entry.
-- R378 marked `done (<sha>)`, and the index regenerated.
-- Two new roadmap items, with the next free ids re-checked just before writing:
-  - the hang tag missing a loop-condition operand that sits inside an active `#if` (repro above);
-  - the symbol table, receiver and structural readers that read inactive declarations and so refuse sites.
+- R378 marked `done (<sha>)`, with A4's measured limit, and the index regenerated.
+- New roadmap items, with the next free ids re-checked right before writing: B1 to B3 (one item), B4, B5, and C1.
