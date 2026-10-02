@@ -126,3 +126,11 @@ So an old fingerprint stays valid exactly when the new policy left the discovere
 
 ## 6. `testpage-scan` and `test-digest`
 Left as they are. Both err in their safe direction. R403 is narrowed to them and stays open.
+
+## 7. Build notes (2026-10-02 wind-down; r3 approved, no code written yet)
+These are code facts found while starting the build, before any edit. They are for whoever resumes it.
+- **Order in `runSession`.** Discovery (`discoverTests(cfg.testDir, ...)` in `orchestrator.ts`, the `tests-discovered` emit) runs BEFORE the R139 package read (`testAppIdentity`, `reportPublishedTestApp`) and before the lease. The env-tool `afterLeaseAcquired` hook runs later still. The §3(c) fallback has to know whether compiled evidence exists before the suite is fixed, so discovery should return BOTH the filtered and the unfiltered list, and the choice is made once the evidence is known.
+- **env-tool package.** The `.app` files `publishTestApps` publishes are local paths (`cfg.publishApps` in `env-tool-session.ts`). The smallest seam: pass those paths alongside `afterLeaseAcquired` from `afterLeaseAcquiredFor` (`cli.ts`). Pick the test app among them by name and publisher (`readAppIdentity`) against the test `app.json`, and make the filter choice before the lease. Run the membership check on those files after the hook. If no file matches the test app, the pre-lease R139 package is the one that runs.
+- **Test set.** `effectiveBuildSymbols(cfg.testDir, cfg.preprocessorSymbols ?? [], undefined, buildBackend)`, with the `buildBackend` runSession already decided.
+- **Compiled side.** `app-package.ts` already recurses through namespaces (`ingestScope`) and has a private `extractZipEntry`. Extend the reader with codeunit `Properties` (Subtype) and method `Attributes`. No test helper builds a `.app` with a `SymbolReference.json` today (look at `tests/helpers/fake-app.ts` and `tests/helpers/bundle.ts`). Otherwise commit the two measured scratch packages, `H:/lethal-scratch/R-403/build/{none,x}/tests.app`, as test fixtures. Those paths exist only on the old machine, so rebuild them from §1's shape if they are missing.
+- **Offsets.** `evaluateArms` returns offsets in the RAW source, while discovery matches `[Test]` on masked source (`maskAlNonCode`). Confirm the mask keeps every offset, with a non-ASCII test file, before comparing positions.
