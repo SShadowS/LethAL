@@ -1,4 +1,10 @@
-# R-383: admit multi-object files to al-runner coverage (short plan, r2)
+# R-383: admit multi-object files to al-runner coverage (short plan, r3)
+
+r3 changes only the server procedure rule (Design 3) and its tests (Task 1), for review r2's
+finding 7 (`H:/lethal-coord/reviews/R-383-plan/reject-r2.md`). Build note, 2026-10-02: the
+orchestrator measured that the source build `v2.12.0-main.c39ad5de` passes `status()` and
+`itest:alrunner` as it stands, so Task 0's re-probe on it goes ahead (no change to the version
+check).
 
 Roadmap: `docs/roadmap/R383.md`, section "Measured 2026-10-02".
 - **Measured** on al-runner v2.12.0: upstream #3713 is gone on both the one-shot and the `--server`
@@ -54,11 +60,30 @@ ruled in `reject-r1.md`).
 3. **Both transports resolve by POSITION.**
    - **Cobertura:** each `<line>` is resolved through `resolveFileLine`, then the procedure comes
      from `lookup(type, id, objectLine)`.
-   - **Server:** each statement's `line` is resolved the same way, then the procedure comes from
-     `lookup`. The daemon's `scope` is used only as a CROSS-CHECK. If `scope` disagrees with the
-     resolved procedure, the statement is dropped and a warning names it. It never picks the object,
-     so two same-named procedures in two objects of one file cannot be confused. R318's
-     `renamedMemberAt` is called with the resolved object and object line.
+   - **Server (r3, review finding 7).** The OBJECT always comes from position: the statement's
+     `line` goes through `resolveFileLine`, never through `scope`. So two same-named procedures in
+     two objects of one file cannot be confused. The PROCEDURE is then chosen in this order, and no
+     statement with hits is ever dropped by it:
+     1. **Renamed `#if` arms first:**
+        `renamed = renamedMemberAt(type, id, objectLine, scope)`. If it is defined, it is the
+        procedure. This is R318's existing rule, now given the resolved object and object line
+        instead of the raw file line. It runs BEFORE any comparison, so a compiled-arm `scope` that
+        differs from the span's name is never treated as a disagreement.
+     2. **Lines `lookup` leaves unnamed on purpose** (triggers, and any other line where
+        `lookup(type, id, objectLine)` is `undefined`): the entry is emitted exactly as today's
+        single-object path does, with `procedure: scope` and the object. They are NEVER compared and
+        never dropped, so trigger coverage keeps its object-level evidence.
+     3. **A line two declarations share** (two `#if` arms of one member, R318's `r10`): `scope` is
+        kept as today, because that may be the other member's statement. This is decided by the
+        same shared-line test `renamedMemberAt` already uses, never by comparing names.
+     4. **Otherwise** `named = lookup(type, id, objectLine)`. If `scope` matches it
+        (case-insensitive), `named` is used. If it differs, POSITION WINS: `named` is the procedure,
+        and one warning names the file, line, `scope` and `named`. The statement is kept, not
+        dropped.
+
+     In a single-object file, steps 1 to 3 give today's output exactly, and step 4 can differ only
+     where `scope` and the span disagree. The tests below pin that this does
+     not happen on the existing fixtures' shapes.
    - The transport supplies only a file and a file-relative line, so moving to another build changes
      nothing here if that build keeps the frame. Task 0 checks it.
 4. **Guard change:** drop only the multi-object half, in `supported`, the CLI fallback and the
@@ -95,7 +120,17 @@ ruled in `reject-r1.md`).
        positions give different object ids and different covering sets.
      - **Same name, two files:** the same procedure name in two files.
      - **Same id, two kinds:** a codeunit and a table both numbered 50100. They give different keys.
-     - **A disagreeing `scope`:** dropped, with the warning.
+     - **A disagreeing `scope`:** kept, with POSITION's procedure and the warning.
+   - **Server path, r3** (review finding 7). Each case runs in a SINGLE-object file and in a
+     MULTI-object file (the shape in the second object), and each is red-checked against an
+     unconditional "drop when `scope` differs from `lookup`" comparison, which must turn it red:
+     - **Trigger lines:** an `OnRun` or table-trigger statement with hits, where `lookup` is
+       `undefined`. It is kept, with the object and `procedure: scope`, exactly as today's output.
+     - **A renamed `#if` arm:** R318's `r3` and `r4` shapes, where the server names the compiled arm
+       and the span carries another name. `renamedMemberAt` re-keys it before any comparison, so it
+       is kept under the member's coverage name.
+     - **A line two declarations share** (R318's `r10`, `OtherOnly`): it keeps `scope`, as today.
+     - **A regression pin:** the existing single-object server tests pass unchanged.
    - **Guard:** multi-object files are admitted, and wrapped files are still refused, in both the CLI
      and the index.
    - **The existing refusal tests** change from "refused" to "admitted and mapped". Every
