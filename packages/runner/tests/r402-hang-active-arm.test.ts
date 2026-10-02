@@ -62,6 +62,8 @@ const SHAPES = {
   s4c: `${REPEAT_HEAD}\n#if LETHALX\n            or (B > 5) or (C > 3)\n#endif\n        ;`,
   s4d: `${REPEAT_HEAD}\n#if LETHALX\n            or (B > 5)\n#if LETHALY\n            or (C > 3)\n#endif\n#endif\n        ;`,
   c7b: `${REPEAT_HEAD} // tail follows\n#if LETHALX\n            or (B > 5)\n#endif\n        ;`,
+  c7e: `${REPEAT_HEAD}\n#pragma warning disable AA0001\n#if LETHALX\n            or (B > 5)\n#endif\n        ;\n#pragma warning restore AA0001`,
+  c7f: `${REPEAT_HEAD}\n#region R\n#if LETHALX\n            or (B > 5)\n#endif\n#endregion\n        ;`,
   c8: `${REPEAT_HEAD}\n#if LETHALX\n            or (B > 5)\n#elif LETHALY\n            or (C > 3)\n#endif\n        ;`,
   s4e: `${REPEAT_HEAD};\n#if LETHALX\n        Foo(B);\n#endif`,
   c1: `        if A < 10 then A := A + 1;\n#if LETHALX\n        Foo(B);\n#endif\n        C := C + 1;`,
@@ -175,8 +177,10 @@ describe("R402: the hang tag reads operands in ACTIVE #if arms of a loop conditi
 });
 
 describe("R402: a statement-level #if that continues an unterminated statement refuses its file", () => {
-  test("S4, S4b, S4c, S4d, c7b and c8 are refused in every build, by name", () => {
-    for (const s of ["s4", "s4b", "s4c", "s4d", "c7b", "c8"] as const) {
+  test("S4, S4b, S4c, S4d, c7b, c7e, c7f and c8 are refused in every build, by name", () => {
+    // c7b, c7e and c7f put a comment, a pragma and a region between the statement and the #if:
+    // the trivia skip is what reaches the unterminated statement behind them.
+    for (const s of ["s4", "s4b", "s4c", "s4d", "c7b", "c7e", "c7f", "c8"] as const) {
       for (const b of Object.keys(BUILDS) as Build[]) {
         const r = get(s, b);
         expect(r.undecided, `${s}/${b}`).toHaveLength(1);
