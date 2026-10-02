@@ -33,7 +33,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   bcdev matched the admission's pre-committed table; al-runner did not. So the whole-run refusal
   stays, and the `al-runner-coverage-unsupported` warning now names that reason (and R300's for a
   `#if`-wrapped file). Position-based resolution of every row (both transports) is built and tested
-  offline, kept off until upstream fixes the frame (R407).
+  offline, kept off until upstream fixes the frame (R407). An object of ANY kind now counts
+  (an enum, interface, permission set or extension, not only a codeunit, table, page and the
+  other kinds with a coverage identity), since a codeunit after an enum is a later object too.
+  Measured: this adds one refused file on Continia Document Output (`CDOPermissions.al`, three
+  permission sets) and none on DC, System Application, Business Foundation, BaseApp or the
+  fixtures. A coverage row for a file the index skipped (multi-object, `#if`-wrapped, or with no
+  indexed object) now stops at that file instead of matching a shorter path another file owns.
 - **Three platform-kill tags ignore code the build compiles out** (R378):
   - **The tags:** `write-txn-codeunit-run` on `remove-commit`, plus `run-trigger-skipped-insert` and `run-trigger-forced` on `swap-modify-flag`. These tags are set from a whole procedure or from the receiver table's triggers.
   - **The bug:** a `Codeunit.Run`, a key assignment or an `Error` inside an `#if` arm the build does not compile could tag a mutant whose build never runs it.
@@ -151,7 +157,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   (R383). The line map moved a file's base line only past objects with a coverage identity, so every
   covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture
   has the shape, re-checked: no file under `fixtures/` holds an unindexed object at all). Every
-  top-level object now moves the base.
+  top-level object now moves the base. A `#pragma` line does not, as before: it is not an object
+  (BaseApp has 166 at top level).
 
 
 ## [0.1.0-alpha.3] — 2026-08-27
