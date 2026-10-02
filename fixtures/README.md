@@ -20,6 +20,10 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Layout Alpha` | 79700 | `sandbox-layout` | R353 target, batch 0 at `maxGuardsPerBatch` 7: one procedure, `IsBig`. |
 | `Layout Beta` | 79701 | `sandbox-layout` | R353 target, batch 1: `Grow`, then `Twice` behind a load-bearing 26-line header comment. See "sandbox-layout (R353)" below. |
 | `Layout Tests` | 79750 | `sandbox-layout-tests` | One test per procedure: `AlphaIsBig`, `GrowAboveTen`, `TwiceOfThree`. Asserts via `Error()`. |
+| `Multi A` | 79800 | `sandbox-multiobject` | R383 target, the FIRST object of `MultiPair.Codeunit.al`: one procedure, `Never`, which no test calls. |
+| `Multi B` | 79801 | `sandbox-multiobject` | R383 target, the SECOND object of the same file: `Reached`, then `Unreached` on the line right after `Reached`'s last statement. See "sandbox-multiobject (R383)" below. |
+| `Multi Control` | 79802 | `sandbox-multiobject` | R383 single-object control file: `Double`. |
+| `Multi Tests` | 79850 | `sandbox-multiobject-tests` | `ReachedBothWays` (calls `Multi B.Reached` with 20 and 5) and `ControlDoubles`. Asserts via `Error()`. |
 
 `sandbox-app/app.json` reserves `idRanges` 79000–79199; `sandbox-tests/app.json` depends on
 `sandbox-app` only (id `df1aa9ff-6539-4c86-a9d0-ad702b61ac9a`) and declares the same
@@ -33,7 +37,8 @@ The injected Mutation Selector/Control/Active object ids (`79197`–`79199`, see
 `validateSelectorIds` refuses an id outside every declared range, a duplicate among the three, or one
 the project already declares. Every fixture here follows it against its own ranges (`sandbox-app`
 79197-79199, `sandbox-data` 79397-79399, `sandbox-hang` 79447-79449, `sandbox-harden` 79547-79549,
-`gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749), and two fixtures must never share the three
+`gift-card` 90197-90199, `sandbox-symbols` 79647-79649, `sandbox-layout` 79747-79749,
+`sandbox-multiobject` 79847-79849), and two fixtures must never share the three
 ids, which is R169.
 They didn't always: the original ids (`50000`–`50002`) compiled fine against al-runner but
 fail real `alc.exe` with `AL0297` ("object identifier is not valid ... allowed ranges") —
@@ -378,6 +383,30 @@ pre-committed in `docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitm
 `.alpackages` is gitignored. Create an `.alpackages` directory in `sandbox-layout` (it may stay
 empty: the target needs no symbols), and `alc` the target into `sandbox-layout-tests/.alpackages`
 from current source before compiling. al-runner compiles both from source and needs neither.
+
+## sandbox-multiobject (R383)
+
+A target with TWO codeunits in one file, `MultiPair.Codeunit.al` (`Multi A` then `Multi B`), and a
+single-object control, `MultiControl.Codeunit.al`. al-runner reports coverage lines FILE-relative
+(measured on v2.12.0) and LethAL's line map is keyed OBJECT-relative, so every covered line of
+`Multi B` is resolved to its object and converted by `Multi B`'s base line before a procedure is
+looked up (`resolveFileLine`). The tests reach only `Multi B.Reached` and the control; `Multi A`
+and `Multi B.Unreached` are never called, so their mutants must read `no-coverage`. Before R383 a
+multi-object file turned al-runner coverage off for the whole run, and those same mutants read
+`survived`.
+
+`Unreached`'s declaration sits on the line right after `Reached`'s last statement (`exit(X); end;`),
+so in the SOURCE a base one line off moves that covered statement into `Unreached`. In the
+instrumented text the emitter's closing lines sit between them, so the live leg does not see a
+one-line error; `packages/runner/tests/line-map.test.ts` and `al-runner-coverage.test.ts` pin the
+exact conversion offline. The live leg sees a wrong frame or a wrong object.
+`packages/runner/tests/multiobject-fixture.test.ts` fails offline if the twelve mutants or their
+owners move. The per-mutant verdicts, killing tests and covering tests are pre-committed in
+`docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md`.
+
+`.alpackages` is gitignored. Create an empty `.alpackages` directory in `sandbox-multiobject`, and
+`alc` the target into `sandbox-multiobject-tests/.alpackages` from current source before compiling.
+al-runner compiles both from source and needs neither.
 
 ## Tier-2 Phase 0 — the `sandbox-data` table fixture
 
