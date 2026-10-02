@@ -103,10 +103,10 @@ function equalsIgnoreCase(a: string, b: string): boolean {
  * The FIRST `key(...)` entry's field names — AL's primary key — or an empty list when the table
  * declares no `keys` section this parser can read.
  *
- * An empty list makes every question below answer "no key field was assigned", which lands on NO
- * tag. That is the wrong direction for a screen, so callers must not reach this with an unresolved
- * table; `insertSkipCanRaise` only calls it for a table it resolved, and a resolved AL table
- * without a primary key does not exist (the compiler requires one).
+ * An empty list (no compiled key, or a first compiled key whose field list cannot be read) proves
+ * nothing: `onInsertAssignsPrimaryKey` answers "not assigned" for it, which would land on NO tag,
+ * the wrong direction for a screen. So `insertSkipCanRaise` checks for an empty list first and
+ * KEEPS the tag (R378). It also calls this only for a table it resolved.
  */
 export function primaryKeyFields(
   tableNode: ALSyntaxNode,
@@ -118,7 +118,9 @@ export function primaryKeyFields(
       // is not the table's key in this build.
       if (!isLive(key)) continue;
       const list = key.namedChildren.find((c) => c.rawKind === FIELD_LIST);
-      if (list === undefined) continue;
+      // R378 review r1: the FIRST active key is the primary key even when its field list cannot be
+      // read. Reading the next key instead could prove "not assigned" against the wrong key.
+      if (list === undefined) return [];
       return list.namedChildren
         .filter((c) => IDENTIFIER_KINDS.has(c.rawKind))
         .map((c) => stripQuotes(c.text));
