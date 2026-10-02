@@ -18,13 +18,32 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
   stays off by default. When it is on, a project holding a multi-object file or a `#if`-wrapped
   object runs with coverage `"none"` instead, with one `al-runner-coverage-unsupported` warning
-  naming the files, because al-runner's coverage cannot describe them.
+  naming the files and the reason (see R383 below).
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
 
 ### Changed
 
+- **A file declaring more than one object still turns al-runner coverage off, for a new reason**
+  (R383). Upstream #3713 (every object after a file's first was lost) is fixed. But on the pinned
+  al-runner v2.12.0-main.c39ad5de those objects' lines come back in a mixed frame: when a source
+  project with the same app id is reachable, a later object's line is reported as (previous object's
+  end in the SOURCE) + (distance in the INSTRUMENTED text), so it can land in an earlier object.
+  bcdev matched the admission's pre-committed table; al-runner did not. So the whole-run refusal
+  stays, and the `al-runner-coverage-unsupported` warning now names that reason (and R300's for a
+  `#if`-wrapped file). Position-based resolution of every row (both transports) is built and tested
+  offline, kept off until upstream fixes the frame (R407). The rule is now: a file is refused
+  unless every object after its first is code-free (a permission set, permission set extension,
+  enum, interface or entitlement holding no procedure or trigger). So an enum then a codeunit is
+  refused, which it was not before, since only kinds with a coverage identity were counted; a
+  codeunit then permission sets is not. An object whose header is split by `#if` (one shared body)
+  counts as an object that carries code, so a plain codeunit followed by one is refused too; such
+  an object as a file's first is simply the first object. Two separate objects are never merged
+  into one, so a second multiline `interface` with a procedure body is seen. Measured: no refused file is added or removed on DC,
+  System Application, Business Foundation, BaseApp, Continia Document Output or the fixtures. A
+  coverage row for a file the index skipped (multi-object, `#if`-wrapped, or with no
+  indexed object) now stops at that file instead of matching a shorter path another file owns.
 - **Three platform-kill tags ignore code the build compiles out** (R378):
   - **The tags:** `write-txn-codeunit-run` on `remove-commit`, plus `run-trigger-skipped-insert` and `run-trigger-forced` on `swap-modify-flag`. These tags are set from a whole procedure or from the receiver table's triggers.
   - **The bug:** a `Codeunit.Run`, a key assignment or an `Error` inside an `#if` arm the build does not compile could tag a mutant whose build never runs it.
@@ -135,6 +154,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   codes, since one procedure's mutants are always in one batch. `lethal export` uses the same id, so
   a multi-batch export no longer repeats mutant ids. `lethal explain` still reads v2 reports, and
   `schemas/report-v2.schema.json` is frozen beside the new `report-v3.schema.json`.
+
+### Fixed
+
+- **A codeunit after an enum, interface or permission set in the same file got the wrong base line**
+  (R383). The line map moved a file's base line only past objects with a coverage identity, so every
+  covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture
+  has the shape, re-checked: no file under `fixtures/` holds an unindexed object at all). Every
+  top-level object now moves the base. A `#pragma` line does not, as before: it is not an object
+  (BaseApp has 166 at top level).
 
 
 ## [0.1.0-alpha.3] — 2026-08-27

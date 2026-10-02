@@ -10,8 +10,11 @@ import {
   buildLineMap,
   fileLineMapEntries,
   lineMapFromSources,
+  objectIdentityOf,
   readRenamedMemberNames,
+  refusedAsMultiObject,
   renamedMemberNamesOf,
+  resolveFileLine,
 } from "../src/line-map";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
@@ -804,5 +807,326 @@ ${tail}}
         ],
       ],
     ]);
+  });
+});
+
+/**
+ * R383 Design 1: objects PARTITION the file, whatever their kind. An enum, an interface or a
+ * permission set has no coverage identity, so it gets no entry, but it still holds lines, and the
+ * object after it is numbered from one past its end. Before R383 only an object WITH an identity
+ * moved the base, so a codeunit after an enum was numbered from line 1: latent on bcdev (no fixture
+ * has the shape) and wrong on every line.
+ */
+describe("R383: fileLineMapEntries partitions on every top-level object", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  //  1..4  the unindexed object (4 lines each, by construction)
+  //  5 codeunit 50121 C
+  //  6 {
+  //  7     procedure P()
+  //  8     begin
+  //  9     end;
+  // 10 }
+  const AFTER = `codeunit 50121 C
+{
+    procedure P()
+    begin
+    end;
+}`;
+  const UNINDEXED: [string, string][] = [
+    ["an enum", "enum 50120 E\n{\n    value(0; A) { }\n}\n"],
+    ["an interface", 'interface "I Probe"\n{\n    procedure Q();\n}\n'],
+    ["a permission set", "permissionset 50122 PS\n{\n    Assignable = true;\n}\n"],
+  ];
+
+  for (const [label, first] of UNINDEXED) {
+    test(`${label} before a codeunit: the codeunit bases one past its end`, () => {
+      const src = `${first}${AFTER}`;
+      const entries = fileLineMapEntries(wrapRoot(parseAL(src)), objectIdentityOf);
+      expect(entries.map((e) => [e.objectType, e.objectId, e.baseLine])).toEqual([
+        ["Codeunit", 50121, 5],
+      ]);
+      // `procedure P()` is file line 7, so object line 3.
+      const m = new LineMap(entries, new Set(["codeunit:50121"]));
+      expect([3, 5, 7].map((n) => m.lookup("Codeunit", 50121, n))).toEqual(["P", "P", undefined]);
+    });
+  }
+
+  test("a namespace and using header before the first object: base 1", () => {
+    const src = `namespace A.B;\n\nusing X.Y;\n\n${AFTER}`;
+    const entries = fileLineMapEntries(wrapRoot(parseAL(src)), objectIdentityOf);
+    expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([[50121, 1]]);
+  });
+
+  test("a top-level comment between objects moves no base: it belongs to the object after it", () => {
+    const src = `codeunit 50120 A\n{\n}\n// c\n/* m */\n${AFTER}`;
+    const entries = fileLineMapEntries(wrapRoot(parseAL(src)), objectIdentityOf);
+    expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([
+      [50120, 1],
+      [50121, 4],
+    ]);
+  });
+
+  // R383 r2: `#pragma` is the only non-declaration kind at top level in every measured corpus
+  // (166 in BaseApp). Before R383 it never moved a base; it must not now, or every line of a
+  // BaseApp object under a leading pragma would be one off on bcdev.
+  test("a leading #pragma line moves no base, as before R383", () => {
+    const src = `#pragma warning disable AA0005\n${AFTER}\n#pragma warning restore AA0005\n`;
+    const root = wrapRoot(parseAL(src));
+    expect(root.namedChildren.map((n) => n.rawKind)).toEqual([
+      "pragma",
+      "codeunit_declaration",
+      "pragma",
+    ]);
+    const entries = fileLineMapEntries(root, objectIdentityOf);
+    expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([[50121, 1]]);
+    // A pragma counted as an object would be a non-code-free object after the codeunit.
+    expect(refusedAsMultiObject(root)).toBe(false);
+  });
+});
+
+/**
+ * R383 r2 ruling: a file is refused UNLESS every object after its first is code-free (an
+ * allow-listed kind with no code node inside). The first object may be any kind.
+ */
+describe("R383 r2: refusedAsMultiObject", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const CODEUNIT = "codeunit 50121 C\n{\n    procedure P()\n    begin\n    end;\n}\n";
+  const parsed = (src: string) => wrapRoot(parseAL(src));
+  const CODE_FREE: [string, string, string][] = [
+    [
+      "permissionset",
+      "permissionset_declaration",
+      "permissionset 50122 PS\n{\n    Assignable = true;\n}\n",
+    ],
+    [
+      "permissionsetextension",
+      "permissionsetextension_declaration",
+      "permissionsetextension 50123 PSX extends PS\n{\n}\n",
+    ],
+    ["enum", "enum_declaration", "enum 50120 E\n{\n    value(0; A) { }\n}\n"],
+    ["interface", "interface_declaration", 'interface "I Probe"\n{\n    procedure Q();\n}\n'],
+    ["entitlement", "entitlement_declaration", 'entitlement "E Probe"\n{\n    Type = Role;\n}\n'],
+  ];
+
+  for (const [label, kind, src] of CODE_FREE) {
+    test(`a codeunit then ${label} is ADMITTED`, () => {
+      const root = parsed(`${CODEUNIT}${src}`);
+      expect(root.namedChildren.map((n) => n.rawKind)).toEqual(["codeunit_declaration", kind]);
+      expect(refusedAsMultiObject(root)).toBe(false);
+    });
+  }
+
+  test("a codeunit then three permission sets (CDOPermissions.al's shape plus code) is ADMITTED", () => {
+    const ps = (id: number) => `permissionset ${id} P${id}\n{\n    Assignable = true;\n}\n`;
+    expect(refusedAsMultiObject(parsed(`${CODEUNIT}${ps(1)}${ps(2)}${ps(3)}`))).toBe(false);
+    expect(refusedAsMultiObject(parsed(`${ps(1)}${ps(2)}${ps(3)}`))).toBe(false);
+  });
+
+  const CODE_BEARING: [string, string, string][] = [
+    [
+      "a query with a trigger",
+      "query_declaration",
+      'query 50130 Q\n{\n    elements\n    {\n        dataitem(D; "Customer") { }\n    }\n\n    trigger OnBeforeOpen()\n    begin\n    end;\n}\n',
+    ],
+    [
+      "an xmlport",
+      "xmlport_declaration",
+      "xmlport 50131 X\n{\n    schema\n    {\n        textelement(Root) { }\n    }\n}\n",
+    ],
+    ["a second codeunit", "codeunit_declaration", 'codeunit 50124 "C Two"\n{\n}\n'],
+    [
+      "an enumextension (not on the list)",
+      "enumextension_declaration",
+      "enumextension 50125 EX extends E\n{\n    value(1; B) { }\n}\n",
+    ],
+  ];
+  for (const [label, kind, src] of CODE_BEARING) {
+    test(`a codeunit then ${label} is REFUSED`, () => {
+      const root = parsed(`${CODEUNIT}${src}`);
+      expect(root.namedChildren.map((n) => n.rawKind)).toEqual(["codeunit_declaration", kind]);
+      expect(refusedAsMultiObject(root)).toBe(true);
+    });
+  }
+
+  test("an enum then a codeunit is REFUSED: the codeunit is the later object, and it has code", () => {
+    expect(
+      refusedAsMultiObject(parsed(`enum 50120 E\n{\n    value(0; A) { }\n}\n${CODEUNIT}`)),
+    ).toBe(true);
+  });
+
+  test("an ERROR after a codeunit is REFUSED (fail-closed)", () => {
+    const root = parsed(`${CODEUNIT}%%% not AL {\n`);
+    expect(root.namedChildren.map((n) => n.rawKind)).toContain("ERROR");
+    expect(refusedAsMultiObject(root)).toBe(true);
+  });
+
+  test("an allow-listed kind that parsed WITH code is REFUSED (the grammar accepts it)", () => {
+    const enumWithCode = "enum 50120 E\n{\n    procedure X()\n    begin\n    end;\n}\n";
+    expect(refusedAsMultiObject(parsed(`${CODEUNIT}${enumWithCode}`))).toBe(true);
+  });
+
+  test("one object, or a namespace, using and comments before it, is not multi-object", () => {
+    expect(refusedAsMultiObject(parsed(CODEUNIT))).toBe(false);
+    const src = `namespace A.B;\nusing X.Y;\n// c\n/* m */\n${CODEUNIT}`;
+    expect(refusedAsMultiObject(parsed(src))).toBe(false);
+  });
+
+  test("the two arms of one wrapped codeunit are ONE object", () => {
+    const src = `#if CLEAN27\n${CODEUNIT}#else\n${CODEUNIT}#endif\n`;
+    expect(refusedAsMultiObject(parsed(src))).toBe(false);
+  });
+});
+
+/**
+ * R383 Design 2: a FILE-relative line (what al-runner reports, measured on v2.12.0, both
+ * transports) to the object and OBJECT-relative line the line map is keyed on.
+ */
+describe("R383: resolveFileLine", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  // The probe's own Two.Codeunit.al (R383.md, "Measured 2026-10-02"), with B given a global var
+  // section so its header has a `var` line.
+  //  1 codeunit 50100 ProbeA        13 codeunit 50101 ProbeB
+  //  2 {                            14 {
+  //  3     procedure RunA()...      15     var
+  //  7         x := 1;              16         G: Integer;
+  // 10     end;                     17
+  // 11 }                            18     procedure RunB(): Integer
+  // 12 (blank)                      19     var / 20 y / 21 begin
+  //                                 22..24 statements, 25 end; 26 }
+  const TWO = `codeunit 50100 ProbeA
+{
+    procedure RunA(): Integer
+    var
+        x: Integer;
+    begin
+        x := 1;
+        x := x + 10;
+        exit(x);
+    end;
+}
+
+codeunit 50101 ProbeB
+{
+    var
+        G: Integer;
+
+    procedure RunB(): Integer
+    var
+        y: Integer;
+    begin
+        y := 2;
+        y := y + 20;
+        exit(y);
+    end;
+}
+// trailing comment
+`;
+  const THREE = `${TWO}
+codeunit 50102 ProbeC
+{
+    procedure RunC(): Integer
+    begin
+        exit(3);
+    end;
+}
+`;
+  const entriesOf = (src: string) => fileLineMapEntries(wrapRoot(parseAL(src)), objectIdentityOf);
+  const all = (src: string) => {
+    const e = entriesOf(src);
+    return src.split("\n").map((_, i) => resolveFileLine(e, i + 1));
+  };
+
+  test("two objects: each line resolves to its own object, object-relative", () => {
+    const e = entriesOf(TWO);
+    expect(resolveFileLine(e, 7)).toEqual({
+      objectType: "Codeunit",
+      objectId: 50100,
+      objectLine: 7,
+    });
+    // A ends at 11, so B bases at 12: file line 22 is object line 11.
+    expect(resolveFileLine(e, 22)).toEqual({
+      objectType: "Codeunit",
+      objectId: 50101,
+      objectLine: 11,
+    });
+    const m = new LineMap(e, new Set(["codeunit:50100", "codeunit:50101"]));
+    expect(m.lookup("Codeunit", 50101, 11)).toBe("RunB");
+    expect(m.lookup("Codeunit", 50100, 7)).toBe("RunA");
+  });
+
+  test("three objects: the third bases one past the second's end", () => {
+    const e = entriesOf(THREE);
+    // B ends at 26, the comment is 27 (a comment moves no base), the blank 28; C's keyword is 29,
+    // `exit(3)` 33. So C bases at 27 and `exit(3)` is object line 7.
+    expect(resolveFileLine(e, 33)).toEqual({
+      objectType: "Codeunit",
+      objectId: 50102,
+      objectLine: 7,
+    });
+    const m = new LineMap(e, new Set(["codeunit:50100", "codeunit:50101", "codeunit:50102"]));
+    expect(m.lookup("Codeunit", 50102, 7)).toBe("RunC");
+  });
+
+  test("a blank or comment line between objects resolves to nothing", () => {
+    const e = entriesOf(THREE);
+    expect([12, 27, 28].map((n) => resolveFileLine(e, n))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(resolveFileLine(e, 0)).toBeUndefined();
+    expect(resolveFileLine(e, 999)).toBeUndefined();
+  });
+
+  test("the second object's header lines resolve to the SECOND object and name no member", () => {
+    const e = entriesOf(TWO);
+    const m = new LineMap(e, new Set(["codeunit:50100", "codeunit:50101"]));
+    for (const n of [13, 14, 15, 16]) {
+      const r = resolveFileLine(e, n);
+      expect([n, r?.objectId, r?.objectLine]).toEqual([n, 50101, n - 11]);
+      expect([n, m.lookup("Codeunit", 50101, r?.objectLine ?? -1)]).toEqual([n, undefined]);
+    }
+  });
+
+  test("CRLF and a BOM give the same answer on every line as LF without a BOM", () => {
+    const lf = all(THREE);
+    expect(lf.filter((r) => r !== undefined).length).toBeGreaterThan(30);
+    expect(all(THREE.replace(/\n/g, "\r\n"))).toEqual(lf);
+    expect(all(`﻿${THREE}`)).toEqual(lf);
+    expect(all(`﻿${THREE.replace(/\n/g, "\r\n")}`)).toEqual(lf);
+  });
+
+  test("an unindexed object's lines resolve to nothing, and the object after it is based past it", () => {
+    const src =
+      "enum 50120 E\n{\n    value(0; A) { }\n}\ncodeunit 50121 C\n{\n    procedure P()\n    begin\n    end;\n}\n";
+    const e = entriesOf(src);
+    expect([1, 2, 3, 4].map((n) => resolveFileLine(e, n))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(resolveFileLine(e, 8)).toEqual({
+      objectType: "Codeunit",
+      objectId: 50121,
+      objectLine: 4,
+    });
+  });
+
+  test("a refused object's lines resolve to nothing", () => {
+    const src =
+      "#if not CLEAN27\ncodeunit 50105 W\n{\n    procedure P()\n    begin\n    end;\n}\n#endif\n";
+    const e = entriesOf(src);
+    expect(e.every((x) => x.refused !== undefined)).toBe(true);
+    expect([2, 4, 5].map((n) => resolveFileLine(e, n))).toEqual([undefined, undefined, undefined]);
   });
 });

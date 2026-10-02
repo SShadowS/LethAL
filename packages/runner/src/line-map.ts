@@ -331,6 +331,17 @@ export class LineMap {
     }
     return undefined;
   }
+
+  /**
+   * R383: is `lineNo` inside a RENAMED split member's span? There R318's rule
+   * (`renamedMemberAt`) decides alone, both halves: an own arm name is re-keyed, any other scope is
+   * kept as some other member's statement. No counter: an object with none exits at once.
+   */
+  inRenamedSpan(objectType: string, objectId: number, lineNo: number): boolean {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    if (entry === undefined || entry.renamed.length === 0) return false;
+    return entry.renamed.some((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
+  }
 }
 
 /**
@@ -540,7 +551,153 @@ const NOT_AN_OBJECT: ReadonlySet<string> = new Set([
  * so the unsafe direction is to call them nothing.
  */
 export function wrapperHoldsObject(wrapper: ALSyntaxNode): boolean {
-  return objectDeclarationsOf(wrapper).some((d) => !NOT_AN_OBJECT.has(d.rawKind));
+  // R383 r3: `containerNodesOf`, so a split-header object in the wrapper counts (it did not).
+  return containerNodesOf(wrapper).some((d) => !NOT_AN_OBJECT.has(d.rawKind));
+}
+
+/**
+ * R383 r3: preprocessor nodes that are directive LINES and hold no declaration. Every other
+ * `preproc_*` node an object container holds is declaration-bearing and counts as an object
+ * (fail-closed). In tree-sitter-al 4.4.1 that is `preproc_split_declaration` (`grammar.js` 420,
+ * 426: `#if`-alternated object headers over ONE shared body, an `_object` choice), and any kind a
+ * later grammar adds there.
+ */
+const DIRECTIVE_ONLY_KINDS: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+  "preproc_region",
+  "preproc_endregion",
+  "preproc_define",
+  "preproc_undef",
+  "preproc_pragma_only",
+]);
+
+/**
+ * R383 r3: like `objectDeclarationsOf` (the `#if` wrappers flattened), but a declaration-bearing
+ * preprocessor node is KEPT. `objectDeclarationsOf` drops every `preproc_*` child, so a
+ * `preproc_split_declaration` vanished from the object count.
+ */
+function containerNodesOf(root: ALSyntaxNode): ALSyntaxNode[] {
+  const out: ALSyntaxNode[] = [];
+  for (const c of root.namedChildren) {
+    if (c.rawKind === "preproc_conditional_object") out.push(...containerNodesOf(c));
+    else if (!DIRECTIVE_ONLY_KINDS.has(c.rawKind)) out.push(c);
+  }
+  return out;
+}
+
+/**
+ * R383: is this top-level node an OBJECT for the partition and the multi-object count? Every
+ * declaration kind is (enum, interface, permission set, extension, profile, dotnet, ...), and so is
+ * an `ERROR` or any kind not listed here: fail-closed, since a node holding lines shifts a later
+ * object's base. Not objects: namespace, using and comment lines, `preproc_*` markers, and a
+ * `#pragma` line, which is a compiler directive like a comment. Measured (r2 census): `pragma` is
+ * the ONLY non-declaration kind at top level across fixtures, DC, System Application, Business
+ * Foundation, BaseApp and CDO, and no file there has a top-level `ERROR`. Before R383 a pragma never
+ * moved a base either; counting it would refuse every BaseApp file that opens with one.
+ *
+ * R383 r3: a declaration-bearing preprocessor node (`preproc_split_declaration`, anything outside
+ * `DIRECTIVE_ONLY_KINDS`) IS an object: it holds a whole object's lines. A `#if` wrapper
+ * (`preproc_conditional_object`) is not one itself; its arms are counted (`containerNodesOf`).
+ */
+export function isTopLevelObject(node: ALSyntaxNode): boolean {
+  return (
+    !NOT_AN_OBJECT.has(node.rawKind) &&
+    node.rawKind !== "pragma" &&
+    node.rawKind !== "preproc_conditional_object" &&
+    !DIRECTIVE_ONLY_KINDS.has(node.rawKind)
+  );
+}
+
+/**
+ * R383 r2 ruling: object kinds that carry no code, so one AFTER a file's first object shifts no
+ * covered line. An explicit allow-list by AL semantics, NOT by the grammar: tree-sitter-al 4.4.1
+ * gives every one of these the shared `declaration_body` (`grammar.js` 475 `permissionset_declaration:
+ * _object_with_id(...)`, 487 `enum_declaration`, 529 `entitlement_declaration`; `interface_body` at
+ * 559 is `repeat1(choice($._body_element, $.interface_procedure))`), and `node-types.json` lists
+ * `procedure` and `trigger_declaration` among `declaration_body`'s and `interface_body`'s children.
+ * So the grammar shows NO kind code-free, `enumextension` included, and none is added beyond the
+ * ruling's list; `holdsCode` backs the list up by refusing an allow-listed node that parsed with code.
+ */
+const CODE_FREE_KINDS: ReadonlySet<string> = new Set([
+  "permissionset_declaration",
+  "permissionsetextension_declaration",
+  "enum_declaration",
+  "interface_declaration",
+  "entitlement_declaration",
+]);
+
+/** Node kinds that hold executable code (or a procedure split across `#if` arms). */
+const CODE_KINDS: ReadonlySet<string> = new Set([
+  "procedure",
+  "trigger_declaration",
+  "code_block",
+  "preproc_split_procedure",
+  "preproc_split_procedure_preamble",
+]);
+
+function holdsCode(node: ALSyntaxNode): boolean {
+  return node.namedChildren.some((c) => CODE_KINDS.has(c.rawKind) || holdsCode(c));
+}
+
+/**
+ * R383: the objects a file declares, of ANY kind, in source order, each as the list of its
+ * declaration nodes. A plain top-level declaration is one object of one node. The arms of one
+ * `#if` wrapper (R298) that declare the same object are ONE object of several nodes, merged by kind
+ * plus `object_id`, or the header line for a kind with no id (an interface). R383 r3: merged only
+ * WITHIN one top-level wrapper, the one place alternative arms of one object can be. Two separate
+ * declarations whose keys collide (two multiline `interface` headers both key `interface`) stay two
+ * objects, and every node is kept, so the code check sees each one. An `ERROR` node is always its
+ * own object, and so is a declaration-bearing preprocessor node (`isTopLevelObject`).
+ */
+function fileObjects(root: ALSyntaxNode): ALSyntaxNode[][] {
+  const out: ALSyntaxNode[][] = [];
+  for (const top of root.namedChildren) {
+    if (top.rawKind !== "preproc_conditional_object") {
+      if (isTopLevelObject(top)) out.push([top]);
+      continue;
+    }
+    const arms = new Map<string, ALSyntaxNode[]>();
+    for (const node of containerNodesOf(top)) {
+      if (!isTopLevelObject(node)) continue;
+      const tag =
+        node.rawKind === "ERROR" || node.rawKind.startsWith("preproc_")
+          ? `@${node.startPosition.row}:${node.startPosition.column}`
+          : (node.childForFieldName("object_id")?.text ?? node.text.split("\n")[0]?.trim() ?? "");
+      const key = `${node.rawKind}:${tag.toLowerCase()}`;
+      const merged = arms.get(key);
+      if (merged === undefined) {
+        const object = [node];
+        arms.set(key, object);
+        out.push(object);
+      } else merged.push(node);
+    }
+  }
+  return out;
+}
+
+/**
+ * R383 r2 ruling, the ONE predicate the al-runner coverage guard, the CLI fallback and the index
+ * skip share: is this file refused as multi-object? al-runner reports every object after a file's
+ * first in the wrong frame, so a file is refused UNLESS every object after the first is code-free
+ * (`CODE_FREE_KINDS`, with no code node inside, checked on EVERY node of a merged object). The first
+ * object may be any kind. Anything else after it refuses, an `ERROR` or an unknown kind included
+ * (fail-closed).
+ *
+ * R383 r3: a `preproc_split_declaration` is never in `CODE_FREE_KINDS`, so one after the first
+ * object refuses the file whatever its headers say: it carries code unless proven otherwise, and
+ * nothing here proves it. As the FIRST object it is simply the first object (base 1), like any
+ * kind. Its own lines resolve nowhere: `objectIdentityOf` gives it no identity, so it has no index
+ * entry. That loses nothing measured today: R305's skip (`generateMutationSet`) generates no mutant
+ * in a file whose only code-carrying object is split, and a file where a plain object follows it is
+ * refused here.
+ */
+export function refusedAsMultiObject(root: ALSyntaxNode): boolean {
+  return fileObjects(root)
+    .slice(1)
+    .some((object) => object.some((n) => !CODE_FREE_KINDS.has(n.rawKind) || holdsCode(n)));
 }
 
 /**
@@ -585,10 +742,46 @@ export function fileLineMapEntries(
       previousEndLine = node.endPosition.row + 1;
       continue;
     }
-    if (!push(node, afterWrapper)) continue;
+    push(node, afterWrapper);
+    // R383: EVERY top-level object moves the base, indexed or not. An enum, an interface or a
+    // permission set has no coverage identity but still holds lines, so a codeunit after one is
+    // numbered from one past its end. Namespace, using and comment lines are not objects: a leading
+    // comment belongs to the object after it, as measured (`LineMapEntry.baseLine`). So does a
+    // `#pragma` line, as before R383 (`isTopLevelObject`).
+    if (!isTopLevelObject(node)) continue;
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
+}
+
+/**
+ * R383: a FILE-relative line of the INSTRUMENTED text to the object whose declaration holds it and
+ * the OBJECT-relative line the line map is keyed on.
+ *
+ * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
+ * first object in this frame but every later object in a mixed source/instrumented frame
+ * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
+ * files whose only object with code is the first (`refusedAsMultiObject`), so its base is 1.
+ *
+ * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
+ * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
+ * line between objects, an enum's lines) and for a refused object's lines: no coverage entry at all,
+ * never a guess. Keyed by `(objectType, objectId)`, never by a procedure name or a bare id.
+ */
+export function resolveFileLine(
+  entries: readonly LineMapEntry[],
+  fileLine: number,
+): { objectType: string; objectId: number; objectLine: number } | undefined {
+  for (const e of entries) {
+    if (fileLine < e.root.startPosition.row + 1 || fileLine > e.root.endPosition.row + 1) continue;
+    if (e.refused !== undefined) return undefined;
+    return {
+      objectType: e.objectType,
+      objectId: e.objectId,
+      objectLine: fileLine - e.baseLine + 1,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -611,9 +804,11 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
  * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
  * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
- * enum, an interface): the multi-object guard then counts one object and leaves coverage on, al-runner
- * drops the whole file's hits, and without the union the bare table's trigger mutants would reach
- * the all-green fallback. Over-refusing is the safe direction.
+ * enum, an interface): coverage stays on for the file's other objects (a code-free enum after the
+ * table does not make the file multi-object, `refusedAsMultiObject`), al-runner drops the whole
+ * file's hits, and without the
+ * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
+ * safe direction.
  */
 export function coverageRefusedObjects(
   files: readonly { readonly path: string; readonly root: ALSyntaxNode }[],

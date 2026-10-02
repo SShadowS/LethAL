@@ -284,8 +284,10 @@ export interface AlRunnerConfig {
    * every mutant runs every green test and an unreached one is reported `survived`, which
    * over-reports. With coverage wrongly enabled it would be reported `no-coverage`, which HIDES
    * it. So the caller has to opt in, and must first ask `alRunnerCoverageSupport(projectDir)`
-   * whether al-runner can report this project correctly at all -- it cannot for a file declaring
-   * more than one object, measured on 2.11.0 (see `al-runner-coverage.ts`).
+   * whether al-runner's coverage can be trusted for this project at all -- it cannot for a file
+   * declaring more than one object (al-runner reports every object after the first in the wrong
+   * frame, measured on v2.12.0-main.c39ad5de, R383; see `al-runner-coverage.ts`), and the CLI also
+   * refuses a file holding a `#if`-wrapped object (R298, pending R300).
    *
    * Decided by the caller rather than here because `capabilities()` is synchronous and is read at
    * the top of `runSession`, before an instrumented bundle exists to inspect.
@@ -649,8 +651,9 @@ export class AlRunnerBackend implements ExecutionBackend {
    * - `coverage: "none"` — NO LONGER TRUE since R220 (2026-09-09): `cfg.coverage: "al-runner"`
    *   reads al-runner's own per-test `--coverage`. What keeps `authoritative` false on this point
    *   is that the coverage is CONDITIONAL: a file declaring more than one object disables it for
-   *   the whole run (upstream #3713), so it is a property of the project's layout, not a
-   *   capability of the backend.
+   *   the whole run, so it is a property of the project's layout, not a capability of the backend.
+   *   The reason moved in R383: upstream #3713 (objects after the first lost) is fixed, but on
+   *   v2.12.0-main.c39ad5de those objects' lines come back in a frame LethAL cannot undo.
    * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
    *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
    *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that

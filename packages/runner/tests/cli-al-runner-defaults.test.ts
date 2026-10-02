@@ -519,6 +519,32 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
     expect(out.alRunner?.coverage).toBe("none");
     expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+    // R383: the warning names the REAL reason, al-runner's frame for later objects, not #3713.
+    expect(warned[0]).toContain("every object after a file's first at the wrong line");
+    expect(warned[0]).not.toContain("R300");
+  });
+
+  test("R383 r3: a codeunit then a #if split-header codeunit falls back to none as multi-object", async () => {
+    const split =
+      "codeunit 50104 P\n{\n}\n#if FEATURE\ncodeunit 50105 Q\n#else\ncodeunit 50105 Q\n#endif\n{\n    procedure Q()\n    begin\n    end;\n}\n";
+    const dir = await alProject({ "Split.Codeunit.al": split });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("Split.Codeunit.al (more than one object)");
+  });
+
+  test("R383: a multi-object file beside a wrapped one: ONE warning naming both, with both reasons", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS, "B.Codeunit.al": TWO_ARM });
+    const warned: string[] = [];
+    const out = await withAlRunnerCoverageGuard(cfg(dir), dir, (l) => warned.push(l));
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+    expect(warned[0]).toContain("B.Codeunit.al (an #if-wrapped object)");
+    expect(warned[0]).toContain("R383");
+    expect(warned[0]).toContain("R300");
   });
 
   test("a clean project keeps coverage on and warns nothing", async () => {
