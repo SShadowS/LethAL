@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**107 of 401 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 402 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -155,7 +155,7 @@ that ordering is the priority.
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
-- **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · open, filed 2026-10-02
+- **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
 - **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · open, filed 2026-10-02
 - **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · open, filed 2026-10-02
 
@@ -277,6 +277,7 @@ that ordering is the priority.
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 - **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · open, filed 2026-10-01
 - **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · open, filed 2026-10-02
+- **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed 2026-10-02
 
 ## Backends and tooling
 
