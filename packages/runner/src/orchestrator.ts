@@ -382,7 +382,7 @@ export interface RefusedFile extends FileRefusalFields {
   /**
    * Only when the header rule refused it (no object name to reserve an exact entry under): the
    * `looseIdentityTupleOf` of each deduped site. Absent for an exact refusal, whose sites are
-   * reserved in `identityOrdinals` instead.
+   * reserved in the set's `reservedIdentityEntries` instead.
    */
   readonly looseTuples?: readonly string[];
   /**
