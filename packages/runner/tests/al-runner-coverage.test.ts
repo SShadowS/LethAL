@@ -253,6 +253,13 @@ ${R298_BODY("W")}#endif
 `;
 const R298_PLAIN = `codeunit 50107 Other
 ${R298_BODY("R")}`;
+/** R383 r3: `#if`-alternated headers over ONE shared body, `preproc_split_declaration`. */
+const R383_SPLIT = `#if FEATURE
+codeunit 50108 "Split B"
+#else
+codeunit 50108 "Split B"
+#endif
+${R298_BODY("Q")}`;
 const R298_REFUSED =
   "[lethal] coverage refused for Codeunit:50103 (src/B2.Codeunit.al): it is declared inside, or after, a #if ... #endif object wrapper, and how the compiled arm's lines are numbered is not yet measured (R300). Its mutants read no-coverage.";
 
@@ -350,6 +357,70 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
       alRunnerCoverageFrom([{ file: "src/WithPerms.Codeunit.al", line: 6, hits: 1 }], index)
         .entries,
     ).toEqual([{ objectType: "Codeunit", objectId: 50107, procedure: "R", line: 6 }]);
+  });
+
+  test("R383 r3: a codeunit then a #if split-header codeunit IS two objects: guard refuses, index skips, no hit resolves on either transport", async () => {
+    // Line 7 is `L := 1;` in Other.R. al-runner reports a later object's lines shifted up into
+    // the first object's (r383-real-frame), so a hit of Split B's can arrive as line 7.
+    const dir = await bundle({ "src/Split.Codeunit.al": `${R298_PLAIN}${R383_SPLIT}` });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
+      multiObjectFiles: ["src/Split.Codeunit.al"],
+      wrappedObjectFiles: [],
+    });
+    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(index.multiObjectFiles).toEqual(["src/Split.Codeunit.al"]);
+    expect(index.byFile.size).toBe(0);
+    expect(
+      alRunnerCoverageFrom([{ file: "src/Split.Codeunit.al", line: 7, hits: 1 }], index).entries,
+    ).toEqual([]);
+    const server: ServerPerTestCoverage = {
+      test: "Codeunit50140.T",
+      coverage: [{ file: "src/Split.Codeunit.al", statements: [{ line: 7, hits: 1, scope: "Q" }] }],
+    };
+    expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
+  });
+
+  test("R383 r3: a split-header object FIRST is the first object: a code-free permission set after it is admitted, a codeunit after it is refused", async () => {
+    const perms = "permissionset 50122 PS\n{\n    Assignable = true;\n}\n";
+    const dir = await bundle({
+      "src/SplitFirst.Codeunit.al": `${R383_SPLIT}${perms}`,
+      "src/SplitThenPlain.Codeunit.al": `${R383_SPLIT}${R298_PLAIN}`,
+    });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
+      multiObjectFiles: ["src/SplitThenPlain.Codeunit.al"],
+      wrappedObjectFiles: [],
+    });
+    // The split object has no coverage identity, so the admitted file has no entry to resolve.
+    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(index.byFile.size).toBe(0);
+  });
+
+  test("R383 r3: a #if wrapper holding only a split-header object holds an object (R298 refuses the file)", async () => {
+    const dir = await bundle({ "src/W.Codeunit.al": `#if OUTER\n${R383_SPLIT}#endif\n` });
+    expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual(["src/W.Codeunit.al"]);
+  });
+
+  test("R383 r3: two separate multiline interfaces whose header keys collide stay two objects, so the second one's procedure body refuses the file", async () => {
+    const i1 = 'interface\n    "I1"\n{\n    procedure P();\n}\n';
+    const i2 = 'interface\n    "I2"\n{\n    procedure P()\n    begin\n    end;\n}\n';
+    const dir = await bundle({
+      "src/Ifaces.Codeunit.al": `${R298_PLAIN}${i1}${i2}`,
+      // Merging by key across the file would also fold I2 into a FIRST object I1 and admit this.
+      "src/IfaceFirst.Codeunit.al": `${i1}enum 50120 E\n{\n    value(0; A) { }\n}\n${i2}`,
+      // Genuine alternative arms ARE one object, and every arm is checked, not only the first.
+      "src/IfaceArms.Codeunit.al": `${R298_PLAIN}#if X\n${i1}#else\n${i1.replace("procedure P();", "procedure P()\n    begin\n    end;")}#endif\n`,
+    });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
+      multiObjectFiles: [
+        "src/IfaceArms.Codeunit.al",
+        "src/IfaceFirst.Codeunit.al",
+        "src/Ifaces.Codeunit.al",
+      ],
+      wrappedObjectFiles: ["src/IfaceArms.Codeunit.al"],
+    });
   });
 
   test("R387: a clean project lists no file in either list", async () => {
