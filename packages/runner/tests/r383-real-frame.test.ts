@@ -20,6 +20,10 @@ import type { ServerPerTestCoverage } from "../src/al-runner-server";
  * `Multi A.Never`. The control is the same bundle under a fresh app id, where al-runner finds no
  * source project and reports the instrumented frame.
  *
+ * R383 r3 added the MEASURED positive control: `cobertura-calls-never.xml` and
+ * `server-calls-never.json` are a real run of the same bundle with one more test, `CallsNever`,
+ * which calls `Multi A.Never(1)` (each file's header says how it was captured).
+ *
  * The index is built with `admitMultiObjectFiles`, i.e. as the R383 admission would have run.
  * Production refuses the file instead; this file is why.
  */
@@ -84,9 +88,38 @@ describe("R383: al-runner's real frame mis-resolves every object after a file's 
     }
   });
 
-  test("positive control: a hit on A's own line 20 (`exit(X + 7)`) resolves to exactly Multi A.Never 20, on both transports", async () => {
-    // Line 20 is a real row of the captured run (hits 0: no test calls A). Given a hit, it must
-    // land on A at object line 20 (A is first, base 1), not merely somewhere in a set of lines.
+  test("positive control, MEASURED: CallsNever's real hits on A resolve to exactly Multi A.Never at the same lines, on both transports", async () => {
+    // A real run of the same bundle with a test that calls Multi A.Never(1). A is the file's FIRST
+    // object, so al-runner reports it in the instrumented frame: 8, 10 and 14 are the Active
+    // checks, 20 is `exit(X + 7)`. Base 1, so each file line is its own object line.
+    const exact = [8, 10, 14, 20].map((line) => ({
+      objectType: "Codeunit",
+      objectId: A,
+      procedure: "Never",
+      line,
+    }));
+    expect(await hitLines("cobertura-calls-never.xml")).toEqual([8, 10, 14, 20]);
+    const index = await admittedIndex();
+    expect(
+      alRunnerCoverageFrom(await cobertura("cobertura-calls-never.xml"), index).entries,
+    ).toEqual(exact);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const payload = JSON.parse(
+        await readFile(join(DIR, "server-calls-never.json"), "utf8"),
+      ) as ServerPerTestCoverage;
+      expect(alRunnerCoverageFromServer(payload, index).entries).toEqual(exact);
+      // The daemon's scope agrees with the position for every statement: nothing overruled.
+      expect(warn.mock.calls.length).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("MAPPER test (synthetic, not evidence): a hit placed on A's line 20 resolves to exactly Multi A.Never 20, on both transports", async () => {
+    // Line 20 is a real row of the ReachedBothWays capture (hits 0), EDITED to 1, and the server
+    // statement is invented: this pins the mapper's arithmetic, not al-runner's behaviour. The
+    // measured counterpart is the positive control above.
     const real = await cobertura("cobertura-reached-both-ways.xml");
     const row = real.find((l) => l.line === 20);
     if (row === undefined) throw new Error("the captured Cobertura lost its line 20 row");
