@@ -34,6 +34,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   stays, and the `al-runner-coverage-unsupported` warning now names that reason (and R300's for a
   `#if`-wrapped file). Position-based resolution of every row (both transports) is built and tested
   offline, kept off until upstream fixes the frame (R407).
+- **Three platform-kill tags ignore code the build compiles out** (R378):
+  - **The tags:** `write-txn-codeunit-run` on `remove-commit`, plus `run-trigger-skipped-insert` and `run-trigger-forced` on `swap-modify-flag`. These tags are set from a whole procedure or from the receiver table's triggers.
+  - **The bug:** a `Codeunit.Run`, a key assignment or an `Error` inside an `#if` arm the build does not compile could tag a mutant whose build never runs it.
+  - **The fix:** each file's arms are now evaluated once and shared with every analysis (`SemanticContext.armOf`).
+  - **Uncertainty keeps the tag:** a receiver table whose directives cannot be evaluated keeps both trigger tags. So does a primary key with no readable field list. The primary key is the first key the build compiles.
+  - **Measured on the four R214 corpora** (DC, System Application, Business Foundation and BaseApp, both symbol sets): no mutant gained, lost or renumbered, no tag changed, and peak memory within 110% of master. Every frozen gate fixture is unaffected.
+  - **Verdicts:** no verdict and no identity key moves.
 - **al-runner runs now measure the preprocessor symbols al-runner predefines, every session**
   (R392): one one-shot al-runner run of a generated probe project, after provisioning and before
   anything is generated, instead of assuming the `CLEANSCHEMA1`..`CLEANSCHEMA25` list measured on
