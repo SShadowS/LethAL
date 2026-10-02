@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- R383 evidence: al-runner v2.12.0-main.c39ad5de, one-shot, the baseline run of
+     Multi Tests.ReachedBothWays against LethAL's instrumented sandbox-multiobject bundle
+     (MultiPair.Codeunit.al beside this file). Trimmed to the MultiPair class; every line in it is
+     verbatim. The filename is the SOURCE path al-runner substituted, as captured. -->
+<coverage line-rate="0.2444" branch-rate="0" lines-covered="11" lines-valid="45" version="1.0" timestamp="1790928720">
+  <sources>
+    <source>.</source>
+  </sources>
+  <packages>
+    <package name="al-source" line-rate="0.2444" branch-rate="0">
+      <classes>
+        <class name="MultiPair.Codeunit" filename="fixtures/sandbox-multiobject/src/MultiPair.Codeunit.al" line-rate="0.2581" branch-rate="0">
+          <lines>
+            <line number="8" hits="0" />
+            <line number="9" hits="0" />
+            <line number="10" hits="0" />
+            <line number="12" hits="0" />
+            <line number="14" hits="0" />
+            <line number="16" hits="2" />
+            <line number="17" hits="0" />
+            <line number="18" hits="2" />
+            <line number="20" hits="0" />
+            <line number="21" hits="0" />
+            <line number="22" hits="0" />
+            <line number="23" hits="2" />
+            <line number="25" hits="0" />
+            <line number="26" hits="0" />
+            <line number="27" hits="0" />
+            <line number="28" hits="2" />
+            <line number="30" hits="0" />
+            <line number="31" hits="0" />
+            <line number="32" hits="0" />
+            <line number="33" hits="2" />
+            <line number="35" hits="0" />
+            <line number="36" hits="0" />
+            <line number="37" hits="0" />
+            <line number="40" hits="2" />
+            <line number="41" hits="1" />
+            <line number="42" hits="1" />
+            <line number="47" hits="0" />
+            <line number="48" hits="0" />
+            <line number="49" hits="0" />
+            <line number="51" hits="0" />
+            <line number="55" hits="0" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

@@ -1,0 +1,19 @@
+{
+  "_note": "R383 evidence: al-runner v2.12.0-main.c39ad5de --server, the baseline runTests of Multi Tests.ReachedBothWays against LethAL's instrumented sandbox-multiobject bundle (MultiPair.Codeunit.al beside this file). Trimmed to the MultiPair file and to the fields LethAL reads; the statements are verbatim. The file was an absolute path to the SOURCE fixture, normalised here to the repo-relative path.",
+  "test": "Codeunit79850.ReachedBothWays",
+  "coverage": [
+    {
+      "file": "fixtures/sandbox-multiobject/src/MultiPair.Codeunit.al",
+      "statements": [
+        { "id": 0, "scope": "Reached", "line": 16, "hits": 2 },
+        { "id": 4, "scope": "Reached", "line": 18, "hits": 2 },
+        { "id": 11, "scope": "Reached", "line": 23, "hits": 2 },
+        { "id": 18, "scope": "Reached", "line": 28, "hits": 2 },
+        { "id": 25, "scope": "Reached", "line": 33, "hits": 2 },
+        { "id": 32, "scope": "Reached", "line": 40, "hits": 2 },
+        { "id": 33, "scope": "Reached", "line": 41, "hits": 1 },
+        { "id": 34, "scope": "Reached", "line": 42, "hits": 1 }
+      ]
+    }
+  ]
+}
