@@ -10,6 +10,7 @@ import {
   buildAlRunnerCoverageIndex,
   parseCobertura,
 } from "../src/al-runner-coverage";
+import type { ServerPerTestCoverage } from "../src/al-runner-server";
 import { coverageRefusedObjects } from "../src/line-map";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
 
@@ -320,6 +321,21 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
     });
   });
 
+  test("R383 r2: an enum then a codeunit IS two objects: the guard refuses and the index skips", async () => {
+    // The codeunit is the file's SECOND object, which is the one al-runner reports in the wrong
+    // frame, though the enum has no coverage identity.
+    const src = `enum 50120 E\n{\n    value(0; A) { }\n}\n${R298_PLAIN}`;
+    const dir = await bundle({ "src/EnumThenCodeunit.Codeunit.al": src });
+    expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
+      multiObjectFiles: ["src/EnumThenCodeunit.Codeunit.al"],
+      wrappedObjectFiles: [],
+    });
+    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(index.multiObjectFiles).toEqual(["src/EnumThenCodeunit.Codeunit.al"]);
+    expect(index.byFile.size).toBe(0);
+  });
+
   test("R387: a clean project lists no file in either list", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": "codeunit 50100 A\n{\n}\n" });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
@@ -367,6 +383,31 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
     } finally {
       warn.mockRestore();
     }
+  });
+
+  test("R383 r2: a hit on a skipped multi-object src/Foo.Codeunit.al is not credited to a root Foo.Codeunit.al", async () => {
+    // src/Foo holds two codeunits; its line 6 is inside 50151's `Reached`. The root Foo holds one
+    // codeunit, 50107, whose line 6 is inside `R`. A fall-through credits 50107.R on both paths.
+    const two = `codeunit 50151 "Foo A"\n${R298_BODY("Reached")}codeunit 50152 "Foo B"\n${R298_BODY("Other")}`;
+    const dir = await bundle({ "src/Foo.Codeunit.al": two, "Foo.Codeunit.al": R298_PLAIN });
+    const rows = [{ file: "C:/x/instrumented/active/src/Foo.Codeunit.al", line: 6, hits: 1 }];
+    const server: ServerPerTestCoverage = {
+      test: "Codeunit50140.T",
+      coverage: [
+        { file: "src/Foo.Codeunit.al", statements: [{ line: 6, hits: 1, scope: "Reached" }] },
+      ],
+    };
+    const index = await buildAlRunnerCoverageIndex(dir);
+    expect(index.multiObjectFiles).toEqual(["src/Foo.Codeunit.al"]);
+    expect([...index.byFile.keys()]).toEqual(["foo.codeunit.al"]);
+    expect(alRunnerCoverageFrom(rows, index).entries).toEqual([]);
+    expect(alRunnerCoverageFromServer(server, index).entries).toEqual([]);
+    // Admitted (tests only), the same hit resolves to src/Foo's own first object: the stop-list
+    // does not block an index that was let in.
+    const admittedIndex = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
+    const own = [{ objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 }];
+    expect(alRunnerCoverageFrom(rows, admittedIndex).entries).toEqual(own);
+    expect(alRunnerCoverageFromServer(server, admittedIndex).entries).toEqual(own);
   });
 
   test("a file holding a wrapped ENUM is refused too, though an enum has no coverage identity", async () => {
@@ -521,7 +562,7 @@ enum 50120 E
 `;
 
 describe("R298 end to end (al-runner): a bare table before a wrapped enum reads no-coverage", () => {
-  test("al-runner keeps coverage on and refuses the file; selection refuses every mutant of the table", async () => {
+  test("al-runner refuses the file (and, since R383 r2, coverage for the run); selection refuses every mutant of the table", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const files = {
@@ -529,9 +570,10 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
         "src/Other.Codeunit.al": R298_PLAIN,
       };
       const dir = await bundle(files);
+      // R383 r2: the wrapped enum is an object too, so the table is not the file's only one.
       expect(await alRunnerCoverageSupport(dir)).toEqual({
-        supported: true,
-        multiObjectFiles: [],
+        supported: false,
+        multiObjectFiles: ["src/T.Table.al"],
         wrappedObjectFiles: ["src/T.Table.al"],
       });
       const index = await buildAlRunnerCoverageIndex(dir);

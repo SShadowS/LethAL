@@ -28,8 +28,10 @@
  * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
  * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
  * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
- * gated to table triggers. Prevalence is low: measured, no file trips this on any gate fixture but
- * `sandbox-multiobject` (which exists to), nor on Continia Document Output (R383.md).
+ * gated to table triggers. An object of ANY kind counts (`fileObjectCount`): an enum then a
+ * codeunit makes the codeunit a later object. Prevalence, measured (R383.md): on the gate fixtures
+ * only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe` trip this; on Continia
+ * Document Output one file does, three permission sets in `CDOPermissions.al`.
  *
  * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
  * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
@@ -40,8 +42,8 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, objectDeclarationsOf, parseAL } from "@lethal/engine";
-import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
+import { initParser, parseAL } from "@lethal/engine";
+import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
 import {
@@ -49,6 +51,7 @@ import {
   type LineMapEntry,
   fileHoldsWrappedObject,
   fileLineMapEntries,
+  fileObjectCount,
   objectIdentityOf,
   readRenamedMemberNames,
   refusedObjectsOfFile,
@@ -91,26 +94,6 @@ export function parseCobertura(xml: string): readonly CoberturaLine[] {
 }
 
 /**
- * Every object a file declares, in source order, `#if`-wrapped ones included (R298). The arms of
- * one wrapped object are ONE object: each compile builds exactly one arm, so a two-arm wrapper
- * declaring the same `(type, id)` twice must not be reported as a multi-object file. Counted by
- * `(type, id)`, never by node.
- */
-function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
-  const found: Array<{ objectType: string; objectId: number }> = [];
-  const seen = new Set<string>();
-  for (const decl of objectDeclarationsOf(root)) {
-    const id = objectIdentityOf(decl);
-    if (id === null) continue;
-    const key = `${id.objectType}:${id.objectId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    found.push(id);
-  }
-  return found;
-}
-
-/**
  * What one instrumented bundle can tell us about its own files: which object each declares, and a
  * line map to place a covered line inside a procedure.
  */
@@ -122,7 +105,7 @@ export interface AlRunnerCoverageIndex {
   readonly byFile: ReadonlyMap<string, readonly LineMapEntry[]>;
   readonly lineMap: LineMap;
   /**
-   * Project-relative paths declaring more than one object. Non-empty disables coverage, and such a
+   * Project-relative paths declaring more than one object of any kind. Non-empty disables coverage, and such a
    * file is not indexed unless `admitMultiObjectFiles` was passed (R383).
    */
   readonly multiObjectFiles: readonly string[];
@@ -133,6 +116,13 @@ export interface AlRunnerCoverageIndex {
    * declared set, or `multiObjectFiles`.
    */
   readonly refusedFiles: readonly string[];
+  /**
+   * Every `.al` path scanned but NOT in `byFile` (lower-cased keys): refused, multi-object and not
+   * admitted, or holding no indexed object. A coverage row stops at its own path here instead of
+   * falling through to a shorter ending another file owns (R298, R383 r2). An admitted
+   * multi-object file is in `byFile`, so it is never here.
+   */
+  readonly skippedFiles: readonly string[];
 }
 
 /**
@@ -173,7 +163,9 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
   for (const rel of rels) {
     const root = wrapRoot(parseAL(await readFile(join(projectDir, rel), "utf8")));
     if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
-    if (objectsOf(root).length > 1) multi.push(normalizeSlashes(rel));
+    // R383 r2: objects of EVERY kind count. An enum then a codeunit puts the codeunit second, and
+    // al-runner reports a later object in the wrong frame whatever the first one is.
+    if (fileObjectCount(root) > 1) multi.push(normalizeSlashes(rel));
   }
   return {
     supported: multi.length === 0,
@@ -208,6 +200,7 @@ export async function buildAlRunnerCoverageIndex(
   const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
   const refusedFiles: string[] = [];
+  const skippedFiles: string[] = [];
   const entries: LineMapEntry[] = [];
   const declared = new Set<string>();
 
@@ -217,20 +210,27 @@ export async function buildAlRunnerCoverageIndex(
     if (fileHoldsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
+      skippedFiles.push(normalizeFileKey(rel));
       for (const reason of refusedObjectsOfFile(root, file).values()) {
         console.warn(`[lethal] ${reason}`);
       }
       continue;
     }
-    if (objectsOf(root).length > 1) {
+    if (fileObjectCount(root) > 1) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
       multiObjectFiles.push(normalizeSlashes(rel));
       // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
-      if (options.admitMultiObjectFiles !== true) continue;
+      if (options.admitMultiObjectFiles !== true) {
+        skippedFiles.push(normalizeFileKey(rel));
+        continue;
+      }
     }
     const fileEntries = fileLineMapEntries(root, objectIdentityOf);
-    if (fileEntries.length === 0) continue;
+    if (fileEntries.length === 0) {
+      skippedFiles.push(normalizeFileKey(rel));
+      continue;
+    }
     byFile.set(normalizeFileKey(rel), fileEntries);
     for (const e of fileEntries) {
       // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
@@ -247,6 +247,7 @@ export async function buildAlRunnerCoverageIndex(
     lineMap: new LineMap(entries, declared, await readRenamedMemberNames(instrumentedDir)),
     multiObjectFiles,
     refusedFiles,
+    skippedFiles,
   };
 }
 
@@ -279,15 +280,16 @@ function fileKeyCandidates(coberturaPath: string): string[] {
  * The objects a reported file declares, matched on the LONGEST path ending first. R298: a refused
  * file is left out of `byFile`, so its hits must STOP at its own ending rather than fall through to
  * a shorter ending another file owns (`src/Foo.Codeunit.al` refused, a root `Foo.Codeunit.al`
- * indexed): that would attribute the refused object's lines to a different object.
+ * indexed): that would attribute the refused object's lines to a different object. R383 r2: the
+ * same holds for EVERY skipped file (`skippedFiles`), a non-admitted multi-object one included.
  */
 function objectsForFile(
   file: string,
   index: AlRunnerCoverageIndex,
-  refused: ReadonlySet<string>,
+  skipped: ReadonlySet<string>,
 ): readonly LineMapEntry[] | undefined {
   for (const cand of fileKeyCandidates(file)) {
-    if (refused.has(cand)) return undefined;
+    if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
     if (hit !== undefined) return hit;
   }
@@ -316,10 +318,10 @@ export function alRunnerCoverageFrom(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
-  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
+  const skipped = new Set(index.skippedFiles);
   for (const ln of lines) {
     if (ln.hits <= 0) continue;
-    const objects = objectsForFile(ln.file, index, refused);
+    const objects = objectsForFile(ln.file, index, skipped);
     // A coverage row for something this bundle does not declare — the test app, Base Application,
     // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
     // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
@@ -368,12 +370,12 @@ export function alRunnerCoverageFromServer(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
-  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
+  const skipped = new Set(index.skippedFiles);
   // `lookup` scans an object's spans, so it is memoised per object line: a large object reports the
   // same few lines many times.
   const named = new Map<string, string | undefined>();
   for (const file of entry.coverage ?? []) {
-    const objects = objectsForFile(file.file, index, refused);
+    const objects = objectsForFile(file.file, index, skipped);
     if (objects === undefined) continue;
     for (const st of file.statements ?? []) {
       // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was

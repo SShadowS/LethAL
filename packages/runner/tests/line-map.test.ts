@@ -9,6 +9,7 @@ import {
   LineMap,
   buildLineMap,
   fileLineMapEntries,
+  fileObjectCount,
   lineMapFromSources,
   objectIdentityOf,
   readRenamedMemberNames,
@@ -866,6 +867,49 @@ describe("R383: fileLineMapEntries partitions on every top-level object", () => 
       [50120, 1],
       [50121, 4],
     ]);
+  });
+
+  // R383 r2: `#pragma` is the only non-declaration kind at top level in every measured corpus
+  // (166 in BaseApp). Before R383 it never moved a base; it must not now, or every line of a
+  // BaseApp object under a leading pragma would be one off on bcdev.
+  test("a leading #pragma line moves no base, as before R383", () => {
+    const src = `#pragma warning disable AA0005\n${AFTER}\n#pragma warning restore AA0005\n`;
+    const root = wrapRoot(parseAL(src));
+    expect(root.namedChildren.map((n) => n.rawKind)).toEqual([
+      "pragma",
+      "codeunit_declaration",
+      "pragma",
+    ]);
+    const entries = fileLineMapEntries(root, objectIdentityOf);
+    expect(entries.map((e) => [e.objectId, e.baseLine])).toEqual([[50121, 1]]);
+    expect(fileObjectCount(root)).toBe(1);
+  });
+});
+
+describe("R383 r2: fileObjectCount counts objects of every kind", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("an enum, an interface or a permission set before a codeunit makes two objects", () => {
+    for (const first of [
+      "enum 50120 E\n{\n    value(0; A) { }\n}\n",
+      'interface "I Probe"\n{\n    procedure Q();\n}\n',
+      "permissionset 50122 PS\n{\n    Assignable = true;\n}\n",
+    ]) {
+      expect(fileObjectCount(wrapRoot(parseAL(`${first}codeunit 50121 C\n{\n}\n`)))).toBe(2);
+    }
+  });
+
+  test("namespace, using and comment lines are not objects", () => {
+    const src = "namespace A.B;\nusing X.Y;\n// c\n/* m */\ncodeunit 50121 C\n{\n}\n";
+    expect(fileObjectCount(wrapRoot(parseAL(src)))).toBe(1);
+  });
+
+  test("the two arms of one wrapped interface are ONE object", () => {
+    const arm = 'interface "I Probe"\n{\n    procedure Q();\n}\n';
+    const src = `#if CLEAN27\n${arm}#else\n${arm}#endif\n`;
+    expect(fileObjectCount(wrapRoot(parseAL(src)))).toBe(1);
   });
 });
 

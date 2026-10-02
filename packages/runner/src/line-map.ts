@@ -555,6 +555,42 @@ export function wrapperHoldsObject(wrapper: ALSyntaxNode): boolean {
 }
 
 /**
+ * R383: is this top-level node an OBJECT for the partition and the multi-object count? Every
+ * declaration kind is (enum, interface, permission set, extension, profile, dotnet, ...), and so is
+ * an `ERROR` or any kind not listed here: fail-closed, since a node holding lines shifts a later
+ * object's base. Not objects: namespace, using and comment lines, `preproc_*` markers, and a
+ * `#pragma` line, which is a compiler directive like a comment. Measured (r2 census): `pragma` is
+ * the ONLY non-declaration kind at top level across fixtures, DC, System Application, Business
+ * Foundation, BaseApp and CDO, and no file there has a top-level `ERROR`. Before R383 a pragma never
+ * moved a base either; counting it would refuse every BaseApp file that opens with one.
+ */
+export function isTopLevelObject(node: ALSyntaxNode): boolean {
+  return (
+    !NOT_AN_OBJECT.has(node.rawKind) &&
+    node.rawKind !== "pragma" &&
+    !node.rawKind.startsWith("preproc_")
+  );
+}
+
+/**
+ * R383: how many objects a file declares, of ANY kind, `#if`-wrapped arms flattened (R298). The
+ * arms of one wrapped object are ONE object, so they are counted by kind plus `object_id`, or the
+ * header line for a kind with no id (an interface). An `ERROR` node is always its own object.
+ */
+export function fileObjectCount(root: ALSyntaxNode): number {
+  const seen = new Set<string>();
+  for (const node of objectDeclarationsOf(root)) {
+    if (!isTopLevelObject(node)) continue;
+    const tag =
+      node.rawKind === "ERROR"
+        ? `@${node.startPosition.row}:${node.startPosition.column}`
+        : (node.childForFieldName("object_id")?.text ?? node.text.split("\n")[0]?.trim() ?? "");
+    seen.add(`${node.rawKind}:${tag.toLowerCase()}`);
+  }
+  return seen.size;
+}
+
+/**
  * Builds the per-object entries for one parsed FILE.
  *
  * `baseLine` is computed as "one past the previous object's last line", with the first object
@@ -600,8 +636,9 @@ export function fileLineMapEntries(
     // R383: EVERY top-level object moves the base, indexed or not. An enum, an interface or a
     // permission set has no coverage identity but still holds lines, so a codeunit after one is
     // numbered from one past its end. Namespace, using and comment lines are not objects: a leading
-    // comment belongs to the object after it, as measured (`LineMapEntry.baseLine`).
-    if (NOT_AN_OBJECT.has(node.rawKind) || node.rawKind.startsWith("preproc_")) continue;
+    // comment belongs to the object after it, as measured (`LineMapEntry.baseLine`). So does a
+    // `#pragma` line, as before R383 (`isTopLevelObject`).
+    if (!isTopLevelObject(node)) continue;
     previousEndLine = node.endPosition.row + 1;
   }
   return entries;
@@ -614,8 +651,7 @@ export function fileLineMapEntries(
  * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
  * first object in this frame but every later object in a mixed source/instrumented frame
  * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
- * files with one indexed object only. Its base is 1 unless an unindexed object (an enum, an
- * interface) comes first, which no fixture holds (R383, checked offline).
+ * files with one object only (of any kind, `fileObjectCount`), so its base is 1.
  *
  * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
  * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
@@ -658,8 +694,8 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
  * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
  * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
- * enum, an interface): coverage stays on for the file's other objects (the multi-object guard
- * counts one object here), al-runner drops the whole file's hits, and without the
+ * enum, an interface): al-runner drops the whole file's hits (and since R383 r2 the multi-object
+ * guard counts the enum too and refuses coverage for the run), and without the
  * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
  * safe direction.
  */
