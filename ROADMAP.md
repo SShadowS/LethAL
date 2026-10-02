@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**108 of 398 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**110 of 403 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -145,7 +145,7 @@ that ordering is the priority.
 - **R349** · al-runner's coverage index is built once per backend and never reset on deploy(), so a multi-batch run maps batch 2's coverage lines through batch 1's layout · [R349.md](docs/roadmap/R349.md) · done (e210b79f)
 - **R351** · A renamed split member reports and orders under the empty procedure name · [R351.md](docs/roadmap/R351.md) · done (33364019..b6ddf1b6)
 - **R353** · No live gate discriminates R349: every al-runner fixture keeps the same verdicts even when batch 2's coverage is read through batch 1's layout · [R353.md](docs/roadmap/R353.md) · done (1c20c306)
-- **R378** · Member-wide analyses (the write-transaction and hang tags) still read arms the build compiles out · [R378.md](docs/roadmap/R378.md) · open, filed 2026-10-01
+- **R378** · Member-wide analyses (the write-transaction and hang tags) still read arms the build compiles out · [R378.md](docs/roadmap/R378.md) · done (a6ce4d40)
 - **R354** · --resume and history can carry verdicts across a coverage-mode change: coverageMode is not in the session fingerprint, and coverage off scores an unreached mutant survived where coverage on scores it no-coverage · [R354.md](docs/roadmap/R354.md) · done (21867221, d5926b5f)
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
 - **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · done (7d6fc37b)
@@ -157,6 +157,9 @@ that ordering is the priority.
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
+- **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · open, filed 2026-10-02
+- **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · open, filed 2026-10-02
+- **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · open, filed 2026-10-02
 
 ## Product gaps a real project hits
 
@@ -276,6 +279,7 @@ that ordering is the priority.
 - **R387** · `lethal run --backend al-runner` defaults to its slowest path (one-shot, recompile per mutant, no coverage), and two of the three fast switches have no CLI or config surface · [R387.md](docs/roadmap/R387.md) · done (b3928cb9, 7a84c70e); coverage default is R394
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 - **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · open, filed 2026-10-01
+- **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · open, filed 2026-10-02
 
 ## Backends and tooling
 
@@ -423,7 +427,7 @@ that ordering is the priority.
 - **R337** · `itest:envtool` writes no gate receipt, so a challenged caller cannot tell its pass from a skip or a refusal · [R337.md](docs/roadmap/R337.md) · done (73327d05)
 - **R338** · al-runner 2.12.0 prints its `[bc] selected BC <build> (<dir>)` line only under AL_RUNNER_VERBOSE=1, so LethAL records no `bcBuild` and itest:alrunner fails · [R338.md](docs/roadmap/R338.md) · done (01230c5c)
 - **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
-- **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · open, filed 2026-09-29
+- **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · closed 2026-10-02: the lanes and gates run a pinned source build of upstream main (c39ad5de) that carries the…
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
 - **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
@@ -443,6 +447,7 @@ that ordering is the priority.
 - **R396** · Measure the R-387 al-runner speed-up on a real app: one timed run with the old defaults and one with the new, verdicts identical per mutant · [R396.md](docs/roadmap/R396.md) · open, filed 2026-10-01
 - **R395** · al-runner's `--server` path runs the whole suite under ONE long deadline, so a hung test becomes an error after at least 10 minutes rather than a per-test timeout, and no live gate checks an al-runner hang · [R395.md](docs/roadmap/R395.md) · open, filed 2026-10-01 (a stated limit)
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
+- **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)
 
 ---
 

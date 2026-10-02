@@ -71,8 +71,8 @@ export {
 } from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
-export type { SemanticContext } from "./semantic/context";
-export { buildSemanticContext } from "./semantic/context";
+export type { NodeArm, SemanticContext } from "./semantic/context";
+export { armOfNode, buildSemanticContext } from "./semantic/context";
 export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
 
 // Operator contract

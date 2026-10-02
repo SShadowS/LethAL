@@ -56,11 +56,12 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type SemanticContext,
+  type SymbolTable,
+  armOfNode,
   declarationMembers,
   findAll,
   resolveReceiverTable,
-  type SemanticContext,
-  type SymbolTable,
   visit,
 } from "@lethal/engine";
 
@@ -102,16 +103,24 @@ function equalsIgnoreCase(a: string, b: string): boolean {
  * The FIRST `key(...)` entry's field names — AL's primary key — or an empty list when the table
  * declares no `keys` section this parser can read.
  *
- * An empty list makes every question below answer "no key field was assigned", which lands on NO
- * tag. That is the wrong direction for a screen, so callers must not reach this with an unresolved
- * table; `insertSkipCanRaise` only calls it for a table it resolved, and a resolved AL table
- * without a primary key does not exist (the compiler requires one).
+ * An empty list (no compiled key, or a first compiled key whose field list cannot be read) proves
+ * nothing: `onInsertAssignsPrimaryKey` answers "not assigned" for it, which would land on NO tag,
+ * the wrong direction for a screen. So `insertSkipCanRaise` checks for an empty list first and
+ * KEEPS the tag (R378). It also calls this only for a table it resolved.
  */
-export function primaryKeyFields(tableNode: ALSyntaxNode): readonly string[] {
+export function primaryKeyFields(
+  tableNode: ALSyntaxNode,
+  isLive: (node: ALSyntaxNode) => boolean = () => true,
+): readonly string[] {
   for (const section of descendantsOfRawKind(tableNode, KEYS_SECTION)) {
     for (const key of descendantsOfRawKind(section, KEY_DECLARATION)) {
+      // R378: the build's primary key is its first COMPILED key; a key in an arm it compiles out
+      // is not the table's key in this build.
+      if (!isLive(key)) continue;
       const list = key.namedChildren.find((c) => c.rawKind === FIELD_LIST);
-      if (list === undefined) continue;
+      // R378 review r1: the FIRST active key is the primary key even when its field list cannot be
+      // read. Reading the next key instead could prove "not assigned" against the wrong key.
+      if (list === undefined) return [];
       return list.namedChildren
         .filter((c) => IDENTIFIER_KINDS.has(c.rawKind))
         .map((c) => stripQuotes(c.text));
@@ -121,13 +130,17 @@ export function primaryKeyFields(tableNode: ALSyntaxNode): readonly string[] {
 }
 
 /** The table's own `OnInsert` trigger, or `null`. Name-matched, case-insensitively. */
-export function onInsertTrigger(tableNode: ALSyntaxNode): ALSyntaxNode | null {
+export function onInsertTrigger(
+  tableNode: ALSyntaxNode,
+  isLive: (node: ALSyntaxNode) => boolean = () => true,
+): ALSyntaxNode | null {
   const named = (n: ALSyntaxNode): string | null => {
     const id = n.namedChildren.find((c) => c.rawKind === "identifier");
     return id === null || id === undefined ? null : id.text;
   };
   for (const member of declarationMembers(tableNode)) {
     if (member.kind !== ALNodeKind.trigger) continue;
+    if (!isLive(member)) continue;
     const name = named(member);
     if (name !== null && equalsIgnoreCase(name, "OnInsert")) return member;
   }
@@ -162,19 +175,25 @@ function referencesOwnField(node: ALSyntaxNode, field: string): boolean {
  * assigns it through the field's own `OnValidate`. Any other route (a helper procedure, a No.
  * Series call) is out of scope — see this module's limit 1.
  */
-export function onInsertAssignsPrimaryKey(tableNode: ALSyntaxNode): boolean {
-  const trigger = onInsertTrigger(tableNode);
+export function onInsertAssignsPrimaryKey(
+  tableNode: ALSyntaxNode,
+  isLive: (node: ALSyntaxNode) => boolean = () => true,
+): boolean {
+  const trigger = onInsertTrigger(tableNode, isLive);
   if (trigger === null) return false;
-  const key = primaryKeyFields(tableNode);
+  const key = primaryKeyFields(tableNode, isLive);
   if (key.length === 0) return false;
 
   for (const assignment of findAll(trigger, ALNodeKind.assignment_statement)) {
+    // R378: an assignment in an arm the build compiles out never runs.
+    if (!isLive(assignment)) continue;
     const target = assignment.namedChildren[0];
     if (target === undefined) continue;
     if (key.some((f) => referencesOwnField(target, f))) return true;
   }
 
   for (const call of descendantsOfRawKind(trigger, CALL_EXPRESSION)) {
+    if (!isLive(call)) continue;
     const callee = call.namedChildren[0];
     if (callee === undefined) continue;
     const calleeName =
@@ -206,5 +225,14 @@ export function insertSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   if (symbols === undefined) return true;
   const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
   if (table === null) return true;
-  return onInsertAssignsPrimaryKey(table.node);
+  // R378: proof needs the table's file to be decided. An undecided file KEEPS the tag: for a screen
+  // the unsafe direction is under-tagging, and an undecided arm could hold the key assignment.
+  if (armOfNode(ctx, table.node) === "undecided") return true;
+  const isLive = (n: ALSyntaxNode): boolean => armOfNode(ctx, n) === "active";
+  // No compiled `OnInsert`: `Insert(false)` skips nothing, so there is no mechanism to tag.
+  if (onInsertTrigger(table.node, isLive) === null) return false;
+  // R378: "not assigned" is proven only against a readable, non-empty primary key. No compiled key,
+  // or one whose field list this parser cannot read, proves nothing, so the tag stays.
+  if (primaryKeyFields(table.node, isLive).length === 0) return true;
+  return onInsertAssignsPrimaryKey(table.node, isLive);
 }

@@ -6,6 +6,7 @@ import { tier2Operators } from "@lethal/builtin-tier2";
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type ArmEvaluation,
   type FileRefusalFields,
   FileRefusedError,
   type MutationOperator,
@@ -814,12 +815,21 @@ export async function generateMutationSet(
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );
-  const ctx = buildSemanticContext(parsed.map(({ path, root }) => ({ path, root })));
   const buildSymbols = await effectiveBuildSymbols(
     projectDir,
     options.preprocessorSymbols ?? [],
     snapshot,
     options.backend ?? { kind: "bcdev" },
+  );
+  // R378: every parsed file's arms, evaluated ONCE, before the context, so analyses that read
+  // another file (a receiver table's trigger) see that file's arms too. The R214 loop below reads
+  // the same map.
+  const armsByRoot = new Map<ALSyntaxNode, ArmEvaluation>(
+    parsed.map(({ source, root }) => [root, evaluateArms(root, source, buildSymbols)]),
+  );
+  const ctx = buildSemanticContext(
+    parsed.map(({ path, root }) => ({ path, root })),
+    armsByRoot,
   );
   const preprocExcluded: PreprocExcludedFile[] = [];
   const symbolsDetail = `symbols: ${buildSymbols.length > 0 ? buildSymbols.join(", ") : "none"}`;
@@ -865,7 +875,8 @@ export async function generateMutationSet(
     const spanIndex = buildSpanIndex(root);
     // R214: sites in an arm this build compiles out are not generated, and a file whose directives
     // cannot be evaluated exactly as alc does is not mutated at all: no known-uncertain arm is scored.
-    const arms = evaluateArms(root, source, buildSymbols);
+    const arms = armsByRoot.get(root);
+    if (arms === undefined) throw new Error(`R378: no arm evaluation for ${rel}`);
     const inactive = arms.kind === "decided" ? arms.inactive : [];
     let compiledOutHere = 0;
     const specs: MutationSpec[] = [];

@@ -338,7 +338,7 @@ function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly Muta
       // Tagged only where the trigger body PROVABLY contains a raise-capable statement. Unlike the
       // skip direction's blanket tag, this one is emitted from the trigger itself, which is
       // available precisely because the site test refused everything it could not resolve.
-      ...(forcedTriggerCanRaise(trigger) ? { platformKillMechanism: RUN_TRIGGER_FORCED } : {}),
+      ...(forcedTriggerCanRaise(trigger, ctx) ? { platformKillMechanism: RUN_TRIGGER_FORCED } : {}),
     },
   ];
 }
