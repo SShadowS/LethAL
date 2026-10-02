@@ -992,7 +992,8 @@ codeunit 50102 ProbeC
   });
 
   test("an unindexed object's lines resolve to nothing, and the object after it is based past it", () => {
-    const src = `enum 50120 E\n{\n    value(0; A) { }\n}\ncodeunit 50121 C\n{\n    procedure P()\n    begin\n    end;\n}\n`;
+    const src =
+      "enum 50120 E\n{\n    value(0; A) { }\n}\ncodeunit 50121 C\n{\n    procedure P()\n    begin\n    end;\n}\n";
     const e = entriesOf(src);
     expect([1, 2, 3, 4].map((n) => resolveFileLine(e, n))).toEqual([
       undefined,
@@ -1008,7 +1009,8 @@ codeunit 50102 ProbeC
   });
 
   test("a refused object's lines resolve to nothing", () => {
-    const src = `#if not CLEAN27\ncodeunit 50105 W\n{\n    procedure P()\n    begin\n    end;\n}\n#endif\n`;
+    const src =
+      "#if not CLEAN27\ncodeunit 50105 W\n{\n    procedure P()\n    begin\n    end;\n}\n#endif\n";
     const e = entriesOf(src);
     expect(e.every((x) => x.refused !== undefined)).toBe(true);
     expect([2, 4, 5].map((n) => resolveFileLine(e, n))).toEqual([undefined, undefined, undefined]);
