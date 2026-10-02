@@ -227,6 +227,8 @@ export function insertSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   // the unsafe direction is under-tagging, and an undecided arm could hold the key assignment.
   if (armOfNode(ctx, table.node) === "undecided") return true;
   const isLive = (n: ALSyntaxNode): boolean => armOfNode(ctx, n) === "active";
+  // No compiled `OnInsert`: `Insert(false)` skips nothing, so there is no mechanism to tag.
+  if (onInsertTrigger(table.node, isLive) === null) return false;
   // R378: "not assigned" is proven only against a readable, non-empty primary key. No compiled key,
   // or one whose field list this parser cannot read, proves nothing, so the tag stays.
   if (primaryKeyFields(table.node, isLive).length === 0) return true;

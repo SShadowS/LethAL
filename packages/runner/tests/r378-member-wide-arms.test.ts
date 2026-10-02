@@ -146,6 +146,17 @@ const TABLE_N = `table 50304 "N Tab"
 }
 `;
 
+// No keys section and no OnInsert (BaseApp's "Job Queue Notified Admin" shape, measured): with no
+// compiled OnInsert there is nothing for Insert(false) to skip, so the unreadable key must not tag.
+const TABLE_E = `table 50306 "E Tab"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+    }
+}
+`;
+
 // A trigger inside an object-level #if is not a direct member, so `findTableTrigger` never finds
 // it in either build: no forward mutant either way (the plan's A3-gone pin).
 const TABLE_D = `table 50305 "D Tab"
@@ -236,6 +247,13 @@ const OPS = `codeunit 50310 "R378 Ops"
         NTab.Insert(true);
     end;
 
+    procedure InsE()
+    var
+        ETab: Record "E Tab";
+    begin
+        ETab.Insert(true);
+    end;
+
     procedure ModD()
     var
         DTab: Record "D Tab";
@@ -252,6 +270,7 @@ const FILES: Record<string, string> = {
   "src/CTab.Table.al": TABLE_C,
   "src/NTab.Table.al": TABLE_N,
   "src/DTab.Table.al": TABLE_D,
+  "src/ETab.Table.al": TABLE_E,
   "src/Ops.Codeunit.al": OPS,
 };
 
@@ -326,6 +345,11 @@ describe("R378: tags read only the arms the build compiles", () => {
   test("A2-unreadable-key: a key with no readable field list keeps the skipped-insert tag", () => {
     expect(site("off", "NTab.Insert(true)", SWAP_FLAG).plat).toBe("run-trigger-skipped-insert");
     expect(site("on", "NTab.Insert(true)", SWAP_FLAG).plat).toBe("run-trigger-skipped-insert");
+  });
+
+  test("A2-no-trigger: no keys section and no OnInsert gives no skipped-insert tag (as on master)", () => {
+    expect(site("off", "ETab.Insert(true)", SWAP_FLAG).plat).toBe("-");
+    expect(site("on", "ETab.Insert(true)", SWAP_FLAG).plat).toBe("-");
   });
 
   test("A3-gone pin: a trigger inside an object-level #if yields no forward mutant in either build", () => {
