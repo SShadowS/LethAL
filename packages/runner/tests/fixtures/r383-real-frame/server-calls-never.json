@@ -1,0 +1,15 @@
+{
+  "_note": "R383 r3 positive control: al-runner v2.12.0-main.c39ad5de --server (runTests with coverage and perTestCoverage), the baseline run's per-test coverage of CallsNever (`if MultiA.Never(1) <> 8 then Error(...)`) against the SAME instrumented sandbox-multiobject bundle (MultiPair.Codeunit.al beside this file, byte for byte), from a copy of sandbox-multiobject-tests with that one test added, placed beside fixtures/sandbox-multiobject. Trimmed to the MultiPair file and to the fields LethAL reads; the statements are verbatim. The file was an absolute path to the SOURCE fixture, normalised here to the repo-relative path.",
+  "test": "Codeunit79850.CallsNever",
+  "coverage": [
+    {
+      "file": "fixtures/sandbox-multiobject/src/MultiPair.Codeunit.al",
+      "statements": [
+        { "id": 0, "scope": "Never", "line": 8, "hits": 1 },
+        { "id": 4, "scope": "Never", "line": 10, "hits": 1 },
+        { "id": 9, "scope": "Never", "line": 14, "hits": 1 },
+        { "id": 14, "scope": "Never", "line": 20, "hits": 1 }
+      ]
+    }
+  ]
+}

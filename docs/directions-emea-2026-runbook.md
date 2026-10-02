@@ -231,9 +231,11 @@ dated before the run.
 
 **"Which backend should I use?"**
 `bcdev`. `al-runner` is offline and NOT authoritative: its coverage is CONDITIONAL. LethAL reads
-al-runner's own `--coverage` (R220), but one file declaring more than one object disables it for
-the whole run (upstream #3713), and then an unreached mutant comes back survived rather than
-no-coverage. That is one measured route to a false survivor; no measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). A startup canary measures the actual binary each session. (The older claim
+al-runner's own `--coverage` (R220), but one file declaring more than one object, or holding a
+`#if`-wrapped object (R298, pending R300), disables it for the whole run, and then an unreached
+mutant comes back survived rather than no-coverage. (The multi-object reason is no longer upstream
+#3713, which is fixed: on v2.12.0-main.c39ad5de al-runner reports later objects' lines in the wrong
+frame, R383.) That is one measured route to a false survivor; no measurement has shown a false kill from this backend, but none rules one out (a pinned platform-app directory holding a mismatched build is untested, R235). A startup canary measures the actual binary each session. (The older claim
 that its `asserterror` never fails a test was fixed upstream in v2; the canary confirms it.)
 
 **"You planted that bug."**

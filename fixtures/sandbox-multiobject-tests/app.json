@@ -1,0 +1,35 @@
+{
+  "id": "a5f5fc2b-b63f-41cd-8f3c-7d1fbe34a01f",
+  "name": "LethAL Sandbox MultiObject Tests",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R383 fixture: tests for the multi-object target.",
+  "description": "Reaches only Multi B's Reached and the control's Double; Multi A and Multi B's Unreached are never called. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [
+    {
+      "id": "6c779974-6ae1-42b9-9842-ca25979bae35",
+      "name": "LethAL Sandbox MultiObject",
+      "publisher": "LethAL",
+      "version": "1.0.0.0"
+    }
+  ],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79850,
+      "to": 79899
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

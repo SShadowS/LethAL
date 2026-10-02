@@ -12,51 +12,52 @@
  * reports that file at `line-rate 0.0000`, so the two backends already agree; only the wiring was
  * missing.
  *
- * ## The multi-object defect this module refuses to paper over
+ * ## Multi-object files: still refused, for a different reason than before
  *
- * MEASURED against al-runner 2.11.0, and it is the reason for `multiObjectFiles` below. Given ONE
- * file holding two codeunits and a test that calls only the SECOND:
+ * al-runner 2.11.0 lost every object after a file's first (upstream #3713). That is FIXED on
+ * v2.12.0: the second object's lines are reported now, on both transports. But measured on the
+ * pinned build v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they are reported in the WRONG
+ * FRAME. al-runner compiles LethAL's instrumented bundle, finds the source project with the same
+ * app id, and labels coverage with the SOURCE path. For the first object in a file the lines are
+ * right. For every object after it, a line is reported as (the previous object's closing line in
+ * the SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
+ * instrumented lines 33/35/40/45/50 of `Multi B` come back as 16/18/23/28/33, which lie inside
+ * `Multi A`. Nothing in the report says which frame a line is in, so LethAL cannot undo it.
  *
- * ```text
- *   two objects in Two.Codeunit.al   -> class "Two.Codeunit", line 5 hits 0.  The executed line
- *                                       in the second object is reported NOWHERE.
- *   the same two objects, split      -> First.Codeunit  line 5 hits 0   (correct, never called)
- *   into one file each                  Second.Codeunit line 5 hits 1   (correct, called)
- * ```
+ * So a file declaring more than one object still disables coverage for the WHOLE run
+ * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
+ * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
+ * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
+ * gated to table triggers. The rule (`refusedAsMultiObject`, R383 r2 ruling): a file is refused
+ * unless every object after its first is code-free (a permission set, permission set extension,
+ * enum, interface or entitlement). So an enum then a codeunit is refused, the codeunit being a
+ * later object with code; a codeunit then permission sets is not. Prevalence, measured (R383.md):
+ * on the gate fixtures only `sandbox-multiobject` (which exists to) and `sandbox-coverage-probe`
+ * trip this, and no file on DC, System Application, Business Foundation, BaseApp or CDO does.
  *
- * So al-runner's Cobertura keys a class per FILE and loses every object after the first. Trusting
- * it on such a file would produce a mutant with no coverage entry, and `coverageFilter`'s
- * FALLBACK 2 (every green test) is gated to TABLE TRIGGERS, so an ordinary mutant with no entry is
- * reported `no-coverage`. That is a FALSE no-coverage: strictly worse than the honest
- * over-reporting this replaces, because it hides the mutant instead of running it.
- *
- * Hence the rule: a file declaring more than one object disables coverage for the WHOLE run, which
- * falls back to exactly today's behaviour. Coarse on purpose. The alternative, dropping just that
- * file's objects, produces the false `no-coverage` above for those objects; there is no "unknown"
- * verdict to fall back to per-object. Prevalence is low enough for this to cost little: measured,
- * 0 of 31 files in `fixtures/sandbox-data`, 0 of 2 in `fixtures/sandbox-app`, and 1 of 553 in
- * Continia Document Output's Cloud app.
- *
- * That restriction also settles a question this module would otherwise have to answer. BC numbers
- * coverage lines OBJECT-relative and objects PARTITION a file, which is why `line-map.ts` computes
- * a base line per object. Cobertura's `<line number>` is file-relative. For a file holding exactly
- * one object the two frames COINCIDE (the object's base line is 1), so restricting to
- * single-object files means no frame conversion is needed and none is done. If the upstream defect
- * is ever fixed and multi-object files are admitted, the base line must be applied here.
+ * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
+ * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
+ * object's base line converts it to the object-relative frame BC and the line map use. In a
+ * single-object file the base is 1, so this is exactly the old behaviour.
+ * `buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true })` turns the admission on, and
+ * only tests use it today.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { initParser, objectDeclarationsOf, parseAL } from "@lethal/engine";
-import { type ALSyntaxNode, wrapRoot } from "@lethal/engine";
+import { initParser, parseAL } from "@lethal/engine";
+import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap } from "./backend";
 import {
   LineMap,
+  type LineMapEntry,
   fileHoldsWrappedObject,
   fileLineMapEntries,
   objectIdentityOf,
   readRenamedMemberNames,
+  refusedAsMultiObject,
   refusedObjectsOfFile,
+  resolveFileLine,
 } from "./line-map";
 
 /** One `<line>` of one `<class>`, as al-runner writes it. */
@@ -95,34 +96,21 @@ export function parseCobertura(xml: string): readonly CoberturaLine[] {
 }
 
 /**
- * Every object a file declares, in source order, `#if`-wrapped ones included (R298). The arms of
- * one wrapped object are ONE object: each compile builds exactly one arm, so a two-arm wrapper
- * declaring the same `(type, id)` twice must not trip the multi-object guard. Counted by
- * `(type, id)`, never by node.
- */
-function objectsOf(root: ALSyntaxNode): Array<{ objectType: string; objectId: number }> {
-  const found: Array<{ objectType: string; objectId: number }> = [];
-  const seen = new Set<string>();
-  for (const decl of objectDeclarationsOf(root)) {
-    const id = objectIdentityOf(decl);
-    if (id === null) continue;
-    const key = `${id.objectType}:${id.objectId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    found.push(id);
-  }
-  return found;
-}
-
-/**
  * What one instrumented bundle can tell us about its own files: which object each declares, and a
  * line map to place a covered line inside a procedure.
  */
 export interface AlRunnerCoverageIndex {
-  /** Lower-cased absolute-ish path suffix -> the single object that file declares. */
-  readonly byFile: ReadonlyMap<string, { objectType: string; objectId: number }>;
+  /**
+   * Lower-cased absolute-ish path suffix -> every indexed object that file declares, in file order,
+   * with the base line each is numbered from (R383: a file may hold several).
+   */
+  readonly byFile: ReadonlyMap<string, readonly LineMapEntry[]>;
   readonly lineMap: LineMap;
-  /** Project-relative paths declaring more than one object. Non-empty disables coverage. */
+  /**
+   * Project-relative paths refused as multi-object (`refusedAsMultiObject`: an object with code
+   * after the file's first). Non-empty disables coverage, and such a
+   * file is not indexed unless `admitMultiObjectFiles` was passed (R383).
+   */
   readonly multiObjectFiles: readonly string[];
   /**
    * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object. Refused WHOLE,
@@ -139,6 +127,13 @@ export interface AlRunnerCoverageIndex {
    * Direction B's exemption.
    */
   readonly exempt: ReadonlySet<string>;
+  /**
+   * Every `.al` path scanned but NOT in `byFile` (lower-cased keys): refused, multi-object and not
+   * admitted, or holding no indexed object. A coverage row stops at its own path here instead of
+   * falling through to a shorter ending another file owns (R298, R383 r2). An admitted
+   * multi-object file is in `byFile`, so it is never here.
+   */
+  readonly skippedFiles: readonly string[];
 }
 
 /**
@@ -152,8 +147,9 @@ export interface AlRunnerCoverageIndex {
  * `no-coverage`, which is the worst of the three possible answers.
  *
  * Scanning the SOURCE is sound because instrumentation is one output file per input file, so a
- * file's object COUNT is the same on both sides. See this module's header for why a multi-object
- * file disqualifies the whole run rather than just its own objects.
+ * file's objects are the same on both sides. See this module's header for why a multi-object file
+ * disqualifies the whole run rather than just its own objects (R383: al-runner's frame for every
+ * object after a file's first, measured on v2.12.0-main.c39ad5de).
  *
  * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
  * (`fileHoldsWrappedObject`), so the guard and the index cannot drift. Such a file's objects are
@@ -178,7 +174,9 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
   for (const rel of rels) {
     const root = wrapRoot(parseAL(await readFile(join(projectDir, rel), "utf8")));
     if (fileHoldsWrappedObject(root)) wrapped.push(normalizeSlashes(rel));
-    if (objectsOf(root).length > 1) multi.push(normalizeSlashes(rel));
+    // R383 r2: the same predicate as the index skip below. An enum then a codeunit puts the
+    // codeunit second, and al-runner reports a later object in the wrong frame whatever the first.
+    if (refusedAsMultiObject(root)) multi.push(normalizeSlashes(rel));
   }
   return {
     supported: multi.length === 0,
@@ -195,9 +193,14 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
  * and resolution is keyed by the FILE PATH Cobertura reports rather than by an opaque id that
  * could collide with a copied dependency source. That is the R29 hazard `line-map.ts` guards
  * against on the hub path, and it does not arise when the coverage row names the file.
+ *
+ * A multi-object file is NAMED and, by default, not indexed (R383, this module's header).
+ * `admitMultiObjectFiles` indexes every object of it, resolved by position; only tests pass it
+ * until upstream reports every object in the instrumented frame.
  */
 export async function buildAlRunnerCoverageIndex(
   instrumentedDir: string,
+  options: { readonly admitMultiObjectFiles?: boolean } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
   const rels = (await readdir(instrumentedDir, { recursive: true }))
@@ -205,10 +208,11 @@ export async function buildAlRunnerCoverageIndex(
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .sort();
 
-  const byFile = new Map<string, { objectType: string; objectId: number }>();
+  const byFile = new Map<string, readonly LineMapEntry[]>();
   const multiObjectFiles: string[] = [];
   const refusedFiles: string[] = [];
-  const entries = [];
+  const skippedFiles: string[] = [];
+  const entries: LineMapEntry[] = [];
   const declared = new Set<string>();
   const exempt = new Set<string>();
 
@@ -218,29 +222,38 @@ export async function buildAlRunnerCoverageIndex(
     if (fileHoldsWrappedObject(root)) {
       const file = normalizeSlashes(rel);
       refusedFiles.push(file);
+      skippedFiles.push(normalizeFileKey(rel));
       for (const [key, reason] of refusedObjectsOfFile(root, file)) {
         exempt.add(key);
         console.warn(`[lethal] ${reason}`);
       }
       continue;
     }
-    const objects = objectsOf(root);
-    if (objects.length > 1) {
+    const fileEntries = fileLineMapEntries(root, objectIdentityOf);
+    if (refusedAsMultiObject(root)) {
       // Forward slashes so the warning reads the same on every platform: `readdir` hands back
       // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
       multiObjectFiles.push(normalizeSlashes(rel));
-      for (const o of objects) exempt.add(`${o.objectType.toLowerCase()}:${o.objectId}`);
+      for (const e of fileEntries) exempt.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
+      // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
+      if (options.admitMultiObjectFiles !== true) {
+        skippedFiles.push(normalizeFileKey(rel));
+        continue;
+      }
+    }
+    if (fileEntries.length === 0) {
+      skippedFiles.push(normalizeFileKey(rel));
       continue;
     }
-    const only = objects[0];
-    if (only === undefined) continue;
-    byFile.set(normalizeFileKey(rel), only);
-    // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
-    // `LineMap` constructor skips an object it thinks is undeclared, and `lookup` then returns
-    // undefined for every line of it, so every entry silently loses its `procedure` and coverage
-    // degrades to object-level without a word. Caught by the tests below asserting a NAME.
-    declared.add(`${only.objectType.toLowerCase()}:${only.objectId}`);
-    entries.push(...fileLineMapEntries(root, objectIdentityOf));
+    byFile.set(normalizeFileKey(rel), fileEntries);
+    for (const e of fileEntries) {
+      // LOWER-CASED to match `line-map.ts`'s own `keyOf`. Getting this wrong does not throw: the
+      // `LineMap` constructor skips an object it thinks is undeclared, and `lookup` then returns
+      // undefined for every line of it, so every entry silently loses its `procedure` and coverage
+      // degrades to object-level without a word. Caught by the tests below asserting a NAME.
+      declared.add(`${e.objectType.toLowerCase()}:${e.objectId}`);
+    }
+    entries.push(...fileEntries);
   }
 
   return {
@@ -250,6 +263,7 @@ export async function buildAlRunnerCoverageIndex(
     refusedFiles,
     declared,
     exempt,
+    skippedFiles,
   };
 }
 
@@ -279,18 +293,19 @@ function fileKeyCandidates(coberturaPath: string): string[] {
 }
 
 /**
- * The object a reported file belongs to, matched on the LONGEST path ending first. R298: a refused
+ * The objects a reported file declares, matched on the LONGEST path ending first. R298: a refused
  * file is left out of `byFile`, so its hits must STOP at its own ending rather than fall through to
  * a shorter ending another file owns (`src/Foo.Codeunit.al` refused, a root `Foo.Codeunit.al`
- * indexed): that would attribute the refused object's lines to a different object.
+ * indexed): that would attribute the refused object's lines to a different object. R383 r2: the
+ * same holds for EVERY skipped file (`skippedFiles`), a non-admitted multi-object one included.
  */
-function objectForFile(
+function objectsForFile(
   file: string,
   index: AlRunnerCoverageIndex,
-  refused: ReadonlySet<string>,
-): { objectType: string; objectId: number } | undefined {
+  skipped: ReadonlySet<string>,
+): readonly LineMapEntry[] | undefined {
   for (const cand of fileKeyCandidates(file)) {
-    if (refused.has(cand)) return undefined;
+    if (skipped.has(cand)) return undefined;
     const hit = index.byFile.get(cand);
     if (hit !== undefined) return hit;
   }
@@ -308,6 +323,10 @@ function objectForFile(
  * omission is load-bearing rather than lossy: `CoverageEntry` documents an absent `procedure` as
  * object-level evidence, which feeds `byObject` and lets a trigger mutant's FALLBACK 1 answer,
  * whereas a blank-but-present one would collide with the key a trigger mutant builds.
+ *
+ * R383: the `<line number>` is FILE-relative (measured on v2.12.0), so it is resolved by position
+ * (`resolveFileLine`) to an object and an OBJECT-relative line, and the entry carries that object
+ * line, the frame the line map and BC use. A line in no indexed object gives no entry at all.
  */
 export function alRunnerCoverageFrom(
   lines: readonly CoberturaLine[],
@@ -315,24 +334,26 @@ export function alRunnerCoverageFrom(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
-  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
+  const skipped = new Set(index.skippedFiles);
   for (const ln of lines) {
     if (ln.hits <= 0) continue;
-    const object = objectForFile(ln.file, index, refused);
+    const objects = objectsForFile(ln.file, index, skipped);
     // A coverage row for something this bundle does not declare — the test app, Base Application,
     // a dependency — is skipped rather than an error, the same rule `LineMap` states for the
     // hub path. Cobertura serialises every file it instrumented, and most are legitimately not
     // ours.
-    if (object === undefined) continue;
-    const procedure = index.lineMap.lookup(object.objectType, object.objectId, ln.line);
-    const key = `${object.objectType}:${object.objectId}:${procedure ?? ""}:${ln.line}`;
+    if (objects === undefined) continue;
+    const at = resolveFileLine(objects, ln.line);
+    if (at === undefined) continue;
+    const procedure = index.lineMap.lookup(at.objectType, at.objectId, at.objectLine);
+    const key = `${at.objectType}:${at.objectId}:${procedure ?? ""}:${at.objectLine}`;
     if (seen.has(key)) continue;
     seen.add(key);
     entries.push({
-      objectType: object.objectType,
-      objectId: object.objectId,
+      objectType: at.objectType,
+      objectId: at.objectId,
       ...(procedure !== undefined ? { procedure } : {}),
-      line: ln.line,
+      line: at.objectLine,
     });
   }
   return { granularity: "line", entries };
@@ -341,18 +362,23 @@ export function alRunnerCoverageFrom(
 /**
  * The same mapping, from `--server`'s `perTestCoverage` instead of Cobertura.
  *
- * SIMPLER than the Cobertura path in the one way that matters: each statement carries `scope`, the
- * PROCEDURE the server itself attributes it to, so nothing has to place a line inside a member.
- * The Cobertura path resolves that through `line-map.ts`, which is correct but is a second opinion
- * about the same source; here the producer answers directly. Except inside a renamed split member
- * (R318), where the producer's answer is the compiled arm's name and the line map's is the name the
- * manifest looks up; see `LineMap.renamedMemberAt` for when the line map wins.
+ * Each statement carries `scope`, the procedure the server itself attributes it to, and a
+ * FILE-relative `line` (measured on v2.12.0, R383). The OBJECT always comes from the line's
+ * position (`resolveFileLine`), never from `scope`, so two same-named procedures in two objects of
+ * one file cannot be confused. The PROCEDURE is chosen in this order (R383 plan r3, Design 3), and
+ * no statement with hits is dropped by it:
  *
- * The multi-object restriction still applies and is NOT relaxed here. Measured on 2.11.0, the
- * server loses a multi-object file exactly as the Cobertura writer does -- given two codeunits in
- * one file and a test calling the second, the file is absent from `perTestCoverage` entirely -- so
- * the defect is in the coverage machinery rather than in either writer. Reported upstream as
- * StefanMaron/BusinessCentral.AL.Runner#3713.
+ * 1. R318: inside a renamed split member, `renamedMemberAt` decides alone. An own arm name is
+ *    re-keyed to the member's coverage name (the server names the COMPILED arm: `r3` build `[]`
+ *    `Choose`, `r4` `Beta`); any other scope is kept, as some other member's statement (review M2).
+ * 2. A line `lookup` leaves unnamed on purpose (a trigger, a line two declarations share, R318's
+ *    `r10` `OtherOnly`): `scope` is kept, exactly as before, so trigger coverage keeps its
+ *    object-level evidence.
+ * 3. Otherwise `lookup` names a procedure. A matching `scope` (case-insensitive) agrees; a
+ *    different one is overruled by POSITION, with one warning naming the file, line, both names.
+ *
+ * In a single-object file steps 1 and 2 give the pre-R383 output exactly; step 3 differs only where
+ * the server and the span disagree, which no measured shape does.
  */
 export function alRunnerCoverageFromServer(
   entry: ServerPerTestCoverage,
@@ -360,37 +386,66 @@ export function alRunnerCoverageFromServer(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
-  const refused = new Set(index.refusedFiles.map(normalizeFileKey));
+  const skipped = new Set(index.skippedFiles);
+  // `lookup` scans an object's spans, so it is memoised per object line: a large object reports the
+  // same few lines many times.
+  const named = new Map<string, string | undefined>();
   for (const file of entry.coverage ?? []) {
-    const object = objectForFile(file.file, index, refused);
-    if (object === undefined) continue;
+    const objects = objectsForFile(file.file, index, skipped);
+    if (objects === undefined) continue;
     for (const st of file.statements ?? []) {
       // Same rule as the Cobertura path: a reported-but-unhit statement is evidence the file was
       // COMPILED, never that this test reached it. Treating it as coverage is [[R63]]'s
       // manufactured coverage.
       if ((st.hits ?? 0) <= 0) continue;
-      // R318: a statement inside a renamed split member takes the member's coverage name, by
-      // POSITION, instead of `st.scope`, when the line is the member's alone and `st.scope` is one
-      // of its own arm names (`LineMap.renamedMemberAt`). The server names the COMPILED arm, which
-      // the collision rule may have dropped (`r3`, build `[]`: `Choose`) and which in another build
-      // can be another declaration's name (`r4`: `Beta`). A line two declarations share, or a scope
-      // the member does not declare, keeps `st.scope`: that may be the other member's statement
-      // (`r10`: `OtherOnly`, line 12, scope `Other`). Every other statement keeps `st.scope` exactly.
-      const renamed =
-        st.line === undefined
-          ? undefined
-          : index.lineMap.renamedMemberAt(object.objectType, object.objectId, st.line, st.scope);
-      const procedure = renamed ?? st.scope;
-      const key = `${object.objectType}:${object.objectId}:${procedure ?? ""}:${st.line ?? -1}`;
+      const at = placeStatement(objects, st.line);
+      if (at === undefined) continue;
+      let procedure = st.scope;
+      if (at.objectLine !== undefined) {
+        const { objectType, objectId, objectLine } = at;
+        const renamed = index.lineMap.renamedMemberAt(objectType, objectId, objectLine, st.scope);
+        if (renamed !== undefined) {
+          procedure = renamed;
+        } else if (!index.lineMap.inRenamedSpan(objectType, objectId, objectLine)) {
+          const memo = `${objectType}:${objectId}:${objectLine}`;
+          if (!named.has(memo)) {
+            named.set(memo, index.lineMap.lookup(objectType, objectId, objectLine));
+          }
+          const byPosition = named.get(memo);
+          if (byPosition !== undefined) {
+            if (st.scope?.toLowerCase() !== byPosition.toLowerCase()) {
+              console.warn(
+                `[lethal] al-runner --server named the covered statement at ${file.file}:${st.line} "${st.scope ?? ""}", but that line is inside "${byPosition}"; the position wins (R383).`,
+              );
+            }
+            procedure = byPosition;
+          }
+        }
+      }
+      const key = `${at.objectType}:${at.objectId}:${procedure ?? ""}:${at.objectLine ?? -1}`;
       if (seen.has(key)) continue;
       seen.add(key);
       entries.push({
-        objectType: object.objectType,
-        objectId: object.objectId,
+        objectType: at.objectType,
+        objectId: at.objectId,
         ...(procedure !== undefined && procedure !== "" ? { procedure } : {}),
-        ...(st.line !== undefined ? { line: st.line } : {}),
+        ...(at.objectLine !== undefined ? { line: at.objectLine } : {}),
       });
     }
   }
   return { granularity: "line", entries };
+}
+
+/**
+ * A `--server` statement's object, by its FILE line. A statement with no line can be placed only
+ * in a file holding one indexed object, which is the pre-R383 behaviour; in a multi-object file it
+ * has no position, so it is skipped rather than guessed.
+ */
+function placeStatement(
+  objects: readonly LineMapEntry[],
+  line: number | undefined,
+): { objectType: string; objectId: number; objectLine?: number } | undefined {
+  if (line !== undefined) return resolveFileLine(objects, line);
+  const only = objects.length === 1 ? objects[0] : undefined;
+  return only === undefined ? undefined : { objectType: only.objectType, objectId: only.objectId };
 }

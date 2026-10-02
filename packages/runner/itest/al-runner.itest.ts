@@ -43,7 +43,7 @@ import { fileURLToPath } from "node:url";
 import { AlRunnerBackend, defaultServerSpawn } from "../src/al-runner-backend";
 import { alRunnerCoverageSupport } from "../src/al-runner-coverage";
 import type { ExecutionBackend } from "../src/backend";
-import { buildBackend } from "../src/cli";
+import { buildBackend, withAlRunnerCoverageGuard } from "../src/cli";
 import { formatFailure } from "../src/format-failure";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { defaultSpawn } from "../src/publisher";
@@ -78,6 +78,15 @@ import {
   assertLayoutRun,
   printLayoutTable,
 } from "./layout-fixture";
+import {
+  MULTIOBJECT_PROJECT_DIR,
+  MULTIOBJECT_SELECTOR_IDS,
+  MULTIOBJECT_TEST_DIR,
+  assertMultiObjectLegsEqual,
+  assertMultiObjectRefusal,
+  assertMultiObjectRun,
+  printMultiObjectTable,
+} from "./multiobject-fixture";
 import {
   assertEveryMutantHasReachGrain,
   assertNoReachAttestation,
@@ -118,6 +127,8 @@ const SELECTOR_IDS = { selectorId: 79199, controlId: 79198, tableId: 79197 };
 const BASELINE_PATH = join(HERE, "al-runner.baseline.json");
 /** R353: the layout fixture's one-shot leg, recorded only through R332's record path. */
 const LAYOUT_BASELINE_PATH = join(HERE, "al-runner.layout.baseline.json");
+/** R383: the multi-object fixture's one-shot leg, recorded only through R332's record path. */
+const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner.multiobject.baseline.json");
 /** R387: the CLI-default leg (`buildBackend`, no transport key), recorded only through R332. */
 const CLI_DEFAULT_BASELINE_PATH = join(HERE, "al-runner.cli-default.baseline.json");
 
@@ -142,6 +153,8 @@ interface GateFixture {
   readonly symbols: readonly string[];
   /** R353: absent on every leg but the layout legs, so the others still run one batch. */
   readonly maxGuardsPerBatch?: number;
+  /** R383: absent means `"al-runner"`; the multi-object legs pass what the CLI guard returned. */
+  readonly coverage?: "al-runner" | "none";
 }
 
 const SANDBOX: GateFixture = {
@@ -229,8 +242,10 @@ async function runOnce(
     // R220: the caller decides, having first asked whether al-runner can report this project's
     // coverage correctly at all. `capabilities()` is read at the top of `runSession`, before an
     // instrumented bundle exists, so the answer has to come from the source tree.
+    // R383: the multi-object legs pass `coverage: "none"`, as the CLI guard decided for them.
+    const coverage = fixture.coverage ?? "al-runner";
     const support = await alRunnerCoverageSupport(fixture.projectDir);
-    if (!support.supported) {
+    if (coverage === "al-runner" && !support.supported) {
       throw new Error(
         `al-runner coverage is unsupported for this fixture, which it must not be: ${support.multiObjectFiles.join(", ")}`,
       );
@@ -240,7 +255,7 @@ async function runOnce(
       instrumentedDir: join(scratchRoot, "instrumented"),
       testDir: fixture.testDir,
       selectorObjectId: fixture.selectorIds.selectorId,
-      coverage: "al-runner",
+      coverage,
       ...(serverMode ? { serverMode: true } : {}),
       ...(selectorMode === "resource" ? { selectorMode } : {}),
       // R321: the one-shot argv (`buildAlRunnerArgv`) and the daemon's start argv (R319) read this.
@@ -623,6 +638,75 @@ async function runLayoutLegs(): Promise<SessionReport> {
   }
 }
 
+/**
+ * R383: `sandbox-multiobject`, one-shot then `--server`, under the multi-object REFUSAL. Two
+ * codeunits in one file, whose later object al-runner reports in a frame LethAL cannot undo, so
+ * the CLI guard must turn the requested coverage off, by name, before either leg runs. Both legs
+ * then run with coverage "none" and must equal the pre-committed refusal table per mutant,
+ * covering tests included, and each other.
+ *
+ * Checks are collected and thrown once, so a failure shows both legs. Returns the one-shot report
+ * for `main()` to compare with the frozen baseline LAST, after every table check passed.
+ */
+async function runMultiObjectLegs(): Promise<SessionReport> {
+  const warnings: string[] = [];
+  const guarded = await withAlRunnerCoverageGuard(
+    { alRunner: { alRunnerPath, coverage: "al-runner" } },
+    MULTIOBJECT_PROJECT_DIR,
+    (line) => {
+      console.warn(line);
+      warnings.push(line);
+    },
+  );
+  const coverage = guarded.alRunner?.coverage;
+  // Thrown at once: without the refusal there is nothing for the legs to measure.
+  assertMultiObjectRefusal(coverage, warnings);
+  const fixture: GateFixture = {
+    projectDir: MULTIOBJECT_PROJECT_DIR,
+    testDir: MULTIOBJECT_TEST_DIR,
+    selectorIds: MULTIOBJECT_SELECTOR_IDS,
+    symbols: [],
+    coverage: coverage === "none" ? "none" : "al-runner",
+  };
+  const failures: string[] = [];
+  const check = (what: string, fn: () => void): void => {
+    try {
+      fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  FAILED ${what}: ${message}`);
+      failures.push(message);
+    }
+  };
+  const oneShotDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-oneshot-"));
+  const serverDir = await mkdtemp(join(tmpdir(), "lethal-itest-alrunner-multi-server-"));
+  try {
+    const oneShot = await runOnce(oneShotDir, false, "static", fixture);
+    printMultiObjectTable(oneShot, "one-shot");
+    check("multi-object one-shot", () => assertMultiObjectRun(oneShot, "one-shot"));
+
+    const viaServer = await runOnce(serverDir, true, "static", fixture);
+    printMultiObjectTable(viaServer, "--server");
+    check("multi-object --server", () => assertMultiObjectRun(viaServer, "--server"));
+    check("multi-object --server vs one-shot", () =>
+      assertMultiObjectLegsEqual(oneShot, viaServer, "--server"),
+    );
+
+    if (failures.length > 0) {
+      throw new Error(
+        `R383: ${failures.length} multi-object-leg check(s) failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`,
+      );
+    }
+    console.log(
+      `  multi-object legs: one-shot killed=${oneShot.counts.killed} survived=${oneShot.counts.survived} noCoverage=${oneShot.counts.noCoverage}, --server identical`,
+    );
+    return oneShot;
+  } finally {
+    await rm(oneShotDir, { recursive: true, force: true });
+    await rm(serverDir, { recursive: true, force: true });
+  }
+}
+
 /** R387: the BC build and platform-app directory a report records, for printing beside another. */
 function provenance(report: SessionReport): { bcBuild: string; platformAppsDir: string } {
   const ctx = report.validity.executionContexts;
@@ -769,6 +853,7 @@ async function main(): Promise<void> {
   preflightGateBaseline(BASELINE_PATH, "al-runner itest");
   preflightGateBaseline(CLI_DEFAULT_BASELINE_PATH, "al-runner itest cli-default");
   preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner itest layout");
+  preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner itest multiobject");
   // Check BOTH symbol baselines before either leg runs: a missing file fails at startup rather
   // than after a live run, and record mode starts only when both files are in the state it needs.
   for (const symbols of SYMBOL_SETS) {
@@ -860,6 +945,9 @@ async function main(): Promise<void> {
   const layoutOneShot = await runLayoutLegs();
   await assertGateBaseline(layoutOneShot, LAYOUT_BASELINE_PATH, "al-runner itest layout");
 
+  const multiOneShot = await runMultiObjectLegs();
+  await assertGateBaseline(multiOneShot, MULTIOBJECT_BASELINE_PATH, "al-runner itest multiobject");
+
   await runSymbolLegs();
   if (RECORD_SYMBOL_BASELINES) {
     // Decision 6: recording is not a measurement against a frozen table, so it is never a pass.
@@ -884,6 +972,8 @@ async function main(): Promise<void> {
       "platform-pin",
       "layout-one-shot",
       "layout-server",
+      "multiobject-one-shot",
+      "multiobject-server",
       "cli-default",
     ],
     artifacts: { reported: false },

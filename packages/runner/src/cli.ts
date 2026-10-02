@@ -2192,7 +2192,7 @@ export function alRunnerAdvisory(
   }
   if (coverageTurnedOffFor.length > 0) {
     notes.push(
-      `coverage is "none" (turned off for this run because al-runner's coverage cannot describe ${coverageTurnedOffFor.join(", ")})`,
+      `coverage is "none" (turned off for this run because al-runner's coverage lines cannot be placed in ${coverageTurnedOffFor.join(", ")}; the warning above says why)`,
     );
   } else if (t.coverage === "none") {
     notes.push(
@@ -2205,10 +2205,12 @@ export function alRunnerAdvisory(
 
 /**
  * R387: an `alRunner.coverage: "al-runner"` request, checked against the project before anything
- * is built. al-runner's coverage cannot describe a file declaring more than one object, and the
- * index drops a file holding a `#if`-wrapped object (`fileHoldsWrappedObject`), so either would turn
- * real coverage into a false `no-coverage`. Such a run falls back to `"none"` with ONE warning
- * naming the files. Called once per session, so the warning is not repeated per worker.
+ * is built. al-runner reports every object after a file's first in a frame LethAL cannot convert
+ * (R383, measured on v2.12.0-main.c39ad5de; upstream #3713's object loss is fixed, this is a
+ * different defect), and the index drops a file holding a `#if`-wrapped object
+ * (`fileHoldsWrappedObject`, R298, pending R300), so either would turn real coverage into wrong
+ * coverage. Such a run falls back to `"none"` with ONE warning naming the files. Called once per
+ * session, so the warning is not repeated per worker.
  */
 export async function withAlRunnerCoverageGuard(
   configFile: LethalConfigFile,
@@ -2234,8 +2236,18 @@ async function applyAlRunnerCoverageGuard(
     ...support.multiObjectFiles.map((f) => `${f} (more than one object)`),
     ...support.wrappedObjectFiles.map((f) => `${f} (an #if-wrapped object)`),
   ];
+  const why = [
+    ...(support.multiObjectFiles.length > 0
+      ? [
+          "al-runner reports every object after a file's first at the wrong line (measured on v2.12.0-main.c39ad5de, R383)",
+        ]
+      : []),
+    ...(support.wrappedObjectFiles.length > 0
+      ? ["how a compiled #if arm is numbered is not measured (R300)"]
+      : []),
+  ];
   warn(
-    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot describe ${named.join(", ")}, and trusting it would report those objects' mutants no-coverage while tests do reach them.`,
+    `[lethal] al-runner-coverage-unsupported: "alRunner.coverage": "al-runner" is IGNORED for this run, which runs with coverage "none" instead. al-runner's coverage cannot be placed in ${named.join(", ")}: ${why.join("; ")}. Trusting it would credit those objects' mutants to the wrong tests, or report them no-coverage while tests do reach them.`,
   );
   return { config: { ...configFile, alRunner: { ...section, coverage: "none" } }, named };
 }

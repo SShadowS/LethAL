@@ -1,0 +1,28 @@
+{
+  "id": "6c779974-6ae1-42b9-9842-ca25979bae35",
+  "name": "LethAL Sandbox MultiObject",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL R383 fixture: two codeunits in one file, and a single-object control.",
+  "description": "MultiPair.Codeunit.al holds Multi A then Multi B; B's Reached ends on the line right before Unreached starts, so a base line one off moves a covered statement into the wrong procedure. MultiControl.Codeunit.al is a single-object control. Run by itest:alrunner. Deliberately its OWN app and id range so no other frozen baseline moves. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 79800,
+      "to": 79849
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": []
+}

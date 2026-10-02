@@ -133,9 +133,16 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
     if (dir0 === undefined || dir1 === undefined) throw new Error("expected two batch dirs");
     const stale = await buildAlRunnerCoverageIndex(dir0);
     const own = await buildAlRunnerCoverageIndex(dir1);
-    const beta = own.byFile.get(normalizeFileKey(BETA));
+    // R383: `byFile` holds a file's line-map entries; the object identity is what must agree.
+    const identity = (index: typeof own) =>
+      (index.byFile.get(normalizeFileKey(BETA)) ?? []).map((e) => ({
+        objectType: e.objectType,
+        objectId: e.objectId,
+      }));
+    const [beta, ...more] = identity(own);
     if (beta === undefined) throw new Error(`batch 1's index does not declare ${BETA}`);
-    expect(stale.byFile.get(normalizeFileKey(BETA))).toEqual(beta);
+    expect(more).toEqual([]);
+    expect(identity(stale)).toEqual([beta]);
 
     const verbatim = (await readFile(join(dir0, BETA), "utf8")).split(/\r?\n/);
     const emitted = (await readFile(join(dir1, BETA), "utf8")).split(/\r?\n/);
