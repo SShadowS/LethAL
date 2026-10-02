@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**105 of 395 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 397 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -119,6 +119,7 @@ that ordering is the priority.
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open; writer fixed 2026-09-28 (dd14626), coverage refused pending R300
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
+- **R399** · Undecided-#if and not-instrumentable rows in excludedSites do not make the report's reliability narrowed, while R-307's refused rows do · [R399.md](docs/roadmap/R399.md) · open, filed 2026-10-02
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
@@ -245,6 +246,7 @@ that ordering is the priority.
 - **R292** · Retaining every parse tree exhausts wasm memory on BC.History/BaseApp's 9,620 files: the census script needs it split into halves, and the PRODUCT path (`locate`/`identity-keys`) aborts the same way on a whole-BaseApp run · [R292.md](docs/roadmap/R292.md) · done (9f7cb5f0)
 - **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
 - **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
+- **R398** · The object-header scan is ASCII-only and line-anchored, so valid AL such as an unquoted non-ASCII object name or `namespace X; codeunit ...` on one line is refused whole (no-header) · [R398.md](docs/roadmap/R398.md) · open, filed 2026-10-02
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · open, filed 2026-09-28
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · open, filed 2026-09-28
 - **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · open, filed 2026-09-28

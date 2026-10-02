@@ -22,6 +22,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
+- **A file whose instrumentation throws is refused whole, and the rest of the project still runs**
+  (R307). Before, one such file (an object mix, no object header, a statement the injector cannot
+  place) aborted the whole run. Now LethAL tries each file on its own, skips the one that fails,
+  and measures the others. The report shows it: an `excludedSites` row with reason
+  `instrumentation-refused` (file, object kinds, site count and the reason), the caveat
+  `files-refused`, the warning `instrumentation-refused-files`, and `reliability` `narrowed`,
+  because the score then leaves that file out. A refused file's mutants carry no identity, so
+  history, resume and equivalence marks skip them, and a warning says so. If EVERY file with sites
+  is refused, nothing is left to measure and the run exits 1 naming each file. The explain document
+  is now version 10. A mixed-object file is still refused whole: [[R299]] tracks per-object
+  dropping.
 
 ### Changed
 
