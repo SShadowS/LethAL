@@ -104,6 +104,103 @@ function conditionText(marker: ALSyntaxNode): string {
     .trim();
 }
 
+/** The grammar's `extras` that can sit between two statements (tree-sitter-al 4.4.1). */
+const TRIVIA_KINDS: ReadonlySet<string> = new Set([
+  "comment",
+  "multiline_comment",
+  "pragma",
+  "preproc_region",
+  "preproc_endregion",
+  "preproc_define",
+  "preproc_undef",
+]);
+const ARM_MARKERS: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+]);
+
+/** A statement the parser placed in a statement list: a `*_statement`, or an expression statement.
+ *  A preproc container (`preproc_conditional_statement`) is NOT one: plan r3 admits a `#if` that
+ *  follows another, since its content cannot be judged without the earlier container's arms. */
+function isStatementNode(n: ALSyntaxNode): boolean {
+  if (n.rawKind.startsWith("preproc_")) return false;
+  return n.rawKind.endsWith("_statement") || n.rawKind.endsWith("_expression");
+}
+
+/** The last (or first) leaf of `n`, skipping trivia subtrees. */
+function edgeLeaf(n: ALSyntaxNode, last: boolean): ALSyntaxNode | null {
+  if (TRIVIA_KINDS.has(n.rawKind)) return null;
+  if (n.children.length === 0) return n;
+  const kids = last ? [...n.children].reverse() : n.children;
+  for (const c of kids) {
+    const leaf = edgeLeaf(c, last);
+    if (leaf !== null) return leaf;
+  }
+  return null;
+}
+
+/**
+ * R402: a statement-level `#if` whose arm CONTINUES the statement before it. The grammar cannot
+ * attach such a tail (`repeat ... until (A > 10)` `#if X or (B > 5) #endif ;`) to the statement, so
+ * it parses the tail as a separate statement (`or(...)` becomes a call), and instrumenting it emits
+ * an artifact alc refuses (measured: AL0111 / AL0104). Refused like any arm alc's reading of which
+ * the tree cannot show. The rule (plan r3 §2(a)): skip trivia back to the previous sibling; admit
+ * when it is not a statement, when its last leaf is `;`, or when every arm is empty or trivia-only
+ * or starts with `;` (c2, c2b and c3 compile); otherwise refuse.
+ *
+ * Exported for test: no parse yields a statement that OWNS its `;` before a statement-level `#if`
+ * (measured, plan r3 table C), so that admission is pinned on a hand-built tree.
+ */
+export function continuationRefusal(root: ALSyntaxNode): string | null {
+  let found: string | null = null;
+  const walk = (n: ALSyntaxNode): void => {
+    if (found !== null) return;
+    if (n.rawKind === "preproc_conditional_statement" && continuesPrevious(n)) {
+      found = `directive-continues-statement at line ${lineOf(n)}`;
+      return;
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(root);
+  return found;
+}
+
+function continuesPrevious(container: ALSyntaxNode): boolean {
+  const parent = container.parent;
+  if (parent === null) return false;
+  // Positions, not identity: wrapper nodes are rebuilt on access (R209).
+  const at = parent.children.findIndex((c) => c.startIndex === container.startIndex);
+  let prev: ALSyntaxNode | undefined;
+  for (let i = at - 1; i >= 0; i--) {
+    const c = parent.children[i];
+    if (c !== undefined && !TRIVIA_KINDS.has(c.rawKind)) {
+      prev = c;
+      break;
+    }
+  }
+  if (prev === undefined || !isStatementNode(prev)) return false;
+  if (edgeLeaf(prev, true)?.rawKind === ";") return false;
+  // Each arm's first content leaf: an arm with none (empty or trivia-only) continues nothing, and
+  // an arm that opens with `;` supplies the separator itself.
+  let armOpen = false;
+  let armSeen = false;
+  for (const c of container.children) {
+    if (ARM_MARKERS.has(c.rawKind)) {
+      armOpen = c.rawKind !== "preproc_endif";
+      armSeen = false;
+      continue;
+    }
+    if (!armOpen || armSeen) continue;
+    const first = edgeLeaf(c, false);
+    if (first === null) continue;
+    armSeen = true;
+    if (first.rawKind !== ";") return true;
+  }
+  return false;
+}
+
 function markersOf(root: ALSyntaxNode): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   const walk = (n: ALSyntaxNode): void => {
@@ -160,6 +257,8 @@ export function evaluateArms(
         `marker-mismatch (${lines} directive lines, ${markers.length} markers)`,
       );
     }
+    const continuation = continuationRefusal(root);
+    if (continuation !== null) throw new UndecidedArm(continuation);
     for (const d of markers) {
       const before = active();
       if (d.rawKind === "preproc_define" || d.rawKind === "preproc_undef") {

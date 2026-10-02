@@ -3,6 +3,7 @@ import {
   type ALSyntaxNode,
   type HangCapableReason,
   type SemanticContext,
+  armOfNode,
   isProcedureLike,
   resolveVarRef,
 } from "@lethal/engine";
@@ -112,15 +113,38 @@ function conditionOf(loop: ALSyntaxNode): ALSyntaxNode | null {
   return loop.childForFieldName("condition") ?? null;
 }
 
-/** Every identifier read inside an expression, bare or quoted (`isIdentifierLike`), member names
- *  excluded by `resolveVarRef`. */
-function identifiersIn(node: ALSyntaxNode): ALSyntaxNode[] {
+/** A directive marker: `#if`/`#elif`/`#else`/`#endif` and the symbol condition it carries. */
+const DIRECTIVE_MARKERS: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+]);
+
+/**
+ * Every identifier the loop's condition reads in THIS build, bare or quoted (`isIdentifierLike`),
+ * member names excluded by `resolveVarRef`.
+ *
+ * R402: the grammar puts a directive tail of the condition (`while (A < 10)` `#if X and (B < 5)`
+ * `#endif` `do`) BESIDE the `condition` field, as a `preproc_conditional_expression_tail`, so those
+ * are read too. Tails and list elements nested inside the condition are reached by the same walk.
+ * A node in an arm the build compiles out is skipped; an UNDECIDED one is read, because for a hang
+ * tag the unsafe direction is an untagged hang-capable mutant. Directive markers are never read:
+ * their condition is a preprocessor symbol, not a variable.
+ */
+function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   const walk = (n: ALSyntaxNode): void => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind)) return;
+    if (armOfNode(ctx, n) === "inactive") return;
     if (isIdentifierLike(n)) out.push(n);
     for (const c of n.namedChildren) walk(c);
   };
-  walk(node);
+  const cond = conditionOf(loop);
+  if (cond !== null) walk(cond);
+  for (const c of loop.namedChildren) {
+    if (c.rawKind === "preproc_conditional_expression_tail") walk(c);
+  }
   return out;
 }
 
@@ -185,13 +209,10 @@ export function classifyHangCapable(
   let cur: ALSyntaxNode | null = node.parent;
   while (cur !== null && !isScope(cur)) {
     if (LOOP_KINDS.has(cur.kind)) {
-      const cond = conditionOf(cur);
-      if (cond !== null) {
-        for (const ident of identifiersIn(cond)) {
-          const identSym = resolveVarRef(ident, ctx);
-          if (identSym !== null && sameDeclaration(identSym, targetSym)) {
-            return "loop-condition-target";
-          }
+      for (const ident of conditionIdentifiers(cur, ctx)) {
+        const identSym = resolveVarRef(ident, ctx);
+        if (identSym !== null && sameDeclaration(identSym, targetSym)) {
+          return "loop-condition-target";
         }
       }
     }

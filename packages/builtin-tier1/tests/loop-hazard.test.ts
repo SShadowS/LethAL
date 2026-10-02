@@ -294,3 +294,30 @@ describe("classifyHangCapable: a named return value (R323)", () => {
     );
   });
 });
+
+describe("R402: an UNDECIDED arm is read, so the tag errs toward claiming", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("CLAIMS B when the tail holding B sits in an arm whose file is undecided", () => {
+    const src = `codeunit 50402 "R" {
+      procedure P() var A: Integer; B: Integer; begin
+        while (A < 10)
+#if LETHALX
+          and (B < 5)
+#endif
+        do begin
+          A := A + 1;
+          B := B + 1;
+        end;
+      end; }`;
+    const { root, ctx } = load(src);
+    // generateMutationSet runs operators before it drops an undecided file, so the classifier can
+    // be asked about one; the context is the real one with every node answering "undecided".
+    const undecided = { ...ctx, armOf: () => "undecided" as const };
+    expect(classifyHangCapable(assignment(root, "B := B + 1"), undecided)).toBe(
+      "loop-condition-target",
+    );
+  });
+});
