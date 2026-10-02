@@ -1,60 +1,90 @@
-# R-402: the hang tag reads loop-condition operands in active `#if` arms (short plan)
+# R-402: the hang tag reads loop-condition operands in active `#if` arms (short plan, r2)
 
 Task: `H:/lethal-coord/tasks/R-402/task.md`. Item: `docs/roadmap/R402.md`. Branch `lethal/lane-preproc`, from master 0ef6652f. Offline.
 
-## 1. Shapes, measured
+## Revision r2: what changed (`H:/lethal-coord/reviews/R-402-plan/reject-r1.md`)
 
-The analysis is `classifyHangCapable` (`packages/builtin-tier1/src/loop-hazard.ts`). It walks the ANCESTOR loops of an assignment (`while_statement`, `repeat_statement`; `LOOP_KINDS`) and reads the identifiers under each loop's `condition` field. Its callers are `remove-assignment`, `swap-additive`, `shift-integer` and `flip-boolean-literal`, through `hangCapableForMutatedNode`.
+| Finding | r2 change | Where |
+|---|---|---|
+| 1. Shapes were missing; `identifiersIn` reads inactive arms | 17 shapes, each parsed AND compiled (unmutated source and instrumented artifact, 4 builds). One arm-aware operand walk replaces `identifiersIn`; it never reads directive conditions | §1, §2 |
+| 2. S4 breaks the artifact | Measured on master: it does break it, in 3 of 4 S4 variants. The file is REFUSED in R-402 with a named reason, through a separator-aware rule in `evaluateArms` | §1, §2 |
+| 3. Undecided reaches the classifier | Skip only "inactive", read "undecided", and red-check it with a classifier test that uses an undecided context | §2, §4 |
+| 4. Controls and compile-backed tests | Control `Foo(B)` after a terminated `repeat`. A committed compile script runs every shape under every build before submit. The undecided shapes assert the `preproc-undecided` row | §4 |
+| 5. No unconditional zero-change promise | A key diff by cause on the four corpora. `r214-capture` does not compile, so the compile script covers that | §3 |
 
-I parsed each shape with the engine (scratch probe, not committed) and evaluated it with `evaluateArms`:
+## 1. Shapes, measured on master 0ef6652f
 
-| # | Shape | Tree | R214 file decision | Hang tag on `B := B + 1` today |
+Method: `scratchpad/r402/sweep.ts`, which becomes `scripts/r402-shape-sweep.ts` in the build. For each shape and each build (`[]`, `[X]`, `[Y]`, `[X,Y]`) it reports:
+- `generateMutationSet`: the specs, any `preproc-undecided` row, and the `remove-assignment` hang tags;
+- an alc compile of the unmutated source;
+- an alc compile of the instrumented artifact, with LethAL Control symbols.
+
+The unmutated source compiles under every build for every shape.
+
+| Shape | Tree | Decision | Hang tag today (variable read only in the `#if` arm) | Artifact |
 |---|---|---|---|---|
-| S1 | `while (A < 10)` `#if X` `and (B < 5)` `#endif` `do` | the tail is a `preproc_conditional_expression_tail` node, a SIBLING of `condition` inside `while_statement`, with `operator` and `operand` fields | decided | **missed with X**; measured through `generateMutationSet` in R-378 |
-| S2 | S1 with `#elif Y` `and (B < 7)` | the same tail node, with one `operator`/`operand` pair per arm | decided | missed in both arms |
-| S3 | S1 with `#if not X` | the same tail node | decided | missed without X |
-| S4 | `repeat ... until (A > 10)` `#if X` `or (B > 5)` `#endif` `;` | **misparsed.** The tail is not in `repeat_statement`. It is the NEXT sibling, a statement-level `preproc_conditional_statement` holding `call_expression` `or(...)` | decided | **missed with X** |
-| S5 | `#if X` / `#else` / `#endif` choosing the whole condition (while or repeat) | ERROR nodes | **undecided** (`marker-mismatch`): the whole file is refused, so no mutant exists | n/a |
-| S6 | the tail inside the parentheses, `while ((A < 10)` `#if X` `and (B < 5)` `#endif` `) do` | ERROR nodes | **undecided** | n/a |
-| S7 | two consecutive tails | ERROR nodes | **undecided** | n/a |
+| S1 `while (A<10)` `#if X and (B<5)` `#endif` | `preproc_conditional_expression_tail` beside `condition` | decided | **B untagged under [X]** (miss) | ok |
+| S2 S1 + `#elif Y and (C<7)` | same tail, one operand per arm | decided | **B and C untagged** in their builds | ok |
+| S3 S1 with `#if not X` | same | decided | **B untagged under []** | ok |
+| S4 `repeat … until (A>10)` `#if X or (B>5)` `#endif ;` | MISPARSE: the tail is a statement-level `preproc_conditional_statement` after the repeat, holding a call `or(...)` | decided | B untagged | **FAILS under [X]**: `AL0111: Semicolon expected` |
+| S4b S4 + empty `#else` | same | decided | B untagged | **FAILS under [X]** |
+| S4c `or (B>5) or (C>3)` | same, holding `logical_expression(or(...) or ...)` | decided | B and C untagged | ok (compiles, but the hang tag is missed) |
+| S4d nested `#if Y or (C>3)` | same | decided | B and C untagged | **FAILS under [X]** and [X,Y] (`AL0104: 'end' expected`) |
+| S4e control: `until (A>10);` then `#if X Foo(B); #endif` | the SAME tree as S4 (`preproc_conditional_statement` holding `call_expression`); only the `;` in the source differs | decided | B untagged (correct) | ok |
+| S8 operand prefix `#if X (B<5) and #endif (A<10)` | ERROR | **undecided** (marker-mismatch) | no mutant | n/a |
+| S9 tail inside a call argument `Check(A #if X + B #endif, 10)` | tail inside `condition` | decided | **B tagged under []** (over-tag) | ok |
+| S10 tail inside a subscript `Arr[1 #if X + B #endif]` | tail inside `condition` | decided | **B tagged under []** | ok |
+| S11 `preproc_conditional_list_elements` `A in [1, 2 #if X , B #endif]` | inside `condition` | decided | **B tagged under []** | ok |
+| S12 nested tail | ERROR | **undecided** | no mutant | n/a |
+| S13 `#if X while (B<5) #else while (A<10) #endif do` | ERROR | **undecided** | no mutant | n/a |
+| S14 a whole loop inside a statement-level `#if` | an ordinary loop inside `preproc_conditional_statement` | decided | B tagged only under [X] (correct already) | ok |
+| S15 an assignment tail `A := A #if X + B #endif;` / S16 an `if` condition tail | a tail node | decided | not a loop | ok |
 
-**`for` loops** are not in `LOOP_KINDS`. A `for` header has a bound, not a condition operand, and making counter loops hang-capable is R164's ruling, not this item's. Out of scope.
+`for`, `downto` and `foreach` are not in `LOOP_KINDS`. That is an existing scope decision (R164), not shape coverage.
 
-## 2. The fix
-- **S1 to S3.** In `classifyHangCapable`, as well as `identifiersIn(conditionOf(loop))`, read each `operand` child of every `preproc_conditional_expression_tail` that is a direct child of the loop. Read an operand only where `armOfNode(ctx, operand)` is `"active"` (R378's `armOf`). This is one helper, `conditionOperands(loop, ctx)`, used where `conditionOf` is used today.
-- **S4.** For a `repeat_statement`, also read the next named sibling when the misparse can be recognised exactly: it is a `preproc_conditional_statement` whose arms each hold exactly one `call_expression` whose `function` is the bare identifier `and`, `or` or `xor`. Read each active arm's arguments as condition operands. The match is deliberately narrow: an ordinary statement-level `#if` after a `repeat` holds statements, not a call named `or`. Undecided cannot arise, as the next point explains.
-- **Undecided.** The mutated site's own file is never undecided, because R214 generates no mutant in such a file (S5 to S7). The loop and its tail are in that same file, so `armOf` answers only "active" or "inactive" here. If it ever answered "undecided", the SAFE direction for a hang tag is to TAG: an untagged hang-capable mutant can strand a tier. So "undecided" is treated as readable, not skipped.
-- **Inactive operands stay unread.** That is today's behaviour, because tails are not read at all, now made explicit.
-- **Also filed, not fixed:** S4's misparse also makes `or (B > 5)` look like a statement-level call, so call operators can claim it as a site (for example `void-method-call`). That is a grammar defect. It gets its own roadmap item, with `roadmap-next-id.ts` run right before writing.
+## 2. Fix
 
-## 3. Can a tag, verdict or key move?
-- **Keys:** no. `hangCapable` is not in `identityKeyOf`.
-- **Verdicts:** no. The tag is reported per mutant, and the run warns `hang-capable` with a count. It changes which mutants are counted as hang-capable, never a verdict.
-- **Gate fixtures:** no gate fixture has a directive inside a loop condition. Only `fixtures/sandbox-symbols` has `#if`, and it has no loop. So no gate figure moves, and no pre-commitment is needed.
-- **Check before submit,** as in R-378: run `scripts/r214-capture.ts` on master 0ef6652f and on the branch, over the four R214 corpora, S0 and S1, plus the pinned `fixtures/r214/expected` captures.
-  - Required: 0 mutants gone, 0 appeared, 0 key moves, 0 `plat=` changes.
-  - `hang=` may only go from `-` to `loop-condition-target`, and every such site is listed with its shape.
-  - Any other change is a STOP.
+**(a) S4 refusal, in `evaluateArms`.** It is the R214 evaluator, so the existing `preproc-undecided` row, warning and caveat all apply.
+- A statement-level `preproc_conditional_statement` whose nearest preceding sibling, skipping comments, is a STATEMENT, with no `;` token between the two, continues that statement. The tree misplaces that code, so the whole file is `undecided` with the reason `directive-continues-statement at line N`.
+- The rule is separator-aware by construction. S4, S4b, S4c and S4d are refused. S4e, which has a `;`, is not.
+- A `#if` that follows `begin`, `then`, `else`, `do` or `;` is untouched.
+- Correct structural ownership of the tail is a grammar change (tree-sitter-al). It will be filed as its own item for when the grammar gains it, so a refusal is not the permanent answer.
+
+**(b) One arm-aware operand walk** replaces `identifiersIn` for each enclosing loop. It reads:
+- the `condition` subtree;
+- each `preproc_conditional_expression_tail` that is a direct child of the loop (S1 to S3).
+
+The walk is recursive, so tails and list elements nested inside the condition (S9 to S11) are reached by the same walk. It never reads directive markers or their conditions (`preproc_if`, `preproc_elif`, `preproc_else`, `preproc_endif`). It skips a node only when `armOfNode(ctx, node) === "inactive"`.
+
+**(c) Undecided is read, so it tags.** `generateMutationSet` runs operators before it refuses an undecided file, so `armOf` can answer "undecided" to the classifier. Reading those operands is the safe direction for a hang tag, because an untagged hang-capable mutant can strand a tier. The mutants are then dropped anyway.
+
+## 3. Moves, by cause
+- **Keys and verdicts from the tag alone:** none. `hangCapable` is not in `identityKeyOf`, and it drives only the hang count and warning.
+- **The S4 refusal** removes every site of an affected file, and that changes sites, hashes and ordinals in that file. It is the R214 refusal path, which reports the file.
+- **Before submit:** run `scripts/r214-capture.ts`, master 0ef6652f against the branch, on DC, SysApp, BCF and BaseApp, S0 and S1, plus the pinned `fixtures/r214/expected` captures. List every change by cause:
+  - (i) `hang=` going from `-` to `loop-condition-target` (S1 to S3 shapes) or the reverse (S9 to S11 over-tags removed), each site listed with its shape;
+  - (ii) newly undecided files with `directive-continues-statement`, each listed with its line;
+  - any other change is a STOP.
   - Peak memory must stay at most 110% of master's.
+- **Gate fixtures:** none has a directive inside a loop, and none has a statement-level `#if` after an unterminated statement. The pinned captures must stay byte-identical.
+- **`r214-capture` does not compile,** so `scripts/r402-shape-sweep.ts` is the compile check. It runs before submit, and every artifact it emits must compile.
 
 ## 4. Tests (test-first, each red-checked)
-These go in `packages/runner/tests/r402-hang-active-arm.test.ts`, through `generateMutationSet`. Every row first asserts that `remove-assignment` on `B := B + 1` (and on `A := A + 1`) EXISTS in that build, then asserts its tag:
-
-| Shape | Build | `B := B + 1` | `A := A + 1` |
-|---|---|---|---|
-| S1 | `[]` | untagged | tagged |
-| S1 | `[X]` | **tagged** | tagged |
-| S2 | `[X]` | tagged | |
-| S2 | `[Y]` | tagged (the elif arm) | |
-| S2 | `[]` | untagged | |
-| S3 | `[]` | tagged | |
-| S3 | `[X]` | untagged | |
-| S4 | `[X]` | **tagged** | |
-| S4 | `[]` | untagged | |
-| S5 to S7 | any | no mutant in the file (pin, no product line) | |
-
-**Red-checks:**
-- Remove the tail read: S1, S2 and S3's tagged rows go red.
-- Read tail operands without the `armOf` check: S1 `[]`, S2 `[]` and S3 `[X]` go red.
-- Remove the S4 sibling read: S4 `[X]` goes red.
-- Widen S4's match to any `preproc_conditional_statement`: a control row goes red. The control is a `repeat` followed by an ordinary statement-level `#if` holding `B := 0;`, where `B` must stay untagged.
+- **Runner, through `generateMutationSet`:** `packages/runner/tests/r402-hang-active-arm.test.ts`. Each tag row first asserts that `remove-assignment` on the named assignment EXISTS in that build.
+  - S1 `[]`: B untagged, A tagged. S1 `[X]`: B tagged.
+  - S2 `[X]`: B tagged, C untagged. S2 `[Y]`: C tagged, B untagged. S2 `[]`: both untagged. Each arm uses its own variable.
+  - S3 `[]`: B tagged. S3 `[X]`: B untagged.
+  - S9, S10 and S11 `[]`: B untagged. Under `[X]`: B tagged.
+  - S14 `[X]`: B tagged. S14 `[]`: no B site.
+  - S4, S4b, S4c and S4d (every build): the file is refused with a `preproc-undecided` row whose detail starts `directive-continues-statement`.
+  - S4e: not refused, and `Foo(B)` keeps its `void-method-call` site.
+  - S8, S12 and S13: their existing `preproc-undecided` rows (`marker-mismatch`).
+- **Classifier unit test** (builtin-tier1): `classifyHangCapable` on S1 with a context whose `armOf` answers "undecided": B is tagged.
+- **Red-checks:**
+  - Remove the tail read: S1, S2 and S3's tagged rows go red.
+  - Drop the inactive skip: the S1 `[]`, S2 and S3 `[X]` untagged rows and S9 to S11 `[]` go red.
+  - Skip on `!== "active"` instead of `=== "inactive"`: the undecided classifier test goes red.
+  - Read directive conditions: a row whose directive symbol is also a variable name (`#if B`) goes red.
+  - Remove the continuation rule: the S4 rows go red.
+  - Ignore the `;` check: the S4e control goes red.
+- **Compile-backed:** `scripts/r402-shape-sweep.ts` runs on the branch before submit. Every emitted artifact must compile under every build; the output goes in the submit note. It needs alc, so it is a script and not a unit test.
