@@ -7,7 +7,11 @@
 //
 // Output, per shape and build: src=<ok|FAIL(first error)> specs=<n> [UNDECIDED(<reason>)]
 // tags{<var>:<H|->} (remove-assignment hang tags) calls{<void-method-call sites>}
-// artifact=<ok|FAIL(first error)|n/a>. Exit 1 when any emitted artifact fails to compile.
+// artifact=<ok|FAIL(first error)|n/a>. Each shape's expected outcome is in
+// scripts/fixtures/r402/expected.json (refused with a named reason, or admitted with its spec count
+// per build, measured on master). Exit 1 on a source or artifact compile failure, an unexpected
+// refusal or admission, a spec count that differs (a missing mutant), a shape with no expectation,
+// or a shape filter that matches nothing.
 // alc: $ALC, else the AL extension's bin/alc.exe (newest ms-dynamics-smb.al-*, both layouts).
 // Symbols come from fixtures/sandbox-symbols/.alpackages (source) and fixtures/sandbox-app's
 // (artifact, which also needs LethAL Control). Not in `bun run typecheck` (dynamic imports by --repo).
@@ -79,17 +83,35 @@ const builds: readonly (readonly string[])[] = [
   ["LETHALY"],
   ["LETHALX", "LETHALY"],
 ];
+type Expected = { readonly refused?: string; readonly specs?: readonly number[] };
+const expected = JSON.parse(readFileSync(join(shapesDir, "expected.json"), "utf8")) as Record<
+  string,
+  Expected
+>;
+const shapeFiles = readdirSync(shapesDir)
+  .filter((n) => n.endsWith(".al"))
+  .sort()
+  .filter((f) => only.length === 0 || only.includes(f.replace(/\.al$/, "")));
+if (shapeFiles.length === 0) {
+  console.error(`r402-shape-sweep: no shape matches ${only.join(", ")}`);
+  process.exit(1);
+}
 const scratch = mkdtempSync(join(tmpdir(), "r402-sweep-"));
-let artifactFailures = 0;
+const problems: string[] = [];
+let cases = 0;
+let artifacts = 0;
+let refusedCases = 0;
 try {
-  for (const f of readdirSync(shapesDir)
-    .filter((n) => n.endsWith(".al"))
-    .sort()) {
+  for (const f of shapeFiles) {
     const name = f.replace(/\.al$/, "");
-    if (only.length > 0 && !only.includes(name)) continue;
+    const want = expected[name];
+    if (want === undefined) {
+      problems.push(`${name}: no entry in expected.json`);
+      continue;
+    }
     const text = readFileSync(join(shapesDir, f), "utf8");
     console.log(`=== ${name}`);
-    for (const set of builds) {
+    for (const [bi, set] of builds.entries()) {
       const src = join(scratch, "src");
       rmSync(src, { recursive: true, force: true });
       mkdirSync(join(src, "src"), { recursive: true });
@@ -135,15 +157,40 @@ try {
           recursive: true,
         });
         art = compiles(out, set);
-        if (art !== "ok") artifactFailures++;
+        artifacts++;
+        if (art !== "ok") problems.push(`${name} [${set.join(",")}]: artifact ${art}`);
+      }
+      cases++;
+      const srcResult = compiles(src, set);
+      if (srcResult !== "ok") problems.push(`${name} [${set.join(",")}]: source ${srcResult}`);
+      const label = `${name} [${set.join(",")}]`;
+      if (want.refused !== undefined) {
+        refusedCases++;
+        if (undecided.length !== 1 || !(undecided[0] ?? "").startsWith(want.refused)) {
+          problems.push(
+            `${label}: expected refusal "${want.refused}", got ${JSON.stringify(undecided)}`,
+          );
+        }
+        if (specs.length !== 0)
+          problems.push(`${label}: refused shape emitted ${specs.length} specs`);
+      } else {
+        if (undecided.length > 0)
+          problems.push(`${label}: unexpected refusal ${JSON.stringify(undecided)}`);
+        const n = want.specs?.[bi];
+        if (n === undefined) problems.push(`${label}: expected.json has no spec count`);
+        else if (specs.length !== n)
+          problems.push(`${label}: ${specs.length} specs, expected ${n}`);
       }
       console.log(
-        `  [${set.join(",")}] src=${compiles(src, set)} specs=${specs.length} ${undecided.length > 0 ? `UNDECIDED(${undecided.join(";")}) ` : ""}tags{${tags}} calls{${calls}} artifact=${art}`,
+        `  [${set.join(",")}] src=${srcResult} specs=${specs.length} ${undecided.length > 0 ? `UNDECIDED(${undecided.join(";")}) ` : ""}tags{${tags}} calls{${calls}} artifact=${art}`,
       );
     }
   }
 } finally {
   rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
-console.log(`artifact compile failures: ${artifactFailures}`);
-process.exit(artifactFailures > 0 ? 1 : 0);
+console.log(
+  `cases ${cases}: ${artifacts} artifacts compiled, ${refusedCases} refused (no artifact); problems ${problems.length}`,
+);
+for (const p of problems) console.log(`  PROBLEM ${p}`);
+process.exit(problems.length > 0 ? 1 : 0);

@@ -78,9 +78,22 @@ const SHAPES = {
   c7: "        A := A + 1; // done\n#if LETHALX\n        Foo(B);\n#endif",
   c7c: "        A := A + 1;\n#pragma warning disable AA0001\n#if LETHALX\n        Foo(B);\n#endif\n#pragma warning restore AA0001",
   c7d: "        A := A + 1;\n#region R\n#if LETHALX\n        Foo(B);\n#endif\n#endregion",
+  // Already undecided under R214 (marker-mismatch): an operand prefix, a nested tail, and an
+  // #if/#else choosing the whole loop header.
+  s8: `        while\n#if LETHALX\n            (B < 5) and\n#endif\n            (A < 10)\n${LOOP_BODY}`,
+  s12: `        while (A < 10)\n#if LETHALX\n            and (B < 5)\n#if LETHALY\n            and (C < 7)\n#endif\n#endif\n${LOOP_BODY}`,
+  s13: `#if LETHALX\n        while (B < 5)\n#else\n        while (A < 10)\n#endif\n${LOOP_BODY}`,
+  // Expression tails beside an assignment and an if condition: not statement-level containers.
+  s15: "        A := A\n#if LETHALX\n            + B\n#endif\n        ;",
+  s16: "        if (A < 10)\n#if LETHALX\n            and (B < 5)\n#endif\n        then\n            A := A + 1;",
 } as const;
 type Shape = keyof typeof SHAPES;
-const BUILDS = { none: [], X: ["LETHALX"], Y: ["LETHALY"] } as const;
+const BUILDS = {
+  none: [],
+  X: ["LETHALX"],
+  Y: ["LETHALY"],
+  XY: ["LETHALX", "LETHALY"],
+} as const;
 type Build = keyof typeof BUILDS;
 
 type Result = {
@@ -88,6 +101,8 @@ type Result = {
   assigns: Map<string, boolean[]>;
   calls: string[];
   undecided: string[];
+  /** Every generated spec, to check an admitted shape keeps all its sites. */
+  specs: number;
 };
 const results = new Map<string, Result>();
 
@@ -114,6 +129,7 @@ async function run(shape: Shape, build: Build): Promise<Result> {
       undecided: set.preprocExcluded
         .filter((e) => e.reason === "preproc-undecided")
         .map((e) => e.detail ?? ""),
+      specs: specs.length,
     };
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -226,5 +242,57 @@ describe("R402: a statement-level #if that continues an unterminated statement r
     expect(get("c6", "none").calls).toEqual(["Foo(A)"]);
     // A unterminated statement before an empty or trivia-only #if still has its own site.
     for (const s of ["c2", "c2b"] as const) expect(tagged(s, "X", "A")).toBe(false);
+  });
+
+  test("the admitted shapes keep EVERY site master generated, per build", () => {
+    // Spec counts measured on master 0ef6652f ([] / [X] / [Y] / [X,Y]); the same numbers are the
+    // expectations of scripts/r402-shape-sweep.ts. A rule that refused or dropped any of these
+    // sites changes a count.
+    const retained: Partial<Record<Shape, readonly [number, number, number, number]>> = {
+      c1: [9, 10, 9, 10],
+      c2: [6, 6, 6, 6],
+      c2b: [6, 6, 6, 6],
+      c3: [6, 7, 6, 7],
+      c4: [5, 5, 5, 5],
+      c4b: [7, 7, 7, 7],
+      c5: [4, 4, 4, 4],
+      c5b: [5, 6, 5, 6],
+      c6: [9, 9, 9, 9],
+      c7: [6, 7, 6, 7],
+      c7c: [6, 7, 6, 7],
+      c7d: [6, 7, 6, 7],
+      // s4e here has a three-assignment repeat body; the sweep fixture's two-assignment s4e is the
+      // one whose master count is checked (scripts/fixtures/r402/expected.json).
+      s15: [5, 5, 5, 5],
+      s16: [7, 8, 7, 8],
+    };
+    for (const [s, counts] of Object.entries(retained) as [Shape, readonly number[]][]) {
+      const got = (Object.keys(BUILDS) as Build[]).map((b) => get(s, b).specs);
+      expect(got, s).toEqual([...counts]);
+    }
+  });
+
+  test("scope: only a statement-level container is judged; expression tails are never refused", () => {
+    // A `preproc_conditional_expression_tail` follows an expression whose last leaf is not `;`
+    // and its arm opens with `and`/`+`, so the rule WOULD refuse these if it judged every
+    // container (the while, if and assignment tails; the call-argument, subscript and list ones).
+    for (const s of ["s1", "s2", "s3", "s9", "s10", "s11", "s15", "s16"] as const) {
+      for (const b of Object.keys(BUILDS) as Build[]) {
+        expect(get(s, b).undecided, `${s}/${b}`).toEqual([]);
+      }
+    }
+  });
+});
+
+describe("R402: the shapes R214 already refuses keep their marker-mismatch refusal", () => {
+  test("S8 (operand prefix), S12 (nested tail) and S13 (#if/#else whole header)", () => {
+    for (const s of ["s8", "s12", "s13"] as const) {
+      for (const b of Object.keys(BUILDS) as Build[]) {
+        const r = get(s, b);
+        expect(r.undecided, `${s}/${b}`).toHaveLength(1);
+        expect(r.undecided[0], `${s}/${b}`).toStartWith("marker-mismatch");
+        expect(r.specs, `${s}/${b}`).toBe(0);
+      }
+    }
   });
 });
