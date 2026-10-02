@@ -1,5 +1,12 @@
 # R383 pre-commitment: `sandbox-multiobject`, two codeunits in one file, on bcdev and al-runner
 
+> **Note added 2026-10-02, after the first live runs. The table below is not edited.** bcdev matched
+> it exactly. The al-runner legs did not (M0003 to M0005 read `survived`), because al-runner
+> `v2.12.0-main.c39ad5de` reports every object after a file's first in a frame LethAL cannot undo.
+> The multi-object refusal is restored, and the al-runner legs now match
+> `2026-10-02-r383-multiobject-refusal-precommitment.md` instead. This table stays as the
+> bcdev-validated FUTURE prediction for al-runner, for when upstream fixes that frame.
+
 Written **before** any live run on this fixture (no bcdev run, no al-runner session), and committed
 alone. Every row below is derived by hand from the AL and from the code at `5daccc09` (fixture and
 offline guard) on top of `d607eaba` (the R383 build), checked against an offline instrumentation
