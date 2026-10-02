@@ -1,6 +1,15 @@
-# R-378: member-wide analyses skip arms the build compiles out (short plan, r2)
+# R-378: member-wide analyses skip arms the build compiles out (short plan, r3)
 
 Task: `H:/lethal-coord/tasks/R-378/task.md`. Item: `docs/roadmap/R378.md`. Branch `lethal/lane-preproc`, from master b1bc7e2e. Offline only.
+
+## Revision r3: finding 6 (`H:/lethal-coord/reviews/R-378-plan/reject-r2.md`)
+
+| Point | r3 change | Where |
+|---|---|---|
+| 6.1 The count claims disagreed | A3 is NOT tag-only, because `resolveForcedTrigger` also guards `swap-modify-flag`'s forward generator. §2 now states exactly when a mutant can disappear (none can appear). §4 no longer claims identical counts: it requires every count change to be one of those cases, listed | §2 A3, §4 |
+| 6.2 The scheme bump was ruled out too early | It is no longer ruled out. A key and ordinal diff, master against the branch, on the pinned captures and the R214 corpora, decides it. A moved key for unchanged source means `IDENTITY_SCHEME` 7, coordinated through the orchestrator (R-307 holds 6) | §4 |
+| 6.3 The A3-undecided test was missing | Added as a control with the same three proofs as A2-undecided, and red-checked | §3 |
+| 6.4 A2's "no tag" was too wide | "No tag" only when an active key exists AND its field list is readable and non-empty. `primaryKeyFields` returning `[]` keeps the tag | §2 A2, §3 A2-unreadable-key |
 
 ## Revision r2: what changed, finding by finding (review `H:/lethal-coord/reviews/R-378-plan/review-r1.md`)
 
@@ -57,11 +66,16 @@ I have not shown that every shape keeps inactive operands out of the condition's
   - **A2:** the tag is kept unless the table is resolved AND it is PROVEN that the build's `OnInsert` does not assign the build's primary key. So:
     - If the receiver table's file is "undecided", KEEP the tag, and do not scan.
     - Otherwise, the primary key is the first `key(...)` whose node is "active". The `OnInsert` is the first active one. Assignments and `Validate` calls in inactive ranges do not count.
-    - If no active key is found, KEEP the tag. Today that case answers no tag, which is the direction the module's own comment calls wrong.
+    - "No tag" needs an active key whose field list is readable and non-empty. No active key, or an active key where `primaryKeyFields` reads `[]` (no readable field list), KEEPS the tag. Today both cases answer no tag, which is the direction the module's own comment calls wrong.
   - **A3:** the module under-tags indirect raises by design (its comment). R-378 does not widen that. It only removes evidence the build cannot run:
     - If the receiver table's file is "undecided", KEEP the tag, and do not scan.
     - Otherwise, the trigger is the first active trigger with that name, and raise-capable calls in inactive ranges do not count.
-    - Whether the mutant is GENERATED is unchanged, except that a trigger declaration that is itself inactive no longer counts.
+    - **A3 also decides GENERATION.** `forcedTriggerSite` calls `resolveForcedTrigger`, and it guards both `targets` and `generate` of the forward direction (`swap-modify-flag.ts:191`, `:308-322`). So:
+      - **A mutant DISAPPEARS** exactly when every table-level `trigger_declaration` named for the method (`OnInsert` / `OnModify` / `OnDelete`) that is a direct member of the receiver table's body starts in an inactive range. That trigger is not in the build, so `Modify()` versus `Modify(true)` runs no trigger in either case. The mutant was equivalent, and dropping it is the fix.
+      - **No mutant APPEARS.** The change only removes candidates from `findTableTrigger`. It never adds one, and an undecided file keeps today's lookup.
+      - **A tag-only change happens** when an active and an inactive trigger of the same name are both direct members. The first active one is read.
+      - Measured on master: a trigger inside an object-level `#if` is not a direct `trigger_declaration` member (the B5 shape), so the disappearing case may never occur in real code. §4 counts it.
+    - **Ordinals.** The ordinal counts mutants within `(astHash, codeunit, member, operator, major)` in source order (`project.ts:84-87`). A receiver variable is a positional id in `astSubtreeHash`, so `A.Modify()` and `B.Modify()` on two different tables in one member share a tuple. If A's mutant disappears, B's ordinal can drop from 1 to 0. That is a key move for unchanged source, and §4 decides whether it happens.
 
 ## 3. Repros (test-first, each red-checked)
 
@@ -74,9 +88,12 @@ The tests go in `packages/runner/tests/r378-member-wide-arms.test.ts`, through `
 | A2-key | the active first key is `"Code"`, which `OnInsert` assigns: tag KEPT | the active first key is `Amount`, which `OnInsert` does not assign: no tag |
 | A3 | `Modify()` exists, no tag | exists, `run-trigger-forced` |
 | A2-undecided | a receiver table with an undecidable directive (`#if LETHALX LETHALY`, `unparsed-condition`) and an `OnInsert` with no key assignment | |
+| A3-undecided | a receiver table with the same undecidable directive, whose `OnModify` has no raise-capable call. The forward `Modify()` mutant exists and KEEPS `run-trigger-forced` | |
+| A2-unreadable-key | a receiver table whose active key has no readable field list. Unit level, on `insertSkipCanRaise` with a hand-built tree, if alc refuses such a key: tag KEPT | |
+| A3-gone | if a shape exists where a direct trigger member is inactive: the forward mutant exists in the build with `LETHALX` and is ABSENT in the build without it. If no such shape parses, the test pins that the object-level `#if` trigger keeps today's answer (no mutant in either build) | |
 
 - **A2-key shape:** `#if LETHALX key(PK; Amount) #else key(PK; "Code") #endif`. I will first check that alc compiles it (`/al-compile`) and that R214 decides it.
-- **A2-undecided is a CONTROL.** It must first prove three things:
+- **A2-undecided and A3-undecided are CONTROLS.** It must first prove three things:
   - (a) `buildSemanticContext(...).symbols.resolveObject` resolves that table;
   - (b) `evaluateArms` returns `undecided` for its file;
   - (c) the same table WITHOUT the bad directive gives no tag.
@@ -85,7 +102,8 @@ The tests go in `packages/runner/tests/r378-member-wide-arms.test.ts`, through `
 - **Red-checks** (`mutation-red-checker`):
   - Remove each skip alone. A1's, A2's and A3's no-`LETHALX` halves go red.
   - Revert A2's active-key choice: A2-key goes red.
-  - Remove the "undecided keeps the tag" branch: A2-undecided goes red.
+  - Remove the "undecided keeps the tag" branch, separately for A2 and for A3: A2-undecided goes red, then A3-undecided goes red.
+  - Remove the readable-key condition: A2-unreadable-key goes red.
   - Remove the throw: the throw test goes red.
   - Make `armOf` always answer "active": every no-`LETHALX` half goes red.
 
@@ -96,12 +114,17 @@ The loop runs `bun scripts/verify.ts` and biome on the touched files.
 - **Pinned captures.** Every `packages/runner/tests/fixtures/r214/expected/*.txt` (including `p11-tier2.0.txt` and `.1.txt`, whose line 6 is `plat=-`) and `fixture-sandbox-symbols.*` must stay byte-identical. The existing r214 capture test asserts this.
   - `p11-tier2`'s later `Codeunit.Run` is a bare statement. It is not a consumed one, so A1 does not tag it in either build.
 - **Gate fixtures.** Only `fixtures/sandbox-symbols` has `#if`, and it holds no `Commit`, `Codeunit.Run`, `Insert`, `Modify`, `Delete` or loop. No gate figure moves and no pre-commitment is needed.
-- **Verdicts and keys.** A tag never moves a verdict: it is reported beside a kill. It is not in `identityKeyOf` (`selection.ts:36`), so there is no scheme bump.
+- **Verdicts.** A tag never moves a verdict: it is reported beside a kill.
+- **Keys and the scheme (decided by measurement, not ruled out).** A tag is not in `identityKeyOf` (`selection.ts:36`). A3's disappearing case can still renumber a surviving mutant (§2). So, before submit:
+  - Diff the full key list (the serialized identity key, ordinal included) master b1bc7e2e against the branch for every pinned capture and every R214 corpus and set. `r214-capture.ts` prints the key per deployed mutant.
+  - Classify each difference as either (i) a mutant gone under §2's A3 rule, or (ii) a surviving mutant whose key changed.
+  - Any (ii) for unchanged source means `IDENTITY_SCHEME` 7. I message the orchestrator BEFORE bumping (R-307 holds 6), and the bump follows R214's scheme-race procedure.
+  - Zero (ii) means no bump, and the submit note gives the diff's counts.
 - **Operator versions** are unchanged. If the review wants a minor bump, it is two lines plus `operator-version-invariant.test.ts`.
 - **Large corpora.** `r214-capture.ts` on the R214 corpora (DC and BaseApp, sets S0 and S1, per `docs/superpowers/specs/2026-09-29-r214-precommitment.md` §Corpora), run sequentially:
   - (a) Peak memory on a no-listing run must be at most 110% of master b1bc7e2e's, measured the same way the same day. The map adds one small range list per file, and the roots are already held.
   - (b) The `plat=` changes are listed per corpus. These are the expected fixes, and none of them is a verdict.
-  - (c) Raw and deployed counts must be identical. A3 can drop a mutant only when its trigger declaration is inactive. Any count change is listed and explained.
+  - (c) Raw and deployed counts change ONLY by mutants gone under §2's A3 rule. Each one is listed by file, line and receiver table, with the inactive trigger named. No mutant may appear. A count change of any other kind is a STOP.
   - The corpora are on `U:`, and `H:/lethal-scratch` holds no product code.
 
 ## 5. Also in the build
