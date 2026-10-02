@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**108 of 399 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 399 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -424,7 +424,7 @@ that ordering is the priority.
 - **R337** · `itest:envtool` writes no gate receipt, so a challenged caller cannot tell its pass from a skip or a refusal · [R337.md](docs/roadmap/R337.md) · done (73327d05)
 - **R338** · al-runner 2.12.0 prints its `[bc] selected BC <build> (<dir>)` line only under AL_RUNNER_VERBOSE=1, so LethAL records no `bcBuild` and itest:alrunner fails · [R338.md](docs/roadmap/R338.md) · done (01230c5c)
 - **R344** · On a `--server` session, `runSession` still re-probes the al-runner contract under the platform-app pin, an argv no mutant uses · [R344.md](docs/roadmap/R344.md) · open, filed 2026-09-29
-- **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · open, filed 2026-09-29
+- **R345** · The R149 contract re-probe failed once with al-runner exit 82 (no readable --output-json) while another session was running al-runner probes; cause not measured · [R345.md](docs/roadmap/R345.md) · closed 2026-10-02: the lanes and gates run a pinned source build of upstream main (c39ad5de) that carries the…
 - **R347** · `r181-discrimination-census.ts`'s procedure grain keys a trigger mutant as `file:` (blank), so every trigger in a file shares one group · [R347.md](docs/roadmap/R347.md) · open
 - **R348** · Docs state the CURRENT control-app version as a literal, so every bump leaves them stale (CLAUDE.md says 1.0.0.19 while the code requires 1.0.0.20) · [R348.md](docs/roadmap/R348.md) · done (3d756626)
 - **R375** · The full unit suite fails intermittently on Windows: `cli.test.ts`'s scratch cleanup cannot remove a `lethal-run-verify-*` folder (EBUSY), and the R358 guard then fails too · [R375.md](docs/roadmap/R375.md) · open, filed 2026-10-01
