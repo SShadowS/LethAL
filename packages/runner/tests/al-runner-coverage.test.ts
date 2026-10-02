@@ -124,12 +124,23 @@ describe("buildAlRunnerCoverageIndex", () => {
     expect(identities(index)).toEqual([[{ objectType: "Codeunit", objectId: 79150 }]]);
   });
 
-  test("R383: NAMES a file declaring two objects, and now INDEXES both objects, in order", async () => {
-    // al-runner #3713 (2.11.0 lost every object after a file's first) is gone on v2.12.0, measured
-    // on both transports (R383.md). The file is still REPORTED, and both objects are indexed.
+  test("NAMES a file declaring two objects, which is what disables coverage for the run", async () => {
+    // The upstream defect this guards, as of R383: al-runner v2.12.0-main.c39ad5de reports every
+    // object after a file's first at (previous object's end in the SOURCE) + (distance in the
+    // INSTRUMENTED text), so a later object's lines land in the wrong object. Before that (2.11.0,
+    // #3713, fixed upstream) it lost those objects outright.
     const two = `${ONE_OBJECT}\ncodeunit 79151 "Probe Two"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
     const dir = await bundle({ "src/Two.Codeunit.al": two });
     const index = await buildAlRunnerCoverageIndex(dir);
+    expect(index.multiObjectFiles).toEqual(["src/Two.Codeunit.al"]);
+    // And it is not indexed, so nothing can accidentally resolve against half of it.
+    expect(index.byFile.size).toBe(0);
+  });
+
+  test("R383: admitMultiObjectFiles (infrastructure, tests only) indexes both objects, in order", async () => {
+    const two = `${ONE_OBJECT}\ncodeunit 79151 "Probe Two"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
+    const dir = await bundle({ "src/Two.Codeunit.al": two });
+    const index = await buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
     expect(index.multiObjectFiles).toEqual(["src/Two.Codeunit.al"]);
     expect(identities(index)).toEqual([
       [
@@ -292,9 +303,9 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("a two-arm wrapped object counts as ONE object for the multi-object guard", async () => {
     const dir = await bundle({ "src/B2.Codeunit.al": R298_TWO_ARM });
     // R387: listed as wrapped, by the index's own rule, so the CLI can fall back to no coverage.
-    // R383: `supported` is gone; it answered the multi-object question alone, and that refusal is
-    // dropped. The lists stay, the wrapped one still drives the CLI fallback.
+    // `supported` still answers the multi-object question alone, as before.
     expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: true,
       multiObjectFiles: [],
       wrappedObjectFiles: ["src/B2.Codeunit.al"],
     });
@@ -303,6 +314,7 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("a bare object plus a wrapped one IS two objects for the guard", async () => {
     const dir = await bundle({ "src/Mixed.Codeunit.al": R298_MIXED });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: false,
       multiObjectFiles: ["src/Mixed.Codeunit.al"],
       wrappedObjectFiles: ["src/Mixed.Codeunit.al"],
     });
@@ -311,6 +323,7 @@ describe("R298: a file holding a #if-wrapped object is refused whole", () => {
   test("R387: a clean project lists no file in either list", async () => {
     const dir = await bundle({ "src/A.Codeunit.al": "codeunit 50100 A\n{\n}\n" });
     expect(await alRunnerCoverageSupport(dir)).toEqual({
+      supported: true,
       multiObjectFiles: [],
       wrappedObjectFiles: [],
     });
@@ -517,6 +530,7 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
       };
       const dir = await bundle(files);
       expect(await alRunnerCoverageSupport(dir)).toEqual({
+        supported: true,
         multiObjectFiles: [],
         wrappedObjectFiles: ["src/T.Table.al"],
       });
@@ -577,10 +591,14 @@ describe("R298 end to end (al-runner): a bare table before a wrapped enum reads 
 });
 
 /**
- * R383: multi-object files, both transports. al-runner v2.12.0 reports FILE-relative lines on
- * both (measured, R383.md), and the line map is keyed OBJECT-relative, so every row is resolved by
- * POSITION (`resolveFileLine`) before a procedure is looked up.
+ * R383 infrastructure: multi-object files, both transports, through an index built with
+ * `admitMultiObjectFiles`. Production does NOT admit them (al-runner v2.12.0-main.c39ad5de reports
+ * later objects in the wrong frame; see the real-frame evidence test), so these pin the resolver for
+ * the day it does: every row resolved by POSITION (`resolveFileLine`) from the INSTRUMENTED file
+ * frame before a procedure is looked up. The probe inputs below come from an UNinstrumented probe
+ * app, where the compiled text is the source, so the frame defect cannot show in them.
  */
+const admitted = (dir: string) => buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true });
 
 /** The probe's own `two/app/Two.Codeunit.al`, verbatim. A: 1-11, B: 13-23 (bases 1 and 12). */
 const PROBE_TWO = `codeunit 50100 ProbeA
@@ -676,9 +694,7 @@ const serverOne = (
 describe("R383: a multi-object file's rows resolve by position, on both transports", () => {
   test("Cobertura: the probe's s1.xml covers B.RunB only, at object-relative lines (LF, CRLF, BOM)", async () => {
     for (const [label, src] of variantsOf(PROBE_TWO)) {
-      const index = await buildAlRunnerCoverageIndex(
-        await bundle({ "two/app/Two.Codeunit.al": src }),
-      );
+      const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": src }));
       expect([label, alRunnerCoverageFrom(parseCobertura(PROBE_S1), index).entries]).toEqual([
         label,
         ONLY_B,
@@ -688,9 +704,7 @@ describe("R383: a multi-object file's rows resolve by position, on both transpor
 
   test("--server: the probe's OnlyB record covers B.RunB only (LF, CRLF, BOM)", async () => {
     for (const [label, src] of variantsOf(PROBE_TWO)) {
-      const index = await buildAlRunnerCoverageIndex(
-        await bundle({ "two/app/Two.Codeunit.al": src }),
-      );
+      const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": src }));
       expect([label, alRunnerCoverageFromServer(PROBE_SERVER_ONLY_B, index).entries]).toEqual([
         label,
         ONLY_B,
@@ -724,7 +738,7 @@ pageextension 50131 "PExt" extends "Customer Card"
       { objectType: "PageExtension", objectId: 50131, procedure: "TouchP", line: 6 },
     ];
     for (const [label, text] of variantsOf(src)) {
-      const index = await buildAlRunnerCoverageIndex(await bundle({ "src/Ext.al": text }));
+      const index = await admitted(await bundle({ "src/Ext.al": text }));
       const cob = alRunnerCoverageFrom(
         [5, 13].map((line) => ({ file: "src/Ext.al", line, hits: 1 })),
         index,
@@ -741,9 +755,7 @@ pageextension 50131 "PExt" extends "Customer Card"
   });
 
   test("a blank line between objects, or B's header, yields no member evidence", async () => {
-    const index = await buildAlRunnerCoverageIndex(
-      await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }),
-    );
+    const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }));
     const cob = alRunnerCoverageFrom(
       [12, 13, 14].map((line) => ({ file: "two/app/Two.Codeunit.al", line, hits: 1 })),
       index,
@@ -788,7 +800,7 @@ describe("R383: covering sets are keyed by (file, type, id), never by a procedur
     hit2: { file: string; line: number; scope: string },
     mutants: ReturnType<typeof mutant>[],
   ): Promise<string[][]> => {
-    const index = await buildAlRunnerCoverageIndex(await bundle(files));
+    const index = await admitted(await bundle(files));
     const out: string[][] = [];
     for (const transport of ["cobertura", "server"]) {
       const cov = (h: typeof hit1) =>
@@ -895,7 +907,7 @@ describe("R383: the --server procedure rule (r3 Design 3)", () => {
   ];
   /** `--server` entries as `type:id procedure`, for statements found by a needle in the text. */
   const run = async (src: string, statements: { scope: string; needle: string }[]) => {
-    const index = await buildAlRunnerCoverageIndex(await bundle({ "src/R.al": src }));
+    const index = await admitted(await bundle({ "src/R.al": src }));
     const lines = src.split("\n");
     const at = (needle: string) => lines.findIndex((l) => l.includes(needle)) + 1;
     const map = alRunnerCoverageFromServer(
@@ -1056,9 +1068,7 @@ describe("R383: the --server procedure rule (r3 Design 3)", () => {
   test("a disagreeing scope: POSITION wins, the statement is kept, and one warning names it", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const index = await buildAlRunnerCoverageIndex(
-        await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }),
-      );
+      const index = await admitted(await bundle({ "two/app/Two.Codeunit.al": PROBE_TWO }));
       const map = alRunnerCoverageFromServer(
         serverOne("two/app/Two.Codeunit.al", [
           { scope: "RunA", line: 19 },

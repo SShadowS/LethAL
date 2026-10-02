@@ -608,8 +608,14 @@ export function fileLineMapEntries(
 }
 
 /**
- * R383: a FILE-relative line, as al-runner reports it on both transports (measured on v2.12.0), to
- * the object whose declaration holds it and the OBJECT-relative line the line map is keyed on.
+ * R383: a FILE-relative line of the INSTRUMENTED text to the object whose declaration holds it and
+ * the OBJECT-relative line the line map is keyed on.
+ *
+ * Infrastructure only for now. al-runner v2.12.0-main.c39ad5de reports a multi-object file's
+ * first object in this frame but every later object in a mixed source/instrumented frame
+ * (`al-runner-coverage.ts` header), so the index does not admit such files and this function sees
+ * files with one indexed object only. Its base is 1 unless an unindexed object (an enum, an
+ * interface) comes first, which no fixture holds (R383, checked offline).
  *
  * Selects by the declaration node's own FILE span and converts with the same `baseLine` `spansOf`
  * used, so the two cannot disagree. `undefined` for a line in no indexed object (a blank or comment
@@ -652,8 +658,8 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * holds an object), and al-runner's whole-file rule (`fileHoldsWrappedObject`: every object of a
  * file holding such a wrapper, including a bare object BEFORE it). The second is wider only for a
  * bare object before the wrapper. It matters when the wrapped object has no coverage identity (an
- * enum, an interface): coverage stays on for the file's other objects (the multi-object guard,
- * gone since R383, counted one object here), al-runner drops the whole file's hits, and without the
+ * enum, an interface): coverage stays on for the file's other objects (the multi-object guard
+ * counts one object here), al-runner drops the whole file's hits, and without the
  * union the bare table's trigger mutants would reach the all-green fallback. Over-refusing is the
  * safe direction.
  */

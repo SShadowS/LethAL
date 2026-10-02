@@ -284,10 +284,10 @@ export interface AlRunnerConfig {
    * every mutant runs every green test and an unreached one is reported `survived`, which
    * over-reports. With coverage wrongly enabled it would be reported `no-coverage`, which HIDES
    * it. So the caller has to opt in, and must first ask `alRunnerCoverageSupport(projectDir)`
-   * whether LethAL can place this project's coverage at all -- it cannot yet for a file holding a
-   * `#if`-wrapped object (R298, pending R300). A multi-object file is admitted since R383: al-runner
-   * #3713 is gone on v2.12.0, and each row is resolved to its object by position (see
-   * `al-runner-coverage.ts`).
+   * whether al-runner's coverage can be trusted for this project at all -- it cannot for a file
+   * declaring more than one object (al-runner reports every object after the first in the wrong
+   * frame, measured on v2.12.0-main.c39ad5de, R383; see `al-runner-coverage.ts`), and the CLI also
+   * refuses a file holding a `#if`-wrapped object (R298, pending R300).
    *
    * Decided by the caller rather than here because `capabilities()` is synchronous and is read at
    * the top of `runSession`, before an instrumented bundle exists to inspect.
@@ -649,9 +649,11 @@ export class AlRunnerBackend implements ExecutionBackend {
    * 2.7.0.0, `docs/superpowers/specs/2026-08-28-alrunner-bc-parity-probe.md`):
    *
    * - `coverage: "none"` — NO LONGER TRUE since R220 (2026-09-09): `cfg.coverage: "al-runner"`
-   *   reads al-runner's own per-test `--coverage`. Since R383 a multi-object file no longer
-   *   disables it (upstream #3713 is gone on v2.12.0, measured), so coverage is no longer a reason
-   *   for `authoritative: false`; the reasons below still are.
+   *   reads al-runner's own per-test `--coverage`. What keeps `authoritative` false on this point
+   *   is that the coverage is CONDITIONAL: a file declaring more than one object disables it for
+   *   the whole run, so it is a property of the project's layout, not a capability of the backend.
+   *   The reason moved in R383: upstream #3713 (objects after the first lost) is fixed, but on
+   *   v2.12.0-main.c39ad5de those objects' lines come back in a frame LethAL cannot undo.
    * - **`Codeunit.Run` does not scope a write transaction.** `remove-commit` at
    *   `Data Commit Ops.CommitThenRunValueForm` is killed on bcdev and survives here, and a direct
    *   probe confirms the mechanism: a row inserted inside `Codeunit.Run` survives the error that
@@ -691,10 +693,11 @@ export class AlRunnerBackend implements ExecutionBackend {
       coverage: this.cfg.coverage ?? "none",
       deploy: "none",
       isolation: "full-reset",
-      // R183 held this false for TWO reasons. Coverage is no longer one (R383: a multi-object file
-      // no longer disables it). The other is that `Codeunit.Run` did not scope a write
-      // transaction, so a mutant killable only through that rollback survived; the canary reports
-      // 2.11.0 may have closed it, and that needs measuring against bcdev before this changes.
+      // R183 holds this false for TWO reasons, and coverage was only one of them. The other is
+      // that `Codeunit.Run` did not scope a write transaction, so a mutant killable only through
+      // that rollback survived. Flipping this on the strength of coverage alone would be claiming
+      // the half that is not measured; the canary reports 2.11.0 may have closed it, and that
+      // needs measuring against bcdev before this changes.
       authoritative: false,
     };
   }

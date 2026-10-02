@@ -12,27 +12,31 @@
  * reports that file at `line-rate 0.0000`, so the two backends already agree; only the wiring was
  * missing.
  *
- * ## Multi-object files: refused until R383, admitted and resolved by position since
+ * ## Multi-object files: still refused, for a different reason than before
  *
- * al-runner 2.11.0 lost every object after a file's first (upstream #3713): given one file holding
- * two codeunits and a test calling only the second, the executed line was reported nowhere, on
- * both transports. So until R383 a file declaring more than one object disabled coverage for the
- * whole run, because trusting it would have read the second object's mutants a FALSE
- * `no-coverage`.
+ * al-runner 2.11.0 lost every object after a file's first (upstream #3713). That is FIXED on
+ * v2.12.0: the second object's lines are reported now, on both transports. But measured on the
+ * pinned build v2.12.0-main.c39ad5de (`docs/roadmap/R383.md`), they are reported in the WRONG
+ * FRAME. al-runner compiles LethAL's instrumented bundle, finds the source project with the same
+ * app id, and labels coverage with the SOURCE path. For the first object in a file the lines are
+ * right. For every object after it, a line is reported as (the previous object's closing line in
+ * the SOURCE) + (its distance from that line in the INSTRUMENTED text). On `sandbox-multiobject`
+ * instrumented lines 33/35/40/45/50 of `Multi B` come back as 16/18/23/28/33, which lie inside
+ * `Multi A`. Nothing in the report says which frame a line is in, so LethAL cannot undo it.
  *
- * MEASURED 2026-10-02 on al-runner v2.12.0 (`docs/roadmap/R383.md`): the defect is gone on both
- * transports, for two and three objects in one file and a test calling any one of them. Both
- * transports report FILE-relative lines (B's first statement at file line 19 is reported 19, not
- * its object-relative 7); Cobertura has one `<class>` per FILE, and the daemon keys statements by
- * file path.
+ * So a file declaring more than one object still disables coverage for the WHOLE run
+ * (`supported: false`, and the CLI guard falls back to `"none"`), and the index skips such a file
+ * so nothing can resolve against it. Coarse on purpose: dropping just that file's objects would
+ * read their mutants a false `no-coverage`, because `coverageFilter`'s every-green-test fallback is
+ * gated to table triggers. Prevalence is low: measured, no file trips this on any gate fixture but
+ * `sandbox-multiobject` (which exists to), nor on Continia Document Output (R383.md).
  *
- * BC numbers coverage lines OBJECT-relative and objects PARTITION a file, which is why
- * `line-map.ts` computes a base line per object. So every row here is resolved by POSITION first
- * (`resolveFileLine`): the declaration whose file span holds the line names the object, and that
- * object's base line converts the line to the frame the line map is keyed on. In a single-object
- * file the base is 1 and the two frames coincide, which is why nothing converted before. A line in
- * no indexed object (a gap between objects, an enum) gives no entry. `multiObjectFiles` is still
- * reported, and only a `#if`-wrapped file is still refused (R298, pending R300).
+ * What R383 built stays as infrastructure for the day upstream fixes the frame: every row is
+ * resolved by POSITION (`resolveFileLine`) to the declaration whose file span holds it, and that
+ * object's base line converts it to the object-relative frame BC and the line map use. In a
+ * single-object file the base is 1, so this is exactly the old behaviour.
+ * `buildAlRunnerCoverageIndex(dir, { admitMultiObjectFiles: true })` turns the admission on, and
+ * only tests use it today.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -117,7 +121,10 @@ export interface AlRunnerCoverageIndex {
    */
   readonly byFile: ReadonlyMap<string, readonly LineMapEntry[]>;
   readonly lineMap: LineMap;
-  /** Project-relative paths declaring more than one object. Reported only, since R383. */
+  /**
+   * Project-relative paths declaring more than one object. Non-empty disables coverage, and such a
+   * file is not indexed unless `admitMultiObjectFiles` was passed (R383).
+   */
   readonly multiObjectFiles: readonly string[];
   /**
    * R298: project-relative paths (forward slashes) holding a `#if`-wrapped object. Refused WHOLE,
@@ -139,20 +146,20 @@ export interface AlRunnerCoverageIndex {
  * `no-coverage`, which is the worst of the three possible answers.
  *
  * Scanning the SOURCE is sound because instrumentation is one output file per input file, so a
- * file's objects are the same on both sides.
- *
- * R383: `multiObjectFiles` is REPORTED only. A multi-object file no longer disqualifies anything,
- * since its rows are resolved by position (this module's header). The `supported` flag that
- * answered that question alone is gone.
+ * file's objects are the same on both sides. See this module's header for why a multi-object file
+ * disqualifies the whole run rather than just its own objects (R383: al-runner's frame for every
+ * object after a file's first, measured on v2.12.0-main.c39ad5de).
  *
  * R387: `wrappedObjectFiles` uses the SAME rule the index uses to refuse a file
  * (`fileHoldsWrappedObject`), so the guard and the index cannot drift. Such a file's objects are
- * dropped from the index, so trusting coverage would read every one of them `no-coverage`. R298
- * keeps coverage on for a wrapped file and refuses its objects in selection, by name; the CLI is
- * stricter and falls back to no coverage when this list is non-empty (`withAlRunnerCoverageGuard`,
- * cli.ts). A file can be in both lists.
+ * dropped from the index, so trusting coverage would read every one of them `no-coverage`.
+ * `supported` still answers the multi-object question alone, as before: R298 keeps coverage on for
+ * a wrapped file and refuses its objects in selection, by name. The CLI is stricter and falls back
+ * to no coverage when EITHER list is non-empty (`withAlRunnerCoverageGuard`, cli.ts). A file can be
+ * in both lists.
  */
 export async function alRunnerCoverageSupport(projectDir: string): Promise<{
+  supported: boolean;
   multiObjectFiles: readonly string[];
   wrappedObjectFiles: readonly string[];
 }> {
@@ -169,6 +176,7 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
     if (objectsOf(root).length > 1) multi.push(normalizeSlashes(rel));
   }
   return {
+    supported: multi.length === 0,
     multiObjectFiles: multi,
     wrappedObjectFiles: wrapped,
   };
@@ -182,9 +190,14 @@ export async function alRunnerCoverageSupport(projectDir: string): Promise<{
  * and resolution is keyed by the FILE PATH Cobertura reports rather than by an opaque id that
  * could collide with a copied dependency source. That is the R29 hazard `line-map.ts` guards
  * against on the hub path, and it does not arise when the coverage row names the file.
+ *
+ * A multi-object file is NAMED and, by default, not indexed (R383, this module's header).
+ * `admitMultiObjectFiles` indexes every object of it, resolved by position; only tests pass it
+ * until upstream reports every object in the instrumented frame.
  */
 export async function buildAlRunnerCoverageIndex(
   instrumentedDir: string,
+  options: { readonly admitMultiObjectFiles?: boolean } = {},
 ): Promise<AlRunnerCoverageIndex> {
   await initParser();
   const rels = (await readdir(instrumentedDir, { recursive: true }))
@@ -209,9 +222,13 @@ export async function buildAlRunnerCoverageIndex(
       }
       continue;
     }
-    // R383: reported, no longer skipped. Forward slashes so the path reads the same on every
-    // platform: `readdir` hands back `src\X.al` on Windows.
-    if (objectsOf(root).length > 1) multiObjectFiles.push(normalizeSlashes(rel));
+    if (objectsOf(root).length > 1) {
+      // Forward slashes so the warning reads the same on every platform: `readdir` hands back
+      // `src\X.al` on Windows, and this string is quoted to a user who has to find the file.
+      multiObjectFiles.push(normalizeSlashes(rel));
+      // Not indexed, so nothing can resolve against a file al-runner reports in the wrong frame.
+      if (options.admitMultiObjectFiles !== true) continue;
+    }
     const fileEntries = fileLineMapEntries(root, objectIdentityOf);
     if (fileEntries.length === 0) continue;
     byFile.set(normalizeFileKey(rel), fileEntries);
