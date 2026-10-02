@@ -1,4 +1,4 @@
-import { isProcedureLike } from "@lethal/engine";
+import { type SemanticContext, armOfNode, isProcedureLike } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -77,7 +77,10 @@ function isConsumedCodeunitRun(node: ALSyntaxNode): boolean {
  * Both are why the report words this as best-effort and never as a classification, and why the
  * verdict does not move.
  */
-export function detectWriteTxnCodeunitRun(commitNode: ALSyntaxNode): PlatformKillMechanism | null {
+export function detectWriteTxnCodeunitRun(
+  commitNode: ALSyntaxNode,
+  ctx?: SemanticContext,
+): PlatformKillMechanism | null {
   const body = enclosingBody(commitNode);
   if (body === null) return null;
   let found = false;
@@ -86,7 +89,9 @@ export function detectWriteTxnCodeunitRun(commitNode: ALSyntaxNode): PlatformKil
     // Strictly AFTER the deleted statement. A consumed `Codeunit.Run` BEFORE the `Commit()` is
     // unaffected by deleting it — the write it would have seen is the same either way.
     if (n.startIndex < commitNode.endIndex) return;
-    if (isConsumedCodeunitRun(n)) found = true;
+    // R378: a call in an `#if` arm this build compiles out never runs. The site's own file is never
+    // undecided here (R214 generates no mutant in such a file), so only "inactive" is skipped.
+    if (isConsumedCodeunitRun(n) && armOfNode(ctx, n) !== "inactive") found = true;
   });
   return found ? WRITE_TXN_CODEUNIT_RUN : null;
 }
