@@ -247,6 +247,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner.layout.baseline.json",
     "itest:alrunner",
   ),
+  "al-runner.multiobject.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
+    "al-runner.multiobject.baseline.json",
+    "itest:alrunner",
+  ),
   "al-runner.cli-default.baseline.json": gateHow(
     "LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH=<al-runner.exe>",
     "al-runner.cli-default.baseline.json",
@@ -266,10 +271,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * Registered gate baselines that have never been recorded. Its gate still REFUSES to start without
  * the file (R332); this list only lets the offline wiring test tell "pre-committed, waiting for its
  * one record run" from "missing". The commit that records a file removes it from here, and the
- * wiring test fails while a listed file exists. Empty: R387's CLI-default leg was recorded
- * 2026-10-01 (al-runner.cli-default.baseline.json).
+ * wiring test fails while a listed file exists. R387's CLI-default leg was recorded 2026-10-01
+ * (al-runner.cli-default.baseline.json). R383's multi-object leg is pre-committed in
+ * docs/superpowers/specs/2026-10-02-r383-multiobject-precommitment.md and not yet run.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner.multiobject.baseline.json"];
 
 /** R321's symbol baselines. Recorded only through `LETHAL_ITEST_RECORD_SYMBOL_BASELINES=1`. */
 export const SYMBOL_BASELINES: readonly string[] = [

@@ -316,6 +316,7 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
   "al-runner.itest.ts": {
     BASELINE_PATH: "al-runner.baseline.json",
     LAYOUT_BASELINE_PATH: "al-runner.layout.baseline.json",
+    MULTIOBJECT_BASELINE_PATH: "al-runner.multiobject.baseline.json",
     CLI_DEFAULT_BASELINE_PATH: "al-runner.cli-default.baseline.json",
   },
   "bcdev.itest.ts": { BASELINE_PATH: "bcdev.baseline.json" },

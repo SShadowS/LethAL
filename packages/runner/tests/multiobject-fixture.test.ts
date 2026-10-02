@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
+import { EXPECTED_MULTIOBJECT } from "../itest/multiobject-fixture";
 import { alRunnerCoverageFrom, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { lineMapFromSources } from "../src/line-map";
 import {
@@ -106,6 +107,14 @@ describe("R383: sandbox-multiobject", () => {
     expect(get().rows).toEqual(EXPECTED_MUTANTS);
   });
 
+  it("the itest leg's pre-committed table names exactly these mutants", () => {
+    const sites = EXPECTED_MULTIOBJECT.map(
+      (r) =>
+        `${r.code} ${r.file.replace(/\//g, "\\")} ${r.line} ${r.operatorName} ${r.procedureName}`,
+    );
+    expect(sites).toEqual(EXPECTED_MUTANTS.map((m) => m.replace(/ codeunit:\d+/, "")));
+  });
+
   it("the emitted pair is indexed as two objects, and each baseline line resolves to its owner", async () => {
     const { dir } = get();
     const index = await buildAlRunnerCoverageIndex(dir);
@@ -118,16 +127,17 @@ describe("R383: sandbox-multiobject", () => {
       if (n === undefined) throw new Error(`no emitted line holds ${needle}`);
       return n;
     };
-    const owners = [
+    const owners: [string, string][] = [
       ["exit(X + 7);", "79800 Never"],
       ["exit(X + 1);", "79801 Reached"],
       ["exit(X); end", "79801 Reached"],
       ["exit(X * 3);", "79801 Unreached"],
-    ].map(([needle, owner]) => {
-      const map = alRunnerCoverageFrom([{ file: PAIR, line: last(needle ?? ""), hits: 1 }], index);
-      return [needle, map.entries.map((e) => `${e.objectId} ${e.procedure ?? "-"}`), owner];
-    });
-    for (const [needle, got, owner] of owners) expect([needle, got]).toEqual([needle, [owner]]);
+    ];
+    for (const [needle, owner] of owners) {
+      const map = alRunnerCoverageFrom([{ file: PAIR, line: last(needle), hits: 1 }], index);
+      const got = map.entries.map((e) => `${e.objectId} ${e.procedure ?? "-"}`);
+      expect([needle, got]).toEqual([needle, [owner]]);
+    }
   });
 
   it("in the source frame, Reached's last statement sits on the line right before Unreached", async () => {
