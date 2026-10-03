@@ -37,6 +37,7 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
+import { discoveredRelPaths } from "./line-filter";
 import { testKeyOf } from "./selection";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
@@ -1969,13 +1970,22 @@ export function scanTestPageModel(
   return refused;
 }
 
+/** R421: `path` is the `/`-separated form (`discoveredRelPaths`); the file is read through its raw
+ *  name. `platform` defaults to `process.platform`; tests pass `"win32"` to simulate Windows. */
 export async function readTestAppSources(
   testDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<Array<{ path: string; text: string }>> {
   const entries = await readdir(testDir, { recursive: true });
-  const alFiles = entries.filter((e) => e.toLowerCase().endsWith(".al")).sort();
+  const alFiles = discoveredRelPaths(
+    entries.filter((e) => e.toLowerCase().endsWith(".al")),
+    platform,
+  );
   return Promise.all(
-    alFiles.map(async (path) => ({ path, text: await readFile(join(testDir, path), "utf8") })),
+    alFiles.map(async ({ rel, raw }) => ({
+      path: rel,
+      text: await readFile(join(testDir, raw), "utf8"),
+    })),
   );
 }
 

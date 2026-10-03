@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
+import { readTargetSource } from "../src/baseline-snapshot";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
@@ -13,6 +14,12 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * the emitted output is what a real run could produce). sandbox-app's hashes are the R-297 Task 0
  * BEFORE capture (base `2ab111a`), unchanged. The other four were captured under WASM at
  * `98876ffa`; the native switch (RUST-03 S3) must leave every value unchanged (pre-commitment Q3).
+ *
+ * R421: the five `mutant-manifest.json` pins were re-recorded in the one `/` form every platform
+ * now writes for a discovered path (they were the Windows `\` form: 5db0c7e3, 0ae3b2f7, 3d4d0238,
+ * 3c3f0bde and a6d004e2 for the five fixtures in the order below). No other pin moved, and the
+ * R411 shim that rewrote `/` to `\` on other hosts is gone. Each fixture is also emitted from a
+ * `\`-keyed snapshot (the shape a Windows read gives) and must give the same hashes.
  *
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
  * the same commit, and says so.
@@ -37,7 +44,7 @@ const PINNED: Record<
         "07afac62dc7a9cdd4958bd31b2688e4e021d6c98cb72cab958620cbc877a2e00",
       "SandboxPricing.Codeunit.al":
         "1e5744a518bf3df186ba3ce9495745bfe0d68efde8f6eac615c235c1567083cc",
-      "mutant-manifest.json": "5db0c7e3d16b31f2c66a9bdfc042a9acda228ee93bd79923d4db5a529e179b78",
+      "mutant-manifest.json": "24960578e7b86f7ee0d6009295ec27c714ad429e6c82c717d2f1a36bf1be5641",
     },
   },
   "sandbox-data": {
@@ -91,7 +98,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "0ae3b2f7075846542c1d6d1acca2c90512120fa9c59501df905abf3aa700a308",
+      "mutant-manifest.json": "90fa82e468b6c90a88a73bb74bf9e55c0c19cd56a07bcccdc8cbce976ca317ba",
     },
   },
   "sandbox-hang": {
@@ -104,7 +111,7 @@ const PINNED: Record<
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "3d4d02389ce5a49d712dadac2d7eb1005cd86cefce79fd29509addcbe72efc8d",
+      "mutant-manifest.json": "f7b49d85171168e3a2403e55ad69b077fc1ab6645ecf44492b7d9de2de1f86e6",
     },
   },
   "sandbox-harden": {
@@ -118,7 +125,7 @@ const PINNED: Record<
         "761229a7c2c2edaa674509cd00a51e53118742a676a957645d3d33cb3f30966d",
       "MutationUpgrade.Codeunit.al":
         "4a52c84af5a27079132374f5737fb95f13d9721f616e70c2b62f83e6d90d7378",
-      "mutant-manifest.json": "3c3f0bdef04e0d952eaa8507c9c130e7e244e61493180df2cf098f010c2f73f9",
+      "mutant-manifest.json": "71fe65be7ce4ae7a5e342f67b084fa48c92d7d241fcddb74ab18fa18b40094b4",
     },
   },
   "sandbox-coverage-probe": {
@@ -135,7 +142,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "7f36f6c33258728c6dfdec37e742730e48627e4f0e92cd325184a1c444b2f740",
-      "mutant-manifest.json": "a6d004e2ae6344d4361108568879dd8b96dfd95db6a946cf577182b911661a61",
+      "mutant-manifest.json": "da594088aba11817ac3a5d78f17c931d82f1f30b506b17588cc7365e40cc63cc",
     },
   },
 };
@@ -155,36 +162,38 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
       expect(appJson.idRanges.some((r) => id >= r.from && id <= r.to)).toBe(true);
     }
 
-    const targetDir = await mkdtemp(join(tmpdir(), "lethal-fixture-emission-"));
-    dirs.push(targetDir);
-    const set = await generateMutationSet(fixtureDir);
-    await writeInstrumentedProject({
-      targetDir,
-      files: set.files,
-      identityOrdinals: identityOrdinalsOf(set),
-      selectorIds,
-      artifactId: "0123456789abcdef0123456789abcdef",
-      targetAppId: "00000000-0000-0000-0000-000000000000",
-      operatorTiers,
-    });
-    const got: Record<string, string> = {};
-    for (const name of (await readdir(targetDir, { recursive: true })).map(String).sort()) {
-      if (name === "app.json") continue;
-      let bytes: Buffer | string = await readFile(join(targetDir, name));
-      // R411: the manifest's `"file"` values carry the host separator, and these pins are the
-      // Windows capture. On another host, write those values in the Windows form before hashing,
-      // so every OTHER byte must still match the capture exactly (measured: they are the only
-      // difference between a Linux and a Windows manifest).
-      if (name === "mutant-manifest.json" && process.platform !== "win32") {
-        bytes = bytes
-          .toString("utf8")
-          .replace(
-            /^(\s*"file": ")([^"]*)"/gm,
-            (_, head: string, p: string) => `${head}${p.split("/").join("\\\\")}"`,
-          );
+    const emitHashes = async (
+      options?: Parameters<typeof generateMutationSet>[1],
+    ): Promise<Record<string, string>> => {
+      const targetDir = await mkdtemp(join(tmpdir(), "lethal-fixture-emission-"));
+      dirs.push(targetDir);
+      const set = await generateMutationSet(fixtureDir, options);
+      await writeInstrumentedProject({
+        targetDir,
+        files: set.files,
+        identityOrdinals: identityOrdinalsOf(set),
+        selectorIds,
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "00000000-0000-0000-0000-000000000000",
+        operatorTiers,
+      });
+      const got: Record<string, string> = {};
+      for (const name of (await readdir(targetDir, { recursive: true })).map(String).sort()) {
+        if (name === "app.json") continue;
+        const bytes = await readFile(join(targetDir, name));
+        got[name.split("\\").join("/")] = createHash("sha256").update(bytes).digest("hex");
       }
-      got[name.split("\\").join("/")] = createHash("sha256").update(bytes).digest("hex");
+      return got;
+    };
+
+    expect(await emitHashes()).toEqual(hashes);
+
+    // R421: the same files read the way Windows reads them (every key written with `\`) must
+    // give the same bytes, so one expected value holds for both input forms on any host.
+    const winSource = new Map<string, Buffer>();
+    for (const [k, v] of await readTargetSource(fixtureDir)) {
+      winSource.set(k.split("/").join("\\"), v);
     }
-    expect(got).toEqual(hashes);
+    expect(await emitHashes({ source: winSource, platform: "win32" })).toEqual(hashes);
   });
 }

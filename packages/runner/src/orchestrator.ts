@@ -124,7 +124,7 @@ import {
   MAX_TTL_SECONDS,
 } from "./lease";
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
-import { isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
+import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
@@ -544,6 +544,12 @@ export interface MutationSetOptions {
    * i.e. alc, which predefines nothing.
    */
   readonly backend?: BuildBackend;
+  /**
+   * R421: the platform whose path rules apply to the discovered file names (`discoveredRelPaths`).
+   * Absent means `process.platform`, which is what every production caller wants; tests pass
+   * `"win32"` to simulate a Windows readdir on any host.
+   */
+  readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -769,9 +775,21 @@ export async function generateMutationSet(
   /** Files with >=1 spec that no selector var can be injected into — reported once, below. */
   const skipped: NotInstrumentedFile[] = [];
   const snapshot = options.source;
-  const entries = (
-    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
-  ).filter(isEnumeratedAl);
+  // R421: every discovered name is normalised to `/` HERE, once, and sorted in that form, so file
+  // order, mutant ids, batches and every written `file` are the same on every platform. Reads go
+  // through the RAW name (`readKeyOf`): a snapshot taken on Windows is keyed with `\`.
+  const listed =
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true });
+  // The `.al` / generated-file filter reads each name the way its platform does: only win32 treats
+  // `\` as a separator. Off win32 `x\MutationFoo.al` is ONE name, not a generated `MutationFoo.al`,
+  // so it reaches `discoveredRelPaths` and is refused by name instead of skipped without a word.
+  const platform = options.platform ?? process.platform;
+  const discovered = discoveredRelPaths(
+    listed.filter((e) => isEnumeratedAl(e, platform)),
+    platform,
+  );
+  const readKeyOf = new Map(discovered.map((d) => [d.rel, d.raw]));
+  const entries = discovered.map((d) => d.rel);
   // R41: resolved BEFORE any file is read, so a typo'd pattern fails immediately rather than
   // after a full parse. `undefined` means "no narrowing" — distinct from an empty set, which
   // `admittedByOnly` refuses outright.
@@ -818,16 +836,21 @@ export async function generateMutationSet(
   // context must be project-wide, and note that narrowing the PARSE set instead of the
   // spec-generation set would make `--only` change verdicts rather than just how many run.
   const parsed = await Promise.all(
-    entries.sort().map(async (rel) => {
-      const bytes = snapshot?.get(rel);
+    // Already sorted by `discoveredRelPaths`, in the `/` form.
+    entries.map(async (rel) => {
+      const raw = readKeyOf.get(rel);
+      if (raw === undefined) {
+        throw new Error(`generateMutationSet: ${rel} has no discovered file name to read`);
+      }
+      const bytes = snapshot?.get(raw);
       if (snapshot !== undefined && bytes === undefined) {
-        throw new Error(`generateMutationSet: ${rel} is not in the source snapshot`);
+        throw new Error(`generateMutationSet: ${raw} is not in the source snapshot`);
       }
       // Buffer's decode, as `readFile(..., "utf8")` does: a BOM is kept, not stripped.
       const source =
         bytes !== undefined
           ? bytes.toString("utf8")
-          : await readFile(join(projectDir, rel), "utf8");
+          : await readFile(join(projectDir, raw), "utf8");
       return { path: rel, source, root: wrapRoot(parseAL(source)) };
     }),
   );

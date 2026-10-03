@@ -455,9 +455,10 @@ describe("sessionFingerprint (R47)", () => {
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
   // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
   // it was 4a8c47ac...288a under scheme 3. It moved again for R214 (the next scheme after R318's);
-  // it was 25fdc64a...3be4f under scheme 4. It moved again for R374, scheme 6; it was
-  // ef3bb9d1...daf5 under scheme 5.
-  const PINNED = "b3f6072bff3e2fc4b9ff8038470ef189310efef34722bf153e173ba625600c0e";
+  // it was 25fdc64a...3be4f under scheme 4. It moved again for R418 (scheme 6); it was
+  // ef3bb9d1...daf5 under scheme 5. It moved again for R421 (scheme 7); it was b3f6072b...0c0e
+  // under scheme 6.
+  const PINNED = "5c8357ec03b8f337e9b444a80a03be4f5a7bd021aee3a048079fe36804e00c4b";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1913,8 +1914,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 6 since R374 (run-wide identity ordinals).
-    expect(IDENTITY_SCHEME).toBe(6);
+    // Pinned by value so a bump is deliberate: 7 since R421 (discovered paths normalised to `/`).
+    expect(IDENTITY_SCHEME).toBe(7);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

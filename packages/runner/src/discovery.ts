@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { maskAlNonCode } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
+import { discoveredRelPaths } from "./line-filter";
 
 const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
 const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
@@ -69,6 +70,11 @@ export interface DiscoverOptions {
    * caller opts into, so it is recorded as a report caveat rather than treated as free.
    */
   readonly only?: readonly string[];
+  /**
+   * R421: the platform whose path rules apply to the discovered file names (`discoveredRelPaths`).
+   * Absent means `process.platform`; tests pass `"win32"` to simulate a Windows readdir.
+   */
+  readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -158,11 +164,19 @@ export async function discoverTests(
 ): Promise<TestMethodRef[]> {
   const refs: TestMethodRef[] = [];
   const entries = await readdir(testDir, { recursive: true });
-  const alFiles = entries.filter((e) => e.toLowerCase().endsWith(".al")).sort();
-  const admitted = admittedTestFiles(alFiles, options.only ?? []);
-  for (const rel of alFiles) {
+  // R421: normalised to `/` once and sorted in that form; matched and labelled with `rel`, read
+  // through the raw name.
+  const discovered = discoveredRelPaths(
+    entries.filter((e) => e.toLowerCase().endsWith(".al")),
+    options.platform,
+  );
+  const admitted = admittedTestFiles(
+    discovered.map((d) => d.rel),
+    options.only ?? [],
+  );
+  for (const { rel, raw } of discovered) {
     if (admitted !== undefined && !admitted.has(rel)) continue;
-    const source = await readFile(join(testDir, rel), "utf8");
+    const source = await readFile(join(testDir, raw), "utf8");
     refs.push(...testsInAlSource(rel, source));
   }
   return refs;
