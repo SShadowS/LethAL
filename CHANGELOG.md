@@ -114,6 +114,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 7** (R421): discovered file paths are now normalised to `/` on every platform.
+  On Windows a project with subfolders gets the file order, mutant ids and batches Linux gets, and
+  with per-batch ordinals an identity twin in another file can change ordinal. Existing marks files
+  (`lethal.equivalent.json`) need `"identityScheme": 7` after re-checking each mark against a fresh
+  report. History and resume from older-scheme runs are refused by name (R325).
+- **Paths in reports** (R421): reports made on Windows before this version show `src\X.al`; from
+  this version every platform writes `src/X.al`.
 - **Identity scheme 6** (R418): a key's `codeunitName` can move in a file that holds a non-BMP
   character (an emoji) anywhere before a later comment or blanked string: in code, a quoted name, a
   comment or a string, and in a file of one object as well as several. The mask no longer shifts,
