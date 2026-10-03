@@ -8,18 +8,29 @@ mkdir -p "$src"
 clone() { # <name> <url>
   if [ ! -d "$src/$1/.git" ]; then git clone --quiet "$2" "$src/$1"; else git -C "$src/$1" pull --quiet --ff-only || true; fi
 }
-clone bc-dev-mcp https://github.com/SShadowS/bc-dev-mcp.git
-clone business-central-mcp https://github.com/SShadowS/business-central-mcp.git
-clone pi-mcp https://github.com/SShadowS/pi-mcp.git
-for r in bc-dev-mcp business-central-mcp pi-mcp; do
-  (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent build)
-done
+# four worktrees run setup at once and share $src: one at a time through the siblings
+(
+  flock 9
+  clone bc-dev-mcp https://github.com/SShadowS/bc-dev-mcp.git
+  clone business-central-mcp https://github.com/SShadowS/business-central-mcp.git
+  clone pi-mcp https://github.com/SShadowS/pi-mcp.git
+  for r in bc-dev-mcp business-central-mcp pi-mcp; do
+    (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent build)
+  done
+) 9>"$src/.lock"
 # fixture symbol folders (.alpackages, gitignored) arrive as one tar through secret_files; kraken
 # re-runs setup when its bytes change. Files extracted last time and absent now are removed.
 man=.kraken-local/fixture-symbols.manifest
 if [ -f .kraken-local/fixture-symbols.tar ]; then
-  tar -tf .kraken-local/fixture-symbols.tar | grep -v '/$' | sort > "$man.new"
-  if [ -f "$man" ]; then comm -23 "$man" "$man.new" | while IFS= read -r f; do rm -f -- "$f"; done; fi
+  tar -tf .kraken-local/fixture-symbols.tar | { grep -v '/$' || true; } | sort > "$man.new"
+  # never remove an absolute path or one with a .. segment, whatever an old manifest says
+  if [ -f "$man" ]; then
+    comm -23 "$man" "$man.new" | while IFS= read -r f; do
+      case "/$f/" in */../*) continue ;; esac
+      case "$f" in /* | [A-Za-z]:*) continue ;; esac
+      rm -f -- "$f"
+    done
+  fi
   tar -xf .kraken-local/fixture-symbols.tar
   mv "$man.new" "$man"
 fi

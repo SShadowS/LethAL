@@ -16,11 +16,12 @@ function setup(): { root: string; bin: string; wt: string; src: string; calls: s
   const calls = join(root, "calls.log");
   mkdirSync(bin);
   mkdirSync(join(wt, ".kraken-local"), { recursive: true });
-  const fake = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/bash\necho "${name} $*" >> "${calls.replaceAll("\\", "/")}"\n${body}\n`);
+  const fake = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/bash\necho "${name} $*" >> "${calls.replaceAll("\\", "/")}"\n${body}\n`, { mode: 0o755 });
   // clone <url> <dest>: make <dest>/.git so the second run takes the pull branch
   fake("git", 'if [ "$1" = clone ]; then mkdir -p "$4/.git"; fi');
   fake("npm", "true");
   fake("bun", "true");
+  fake("flock", "true"); // Git Bash has none; the lock itself is not under test
   return { root, bin, wt, src, calls };
 }
 
@@ -63,6 +64,27 @@ test("clones once then pulls, and removes files a newer tar no longer carries", 
     expect(log.match(/^git clone /gm)?.length).toBe(3);
     expect(log.match(/ pull /g)?.length).toBe(3);
     expect(log.match(/^bun install/gm)?.length).toBe(2);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("a manifest entry with .. or an absolute path removes nothing outside the worktree", () => {
+  const t = setup();
+  try {
+    const outside = join(t.root, "outside.txt");
+    const abs = join(t.root, "absolute.txt");
+    writeFileSync(outside, "keep");
+    writeFileSync(abs, "keep");
+    makeTar(t, ["fx/a/one.app"]);
+    // an older manifest (or a tampered one) names files that are not under the worktree
+    writeFileSync(join(t.wt, ".kraken-local", "fixture-symbols.manifest"), `../outside.txt\n${abs.replaceAll("\\", "/")}\nfx/gone.app\n`);
+    mkdirSync(join(t.wt, "fx"), { recursive: true });
+    writeFileSync(join(t.wt, "fx/gone.app"), "x");
+    run(t);
+    expect(existsSync(outside)).toBe(true);
+    expect(existsSync(abs)).toBe(true);
+    expect(existsSync(join(t.wt, "fx/gone.app"))).toBe(false);
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }

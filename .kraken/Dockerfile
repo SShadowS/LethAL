@@ -29,7 +29,7 @@ RUN curl -fsSL --compressed -o /tmp/al.vsix "https://marketplace.visualstudio.co
     && unzip -q /tmp/al.vsix 'extension/*' -d /tmp/al && rm /tmp/al.vsix \
     && cp -r /tmp/al/extension/. $ALX/ && rm -rf /tmp/al \
     && mkdir -p $ALX/bin/linux \
-    && for t in alc altool; do printf '#!/bin/sh\nexec dotnet "%s/bin/%s.dll" "$@"\n' "$ALX" "$t" > $ALX/bin/linux/$t; chmod +x $ALX/bin/linux/$t; done \
+    && for t in alc altool; do printf '#!/bin/sh\nexec /opt/dotnet/dotnet "%s/bin/%s.dll" "$@"\n' "$ALX" "$t" > $ALX/bin/linux/$t; chmod +x $ALX/bin/linux/$t; done \
     && chown -R dev:dev /home/dev/.vscode
 # al-runner: pinned source build c39ad5de (R345), BC 28.5 (same flags as the measured lethal-ops container)
 ARG ALRUNNER_SHA=c39ad5ded38e3bfb3c690f1b48450446754bfa18
@@ -43,9 +43,13 @@ RUN git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.
          --add-source /tmp/alr-nupkg --version $ALRUNNER_VERSION \
     && rm -rf /tmp/alr /tmp/alr-nupkg /tmp/alr-bc /root/.nuget/packages \
     && /opt/al-runner/c39ad5de/al-runner --version
-# PowerShell: pinned tarball (the GitHub API lookup is rate-limited inside a build and the base is Ubuntu 26.04, which has no Microsoft apt repo)
-ARG PWSH_VERSION=7.6.6
-RUN mkdir -p /opt/microsoft/powershell \
-    && curl -fsSL "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" | tar -xz -C /opt/microsoft/powershell \
-    && chmod +x /opt/microsoft/powershell/pwsh && ln -s /opt/microsoft/powershell/pwsh /usr/local/bin/pwsh
+# PowerShell from Microsoft's apt repo (the .deb installs its signing key and list). The base is Ubuntu 26.04
+# and Microsoft's 26.04 repo has no powershell package yet (measured 2026-10-03), so this uses the 24.04 repo;
+# switch to ${VERSION_ID} once the repo carries it.
+RUN curl -fsSL -o /tmp/ms.deb "https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb" \
+    && dpkg -i /tmp/ms.deb && rm /tmp/ms.deb \
+    && apt-get update && apt-get install -y --no-install-recommends powershell && rm -rf /var/lib/apt/lists/*
+# Login shells (bash -l: kraken's setup, ssh sessions) rebuild PATH from /etc/profile, so ENV alone is not enough
+RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:$PATH' 'export DOTNET_ROOT=/opt/dotnet' 'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' > /etc/profile.d/lethal-tools.sh \
+    && chown -R dev:dev /opt/rustup /opt/cargo
 # ends as root: the base entrypoint drops to dev
