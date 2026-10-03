@@ -1,5 +1,5 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
@@ -116,6 +116,7 @@ import {
 } from "./events";
 import type { PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
+import { homeDir } from "./home";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -1376,6 +1377,9 @@ export interface SessionConfig {
    *  `~/.lethal/quarantine` via `defaultQuarantineDir()` when omitted; tests inject a scratch dir
    *  so quarantine state never leaks across test runs or into the real user's home directory. */
   readonly quarantineDir?: string;
+  /** Test seam: the quarantine store itself, in place of one made from `quarantineDir` (a test
+   *  that needs a WRITE to fail injects a store whose `record()` throws). Production omits it. */
+  readonly quarantineStore?: QuarantineStore;
   /**
    * Physical BC service-tier identity for the quarantine consult (spec §9) — the server + server
    * instance the AUTHORITATIVE (bcdev) backend targets, sourced from the bcdev config section
@@ -1829,7 +1833,7 @@ async function bisectAndNote(args: {
  *  command opens the SAME store `runSession` durably writes to — a second, drifting default here
  *  would silently target the wrong directory and never actually clear anything. */
 export function defaultQuarantineDir(): string {
-  return join(homedir(), ".lethal", "quarantine");
+  return join(homeDir(), ".lethal", "quarantine");
 }
 
 /**
@@ -3708,6 +3712,7 @@ async function consultQuarantine(a: {
   resourceServer?: string;
   resourceServerInstance?: string;
   quarantineDir?: string;
+  quarantineStore?: QuarantineStore;
   emit: RunEmitter;
 }): Promise<{ resourceKey: string | undefined; quarantineStore: QuarantineStore | undefined }> {
   let resourceKey: string | undefined;
@@ -3721,7 +3726,8 @@ async function consultQuarantine(a: {
       server: a.resourceServer,
       serverInstance: a.resourceServerInstance,
     });
-    quarantineStore = new QuarantineStore(a.quarantineDir ?? defaultQuarantineDir());
+    quarantineStore =
+      a.quarantineStore ?? new QuarantineStore(a.quarantineDir ?? defaultQuarantineDir());
     const existing = await quarantineStore.read(resourceKey);
     if (existing !== null) {
       throw new Error(
@@ -4461,6 +4467,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { resourceServerInstance: cfg.resourceServerInstance }
       : {}),
     ...(cfg.quarantineDir !== undefined ? { quarantineDir: cfg.quarantineDir } : {}),
+    ...(cfg.quarantineStore !== undefined ? { quarantineStore: cfg.quarantineStore } : {}),
     emit,
   });
   const status = await cfg.backend.status();

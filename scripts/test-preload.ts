@@ -12,8 +12,10 @@ const runDir = mkdtempSync(join(tmpdir(), "lethal-unit-run-"));
 /**
  * R264: unit tests must never read or write the developer's real home. Defaults such as
  * al-runner's caches (multi-GB here), `~/.lethal/quarantine` and `~/.vscode/extensions` all
- * resolve through `os.homedir()`, which on Bun/Windows reads USERPROFILE at call time (measured
- * 2026-09-27) and on POSIX reads HOME. Both point at a fresh empty dir for this process.
+ * resolve through `homeDir()` (`packages/runner/src/home.ts`). On Windows that is `os.homedir()`,
+ * which reads USERPROFILE at call time (measured 2026-09-27). On POSIX Bun's `os.homedir()` keeps
+ * the HOME the process STARTED with (R409), so `homeDir()` reads HOME itself at call time. Both
+ * variables point at a fresh empty dir for this process.
  * `mkdirSync` throws if it cannot create one, so a failure stops the suite rather than silently
  * leaving the real home in place.
  */

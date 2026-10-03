@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
@@ -121,11 +121,13 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
   };
 
   it("gives the pre-committed ten mutants in two batches", () => {
+    // R411: the pre-commitment is written in the Windows form; the product writes the host's.
+    const host = (s: string) => s.split("\\").join(sep);
     expect(get().batchPaths).toEqual([
-      ["src\\LayoutAlpha.Codeunit.al"],
-      ["src\\LayoutBeta.Codeunit.al"],
+      [host("src\\LayoutAlpha.Codeunit.al")],
+      [host("src\\LayoutBeta.Codeunit.al")],
     ]);
-    expect(get().rows).toEqual(EXPECTED_MUTANTS);
+    expect(get().rows).toEqual(EXPECTED_MUTANTS.map(host));
   });
 
   it("batch 0's layout misplaces batch 1's covered lines, and batch 1's own does not", async () => {

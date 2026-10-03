@@ -94,6 +94,7 @@ import type {
 } from "../src/orchestrator";
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
+import type { QuarantineRecord } from "../src/quarantine-store";
 import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
@@ -7693,20 +7694,30 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     ownPublishLostAck(client);
     const boom = new Error("recoverOp exploded");
     client.recoverError = boom;
-    // A regular FILE where the quarantine directory should be: mkdir fails on every record().
-    const blocker = join(freshTmpDir(), "blocker");
-    await Bun.write(blocker, "not a directory");
+    // R417: the WRITE fails through an injected store; the read side stays an ordinary empty dir
+    // (a file at the quarantine path is now refused at the consult, before any write).
+    const writeErr = new Error("disk full");
+    let writes = 0;
+    class FailingWriteStore extends QuarantineStore {
+      override async record(): Promise<QuarantineRecord> {
+        writes++;
+        throw writeErr;
+      }
+    }
     const { lease } = leaseCfg(client);
     const outcome = await runSessionForTest(leaseBackend(), {
       lease,
-      quarantineDir: blocker,
+      quarantineStore: new FailingWriteStore(freshTmpDir()),
       afterLeaseAcquired: async () => {},
     }).catch((e) => e);
     expect(outcome).toBeInstanceOf(AggregateError);
     expect(outcome.message).toContain("recoverOp exploded");
     expect(outcome.message).toContain("recording the container recycle failed");
+    expect(outcome.message).toContain("disk full");
     expect(outcome.errors[0]).toBe(boom);
+    expect(outcome.errors[1]).toBe(writeErr);
     expect(outcome.errors).toHaveLength(2);
+    expect(writes).toBe(1);
   });
 
   test("a target publish whose lost EndPublish ack cannot be reconciled records no accepted publish and calls nothing after (R240)", async () => {

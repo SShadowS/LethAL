@@ -1,11 +1,11 @@
 import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ActivationConfig } from "./activation";
 import type { BcDevConfigSection } from "./cli";
 import { EnvToolError, renderCommand } from "./env-tool";
 import type { EnvToolClient, EnvToolConfigSection, EnvToolReadyBlock } from "./env-tool";
 import { HarnessVerificationError } from "./harness";
+import { homeDir } from "./home";
 
 const EXPIRY_MARGIN_MS = 60 * 60_000;
 
@@ -102,7 +102,7 @@ export async function startEnvToolSession(args: {
   requireBcDevRawFields(args.bcdevRaw);
   const now = args.now ?? Date.now;
   const sleep = args.sleep ?? ((ms: number) => Bun.sleep(ms));
-  const stateDir = args.stateDir ?? join(homedir(), ".lethal", "env-state");
+  const stateDir = args.stateDir ?? join(homeDir(), ".lethal", "env-state");
   // R17: `recordCreatedEnv`/`removeRecordedEnv` below maintain this directory, but until now
   // nothing ever LISTED it — the entire crash-recovery story for a leaked environment was a file
   // nothing reads. Scan it at the start of every session and warn on whatever is still there.

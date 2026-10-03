@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**109 of 405 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**108 of 414 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -159,7 +159,8 @@ that ordering is the priority.
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
 - **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
 - **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · open, filed 2026-10-02
-- **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · open, filed 2026-10-02
+- **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · closed 2026-10-02: measured on al-runner and bcdev, all 36 pre-committed verdicts matched; same-name…
+- **R417** · A quarantine store path that exists but is not a directory read as 'no record', so clear() said 'cleared' and the quarantine check reported clean · [R417.md](docs/roadmap/R417.md) · done (eca61946)
 
 ## Product gaps a real project hits
 
@@ -450,6 +451,14 @@ that ordering is the priority.
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
 - **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)
 - **R407** · Admit multi-object files to al-runner coverage once upstream fixes the source-base frame defect · [R407.md](docs/roadmap/R407.md) · open, blocked on upstream: al-runner v2.12.0-main.c39ad5de reports every object after a file's first in a…
+- **R409** · On Linux, Bun's os.homedir() ignores a HOME set at run time, so the unit-test fake home (R264) does not reach any product default · [R409.md](docs/roadmap/R409.md) · done (a1e0a7c9)
+- **R410** · redact-campaign-report's first-party proof cannot find a Windows-made report's mutant files on Linux (`src\X.al` is one file name there) · [R410.md](docs/roadmap/R410.md) · done (b9ce5250)
+- **R411** · Unit tests pin project-relative paths in the Windows form (`src\X.al`), so they fail on Linux where the product writes `src/X.al` · [R411.md](docs/roadmap/R411.md) · done (3217c6bf)
+- **R412** · Unit tests that assume a Windows host: a drive letter to force a write failure, rmdir to remove a junction, the host platform as the AL tool layout · [R412.md](docs/roadmap/R412.md) · done (f90df586)
+- **R413** · QuarantineStore.read: a quarantine dir that is a regular file reads as 'no record' on Windows (ENOENT) but throws on Linux (ENOTDIR) · [R413.md](docs/roadmap/R413.md) · done (c060a2ff), superseded by R417: the platforms now agree by REFUSING a non-directory store path, not by…
+- **R414** · R393's 'CI unset' control fails on every GitHub runner: Bun also reads GITHUB_ACTIONS as CI, and the control removed only CI · [R414.md](docs/roadmap/R414.md) · done (443e2ec6)
+- **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · done (5a8b8f3c)
+- **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
 
 ---
 
