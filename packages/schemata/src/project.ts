@@ -107,9 +107,12 @@ export function identityTupleOf(
  * changed attribution of unchanged keys. 5: R214, a mutant in an #if arm the build compiles out is no
  * longer generated, a file whose directives cannot be evaluated as alc does is not mutated, and a
  * statement directly inside a statement-level #if became a statement position (measured moves in
- * the R-214 plan).
+ * the R-214 plan). 6: R418, `codeunitName` and `objectType` can move in a file with two or more
+ * objects that holds a non-BMP character (an emoji) in a comment or a string before a later
+ * header: the mask no longer shifts, so an erased header is found, a phantom commented-out header
+ * is gone, and a header's offset matches the source.
  */
-export const IDENTITY_SCHEME = 5;
+export const IDENTITY_SCHEME = 6;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

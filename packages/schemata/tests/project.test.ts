@@ -991,8 +991,8 @@ codeunit 51051 "Second Obj"
 }
 `;
 
-    function twoInjectableObjectFile() {
-      const root = wrapRoot(parseAL(TWO_INJECTABLE_OBJECTS));
+    function twoInjectableObjectFile(source: string = TWO_INJECTABLE_OBJECTS) {
+      const root = wrapRoot(parseAL(source));
       const assigns: ALSyntaxNode[] = [];
       const collect = (node: ALSyntaxNode): void => {
         if (node.kind === ALNodeKind.assignment_statement) assigns.push(node);
@@ -1011,8 +1011,81 @@ codeunit 51051 "Second Obj"
         after: { ...assign, text: `X := ${i + 2};` } as never,
         parentContext: "statement-position",
       }));
-      return { path: "Two.Objects.al", source: TWO_INJECTABLE_OBJECTS, root, specs };
+      return { path: "Two.Objects.al", source, root, specs };
     }
+
+    type ManifestEntry = {
+      objectType: string;
+      codeunitId: number;
+      codeunitName: string;
+      triggerName?: string;
+      procedureName: string;
+    };
+
+    async function manifestOf(file: ReturnType<typeof twoInjectableObjectFile>) {
+      const dir = await mkdtemp(join(tmpdir(), "lethal-r418-"));
+      try {
+        await writeInstrumentedProject({
+          targetDir: dir,
+          files: [file],
+          selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: TARGET_APP_ID,
+          operatorTiers: NO_TIERS,
+        });
+        const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {
+          mutants: ManifestEntry[];
+        };
+        return manifest.mutants;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    // R418: an emoji is two UTF-16 units and one code point. The mask used to index a code-point
+    // array by UTF-16 offsets, so an emoji in a comment shifted the next comment's blanking and
+    // erased the header after it: the second object's mutant was attributed to the first object.
+    it("R418: an emoji comment before the second header does not erase it", async () => {
+      const source = TWO_INJECTABLE_OBJECTS.replace(
+        'codeunit 51051 "Second Obj"',
+        '// 😀😀\n/* a */ codeunit 51051 "Second Obj"',
+      );
+      expect(source).not.toBe(TWO_INJECTABLE_OBJECTS);
+      const mutants = await manifestOf(twoInjectableObjectFile(source));
+      const codeunitEntry = mutants.find((m) => m.procedureName === "P");
+      expect(codeunitEntry).toMatchObject({
+        objectType: "codeunit",
+        codeunitId: 51051,
+        codeunitName: "Second Obj",
+      });
+    });
+
+    // R418, the header OFFSET: each blanked emoji made the masked text one unit shorter, so a
+    // later header's `startIndex` sat N units early against the SOURCE offsets mutants carry. With
+    // N >= the gap from the first mutant to the second header, the first object's mutant was
+    // attributed to the second object.
+    it("R418: an emoji comment in the first object does not move the second header's offset", async () => {
+      const N = 40;
+      const source = TWO_INJECTABLE_OBJECTS.replace(
+        "    trigger OnInsert()",
+        `    // ${"😀".repeat(N)}\n    trigger OnInsert()`,
+      );
+      expect(source).not.toBe(TWO_INJECTABLE_OBJECTS);
+      const file = twoInjectableObjectFile(source);
+      const firstMutant = file.specs[0];
+      if (firstMutant === undefined) throw new Error("fixture has no first mutant");
+      // Precondition: the shift (N) must reach past the gap, or this test passes either way.
+      // `FirstFlag := 1;\n    end;\n}\n\n` is 28 units today.
+      const gap = source.indexOf("codeunit 51051") - firstMutant.before.startIndex;
+      expect(gap).toBeLessThan(N);
+      const mutants = await manifestOf(file);
+      const tableEntry = mutants.find((m) => m.triggerName === "OnInsert");
+      expect(tableEntry).toMatchObject({
+        objectType: "table",
+        codeunitId: 51050,
+        codeunitName: "First Obj",
+      });
+    });
 
     it("attributes each mutant to its OWN object, not the file's first header", async () => {
       const dir = await mkdtemp(join(tmpdir(), "lethal-two-injectable-objects-"));
@@ -1270,6 +1343,18 @@ page 51053 "Not Injectable"
       const src = 'Rec."Field // Odd" := 1;\n';
       expect(stripAlComments(src)).toBe(src);
     });
+
+    it("R418: keeps the source length, and every header, after an emoji in a comment", () => {
+      // An emoji is two UTF-16 units; header offsets are compared with SOURCE offsets in UTF-16
+      // units, so the stripped text must keep both places.
+      const src =
+        'table 51050 "First Obj"\n{\n}\n\n// 😀😀\n/* a */ codeunit 51051 "Second Obj"\n{\n}\n';
+      expect(stripAlComments(src).length).toBe(src.length);
+      expect(scanDeclaredObjects(src)).toEqual([
+        { type: "table", id: 51050, name: "First Obj" },
+        { type: "codeunit", id: 51051, name: "Second Obj" },
+      ]);
+    });
   });
 
   // R3/R4: `validateSelectorIds` (id-ranges.ts) needs every AL object a target project already
@@ -1299,6 +1384,19 @@ page 51053 "Not Injectable"
 
     it("returns an empty array for a file with no object header", () => {
       expect(scanDeclaredObjects("// just a comment\n")).toEqual([]);
+    });
+
+    it("R418: emoji in a string do not leave a commented-out header standing (phantom header)", () => {
+      // A string is not blanked under this policy, but its emoji used to shift every LATER blank
+      // (the mask indexed a code-point array by UTF-16 offsets). With 30 emoji (measured red on
+      // 4b7ba6bc) the block comment's blank missed its own `codeunit 51 "Old Impl"` line and
+      // erased the real `codeunit 52 B` instead: the scan returned A plus a phantom, without B.
+      // The same probe gave the phantom-without-B result for every count from 25 to 40.
+      const src = `codeunit 50 A\n{\n    procedure P() begin Msg := '${"😀".repeat(30)}'; end;\n}\n/*\ncodeunit 51 "Old Impl"\n*/\ncodeunit 52 B\n{\n}\n`;
+      expect(scanDeclaredObjects(src)).toEqual([
+        { type: "codeunit", id: 50, name: "A" },
+        { type: "codeunit", id: 52, name: "B" },
+      ]);
     });
   });
 
