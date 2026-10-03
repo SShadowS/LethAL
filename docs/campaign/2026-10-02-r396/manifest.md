@@ -21,6 +21,25 @@ expectation.
 - **Timings do not carry over.** No timing from the old machine is used, because the comparison
   must be made on one machine, with both runs done one after the other.
 
+## 2026-10-03, kraken container: run settings shared by every run
+
+Recorded while run (i) is running, before run (ii) starts. The project is now CDO at `5f2a71d`
+(addendum 2 of the pre-commitment, `678754ae`). Every run, (i), (ii) and (iii), uses EXACTLY these
+settings, so the comparison is like for like:
+
+- `--selector-id 6175460 --control-id 6175459 --table-id 6175458` (restart step 3 below). Run (i)'s
+  first attempt passed no ids and was refused before measuring anything (`selector id out of
+  range`: the default 79199 is outside CDO's idRanges 6175271-6175468); it was restarted with these
+  ids. In `5f2a71d` no codeunit or table uses them (page 6175460 exists; AL numbers each object type
+  separately).
+- `--only .dependencies/CDO/Codeunit/CDORecipientMgt.Codeunit.al` (relative to `Cloud`) and
+  `--tests-only Src/Recipients/CDORecipientMgtTests.Codeunit.al` (relative to `Test`).
+- packagesDir `/work/lethal-wt/cdo-r396/Test/.alpackages` (the 17 packages pinned in addendum 2),
+  al-runner `/opt/al-runner/c39ad5de/al-runner`.
+- The configs differ ONLY in the keys the pre-commitment names: (i) `serverMode: false`,
+  `selectorMode: "static"`; (ii) neither key (the defaults); (iii) as (ii) plus
+  `coverage: "al-runner"`.
+
 ## To redo on the new machine (all from the pre-commitment)
 
 1. **Make the scratch copy.** Copy `Cloud` and `Test` of Continia Document Output at commit
