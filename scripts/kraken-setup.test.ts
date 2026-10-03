@@ -98,6 +98,26 @@ test("clones once then pulls, and removes files a newer tar no longer carries", 
   }
 });
 
+test("a sibling with no build script does not fail setup (build runs with --if-present)", () => {
+  const t = setup();
+  try {
+    // like real npm for a package without a build script: `run build` fails unless --if-present
+    writeFileSync(
+      join(t.bin, "npm"),
+      `#!/bin/bash\necho "npm $*" >> "${t.calls.replaceAll("\\", "/")}"\nif [ "$1" = run ]; then case " $* " in *" --if-present "*) exit 0 ;; esac; echo 'npm error Missing script: "build"' >&2; exit 1; fi\n`,
+      { mode: 0o755 },
+    );
+    run(t);
+    expect(readFileSync(t.calls, "utf8").match(/^npm run .*--if-present build$/gm)?.length).toBe(3);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("siblings default to /work/src, on the work volume", () => {
+  expect(readFileSync(script, "utf8")).toContain('src="${KRAKEN_SETUP_SRC:-/work/src}"');
+});
+
 test("a manifest entry with .. or an absolute path removes nothing outside the worktree", () => {
   const t = setup();
   try {
