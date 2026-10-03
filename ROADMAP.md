@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**106 of 407 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**109 of 410 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -452,6 +452,9 @@ that ordering is the priority.
 - **R411** · Unit tests pin project-relative paths in the Windows form (`src\X.al`), so they fail on Linux where the product writes `src/X.al` · [R411.md](docs/roadmap/R411.md) · done (3217c6bf)
 - **R412** · Unit tests that assume a Windows host: a drive letter to force a write failure, rmdir to remove a junction, the host platform as the AL tool layout · [R412.md](docs/roadmap/R412.md) · done (f90df586)
 - **R413** · QuarantineStore.read: a quarantine dir that is a regular file reads as 'no record' on Windows (ENOENT) but throws on Linux (ENOTDIR) · [R413.md](docs/roadmap/R413.md) · done (c060a2ff): ENOTDIR reads as no record, as ENOENT does on Windows; whether a non-directory quarantine…
+- **R414** · R393's 'CI unset' control fails on every GitHub runner: Bun also reads GITHUB_ACTIONS as CI, and the control removed only CI · [R414.md](docs/roadmap/R414.md) · open, filed 2026-10-03
+- **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · open, filed 2026-10-03
+- **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · open, filed 2026-10-03
 
 ---
 
