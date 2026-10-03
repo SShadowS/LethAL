@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Per-worktree setup inside a kraken-lethal container (.kraken/project.yaml `setup`).
-# Idempotent: safe to re-run. Sibling repos are shared by all worktrees under ~/src.
+# Idempotent: safe to re-run. Sibling repos are shared by all worktrees under /work/src, on the
+# work volume so they survive a container recreation (the image links /home/dev/src to it for
+# the .mcp.json paths). Setup runs once per worktree, so anything off the volume would be lost.
 # KRAKEN_SETUP_SRC overrides the sibling-repo folder (the unit test uses it).
 set -euo pipefail
-src="${KRAKEN_SETUP_SRC:-/home/dev/src}"
+src="${KRAKEN_SETUP_SRC:-/work/src}"
 mkdir -p "$src"
 clone() { # <name> <url>
   if [ ! -d "$src/$1/.git" ]; then git clone --quiet "$2" "$src/$1"; else git -C "$src/$1" pull --quiet --ff-only || true; fi
@@ -15,7 +17,7 @@ clone() { # <name> <url>
   clone business-central-mcp https://github.com/SShadowS/business-central-mcp.git
   clone pi-mcp https://github.com/SShadowS/pi-mcp.git
   for r in bc-dev-mcp business-central-mcp pi-mcp; do
-    (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent build)
+    (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent --if-present build)
   done
 ) 9>"$src/.lock"
 # fixture symbol folders (.alpackages, gitignored) arrive as one tar through secret_files; kraken
