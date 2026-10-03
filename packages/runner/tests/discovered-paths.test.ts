@@ -263,6 +263,25 @@ test("8. on win32 the same snapshot is accepted, the `\\` read as a separator", 
   expect(set.files.map((f) => f.path)).toEqual(["src/Zed.Codeunit.al", "src/a/b.Codeunit.al"]);
 });
 
+test("8b. off win32 a `\\` name whose part after the `\\` starts with `Mutation` is refused, not skipped as a generated file", async () => {
+  const projectDir = await tempDir();
+  const source = new Map<string, Buffer>([
+    ["src/x\\MutationFoo.Codeunit.al", Buffer.from(body("codeunit", 79100, "B"))],
+    ["src/Zed.Codeunit.al", Buffer.from(body("codeunit", 79101, "Zed"))],
+    ["app.json", Buffer.from(APP_JSON)],
+  ]);
+  let err: unknown;
+  try {
+    await generateMutationSet(projectDir, { source, platform: "linux" });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(DiscoveredPathError);
+  if (!(err instanceof DiscoveredPathError)) return;
+  expect(err.paths).toEqual(["src/x\\MutationFoo.Codeunit.al"]);
+  expect(err.message).toBe(backslashRefusal("src/x\\MutationFoo.Codeunit.al", "linux"));
+});
+
 test.skipIf(process.platform === "win32")(
   "9. on a real POSIX disk, with no platform option, a file named `src/a\\b.Codeunit.al` is refused by name",
   async () => {

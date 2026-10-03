@@ -724,9 +724,13 @@ export async function generateMutationSet(
   // through the RAW name (`readKeyOf`): a snapshot taken on Windows is keyed with `\`.
   const listed =
     snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true });
+  // The `.al` / generated-file filter reads each name the way its platform does: only win32 treats
+  // `\` as a separator. Off win32 `x\MutationFoo.al` is ONE name, not a generated `MutationFoo.al`,
+  // so it reaches `discoveredRelPaths` and is refused by name instead of skipped without a word.
+  const platform = options.platform ?? process.platform;
   const discovered = discoveredRelPaths(
-    listed.filter((e) => isEnumeratedAl(normalizeRelPath(e))),
-    options.platform,
+    listed.filter((e) => isEnumeratedAl(platform === "win32" ? normalizeRelPath(e) : e)),
+    platform,
   );
   const readKeyOf = new Map(discovered.map((d) => [d.rel, d.raw]));
   const entries = discovered.map((d) => d.rel);
