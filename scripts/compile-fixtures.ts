@@ -107,13 +107,40 @@ function extensionDirs(home: string): string[] {
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
 }
 
-/** `--require-all`: one line per skipped project; non-empty means exit 1. */
-export function requireAll(
-  rows: readonly { project: string; status: "compiled" | "skipped"; why?: string }[],
-): string[] {
+interface Row {
+  project: string;
+  status: "compiled" | "skipped" | "failed";
+  why?: string;
+}
+
+/** `--require-all`: one line per skipped project; non-empty means exit 1. (A failed project
+ *  already exits 1 through the failure count.) */
+export function requireAll(rows: readonly Row[]): string[] {
   return rows
     .filter((r) => r.status === "skipped")
     .map((r) => `${r.project}: ${r.why ?? "skipped"}`);
+}
+
+/** The compiled/skipped/failed inventory `--require-all` prints. */
+export function inventoryReport(rows: readonly Row[]): {
+  compiled: number;
+  skipped: number;
+  failed: number;
+  lines: string[];
+} {
+  const count = (s: Row["status"]) => rows.filter((r) => r.status === s).length;
+  const compiled = count("compiled");
+  const skipped = count("skipped");
+  const failed = count("failed");
+  return {
+    compiled,
+    skipped,
+    failed,
+    lines: [
+      `\ncompile-fixtures: compiled ${compiled}, skipped ${skipped}, failed ${failed}`,
+      ...rows.map((r) => `  ${r.status.toUpperCase().padEnd(8)} ${r.project}`),
+    ],
+  };
 }
 
 function fixtureProjects(): string[] {
@@ -175,13 +202,22 @@ function main(): void {
     exists: existsSync,
     extensionDirs: extensionDirs(homedir()),
   });
-  if (alc === null && process.platform !== "win32") {
-    // Never a skip on Linux: the container's gates read exit 0 as "compiled".
-    console.error("compile-fixtures: no Linux alc found (set LETHAL_ALC_DIR)");
-    process.exit(1);
-  }
-  if (alc === null && requireEvery) {
-    console.error("compile-fixtures: no alc.exe found, and --require-all refuses a skip.");
+  if (alc === null && (process.platform !== "win32" || requireEvery)) {
+    // Never a skip on Linux: the container's gates read exit 0 as "compiled". Same for
+    // --require-all anywhere.
+    console.error(
+      process.platform === "win32"
+        ? "compile-fixtures: no alc.exe found, and --require-all refuses a skip."
+        : "compile-fixtures: no Linux alc found (set LETHAL_ALC_DIR)",
+    );
+    if (requireEvery) {
+      const rows = fixtureProjects().map((p) => ({
+        project: projectLabel(p),
+        status: "skipped" as const,
+        why: "no alc",
+      }));
+      for (const l of inventoryReport(rows).lines) console.log(l);
+    }
     process.exit(1);
   }
   if (alc === null && inventoryPath !== undefined) {
@@ -308,16 +344,16 @@ function main(): void {
   if (requireEvery) {
     const rows = inventory.map((p) => ({
       project: p.project,
-      status: p.status === "no-symbols" ? ("skipped" as const) : ("compiled" as const),
+      status:
+        p.status === "no-symbols"
+          ? ("skipped" as const)
+          : p.status === "failed"
+            ? ("failed" as const)
+            : ("compiled" as const),
       ...(p.status === "no-symbols" ? { why: "no .alpackages" } : {}),
     }));
     skipped = requireAll(rows);
-    console.log(
-      `\ncompile-fixtures: compiled ${rows.length - skipped.length}, skipped ${skipped.length}`,
-    );
-    for (const r of rows) {
-      console.log(`  ${r.status === "skipped" ? "SKIPPED" : "COMPILED"}  ${r.project}`);
-    }
+    for (const l of inventoryReport(rows).lines) console.log(l);
   }
 
   if (failed > 0) {
