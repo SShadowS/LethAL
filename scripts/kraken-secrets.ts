@@ -31,6 +31,7 @@ import { fixtureProjects } from "./compile-fixtures.ts";
 
 const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683";
 const SRC = "/home/dev/src";
+const MAIN = "/work/lethal";
 
 export interface PathMap {
   /** Dotted key path -> its container value. Replaced only where the input has the key. */
@@ -45,9 +46,13 @@ export const CONTAINER_MAP = (bcdevEntry: string): PathMap => ({
     "bcdev.alcPath": `${ALX}/bin/linux/alc`,
     "bcdev.altoolPath": `${ALX}/bin/linux/altool`,
     "bcdev.mcpCommand": ["node", bcdevEntry],
+    // fixed meaning: the compiled control app, which kraken-setup.sh builds in the main checkout
+    "bcdev.controlSymbolPath": `${MAIN}/extensions/lethal-control/lethal-control.app`,
   },
-  // the sibling clones kraken-setup.sh makes; the local bc-mcp clone's origin is business-central-mcp
+  // the sibling clones kraken-setup.sh makes; the local bc-mcp clone's origin is business-central-mcp.
+  // The main checkout maps to the orchestrator's; a worktree (`LethAL-wt/...`) is never guessed.
   repos: {
+    LethAL: MAIN,
     "bc-dev-mcp": `${SRC}/bc-dev-mcp`,
     "bc-mcp": `${SRC}/business-central-mcp`,
     "pi-mcp": `${SRC}/pi-mcp`,
@@ -83,7 +88,9 @@ const jsonPath = (segs: readonly Seg[]): string =>
 
 function mapRepo(s: string, repos: PathMap["repos"]): string {
   const m = /^U:[\\/]Git[\\/]([^\\/]+)([\\/].*)?$/i.exec(s);
-  const target = m?.[1] !== undefined ? repos[m[1]] : undefined;
+  const name = m?.[1]?.toLowerCase();
+  const key = Object.keys(repos).find((k) => k.toLowerCase() === name);
+  const target = key !== undefined ? repos[key] : undefined;
   if (m === null || target === undefined) return s;
   return target + (m[2] ?? "").replaceAll("\\", "/");
 }
@@ -206,7 +213,11 @@ export function listingProblems(names: readonly string[], long: readonly string[
 
 /** Tar of every fixture's `.alpackages`, built in memory, entries relative to the repo root. */
 function symbolTar(repo: string, errors: string[]): Uint8Array | undefined {
-  const dirs = fixtureProjects(repo).map((p) => relative(repo, p).replaceAll("\\", "/"));
+  // plus the control app's symbols: kraken-setup.sh compiles it in the container
+  const dirs = [
+    ...fixtureProjects(repo).map((p) => relative(repo, p).replaceAll("\\", "/")),
+    "extensions/lethal-control",
+  ];
   const bare = dirs.filter((d) => !hasSymbols(join(repo, d, ".alpackages")));
   if (bare.length > 0) {
     errors.push(

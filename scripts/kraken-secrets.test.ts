@@ -70,11 +70,8 @@ describe("rewrite", () => {
   });
 
   test("an unknown field holding a host path is a leftover, named by its JSON path", () => {
-    const { leftovers } = rewrite(
-      { bcdev: { controlSymbolPath: "H:/x" }, list: ["ok", "D:\\y"] },
-      map,
-    );
-    expect(leftovers).toEqual(["$.bcdev.controlSymbolPath", "$.list[1]"]);
+    const { leftovers } = rewrite({ bcdev: { someDir: "H:/x" }, list: ["ok", "D:\\y"] }, map);
+    expect(leftovers).toEqual(["$.bcdev.someDir", "$.list[1]"]);
   });
 
   test("a host path embedded in a longer string is a leftover; a URL and a UNC path are told apart", () => {
@@ -109,12 +106,47 @@ describe("rewrite", () => {
     expect(leftovers).toEqual([]);
   });
 
-  test("a repo with no container clone is not guessed at: it stays a leftover", () => {
+  test("a repo with no container clone, or a LethAL worktree, is not guessed at: it stays a leftover", () => {
     const { leftovers } = rewrite(
-      { mcpServers: { x: { command: "node", args: ["U:/Git/LethAL/x.js"] } } },
+      {
+        mcpServers: { x: { command: "node", args: ["U:/Git/other/x.js"] } },
+        bcdev: { packageCachePath: "U:/Git/LethAL-wt/kraken-move/fixtures/a/.alpackages" },
+        alRunner: { packagesDir: "U:\\Git\\LethAL-wt\\x" },
+      },
       map,
     );
-    expect(leftovers).toEqual(["$.mcpServers.x.args[0]"]);
+    expect(leftovers).toEqual([
+      "$.mcpServers.x.args[0]",
+      "$.bcdev.packageCachePath",
+      "$.alRunner.packagesDir",
+    ]);
+  });
+
+  test("the main checkout U:/Git/LethAL maps to /work/lethal, any slash style or case", () => {
+    const { out, leftovers } = rewrite(
+      {
+        bcdev: { packageCachePath: "U:/Git/LethAL/fixtures/sandbox-app/.alpackages" },
+        alRunner: { packagesDir: "U:\\Git\\LethAL\\fixtures\\sandbox-app\\.alpackages" },
+        other: "u:/git/lethal/x",
+      },
+      map,
+    );
+    expect(out).toEqual({
+      bcdev: { packageCachePath: "/work/lethal/fixtures/sandbox-app/.alpackages" },
+      alRunner: { packagesDir: "/work/lethal/fixtures/sandbox-app/.alpackages" },
+      other: "/work/lethal/x",
+    });
+    expect(leftovers).toEqual([]);
+  });
+
+  test("bcdev.controlSymbolPath is always the control app in the main checkout", () => {
+    for (const host of ["U:/Git/LethAL-wt/x/lethal-control.app", "H:/elsewhere.app", "x"]) {
+      const { out, leftovers } = rewrite({ bcdev: { controlSymbolPath: host } }, map);
+      expect(out).toEqual({
+        bcdev: { controlSymbolPath: "/work/lethal/extensions/lethal-control/lethal-control.app" },
+      });
+      expect(leftovers).toEqual([]);
+    }
   });
 
   test.each(["run.cmd", "C:/tools/x.exe", "cmd", "powershell", "pwsh", "s.ps1"])(
@@ -139,7 +171,7 @@ function makeRepo(override: Record<string, string> = {}): { repo: string; pkg: s
       override[f.from] ?? JSON.stringify({ bcdev: { server: "http://bc", password: "pw-ok" } }),
     );
   }
-  for (const proj of ["fixtures/alpha", "examples/beta"]) {
+  for (const proj of ["fixtures/alpha", "examples/beta", "extensions/lethal-control"]) {
     mkdirSync(join(repo, proj, ".alpackages"), { recursive: true });
     writeFileSync(join(repo, proj, "app.json"), "{}");
     writeFileSync(join(repo, proj, ".alpackages", "sym.app"), "symbols");
@@ -185,6 +217,7 @@ describe("CLI", () => {
       .filter((e) => e !== "");
     expect(entries).toContain("fixtures/alpha/.alpackages/sym.app");
     expect(entries).toContain("examples/beta/.alpackages/sym.app");
+    expect(entries).toContain("extensions/lethal-control/.alpackages/sym.app");
     for (const e of entries) {
       expect(e.startsWith("/") || /^[A-Za-z]:/.test(e) || e.split("/").includes("..")).toBe(false);
     }
@@ -227,6 +260,16 @@ describe("CLI", () => {
     expect(r.code).toBe(1);
     expect(r.text).toContain("mcp.json: UnsupportedLauncherError at $.mcpServers.x.command");
     expect(r.text).not.toContain("run.cmd");
+    expect(readdirSync(out)).toEqual([]);
+  });
+
+  test("the control app without symbols: refused by name, nothing written", () => {
+    const { repo, pkg } = makeRepo();
+    rmSync(join(repo, "extensions", "lethal-control", ".alpackages", "sym.app"));
+    const out = temp();
+    const r = cli(repo, pkg, out);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("no .alpackages: extensions/lethal-control");
     expect(readdirSync(out)).toEqual([]);
   });
 

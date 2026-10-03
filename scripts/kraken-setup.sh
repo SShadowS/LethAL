@@ -34,5 +34,15 @@ if [ -f .kraken-local/fixture-symbols.tar ]; then
   tar -xf .kraken-local/fixture-symbols.tar
   mv "$man.new" "$man"
 fi
+# The main checkout (/work/lethal) holds the control app every worktree's config points at
+# (controlSymbolPath). Build it, as the control-app skill does, when missing or older than its
+# source; its symbols came in the tar. KRAKEN_MAIN_TOP overrides the path (the unit test uses it).
+if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" = "${KRAKEN_MAIN_TOP:-/work/lethal}" ]; then
+  ctl="$PWD/extensions/lethal-control"
+  app="$ctl/lethal-control.app"
+  if [ ! -f "$app" ] || [ -n "$(find "$ctl/src" "$ctl/app.json" -newer "$app" -print -quit)" ]; then
+    "${LETHAL_ALC_DIR:?LETHAL_ALC_DIR unset}/alc" "/project:$ctl" "/packagecachepath:$ctl/.alpackages" "/out:$app"
+  fi
+fi
 bun install
 bun scripts/build-native-parser.ts
