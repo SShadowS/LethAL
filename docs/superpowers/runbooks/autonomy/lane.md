@@ -2,13 +2,18 @@
 
 You implement LethAL tasks. Your identity comes from your directory:
 
-| Session | Worktree | Branch | Coord lane | Takes |
-| --- | --- | --- | --- | --- |
-| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | `code` | the c02 epic (`C02-*`) |
-| `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `lethal/lane-bugs` | `bugs` | standalone issues (`GH-*`) |
-| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `lethal/lane-preproc` | `preproc` | the `#if` preprocessor roadmap family (R214, R285, R304 to R308 and relatives) |
+| Session | Worktree (host) | Container | Branch | Coord lane | Takes |
+| --- | --- | --- | --- | --- | --- |
+| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `/work/lethal-wt/lane-code` | `lethal/lane-code` | `code` | the c02 epic (`C02-*`) |
+| `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `/work/lethal-wt/lane-bugs` | `lethal/lane-bugs` | `bugs` | standalone issues (`GH-*`) |
+| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `/work/lethal-wt/lane-preproc` | `lethal/lane-preproc` | `preproc` | the `#if` preprocessor roadmap family (R214, R285, R304 to R308 and relatives) |
 
-**`lethal-preproc` is COORD-ONLY.** It runs on another Claude account and may not be able to
+**Inside kraken** all three lanes run on the container's shared account and can message the
+orchestrator: `lethal-preproc` is an ordinary lane there and the COORD-ONLY section below does not
+apply. Run corpus-sized steps (full BaseApp compiles, corpus captures) one at a time.
+
+**On the Windows host (another account), `lethal-preproc` is COORD-ONLY** (`coordOnly: true` from
+`bun scripts/coord-join-role.ts`). It runs on another Claude account and may not be able to
 message the orchestrator, so it never relies on messages:
 
 - Wherever this file says "message the orchestrator" (including `online:`), write that text as the
@@ -21,8 +26,7 @@ message the orchestrator, so it never relies on messages:
   Wait with `/loop` (self-paced, about 20 minutes per tick), and on each tick re-read
   `H:\lethal-coord\tasks\<id>\task.md` for a new `## Orchestrator` section, `coord questions`,
   and `coord status --lane preproc`. Continue as soon as one of them answers you.
-- It works from `H:`, not `U:`, to spread disk load. Keep its scratch for corpus runs on `H:` too,
-  and run corpus-sized steps (full BaseApp compiles, corpus captures) one at a time.
+- It works from `H:`, not `U:`, to spread disk load. Keep its scratch for corpus runs on `H:` too.
 
 Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 
@@ -32,7 +36,8 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 2. Check you are in the right place: `git rev-parse --show-toplevel` is your `<worktree>`
    (forward slashes) and `git branch --show-current` is your `<branch>`. Otherwise stop and
    `coord ask`.
-3. `coord doctor`, read `H:\lethal-coord\handoff\<session>.md` if it exists.
+3. `coord doctor`, read `<coord root>/handoff/<session>.md` if it exists (`/coord/handoff/...` in
+   the container, `H:\lethal-coord\handoff\...` on the host).
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
 5. Tell the orchestrator you are alive, always, also after a `/clear` or a resume: send
@@ -44,7 +49,7 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 1. `git merge master`.
 2. `coord claim <id> <lane>`; write runId and token to your handoff at once;
    `coord checkpoint <id> <runId> <token> started`.
-3. Read `H:\lethal-coord\tasks\<id>\task.md`, the GitHub issue it names, and the plan the
+3. Read `<coord root>/tasks/<id>/task.md`, the GitHub issue it names, and the plan the
    orchestrator wrote for it (`docs/superpowers/plans/*-<id>-*.md` on `master`). No plan yet: checkpoint `--wait review --note "needs plan"` and
    message the orchestrator.
 4. Work with the superpowers `subagent-driven-development` skill: TDD, a review subagent before

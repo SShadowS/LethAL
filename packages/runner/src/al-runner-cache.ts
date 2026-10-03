@@ -27,8 +27,8 @@
  */
 import { stat } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { homeDir } from "./home";
 
 /** One provisioned BC build in the cache. */
 export interface AlRunnerCacheBuild {
@@ -70,12 +70,12 @@ export interface AlRunnerCacheReport {
 /** al-runner's default artifact root. It also accepts `--cache DIR`; a caller that knows a
  *  different root passes it in rather than this module guessing. */
 export function defaultAlRunnerCacheDir(): string {
-  return join(homedir(), ".local", "share", "al-runner", "artifacts");
+  return join(homeDir(), ".local", "share", "al-runner", "artifacts");
 }
 
 /** al-runner's second cache tree — see `AlRunnerCacheReport.secondaryBytes` (R168). */
 export function defaultAlRunnerSecondaryCacheDir(): string {
-  return join(homedir(), ".cache", "al-runner");
+  return join(homeDir(), ".cache", "al-runner");
 }
 
 /** Numeric, component-wise. `28.0.46665.53508` must sort above `28.0.46665.53492`, which a string

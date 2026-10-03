@@ -11,7 +11,7 @@
  *
  * Scope is deliberately narrow, because a guard that fires on ordinary work gets disabled:
  *
- *  - only paths INSIDE the project dir (a scratch or `U:/Git` path is the correct place for these
+ *  - only paths INSIDE the project dir (a scratch path outside the repo is the correct place for these
  *    files and is left alone),
  *  - only values of 6+ characters, so the repo's own test stubs (`password: "p"`) and the
  *    container password already documented in plans (`1234`) do not trip it,
@@ -68,7 +68,7 @@ console.error(
     "Environment-tool configs and `continia env users --json` carry PLAINTEXT credentials, and this",
     "project's standing rule is that none of it reaches a report, a commit, or a tracked file.",
     "",
-    "Write it outside the project dir instead (the scratchpad, or U:/Git), use it, and delete it.",
+    "Write it outside the repo instead (the scratchpad, or a directory above the checkout), use it, and delete it.",
     "If this is a test stub rather than a real credential, keep the value under 6 characters — that",
     "is how every existing fixture in this repo stays under the threshold.",
   ].join("\n"),

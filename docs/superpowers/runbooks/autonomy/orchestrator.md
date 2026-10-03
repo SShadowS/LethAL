@@ -7,7 +7,8 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 
 1. Read `README.md` in this folder, then this file, then the repo's `CLAUDE.md`.
 2. `coord doctor`; any issue you cannot fix yourself (abandon a crashed claim): `coord ask`.
-3. Read `H:\lethal-coord\handoff\lethal-orchestrator.md` if it exists.
+3. Read `<coord root>/handoff/lethal-orchestrator.md` if it exists (`/coord/...` in the
+   container, `H:\lethal-coord\...` on the host).
 4. `ListAgents`. To each live lane (`lethal-code`, lane `code`; `lethal-bugs`, lane `bugs`) send:
    `protocol: re-read docs/superpowers/runbooks/autonomy/README.md and lane.md, then coord status --lane <lane>`.
 5. `coord overview`.
@@ -35,7 +36,7 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 
 ## Review and integration
 
-1. Freeze the submitted files (`git show <sha>:<path>`) into `H:\lethal-coord\reviews\<id>-<run>\`.
+1. Freeze the submitted files (`git show <sha>:<path>`) into `<coord root>/reviews/<id>-<run>/`.
 2. `pi_ask` with `gpt-6.1-sol`, absolute paths, `require_evidence` on; for test changes ask
    specifically whether a test or frozen figure was weakened.
 3. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,

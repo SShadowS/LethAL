@@ -809,6 +809,10 @@ marginal bytes per mutant** (`(instrumented source − original) / mutants`).
 Layer 6C. Spec: `docs/superpowers/specs/2026-07-26-custom-env-tool-design.md`. Plan:
 `docs/superpowers/plans/2026-07-26-custom-env-tool.md`. Roadmap: R15.
 
+Running through an external environment tool is host-only: ask the owner. `continia.exe` is a
+Windows program and is not in the kraken container. Inside the container, the direct-container
+form (everything above this section) is the one that works.
+
 Everything above this section assumes a BC container LethAL reaches directly (`server` +
 `serverInstance` in the `bcdev` config, published to with `altool`). `envTool` is a second way to
 reach a bcdev-backed environment: a project points LethAL at an **external CLI** that owns the
@@ -1523,7 +1527,8 @@ neither set, the CLI locates the newest `ms-dynamics-smb.al-*` VS Code extension
 `~/.vscode/extensions` automatically and takes the `bin/` build matching the host platform
 (`defaultAlToolPaths()`). Set one when the discovered tool is the wrong BUILD for your server
 (`alcPath`) or cannot publish non-interactively (`altoolPath`); set both when there is no
-extension to discover. The bc-dev OData base URL is derived from `server` + `serverInstance`
+extension to discover. On Linux (the kraken container) the discovered build is
+`bin/linux/` of the extension, and `LETHAL_ALC_DIR` names it. The bc-dev OData base URL is derived from `server` + `serverInstance`
 rather than being its own field, with port **7048** injected regardless of what (if any) port
 `server` carries (`odataBaseUrl()`, `packages/runner/src/cli.ts`) — verified against a real BC
 server 2026-07-18: `server`/`serverInstance` are also used unqualified for bc-dev-mcp's own

@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  rmSync,
+  rmdirSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { defaultRecordsDir } from "../src/campaign-freeze";
 import {
@@ -264,9 +273,20 @@ describe("resolveRecordsDir — symlink/junction bypass refused (fix round 2, De
     const root = findRepoRoot(import.meta.dir);
     const outside = scratch("lethal-outside-repo-");
     const linkPath = join(root, "docs", "campaign", "__test_junction__");
-    if (existsSync(linkPath)) {
-      rmdirSync(linkPath); // clear a stale leftover from a previously aborted run
-    }
+    // R412: removes the link itself, NOT the target's contents. A Windows junction is removed with
+    // rmdir; on POSIX "junction" makes a plain symlink, which rmdir refuses (ENOTDIR) and unlink
+    // removes. `lstat`, not `existsSync`: a stale link whose target is gone is still there, and
+    // `existsSync` follows it and says false.
+    const removeLink = () => {
+      try {
+        lstatSync(linkPath);
+      } catch {
+        return;
+      }
+      if (process.platform === "win32") rmdirSync(linkPath);
+      else unlinkSync(linkPath);
+    };
+    removeLink(); // clear a stale leftover from a previously aborted run
     symlinkSync(outside, linkPath, "junction");
     try {
       expect(() =>
@@ -282,7 +302,7 @@ describe("resolveRecordsDir — symlink/junction bypass refused (fix round 2, De
         }),
       ).toThrow(/real path/);
     } finally {
-      rmdirSync(linkPath); // removes the junction stub itself, NOT the target's contents
+      removeLink();
       rmSync(outside, { recursive: true, force: true });
     }
   });
