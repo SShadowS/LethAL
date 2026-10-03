@@ -61,8 +61,14 @@ fixtures target *different* containers, and a gate against the one you forgot wi
 grep -h '"server"' fixtures/*/lethal.config.local.json
 ```
 
-Today that is `Cronus281` (sandbox-app: `itest:bcdev`) and `Cronus283` (sandbox-data:
-`itest:tables`). Publish to each:
+Today that is `Cronus28` (sandbox-app: `itest:bcdev`) and `Cronus284` (sandbox-data:
+`itest:tables`). Publish to each.
+
+**Inside the kraken container:** the compile steps above work there (Linux `alc` through
+`LETHAL_ALC_DIR`). The Global publish with sync/upgrade (`Publish-BcContainerApp`) needs
+BcContainerHelper and the Windows Docker context, so it is host-only: ask the owner. Over the dev
+endpoint, `altool publishapp` works from the container, but it does not replace the Global publish
+of the control app.
 
 ```powershell
 $env:DOCKER_CONTEXT='desktop-windows'   # the session default is the LINUX engine; without this
@@ -140,8 +146,8 @@ If the apps were already published globally, unpublish DEPENDENTS FIRST and then
 
 | container | apps |
 | --- | --- |
-| Cronus283 | `sandbox-data`, `sandbox-data-tests` |
-| Cronus281 | `sandbox-app`, `sandbox-tests`, `gift-card`, `gift-card-tests`, `sandbox-probes`, `sandbox-hang`, `sandbox-hang-tests` |
+| Cronus284 | `sandbox-data`, `sandbox-data-tests` |
+| Cronus28 | `sandbox-app`, `sandbox-tests`, `gift-card`, `gift-card-tests`, `sandbox-probes`, `sandbox-hang`, `sandbox-hang-tests` |
 
 `sandbox-probes` and the `sandbox-hang` pair are the two easy to forget, and each fails a DIFFERENT
 gate in a way that does not name the missing app. Without `sandbox-probes`, `itest:bcdev`'s verdicts

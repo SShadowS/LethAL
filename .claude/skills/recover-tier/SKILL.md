@@ -51,6 +51,10 @@ the instance is the BC instance name; for an environment-tool environment it is 
 
 ### 2. Recycle
 
+**Inside the kraken container this step is host-only: ask the owner.** A container restart needs
+BcContainerHelper and the Windows Docker context, and the envtool (`continia.exe`) runs on the host
+only. Ask the owner to recycle, then carry on from step 3.
+
 Container:
 
 ```bash
