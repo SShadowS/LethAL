@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { test as bunTest, expect } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +15,12 @@ import { delimiter, join, resolve } from "node:path";
 // things a re-run must get right: sibling repos are cloned once then pulled, and files that an
 // older fixture-symbols.tar carried but the new one does not are removed.
 const script = resolve(import.meta.dir, "kraken-setup.sh");
+
+// R416: kraken-setup.sh runs only inside the Linux kraken image, so these run on Linux only (the
+// unit-linux CI job). On Windows the result depends on which bash the host finds: the WSL launcher
+// fails everything, and Git's bash started from PowerShell (as CI does) does not keep the fakes
+// first on PATH (measured 2026-10-03).
+const test = process.platform === "win32" ? bunTest.skip : bunTest;
 
 function setup(): { root: string; bin: string; wt: string; src: string; calls: string } {
   const root = mkdtempSync(join(tmpdir(), "kraken-setup-"));
