@@ -114,15 +114,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
-- **Identity scheme 6** (R418): keys can move in a file with two or more objects that holds a
-  non-BMP character (an emoji) in a comment or a string before a later header. The mask no longer
-  shifts, so an erased header is found, a phantom commented-out header is gone, and a header offset
+- **Identity scheme 6** (R418): a key's `codeunitName` can move in a file that holds a non-BMP
+  character (an emoji) anywhere before a later comment or blanked string: in code, a quoted name, a
+  comment or a string, and in a file of one object as well as several. The mask no longer shifts,
+  so an erased header is found, a phantom commented-out header is gone, and a header offset
   matches the source. Existing marks files need `"identityScheme": 6` after re-checking each mark
   against a fresh report. History and resume from older-scheme runs are refused by name (R325).
   The same fix reaches two other places. Test discovery no longer refuses a test file ("lost 1 of
-  1 [Test]") or files its tests under the codeunit before, when an emoji comes before a codeunit
-  header. And the object-id collision scan no longer misses a real object id or reports one from a
-  commented-out header.
+  1 [Test]"), or files its tests under the wrong codeunit, when an emoji anywhere earlier in the
+  file shifted the blanking of a later comment. And the object-id collision scan no longer misses a
+  real object id or reports one from a commented-out header.
 - **Identity scheme 5** (R214): keys can move in any object that holds a `#if`. A mutant in an arm
   the build's preprocessor symbols compile out is no longer generated, a file whose directives
   LethAL cannot evaluate as alc does is not mutated at all, and a statement directly inside a

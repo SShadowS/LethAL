@@ -1398,6 +1398,17 @@ page 51053 "Not Injectable"
         { type: "codeunit", id: 52, name: "B" },
       ]);
     });
+
+    it("R418: emoji in a ONE-object file's own header do not leave a commented-out header standing", () => {
+      // The emoji need not be in a comment or a string, and the file need not hold two objects:
+      // any non-BMP character before a later comment used to shift that comment's blank. Here 35
+      // of them sit in the quoted object name (the R-418 run-001 review measured a phantom
+      // `codeunit 51` on master's mask with this shape), so the mutants after the comment would
+      // have been filed under "Old Impl".
+      const name = `Real ${"😀".repeat(35)}`;
+      const src = `codeunit 50 "${name}"\n{\n/*\ncodeunit 51 "Old Impl"\n*/\n    procedure P() begin end;\n}\n`;
+      expect(scanDeclaredObjects(src)).toEqual([{ type: "codeunit", id: 50, name }]);
+    });
   });
 
   // Boundary case a plain revert of `attributeHeader`'s loop condition cannot reach either
