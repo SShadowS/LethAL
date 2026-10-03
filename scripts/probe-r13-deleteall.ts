@@ -41,6 +41,8 @@ for (const dir of ["U:/Git/do-rel2/Cloud", "U:/Git/do-lethal-53470/Cloud"]) {
   for (const f of files) walk(f.root);
   console.log(`${dir.split("/").slice(-2).join("/")}  (${files.length} files)`);
   for (const [m, s] of Object.entries(stats)) {
-    console.log(`   ${m.padEnd(10)} on a resolved Record: ${String(s.onRecord).padStart(4)}   of those, trailing \`true\`: ${s.trueFlag}`);
+    console.log(
+      `   ${m.padEnd(10)} on a resolved Record: ${String(s.onRecord).padStart(4)}   of those, trailing \`true\`: ${s.trueFlag}`,
+    );
   }
 }

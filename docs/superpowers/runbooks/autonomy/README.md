@@ -49,7 +49,8 @@ and the owner's pause live in the same folder CentralGauge uses. A LethAL lease 
 CentralGauge's lanes and the other way round.
 
 Inside the container the machine root is `/coord/machine`, with strict allocation: exactly the
-containers assigned to this project can be leased, and none if there is no `allocation.json`.
+containers assigned to this project can be leased. A missing `allocation.json` there is an error
+(`coord-status.ts` refuses), not "no containers".
 **The owner's host pause is not seen there.** To pause the container's sessions use
 `kraken tentacle stop` (host) or `bash scripts/coord.sh pause` (inside).
 

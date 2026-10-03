@@ -12,7 +12,7 @@
  * kraken container it is the project's own /coord); else `H:\lethal-coord`. On the host an
  * inherited `CG_COORD_ROOT` is ignored on purpose: the machine-wide one can point at CentralGauge's
  * root (see scripts/coord.sh). The leased containers are read from
- * `<root>/../machine/allocation.json` inside kraken, and are Cronus28 and Cronus284 on the host.
+ * `<root>/machine/allocation.json` inside kraken, and are Cronus28 and Cronus284 on the host.
  * A coord call that fails, or prints something that is not the expected shape, exits non-zero.
  */
 
@@ -35,14 +35,14 @@ export function resolveRoot(env: Env): string {
 
 /**
  * The containers this project may lease. Inside kraken: this campaign's list in
- * `<root>/../machine/allocation.json` (a missing or unreadable file is an error, not an empty
+ * `<root>/machine/allocation.json` (a missing or unreadable file is an error, not an empty
  * list: strict allocation means no file, no container). On the host: the fixed pair.
  */
 export function leasedContainers(root: string, env: Env): readonly string[] {
   if (!env.KRAKEN_PROJECT) return LEASED_CONTAINERS;
-  const file = join(root, "..", "machine", "allocation.json");
+  const file = join(root, "machine", "allocation.json");
   if (!existsSync(file)) throw new CoordStatusError(`${file} does not exist`);
-  const alloc = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  const alloc = readJsonFile(file) as Record<string, unknown>;
   const campaign = readCampaign(root) ?? env.KRAKEN_PROJECT;
   const mine = alloc[campaign];
   if (!Array.isArray(mine) || !mine.every((c) => typeof c === "string"))
@@ -50,10 +50,19 @@ export function leasedContainers(root: string, env: Env): readonly string[] {
   return mine as string[];
 }
 
+/** JSON.parse that names the file on failure and never echoes its content. */
+function readJsonFile(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new CoordStatusError(`${file}: not valid JSON`);
+  }
+}
+
 function readCampaign(root: string): string | null {
   const file = join(root, "coord.json");
   if (!existsSync(file)) return null;
-  const meta = JSON.parse(readFileSync(file, "utf8")) as { campaign?: unknown };
+  const meta = readJsonFile(file) as { campaign?: unknown };
   return typeof meta.campaign === "string" ? meta.campaign : null;
 }
 

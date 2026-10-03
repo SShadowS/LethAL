@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
+import { envWithFakeBin } from "./fake-path-env.ts";
 
 const COORD_SH = join(import.meta.dir, "coord.sh");
 
@@ -17,12 +18,14 @@ function fakeBin(): string {
 }
 
 async function run(env: Record<string, string>, ...args: string[]) {
-  const clean = { ...process.env } as Record<string, string | undefined>;
-  for (const k of ["KRAKEN_PROJECT", "KRAKEN_AGENT", "CG_COORD_ROOT", "LETHAL_COORD_ROOT"])
-    delete clean[k];
-  const bin = fakeBin();
+  const base = envWithFakeBin(fakeBin(), [
+    "KRAKEN_PROJECT",
+    "KRAKEN_AGENT",
+    "CG_COORD_ROOT",
+    "LETHAL_COORD_ROOT",
+  ]);
   const p = Bun.spawn(["bash", COORD_SH, ...args], {
-    env: { ...clean, ...env, PATH: `${bin}${delimiter}${clean.PATH ?? ""}` },
+    env: { ...base, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });

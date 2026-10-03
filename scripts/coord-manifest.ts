@@ -35,6 +35,7 @@ async function listFiles(root: string, rel = ""): Promise<string[]> {
     const p = rel === "" ? e.name : `${rel}/${e.name}`;
     if (e.isDirectory()) out.push(...(await listFiles(root, p)));
     else if (e.isFile()) out.push(p);
+    else throw new Error(`${p}: not a regular file or directory (symlink or special entry)`);
   }
   return out;
 }

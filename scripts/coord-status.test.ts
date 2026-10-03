@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import {
   type CoordRunner,
   CoordStatusError,
@@ -12,6 +12,7 @@ import {
   leasedContainers,
   resolveRoot,
 } from "./coord-status.ts";
+import { envWithFakeBin } from "./fake-path-env.ts";
 
 function root(): string {
   const r = mkdtempSync(join(tmpdir(), "coord-status-"));
@@ -103,15 +104,15 @@ describe("root and containers follow KRAKEN_PROJECT", () => {
     expect(resolveRoot({ CG_COORD_ROOT: "/centralgauge" })).toBe(DEFAULT_ROOT);
     expect(resolveRoot({})).toBe(DEFAULT_ROOT);
   });
-  test("host: the fixed pair. kraken: this campaign's list in <root>/../machine/allocation.json", () => {
+  test("host: the fixed pair. kraken: this campaign's list in <root>/machine/allocation.json", () => {
     expect(leasedContainers("/x", {})).toEqual(["Cronus28", "Cronus284"]);
     const base = mkdtempSync(join(tmpdir(), "coord-status-k-"));
     const r = join(base, "coord");
     mkdirSync(r);
-    mkdirSync(join(base, "machine"));
+    mkdirSync(join(r, "machine"));
     writeFileSync(join(r, "coord.json"), JSON.stringify({ campaign: "lethal" }));
     writeFileSync(
-      join(base, "machine", "allocation.json"),
+      join(r, "machine", "allocation.json"),
       JSON.stringify({ lethal: ["Cronus28"], other: ["Cronus281"] }),
     );
     expect(leasedContainers(r, { KRAKEN_PROJECT: "lethal" })).toEqual(["Cronus28"]);
@@ -128,11 +129,8 @@ describe("root and containers follow KRAKEN_PROJECT", () => {
     const r = join(base, "coord");
     mkdirSync(join(r, "tasks", "T-1", "runs", "001"), { recursive: true });
     writeFileSync(join(r, "tasks", "T-1", "runs", "001", "checkpoint.json"), '{"phase":"green"}');
-    mkdirSync(join(base, "machine"));
-    writeFileSync(
-      join(base, "machine", "allocation.json"),
-      JSON.stringify({ lethal: ["CronusZ"] }),
-    );
+    mkdirSync(join(r, "machine"));
+    writeFileSync(join(r, "machine", "allocation.json"), JSON.stringify({ lethal: ["CronusZ"] }));
     const bin = mkdtempSync(join(tmpdir(), "coord-status-bin-"));
     const kr = join(bin, "kraken");
     writeFileSync(
@@ -147,15 +145,11 @@ esac
 `,
     );
     chmodSync(kr, 0o755);
-    const clean = Object.fromEntries(
-      Object.entries(process.env).filter(([k]) => k !== "LETHAL_COORD_ROOT"),
-    );
     const p = Bun.spawn(["bun", join(import.meta.dir, "coord-status.ts")], {
       env: {
-        ...clean,
+        ...envWithFakeBin(bin, ["LETHAL_COORD_ROOT"]),
         KRAKEN_PROJECT: "lethal",
         CG_COORD_ROOT: r,
-        PATH: `${bin}${delimiter}${clean.PATH}`,
       },
       stdout: "pipe",
       stderr: "pipe",
