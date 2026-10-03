@@ -46,7 +46,7 @@ export class DiscoveredPathError extends Error {
  * its own key) and use `rel` everywhere else.
  *
  * Throws `DiscoveredPathError` when two raw names give one `rel`: reading one and dropping the other
- * would lose a file without a word.
+ * would lose a file without a word. Also throws, off win32, on a raw name holding a literal `\`.
  *
  * `platform` is a parameter, defaulting to `process.platform`, so every branch is testable on any
  * host (the `defaultAlToolPaths` pattern in `publisher.ts`).
@@ -55,6 +55,19 @@ export function discoveredRelPaths(
   raw: readonly string[],
   platform: NodeJS.Platform = process.platform,
 ): Array<{ rel: string; raw: string }> {
+  // Off win32 `\` is an ordinary file-name character, not a separator. Normalising it would record
+  // a path that does not exist, and the batch copy (which takes the raw name's basename) would
+  // then hold two copies of one object. Checked before the collision check, so a POSIX `src\A`
+  // beside `src/A` is refused for the backslash.
+  if (platform !== "win32") {
+    for (const r of raw) {
+      if (!r.includes("\\")) continue;
+      throw new DiscoveredPathError(
+        `cannot use the file "${r}": its name contains a backslash. On ${platform} a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "${normalizeRelPath(r)}", which does not exist, and its batch would not compile. Rename the file.`,
+        [r],
+      );
+    }
+  }
   const out = raw.map((r) => ({ rel: normalizeRelPath(r), raw: r }));
   const byRel = new Map<string, string[]>();
   for (const d of out) {

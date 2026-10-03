@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
@@ -226,3 +226,60 @@ test("6. two discovered names that are one path once `\\` reads as `/` are refus
     'two discovered files have the same path once "\\" is read as "/": "src/A.Codeunit.al" and "src\\A.Codeunit.al". Refusing rather than reading one of them and dropping the other.',
   );
 });
+
+/** Task 1a's refusal text for a raw name holding a literal `\`, on `platform`. */
+const backslashRefusal = (raw: string, platform: string): string =>
+  `cannot use the file "${raw}": its name contains a backslash. On ${platform} a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "${raw.replaceAll("\\", "/")}", which does not exist, and its batch would not compile. Rename the file.`;
+
+test("7. off win32 a literal `\\` in a file name is refused by name", async () => {
+  const projectDir = await tempDir();
+  const source = new Map<string, Buffer>([
+    ["src/a\\b.Codeunit.al", Buffer.from(body("codeunit", 79100, "B"))],
+    ["src/Zed.Codeunit.al", Buffer.from(body("codeunit", 79101, "Zed"))],
+    ["app.json", Buffer.from(APP_JSON)],
+  ]);
+  let err: unknown;
+  try {
+    await generateMutationSet(projectDir, { source, platform: "linux" });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(DiscoveredPathError);
+  if (!(err instanceof DiscoveredPathError)) return;
+  expect(err.paths).toEqual(["src/a\\b.Codeunit.al"]);
+  expect(err.message).toBe(
+    'cannot use the file "src/a\\b.Codeunit.al": its name contains a backslash. On linux a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "src/a/b.Codeunit.al", which does not exist, and its batch would not compile. Rename the file.',
+  );
+});
+
+test("8. on win32 the same snapshot is accepted, the `\\` read as a separator", async () => {
+  const projectDir = await tempDir();
+  const source = new Map<string, Buffer>([
+    ["src/a\\b.Codeunit.al", Buffer.from(body("codeunit", 79100, "B"))],
+    ["src/Zed.Codeunit.al", Buffer.from(body("codeunit", 79101, "Zed"))],
+    ["app.json", Buffer.from(APP_JSON)],
+  ]);
+  const set = await generateMutationSet(projectDir, { source, platform: "win32" });
+  expect(set.files.map((f) => f.path)).toEqual(["src/Zed.Codeunit.al", "src/a/b.Codeunit.al"]);
+});
+
+test.skipIf(process.platform === "win32")(
+  "9. on a real POSIX disk, with no platform option, a file named `src/a\\b.Codeunit.al` is refused by name",
+  async () => {
+    const projectDir = await tempDir();
+    await mkdir(join(projectDir, "src"), { recursive: true });
+    await writeFile(join(projectDir, "app.json"), APP_JSON);
+    await writeFile(join(projectDir, "src", "a\\b.Codeunit.al"), body("codeunit", 79100, "B"));
+    await writeFile(join(projectDir, "src", "Zed.Codeunit.al"), body("codeunit", 79101, "Zed"));
+    let err: unknown;
+    try {
+      await generateMutationSet(projectDir);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DiscoveredPathError);
+    if (!(err instanceof DiscoveredPathError)) return;
+    expect(err.paths).toEqual(["src/a\\b.Codeunit.al"]);
+    expect(err.message).toBe(backslashRefusal("src/a\\b.Codeunit.al", process.platform));
+  },
+);
