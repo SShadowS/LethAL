@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import {
   CONTAINER_MAP,
   UnsupportedLauncherError,
+  describeError,
   hasSymbols,
   hasWindowsPath,
   icaclsArgv,
@@ -27,6 +28,22 @@ import {
 } from "./kraken-secrets.ts";
 
 const SCRIPT = join(import.meta.dir, "kraken-secrets.ts");
+
+test("describeError names a file-system failure without any value", () => {
+  let fsErr: unknown;
+  try {
+    readFileSync(join(tmpdir(), "kraken-secrets-no-such-file-hunter2"));
+  } catch (e) {
+    fsErr = e;
+  }
+  const d = describeError(fsErr);
+  expect(d).toMatch(/^\w+ ENOENT open$/);
+  expect(d).not.toContain("hunter2");
+  // a code or syscall that is not errno-shaped (could carry data) is dropped
+  const odd = Object.assign(new Error("password hunter2"), { code: "hunter2", syscall: "x y" });
+  expect(describeError(odd)).toBe("Error");
+  expect(describeError("hunter2")).toBe("error");
+});
 const temps: string[] = [];
 afterEach(() => {
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });

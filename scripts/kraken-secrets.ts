@@ -393,13 +393,24 @@ function main(): number {
   return 0;
 }
 
+/** Class name, plus an errno-shaped `code` (EPERM) and a lower-case `syscall` (rename). Never the message. */
+export function describeError(e: unknown): string {
+  if (!(e instanceof Error)) return "error";
+  const x = e as { code?: unknown; syscall?: unknown };
+  const code = typeof x.code === "string" && /^E[A-Z0-9]{1,15}$/.test(x.code) ? x.code : undefined;
+  const sys =
+    typeof x.syscall === "string" && /^[a-z]{1,16}$/.test(x.syscall) ? x.syscall : undefined;
+  return [e.constructor.name, code, sys].filter((p) => p !== undefined).join(" ");
+}
+
 if (import.meta.main) {
   let code = 1;
   try {
     code = main();
   } catch (e) {
-    // sanitised: a class name only, never a message that might quote a value
-    console.error(`kraken-secrets: failed: ${e instanceof Error ? e.constructor.name : "error"}`);
+    // sanitised: a class name plus, for a file-system error, its errno code and syscall (fixed
+    // words such as EPERM / rename, never data); never a message that might quote a value
+    console.error(`kraken-secrets: failed: ${describeError(e)}`);
   }
   process.exit(code);
 }
