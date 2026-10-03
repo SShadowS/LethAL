@@ -236,7 +236,7 @@ describe("R332: a frozen baseline never records itself", () => {
   const arm = (v: string): NodeJS.ProcessEnv => ({ [RECORD_BASELINE_ENV]: v });
   const none: NodeJS.ProcessEnv = {};
 
-  test("recordRequested: exact registered basenames only; slash direction does not matter", () => {
+  test("recordRequested: exact registered basenames only; either slash on Windows, only / on POSIX", () => {
     const p = join(dir, NAME);
     expect(recordRequested(p, none)).toBe(false);
     expect(recordRequested(p, arm(""))).toBe(false);
