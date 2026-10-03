@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { defaultAlRunnerCacheDir, defaultAlRunnerSecondaryCacheDir } from "../src/al-runner-cache";
 import { homeDir } from "../src/home";
 
@@ -63,4 +63,40 @@ test("R409: no product source calls os.homedir() directly; home.ts is the one re
   }
   // Exactly the one reader. Seeing home.ts here also proves the walk is not vacuous.
   expect(callers).toEqual(["runner/src/home.ts"]);
+});
+
+test("R409: no non-test script that a test imports calls os.homedir() directly", () => {
+  // Scripts are CLI entry points, but one a test IMPORTS runs inside the unit run, so its home
+  // must come from `homeDir()` as well. Scripts no test imports (one-off probes) are not checked.
+  const repo = join(import.meta.dir, "..", "..", "..");
+  const testFiles = [
+    ...readdirSync(join(repo, "scripts"), { recursive: true })
+      .map(String)
+      .map((f) => join(repo, "scripts", f)),
+    ...readdirSync(join(repo, "packages")).flatMap((pkg) => {
+      const dir = join(repo, "packages", pkg, "tests");
+      return existsSync(dir)
+        ? readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f)))
+        : [];
+    }),
+  ].filter((f) => f.endsWith(".test.ts"));
+  const imported = new Set<string>();
+  for (const t of testFiles) {
+    for (const m of readFileSync(t, "utf8").matchAll(/from "(\.{1,2}\/[^"]+)"/g)) {
+      const spec = m[1];
+      if (spec === undefined) continue;
+      const target = resolve(dirname(t), spec.endsWith(".ts") ? spec : `${spec}.ts`);
+      const rel = relative(join(repo, "scripts"), target);
+      if (rel.startsWith("..") || rel.endsWith(".test.ts") || !existsSync(target)) continue;
+      imported.add(rel.split("\\").join("/"));
+    }
+  }
+  // Non-vacuity: compile-fixtures.ts is imported by its test and is the script that used to call it.
+  expect(imported.has("compile-fixtures.ts")).toBe(true);
+  const callers = [...imported].filter(
+    (r) =>
+      r !== "test-preload.ts" &&
+      /\bhomedir\s*\(/.test(readFileSync(join(repo, "scripts", r), "utf8")),
+  );
+  expect(callers).toEqual([]);
 });

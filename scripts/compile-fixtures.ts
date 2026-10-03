@@ -42,8 +42,9 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { homeDir } from "../packages/runner/src/home.ts";
 import { sourceHash } from "./lib/source-hash.ts";
 import { readSymbolSets } from "./lib/symbol-sets.ts";
 
@@ -200,9 +201,9 @@ function main(): void {
   const alc = findAlc({
     platform: process.platform,
     env: process.env,
-    home: homedir(),
+    home: homeDir(),
     exists: existsSync,
-    extensionDirs: extensionDirs(homedir()),
+    extensionDirs: extensionDirs(homeDir()),
   });
   if (alc === null && (process.platform !== "win32" || requireEvery)) {
     // Never a skip on Linux: the container's gates read exit 0 as "compiled". Same for
