@@ -8,8 +8,12 @@
  * `<root>/tasks/<id>/runs/<latest>/checkpoint.json`), and who holds the Cronus28 and Cronus284
  * leases. Everything except the checkpoints comes from the coord CLI via `scripts/coord.sh`.
  *
- * The root is `LETHAL_COORD_ROOT`, default `H:\lethal-coord`. An inherited `CG_COORD_ROOT` is
- * ignored on purpose: the machine-wide one can point at CentralGauge's root (see scripts/coord.sh).
+ * The root is `LETHAL_COORD_ROOT`; else `CG_COORD_ROOT` when `KRAKEN_PROJECT` is set (inside a
+ * kraken container it is the project's own /coord, and a LETHAL_COORD_ROOT that differs from it is
+ * refused); else `H:\lethal-coord`. On the host an
+ * inherited `CG_COORD_ROOT` is ignored on purpose: the machine-wide one can point at CentralGauge's
+ * root (see scripts/coord.sh). The leased containers are read from
+ * `<root>/machine/allocation.json` inside kraken, and are Cronus28 and Cronus284 on the host.
  * A coord call that fails, or prints something that is not the expected shape, exits non-zero.
  */
 
@@ -20,6 +24,56 @@ const COORD_SH = join(import.meta.dir, "coord.sh");
 export const DEFAULT_ROOT = "H:\\lethal-coord";
 export const LEASED_CONTAINERS = ["Cronus28", "Cronus284"] as const;
 const NOTE_CHARS = 200;
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+/**
+ * Which coord root to read: see the file header. Inside kraken a LETHAL_COORD_ROOT that differs
+ * from CG_COORD_ROOT is refused (scripts/coord.sh applies the same rule): the coord CLI there reads
+ * CG_COORD_ROOT, so status would read checkpoints from one root and leases from the other.
+ */
+export function resolveRoot(env: Env): string {
+  if (env.KRAKEN_PROJECT && env.LETHAL_COORD_ROOT && env.LETHAL_COORD_ROOT !== env.CG_COORD_ROOT)
+    throw new CoordStatusError(
+      `LETHAL_COORD_ROOT=${env.LETHAL_COORD_ROOT} differs from CG_COORD_ROOT=${env.CG_COORD_ROOT ?? "(unset)"}; inside kraken the coord root is CG_COORD_ROOT. Unset LETHAL_COORD_ROOT or make the two equal.`,
+    );
+  if (env.LETHAL_COORD_ROOT) return env.LETHAL_COORD_ROOT;
+  if (env.KRAKEN_PROJECT && env.CG_COORD_ROOT) return env.CG_COORD_ROOT;
+  return DEFAULT_ROOT;
+}
+
+/**
+ * The containers this project may lease. Inside kraken: this campaign's list in
+ * `<root>/machine/allocation.json` (a missing or unreadable file is an error, not an empty
+ * list: strict allocation means no file, no container). On the host: the fixed pair.
+ */
+export function leasedContainers(root: string, env: Env): readonly string[] {
+  if (!env.KRAKEN_PROJECT) return LEASED_CONTAINERS;
+  const file = join(root, "machine", "allocation.json");
+  if (!existsSync(file)) throw new CoordStatusError(`${file} does not exist`);
+  const alloc = readJsonFile(file) as Record<string, unknown>;
+  const campaign = readCampaign(root) ?? env.KRAKEN_PROJECT;
+  const mine = alloc[campaign];
+  if (!Array.isArray(mine) || !mine.every((c) => typeof c === "string"))
+    throw new CoordStatusError(`${file}: no string list for '${campaign}'`);
+  return mine as string[];
+}
+
+/** JSON.parse that names the file on failure and never echoes its content. */
+function readJsonFile(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    throw new CoordStatusError(`${file}: not valid JSON`);
+  }
+}
+
+function readCampaign(root: string): string | null {
+  const file = join(root, "coord.json");
+  if (!existsSync(file)) return null;
+  const meta = readJsonFile(file) as { campaign?: unknown };
+  return typeof meta.campaign === "string" ? meta.campaign : null;
+}
 
 export class CoordStatusError extends Error {
   constructor(message: string) {
@@ -75,12 +129,16 @@ function parseJson(text: string, what: string): unknown {
   }
 }
 
-export async function gather(root: string, coord: CoordRunner): Promise<CoordView> {
+export async function gather(
+  root: string,
+  coord: CoordRunner,
+  containers: readonly string[] = LEASED_CONTAINERS,
+): Promise<CoordView> {
   const [pauseText, questionsText, staleText, ...holderTexts] = await Promise.all([
     coord(["pause-state"]),
     coord(["questions"]),
     coord(["stale"]),
-    ...LEASED_CONTAINERS.map((c) => coord(["holder", c])),
+    ...containers.map((c) => coord(["holder", c])),
   ]);
   const pause = parseJson(pauseText ?? "", "pause-state") as PauseState;
   if (typeof pause?.paused !== "boolean" || !Array.isArray(pause.doing)) {
@@ -92,7 +150,7 @@ export async function gather(root: string, coord: CoordRunner): Promise<CoordVie
     .split(/\r?\n/)
     .filter((l) => l.trim() !== "" && l.trim() !== "(nothing stale)");
   const holders = new Map<string, string | null>();
-  LEASED_CONTAINERS.forEach((c, i) => {
+  containers.forEach((c, i) => {
     const h = parseJson(holderTexts[i] ?? "", `holder ${c}`) as { lane?: unknown } | null;
     holders.set(c, h === null ? null : String(h.lane));
   });
@@ -140,9 +198,10 @@ function spawnCoord(root: string): CoordRunner {
 }
 
 if (import.meta.main) {
-  const root = process.env.LETHAL_COORD_ROOT ?? DEFAULT_ROOT;
   try {
-    console.log(formatView(await gather(root, spawnCoord(root))));
+    const root = resolveRoot(process.env);
+    const containers = leasedContainers(root, process.env);
+    console.log(formatView(await gather(root, spawnCoord(root), containers)));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(1);

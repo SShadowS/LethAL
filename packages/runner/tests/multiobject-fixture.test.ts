@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   EXPECTED_MULTIOBJECT,
@@ -109,10 +109,12 @@ describe("R383: sandbox-multiobject", () => {
   };
 
   it("gives the pre-committed twelve mutants in one batch", () => {
+    // R411: the pre-commitment is written in the Windows form; the product writes the host's.
+    const host = (s: string) => s.split("\\").join(sep);
     expect(get().batchPaths).toEqual([
-      ["src\\MultiControl.Codeunit.al", "src\\MultiPair.Codeunit.al"],
+      [host("src\\MultiControl.Codeunit.al"), host("src\\MultiPair.Codeunit.al")],
     ]);
-    expect(get().rows).toEqual(EXPECTED_MUTANTS);
+    expect(get().rows).toEqual(EXPECTED_MUTANTS.map(host));
   });
 
   it("the itest leg's pre-committed table names exactly these mutants", () => {

@@ -117,7 +117,7 @@ than guessing:
 ```bash
 python - <<'PY'
 import zipfile, io, json
-p = "U:/Git/al-perf-bc/.alpackages/Microsoft_System_28.0.47067.0.app"
+p = "fixtures/sandbox-tests/.alpackages/Microsoft_System_28.0.47067.0.app"  # any fixture's .alpackages System app; match the file name to what is there
 data = open(p, "rb").read()
 z = zipfile.ZipFile(io.BytesIO(data[data.find(b"PK\x03\x04"):]))
 sym = json.loads(z.read("SymbolReference.json").decode("utf-8-sig"))

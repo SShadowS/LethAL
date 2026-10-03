@@ -192,7 +192,8 @@ describe("defaultAlToolPaths", () => {
       await Promise.all(dirs.map((d) => mkdir(join(d, "bin", "win32"), { recursive: true })));
       await Promise.all(dirs.map((d) => Bun.write(join(d, "bin", "win32", "alc.exe"), "")));
 
-      const result = await defaultAlToolPaths(tmpDir);
+      // R412: the layout above is win32's, so say so; the host default finds nothing on Linux.
+      const result = await defaultAlToolPaths(tmpDir, "win32");
       // Should pick 15.10, not 15.9 (which would win lexicographically)
       expect(result?.alcPath).toContain("ms-dynamics-smb.al-15.10");
     } finally {
@@ -220,7 +221,7 @@ describe("defaultAlToolPaths", () => {
       await Promise.all(dirs.map((d) => mkdir(join(d, "bin", "win32"), { recursive: true })));
       await Promise.all(dirs.map((d) => Bun.write(join(d, "bin", "win32", "alc.exe"), "")));
 
-      const result = await defaultAlToolPaths(tmpDir);
+      const result = await defaultAlToolPaths(tmpDir, "win32"); // R412: a win32 layout
       // Should pick 15.1.0
       expect(result?.alcPath).toContain("ms-dynamics-smb.al-15.1.0");
     } finally {

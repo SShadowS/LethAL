@@ -1,0 +1,64 @@
+schema: 1
+name: lethal
+repo: https://github.com/SShadowS/LethAL.git
+image: .kraken/Dockerfile
+ssh_port: 2202
+mem_limit: 24g
+agents:
+  - name: orchestrator
+    branch: master
+    model: opus
+    session_name: lethal-orchestrator
+    start:
+      - /coord-join
+      - "/loop You are lethal-orchestrator. Follow docs/superpowers/runbooks/autonomy/orchestrator.md: run its start procedure if you have not done so in this session, then do one sweep."
+  - name: lane-code
+    branch: lethal/lane-code
+    model: opus
+    session_name: lethal-code
+    coord_lane: code
+    start: [/coord-join]
+  - name: lane-bugs
+    branch: lethal/lane-bugs
+    model: opus
+    session_name: lethal-bugs
+    coord_lane: bugs
+    start: [/coord-join]
+  - name: lane-preproc
+    branch: lethal/lane-preproc
+    model: opus
+    session_name: lethal-preproc
+    coord_lane: preproc
+    start: [/coord-join]
+setup:
+  - bash scripts/kraken-setup.sh
+env:
+  LETHAL_COORD_ROOT: /coord
+  LETHAL_ALRUNNER_PATH: /opt/al-runner/c39ad5de/al-runner
+  LLVM_BIN: /opt/llvm-23.1.2/bin
+  LETHAL_ALC_DIR: /home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683/bin/linux
+secret_files:
+  - { from: fixture-symbols.tar, to: .kraken-local/fixture-symbols.tar }
+  - { from: sandbox-app.launch.local.json, to: fixtures/sandbox-app/.vscode/launch.local.json }
+  - { from: mcp.json, to: .mcp.json }
+  - { from: claude-settings.local.json, to: .claude/settings.local.json }
+  - { from: sandbox-app.local.json, to: fixtures/sandbox-app/lethal.config.local.json }
+  - { from: sandbox-data.local.json, to: fixtures/sandbox-data/lethal.config.local.json }
+  - { from: sandbox-hang.local.json, to: fixtures/sandbox-hang/lethal.config.local.json }
+  - { from: sandbox-harden.local.json, to: fixtures/sandbox-harden/lethal.config.local.json }
+  - { from: sandbox-app.agent.json, to: fixtures/sandbox-app/lethal.config.agent.json }
+  - { from: sandbox-data.agent.json, to: fixtures/sandbox-data/lethal.config.agent.json }
+  - { from: sandbox-hang.agent.json, to: fixtures/sandbox-hang/lethal.config.agent.json }
+  - { from: credit-limit.local.json, to: examples/credit-limit/lethal.config.local.json }
+  - { from: gift-card.local.json, to: examples/gift-card/lethal.config.local.json }
+reaper:
+  grace_minutes: 10
+  disposable:
+    - exe: bun
+      args_contain: --watch
+  protect:
+    - exe: al-runner
+      args_contain: --server
+needs:
+  bc_containers: 2
+permissions: requested
