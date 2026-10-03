@@ -105,3 +105,26 @@ with the measured numbers. If it is not confirmed, that is recorded as a negativ
   from them are written into the manifest.
 - **R396.md** gets the numbers and closes as `done (<commit>)` once (i) and (ii) have run, whatever
   the result. A FINDING is filed as its own item.
+
+## Addendum 2026-10-03: the runs move to the kraken container
+
+Written before any measured run. No run completed on the old machine (see
+`docs/campaign/2026-10-02-r396/manifest.md`); both runs are redone, from the start, inside the
+kraken container (Linux). What changes, and what does not:
+
+- **Timings are a new baseline.** Every time measured in the container stands alone. It is NOT
+  compared with the estimates above (1.6 to 5.3 h OLD, about 1.3 h NEW, 91 s and 75 s per
+  mutant), which came from probes on the old Windows machine. Those estimates stay as written, as
+  a record of what was expected there; they are not a gate and not a reference for the new
+  numbers. The only timing comparison this campaign makes is between runs (i), (ii) and (iii),
+  all on the same machine.
+- **al-runner:** the same pinned source build, `c39ad5de`, now the Linux binary
+  `/opt/al-runner/c39ad5de/al-runner`. Each run's log still starts with its `--version`, which
+  must print `al-runner v2.12.0-main.c39ad5de`.
+- **Project:** the same Continia Document Output commit, `166e2fd6`, read from a checkout under
+  `/work/src` once the owner has placed it there. The working copy is made from it exactly as
+  above (the one change is deleting CDO's own `.app` from `Test/.alpackages`).
+- **Scratch:** the run logs go to the session's scratch folder in the container instead of
+  `C:/Users/SShadowS/AppData/Local/Temp/claude/r396/`. They are still not committed.
+- **Unchanged:** the scope, the three configs, the gates, the verdict expectation (per-mutant
+  IDENTICAL between (i) and (ii)), the stop rules and the reporting rules.
