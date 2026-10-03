@@ -53,10 +53,8 @@ import { readSymbolSets } from "./lib/symbol-sets.ts";
  * server from a stage, so "it stopped compiling" must be a red check here rather than a discovery
  * in front of a room.
  */
-const PROJECT_ROOTS = [
-  join(import.meta.dir, "..", "fixtures"),
-  join(import.meta.dir, "..", "examples"),
-];
+const projectRoots = (repo: string): string[] => [join(repo, "fixtures"), join(repo, "examples")];
+const PROJECT_ROOTS = projectRoots(join(import.meta.dir, ".."));
 
 /**
  * Newest `alc.exe` from the installed AL VS Code extension.
@@ -143,13 +141,17 @@ export function inventoryReport(rows: readonly Row[]): {
   };
 }
 
-function fixtureProjects(): string[] {
-  return PROJECT_ROOTS.filter((root) => existsSync(root)).flatMap((root) =>
-    readdirSync(root)
-      .map((d) => join(root, d))
-      .filter((d) => existsSync(join(d, "app.json")))
-      .sort(),
-  );
+/** Every AL project (a directory with `app.json`) under the repo's project roots. `kraken-secrets.ts`
+ *  reuses it so the symbol tar and this compile check cannot disagree on what a fixture is. */
+export function fixtureProjects(repo?: string): string[] {
+  return (repo === undefined ? PROJECT_ROOTS : projectRoots(repo))
+    .filter((root) => existsSync(root))
+    .flatMap((root) =>
+      readdirSync(root)
+        .map((d) => join(root, d))
+        .filter((d) => existsSync(join(d, "app.json")))
+        .sort(),
+    );
 }
 
 /** `fixtures/sandbox-app` rather than `sandbox-app`: with two roots, the bare directory name no
