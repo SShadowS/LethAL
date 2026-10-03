@@ -51,3 +51,5 @@ packages/engine/vendor/native/*.provenance.json
 # kraken container-local files
 .kraken-local/
 .claude/settings.local.json
+# session notes stay local (on the Windows host a global ignore hid them; a container has none)
+.superpowers/
