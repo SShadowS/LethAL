@@ -26,6 +26,53 @@ export function normalizeRelPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
+/** R421: thrown when a discovered file name cannot be given one `/`-separated path. */
+export class DiscoveredPathError extends Error {
+  constructor(
+    message: string,
+    readonly paths: readonly string[],
+  ) {
+    super(message);
+    this.name = "DiscoveredPathError";
+  }
+}
+
+/**
+ * R421: the ONE place a discovered file name becomes a project path. Each raw name (a readdir
+ * entry, or a source snapshot's key, both `\`-separated on Windows) is paired with its
+ * `normalizeRelPath` form, and the list is sorted by that form in plain code-unit order, the order
+ * discovery has always used. So file order, mutant ids, batches and every `file` written are the
+ * same on every platform. Callers keep `raw` to READ the file (a `\`-keyed snapshot is looked up by
+ * its own key) and use `rel` everywhere else.
+ *
+ * Throws `DiscoveredPathError` when two raw names give one `rel`: reading one and dropping the other
+ * would lose a file without a word.
+ *
+ * `platform` is a parameter, defaulting to `process.platform`, so every branch is testable on any
+ * host (the `defaultAlToolPaths` pattern in `publisher.ts`).
+ */
+export function discoveredRelPaths(
+  raw: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Array<{ rel: string; raw: string }> {
+  const out = raw.map((r) => ({ rel: normalizeRelPath(r), raw: r }));
+  const byRel = new Map<string, string[]>();
+  for (const d of out) {
+    const same = byRel.get(d.rel);
+    if (same === undefined) byRel.set(d.rel, [d.raw]);
+    else same.push(d.raw);
+  }
+  for (const names of byRel.values()) {
+    if (names.length < 2) continue;
+    const sorted = [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw new DiscoveredPathError(
+      `two discovered files have the same path once "\\" is read as "/": ${sorted.map((n) => `"${n}"`).join(" and ")}. Refusing rather than reading one of them and dropping the other.`,
+      sorted,
+    );
+  }
+  return out.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+}
+
 /** `<file>:<start>-<end>` or `<file>:<line>`. The LAST colon splits, so a Windows drive letter in
  *  a path is not mistaken for the separator (though the path must be project-relative). */
 export function parseLineArg(arg: string): LineRange {
