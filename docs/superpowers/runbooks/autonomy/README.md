@@ -6,12 +6,12 @@ share the BC containers, so they share container leases and the owner's pause.
 
 ## Sessions
 
-| Session | Worktree | Branch | Does | Never does |
-| --- | --- | --- | --- | --- |
-| `lethal-orchestrator` | `U:\Git\LethAL` | `master` | plans per task, `task.md` files, reviews, merges, pushes, closes GitHub issues, asks the owner | writes product code, resolves merge conflicts by writing code, re-records a gate baseline, loosens a hook or rule |
-| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `lethal/lane-code` | the c02 epic (coord lane `code`): implements tasks with TDD and subagents, files roadmap items, runs live gates on Cronus28 under a lease (standing owner authorization) | pushes, edits plans or `task.md`, starts or restarts containers |
-| `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `lethal/lane-bugs` | the standalone `GH-*` issues (coord lane `bugs`), same rules as `lethal-code` | same as `lethal-code` |
-| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `lethal/lane-preproc` | the `#if` preprocessor roadmap family (coord lane `preproc`), same rules as `lethal-code`, COORD-ONLY (another account; see `lane.md`) | same as `lethal-code` |
+| Session | Worktree (host) | Container | Branch | Does | Never does |
+| --- | --- | --- | --- | --- | --- |
+| `lethal-orchestrator` | `U:\Git\LethAL` | `/work/lethal` | `master` | plans per task, `task.md` files, reviews, merges, pushes, closes GitHub issues, asks the owner | writes product code, resolves merge conflicts by writing code, re-records a gate baseline, loosens a hook or rule |
+| `lethal-code` | `U:\Git\LethAL-wt\lane-code` | `/work/lethal-wt/lane-code` | `lethal/lane-code` | the c02 epic (coord lane `code`): implements tasks with TDD and subagents, files roadmap items, runs live gates on Cronus28 under a lease (standing owner authorization) | pushes, edits plans or `task.md`, starts or restarts containers |
+| `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `/work/lethal-wt/lane-bugs` | `lethal/lane-bugs` | the standalone `GH-*` issues (coord lane `bugs`), same rules as `lethal-code` | same as `lethal-code` |
+| `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `/work/lethal-wt/lane-preproc` | `lethal/lane-preproc` | the `#if` preprocessor roadmap family (coord lane `preproc`), same rules as `lethal-code` | same as `lethal-code` |
 
 `CLAUDE.md` in the repo still applies in full: the build/test order (typecheck, then
 `rm -rf packages/*/dist`, then `bun test`), biome on touched files only, `compile:fixtures`
@@ -21,11 +21,15 @@ next free id right before writing).
 ## coord
 
 ```
-CG_COORD_ROOT=H:\lethal-coord deno run --allow-all U:\Git\agent-coord\coord.ts <command> ...
+bash scripts/coord.sh <command> ...
 ```
 
-Always pass `CG_COORD_ROOT=H:\lethal-coord`: the machine-wide default points at CentralGauge's
-root. Below, `coord` means that full command.
+Inside a kraken container (`KRAKEN_PROJECT` is set) this runs `kraken coord` against the
+project's own root, `$CG_COORD_ROOT` = `/coord`. On the Windows host it runs agent-coord against
+`H:\lethal-coord` and ignores an inherited `CG_COORD_ROOT` (the machine-wide default points at
+CentralGauge's root); once the host root carries a `MOVED-TO-KRAKEN` marker it prints the marker
+and exits 3. Below, `coord` means that command, and `$CG_COORD_ROOT/...` is `/coord/...` in the
+container and `H:\lethal-coord\...` on the host.
 
 - Tasks: `GH-<n>` for standalone issues, `C02-0N` for the children of epic #10 (c02), with the
   epic's own dependency order. Each `task.md` carries the issue number and URL.
@@ -35,13 +39,19 @@ root. Below, `coord` means that full command.
 - `coord ask "<what you need>" --task <id> --from <session>` followed by
   `coord checkpoint ... --wait owner --note "<one line>"` for anything that needs the owner.
 - Queries: `coord overview`, `coord why <id>`, `coord next code`, `coord questions`, `coord stale`.
-- Owner status screen: `pwsh -File U:\Git\agent-coord\status.ps1 -CoordRoot H:\lethal-coord`.
+- Status screen: host only, `pwsh -File U:\Git\agent-coord\status.ps1 -CoordRoot H:\lethal-coord`.
+  In the container use `kraken tentacle status` and `bash scripts/coord.sh overview`.
 
 ## Containers, leases and the pause (shared with CentralGauge)
 
-`H:\lethal-coord\coord.json` sets `machineRoot` to `H:\cg-coord`, so LethAL leases and the
-owner's pause live in the same folder CentralGauge uses. A LethAL lease is seen by
+On the host, `H:\lethal-coord\coord.json` sets `machineRoot` to `H:\cg-coord`, so LethAL leases
+and the owner's pause live in the same folder CentralGauge uses. A LethAL lease is seen by
 CentralGauge's lanes and the other way round.
+
+Inside the container the machine root is `/coord/machine`, with strict allocation: exactly the
+containers assigned to this project can be leased, and none if there is no `allocation.json`.
+**The owner's host pause is not seen there.** To pause the container's sessions use
+`kraken tentacle stop` (host) or `bash scripts/coord.sh pause` (inside).
 
 - **LethAL may use `Cronus28` and `Cronus284`** (owner allocation 2026-09-25, Cronus284 added
   2026-09-26, enforced by coord through `H:\cg-coord\allocation.json`). Cronus281, Cronus282 and
@@ -57,7 +67,8 @@ CentralGauge's lanes and the other way round.
   run. Both have stalled on TestPage tests (R236, `docs/measurements/2026-09-27-nst-wedge-incidents.md`);
   an unrecoverable container goes to the owner.
 - Before any work that touches it (live gates, control-app publish, fixture publish): check it
-  is running (`pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`), then
+  is running (host only: `pwsh -File U:\Git\agent-coord\containers.ps1 status -Names Cronus28`;
+  in the container, `kraken tentacle status`), then
   `coord lease Cronus28 <lane>`, heartbeat every 5 minutes, release right after. Held by
   another lane: wait.
 - **Standing owner authorization (2026-09-25): Cronus28 is LethAL's to use freely.** Publishing
@@ -92,7 +103,7 @@ CentralGauge's lanes and the other way round.
 ## Launch contract
 
 - Approvals: the orchestrator plus GPT-6.1 Sol via `pi_ask` (`gpt-6.1-sol`, `require_evidence`
-  on, frozen `git show <sha>:<path>` copies under `H:\lethal-coord\reviews\`), at most 2 rounds.
+  on, frozen `git show <sha>:<path>` copies under `$CG_COORD_ROOT/reviews/`), at most 2 rounds.
   `gpt-6-astra` only for the c02 epic's plan. Unresolved after 2 rounds: `coord ask`.
 - Authorized: lane commits on its branch; orchestrator merges to `master`, pushes to `origin`,
   and closes the task's GitHub issue with `gh issue close <n> -R SShadowS/LethAL --comment
@@ -108,5 +119,6 @@ CentralGauge's lanes and the other way round.
 
 ## Restart
 
+In the container the tentacle resumes each session itself; do nothing. On the host:
 `claude --resume <session-name>`, then: `Resume. Follow the "On every start" section of your
 role file.` State lives in coord and git, never in chat.

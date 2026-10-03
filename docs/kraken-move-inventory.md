@@ -65,6 +65,7 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | scripts/host-path-inventory.test.ts | inert | host paths are test data for this check |
 | scripts/host-path-inventory.ts | inert | the pattern and its comment name the host forms |
 | scripts/compile-fixtures.test.ts | inert | MSYS-style home path as test data |
+| scripts/coord-join-role.test.ts | inert | host worktree paths are test data for the role lookup |
 
 ## Historical
 
