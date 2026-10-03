@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Per-worktree setup inside a kraken-lethal container (.kraken/project.yaml `setup`).
+# Idempotent: safe to re-run. Sibling repos are shared by all worktrees under ~/src.
+# KRAKEN_SETUP_SRC overrides the sibling-repo folder (the unit test uses it).
+set -euo pipefail
+src="${KRAKEN_SETUP_SRC:-/home/dev/src}"
+mkdir -p "$src"
+clone() { # <name> <url>
+  if [ ! -d "$src/$1/.git" ]; then git clone --quiet "$2" "$src/$1"; else git -C "$src/$1" pull --quiet --ff-only || true; fi
+}
+clone bc-dev-mcp https://github.com/SShadowS/bc-dev-mcp.git
+clone business-central-mcp https://github.com/SShadowS/business-central-mcp.git
+clone pi-mcp https://github.com/SShadowS/pi-mcp.git
+for r in bc-dev-mcp business-central-mcp pi-mcp; do
+  (cd "$src/$r" && { [ -d node_modules ] || npm install --silent; } && npm run --silent build)
+done
+# fixture symbol folders (.alpackages, gitignored) arrive as one tar through secret_files; kraken
+# re-runs setup when its bytes change. Files extracted last time and absent now are removed.
+man=.kraken-local/fixture-symbols.manifest
+if [ -f .kraken-local/fixture-symbols.tar ]; then
+  tar -tf .kraken-local/fixture-symbols.tar | grep -v '/$' | sort > "$man.new"
+  if [ -f "$man" ]; then comm -23 "$man" "$man.new" | while IFS= read -r f; do rm -f -- "$f"; done; fi
+  tar -xf .kraken-local/fixture-symbols.tar
+  mv "$man.new" "$man"
+fi
+bun install
+bun scripts/build-native-parser.ts
