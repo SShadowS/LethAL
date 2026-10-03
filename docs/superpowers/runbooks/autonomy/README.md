@@ -93,11 +93,15 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   run only on Cronus28 and only under a lease, and need no `coord ask` (standing authorization
   above). `itest:alrunner` runs locally and needs no container. A differing verdict or moved
   frozen figure is a block reported to the owner; never re-record a baseline yourself.
-- **al-runner: use the pinned source build `H:/al-runner-builds/c39ad5de/al-runner.exe`** (since
-  2026-10-02; set it as `LETHAL_ALRUNNER_PATH` and as `alRunner.alRunnerPath` in your gitignored
-  fixture configs). It carries upstream's fix for R345 (concurrent sessions crashing on the shared
-  ncl-shadow cache, #5018/#5019), so lanes no longer take turns. The released global v2.12.0 still
-  has the defect: never run it beside another al-runner session.
+- **al-runner: use the pinned source build c39ad5de** (since 2026-10-02). It carries upstream's
+  fix for R345 (concurrent sessions crashing on the shared ncl-shadow cache, #5018/#5019), so lanes
+  no longer take turns. The released global v2.12.0 still has the defect: never run it beside
+  another al-runner session.
+  - **On the Windows host only:** `H:/al-runner-builds/c39ad5de/al-runner.exe`; set it as
+    `LETHAL_ALRUNNER_PATH` and as `alRunner.alRunnerPath` in your gitignored fixture configs.
+  - **Inside the kraken container:** `/opt/al-runner/c39ad5de/al-runner`. It is already in
+    `LETHAL_ALRUNNER_PATH` there and the container's fixture configs already name it: do not
+    overwrite either with the host path.
 - Pause: `coord checkpoint` answers `"paused": true` while the owner has paused the machine.
   Finish the running step (never kill a live gate midway), release leases, commit, checkpoint
   `--wait paused`, and go idle until the orchestrator says `resume`.
