@@ -149,4 +149,141 @@ describe("maskAlNonCode", () => {
       expect(out.trimEnd().endsWith(";")).toBe(true);
     });
   });
+
+  // R418: every offset the mask reads and every offset its callers map back to the source is a
+  // UTF-16 unit (tree-sitter's offsets, halved by the native addon, are UTF-16 too). A character
+  // outside the Basic Multilingual Plane (an emoji) is TWO units, so the output must keep both
+  // places: blanked, a surrogate pair becomes two spaces; kept, it stays intact.
+  describe("R418: offsets are UTF-16 units", () => {
+    const policies = [
+      ["attribution", attribution],
+      ["discovery", discovery],
+    ] as const;
+
+    it("keeps the input length under both policies when the text holds a non-BMP character", () => {
+      const inputs = [
+        "x := '😀'; // note\nnext\n",
+        "// 😀😀\n/* a */ codeunit 5 Foo\n",
+        "x := '😀abc';\nnext\n",
+        "a /* 😀 */ b\n",
+        "'😀'\n",
+      ];
+      for (const [name, opts] of policies) {
+        for (const src of inputs) {
+          const out = maskAlNonCode(src, opts);
+          expect({ policy: name, src, length: out.length }).toEqual({
+            policy: name,
+            src,
+            length: src.length,
+          });
+        }
+      }
+    });
+
+    // These four cases came from lane-preproc's d129996d (R-403), which dropped its own mask test
+    // so that R418 is the only change to `maskAlNonCode`. The first one (`æøå`, BMP non-ASCII) is
+    // the CONTROL: it is green before the R418 fix too, because a BMP character is one UTF-16 unit
+    // and one code point. The other three hold a non-BMP character and were red before it.
+    for (const src of [
+      "// æøå\nX",
+      "// \u{1F600}\nX",
+      "'\u{1F600}\u{1F600}' X",
+      "/* \u{1F600} */ X",
+    ]) {
+      it(`keeps length and the offset of X for ${JSON.stringify(src)} (from R-403)`, () => {
+        for (const [name, opts] of policies) {
+          const out = maskAlNonCode(src, opts);
+          expect({ policy: name, length: out.length, x: out.indexOf("X") }).toEqual({
+            policy: name,
+            length: src.length,
+            x: src.indexOf("X"),
+          });
+        }
+      });
+    }
+
+    it("an emoji in a string does not shift the blanking of a later comment", () => {
+      const src = "x := '😀'; // note\nnext\n";
+      expect(maskAlNonCode(src, attribution)).toBe(`x := '😀'; ${" ".repeat(7)}\nnext\n`);
+      expect(maskAlNonCode(src, discovery)).toBe(`x := ${" ".repeat(4)}; ${" ".repeat(7)}\nnext\n`);
+    });
+
+    it("an emoji in a comment does not erase the object header after it", () => {
+      const src = "// 😀😀\n/* a */ codeunit 5 Foo\n";
+      const expected = `${" ".repeat(7)}\n${" ".repeat(7)} codeunit 5 Foo\n`;
+      expect(maskAlNonCode(src, attribution)).toBe(expected);
+      expect(maskAlNonCode(src, discovery)).toBe(expected);
+    });
+
+    it("a blanked string holding an emoji keeps the character after it", () => {
+      const src = "x := '😀abc';\nnext\n";
+      expect(maskAlNonCode(src, discovery)).toBe(`x := ${" ".repeat(7)};\nnext\n`);
+      expect(maskAlNonCode(src, attribution)).toBe(src);
+    });
+
+    it("a blanked surrogate pair becomes two spaces; a kept one stays intact", () => {
+      expect(maskAlNonCode("//😀\n", attribution)).toBe("    \n");
+      expect(maskAlNonCode("//😀\n", discovery)).toBe("    \n");
+      expect(maskAlNonCode("'😀'\n", attribution)).toBe("'😀'\n");
+    });
+
+    // A seeded property test (no dependency): mulberry32 is a 32-bit PRNG small enough to inline.
+    // The oracle replaces each non-BMP character with `zz` (same UTF-16 length, plain ASCII) and
+    // requires the same blanked positions. BMP behaviour is pinned by every test above, so the
+    // all-BMP text is a sound reference for where the blanks belong.
+    it("matches an all-BMP oracle on 2,000 seeded random strings", () => {
+      const mulberry32 = (seed: number) => {
+        let state = seed;
+        return (): number => {
+          state = (state + 0x6d2b79f5) | 0;
+          let t = state;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      };
+      const SEED = 418;
+      const rand = mulberry32(SEED);
+      const alphabet = ["/", "*", "'", '"', "\n", "\r", "a", " ", "é", "中", "😀", "𝄞"];
+      const blankedPositions = (src: string, out: string): number[] => {
+        const at: number[] = [];
+        for (let k = 0; k < src.length; k++) if (out[k] === " " && src[k] !== " ") at.push(k);
+        return at;
+      };
+      const failures: string[] = [];
+      for (let n = 0; n < 2000 && failures.length < 5; n++) {
+        const len = Math.floor(rand() * 61);
+        let src = "";
+        for (let c = 0; c < len; c++) src += alphabet[Math.floor(rand() * alphabet.length)];
+        const bmp = src.replace(/[\u{10000}-\u{10FFFF}]/gu, "zz");
+        for (const [name, opts] of policies) {
+          const where = `seed ${SEED}, case ${n}, ${name}, input ${JSON.stringify(src)}`;
+          const out = maskAlNonCode(src, opts);
+          if (out.length !== src.length) {
+            failures.push(`${where}: length ${out.length}, expected ${src.length}`);
+            continue;
+          }
+          for (let k = 0; k < src.length; k++) {
+            const o = out[k];
+            const s = src[k];
+            if (o !== s && o !== " ") failures.push(`${where}: index ${k} changed to ${o}`);
+            if ((s === "\n" || s === "\r") && o !== s)
+              failures.push(`${where}: newline lost at ${k}`);
+            const code = o === undefined ? 0 : o.charCodeAt(0);
+            if (code >= 0xd800 && code <= 0xdbff && out[k + 1] !== src[k + 1]) {
+              failures.push(`${where}: half a surrogate pair at ${k}`);
+            }
+          }
+          const expected = blankedPositions(bmp, maskAlNonCode(bmp, opts));
+          const actual = blankedPositions(src, out);
+          if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            failures.push(
+              `${where}: blanked ${JSON.stringify(actual)}, oracle ${JSON.stringify(expected)}`,
+            );
+          }
+        }
+      }
+      expect(failures).toEqual([]);
+    });
+  });
 });

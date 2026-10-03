@@ -1,7 +1,7 @@
 /**
  * Blank out everything the AL compiler does not read as code — comments, and optionally the
  * contents of string literals — preserving every offset, so any index into the result is also an
- * index into the original.
+ * index into the original. An "offset" here is a UTF-16 unit, as in tree-sitter's offsets (R418).
  *
  * ONE implementation, because there were two (R80). `stripAlComments` (schemata) and
  * `maskNonCode` (runner, R79) were written three weeks apart, in the same codebase, for the same
@@ -49,7 +49,12 @@ export interface AlMaskOptions {
  * unterminated block comment still runs to EOF, because that IS what the AL compiler does with it.
  */
 export function maskAlNonCode(source: string, options: AlMaskOptions): string {
-  const out = Array.from(source);
+  // R418: one element per UTF-16 UNIT, not per code point (`Array.from` splits by code point).
+  // Every index in this function is a UTF-16 unit, matching tree-sitter's offsets, so a surrogate
+  // pair (an emoji) in a blanked region becomes two spaces and the output keeps `source.length`
+  // and every offset. A pair is never split: every blank boundary is an ASCII character (`/`,
+  // `'`, `\n`, or just after `*/`).
+  const out = source.split("");
   const blank = (from: number, to: number): void => {
     for (let k = from; k < to; k++) {
       const ch = out[k];

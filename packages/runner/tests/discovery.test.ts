@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { discoverTests } from "../src/discovery";
+import { discoverTests, testsInAlSource } from "../src/discovery";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
@@ -400,23 +400,19 @@ describe("discoverTests — the test app's #if arms (R403)", () => {
     expect(methods(x.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
   });
 
-  // R418: red until R-418's mask fix merges; then turn into test()
-  test.failing(
-    "offsets line up in a file with non-ASCII text, including characters outside the BMP",
-    async () => {
-      // Forty astral characters before the `#if`: under a mask that split by code points, the
-      // `[Test]` offset came out 40 units early, before the inactive range, and OnlyUnderX was kept.
-      const comment = `    // ${"\u{1F600}".repeat(40)} æøå\n    // '${"\u{1F600}".repeat(4)}'\n`;
-      const dir = await testDirWith({
-        "Wide.Codeunit.al": R403_SHAPE.replace("#if LETHALX", `${comment}#if LETHALX`),
-      });
-      const none = await discoverTests(dir, { buildSymbols: [] });
-      expect(methods(none.filtered)).toEqual(["PlainDoubles"]);
-      expect(none.excluded.map((e) => e.test.method)).toEqual(["OnlyUnderX"]);
-      const x = await discoverTests(dir, { buildSymbols: ["LETHALX"] });
-      expect(methods(x.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
-    },
-  );
+  test("offsets line up in a file with non-ASCII text, including characters outside the BMP", async () => {
+    // Forty astral characters before the `#if`: under a mask that split by code points, the
+    // `[Test]` offset came out 40 units early, before the inactive range, and OnlyUnderX was kept.
+    const comment = `    // ${"\u{1F600}".repeat(40)} æøå\n    // '${"\u{1F600}".repeat(4)}'\n`;
+    const dir = await testDirWith({
+      "Wide.Codeunit.al": R403_SHAPE.replace("#if LETHALX", `${comment}#if LETHALX`),
+    });
+    const none = await discoverTests(dir, { buildSymbols: [] });
+    expect(methods(none.filtered)).toEqual(["PlainDoubles"]);
+    expect(none.excluded.map((e) => e.test.method)).toEqual(["OnlyUnderX"]);
+    const x = await discoverTests(dir, { buildSymbols: ["LETHALX"] });
+    expect(methods(x.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+  });
 
   test("--tests-only still narrows both lists", async () => {
     const dir = await testDirWith({
@@ -492,5 +488,57 @@ describe("discoverTests — the test app's #if arms (R403)", () => {
     const narrowed = await discoverTests(dir, { only: ["R403*"], buildSymbols: [] });
     expect([...(narrowed.inScopeCodeunits ?? [])].sort()).toEqual([50140, 50145]);
     expect((await discoverTests(dir, { buildSymbols: [] })).inScopeCodeunits).toBeUndefined();
+  });
+});
+
+// R418: the mask indexed a code-point array by UTF-16 offsets, so an emoji (two UTF-16 units, one
+// code point) in a comment shifted every later blank one place left and erased the next header.
+describe("testsInAlSource — a non-BMP character before a header (R418)", () => {
+  test("an emoji in a comment does not erase the codeunit header after it", () => {
+    const src =
+      '// 😀😀\n/* a */ codeunit 79400 "Emoji Suite"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure Runs()\n    begin\n    end;\n}\n';
+    expect(testsInAlSource("Emoji.Codeunit.al", src)).toEqual([
+      { codeunitId: 79400, codeunitName: "Emoji Suite", method: "Runs", file: "Emoji.Codeunit.al" },
+    ]);
+  });
+
+  test("a test after an emoji comment is filed under its own codeunit, not the one before", () => {
+    // With an earlier codeunit in the file, the lost header does not trip the "lost N of M" guard:
+    // the second test lands in the FIRST section, silently, under the wrong codeunit.
+    const src = `codeunit 79401 "First Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure InFirst()
+    begin
+    end;
+}
+
+// 😀😀
+/* a */ codeunit 79402 "Second Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure InSecond()
+    begin
+    end;
+}
+`;
+    expect(testsInAlSource("Two.Codeunit.al", src)).toEqual([
+      {
+        codeunitId: 79401,
+        codeunitName: "First Suite",
+        method: "InFirst",
+        file: "Two.Codeunit.al",
+      },
+      {
+        codeunitId: 79402,
+        codeunitName: "Second Suite",
+        method: "InSecond",
+        file: "Two.Codeunit.al",
+      },
+    ]);
   });
 });
