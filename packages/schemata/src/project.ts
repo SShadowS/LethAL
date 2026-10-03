@@ -110,9 +110,12 @@ export function identityTupleOf(
  * the R-214 plan). 6: R418, `codeunitName` can move in a file holding a non-BMP character (an
  * emoji) anywhere before a later comment or blanked string, in code, a quoted name, a comment or a
  * string, in a file of one object or several: the mask no longer shifts, so an erased header is
- * found, a phantom commented-out header is gone, and a header's offset matches the source.
+ * found, a phantom commented-out header is gone, and a header's offset matches the source. 7:
+ * R421, discovered paths are normalised to `/`, so on Windows a project with subfolders gets the
+ * file order, mutant ids and batches Linux gets, and with per-batch ordinals an identity twin in
+ * another file can change ordinal.
  */
-export const IDENTITY_SCHEME = 6;
+export const IDENTITY_SCHEME = 7;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

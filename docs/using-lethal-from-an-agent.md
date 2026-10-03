@@ -529,7 +529,7 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 6, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 7, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. To mark a survivor:
