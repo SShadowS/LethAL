@@ -9,7 +9,8 @@
  * leases. Everything except the checkpoints comes from the coord CLI via `scripts/coord.sh`.
  *
  * The root is `LETHAL_COORD_ROOT`; else `CG_COORD_ROOT` when `KRAKEN_PROJECT` is set (inside a
- * kraken container it is the project's own /coord); else `H:\lethal-coord`. On the host an
+ * kraken container it is the project's own /coord, and a LETHAL_COORD_ROOT that differs from it is
+ * refused); else `H:\lethal-coord`. On the host an
  * inherited `CG_COORD_ROOT` is ignored on purpose: the machine-wide one can point at CentralGauge's
  * root (see scripts/coord.sh). The leased containers are read from
  * `<root>/machine/allocation.json` inside kraken, and are Cronus28 and Cronus284 on the host.
@@ -26,8 +27,16 @@ const NOTE_CHARS = 200;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-/** Which coord root to read: see the file header. */
+/**
+ * Which coord root to read: see the file header. Inside kraken a LETHAL_COORD_ROOT that differs
+ * from CG_COORD_ROOT is refused (scripts/coord.sh applies the same rule): the coord CLI there reads
+ * CG_COORD_ROOT, so status would read checkpoints from one root and leases from the other.
+ */
 export function resolveRoot(env: Env): string {
+  if (env.KRAKEN_PROJECT && env.LETHAL_COORD_ROOT && env.LETHAL_COORD_ROOT !== env.CG_COORD_ROOT)
+    throw new CoordStatusError(
+      `LETHAL_COORD_ROOT=${env.LETHAL_COORD_ROOT} differs from CG_COORD_ROOT=${env.CG_COORD_ROOT ?? "(unset)"}; inside kraken the coord root is CG_COORD_ROOT. Unset LETHAL_COORD_ROOT or make the two equal.`,
+    );
   if (env.LETHAL_COORD_ROOT) return env.LETHAL_COORD_ROOT;
   if (env.KRAKEN_PROJECT && env.CG_COORD_ROOT) return env.CG_COORD_ROOT;
   return DEFAULT_ROOT;
@@ -189,8 +198,8 @@ function spawnCoord(root: string): CoordRunner {
 }
 
 if (import.meta.main) {
-  const root = resolveRoot(process.env);
   try {
+    const root = resolveRoot(process.env);
     const containers = leasedContainers(root, process.env);
     console.log(formatView(await gather(root, spawnCoord(root), containers)));
   } catch (e) {

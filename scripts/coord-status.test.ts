@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -96,13 +96,23 @@ describe("gather + formatView", () => {
 });
 
 describe("root and containers follow KRAKEN_PROJECT", () => {
-  test("LETHAL_COORD_ROOT wins; KRAKEN_PROJECT reads CG_COORD_ROOT; the host ignores it", () => {
+  test("LETHAL_COORD_ROOT wins on the host; KRAKEN_PROJECT reads CG_COORD_ROOT; the host ignores it", () => {
+    expect(resolveRoot({ LETHAL_COORD_ROOT: "/a", CG_COORD_ROOT: "/b" })).toBe("/a");
     expect(
-      resolveRoot({ LETHAL_COORD_ROOT: "/a", KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/b" }),
-    ).toBe("/a");
+      resolveRoot({ LETHAL_COORD_ROOT: "/b", KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/b" }),
+    ).toBe("/b");
     expect(resolveRoot({ KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/tmp/x" })).toBe("/tmp/x");
     expect(resolveRoot({ CG_COORD_ROOT: "/centralgauge" })).toBe(DEFAULT_ROOT);
     expect(resolveRoot({})).toBe(DEFAULT_ROOT);
+  });
+  test("kraken: a LETHAL_COORD_ROOT that differs from CG_COORD_ROOT is refused, naming both", () => {
+    for (const env of [
+      { LETHAL_COORD_ROOT: "/a", KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/b" },
+      { LETHAL_COORD_ROOT: "/a", KRAKEN_PROJECT: "lethal" },
+    ]) {
+      expect(() => resolveRoot(env)).toThrow(CoordStatusError);
+      expect(() => resolveRoot(env)).toThrow(/LETHAL_COORD_ROOT=\/a differs from CG_COORD_ROOT=/);
+    }
   });
   test("host: the fixed pair. kraken: this campaign's list in <root>/machine/allocation.json", () => {
     expect(leasedContainers("/x", {})).toEqual(["Cronus28", "Cronus284"]);
@@ -145,18 +155,23 @@ describe("root and containers follow KRAKEN_PROJECT", () => {
       expect(msg).not.toContain("hunter2");
     },
   );
-  test("end to end: KRAKEN_PROJECT + CG_COORD_ROOT=<tmp> reads <tmp>, never H:", async () => {
-    const base = mkdtempSync(join(tmpdir(), "coord-status-e2e-"));
-    const r = join(base, "coord");
-    mkdirSync(join(r, "tasks", "T-1", "runs", "001"), { recursive: true });
-    writeFileSync(join(r, "tasks", "T-1", "runs", "001", "checkpoint.json"), '{"phase":"green"}');
+  // A populated root: one doing task with a checkpoint, and one leased container.
+  const populatedRoot = (task: string, container: string): string => {
+    const r = join(mkdtempSync(join(tmpdir(), "coord-status-e2e-")), "coord");
+    mkdirSync(join(r, "tasks", task, "runs", "001"), { recursive: true });
+    writeFileSync(join(r, "tasks", task, "runs", "001", "checkpoint.json"), '{"phase":"green"}');
     mkdirSync(join(r, "machine"));
-    writeFileSync(join(r, "machine", "allocation.json"), JSON.stringify({ lethal: ["CronusZ"] }));
+    writeFileSync(join(r, "machine", "allocation.json"), JSON.stringify({ lethal: [container] }));
+    return r;
+  };
+  // Runs coord-status.ts against a fake `kraken` that reports T-1 doing; `called` records argv.
+  const runStatus = async (env: Record<string, string>) => {
     const bin = mkdtempSync(join(tmpdir(), "coord-status-bin-"));
-    const kr = join(bin, "kraken");
+    const called = join(bin, "called");
     writeFileSync(
-      kr,
+      join(bin, "kraken"),
       `#!/usr/bin/env bash
+echo "$*" >> "${called.replace(/\\/g, "/")}"
 case "$2" in
   pause-state) echo '{"paused":false,"doing":[{"id":"T-1","lane":"code"}]}';;
   questions) echo '[]';;
@@ -165,13 +180,9 @@ case "$2" in
 esac
 `,
     );
-    chmodSync(kr, 0o755);
+    chmodSync(join(bin, "kraken"), 0o755);
     const p = Bun.spawn(["bun", join(import.meta.dir, "coord-status.ts")], {
-      env: {
-        ...envWithFakeBin(bin, ["LETHAL_COORD_ROOT"]),
-        KRAKEN_PROJECT: "lethal",
-        CG_COORD_ROOT: r,
-      },
+      env: { ...envWithFakeBin(bin, ["LETHAL_COORD_ROOT"]), KRAKEN_PROJECT: "lethal", ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -180,10 +191,31 @@ esac
       new Response(p.stderr).text(),
       p.exited,
     ]);
-    expect(err).toBe("");
-    expect(code).toBe(0);
-    expect(out).toContain("  T-1 (code) run 001 green");
-    expect(out).toContain("lease CronusZ: free");
-    expect(out).not.toContain("Cronus28");
+    return { out, err, code, krakenCalled: existsSync(called) };
+  };
+
+  test("end to end: KRAKEN_PROJECT + CG_COORD_ROOT=<tmp> reads <tmp>, never H:", async () => {
+    const r = populatedRoot("T-1", "CronusZ");
+    for (const env of [{ CG_COORD_ROOT: r }, { CG_COORD_ROOT: r, LETHAL_COORD_ROOT: r }]) {
+      const { out, err, code } = await runStatus(env);
+      expect(err).toBe("");
+      expect(code).toBe(0);
+      expect(out).toContain("  T-1 (code) run 001 green");
+      expect(out).toContain("lease CronusZ: free");
+      expect(out).not.toContain("Cronus28");
+    }
+  });
+
+  test("end to end: distinct populated roots are refused, naming both, before any coord call", async () => {
+    const a = populatedRoot("T-1", "CronusA");
+    const b = populatedRoot("T-1", "CronusB");
+    const { out, err, code, krakenCalled } = await runStatus({
+      LETHAL_COORD_ROOT: a,
+      CG_COORD_ROOT: b,
+    });
+    expect(code).toBe(1);
+    expect(out).toBe("");
+    expect(err).toContain(`LETHAL_COORD_ROOT=${a} differs from CG_COORD_ROOT=${b}`);
+    expect(krakenCalled).toBe(false);
   });
 });

@@ -49,6 +49,28 @@ describe("scripts/coord.sh", () => {
     expect(r.out).toBe("kraken coord status --lane code root=/coord");
   });
 
+  test("KRAKEN_PROJECT: a LETHAL_COORD_ROOT equal to CG_COORD_ROOT is fine", async () => {
+    const r = await run(
+      { KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/coord", LETHAL_COORD_ROOT: "/coord" },
+      "overview",
+    );
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("kraken coord overview root=/coord");
+  });
+
+  test("KRAKEN_PROJECT: a LETHAL_COORD_ROOT that differs is refused, naming both, nothing called", async () => {
+    for (const env of [
+      { KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/coord", LETHAL_COORD_ROOT: "/other" },
+      { KRAKEN_PROJECT: "lethal", LETHAL_COORD_ROOT: "/other" },
+    ]) {
+      const r = await run(env, "status");
+      expect(r.code).toBe(2);
+      expect(r.out).toBe("");
+      expect(r.err).toContain("LETHAL_COORD_ROOT=/other differs from CG_COORD_ROOT=");
+      expect(r.err).toContain(env.CG_COORD_ROOT ?? "(unset)");
+    }
+  });
+
   test("the owner's shell pane (KRAKEN_PROJECT, no KRAKEN_AGENT) behaves the same", async () => {
     const r = await run({ KRAKEN_PROJECT: "lethal", CG_COORD_ROOT: "/coord" }, "overview");
     expect(r.out).toBe("kraken coord overview root=/coord");
