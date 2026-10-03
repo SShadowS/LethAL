@@ -1,6 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+/** R417: the quarantine store path exists but is not a directory. A broken configuration, never
+ *  "no record". */
+export class QuarantineStoreNotADirectoryError extends Error {
+  constructor(readonly path: string) {
+    super(
+      `the quarantine store ${path} exists but is not a directory, so no quarantine can be read or cleared there. Remove or move it, or point the quarantine dir somewhere else.`,
+    );
+    this.name = "QuarantineStoreNotADirectoryError";
+  }
+}
 
 /** Bounded retry budget for `renameWithRetry`'s transient-EPERM ride-out (see its doc comment). */
 const RENAME_MAX_ATTEMPTS = 5;
@@ -71,11 +82,20 @@ export class QuarantineStore {
     try {
       raw = await readFile(this.fileFor(resourceKey), "utf8");
     } catch (err) {
-      // R413: ENOTDIR is Linux's answer when baseDir is a regular file; Windows says ENOENT for
-      // the same path. No record can exist there either way, and record() still refuses the path.
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") return null;
-      throw err;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+      // R417: a MISSING store dir means no record. A store path that EXISTS but is not a
+      // directory is a broken configuration, refused on every platform (Linux reports ENOTDIR
+      // here, Windows ENOENT, R413). Reading it as "no record" would let `clear()` answer
+      // "cleared" and the quarantine check report clean: empty-vs-empty on a safety latch.
+      let isDir: boolean;
+      try {
+        isDir = (await stat(this.baseDir)).isDirectory();
+      } catch {
+        return null;
+      }
+      if (!isDir) throw new QuarantineStoreNotADirectoryError(this.baseDir);
+      return null;
     }
     return JSON.parse(raw) as QuarantineRecord;
   }
