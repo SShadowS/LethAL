@@ -230,7 +230,7 @@ describe("CLI", () => {
     });
     const entries = list.stdout
       .toString()
-      .split("\n")
+      .split(/\r?\n/) // R415: Windows' bsdtar ends each name with \r\n
       .filter((e) => e !== "");
     expect(entries).toContain("fixtures/alpha/.alpackages/sym.app");
     expect(entries).toContain("examples/beta/.alpackages/sym.app");
