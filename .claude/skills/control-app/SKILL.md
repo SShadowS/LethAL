@@ -142,7 +142,7 @@ If the apps were already published globally, unpublish DEPENDENTS FIRST and then
 (`UnPublish-BcContainerApp -unInstall -force`), then republish both through the dev endpoint.
 
 **3. Which apps, and where.** Read the containers from the configs, never from memory. As of
-2026-08-19:
+2026-08-19 (container names updated 2026-10-03 to Cronus28 and Cronus284):
 
 | container | apps |
 | --- | --- |

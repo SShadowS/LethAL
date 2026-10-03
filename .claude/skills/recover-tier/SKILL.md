@@ -59,7 +59,7 @@ Container:
 
 ```bash
 docker context use desktop-windows
-Restart-BcContainer -containerName Cronus281       # PowerShell tool
+Restart-BcContainer -containerName Cronus28       # PowerShell tool
 ```
 
 Environment tool:
