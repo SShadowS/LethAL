@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** R417: the quarantine store path exists but is not a directory. A broken configuration, never
  *  "no record". */
@@ -88,19 +88,26 @@ export class QuarantineStore {
       // directory is a broken configuration, refused on every platform (Linux reports ENOTDIR
       // here, Windows ENOENT, R413). Reading it as "no record" would let `clear()` answer
       // "cleared" and the quarantine check report clean: empty-vs-empty on a safety latch.
-      let isDir: boolean;
-      try {
-        isDir = (await stat(this.baseDir)).isDirectory();
-      } catch (statErr) {
-        const sc = (statErr as NodeJS.ErrnoException).code;
-        if (sc === "ENOENT") return null;
-        // The store dir's own parent is a file: the same broken configuration as a file at the
-        // store path. Anything else (EACCES, EIO) is unknown, so it must not read as "no record".
-        if (sc === "ENOTDIR") throw new QuarantineStoreNotADirectoryError(this.baseDir);
-        throw statErr;
+      // Walk up from the store dir to the nearest path that exists. A directory there means the
+      // store is genuinely missing (no record). A non-directory there (the store path itself, or
+      // an ancestor) is the broken configuration, refused. Windows reports ENOENT, not ENOTDIR,
+      // for a child of a file, so the errno alone cannot tell the two apart. Anything else
+      // (EACCES, EIO) is unknown, so it must not read as "no record".
+      for (let p = this.baseDir; ; ) {
+        let isDir: boolean;
+        try {
+          isDir = (await stat(p)).isDirectory();
+        } catch (statErr) {
+          const sc = (statErr as NodeJS.ErrnoException).code;
+          if (sc !== "ENOENT" && sc !== "ENOTDIR") throw statErr;
+          const up = dirname(p);
+          if (up === p) return null;
+          p = up;
+          continue;
+        }
+        if (!isDir) throw new QuarantineStoreNotADirectoryError(p);
+        return null;
       }
-      if (!isDir) throw new QuarantineStoreNotADirectoryError(this.baseDir);
-      return null;
     }
     return JSON.parse(raw) as QuarantineRecord;
   }
