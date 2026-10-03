@@ -13,7 +13,8 @@ import { join } from "node:path";
 export type PathClass = "operational" | "inert" | "historical";
 
 /** One source for `git grep -E` and for JS. Backslash and slash forms of each host root. */
-export const HOST_PATH_SOURCE = String.raw`H:[\\/]|U:[\\/]Git|C:[\\/]Users|~/\.vscode`;
+// The MSYS forms (/h/, /u/Git) are anchored so a path like /x/h/y or a URL /u/ does not match.
+export const HOST_PATH_SOURCE = String.raw`H:[\\/]|U:[\\/]Git|C:[\\/]Users|~/\.vscode|(^|[^A-Za-z0-9_.-])(/h/|/u/Git)`;
 
 const norm = (p: string): string => p.replace(/\\/g, "/");
 
@@ -41,6 +42,14 @@ export function inventory(
     if (!classOf(path, classes)) unclassified.push(path);
   }
   return { unclassified, hits };
+}
+
+/** Rows (files or directories) that no hit file matches any more. */
+export function staleRows(hits: Map<string, number>, classes: Map<string, PathClass>): string[] {
+  const paths = [...hits.keys()];
+  return [...classes.keys()].filter((row) =>
+    row.endsWith("/") ? !paths.some((p) => p.startsWith(row)) : !hits.has(row),
+  );
 }
 
 /** Rows of `| path | class | note |`. Header, separator and prose lines are skipped. */
@@ -80,8 +89,14 @@ async function main(): Promise<number> {
     return 1;
   }
   const paths = proc.stdout.toString().split("\0").filter(Boolean);
+  // git grep reads the working tree, so a tracked file deleted there is never listed (pinned by test).
   const files = paths.map((path) => ({ path, text: readFileSync(join(root, path), "utf8") }));
   const { unclassified, hits } = inventory(files, classes);
+  const stale = staleRows(hits, classes);
+  if (stale.length > 0) {
+    console.error(`host-path-inventory: WARNING ${stale.length} stale row(s), no hits any more:`);
+    for (const r of stale) console.error(`  ${r}`);
+  }
   if (hits.size === 0) {
     console.error(
       "host-path-inventory: no hits at all; the grep is broken (this repo has hundreds)",

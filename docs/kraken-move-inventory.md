@@ -63,6 +63,8 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | .kraken/Dockerfile | inert | a comment names the VS Code extensions folder to say where LethAL looks |
 | scripts/kraken-secrets.test.ts | inert | host paths are test data for the path rewriter |
 | scripts/host-path-inventory.test.ts | inert | host paths are test data for this check |
+| scripts/host-path-inventory.ts | inert | the pattern and its comment name the host forms |
+| scripts/compile-fixtures.test.ts | inert | MSYS-style home path as test data |
 
 ## Historical
 
