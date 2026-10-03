@@ -1,20 +1,14 @@
 # Join the LethAL autonomous run
 
 Work out which of the four sessions you are, then start it. Runbook:
-`docs/superpowers/runbooks/autonomy/`.
+`docs/superpowers/runbooks/autonomy/`. Inside a kraken container nothing here waits for the owner.
 
-## 1. Your role comes from your directory
+## 1. Find your role
 
-Run `git rev-parse --show-toplevel`:
+Run `bun scripts/coord-join-role.ts`. It prints one JSON line:
+`{ session, roleFile, kraken, skipRename, loopFromStart }`. Exit 1: say what it printed and stop.
 
-| Top level | Session name | Role file |
-| --- | --- | --- |
-| `U:/Git/LethAL` | `lethal-orchestrator` | `orchestrator.md` |
-| `U:/Git/LethAL-wt/lane-code` | `lethal-code` | `lane.md` |
-| `U:/Git/LethAL-wt/lane-bugs` | `lethal-bugs` | `lane.md` |
-| `H:/LethAL-wt/lane-preproc` | `lethal-preproc` | `lane.md` |
-
-Anything else: say this directory has no role and stop.
+With `KRAKEN_PROJECT` set the role comes from `KRAKEN_AGENT`; otherwise from the directory.
 
 ## 2. Check the role is free
 
@@ -24,21 +18,32 @@ step 4.
 
 ## 3. Get the name
 
-You cannot rename yourself. Tell the user:
+If `skipRename` is false: you cannot rename yourself. Tell the user:
 
-> I am `<session name>`. Please run `/rename <session name>` so the other session can reach me.
+> I am `<session>`. Please run `/rename <session>` so the other session can reach me.
 
 Wait for confirmation, then check `ListAgents` shows the new name.
 
-## 4. Start the role
+If `skipRename` is true: the session was named by `--name` when it started. Check `ListAgents`
+shows `<session>`. Do not ask the owner for anything.
 
-- `lethal-orchestrator`: read `orchestrator.md` and tell the user to start the loop with
+## 4. Acknowledge (kraken only)
+
+If `kraken` is true, run `kraken tentacle ack` now. Run it only after steps 2 and 3 passed, and
+before any other work. If it fails, report its output and stop (the tentacle retries the join).
+If `kraken` is false, skip this step.
+
+## 5. Start the role
+
+- `orchestrator.md`: read it. If `loopFromStart` is true, do NOT ask the owner to type `/loop`;
+  the loop arrives as your next prompt. Otherwise tell the user to start the loop with
   `/loop You are lethal-orchestrator. Follow docs/superpowers/runbooks/autonomy/orchestrator.md: run its start procedure if you have not done so in this session, then do one sweep.`
-- `lethal-code`, `lethal-bugs` or `lethal-preproc`: read `lane.md` and follow its "On every start" section.
+- `lane.md`: read it and follow its "On every start" section.
 
-For `lethal-code` and `lethal-bugs`, the last start step messages `lethal-orchestrator` that you are online; never skip
-it, the orchestrator waits for it after a `/clear`. `lethal-preproc` is COORD-ONLY: it may be on
-another account, so steps 2 and 3 are optional for it and it follows `lane.md`'s COORD-ONLY section
-instead of messaging.
+## 6. Tell the orchestrator
+
+Every lane (`lethal-code`, `lethal-bugs`, `lethal-preproc`): the last start step messages
+`lethal-orchestrator` that you are online; never skip it, the orchestrator waits for it after a
+`/clear`.
 
 Report which of the other roles are live, and the directory of each that is not.
