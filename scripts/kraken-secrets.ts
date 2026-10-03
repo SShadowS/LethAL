@@ -316,24 +316,57 @@ export function writeOutputs(
 
 const removeDir = (dir: string): void => rmSync(dir, { recursive: true, force: true });
 
-/** Delete `<out>.old-*` / `<out>.tmp-*` siblings: credential copies left by a crash mid-swap. */
-export function sweepSwapFolders(outDir: string): string[] {
+/** `<out>.<kind>-<hex>` sibling names, for each kind given. */
+function swapSiblings(outDir: string, kinds: readonly ("old" | "tmp")[]): string[] {
   const parent = dirname(outDir);
   if (!existsSync(parent)) return [];
   const base = basename(outDir);
-  const swept = readdirSync(parent).filter((n) => {
-    const rest =
-      n.startsWith(`${base}.old-`) || n.startsWith(`${base}.tmp-`) ? n.slice(base.length + 5) : "";
-    return /^[0-9a-f]+$/.test(rest);
-  });
-  for (const n of swept) removeDir(join(parent, n));
+  return readdirSync(parent).filter((n) =>
+    kinds.some(
+      (k) => n.startsWith(`${base}.${k}-`) && /^[0-9a-f]+$/.test(n.slice(base.length + 5)),
+    ),
+  );
+}
+
+/** Delete `<out>.old-*` / `<out>.tmp-*` siblings: credential copies left by a crash mid-swap.
+ *  Call it only after `recoverInterruptedSwap`, which may need one of them. */
+export function sweepSwapFolders(outDir: string): string[] {
+  const swept = swapSiblings(outDir, ["old", "tmp"]);
+  for (const n of swept) removeDir(join(dirname(outDir), n));
   return swept;
+}
+
+export class SwapRecoveryError extends Error {
+  constructor() {
+    super("the output folder is missing and more than one <out>.old-* exists; restore one by hand");
+    this.name = "SwapRecoveryError";
+  }
+}
+
+/**
+ * A process death between `writeOutputs` moving `<out>` aside and publishing the new folder
+ * leaves no `<out>` and exactly one `<out>.old-*`: the last valid output. Put it back before
+ * anything else, so a sweep or a refused run cannot lose it. Returns the restored name. More than
+ * one candidate is refused: which one is newest cannot be told safely.
+ */
+export function recoverInterruptedSwap(outDir: string): string | undefined {
+  if (existsSync(outDir)) return undefined;
+  const olds = swapSiblings(outDir, ["old"]);
+  const [only] = olds;
+  if (only === undefined) return undefined;
+  if (olds.length > 1) throw new SwapRecoveryError();
+  renameSync(join(dirname(outDir), only), outDir);
+  return only;
 }
 
 function main(): number {
   const repo = arg("--repo") ?? join(import.meta.dir, "..");
   const outDir = arg("--out") ?? "U:/Git/kraken/secrets/lethal";
   const pkgPath = arg("--bcdev-package") ?? "U:/Git/bc-dev-mcp/package.json";
+  const restored = recoverInterruptedSwap(outDir);
+  if (restored !== undefined)
+    console.log(`kraken-secrets: restored ${restored} (a previous run stopped mid-swap)`);
+  // after recovery, every .old-*/.tmp-* left is obsolete: <out> holds the last valid output
   for (const n of sweepSwapFolders(outDir)) console.log(`kraken-secrets: removed leftover ${n}`);
   const errors: string[] = [];
   const outputs: { name: string; bytes: string | Uint8Array }[] = [];

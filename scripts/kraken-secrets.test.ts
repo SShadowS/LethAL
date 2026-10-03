@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   CONTAINER_MAP,
+  SwapRecoveryError,
   UnsupportedLauncherError,
   describeError,
   hasSymbols,
@@ -21,6 +22,7 @@ import {
   isSecretEntry,
   listingProblems,
   nonRegularEntries,
+  recoverInterruptedSwap,
   rewrite,
   secretFiles,
   sweepSwapFolders,
@@ -516,15 +518,45 @@ describe("sweepSwapFolders", () => {
     expect(readdirSync(parent).sort()).toEqual(["lethal", "lethal.old-notes", "other.tmp-0a1b"]);
   });
 
-  test("the CLI sweeps before anything else, even on a refused run", () => {
+  test("with <out> present the CLI sweeps leftovers first, even on a refused run", () => {
     const { repo, pkg } = makeRepo({ "mcp.json": "{" });
     const parent = temp();
     const out = join(parent, "secrets");
+    mkdirSync(out);
+    writeFileSync(join(out, "a.json"), "previous");
     mkdirSync(join(parent, "secrets.old-abc123"));
     const r = cli(repo, pkg, out);
     expect(r.code).toBe(1);
     expect(r.text).toContain("removed leftover secrets.old-abc123");
-    expect(readdirSync(parent)).toEqual([]);
+    expect(readdirSync(parent)).toEqual(["secrets"]);
+    expect(readFileSync(join(out, "a.json"), "utf8")).toBe("previous");
+  });
+
+  test("an interrupted swap (no <out>, one .old-*) then an INVALID run: the previous output survives", () => {
+    const { repo, pkg } = makeRepo({ "mcp.json": "{" });
+    const parent = temp();
+    const out = join(parent, "secrets");
+    // the state a process death leaves between "move <out> aside" and "publish the new folder"
+    mkdirSync(join(parent, "secrets.old-abc123"));
+    writeFileSync(join(parent, "secrets.old-abc123", "a.json"), "previous");
+    mkdirSync(join(parent, "secrets.tmp-abc123"));
+    writeFileSync(join(parent, "secrets.tmp-abc123", "a.json"), "half-written");
+    const r = cli(repo, pkg, out);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("restored secrets.old-abc123");
+    expect(r.text).toContain("removed leftover secrets.tmp-abc123");
+    expect(readdirSync(parent)).toEqual(["secrets"]);
+    expect(readFileSync(join(out, "a.json"), "utf8")).toBe("previous");
+  });
+
+  test("no <out> and two .old-* candidates: refused, nothing touched", () => {
+    const parent = temp();
+    const out = join(parent, "secrets");
+    mkdirSync(join(parent, "secrets.old-aa"));
+    mkdirSync(join(parent, "secrets.old-bb"));
+    expect(() => recoverInterruptedSwap(out)).toThrow(SwapRecoveryError);
+    expect(readdirSync(parent).sort()).toEqual(["secrets.old-aa", "secrets.old-bb"]);
+    expect(recoverInterruptedSwap(join(temp(), "fresh"))).toBeUndefined();
   });
 
   test("an old folder that will not delete after a good swap is returned (warned), new outputs in place", () => {
