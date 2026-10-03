@@ -14,17 +14,17 @@ on:
 
 jobs:
   check:
-    # windows-latest, not ubuntu, because this is a Windows-first tool: the AL compiler, altool and
-    # the BC containers it drives are Windows, the development machine is Windows, and the unit
-    # suite has never been run on Linux. Building the Linux and macOS binaries is a separate job on
-    # a tag (release.yml) and does not need the suite to have passed on those platforms.
+    # The Windows unit job. The BC containers LethAL drives are Windows, and so was every
+    # development machine until 2026-10, so this job came first. `unit-linux` below runs the same
+    # suite on Linux, where development now also runs (R409 to R413 are what the first Linux run
+    # found).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.2
 
       - run: bun install --frozen-lockfile
 
@@ -72,3 +72,41 @@ jobs:
       # format debt in engine/ and builtin-tier1/, so a repo-wide run would fail every build and
       # teach everyone to ignore this job. Formatting is enforced per-file by a local PostToolUse
       # hook instead. Making the whole repository clean is the prerequisite for adding it here.
+
+  unit-linux:
+    # The same suite as `check`, on Linux. It runs through scripts/verify.ts (typecheck, dist
+    # clean, `bun test` with CI=true and the .snap belt), the loop CLAUDE.md names.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - run: bun install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
+      - name: LLVM 23.1.2 (clang builds the grammar)
+        run: bash scripts/install-llvm.sh linux-x64
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            packages/engine/native/target
+          key: native-${{ runner.os }}-${{ hashFiles('packages/engine/native/Cargo.lock', 'packages/engine/native/src/**', 'packages/engine/native/build.rs') }}
+      - name: Build the native parser (grammar check, clang, provenance)
+        run: CARGO_TARGET_DIR=packages/engine/native/target bun scripts/build-native-parser.ts
+      - name: Native Rust tests
+        run: CARGO_TARGET_DIR=packages/engine/native/target bun scripts/build-native-parser.ts --test
+      - name: Native notice inventory is current
+        run: bun scripts/native-notices.ts --check
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Remove compiled dist before testing
+        run: rm -rf packages/*/dist
+
+      - name: Unit tests
+        run: bun scripts/verify.ts
