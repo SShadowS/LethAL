@@ -20,6 +20,7 @@ describe("host paths", () => {
         kraken: false,
         skipRename: false,
         loopFromStart: false,
+        coordOnly: session === "lethal-preproc",
       });
     });
   }
@@ -46,6 +47,7 @@ describe("kraken", () => {
         kraken: true,
         skipRename: true,
         loopFromStart: agent === "orchestrator",
+        coordOnly: false,
       });
     });
   }
@@ -84,6 +86,25 @@ describe("coord-join.md order", () => {
     expect(free).toBeLessThan(name);
     expect(name).toBeLessThan(ack);
     expect(ack).toBeLessThan(start);
+  });
+  test("the COORD-ONLY fallback is in the last step, keyed on coordOnly, scoped to the host", () => {
+    const tell = at(/^## \d+\. Tell the orchestrator/m);
+    expect(start).toBeLessThan(tell);
+    const tail = text.slice(tell);
+    expect(tail).toContain("If `coordOnly` is false");
+    expect(tail).toMatch(/If `coordOnly` is true \(`lethal-preproc` on the Windows host/);
+    expect(tail).toContain("COORD-ONLY section");
+  });
+  test("lane.md keeps the host COORD-ONLY section and makes preproc ordinary inside kraken", () => {
+    const lane = readFileSync(
+      join(import.meta.dir, "..", "docs", "superpowers", "runbooks", "autonomy", "lane.md"),
+      "utf8",
+    );
+    expect(lane).toContain(
+      "**On the Windows host (another account), `lethal-preproc` is COORD-ONLY**",
+    );
+    expect(lane).toContain("`lethal-preproc` is an ordinary lane there");
+    expect(lane).toContain("**Never go idle while waiting**");
   });
   test("`kraken tentacle ack` appears only in the ack step", () => {
     const first = text.indexOf("kraken tentacle ack");

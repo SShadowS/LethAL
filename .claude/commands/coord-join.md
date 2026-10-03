@@ -6,7 +6,7 @@ Work out which of the four sessions you are, then start it. Runbook:
 ## 1. Find your role
 
 Run `bun scripts/coord-join-role.ts`. It prints one JSON line:
-`{ session, roleFile, kraken, skipRename, loopFromStart }`. Exit 1: say what it printed and stop.
+`{ session, roleFile, kraken, skipRename, loopFromStart, coordOnly }`. Exit 1: say what it printed and stop.
 
 With `KRAKEN_PROJECT` set the role comes from `KRAKEN_AGENT`; otherwise from the directory.
 
@@ -44,8 +44,12 @@ If `kraken` is false, skip this step.
 
 ## 6. Tell the orchestrator
 
-Every lane (`lethal-code`, `lethal-bugs`, `lethal-preproc`): the last start step messages
-`lethal-orchestrator` that you are online; never skip it, the orchestrator waits for it after a
-`/clear`.
+If `coordOnly` is false (every lane inside kraken, and `lethal-code` and `lethal-bugs` on the
+host): the last start step messages `lethal-orchestrator` that you are online; never skip it, the
+orchestrator waits for it after a `/clear`.
+
+If `coordOnly` is true (`lethal-preproc` on the Windows host, another account): it is COORD-ONLY.
+Steps 2 and 3 are optional for it, and it follows `lane.md`'s COORD-ONLY section instead of
+messaging.
 
 Report which of the other roles are live, and the directory of each that is not.

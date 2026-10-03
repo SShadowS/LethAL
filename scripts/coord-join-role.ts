@@ -6,13 +6,16 @@ export interface JoinRole {
   kraken: boolean;
   skipRename: boolean;
   loopFromStart: boolean;
+  /** lane.md's COORD-ONLY section: true only for the host preproc lane, which runs on another
+   *  account and cannot rely on messages. Inside kraken every lane shares the account. */
+  coordOnly: boolean;
 }
 
-const HOST: Record<string, [string, JoinRole["roleFile"]]> = {
-  "u:/git/lethal": ["lethal-orchestrator", "orchestrator.md"],
-  "u:/git/lethal-wt/lane-code": ["lethal-code", "lane.md"],
-  "u:/git/lethal-wt/lane-bugs": ["lethal-bugs", "lane.md"],
-  "h:/lethal-wt/lane-preproc": ["lethal-preproc", "lane.md"],
+const HOST: Record<string, [string, JoinRole["roleFile"], boolean]> = {
+  "u:/git/lethal": ["lethal-orchestrator", "orchestrator.md", false],
+  "u:/git/lethal-wt/lane-code": ["lethal-code", "lane.md", false],
+  "u:/git/lethal-wt/lane-bugs": ["lethal-bugs", "lane.md", false],
+  "h:/lethal-wt/lane-preproc": ["lethal-preproc", "lane.md", true],
 };
 
 const LANES = ["lane-code", "lane-bugs", "lane-preproc"];
@@ -33,6 +36,7 @@ export function role(top: string, env: Record<string, string | undefined>): Join
       kraken: true,
       skipRename: true,
       loopFromStart: isOrch,
+      coordOnly: false,
     };
   }
   const hit = HOST[top.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()];
@@ -43,6 +47,7 @@ export function role(top: string, env: Record<string, string | undefined>): Join
     kraken: false,
     skipRename: false,
     loopFromStart: false,
+    coordOnly: hit[2],
   };
 }
 

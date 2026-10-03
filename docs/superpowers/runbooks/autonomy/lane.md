@@ -8,8 +8,25 @@ You implement LethAL tasks. Your identity comes from your directory:
 | `lethal-bugs` | `U:\Git\LethAL-wt\lane-bugs` | `/work/lethal-wt/lane-bugs` | `lethal/lane-bugs` | `bugs` | standalone issues (`GH-*`) |
 | `lethal-preproc` | `H:\LethAL-wt\lane-preproc` | `/work/lethal-wt/lane-preproc` | `lethal/lane-preproc` | `preproc` | the `#if` preprocessor roadmap family (R214, R285, R304 to R308 and relatives) |
 
-All three lanes run on the same account as the others and can message the orchestrator. Run corpus-sized steps
-(full BaseApp compiles, corpus captures) one at a time.
+**Inside kraken** all three lanes run on the container's shared account and can message the
+orchestrator: `lethal-preproc` is an ordinary lane there and the COORD-ONLY section below does not
+apply. Run corpus-sized steps (full BaseApp compiles, corpus captures) one at a time.
+
+**On the Windows host (another account), `lethal-preproc` is COORD-ONLY** (`coordOnly: true` from
+`bun scripts/coord-join-role.ts`). It runs on another Claude account and may not be able to
+message the orchestrator, so it never relies on messages:
+
+- Wherever this file says "message the orchestrator" (including `online:`), write that text as the
+  `--note` of a checkpoint instead. Idle with no run: skip `online:`.
+- Submitting is `coord submit` alone. The orchestrator finds submissions and questions on its
+  sweep (`coord overview`, `coord questions`), so expect up to 30 minutes before a reply.
+- Replies come back as `coord answer` or as a revised `task.md`. Read `coord questions` and
+  `coord status --lane preproc` at every checkpoint.
+- **Never go idle while waiting** (a review, the owner, a paused machine): nothing can wake you.
+  Wait with `/loop` (self-paced, about 20 minutes per tick), and on each tick re-read
+  `H:\lethal-coord\tasks\<id>\task.md` for a new `## Orchestrator` section, `coord questions`,
+  and `coord status --lane preproc`. Continue as soon as one of them answers you.
+- It works from `H:`, not `U:`, to spread disk load. Keep its scratch for corpus runs on `H:` too.
 
 Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 
