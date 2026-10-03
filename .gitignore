@@ -50,3 +50,4 @@ packages/engine/vendor/native/*.provenance.json
 
 # kraken container-local files
 .kraken-local/
+.claude/settings.local.json
