@@ -14,11 +14,13 @@ With `KRAKEN_PROJECT` set the role comes from `KRAKEN_AGENT`; otherwise from the
 
 Call `ListAgents`. Another live session already has your name: do not take it; tell the user
 which role is missing and its directory, then stop. This session already has the name: go to
-step 4.
+step 3 (it confirms the name and skips the rename request).
 
 ## 3. Get the name
 
-If `skipRename` is false: you cannot rename yourself. Tell the user:
+If `ListAgents` already shows this session as `<session>`: nothing to do, go to step 4.
+
+Otherwise, if `skipRename` is false: you cannot rename yourself. Tell the user:
 
 > I am `<session>`. Please run `/rename <session>` so the other session can reach me.
 
