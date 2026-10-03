@@ -125,6 +125,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 8** (R307, R374): identity ordinals are now numbered once over the whole run,
+  not per batch. Before, two twin mutants (same object, member, operator and code) that
+  `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so
+  `--skip-known-survivors` could skip one on the other's verdict. Keys move only where batching
+  split twins; a one-batch run keeps every key. Every older store stops resuming (`--resume` and
+  `--resume-run` refuse it by name), the next `--skip-known-survivors` run skips nothing once, and
+  marks files need `"identityScheme": 8` after re-checking each mark against a fresh report (R325).
 - **Identity scheme 7** (R421): discovered file paths are now normalised to `/` on every platform.
   On Windows a project with subfolders gets the file order, mutant ids and batches Linux gets, and
   with per-batch ordinals an identity twin in another file can change ordinal. Existing marks files
