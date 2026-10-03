@@ -244,7 +244,12 @@ describe("R332: a frozen baseline never records itself", () => {
     expect(recordRequested(p, arm(`tables.baseline.json, ${NAME}`))).toBe(true);
     expect(recordRequested(p, arm("tables.baseline.json"))).toBe(false);
     expect(recordRequested(`${dir.replace(/\\/g, "/")}/${NAME}`, arm(NAME))).toBe(true);
-    expect(recordRequested(`${dir.replace(/\//g, "\\")}\\${NAME}`, arm(NAME))).toBe(true);
+    // R411: a backslash separates path segments on Windows only. On POSIX it is an ordinary
+    // file-name character, so the whole backslash string is ONE basename that names no gate file,
+    // and arming NAME must not arm it.
+    expect(recordRequested(`${dir.replace(/\//g, "\\")}\\${NAME}`, arm(NAME))).toBe(
+      process.platform === "win32",
+    );
   });
 
   test("recordRequested throws on =1, a typo, a wrong case, a path, or a symbol file", () => {

@@ -169,9 +169,20 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
     const got: Record<string, string> = {};
     for (const name of (await readdir(targetDir, { recursive: true })).map(String).sort()) {
       if (name === "app.json") continue;
-      got[name.split("\\").join("/")] = createHash("sha256")
-        .update(await readFile(join(targetDir, name)))
-        .digest("hex");
+      let bytes: Buffer | string = await readFile(join(targetDir, name));
+      // R411: the manifest's `"file"` values carry the host separator, and these pins are the
+      // Windows capture. On another host, write those values in the Windows form before hashing,
+      // so every OTHER byte must still match the capture exactly (measured: they are the only
+      // difference between a Linux and a Windows manifest).
+      if (name === "mutant-manifest.json" && process.platform !== "win32") {
+        bytes = bytes
+          .toString("utf8")
+          .replace(
+            /^(\s*"file": ")([^"]*)"/gm,
+            (_, head: string, p: string) => `${head}${p.split("/").join("\\\\")}"`,
+          );
+      }
+      got[name.split("\\").join("/")] = createHash("sha256").update(bytes).digest("hex");
     }
     expect(got).toEqual(hashes);
   });
