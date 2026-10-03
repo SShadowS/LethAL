@@ -1,13 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type Exec,
+  InventoryError,
+  SCAN_PS,
   allReady,
   formatTable,
+  hostScanRows,
   ignoredSuperpowers,
   laneRow,
   orphanBranchRows,
   parseHostScan,
   parseRemoteHeads,
   parseWorktrees,
+  repoRows,
   runRow,
   stashRows,
   worktreeRow,
@@ -54,9 +59,24 @@ describe("kraken-preflight worktrees", () => {
 
   test("local branches without a worktree and not on origin are not ready", () => {
     const wts = [{ path: "/repo", head: A, branch: "master" }];
-    const rows = orphanBranchRows("master\nkeep\nlethal/x\nlost\n", wts, remote);
+    const rows = orphanBranchRows(
+      `master ${A}\nkeep ${A}\nlethal/x ${B}\nlost ${B}\n`,
+      wts,
+      remote,
+    );
     expect(rows.map((r) => r.subject)).toEqual(["keep", "lost"]);
     expect(rows.every((r) => !r.ready)).toBe(true);
+  });
+
+  test("remote branch exists, local is ahead: not ready, names both tips", () => {
+    const rows = orphanBranchRows(`lethal/x ${A}\n`, [], remote);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.ready).toBe(false);
+    expect(rows[0]?.detail).toContain("differs from origin (local aaaaaaaa, origin bbbbbbbb)");
+  });
+
+  test("a branch listing line without a tip is an inventory failure, not a pass", () => {
+    expect(() => orphanBranchRows("lethal/x\n", [], remote)).toThrow(InventoryError);
   });
 
   test("each stash is a not-ready line, none is ready", () => {
@@ -148,15 +168,79 @@ describe("kraken-preflight host scan", () => {
     expect(rows.map((r) => r.ready)).toEqual([false, true, false]);
   });
 
-  test("an empty scan is ready; a single object (PowerShell's one-item form) parses", () => {
-    expect(allReady(parseHostScan("[]"))).toBe(true);
-    expect(allReady(parseHostScan(""))).toBe(true);
-    const one = JSON.stringify({
-      kind: "process",
-      name: "pid 1 x",
-      state: "running",
-      text: "agent-coord serve",
+  test("a complete scan with nothing watched is ready", () => {
+    const quiet = JSON.stringify([
+      { kind: "task", name: "\\Other", state: "Ready", text: "notepad" },
+      { kind: "process", name: "pid 1 x", state: "running", text: "x.exe" },
+    ]);
+    expect(parseHostScan(quiet).map((r) => r.detail)).toEqual(["none found"]);
+  });
+
+  test("empty, non-JSON, non-array, malformed or one-sided output is an inventory failure", () => {
+    const task = { kind: "task", name: "\\T", state: "Ready", text: "t" };
+    const proc = { kind: "process", name: "pid 1 x", state: "running", text: "x" };
+    for (const bad of [
+      "",
+      "[]",
+      "not json",
+      JSON.stringify(proc),
+      JSON.stringify([task]),
+      JSON.stringify([proc]),
+      JSON.stringify([task, { ...proc, text: null }]),
+      JSON.stringify([task, proc, { kind: "other", name: "n", state: "s", text: "t" }]),
+    ])
+      expect(() => parseHostScan(bad)).toThrow(InventoryError);
+  });
+
+  test("the scan's PowerShell stops on any error and the runner refuses its exit", async () => {
+    expect(SCAN_PS).toContain("$ErrorActionPreference = 'Stop'");
+    expect(SCAN_PS).toMatch(
+      /catch \{ \[Console\]::Error\.WriteLine\(\$_\.ToString\(\)\); exit 1 \}/,
+    );
+    const failed: Exec = async () => ({ code: 1, out: "[]", err: "Access is denied." });
+    await expect(hostScanRows(failed)).rejects.toThrow(
+      /host scan \(PowerShell\) failed \(exit 1\): Access is denied\./,
+    );
+  });
+});
+
+describe("kraken-preflight inventory commands (injected failures)", () => {
+  const REMOTE = `${A}\trefs/heads/master\n`;
+  const WTS = `worktree /repo\nHEAD ${A}\nbranch refs/heads/master\n`;
+  // Every command answers successfully unless its key (the git subcommand words) is `failing`.
+  const fake =
+    (failing: string | null): Exec =>
+    async (cmd) => {
+      const key = cmd.slice(3).join(" ");
+      if (failing !== null && key.startsWith(failing))
+        return { code: 128, out: "", err: `fatal: injected ${failing}` };
+      if (key.startsWith("ls-remote")) return { code: 0, out: REMOTE, err: "" };
+      if (key.startsWith("worktree list")) return { code: 0, out: WTS, err: "" };
+      if (key.startsWith("for-each-ref")) return { code: 0, out: `master ${A}\n`, err: "" };
+      if (key.startsWith("rev-parse")) return { code: 1, out: "", err: "" };
+      return { code: 0, out: "", err: "" };
+    };
+
+  test("all listings succeeding gives rows (the control)", async () => {
+    const rows = await repoRows(fake(null), "/repo", undefined, {});
+    expect(rows.find((r) => r.area === "worktree")?.ready).toBe(true);
+  });
+
+  for (const failing of [
+    "ls-remote",
+    "worktree list",
+    "for-each-ref",
+    "stash list",
+    "status --porcelain --ignored",
+  ])
+    test(`a failed ${failing} throws with its stderr, never an empty inventory`, async () => {
+      await expect(repoRows(fake(failing), "/repo", undefined, {})).rejects.toThrow(
+        new RegExp(`failed \\(exit 128\\): fatal: injected ${failing}`),
+      );
     });
-    expect(allReady(parseHostScan(one))).toBe(false);
+
+  test("a worktree whose plain status fails is a NOT READY row, not a throw", async () => {
+    const rows = await repoRows(fake("status --porcelain"), "/repo", undefined, {});
+    expect(rows.find((r) => r.area === "worktree")?.ready).toBe(false);
   });
 });
