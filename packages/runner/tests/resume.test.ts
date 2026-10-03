@@ -455,8 +455,9 @@ describe("sessionFingerprint (R47)", () => {
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
   // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
   // it was 4a8c47ac...288a under scheme 3. It moved again for R214 (the next scheme after R318's);
-  // it was 25fdc64a...3be4f under scheme 4.
-  const PINNED = "ef3bb9d1f2134482a63cca3f4fe735ed677e0c5d644ede3979857d1fced7daf5";
+  // it was 25fdc64a...3be4f under scheme 4. It moved again for R418 (scheme 6); it was
+  // ef3bb9d1...daf5 under scheme 5.
+  const PINNED = "b3f6072bff3e2fc4b9ff8038470ef189310efef34722bf153e173ba625600c0e";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
