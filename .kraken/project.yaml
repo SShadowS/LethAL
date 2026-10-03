@@ -33,11 +33,12 @@ agents:
 setup:
   - bash scripts/kraken-setup.sh
   - bash scripts/kraken-corpora.sh
+  - bash scripts/al-runner-bootstrap.sh
 env:
   LETHAL_COORD_ROOT: /coord
-  LETHAL_ALRUNNER_PATH: /opt/al-runner/c39ad5de/al-runner
+  LETHAL_ALRUNNER_PATH: /work/tools/al-runner/current/al-runner
   LLVM_BIN: /opt/llvm-23.1.2/bin
-  LETHAL_ALC_DIR: /home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683/bin/linux
+  LETHAL_ALC_DIR: /home/dev/.vscode/extensions/ms-dynamics-smb.al-current/bin/linux
 secret_files:
   - { from: fixture-symbols.tar, to: .kraken-local/fixture-symbols.tar }
   - { from: sandbox-app.launch.local.json, to: fixtures/sandbox-app/.vscode/launch.local.json }

@@ -29,7 +29,7 @@ import {
 import { basename, dirname, join, relative } from "node:path";
 import { fixtureProjects } from "./compile-fixtures.ts";
 
-const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683";
+const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-current";
 const SRC = "/home/dev/src";
 const MAIN = "/work/lethal";
 
@@ -42,7 +42,7 @@ export interface PathMap {
 
 export const CONTAINER_MAP = (bcdevEntry: string): PathMap => ({
   fields: {
-    "alRunner.alRunnerPath": "/opt/al-runner/c39ad5de/al-runner",
+    "alRunner.alRunnerPath": "/work/tools/al-runner/current/al-runner",
     "bcdev.alcPath": `${ALX}/bin/linux/alc`,
     "bcdev.altoolPath": `${ALX}/bin/linux/altool`,
     "bcdev.mcpCommand": ["node", bcdevEntry],

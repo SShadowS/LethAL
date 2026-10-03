@@ -11,9 +11,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get instal
 COPY scripts/install-llvm.sh /tmp/install-llvm.sh
 RUN TMPDIR=/opt bash /tmp/install-llvm.sh linux-x64 && test -x /opt/llvm-23.1.2/bin/clang \
     && rm -f /tmp/install-llvm.sh /opt/llvm-23.1.2.tar.xz
-# Rust 1.96 outside the cache volume (the base points CARGO_HOME at ~/.cache for the registry)
+# Rust (stable) outside the cache volume (the base points CARGO_HOME at ~/.cache for the registry)
 ENV RUSTUP_HOME=/opt/rustup
-RUN curl -fsSL https://sh.rustup.rs | CARGO_HOME=/opt/cargo sh -s -- -y --profile minimal --default-toolchain 1.96.0 --no-modify-path
+RUN curl -fsSL https://sh.rustup.rs | CARGO_HOME=/opt/cargo sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path
 ENV PATH=/opt/cargo/bin:$PATH
 # .NET 10 SDK + 8 runtime (alc/altool run on 10; al-runner targets 8)
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
@@ -21,15 +21,24 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir /opt/dotnet \
     && rm /tmp/dotnet-install.sh
 ENV DOTNET_ROOT=/opt/dotnet PATH=/opt/dotnet:$PATH DOTNET_CLI_TELEMETRY_OPTOUT=1
-# AL extension 18.0.2732683 (universal VSIX: .NET dlls, Windows launchers, no bin/linux) + Linux wrappers,
-# under ~/.vscode/extensions where LethAL's defaultAlToolPaths looks
-ARG ALX=/home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683
-RUN curl -fsSL --compressed -o /tmp/al.vsix "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ms-dynamics-smb/vsextensions/al/18.0.2732683/vspackage" \
+# AL extension: the newest on the Marketplace, resolved through the gallery API at build time (universal
+# VSIX: .NET dlls, Windows launchers, no bin/linux) + Linux wrappers, under ~/.vscode/extensions where
+# LethAL's defaultAlToolPaths looks. The folder name carries the version, so a stable symlink
+# ms-dynamics-smb.al-current points at it (project.yaml's LETHAL_ALC_DIR uses that); defaultAlToolPaths
+# skips folders whose suffix is not a version.
+RUN ALV="$(curl -fsS -X POST -H 'Content-Type: application/json' -H 'Accept: application/json;api-version=7.1-preview.1' \
+         -d '{"filters":[{"criteria":[{"filterType":7,"value":"ms-dynamics-smb.al"}]}],"flags":512}' \
+         https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery \
+         | jq -er '.results[0].extensions[0].versions[0].version')" \
+    && echo "AL extension $ALV" \
+    && ALX=/home/dev/.vscode/extensions/ms-dynamics-smb.al-$ALV \
+    && curl -fsSL --compressed -o /tmp/al.vsix "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ms-dynamics-smb/vsextensions/al/$ALV/vspackage" \
     && mkdir -p $ALX \
     && unzip -q /tmp/al.vsix 'extension/*' -d /tmp/al && rm /tmp/al.vsix \
     && cp -r /tmp/al/extension/. $ALX/ && rm -rf /tmp/al \
     && mkdir -p $ALX/bin/linux \
     && for t in alc altool; do printf '#!/bin/sh\nexec /opt/dotnet/dotnet "%s/bin/%s.dll" "$@"\n' "$ALX" "$t" > $ALX/bin/linux/$t; chmod +x $ALX/bin/linux/$t; done \
+    && ln -s ms-dynamics-smb.al-$ALV /home/dev/.vscode/extensions/ms-dynamics-smb.al-current \
     && chown -R dev:dev /home/dev/.vscode
 # al-runner: pinned source build c39ad5de (R345), BC 28.5 (same flags as the measured lethal-ops container)
 ARG ALRUNNER_SHA=c39ad5ded38e3bfb3c690f1b48450446754bfa18

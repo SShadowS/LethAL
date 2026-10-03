@@ -111,6 +111,7 @@
     "kraken-secret-ignore.test.ts",
     "kraken-setup.test.ts",
     "kraken-corpora.test.ts",
+    "al-runner-update.test.ts",
     "coord-join-role.ts",
     "coord-join-role.test.ts",
     "host-path-inventory.ts",
