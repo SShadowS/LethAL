@@ -1,5 +1,5 @@
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
@@ -105,6 +105,7 @@ import {
 } from "./events";
 import type { PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
+import { homeDir } from "./home";
 import {
   type BeginPublishRefusal,
   LeaseUnavailableError,
@@ -1672,7 +1673,7 @@ async function bisectAndNote(args: {
  *  command opens the SAME store `runSession` durably writes to — a second, drifting default here
  *  would silently target the wrong directory and never actually clear anything. */
 export function defaultQuarantineDir(): string {
-  return join(homedir(), ".lethal", "quarantine");
+  return join(homeDir(), ".lethal", "quarantine");
 }
 
 /**
