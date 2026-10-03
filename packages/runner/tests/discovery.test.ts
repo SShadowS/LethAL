@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverTests } from "../src/discovery";
+import { discoverTests, testsInAlSource } from "../src/discovery";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
 const fixturesDir = import.meta.dir.includes("dist")
@@ -245,5 +245,57 @@ end;
 `,
       ),
     ).rejects.toThrow(/lost 1 of 1 \[Test\] procedures in "Orphan\.Codeunit\.al"/);
+  });
+});
+
+// R418: the mask indexed a code-point array by UTF-16 offsets, so an emoji (two UTF-16 units, one
+// code point) in a comment shifted every later blank one place left and erased the next header.
+describe("testsInAlSource — a non-BMP character before a header (R418)", () => {
+  test("an emoji in a comment does not erase the codeunit header after it", () => {
+    const src =
+      '// 😀😀\n/* a */ codeunit 79400 "Emoji Suite"\n{\n    Subtype = Test;\n\n    [Test]\n    procedure Runs()\n    begin\n    end;\n}\n';
+    expect(testsInAlSource("Emoji.Codeunit.al", src)).toEqual([
+      { codeunitId: 79400, codeunitName: "Emoji Suite", method: "Runs", file: "Emoji.Codeunit.al" },
+    ]);
+  });
+
+  test("a test after an emoji comment is filed under its own codeunit, not the one before", () => {
+    // With an earlier codeunit in the file, the lost header does not trip the "lost N of M" guard:
+    // the second test lands in the FIRST section, silently, under the wrong codeunit.
+    const src = `codeunit 79401 "First Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure InFirst()
+    begin
+    end;
+}
+
+// 😀😀
+/* a */ codeunit 79402 "Second Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure InSecond()
+    begin
+    end;
+}
+`;
+    expect(testsInAlSource("Two.Codeunit.al", src)).toEqual([
+      {
+        codeunitId: 79401,
+        codeunitName: "First Suite",
+        method: "InFirst",
+        file: "Two.Codeunit.al",
+      },
+      {
+        codeunitId: 79402,
+        codeunitName: "Second Suite",
+        method: "InSecond",
+        file: "Two.Codeunit.al",
+      },
+    ]);
   });
 });
