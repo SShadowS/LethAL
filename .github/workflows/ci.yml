@@ -102,11 +102,6 @@ jobs:
       - name: Native notice inventory is current
         run: bun scripts/native-notices.ts --check
 
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Remove compiled dist before testing
-        run: rm -rf packages/*/dist
-
-      - name: Unit tests
+      # verify.ts runs the typecheck and the dist clean itself, in that order, before `bun test`.
+      - name: Typecheck and unit tests
         run: bun scripts/verify.ts
