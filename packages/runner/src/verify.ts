@@ -800,9 +800,11 @@ export async function planVerify(a: {
 
   // R403: the parser before discovery, which parses each test file that holds a `[Test]`.
   await initParser();
-  // R403 phase A: verify is bcdev only, and bcdev keeps the UNFILTERED list until R-403 phase B
-  // reads the published package's compiled membership (see `runSession`). The arms are evaluated
-  // under the test app's derived set all the same, so phase B only has to choose.
+  // R403: verify is bcdev only. `runSession` runs the FILTERED list only when a compiled package
+  // proves which build runs (phase B); verify reads no published test-app package (it compiles and
+  // publishes its own, AFTER this plan), so it has no compiled evidence here and keeps the
+  // UNFILTERED list, exactly as before R403: §3(c)'s no-evidence rule. The arms are evaluated
+  // under the test app's derived set all the same.
   const discovered = (await discoverTests(testDir, { buildSymbols: a.testBuildSymbols ?? [] }))
     .unfiltered;
   const baselineKeys = new Set(

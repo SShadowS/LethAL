@@ -155,15 +155,46 @@ const SYMBOL_ARRAYS: ReadonlyArray<{ key: string; objectType: number }> = [
   { key: "TableExtensions", objectType: 15 },
 ];
 
+// R403 phase B: the shapes below were MEASURED with alc 18.0.2732683 (linux) on a probe test app,
+// 2026-10-03: a `Subtype = Test` codeunit carries `Properties: [{"Name":"Subtype","Value":"Test"}]`
+// (a Normal codeunit carries no `Properties` at all), and a method carries
+// `Attributes: [{"Name":"Test"}, {"Name":"HandlerFunctions","Arguments":[...]}]`, a handler
+// `[{"Name":"MessageHandler"}]`, a plain procedure no `Attributes`. A compiled-out `[Test]` is
+// absent, and a namespaced codeunit sits under `Namespaces[].Namespaces[].Codeunits`.
 interface SymbolMethod {
   readonly Id: number;
   readonly Name: string;
+  readonly Attributes?: ReadonlyArray<{ readonly Name?: unknown }>;
 }
 
 interface SymbolObject {
   readonly Id: number;
   readonly Name: string;
   readonly Methods?: readonly SymbolMethod[];
+  readonly Properties?: ReadonlyArray<{ readonly Name?: unknown; readonly Value?: unknown }>;
+}
+
+/** R403 phase B: one test method a compiled package declares (see `AppMethodIndex.compiledTests`). */
+export interface CompiledTest {
+  readonly codeunitId: number;
+  readonly codeunitName: string;
+  readonly method: string;
+}
+
+const sameWord = (v: unknown, word: string): boolean =>
+  typeof v === "string" && v.toLowerCase() === word.toLowerCase();
+
+/** A codeunit with `Subtype = Test`: the only kind whose `[Test]` methods BC runs as tests. */
+function isTestCodeunit(obj: SymbolObject): boolean {
+  return (obj.Properties ?? []).some(
+    (p) => sameWord(p.Name, "Subtype") && sameWord(p.Value, "Test"),
+  );
+}
+
+/** A method carrying the `Test` attribute. Handler attributes (`MessageHandler`, `ConfirmHandler`,
+ *  ...) are not `Test`, and `HandlerFunctions` beside `Test` does not remove it. */
+function isTestMethod(method: SymbolMethod): boolean {
+  return (method.Attributes ?? []).some((a) => sameWord(a.Name, "Test"));
 }
 
 /**
@@ -185,8 +216,20 @@ interface SymbolObject {
 export class AppMethodIndex {
   private readonly byKey = new Map<string, string>();
   private readonly declared = new Set<string>();
+  private readonly tests: CompiledTest[] = [];
 
   private constructor() {}
+
+  /**
+   * R403 phase B: every test this compiled package declares: a method carrying the `Test`
+   * attribute in a codeunit with `Subtype = Test`, at any namespace depth. This is compiled
+   * membership: a `[Test]` the build compiled out of an `#if` is not in it, while the embedded
+   * source still holds it (measured, plan §1). TestPage and disabled tests are in it: execution
+   * refusals come later and are not membership.
+   */
+  compiledTests(): readonly CompiledTest[] {
+    return this.tests;
+  }
 
   static fromSymbolReference(json: unknown): AppMethodIndex {
     const index = new AppMethodIndex();
@@ -224,8 +267,12 @@ export class AppMethodIndex {
       for (const obj of objects ?? []) {
         if (typeof obj.Id !== "number") continue;
         this.declared.add(`${objectTypeName(objectType).toLowerCase()}:${obj.Id}`);
+        const testCodeunit = key === "Codeunits" && isTestCodeunit(obj);
         for (const method of obj.Methods ?? []) {
           this.byKey.set(`${objectType}:${obj.Id}:${method.Id}`, method.Name);
+          if (testCodeunit && isTestMethod(method)) {
+            this.tests.push({ codeunitId: obj.Id, codeunitName: obj.Name, method: method.Name });
+          }
         }
       }
     }

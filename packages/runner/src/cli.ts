@@ -3073,9 +3073,15 @@ export async function buildBackend(
  */
 export function afterLeaseAcquiredFor(envSession: EnvToolSession | undefined): {
   afterLeaseAcquired?: () => Promise<void>;
+  afterLeaseAcquiredPublishes?: readonly string[];
 } {
   if (envSession === undefined) return {};
-  return { afterLeaseAcquired: () => envSession.publishTestApps() };
+  return {
+    afterLeaseAcquired: () => envSession.publishTestApps(),
+    // R403 phase B: the files that hook publishes, so `runSession` reads the test app's compiled
+    // membership from the build the session RUNS (plan §3(b)).
+    afterLeaseAcquiredPublishes: envSession.publishApps,
+  };
 }
 
 export function leaseSessionFor(

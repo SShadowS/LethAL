@@ -416,4 +416,65 @@ describe("discoverTests — the test app's #if arms (R403)", () => {
     const dir = await testDirWith({ "R403.Codeunit.al": R403_SHAPE });
     expect(methods(await discoverTests(dir))).toEqual(["OnlyUnderX", "PlainDoubles"]);
   });
+
+  // R403 phase B: what `test-symbols-unverified` names when no compiled package says which build
+  // was published: a file with an `#if` AROUND a `[Test]`, in any arm, active or not.
+  test("conditionalTestFiles: an #if around a [Test], in either arm; not one inside a body", async () => {
+    const dir = await testDirWith({
+      "A.Codeunit.al": R403_SHAPE,
+      // Active under [LETHALX], still conditional: a build without X drops it.
+      "B.Codeunit.al": R403_SHAPE.replace("50140", "50141").replace("R403 Tests", "B Tests"),
+      "C.Codeunit.al": `codeunit 50143 "C Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure BodyOnly()
+    begin
+#if LETHALX
+        Error('x');
+#endif
+    end;
+}
+`,
+      "D.Codeunit.al": R403_SHAPE.replace("50140", "50144")
+        .replace("R403 Tests", "D Tests")
+        .replace("#if LETHALX\n", "")
+        .replace("#endif\n", ""),
+    });
+    expect((await discoverTests(dir, { buildSymbols: [] })).conditionalTestFiles).toEqual([
+      "A.Codeunit.al",
+      "B.Codeunit.al",
+    ]);
+    expect((await discoverTests(dir, { buildSymbols: ["LETHALX"] })).conditionalTestFiles).toEqual([
+      "A.Codeunit.al",
+      "B.Codeunit.al",
+    ]);
+  });
+
+  // R403 phase B: the `--tests-only` scope of the compiled-membership check, taken from the
+  // admitted files' DECLARATIONS before arm filtering, so a codeunit whose every test is compiled
+  // out locally is still in scope.
+  test("inScopeCodeunits: admitted files' codeunits, every arm read; absent without --tests-only", async () => {
+    const allOut = `codeunit 50145 "All Out"
+{
+    Subtype = Test;
+
+#if LETHALX
+    [Test]
+    procedure Hidden()
+    begin
+    end;
+#endif
+}
+`;
+    const dir = await testDirWith({
+      "R403.Codeunit.al": R403_SHAPE,
+      "R403AllOut.Codeunit.al": allOut,
+      "Other.Codeunit.al": R403_SHAPE.replace("50140", "50142").replace("R403 Tests", "Other"),
+    });
+    const narrowed = await discoverTests(dir, { only: ["R403*"], buildSymbols: [] });
+    expect([...(narrowed.inScopeCodeunits ?? [])].sort()).toEqual([50140, 50145]);
+    expect((await discoverTests(dir, { buildSymbols: [] })).inScopeCodeunits).toBeUndefined();
+  });
 });
