@@ -140,8 +140,10 @@ test("the control app is built in the main checkout only, and only when missing 
     run(t, main); // missing: build
     expect(builds()).toBe(1);
     expect(readFileSync(t.calls, "utf8")).toMatch(
-      /^alc \/project:\S+\/extensions\/lethal-control \/packagecachepath:\S+\/extensions\/lethal-control\/\.alpackages \/out:\S+\/extensions\/lethal-control\/lethal-control\.app$/m,
+      /^alc \/project:\S+\/extensions\/lethal-control \/packagecachepath:\S+\/extensions\/lethal-control\/\.alpackages \/out:\S+\/extensions\/lethal-control\/lethal-control\.app\.tmp$/m,
     );
+    expect(readFileSync(join(ctl, "lethal-control.app"), "utf8")).toBe("built\n");
+    expect(existsSync(join(ctl, "lethal-control.app.tmp"))).toBe(false);
 
     run(t, main); // up to date: skip
     expect(builds()).toBe(1);
@@ -158,6 +160,36 @@ test("the control app is built in the main checkout only, and only when missing 
     );
     run(t, main); // app.json newer: rebuild
     expect(builds()).toBe(3);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("a compile that fails part-way fails setup and leaves no fresh-looking app", () => {
+  const t = setup();
+  try {
+    const ctl = join(t.wt, "extensions", "lethal-control");
+    mkdirSync(join(ctl, "src"), { recursive: true });
+    writeFileSync(join(ctl, "app.json"), "{}");
+    // this alc writes a partial out file, then fails
+    writeFileSync(
+      join(t.bin, "alc"),
+      '#!/bin/bash\nfor a in "$@"; do case "$a" in /out:*) echo partial > "${a#/out:}" ;; esac; done\nexit 1\n',
+      { mode: 0o755 },
+    );
+    const r = Bun.spawnSync(["bash", script], {
+      cwd: t.wt,
+      env: {
+        ...process.env,
+        PATH: t.bin + delimiter + process.env.PATH,
+        KRAKEN_SETUP_SRC: t.src,
+        FAKE_TOP: "/work/x",
+        KRAKEN_MAIN_TOP: "/work/x",
+        LETHAL_ALC_DIR: t.bin.replaceAll("\\", "/"),
+      },
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(existsSync(join(ctl, "lethal-control.app"))).toBe(false);
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }

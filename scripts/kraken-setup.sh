@@ -41,7 +41,10 @@ if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" = "${KRAKEN_MAIN_TOP
   ctl="$PWD/extensions/lethal-control"
   app="$ctl/lethal-control.app"
   if [ ! -f "$app" ] || [ -n "$(find "$ctl/src" "$ctl/app.json" -newer "$app" -print -quit)" ]; then
-    "${LETHAL_ALC_DIR:?LETHAL_ALC_DIR unset}/alc" "/project:$ctl" "/packagecachepath:$ctl/.alpackages" "/out:$app"
+    # compile to a temp name and rename, so a failed compile never leaves a fresh-looking partial app
+    rm -f "$app.tmp"
+    "${LETHAL_ALC_DIR:?LETHAL_ALC_DIR unset}/alc" "/project:$ctl" "/packagecachepath:$ctl/.alpackages" "/out:$app.tmp"
+    mv -f "$app.tmp" "$app"
   fi
 fi
 bun install
