@@ -800,13 +800,13 @@ export async function planVerify(a: {
 
   // R403: the parser before discovery, which parses each test file that holds a `[Test]`.
   await initParser();
-  // R403: verify is bcdev only. `runSession` runs the FILTERED list only when a compiled package
-  // proves which build runs (phase B); verify reads no published test-app package (it compiles and
-  // publishes its own, AFTER this plan), so it has no compiled evidence here and keeps the
-  // UNFILTERED list, exactly as before R403: §3(c)'s no-evidence rule. The arms are evaluated
-  // under the test app's derived set all the same.
+  // R403: verify keeps the FILTERED list. It does not run a pre-published test-app package: it
+  // compiles the test app itself from `testDir` under the derived set (config symbols via alc's
+  // /define, plus the test app.json's own) and publishes exactly that build, after this plan. The
+  // suite it runs is therefore known from source, as on al-runner, so §3(c)'s no-evidence rule
+  // does not apply. A compiled-out test is not in that build, so it is never new and never rerun.
   const discovered = (await discoverTests(testDir, { buildSymbols: a.testBuildSymbols ?? [] }))
-    .unfiltered;
+    .filtered;
   const baselineKeys = new Set(
     sourceBaseline.map((r) =>
       testKeyOf({ codeunitId: r.codeunitId, codeunitName: "", method: r.method }),

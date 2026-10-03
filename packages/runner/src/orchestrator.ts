@@ -191,6 +191,7 @@ import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
+  PublishAppUnreadableError,
   type TestArmEvidence,
   assertTestMembership,
   chooseTestSuite,
@@ -6727,9 +6728,10 @@ async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestA
 /**
  * R403 phase B: the env-tool `publishApps` file that IS the test app (plan §7), with its bytes, or
  * `undefined` when none is. Only on a session whose hook will run (`afterLeaseAcquired` under a
- * lease). A file that cannot be read or is not an app package is not the test app here; the
- * publish itself fails loudly on it (R232). Several matching files: the LAST is published last,
- * so it is the one that runs.
+ * lease). A file that cannot be read or is not an app package throws `PublishAppUnreadableError`
+ * here, before the lease: skipping it would fall back to the pre-lease package, possibly the
+ * outgoing build (plan §3(b)), and the publish would fail on it anyway (R232). Several matching
+ * files: the LAST is published last, so it is the one that runs.
  */
 async function envToolTestAppFile(
   cfg: SessionConfig,
@@ -6747,8 +6749,8 @@ async function envToolTestAppFile(
     try {
       bytes = await readFile(path);
       identity = readAppIdentity(bytes);
-    } catch {
-      continue;
+    } catch (err) {
+      throw new PublishAppUnreadableError(path, messageOf(err));
     }
     if (identity.name === want.name && identity.publisher === want.publisher) {
       match = { path, bytes };

@@ -109,7 +109,7 @@ import {
   publishTestApp,
 } from "../src/test-app-publish";
 import { testDigestsOfSources } from "../src/test-digest";
-import { TestAppDiffersError } from "../src/test-membership";
+import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
@@ -7281,6 +7281,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       /** What the hook leaves in the file it publishes (a rebuild racing the publish, say). */
       readonly fileAfterHook: Uint8Array;
       readonly testAppInPublishApps?: boolean;
+      /** A further publishApps entry that cannot be read as an app package. */
+      readonly broken?: "missing" | "not-an-app";
     }) {
       const dirs = await makeProject();
       await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
@@ -7291,6 +7293,13 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       // Another app published by the same hook, with a test set that matches nothing: chosen by
       // name and publisher, it must not be read as the test app.
       writeFileSync(otherFile, pkgOf("Some Dependency", ["Unrelated"]));
+      const brokenFile = join(dirs.testDir, "..", "Broken.app");
+      if (o.broken === "not-an-app") writeFileSync(brokenFile, "not a zip, not an app package");
+      const publishApps = [
+        otherFile,
+        ...(o.broken !== undefined ? [brokenFile] : []),
+        ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
+      ];
       const log: string[] = [];
       const client = new FakeLeaseClient(log);
       const { lease } = leaseCfg(client);
@@ -7316,10 +7325,9 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           log.push("hook");
           writeFileSync(testAppFile, o.fileAfterHook);
         },
-        afterLeaseAcquiredPublishes:
-          o.testAppInPublishApps === false ? [otherFile] : [otherFile, testAppFile],
+        afterLeaseAcquiredPublishes: publishApps,
       }).catch((e: unknown) => e);
-      return { outcome, log, client };
+      return { outcome, log, client, brokenFile };
     }
 
     test("a valid replacement published by the hook passes, although the pre-lease package differed", async () => {
@@ -7358,6 +7366,27 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       expect(log).not.toContain("acquire");
       expect(log).not.toContain("hook");
     });
+
+    // R403 review: a publishApps file that cannot be read as an app package is never skipped.
+    // Skipping it fell back to the pre-lease package, here the OUTGOING build, and refused on it
+    // as TestAppDiffersError, which plan §3(b) says the outgoing build must never cause.
+    for (const broken of ["missing", "not-an-app"] as const) {
+      test(`an unreadable publishApps file (${broken}) refuses by name before the lease, never checking the pre-lease package`, async () => {
+        const { outcome, log, brokenFile } = await envToolRun({
+          preLease: OUTGOING,
+          fileBefore: GOOD,
+          fileAfterHook: GOOD,
+          testAppInPublishApps: false,
+          broken,
+        });
+        expect(outcome).toBeInstanceOf(PublishAppUnreadableError);
+        expect((outcome as PublishAppUnreadableError).code).toBe("publish-app-unreadable");
+        expect((outcome as PublishAppUnreadableError).path).toBe(brokenFile);
+        expect((outcome as Error).message).toContain(brokenFile);
+        expect(log).not.toContain("acquire");
+        expect(log).not.toContain("hook");
+      });
+    }
   });
 
   // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
@@ -7913,9 +7942,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
 describe("R238: withEnvTeardown keeps a created environment the session quarantined", () => {
   async function createdEnvSession(publishTestApp: () => Promise<void>) {
     const calls: string[][] = [];
+    // R403: every publishApps file is read as an app package before the lease, so it must be one.
+    // Not the test app by name, so no test-arm evidence comes from it.
+    const appFile = join(freshTmpDir(), "dependency.app");
+    writeFileSync(
+      appFile,
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${APP_ID}" Name="Some Dependency" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+      }),
+    );
     const cfg: EnvToolConfigSection = {
       toolPath: "tool.exe",
-      publishApps: ["tests.app"],
+      publishApps: [appFile],
       resolve: [
         { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
         {

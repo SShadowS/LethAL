@@ -678,25 +678,49 @@ describe("planVerify", () => {
     expect(order).toEqual(["initParser", 'discoverTests:["LETHALX"]']);
   });
 
-  // R403 phase A: verify is bcdev only, and bcdev keeps the UNFILTERED suite until phase B reads
-  // the published package's compiled membership. A compiled-out test is still planned.
-  test("R403 phase A: a test compiled out under the test build set is still planned on bcdev", async () => {
+  // R403 review: verify compiles the test app ITSELF from the derived set and publishes that, so
+  // the suite it runs is the FILTERED one (the al-runner-like case). A source run whose bcdev
+  // session had compiled evidence ran the filtered suite too, so its baseline has no row for a
+  // compiled-out test: reading it as new would count it toward maxNewTests and rerun it.
+  function onlyUnderXDir(): { dir: string; recorded: Promise<Record<string, string>> } {
     const dir = testDir([{ id: 50100, name: "Old", methods: ["A"] }]);
-    const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
+    const recorded = discoverTests(dir).then((refs) => testDigests(dir, refs, INPUTS));
     writeFileSync(
       join(dir, "50101.Codeunit.al"),
       `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n#if LETHALX\n    [Test]\n    procedure OnlyUnderX()\n    begin\n    end;\n#endif\n}\n`,
     );
+    return { dir, recorded };
+  }
+
+  test("R403: a test compiled out under the test build set is neither new nor rerun, and never counts toward maxNewTests", async () => {
+    const { dir, recorded } = onlyUnderXDir();
     const plan = await planVerify({
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "Old", "A")],
-      sourceTestDigests: recorded,
+      sourceTestDigests: await recorded,
       dependencies: DEPS,
       testDir: dir,
       testBuildSymbols: [],
+      maxNewTests: 0,
+    });
+    expect(keys(plan.newTests)).toEqual([]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A"]);
+  });
+
+  test("R403 control: the same test with LETHALX in the test build set and no baseline row IS new", async () => {
+    const { dir, recorded } = onlyUnderXDir();
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "Old", "A")],
+      sourceTestDigests: await recorded,
+      dependencies: DEPS,
+      testDir: dir,
+      testBuildSymbols: ["LETHALX"],
     });
     expect(keys(plan.newTests)).toEqual(["50101::OnlyUnderX"]);
+    expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A", "50101::OnlyUnderX"]);
   });
 
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */

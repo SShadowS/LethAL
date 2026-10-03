@@ -114,6 +114,24 @@ export class TestAppDiffersError extends Error {
   }
 }
 
+/** R403 phase B: an env-tool `publishApps` file that cannot be read as a BC app package before the
+ *  lease. Every such file is published under the lease, where it would fail too (an unreadable one
+ *  is `publishFile`'s pre-publish `ArtifactPrepareError`; a non-package one is refused by the
+ *  server). Skipping it instead could fall back to checking the pre-lease package, possibly the
+ *  OUTGOING build, which plan §3(b) says must not decide anything. A caller-contract violation. */
+export class PublishAppUnreadableError extends Error {
+  readonly code = "publish-app-unreadable" as const;
+  readonly path: string;
+
+  constructor(path: string, cause: string) {
+    super(
+      `the env-tool publishApps file ${path} cannot be read as a BC app package (${cause}). Every publishApps file is published under the lease and this one would fail there, so refusing before the lease rather than checking the test app against the package the server held before it (R403). Fix or remove the entry in publishApps.`,
+    );
+    this.name = "PublishAppUnreadableError";
+    this.path = path;
+  }
+}
+
 /** Throws `TestAppDiffersError` unless the membership is equal in both directions. */
 export function assertTestMembership(
   compiled: readonly CompiledTest[],
