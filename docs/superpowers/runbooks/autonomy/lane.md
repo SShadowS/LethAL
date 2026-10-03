@@ -19,7 +19,7 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 2. Check you are in the right place: `git rev-parse --show-toplevel` is your `<worktree>`
    (forward slashes) and `git branch --show-current` is your `<branch>`. Otherwise stop and
    `coord ask`.
-3. `coord doctor`, read `$CG_COORD_ROOT/handoff/<session>.md` if it exists (`/coord/handoff/...` in
+3. `coord doctor`, read `<coord root>/handoff/<session>.md` if it exists (`/coord/handoff/...` in
    the container, `H:\lethal-coord\handoff\...` on the host).
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
@@ -32,7 +32,7 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
 1. `git merge master`.
 2. `coord claim <id> <lane>`; write runId and token to your handoff at once;
    `coord checkpoint <id> <runId> <token> started`.
-3. Read `$CG_COORD_ROOT/tasks/<id>/task.md`, the GitHub issue it names, and the plan the
+3. Read `<coord root>/tasks/<id>/task.md`, the GitHub issue it names, and the plan the
    orchestrator wrote for it (`docs/superpowers/plans/*-<id>-*.md` on `master`). No plan yet: checkpoint `--wait review --note "needs plan"` and
    message the orchestrator.
 4. Work with the superpowers `subagent-driven-development` skill: TDD, a review subagent before

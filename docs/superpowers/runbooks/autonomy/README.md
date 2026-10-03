@@ -25,11 +25,12 @@ bash scripts/coord.sh <command> ...
 ```
 
 Inside a kraken container (`KRAKEN_PROJECT` is set) this runs `kraken coord` against the
-project's own root, `$CG_COORD_ROOT` = `/coord`. On the Windows host it runs agent-coord against
+project's own root. On the Windows host it runs agent-coord against
 `H:\lethal-coord` and ignores an inherited `CG_COORD_ROOT` (the machine-wide default points at
 CentralGauge's root); once the host root carries a `MOVED-TO-KRAKEN` marker it prints the marker
-and exits 3. Below, `coord` means that command, and `$CG_COORD_ROOT/...` is `/coord/...` in the
-container and `H:\lethal-coord\...` on the host.
+and exits 3. Below, `coord` means that command, and `<coord root>` means `/coord` in the
+container and `H:\lethal-coord` on the host. Never expand `$CG_COORD_ROOT` on the host: it can
+name CentralGauge's shared root.
 
 - Tasks: `GH-<n>` for standalone issues, `C02-0N` for the children of epic #10 (c02), with the
   epic's own dependency order. Each `task.md` carries the issue number and URL.
@@ -104,7 +105,7 @@ containers assigned to this project can be leased. A missing `allocation.json` t
 ## Launch contract
 
 - Approvals: the orchestrator plus GPT-6.1 Sol via `pi_ask` (`gpt-6.1-sol`, `require_evidence`
-  on, frozen `git show <sha>:<path>` copies under `$CG_COORD_ROOT/reviews/`), at most 2 rounds.
+  on, frozen `git show <sha>:<path>` copies under `<coord root>/reviews/`), at most 2 rounds.
   `gpt-6-astra` only for the c02 epic's plan. Unresolved after 2 rounds: `coord ask`.
 - Authorized: lane commits on its branch; orchestrator merges to `master`, pushes to `origin`,
   and closes the task's GitHub issue with `gh issue close <n> -R SShadowS/LethAL --comment
