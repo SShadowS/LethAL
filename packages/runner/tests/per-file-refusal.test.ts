@@ -211,6 +211,12 @@ describe("R307: the per-file trial", () => {
  * The trial changes nothing for a project with no refused file: `fixtures/sandbox-data`'s manifest
  * and every instrumented file are byte-identical to the output of HEAD d1438ade (before the trial
  * existed), measured with this same write.
+ *
+ * Since R421 every platform writes a discovered path in the one `/` form, so this pin is the one
+ * value valid on Windows and Linux alike. It was the Windows capture before (manifest b03f52f2...,
+ * all files e889a463...), which no Linux run ever matched; the values below are the ones Linux
+ * gave all along, re-recorded deliberately. The identity scheme is not written into these files,
+ * so the scheme 8 bump does not move them.
  */
 describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   let dir = "";
@@ -235,7 +241,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
-      "b03f52f2d9b2442098380746c8b4c6a8eb8dde17e49e5229cb5c66b31bcfa20f",
+      "b754095f8aebddf35074c5d032bdac8692076e3e9c1b015d6810bc0ec0ff588e",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -243,7 +249,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(await readFile(join(dir, f)));
     }
     expect(all.digest("hex")).toBe(
-      "e889a463eb095ed9c80622d7d95e1015b6a7beeead5cb57278632839acaee2a3",
+      "9abd8f06e020d8f0fa0113b1534f70927664f1c0383540fd958dec19b7fa73c6",
     );
   }, 60_000);
 });
