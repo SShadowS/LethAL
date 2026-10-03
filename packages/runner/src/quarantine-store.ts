@@ -71,7 +71,10 @@ export class QuarantineStore {
     try {
       raw = await readFile(this.fileFor(resourceKey), "utf8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      // R413: ENOTDIR is Linux's answer when baseDir is a regular file; Windows says ENOENT for
+      // the same path. No record can exist there either way, and record() still refuses the path.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
       throw err;
     }
     return JSON.parse(raw) as QuarantineRecord;
