@@ -104,6 +104,8 @@
     "coord-manifest.ts",
     "coord-manifest.test.ts",
     "fake-path-env.ts",
+    "kraken-preflight.ts",
+    "kraken-preflight.test.ts",
     "report-summary.ts",
     "report-summary.test.ts",
     "report-diff.ts",

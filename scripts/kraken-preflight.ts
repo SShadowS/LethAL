@@ -1,0 +1,241 @@
+// Read-only pre-flight for the move to kraken (plan 3, Task 12 Step 4). It changes nothing and
+// deletes nothing: it prints one table, and exits 0 only when every line is ready.
+//
+//   bun scripts/kraken-preflight.ts --move-commit <sha> [--repo <dir>] [--run R-307=lethal/lane-code ...]
+//   bun scripts/kraken-preflight.ts --host-scan     (Windows host: scheduled tasks and processes)
+//
+// The logic is pure functions over text a fake can supply; only `main` runs git or PowerShell.
+
+export type Row = { area: string; subject: string; ready: boolean; detail: string };
+
+export type Worktree = { path: string; head: string; branch: string | null };
+
+// `git worktree list --porcelain`: blocks separated by a blank line.
+export function parseWorktrees(porcelain: string): Worktree[] {
+  const out: Worktree[] = [];
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    let path = "";
+    let head = "";
+    let branch: string | null = null;
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("worktree ")) path = line.slice(9);
+      else if (line.startsWith("HEAD ")) head = line.slice(5);
+      else if (line.startsWith("branch ")) branch = line.slice(7).replace(/^refs\/heads\//, "");
+    }
+    if (path !== "") out.push({ path, head, branch });
+  }
+  return out;
+}
+
+// `git ls-remote --heads origin`: "<sha>\trefs/heads/<name>" per line.
+export function parseRemoteHeads(text: string): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const [sha, ref] = line.trim().split(/\s+/);
+    if (sha && ref?.startsWith("refs/heads/")) m.set(ref.slice(11), sha);
+  }
+  return m;
+}
+
+// `dirty` is whether `git status --porcelain` printed anything; null means it could not be read.
+export function worktreeRow(wt: Worktree, dirty: boolean | null, remote: Map<string, string>): Row {
+  const base = { area: "worktree", subject: wt.path };
+  if (dirty === null)
+    return { ...base, ready: false, detail: "cannot read status (folder missing?)" };
+  const problems: string[] = [];
+  if (dirty) problems.push("dirty (uncommitted changes)");
+  if (wt.branch === null) {
+    problems.push(`detached HEAD ${wt.head.slice(0, 8)}, no branch to push`);
+  } else {
+    const o = remote.get(wt.branch);
+    if (o === undefined) problems.push(`branch ${wt.branch} is not on origin`);
+    else if (o !== wt.head)
+      problems.push(
+        `branch ${wt.branch} differs from origin (local ${wt.head.slice(0, 8)}, origin ${o.slice(0, 8)})`,
+      );
+  }
+  return {
+    ...base,
+    ready: problems.length === 0,
+    detail: problems.join("; ") || `clean, ${wt.branch} on origin`,
+  };
+}
+
+// An open run is ready when its branch tip (local) is the tip on origin. A run whose branch
+// could not be found is reported as unknown, which is not ready.
+export function runRow(
+  run: string,
+  branch: string | null,
+  localTip: string | null,
+  remote: Map<string, string>,
+): Row {
+  const base = { area: "open run", subject: run };
+  if (branch === null) return { ...base, ready: false, detail: "branch unknown" };
+  const o = remote.get(branch);
+  if (o === undefined) return { ...base, ready: false, detail: `${branch} is not on origin` };
+  if (localTip === null)
+    return { ...base, ready: false, detail: `${branch} has no local branch to compare` };
+  if (localTip !== o)
+    return {
+      ...base,
+      ready: false,
+      detail: `${branch} local ${localTip.slice(0, 8)} differs from origin ${o.slice(0, 8)}`,
+    };
+  return { ...base, ready: true, detail: `${branch} pushed at ${o.slice(0, 8)}` };
+}
+
+// `contains`: exit code of `git merge-base --is-ancestor <move> <lane tip>` (0 yes, 1 no, other = could not check).
+export function laneRow(
+  lane: string,
+  moveCommit: string | undefined,
+  remote: Map<string, string>,
+  contains: number | null,
+): Row {
+  const base = { area: "lane branch", subject: lane };
+  if (moveCommit === undefined)
+    return { ...base, ready: false, detail: "no --move-commit given, cannot check" };
+  if (!remote.has(lane)) return { ...base, ready: false, detail: "not on origin" };
+  if (contains === 0)
+    return { ...base, ready: true, detail: `origin/${lane} contains ${moveCommit.slice(0, 8)}` };
+  if (contains === 1)
+    return {
+      ...base,
+      ready: false,
+      detail: `origin/${lane} does NOT contain ${moveCommit.slice(0, 8)}`,
+    };
+  return { ...base, ready: false, detail: "could not check ancestry (commit unknown locally?)" };
+}
+
+// ponytail: fixed-width text table, no wrapping.
+export function formatTable(rows: Row[]): string {
+  const lines = rows.map(
+    (r) =>
+      `${r.ready ? "READY    " : "NOT READY"}  ${r.area.padEnd(11)}  ${r.subject}\n           ${r.detail}`,
+  );
+  const bad = rows.filter((r) => !r.ready).length;
+  lines.push("", `${rows.length - bad} ready, ${bad} not ready`);
+  return lines.join("\n");
+}
+
+export const allReady = (rows: Row[]): boolean => rows.every((r) => r.ready);
+
+// ---- host scan ----
+
+export type HostEntry = { kind: "task" | "process"; name: string; state: string; text: string };
+
+// "watchdog" counts only as a script or program name (Edge passes --gpu-watchdog-timeout-seconds).
+const WATCHED =
+  /lethal-coord|agent-coord|watchdog[\w.-]*\.(ps1|ts|sh|js|cmd|bat|exe)\b|coord\.sh|coord\.ts/i;
+
+// Input: the JSON the PowerShell below prints (an array, or one object, of HostEntry).
+// A scan's own PowerShell names the patterns, so any entry that runs Get-CimInstance or
+// Get-ScheduledTask is the scan itself and is dropped.
+export function parseHostScan(json: string): Row[] {
+  const parsed: unknown = JSON.parse(json.trim() === "" ? "[]" : json);
+  const list = (Array.isArray(parsed) ? parsed : [parsed]) as HostEntry[];
+  const rows: Row[] = [];
+  for (const e of list) {
+    const text = `${e.name} ${e.text ?? ""}`;
+    if (!WATCHED.test(text)) continue;
+    if (/centralgauge/i.test(text)) continue;
+    if (/Get-CimInstance|Get-ScheduledTask|kraken-preflight/i.test(text)) continue;
+    const disabled = e.kind === "task" && /disabled/i.test(e.state);
+    rows.push({
+      area: e.kind === "task" ? "sched task" : "process",
+      subject: e.name,
+      ready: disabled,
+      detail: e.kind === "task" ? `state ${e.state}: ${e.text}` : e.text,
+    });
+  }
+  if (rows.length === 0)
+    rows.push({
+      area: "host scan",
+      subject: "scheduled tasks and processes",
+      ready: true,
+      detail: "none found",
+    });
+  return rows;
+}
+
+const SCAN_PS = `
+$t = Get-ScheduledTask | ForEach-Object { [pscustomobject]@{ kind = 'task'; name = $_.TaskPath + $_.TaskName; state = [string]$_.State; text = (($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' ') } }
+$p = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | ForEach-Object { [pscustomobject]@{ kind = 'process'; name = "pid $($_.ProcessId) $($_.Name)"; state = 'running'; text = $_.CommandLine } }
+ConvertTo-Json -Compress -Depth 3 -InputObject @(@($t) + @($p))
+`;
+
+// ---- main ----
+
+async function run(cmd: string[], cwd?: string): Promise<{ code: number; out: string }> {
+  const p = Bun.spawn(cmd, { ...(cwd ? { cwd } : {}), stdout: "pipe", stderr: "pipe" });
+  const [out, , code] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+    p.exited,
+  ]);
+  return { code, out };
+}
+
+// Found by reading the coord handoff notes (2026-10-03): R-307 on lane-code, R-396 on its own
+// branch, R-403 on lane-preproc. Override with --run <id>=<branch>; "<id>=" means unknown.
+const DEFAULT_RUNS: Record<string, string> = {
+  "R-307": "lethal/lane-code",
+  "R-396": "lethal/r396",
+  "R-403": "lethal/lane-preproc",
+};
+const LANES = ["lethal/lane-code", "lethal/lane-bugs", "lethal/lane-preproc"];
+
+async function main(argv: string[]): Promise<number> {
+  const arg = (k: string): string | undefined => {
+    const i = argv.indexOf(k);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  if (argv.includes("--host-scan")) {
+    const r = await run(["powershell", "-NoProfile", "-NonInteractive", "-Command", SCAN_PS]);
+    if (r.code !== 0) {
+      console.error(`host scan failed (exit ${r.code})`);
+      return 1;
+    }
+    const rows = parseHostScan(r.out);
+    console.log(formatTable(rows));
+    return allReady(rows) ? 0 : 1;
+  }
+  const repo = arg("--repo") ?? process.cwd();
+  const moveCommit = arg("--move-commit");
+  const runs = { ...DEFAULT_RUNS };
+  argv.forEach((a, i) => {
+    if (a === "--run") {
+      const [id, br] = (argv[i + 1] ?? "").split("=");
+      if (id) {
+        if (br) runs[id] = br;
+        else delete runs[id];
+      }
+    }
+  });
+  const git = (args: string[], cwd = repo) => run(["git", "-C", cwd, ...args]);
+  const remote = parseRemoteHeads((await git(["ls-remote", "--heads", "origin"])).out);
+  const rows: Row[] = [];
+  for (const wt of parseWorktrees((await git(["worktree", "list", "--porcelain"])).out)) {
+    const s = await git(["status", "--porcelain"], wt.path);
+    rows.push(worktreeRow(wt, s.code === 0 ? s.out.trim() !== "" : null, remote));
+  }
+  for (const id of ["R-307", "R-396", "R-403", ...Object.keys(runs)].filter(
+    (v, i, a) => a.indexOf(v) === i,
+  )) {
+    const br = runs[id] ?? null;
+    const tip =
+      br === null
+        ? null
+        : (await git(["rev-parse", "--verify", "-q", `refs/heads/${br}`])).out.trim() || null;
+    rows.push(runRow(id, br, tip, remote));
+  }
+  for (const lane of LANES) {
+    const tip = remote.get(lane);
+    const c =
+      moveCommit && tip ? (await git(["merge-base", "--is-ancestor", moveCommit, tip])).code : null;
+    rows.push(laneRow(lane, moveCommit, remote, c));
+  }
+  console.log(formatTable(rows));
+  return allReady(rows) ? 0 : 1;
+}
+
+if (import.meta.main) process.exit(await main(process.argv.slice(2)));
