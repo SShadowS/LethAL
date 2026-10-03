@@ -124,6 +124,27 @@ describe("root and containers follow KRAKEN_PROJECT", () => {
       CoordStatusError,
     );
   });
+  test.each([["allocation.json"], ["coord.json"]])(
+    "a corrupt %s raises CoordStatusError naming the file, never its content",
+    (name) => {
+      const r = join(mkdtempSync(join(tmpdir(), "coord-status-bad-")), "coord");
+      mkdirSync(join(r, "machine"), { recursive: true });
+      writeFileSync(join(r, "coord.json"), JSON.stringify({ campaign: "lethal" }));
+      writeFileSync(join(r, "machine", "allocation.json"), JSON.stringify({ lethal: ["C"] }));
+      const bad = name === "coord.json" ? join(r, name) : join(r, "machine", name);
+      writeFileSync(bad, "{ hunter2 not json");
+      let err: unknown;
+      try {
+        leasedContainers(r, { KRAKEN_PROJECT: "lethal" });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(CoordStatusError);
+      const msg = (err as Error).message;
+      expect(msg).toContain(name);
+      expect(msg).not.toContain("hunter2");
+    },
+  );
   test("end to end: KRAKEN_PROJECT + CG_COORD_ROOT=<tmp> reads <tmp>, never H:", async () => {
     const base = mkdtempSync(join(tmpdir(), "coord-status-e2e-"));
     const r = join(base, "coord");
