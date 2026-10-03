@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { discoverTests, testsInAlSource } from "../src/discovery";
+import { DiscoveredPathError } from "../src/line-filter";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
@@ -539,6 +540,68 @@ describe("testsInAlSource — a non-BMP character before a header (R418)", () =>
         method: "InSecond",
         file: "Two.Codeunit.al",
       },
+    ]);
+  });
+});
+
+// R421: a test's `file` is written with `/` on every platform, by the same `discoveredRelPaths`
+// that target discovery uses. On a POSIX host a file literally named `Sub\T.Codeunit.al` plays the
+// part of a Windows readdir result when `platform: "win32"` is passed.
+const ONE_TEST = `codeunit 79410 "Sub Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T()
+    begin
+    end;
+}
+`;
+
+async function r421TestDir(rel: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "lethal-discovery-r421-"));
+  tempRoots.push(root);
+  await mkdir(dirname(join(root, rel)), { recursive: true });
+  await writeFile(join(root, rel), ONE_TEST, "utf8");
+  return root;
+}
+
+describe("discoverTests — discovered paths use `/` (R421)", () => {
+  test.skipIf(process.platform === "win32")(
+    "10. a `\\` name read under win32 rules becomes `Sub/T.Codeunit.al`, and `--tests-only Sub/**` admits it",
+    async () => {
+      const dir = await r421TestDir("Sub\\T.Codeunit.al");
+      const expected = [
+        { codeunitId: 79410, codeunitName: "Sub Suite", method: "T", file: "Sub/T.Codeunit.al" },
+      ];
+      expect(await discoverTests(dir, { platform: "win32" })).toEqual(expected);
+      expect(await discoverTests(dir, { platform: "win32", only: ["Sub/**"] })).toEqual(expected);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "11. under the host's own POSIX rules a `\\` in a test file name is refused by name",
+    async () => {
+      const dir = await r421TestDir("Sub\\T.Codeunit.al");
+      let err: unknown;
+      try {
+        await discoverTests(dir);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(DiscoveredPathError);
+      if (!(err instanceof DiscoveredPathError)) return;
+      expect(err.paths).toEqual(["Sub\\T.Codeunit.al"]);
+      expect(err.message).toBe(
+        `cannot use the file "Sub\\T.Codeunit.al": its name contains a backslash. On ${process.platform} a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "Sub/T.Codeunit.al", which does not exist, and its batch would not compile. Rename the file.`,
+      );
+    },
+  );
+
+  test("12. CONTROL on POSIX (green before and after; the red case on Windows): a real subfolder gives `Sub/T.Codeunit.al`", async () => {
+    const dir = await r421TestDir("Sub/T.Codeunit.al");
+    expect(await discoverTests(dir)).toEqual([
+      { codeunitId: 79410, codeunitName: "Sub Suite", method: "T", file: "Sub/T.Codeunit.al" },
     ]);
   });
 });
