@@ -30,6 +30,7 @@ Classified from plan 3, Appendix B (2026-10-03), plus files added on the branch 
 | docs/superpowers/runbooks/autonomy/README.md | operational | Task 11 |
 | docs/superpowers/runbooks/autonomy/lane.md | operational | Task 11 |
 | docs/superpowers/runbooks/autonomy/orchestrator.md | operational | Task 11 |
+| scripts/kraken-corpora.sh | inert | runs in the container only; names the host folder U:/Git/BC.History in a comment, as the thing it mirrors at /work/src/BC.History |
 | scripts/coord.sh | operational | Task 11 |
 | scripts/coord-status.ts | operational | Task 11 |
 | scripts/compile-fixtures.ts | operational | Task 11 |
