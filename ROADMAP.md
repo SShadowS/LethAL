@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**111 of 407 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**106 of 407 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -447,11 +447,11 @@ that ordering is the priority.
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
 - **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)
 - **R407** · Admit multi-object files to al-runner coverage once upstream fixes the source-base frame defect · [R407.md](docs/roadmap/R407.md) · open, blocked on upstream: al-runner v2.12.0-main.c39ad5de reports every object after a file's first in a…
-- **R409** · On Linux, Bun's os.homedir() ignores a HOME set at run time, so the unit-test fake home (R264) does not reach any product default · [R409.md](docs/roadmap/R409.md) · open, filed 2026-10-03
-- **R410** · redact-campaign-report's first-party proof cannot find a Windows-made report's mutant files on Linux (`src\X.al` is one file name there) · [R410.md](docs/roadmap/R410.md) · open, filed 2026-10-03
-- **R411** · Unit tests pin project-relative paths in the Windows form (`src\X.al`), so they fail on Linux where the product writes `src/X.al` · [R411.md](docs/roadmap/R411.md) · open, filed 2026-10-03
-- **R412** · Unit tests that assume a Windows host: a drive letter to force a write failure, rmdir to remove a junction, the host platform as the AL tool layout · [R412.md](docs/roadmap/R412.md) · open, filed 2026-10-03
-- **R413** · QuarantineStore.read: a quarantine dir that is a regular file reads as 'no record' on Windows (ENOENT) but throws on Linux (ENOTDIR) · [R413.md](docs/roadmap/R413.md) · open, filed 2026-10-03
+- **R409** · On Linux, Bun's os.homedir() ignores a HOME set at run time, so the unit-test fake home (R264) does not reach any product default · [R409.md](docs/roadmap/R409.md) · done (a1e0a7c9)
+- **R410** · redact-campaign-report's first-party proof cannot find a Windows-made report's mutant files on Linux (`src\X.al` is one file name there) · [R410.md](docs/roadmap/R410.md) · done (b9ce5250)
+- **R411** · Unit tests pin project-relative paths in the Windows form (`src\X.al`), so they fail on Linux where the product writes `src/X.al` · [R411.md](docs/roadmap/R411.md) · done (3217c6bf)
+- **R412** · Unit tests that assume a Windows host: a drive letter to force a write failure, rmdir to remove a junction, the host platform as the AL tool layout · [R412.md](docs/roadmap/R412.md) · done (f90df586)
+- **R413** · QuarantineStore.read: a quarantine dir that is a regular file reads as 'no record' on Windows (ENOENT) but throws on Linux (ENOTDIR) · [R413.md](docs/roadmap/R413.md) · done (c060a2ff): ENOTDIR reads as no record, as ENOENT does on Windows; whether a non-directory quarantine…
 
 ---
 
