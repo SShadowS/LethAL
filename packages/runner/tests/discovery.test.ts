@@ -1,8 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initParser } from "@lethal/engine";
 import { discoverTests } from "../src/discovery";
+import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 
 // Get the fixtures path (account for running from dist/tests vs source tests)
 const fixturesDir = import.meta.dir.includes("dist")
@@ -245,5 +247,173 @@ end;
 `,
       ),
     ).rejects.toThrow(/lost 1 of 1 \[Test\] procedures in "Orphan\.Codeunit\.al"/);
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// R403: a `[Test]` that exists only in an `#if` arm the test app's build compiles out was
+// discovered anyway, and the run then asked for a method the build does not have (al-runner:
+// baseline `error`; bcdev: R31's refusal). Arm-aware discovery evaluates each file's arms under
+// the TEST app's derived symbol set and returns both lists.
+// ————————————————————————————————————————————————————————————————————————
+const R403_SHAPE = `codeunit 50140 "R403 Tests"
+{
+    Subtype = Test;
+
+#if LETHALX
+    [Test]
+    procedure OnlyUnderX()
+    begin
+    end;
+#endif
+
+    [Test]
+    procedure PlainDoubles()
+    begin
+    end;
+}
+`;
+
+async function testDirWith(files: Record<string, string>): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "lethal-r403-"));
+  tempRoots.push(root);
+  for (const [name, text] of Object.entries(files)) await writeFile(join(root, name), text, "utf8");
+  return root;
+}
+
+const methods = (refs: readonly { readonly method: string }[]) => refs.map((r) => r.method);
+
+describe("discoverTests — the test app's #if arms (R403)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  test("under [] OnlyUnderX is compiled out and recorded; under [LETHALX] both are kept", async () => {
+    const dir = await testDirWith({ "R403.Codeunit.al": R403_SHAPE });
+    const none = await discoverTests(dir, { buildSymbols: [] });
+    expect(methods(none.filtered)).toEqual(["PlainDoubles"]);
+    expect(methods(none.unfiltered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+    expect(none.excluded).toEqual([
+      {
+        test: {
+          codeunitId: 50140,
+          codeunitName: "R403 Tests",
+          method: "OnlyUnderX",
+          file: "R403.Codeunit.al",
+        },
+        file: "R403.Codeunit.al",
+        reason: "compiled-out",
+      },
+    ]);
+
+    const x = await discoverTests(dir, { buildSymbols: ["LETHALX"] });
+    expect(methods(x.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+    expect(methods(x.unfiltered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+    expect(x.excluded).toEqual([]);
+    expect(x.buildSymbols).toEqual(["LETHALX"]);
+  });
+
+  test("`#if not` is the mirror image", async () => {
+    const dir = await testDirWith({
+      "Not.Codeunit.al": R403_SHAPE.replace("#if LETHALX", "#if not LETHALX"),
+    });
+    expect(methods((await discoverTests(dir, { buildSymbols: [] })).filtered)).toEqual([
+      "OnlyUnderX",
+      "PlainDoubles",
+    ]);
+    expect(methods((await discoverTests(dir, { buildSymbols: ["LETHALX"] })).filtered)).toEqual([
+      "PlainDoubles",
+    ]);
+  });
+
+  test("a file's own #define is applied", async () => {
+    const dir = await testDirWith({ "Def.Codeunit.al": `#define LETHALX\n${R403_SHAPE}` });
+    expect(methods((await discoverTests(dir, { buildSymbols: [] })).filtered)).toEqual([
+      "OnlyUnderX",
+      "PlainDoubles",
+    ]);
+  });
+
+  test("the test app.json's own symbols reach the set, through effectiveBuildSymbols", async () => {
+    const dir = await testDirWith({
+      "app.json": JSON.stringify({ preprocessorSymbols: ["LETHALX"] }),
+      "R403.Codeunit.al": R403_SHAPE,
+    });
+    const symbols = await effectiveBuildSymbols(dir, [], undefined, { kind: "bcdev" });
+    expect(symbols).toEqual(["LETHALX"]);
+    const found = await discoverTests(dir, { buildSymbols: symbols });
+    expect(methods(found.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+    expect(found.excluded).toEqual([]);
+  });
+
+  test("an undecided file (R402's s13) keeps every test and records each as undecided-kept", async () => {
+    const s13 = `codeunit 50141 "R403 Undecided"
+{
+    Subtype = Test;
+
+#if LETHALX
+    [Test]
+    procedure OnlyUnderX()
+    begin
+    end;
+#endif
+
+    [Test]
+    procedure Looping()
+    var
+        A: Integer;
+        B: Integer;
+    begin
+#if LETHALX
+        while (B < 5)
+#else
+        while (A < 10)
+#endif
+        do begin
+            A := A + 1;
+            B := B + 1;
+        end;
+    end;
+}
+`;
+    const dir = await testDirWith({ "S13.Codeunit.al": s13 });
+    for (const symbols of [[], ["LETHALX"]]) {
+      const found = await discoverTests(dir, { buildSymbols: symbols });
+      expect(methods(found.filtered)).toEqual(["OnlyUnderX", "Looping"]);
+      expect(found.excluded.map((e) => [e.test.method, e.reason])).toEqual([
+        ["OnlyUnderX", "preproc-undecided-kept"],
+        ["Looping", "preproc-undecided-kept"],
+      ]);
+      for (const e of found.excluded) expect(e.detail).toStartWith("marker-mismatch");
+    }
+  });
+
+  test("offsets line up in a file with non-ASCII text, including characters outside the BMP", async () => {
+    // Forty astral characters before the `#if`: under a mask that split by code points, the
+    // `[Test]` offset came out 40 units early, before the inactive range, and OnlyUnderX was kept.
+    const comment = `    // ${"\u{1F600}".repeat(40)} æøå\n    // '${"\u{1F600}".repeat(4)}'\n`;
+    const dir = await testDirWith({
+      "Wide.Codeunit.al": R403_SHAPE.replace("#if LETHALX", `${comment}#if LETHALX`),
+    });
+    const none = await discoverTests(dir, { buildSymbols: [] });
+    expect(methods(none.filtered)).toEqual(["PlainDoubles"]);
+    expect(none.excluded.map((e) => e.test.method)).toEqual(["OnlyUnderX"]);
+    const x = await discoverTests(dir, { buildSymbols: ["LETHALX"] });
+    expect(methods(x.filtered)).toEqual(["OnlyUnderX", "PlainDoubles"]);
+  });
+
+  test("--tests-only still narrows both lists", async () => {
+    const dir = await testDirWith({
+      "R403.Codeunit.al": R403_SHAPE,
+      "Other.Codeunit.al": R403_SHAPE.replace("50140", "50142").replace("R403 Tests", "Other"),
+    });
+    const found = await discoverTests(dir, { only: ["R403*"], buildSymbols: [] });
+    expect(found.unfiltered.every((r) => r.file === "R403.Codeunit.al")).toBe(true);
+    expect(methods(found.filtered)).toEqual(["PlainDoubles"]);
+  });
+
+  test("without buildSymbols the pre-R403 shape is returned: every arm read", async () => {
+    const dir = await testDirWith({ "R403.Codeunit.al": R403_SHAPE });
+    expect(methods(await discoverTests(dir))).toEqual(["OnlyUnderX", "PlainDoubles"]);
   });
 });

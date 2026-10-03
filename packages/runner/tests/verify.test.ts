@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import * as engineModule from "@lethal/engine";
 import { initParser, parsesSinceStart } from "@lethal/engine";
 import {
   IDENTITY_SCHEME,
@@ -16,6 +17,7 @@ import {
   appInputsOfAppJson,
   readAppJsonInputs,
 } from "../src/digest-inputs";
+import * as discoveryModule from "../src/discovery";
 import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
@@ -638,6 +640,63 @@ describe("planVerify", () => {
     expect(keys(plan.newTests)).toEqual(["50101::N1", "50101::N2"]);
     expect(plan.skipped).toEqual([]);
     expect([...plan.entries.keys()]).toEqual(["M0001", "M0002"]);
+  });
+
+  // R403: the parser is initialised BEFORE discovery (arm-aware discovery parses each test file),
+  // and discovery receives the test app's derived symbol set. Order by a call log, never timing.
+  test("R403: planVerify initialises the parser before discovery, and passes the test build set", async () => {
+    const dir = testDir([{ id: 50100, name: "Old", methods: ["A"] }]);
+    const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
+    const order: string[] = [];
+    const realInit = engineModule.initParser;
+    const realDiscover = discoveryModule.discoverTests;
+    const init = spyOn(engineModule, "initParser").mockImplementation(() => {
+      order.push("initParser");
+      return realInit();
+    });
+    const discover = spyOn(discoveryModule, "discoverTests").mockImplementation(((
+      d: string,
+      o?: { readonly buildSymbols?: readonly string[] },
+    ) => {
+      order.push(`discoverTests:${JSON.stringify(o?.buildSymbols ?? null)}`);
+      return (realDiscover as (d: string, o?: unknown) => Promise<unknown>)(d, o);
+    }) as unknown as typeof realDiscover);
+    try {
+      await planVerify({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "Old", "A")],
+        sourceTestDigests: recorded,
+        dependencies: DEPS,
+        testDir: dir,
+        testBuildSymbols: ["LETHALX"],
+      });
+    } finally {
+      init.mockRestore();
+      discover.mockRestore();
+    }
+    expect(order).toEqual(["initParser", 'discoverTests:["LETHALX"]']);
+  });
+
+  // R403 phase A: verify is bcdev only, and bcdev keeps the UNFILTERED suite until phase B reads
+  // the published package's compiled membership. A compiled-out test is still planned.
+  test("R403 phase A: a test compiled out under the test build set is still planned on bcdev", async () => {
+    const dir = testDir([{ id: 50100, name: "Old", methods: ["A"] }]);
+    const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
+    writeFileSync(
+      join(dir, "50101.Codeunit.al"),
+      `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n#if LETHALX\n    [Test]\n    procedure OnlyUnderX()\n    begin\n    end;\n#endif\n}\n`,
+    );
+    const plan = await planVerify({
+      source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+      manifest: manifest([entry("M0001")]),
+      sourceBaseline: [row(50100, "Old", "A")],
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+      testDir: dir,
+      testBuildSymbols: [],
+    });
+    expect(keys(plan.newTests)).toEqual(["50101::OnlyUnderX"]);
   });
 
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */

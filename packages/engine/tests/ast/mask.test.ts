@@ -131,6 +131,23 @@ describe("maskAlNonCode", () => {
     });
   });
 
+  describe("R403: offsets are UTF-16 code units, as the parser's and every caller's are", () => {
+    it("keeps every offset with non-ASCII text, including characters outside the BMP", () => {
+      for (const src of [
+        "// æøå\nX",
+        "// \u{1F600}\nX",
+        "'\u{1F600}\u{1F600}' X",
+        "/* \u{1F600} */ X",
+      ]) {
+        for (const opts of [attribution, discovery]) {
+          const out = maskAlNonCode(src, opts);
+          expect(out.length, src).toBe(src.length);
+          expect(out.indexOf("X"), src).toBe(src.indexOf("X"));
+        }
+      }
+    });
+  });
+
   describe("the policy the two callers deliberately differ on", () => {
     const src = "Msg := 'codeunit 50100 \"Sales Post\"';\n";
 

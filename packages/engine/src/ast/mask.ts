@@ -49,7 +49,11 @@ export interface AlMaskOptions {
  * unterminated block comment still runs to EOF, because that IS what the AL compiler does with it.
  */
 export function maskAlNonCode(source: string, options: AlMaskOptions): string {
-  const out = Array.from(source);
+  // UTF-16 code units, the unit every index below (and every caller's offset) is in. R403:
+  // `Array.from` split by code POINTS, so a character outside the BMP (an emoji in a comment or a
+  // string) shifted every later offset by one and blanked one code unit too far, measured: in
+  // `'😀😀' X` the `X` after the literal was blanked as string contents.
+  const out = source.split("");
   const blank = (from: number, to: number): void => {
     for (let k = from; k < to; k++) {
       const ch = out[k];

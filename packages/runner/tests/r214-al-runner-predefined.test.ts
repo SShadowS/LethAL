@@ -516,10 +516,12 @@ describe("R392: runSession measures al-runner's predefined symbols", () => {
         kind: "al-runner",
         predefined: { symbols: CLEANSCHEMA_1_TO_25 },
       });
-      // The second effectiveBuildSymbols call is generateMutationSet's own, after `generate`.
+      // R403: the first effectiveBuildSymbols call is the TEST app's set, for discovery; the second
+      // the target's; the third generateMutationSet's own, after `generate`.
       expect(order).toEqual([
         "probe:start",
         "probe:end",
+        `effectiveBuildSymbols:${probed}`,
         `effectiveBuildSymbols:${probed}`,
         "sessionFingerprint",
         "generate",

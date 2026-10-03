@@ -40,7 +40,7 @@ import {
   qualifiedTestName,
   runNamedMutants,
 } from "./orchestrator";
-import { sameBuildSymbols } from "./preprocessor-symbols";
+import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
@@ -686,6 +686,9 @@ export async function planVerify(a: {
   readonly dependencies: string | (() => Promise<string>);
   /** R-371: refuse above this many new tests. Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
+  /** R403: the test app's derived symbol set (`effectiveBuildSymbols(testDir, ...)`), under which
+   *  discovery evaluates the test files' arms. Absent means `[]`. */
+  readonly testBuildSymbols?: readonly string[];
 }): Promise<VerifyPlan> {
   const { source, manifest, sourceBaseline, sourceTestDigests, testDir } = a;
   const maxNewTests = a.maxNewTests ?? DEFAULT_MAX_NEW_TESTS;
@@ -795,7 +798,13 @@ export async function planVerify(a: {
     );
   }
 
-  const discovered = await discoverTests(testDir);
+  // R403: the parser before discovery, which parses each test file that holds a `[Test]`.
+  await initParser();
+  // R403 phase A: verify is bcdev only, and bcdev keeps the UNFILTERED list until R-403 phase B
+  // reads the published package's compiled membership (see `runSession`). The arms are evaluated
+  // under the test app's derived set all the same, so phase B only has to choose.
+  const discovered = (await discoverTests(testDir, { buildSymbols: a.testBuildSymbols ?? [] }))
+    .unfiltered;
   const baselineKeys = new Set(
     sourceBaseline.map((r) =>
       testKeyOf({ codeunitId: r.codeunitId, codeunitName: "", method: r.method }),
@@ -804,8 +813,7 @@ export async function planVerify(a: {
   // R-236c: verify runs fenced, so a test with a reachable call that may open a TestPage is never
   // planned. Throws TestPageScanError on unreadable reachable source, before anything is published.
   // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
-  // VERIFY_REFUSALS keeps its value set.
-  await initParser();
+  // VERIFY_REFUSALS keeps its value set. (The parser was initialised before discovery, R403.)
   // R-371: ONE parse serves the scan and the digests.
   const model = buildTestAppModel(await readTestAppSources(testDir));
   const refusedWhy = scanTestPageModel(model, discovered);
@@ -1344,6 +1352,13 @@ export async function runVerify(
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
+      // R403: verify runs on bcdev only, so alc's set: the config's symbols plus the test app.json's.
+      testBuildSymbols: await effectiveBuildSymbols(
+        args.testDir,
+        deps.preprocessorSymbols,
+        undefined,
+        { kind: "bcdev" },
+      ),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
     const marksWarning = marksSchemeWarning(

@@ -4461,10 +4461,28 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // tests. Removed; isolation is a TestRunner-side concern verified out of
   // band, not something Layer 4 checks.
 
-  const tests = await discoverTests(
+  // R403: the parser first, on every path: arm-aware discovery parses each test file that holds a
+  // `[Test]`, and the scan and digests below parse them again.
+  await initParser();
+  // R403: the TEST app's derived symbol set: the config's symbols, the test `app.json`'s own, and
+  // on al-runner its measured predefined ones (`buildBackend`, decided above). Read from disk: the
+  // snapshot below is the TARGET's.
+  const testBuildSymbols = await effectiveBuildSymbols(
     cfg.testDir,
-    cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {},
+    cfg.preprocessorSymbols ?? [],
+    undefined,
+    buildBackend,
   );
+  const discovery = await discoverTests(cfg.testDir, {
+    ...(cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {}),
+    buildSymbols: testBuildSymbols,
+  });
+  // R403 phase A: al-runner compiles the tests itself from exactly `testBuildSymbols`, so its suite
+  // is the FILTERED list. bcdev runs whatever test app was published, and only that package's
+  // compiled membership can say which build it is; until R-403 phase B reads it, bcdev keeps the
+  // UNFILTERED list, exactly as before R403 (a compiled-out test there still meets R31's refusal).
+  const armPolicyApplied = buildBackend.kind === "al-runner";
+  const tests = armPolicyApplied ? discovery.filtered : discovery.unfiltered;
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
   emit({ type: "tests-discovered", tests });
@@ -4482,7 +4500,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // source a test can reach cannot be read: an unread test is not sent.
   // R-278: one read of the test sources serves the scan and, where nothing is published (R-372),
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
-  await initParser();
+  // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
   const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
@@ -4571,6 +4589,16 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
     // breaks a resume.
     ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
+    // R403: the test app's derived set, which can change while the target's does not (plan §3(e)).
+    // Only when some test file in scope holds a directive line: without one no symbol set can
+    // change the suite, so the pre-R403 digest is kept (on al-runner too, whose set always holds
+    // its predefined symbols).
+    ...(testBuildSymbols.length > 0 && discovery.anyDirective ? { testBuildSymbols } : {}),
+    // R403: only when the arm policy changed the suite this session runs, or kept a file it could
+    // not decide. On bcdev (phase A) the policy is not applied, so the digest is unchanged there.
+    ...(armPolicyApplied && discovery.excluded.length > 0
+      ? { testDiscovery: "arms-v1" as const }
+      : {}),
   });
   const resumeState = resolveResume(
     cfg,
