@@ -43,7 +43,9 @@ RUN git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.
          --add-source /tmp/alr-nupkg --version $ALRUNNER_VERSION \
     && rm -rf /tmp/alr /tmp/alr-nupkg /tmp/alr-bc /root/.nuget/packages \
     && /opt/al-runner/c39ad5de/al-runner --version
-# PowerShell
-RUN curl -fsSL -o /tmp/pwsh.deb "$(curl -fsSL https://api.github.com/repos/PowerShell/PowerShell/releases/latest | jq -r '.assets[] | select(.name|test("deb_amd64.deb$")) | .browser_download_url')" \
-    && apt-get update && apt-get install -y /tmp/pwsh.deb && rm -rf /var/lib/apt/lists/* /tmp/pwsh.deb
+# PowerShell: pinned tarball (the GitHub API lookup is rate-limited inside a build and the base is Ubuntu 26.04, which has no Microsoft apt repo)
+ARG PWSH_VERSION=7.6.6
+RUN mkdir -p /opt/microsoft/powershell \
+    && curl -fsSL "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" | tar -xz -C /opt/microsoft/powershell \
+    && chmod +x /opt/microsoft/powershell/pwsh && ln -s /opt/microsoft/powershell/pwsh /usr/local/bin/pwsh
 # ends as root: the base entrypoint drops to dev
