@@ -1,4 +1,5 @@
 import type { PublishOutcome } from "./deployment-verifier";
+import { normalizeRelPath } from "./line-filter";
 import type { PublishOutcomeRow } from "./store";
 
 /**
@@ -264,7 +265,13 @@ export function clearPublishCeiling(
   const before = knownCeiling(store, tier);
   // Read BEFORE deleting: the report names the rows themselves, not just how many there were.
   const candidates = store.publishOutcomes(tier);
-  const removed = file === undefined ? candidates : candidates.filter((r) => r.file === file);
+  // R421: either separator on either side, exactly as `deletePublishOutcomes`' SQL compares
+  // (`REPLACE(file, '\', '/')` against the normalised argument), so the count check below holds.
+  const wanted = file === undefined ? undefined : normalizeRelPath(file);
+  const removed =
+    wanted === undefined
+      ? candidates
+      : candidates.filter((r) => r.file !== undefined && r.file.replaceAll("\\", "/") === wanted);
   const deleted = store.deletePublishOutcomes(tier, file);
   // Fail loudly rather than reporting a plausible number: if the DELETE and the SELECT disagree,
   // the rows this claims to have destroyed are not the rows that were destroyed, and an operator
