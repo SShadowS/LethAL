@@ -284,6 +284,8 @@ container, so it is the cheapest real check that the binary's assets survived co
 from a directory that is **not** the repo, so a relative path cannot accidentally rescue a
 mislocated asset:
 
+This smoke test runs the Windows `.exe`, so it is host-only: ask the owner.
+
 ```bash
 cd /c
 U:/Git/LethAL/build/lethal-0.1.0-alpha.1-windows-x64.exe run \
@@ -312,7 +314,7 @@ server rather than of LethAL:
 
 - **`alc.exe`** (the AL compiler) is always required — compilation is local on every path, env-tool
   or not. It is found under the AL Language VS Code extension
-  (`~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/`), or pinned with `bcdev.alcPath`.
+  (`~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/`; `bin/linux/` in the kraken container, named by `LETHAL_ALC_DIR`), or pinned with `bcdev.alcPath`.
 - **`altool.exe`**, from the same extension, is required only on the direct-container publish path.
 - **The `LethAL Control` BC extension** (`extensions/lethal-control`) must be published to the target
   server. The runner talks to it over OData.

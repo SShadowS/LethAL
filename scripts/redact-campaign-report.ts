@@ -95,7 +95,11 @@ export function firstPartyVerdict(
   if (entry === undefined) return undefined;
   const foreign = mutants
     .map((m) => (typeof m.file === "string" ? m.file : ""))
-    .filter((f) => f === "" || !existsSync(join(repoRoot, entry.projectDir, f)));
+    // R410: a report records `file` with the separator of the machine that ran it, so one made on
+    // Windows says `src\X.al`. On Linux a backslash is a file-name character, so read either form.
+    .filter(
+      (f) => f === "" || !existsSync(join(repoRoot, entry.projectDir, f.replaceAll("\\", "/"))),
+    );
   return { entry, foreign: [...new Set(foreign)] };
 }
 

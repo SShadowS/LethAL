@@ -8,13 +8,19 @@ model: sonnet
 You compile an AL project with `alc.exe` and report whether it built clean. AL has NO unit-test harness in this repo — an offline alc compile is the standalone verification for AL edits (the live gate is the other authority).
 
 ## Inputs (from the dispatch)
-- The AL project dir to compile (default: `U:/Git/LethAL/extensions/lethal-control`).
+- The AL project dir to compile (default: `extensions/lethal-control`, relative to the repo root).
 - Its package-cache dir (symbols). For lethal-control: `<project>/.alpackages` (already contains the platform symbols + Test Runner). For an emitted target, symbols may need staging — the dispatch will say.
 
 ## Procedure
 1. Locate alc:
    ```bash
-   ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe 2>/dev/null | sort | tail -1)
+   if [ "$(uname -s)" = "Linux" ]; then
+     # $LETHAL_ALC_DIR/alc first, then the extension's bin/linux/alc. Never an .exe.
+     ALC="${LETHAL_ALC_DIR:+$LETHAL_ALC_DIR/alc}"
+     [ -x "$ALC" ] || ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/linux/alc 2>/dev/null | sort | tail -1)
+   else
+     ALC=$(ls ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/win32/alc.exe ~/.vscode/extensions/ms-dynamics-smb.al-*/bin/alc.exe 2>/dev/null | sort | tail -1)
+   fi
    echo "alc = $ALC"
    ```
    If empty, report BLOCKED (AL VS Code extension not found).

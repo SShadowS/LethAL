@@ -25,6 +25,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The hang tag reads loop-condition operands in `#if` arms the build compiles, and only those** (R402). A `while (A < 10)` `#if X and (B < 5) #endif` tail is now read, so `B := B + 1` is tagged `loop-condition-target` under `X`. Tails inside a condition (call arguments, subscripts, list elements) are no longer read when their arm is compiled out. Directive symbols are never read as variables.
+- **A file where a statement-level `#if` continues an unterminated statement is not mutated** (R402, R408). For example, `repeat ... until (A > 10)` `#if X or (B > 5) #endif ;`. The parser places the tail as a separate statement, and the instrumented artifact then failed alc (`AL0111`), taking down every mutant in its batch. Such a file is reported as `preproc-undecided` with the reason `directive-continues-statement at line N`, and it is still compiled and published. Measured on DC, System Application, Business Foundation and BaseApp: no file is refused by this, and no mutant, key or tag changes.
 - **A file declaring more than one object still turns al-runner coverage off, for a new reason**
   (R383). Upstream #3713 (every object after a file's first was lost) is fixed. But on the pinned
   al-runner v2.12.0-main.c39ad5de those objects' lines come back in a mixed frame: when a source

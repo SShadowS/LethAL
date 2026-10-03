@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperationStatus } from "../../packages/runner/src/lease";
 import { scratchDirs } from "../../packages/runner/tests/helpers/scratch";
@@ -394,7 +394,11 @@ describe("writeCaptures (orchestrator ruling A: partial and full TestPage answer
   });
 
   test("a write failure is recorded, never thrown", () => {
-    const recs = writeCaptures("Q:/r236-no-such-drive/A1.ndjson", "x", [
+    // R412: under a regular FILE, so the capture dir cannot be made on any host. A drive letter
+    // (`Q:/...`) only fails on Windows; on Linux it is a relative path that gets created.
+    const blocker = join(scratch("lethal-r236-cap-"), "blocker");
+    writeFileSync(blocker, "not a directory");
+    const recs = writeCaptures(join(blocker, "A1.ndjson"), "x", [
       { trace: trace(3), bytes: new Uint8Array([1, 2, 3]), complete: false },
     ]);
     expect(recs[0]?.error).toBeDefined();

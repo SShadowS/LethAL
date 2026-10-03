@@ -1,0 +1,14 @@
+# The kraken image build sends this folder as context. Secrets and machine-local files must
+# never be in it; the Dockerfile COPYs only scripts/install-llvm.sh.
+**/*.local.json
+.mcp.json
+.claude/settings.local.json
+**/.vscode/*.local.json
+**/.alpackages
+node_modules
+**/node_modules
+packages/*/dist
+packages/engine/native/target
+.superpowers
+.kraken-local
+.git

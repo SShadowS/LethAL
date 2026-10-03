@@ -38,8 +38,11 @@ function runLate(opts: { ci: boolean; seed?: string }) {
   }
   const marker = join(dir, "marker.log");
   // CI must be ABSENT (not the string "undefined") in the control, so rebuild the env without it.
+  // R414: Bun also reads GITHUB_ACTIONS as CI (measured, Bun 1.4.2), which every GitHub runner sets.
   const env = Object.fromEntries(
-    Object.entries({ ...process.env, MARK: marker }).filter(([k]) => k !== "CI"),
+    Object.entries({ ...process.env, MARK: marker }).filter(
+      ([k]) => k !== "CI" && k !== "GITHUB_ACTIONS",
+    ),
   );
   if (opts.ci) env.CI = "true";
   const r = Bun.spawnSync(["bun", "test", "--timeout", "200"], {

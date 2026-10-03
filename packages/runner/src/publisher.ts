@@ -1,8 +1,8 @@
 import { access, readFile, readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CompiledArtifact } from "./artifact";
 import { describeThrown } from "./describe-error";
+import { homeDir } from "./home";
 import { canonicalContainerKey, serializePublish } from "./publish-serializer";
 
 export type SpawnFn = (
@@ -217,7 +217,7 @@ const AL_TOOL_BIN_LAYOUT: Partial<
  * exactly the opaque-diagnosis failure the per-RID fix exists to remove.
  */
 export async function defaultAlToolPaths(
-  extensionsDir: string = join(homedir(), ".vscode", "extensions"),
+  extensionsDir: string = join(homeDir(), ".vscode", "extensions"),
   platform: NodeJS.Platform = process.platform,
 ): Promise<{ alcPath: string; altoolPath: string } | undefined> {
   const layout = AL_TOOL_BIN_LAYOUT[platform];

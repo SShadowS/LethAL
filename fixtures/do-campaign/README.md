@@ -1,5 +1,7 @@
 # Rung-3 workspace contract
 
+The DO campaign is a host-only campaign: it runs on the owner's Windows host, not in the kraken container. If you are in the container, host-only: ask the owner.
+
 This is what the DO campaign's rung-3 `claude -p` agent gets, what it does not get, and — this is
 the part that matters — **which guarantee comes from where, and how strong each one actually is**.
 Four fix rounds went into this (full detail, probe matrix and bypass history in
