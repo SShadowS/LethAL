@@ -31,6 +31,16 @@ describe("R417: a quarantine store path that is not a directory is refused, on e
     expect(await store.clear("tier", 1)).toBe("cleared");
   });
 
+  // Windows reports ENOENT for a child of a file (R413), so only Linux can see this shape.
+  test.skipIf(process.platform === "win32")(
+    "a store dir whose PARENT is a file is refused, not read as no record",
+    async () => {
+      const store = new QuarantineStore(join(fileAtPath(), "sub"));
+      const err = await store.read("tier").catch((e) => e);
+      expect(err).toBeInstanceOf(QuarantineStoreNotADirectoryError);
+    },
+  );
+
   test("an existing empty store dir is no record", async () => {
     expect(await new QuarantineStore(scratch("lethal-qstore-")).read("tier")).toBeNull();
   });

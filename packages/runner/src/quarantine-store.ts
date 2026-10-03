@@ -91,8 +91,13 @@ export class QuarantineStore {
       let isDir: boolean;
       try {
         isDir = (await stat(this.baseDir)).isDirectory();
-      } catch {
-        return null;
+      } catch (statErr) {
+        const sc = (statErr as NodeJS.ErrnoException).code;
+        if (sc === "ENOENT") return null;
+        // The store dir's own parent is a file: the same broken configuration as a file at the
+        // store path. Anything else (EACCES, EIO) is unknown, so it must not read as "no record".
+        if (sc === "ENOTDIR") throw new QuarantineStoreNotADirectoryError(this.baseDir);
+        throw statErr;
       }
       if (!isDir) throw new QuarantineStoreNotADirectoryError(this.baseDir);
       return null;
