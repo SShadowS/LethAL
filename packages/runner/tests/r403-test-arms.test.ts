@@ -669,3 +669,70 @@ describe("R403 phase B: compiledMembershipOf and compareTestMembership", () => {
     });
   });
 });
+
+describe("R403 phase C: the report says what the arm filter did (plan §3(g))", () => {
+  test("al-runner, [] symbols: OnlyUnderX is listed compiled-out, the derived set is recorded, tests-compiled-out is raised", async () => {
+    const root = await project({});
+    const report = await session(root, new ResultsStore(":memory:"), new StubBackend(false));
+    expect(report.excludedTests).toEqual([
+      { test: "R403 Tests.OnlyUnderX", file: "R403.Codeunit.al", reason: "compiled-out" },
+    ]);
+    expect(report.testBuildSymbols).toEqual([...AL_RUNNER_PREDEFINED_SYMBOLS_V2_12_0].sort());
+    expect(report.validity.caveats).toContain("tests-compiled-out");
+    expect(report.validity.caveats).not.toContain("test-symbols-unverified");
+    expect(report.testSymbolsUnverifiedFiles).toBeUndefined();
+  });
+
+  test("bcdev, no compiled evidence, a #if around a [Test]: test-symbols-unverified names the file, nothing is excluded", async () => {
+    const root = await project({});
+    const report = await session(root, new ResultsStore(":memory:"), new StubBackend(true));
+    expect(report.validity.caveats).toContain("test-symbols-unverified");
+    expect(report.validity.caveats).not.toContain("tests-compiled-out");
+    expect(report.testSymbolsUnverifiedFiles).toEqual(["R403.Codeunit.al"]);
+    expect(report.excludedTests).toBeUndefined();
+  });
+
+  test("bcdev, no compiled evidence, NO #if around any [Test]: no caveat, no fields", async () => {
+    const root = await project({});
+    await Bun.write(
+      join(root, "tests", "R403.Codeunit.al"),
+      TEST_AL.replace("#if LETHALX\n", "").replace("#endif\n", ""),
+    );
+    const report = await session(root, new ResultsStore(":memory:"), new StubBackend(true));
+    expect(report.validity.caveats).not.toContain("test-symbols-unverified");
+    expect(report.validity.caveats).not.toContain("tests-compiled-out");
+    expect(report.testSymbolsUnverifiedFiles).toBeUndefined();
+    expect(report.excludedTests).toBeUndefined();
+  });
+
+  test("bcdev with compiled evidence that matched: tests-compiled-out, and no unverified caveat", async () => {
+    const root = await project({});
+    const report = await session(
+      root,
+      new ResultsStore(":memory:"),
+      new PkgBackend(compiledPkg(BUILT_NONE)),
+    );
+    expect(report.excludedTests?.map((t) => t.test)).toEqual(["R403 Tests.OnlyUnderX"]);
+    expect(report.validity.caveats).toContain("tests-compiled-out");
+    expect(report.validity.caveats).not.toContain("test-symbols-unverified");
+  });
+
+  test("nothing excluded and an empty derived set: neither field nor either caveat is present", async () => {
+    const root = await project({});
+    await Bun.write(
+      join(root, "tests", "R403.Codeunit.al"),
+      TEST_AL.replace("#if LETHALX\n", "").replace("#endif\n", ""),
+    );
+    // bcdev derives no symbols of its own: the set is empty.
+    const report = await session(
+      root,
+      new ResultsStore(":memory:"),
+      new PkgBackend(compiledPkg([R403_CU(["OnlyUnderX", "PlainDoubles"])])),
+    );
+    expect("testBuildSymbols" in report).toBe(false);
+    expect("excludedTests" in report).toBe(false);
+    expect("testSymbolsUnverifiedFiles" in report).toBe(false);
+    expect(report.validity.caveats).not.toContain("tests-compiled-out");
+    expect(report.validity.caveats).not.toContain("test-symbols-unverified");
+  });
+});

@@ -238,7 +238,20 @@ export type Caveat =
   | "declarative-sites-dropped"
   | "all-errors"
   | "session-warm"
-  | "preproc-files-refused";
+  | "preproc-files-refused"
+  | "tests-compiled-out"
+  | "test-symbols-unverified";
+
+/**
+ * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
+ * `test` is `Codeunit.method` (the name every other test list in the report uses), `file` is
+ * relative to the test dir.
+ */
+export interface ExcludedTestRecord {
+  readonly test: string;
+  readonly file: string;
+  readonly reason: "compiled-out" | "preproc-undecided-kept";
+}
 
 /**
  * What each `Caveat` MEANS for a reader, and — where the roadmap entry that filed it recorded one
@@ -509,6 +522,28 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "measured, in either direction. A refused file can have 0 sites, so count its rows, not " +
       "its `sites`.",
     basis: "R214",
+  },
+  "tests-compiled-out": {
+    meaning:
+      "At least one test in the test source sits in a `#if` arm that the test app's build symbols " +
+      "do not compile, so it was NOT run. `excludedTests` names each one. The build symbols are " +
+      "DERIVED (see `testBuildSymbols`), not read from the built test app, except where bcdev " +
+      "checked them against the published package.",
+    entailedNegative:
+      "Not a failed test and not a gap in the suite: a test that is not compiled does not exist in " +
+      "that build. A mutant only such a test would have killed reads `no-coverage` or `survived`.",
+    basis: "R403",
+  },
+  "test-symbols-unverified": {
+    meaning:
+      "bcdev had no compiled test package to read, and at least one test file has a `#if` around a " +
+      "`[Test]`. Every test in those files was kept and sent, as before, because the build symbols " +
+      "the test app was built with could not be checked. `testSymbolsUnverifiedFiles` names the " +
+      "files. A test the published build does not contain fails the baseline there.",
+    entailedNegative:
+      "Does not mean any test was dropped, and does not mean the symbols are wrong: they were " +
+      "simply not verified against the built app.",
+    basis: "R403",
   },
 };
 
@@ -1324,6 +1359,24 @@ export interface SessionReport {
    * reads as scheme 1.
    */
   readonly identityScheme?: number;
+  /**
+   * R403 phase C: the TEST app's preprocessor symbols as LethAL DERIVED them (the config's, the
+   * test `app.json`'s, and on al-runner its predefined ones). DERIVED, NOT OBSERVED: on bcdev only
+   * a compiled package check (`tests-compiled-out` present, no refusal) says the built app agrees.
+   * Present only when non-empty; absent reads as none.
+   */
+  readonly testBuildSymbols?: readonly string[];
+  /**
+   * R403 phase C: tests the arm filter excluded (`compiled-out`) or kept because their `#if` could
+   * not be evaluated exactly as alc does (`preproc-undecided-kept`). Present only when non-empty.
+   * Only `compiled-out` raises the `tests-compiled-out` caveat.
+   */
+  readonly excludedTests?: readonly ExcludedTestRecord[];
+  /**
+   * R403 phase C: the test files with a `#if` around a `[Test]` that bcdev could not check against
+   * a compiled package (the `test-symbols-unverified` caveat). Present only when non-empty.
+   */
+  readonly testSymbolsUnverifiedFiles?: readonly string[];
   readonly untargetedTriggerCount: number;
   /**
    * R175. How many `no-coverage` verdicts in this run are LethAL's limitation rather than a
@@ -2451,6 +2504,12 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // See CAVEAT_INTERPRETATIONS["tests-testpage-refused"].
   const testPageRefusedTests = input.testPageRefusedTests ?? [];
   if (testPageRefusedTests.length > 0) caveats.push("tests-testpage-refused");
+  // R403 phase C - see CAVEAT_INTERPRETATIONS["tests-compiled-out"] and ["test-symbols-unverified"].
+  const testBuildSymbols = input.testBuildSymbols ?? [];
+  const excludedTests = input.excludedTests ?? [];
+  const testSymbolsUnverifiedFiles = input.testSymbolsUnverifiedFiles ?? [];
+  if (excludedTests.some((t) => t.reason === "compiled-out")) caveats.push("tests-compiled-out");
+  if (testSymbolsUnverifiedFiles.length > 0) caveats.push("test-symbols-unverified");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
@@ -2713,6 +2772,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     declarativeSites,
     preprocessorSymbols: statics.preprocessorSymbols ?? [],
     identityScheme: IDENTITY_SCHEME,
+    ...(testBuildSymbols.length > 0 ? { testBuildSymbols: [...testBuildSymbols] } : {}),
+    ...(excludedTests.length > 0 ? { excludedTests: [...excludedTests] } : {}),
+    ...(testSymbolsUnverifiedFiles.length > 0
+      ? { testSymbolsUnverifiedFiles: [...testSymbolsUnverifiedFiles] }
+      : {}),
     untargetedTriggerCount: input.untargetedTriggerCount,
     groupedCalls: input.groupedCalls,
     artifacts: input.artifacts,
@@ -2895,6 +2959,18 @@ export function renderConsole(r: SessionReport): string {
       `PREPROCESSOR DIRECTIVES REFUSED: ${undecided.length} file(s) hold a directive LethAL cannot evaluate exactly as alc does, so none of their ${undecided.reduce((n, f) => n + f.sites, 0)} site(s) was mutated (R214):`,
     );
     for (const f of undecided) lines.push(`  ${f.file} (${f.detail})`);
+  }
+  const testsCompiledOut = (r.excludedTests ?? []).filter((t) => t.reason === "compiled-out");
+  if (testsCompiledOut.length > 0) {
+    lines.push(
+      `TESTS COMPILED OUT: ${testsCompiledOut.length} test(s) sit in #if arms the test app's DERIVED build symbols [${(r.testBuildSymbols ?? []).join(", ")}] do not compile, so they were not run (R403). See excludedTests.`,
+    );
+  }
+  if ((r.testSymbolsUnverifiedFiles ?? []).length > 0) {
+    lines.push(
+      `TEST SYMBOLS UNVERIFIED: no compiled test package could be read, so every test was kept in ${(r.testSymbolsUnverifiedFiles ?? []).length} file(s) with a #if around a [Test] (R403):`,
+    );
+    for (const f of r.testSymbolsUnverifiedFiles ?? []) lines.push(`  ${f}`);
   }
   if (r.staleTestApp !== undefined) {
     const n = r.staleTestApp.missingTests.length;

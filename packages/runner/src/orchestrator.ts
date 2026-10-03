@@ -4504,14 +4504,27 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // will publish when one is the test app, else the R139 download. With one, the FILTERED list runs
   // and must equal its compiled membership; without one, the UNFILTERED list runs, as before R403
   // (a compiled-out test there still meets R31's refusal at baseline), and the evidence record says
-  // so. TODO(R-403 phase C): `testArmEvidence` becomes the `test-symbols-unverified` caveat, and
-  // `discovery.excluded` / `testBuildSymbols` the `excludedTests` / `testBuildSymbols` report fields.
+  // so. Phase C reports it: `tests-discovered` below carries `testBuildSymbols`, `excludedTests`
+  // and the `tests-compiled-out` / `test-symbols-unverified` caveats.
   const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } =
     await resolveTestArmEvidence(cfg, buildBackend.kind, publishedRead, discovery);
   const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
-  emit({ type: "tests-discovered", tests });
+  // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
+  // would claim a test was dropped that was in fact sent: only the undecided records are listed.
+  // Each field rides the event only when non-empty, so an ordinary session's stream is unchanged.
+  const excludedTests = discovery.excluded
+    .filter((x) => armPolicyApplied || x.reason === "preproc-undecided-kept")
+    .map((x) => ({ test: qualifiedTestName(x.test), file: x.file, reason: x.reason }));
+  const unverifiedTestFiles = testArmEvidence.kind === "none" ? [...testArmEvidence.files] : [];
+  emit({
+    type: "tests-discovered",
+    tests,
+    ...(testBuildSymbols.length > 0 ? { testBuildSymbols } : {}),
+    ...(excludedTests.length > 0 ? { excludedTests } : {}),
+    ...(unverifiedTestFiles.length > 0 ? { unverifiedTestFiles } : {}),
+  });
   if (cfg.testsOnly !== undefined && cfg.testsOnly.length > 0) {
     emit({
       type: "warning",
