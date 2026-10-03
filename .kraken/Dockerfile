@@ -54,4 +54,10 @@ RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:$PATH' 'export DOTNET_
     && chown -R dev:dev /opt/rustup /opt/cargo
 # MCP sibling repos live on the work volume (kraken-setup.sh); .mcp.json names /home/dev/src/<repo>
 RUN ln -s /work/src /home/dev/src && chown -h dev:dev /home/dev/src
+# pi coding agent (newest). Its state and login (auth.json, settings, sessions) default to ~/.pi/agent,
+# which is not on a volume; PI_CODING_AGENT_DIR (read by pi's getAgentDir) moves it under the config
+# volume so it survives a container recreation. Login shells (ssh) get it from /etc/profile.d.
+RUN npm install -g @earendil-works/pi-coding-agent && pi --version
+ENV PI_CODING_AGENT_DIR=/home/dev/.config/pi
+RUN printf '%s\n' 'export PI_CODING_AGENT_DIR=/home/dev/.config/pi' > /etc/profile.d/lethal-pi.sh
 # ends as root: the base entrypoint drops to dev

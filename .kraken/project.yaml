@@ -32,6 +32,7 @@ agents:
     start: [/coord-join]
 setup:
   - bash scripts/kraken-setup.sh
+  - bash scripts/kraken-corpora.sh
 env:
   LETHAL_COORD_ROOT: /coord
   LETHAL_ALRUNNER_PATH: /opt/al-runner/c39ad5de/al-runner

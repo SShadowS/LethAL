@@ -110,6 +110,7 @@
     "kraken-secrets.test.ts",
     "kraken-secret-ignore.test.ts",
     "kraken-setup.test.ts",
+    "kraken-corpora.test.ts",
     "coord-join-role.ts",
     "coord-join-role.test.ts",
     "host-path-inventory.ts",
