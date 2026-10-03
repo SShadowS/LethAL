@@ -37,13 +37,32 @@ export function parseRemoteHeads(text: string): Map<string, string> {
   return m;
 }
 
+// `git status --porcelain --ignored` hides nothing: ignored entries start with "!! ". Plain
+// `--porcelain` never shows them, so scratch under an ignored `.superpowers/` was invisible.
+export function ignoredSuperpowers(porcelainIgnored: string): string[] {
+  return porcelainIgnored
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("!! .superpowers/"))
+    .map((l) => l.slice(3));
+}
+
 // `dirty` is whether `git status --porcelain` printed anything; null means it could not be read.
-export function worktreeRow(wt: Worktree, dirty: boolean | null, remote: Map<string, string>): Row {
+// `ignored` is `ignoredSuperpowers(...)` for the same worktree.
+export function worktreeRow(
+  wt: Worktree,
+  dirty: boolean | null,
+  remote: Map<string, string>,
+  ignored: string[] = [],
+): Row {
   const base = { area: "worktree", subject: wt.path };
   if (dirty === null)
     return { ...base, ready: false, detail: "cannot read status (folder missing?)" };
   const problems: string[] = [];
   if (dirty) problems.push("dirty (uncommitted changes)");
+  if (ignored.length > 0)
+    problems.push(
+      `ignored .superpowers/ content (${ignored.join(", ")}): copy into the container worktree at cutover or acknowledge`,
+    );
   if (wt.branch === null) {
     problems.push(`detached HEAD ${wt.head.slice(0, 8)}, no branch to push`);
   } else {
@@ -59,6 +78,34 @@ export function worktreeRow(wt: Worktree, dirty: boolean | null, remote: Map<str
     ready: problems.length === 0,
     detail: problems.join("; ") || `clean, ${wt.branch} on origin`,
   };
+}
+
+// Local branches with no worktree that origin lacks would be lost by deleting the host clone.
+// `refs`: `git for-each-ref --format=%(refname:short) refs/heads`.
+export function orphanBranchRows(
+  refs: string,
+  worktrees: Worktree[],
+  remote: Map<string, string>,
+): Row[] {
+  const used = new Set(worktrees.map((w) => w.branch));
+  return refs
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((b) => b !== "" && !used.has(b) && !remote.has(b))
+    .map((b) => ({
+      area: "local branch",
+      subject: b,
+      ready: false,
+      detail: "no worktree and not on origin",
+    }));
+}
+
+// `git stash list`: one line per stash. Stashes live only in this clone.
+export function stashRows(text: string): Row[] {
+  return text
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "")
+    .map((l) => ({ area: "stash", subject: l.split(":")[0] ?? l, ready: false, detail: l }));
 }
 
 // An open run is ready when its branch tip (local) is the tip on origin. A run whose branch
@@ -214,10 +261,27 @@ async function main(argv: string[]): Promise<number> {
   const git = (args: string[], cwd = repo) => run(["git", "-C", cwd, ...args]);
   const remote = parseRemoteHeads((await git(["ls-remote", "--heads", "origin"])).out);
   const rows: Row[] = [];
-  for (const wt of parseWorktrees((await git(["worktree", "list", "--porcelain"])).out)) {
+  const wts = parseWorktrees((await git(["worktree", "list", "--porcelain"])).out);
+  for (const wt of wts) {
     const s = await git(["status", "--porcelain"], wt.path);
-    rows.push(worktreeRow(wt, s.code === 0 ? s.out.trim() !== "" : null, remote));
+    const ig = await git(["status", "--porcelain", "--ignored"], wt.path);
+    rows.push(
+      worktreeRow(
+        wt,
+        s.code === 0 ? s.out.trim() !== "" : null,
+        remote,
+        ig.code === 0 ? ignoredSuperpowers(ig.out) : [],
+      ),
+    );
   }
+  rows.push(
+    ...orphanBranchRows(
+      (await git(["for-each-ref", "--format=%(refname:short)", "refs/heads"])).out,
+      wts,
+      remote,
+    ),
+  );
+  rows.push(...stashRows((await git(["stash", "list"])).out));
   for (const id of ["R-307", "R-396", "R-403", ...Object.keys(runs)].filter(
     (v, i, a) => a.indexOf(v) === i,
   )) {

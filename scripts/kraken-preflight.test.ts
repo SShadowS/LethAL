@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   allReady,
   formatTable,
+  ignoredSuperpowers,
   laneRow,
+  orphanBranchRows,
   parseHostScan,
   parseRemoteHeads,
   parseWorktrees,
   runRow,
+  stashRows,
   worktreeRow,
 } from "./kraken-preflight";
 
@@ -35,6 +38,32 @@ describe("kraken-preflight worktrees", () => {
 
   test("clean and on origin at the same tip is ready", () => {
     expect(worktreeRow({ path: "/r", head: A, branch: "master" }, false, remote).ready).toBe(true);
+  });
+
+  test("ignored .superpowers/ content is not ready and names the path", () => {
+    const ig = ignoredSuperpowers(
+      "?? x\n!! node_modules/\n!! .superpowers/\n!! .superpowers/sdd/notes.md\n!! other/.superpowers/y\n",
+    );
+    expect(ig).toEqual([".superpowers/", ".superpowers/sdd/notes.md"]);
+    const r = worktreeRow({ path: "/r", head: A, branch: "master" }, false, remote, ig);
+    expect(r.ready).toBe(false);
+    expect(r.detail).toContain(".superpowers/sdd/notes.md");
+    expect(r.detail).toContain("copy into the container worktree at cutover or acknowledge");
+    expect(ignoredSuperpowers("!! node_modules/\n")).toEqual([]);
+  });
+
+  test("local branches without a worktree and not on origin are not ready", () => {
+    const wts = [{ path: "/repo", head: A, branch: "master" }];
+    const rows = orphanBranchRows("master\nkeep\nlethal/x\nlost\n", wts, remote);
+    expect(rows.map((r) => r.subject)).toEqual(["keep", "lost"]);
+    expect(rows.every((r) => !r.ready)).toBe(true);
+  });
+
+  test("each stash is a not-ready line, none is ready", () => {
+    expect(stashRows("")).toEqual([]);
+    const rows = stashRows("stash@{0}: WIP on master: abc msg\nstash@{1}: On x: y\n");
+    expect(rows.map((r) => r.subject)).toEqual(["stash@{0}", "stash@{1}"]);
+    expect(allReady(rows)).toBe(false);
   });
 
   test("dirty is not ready", () => {
