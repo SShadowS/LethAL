@@ -729,7 +729,7 @@ export async function generateMutationSet(
   // so it reaches `discoveredRelPaths` and is refused by name instead of skipped without a word.
   const platform = options.platform ?? process.platform;
   const discovered = discoveredRelPaths(
-    listed.filter((e) => isEnumeratedAl(platform === "win32" ? normalizeRelPath(e) : e)),
+    listed.filter((e) => isEnumeratedAl(e, platform)),
     platform,
   );
   const readKeyOf = new Map(discovered.map((d) => [d.rel, d.raw]));

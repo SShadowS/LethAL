@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -171,13 +171,16 @@ export interface ChangedSinceSource {
 const isAl = (p: string) => p.toLowerCase().endsWith(".al");
 
 /** The files `generateMutationSet` parses: `.al`, minus its own emitted `Mutation*` artifacts.
- *  Shared with it, so "LethAL parses this" means one thing in both places. */
-export const isEnumeratedAl = (p: string) => isAl(p) && !basename(p).startsWith("Mutation");
+ *  Shared with it, so "LethAL parses this" means one thing in both places.
+ *  R421: the base name follows `platform`, not the host (node:path's `basename` does): only win32
+ *  reads `\` as a separator, so off win32 `x\MutationFoo.al` is one ordinary name. */
+export const isEnumeratedAl = (p: string, platform: NodeJS.Platform = process.platform) =>
+  isAl(p) && !(platform === "win32" ? win32 : posix).basename(p).startsWith("Mutation");
 
 /** "Holds a file LethAL would parse", walked the way `generateMutationSet` walks the project. */
 async function holdsAlFile(dir: string): Promise<boolean> {
   try {
-    return (await readdir(dir, { recursive: true })).some(isEnumeratedAl);
+    return (await readdir(dir, { recursive: true })).some((e) => isEnumeratedAl(e));
   } catch (e) {
     // A submodule registered in the index but absent on disk: LethAL parses nothing there.
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;

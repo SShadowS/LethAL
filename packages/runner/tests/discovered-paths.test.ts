@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
-import { DiscoveredPathError } from "../src/line-filter";
+import { DiscoveredPathError, isEnumeratedAl } from "../src/line-filter";
 import { generateMutationSet, operatorTiers, planArtifacts } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
@@ -261,6 +261,21 @@ test("8. on win32 the same snapshot is accepted, the `\\` read as a separator", 
   ]);
   const set = await generateMutationSet(projectDir, { source, platform: "win32" });
   expect(set.files.map((f) => f.path)).toEqual(["src/Zed.Codeunit.al", "src/a/b.Codeunit.al"]);
+});
+
+test("8a. isEnumeratedAl reads a name by the GIVEN platform's rules, not the host's", () => {
+  // Off win32 `\` is a file-name character: `x\MutationFoo...` is one name, not a generated file.
+  expect(isEnumeratedAl("src/x\\MutationFoo.Codeunit.al", "linux")).toBe(true);
+  expect(isEnumeratedAl("src/x\\MutationFoo.Codeunit.al", "darwin")).toBe(true);
+  // On win32 `\` is a separator, so the same name IS a generated `MutationFoo` file.
+  expect(isEnumeratedAl("src/x\\MutationFoo.Codeunit.al", "win32")).toBe(false);
+  expect(isEnumeratedAl("src\\MutationFoo.Codeunit.al", "win32")).toBe(false);
+  // Separator-independent cases agree on both.
+  for (const platform of ["linux", "win32"] as const) {
+    expect(isEnumeratedAl("src/MutationFoo.Codeunit.al", platform)).toBe(false);
+    expect(isEnumeratedAl("src/Foo.Codeunit.al", platform)).toBe(true);
+    expect(isEnumeratedAl("src/Foo.txt", platform)).toBe(false);
+  }
 });
 
 test("8b. off win32 a `\\` name whose part after the `\\` starts with `Mutation` is refused, not skipped as a generated file", async () => {
