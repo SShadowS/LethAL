@@ -26,7 +26,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fixtureProjects } from "./compile-fixtures.ts";
 
 const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683";
@@ -55,15 +55,15 @@ export const CONTAINER_MAP = (bcdevEntry: string): PathMap => ({
 });
 
 /**
- * Leftover detector, anywhere in a string: a drive (`C:`, `C:/x`, `1C:\x`, but not the `p:` of
- * `http:` or `h:443`), an MSYS path (`/c/x` after start, space, `=` or a quote), a UNC path either
- * way round (`\\srv`, `//srv/share`, but not `https://srv/`), and `file://srv/`. Fails closed: a
+ * Leftover detector, anywhere in a string: a drive (`C:`, `C:x`, `C:/x`, `1C:\x`, but not the `p:`
+ * of `http:` or `h:443`), an MSYS path (`/c/x` after start, space, `=`, `:` or a quote), a UNC path
+ * either way round (`\\srv`, `//srv`, but not `https://srv/`), and `file://srv/`. Fails closed: a
  * false hit costs the owner one edit, a miss ships a host path.
  */
 const WINDOWS_PATHS = [
-  /(?<![A-Za-z])[A-Za-z]:(?=[\\/\s"',;]|$)/,
-  /(?:^|[\s="'])\/[A-Za-z]\//,
-  /(?:^|[\s="'])\/\/[^/\s]+\//,
+  /(?<![A-Za-z])[A-Za-z]:(?!\d)/,
+  /(?:^|[\s="':])\/[A-Za-z]\//,
+  /(?:^|[\s="'])\/\/[^/\s"']+/,
   /\\\\/,
   /file:\/\/(?!\/)/i,
 ];
@@ -188,15 +188,16 @@ export function tarProblems(tar: Uint8Array): string[] {
   const names = Bun.spawnSync(["tar", "-tf", "-"], { stdin: tar });
   const long = Bun.spawnSync(["tar", "-tvf", "-"], { stdin: tar });
   if (names.exitCode !== 0 || long.exitCode !== 0) return ["tar listing failed"];
-  const lines = (b: Uint8Array) =>
-    new TextDecoder()
-      .decode(b)
-      .split(/\r?\n/)
-      .filter((l) => l !== "");
-  const bad = lines(names.stdout).filter(
-    (n) => /^([\\/]|[A-Za-z]:)/.test(n) || n.split(/[\\/]/).includes(".."),
+  const lines = (b: Uint8Array) => new TextDecoder().decode(b).split(/\r?\n/);
+  return listingProblems(lines(names.stdout), lines(long.stdout));
+}
+
+/** The pure half of `tarProblems`: `tar -tf` names and `tar -tvf` lines in, problems out. */
+export function listingProblems(names: readonly string[], long: readonly string[]): string[] {
+  const bad = names.filter(
+    (n) => n !== "" && (/^([\\/]|[A-Za-z]:)/.test(n) || n.split(/[\\/]/).includes("..")),
   );
-  const odd = lines(long.stdout).filter((l) => l[0] !== "-" && l[0] !== "d");
+  const odd = long.filter((l) => l !== "" && l[0] !== "-" && l[0] !== "d");
   return [
     ...bad.map((n) => `unsafe entry ${n}`),
     ...(odd.length > 0 ? [`${odd.length} entry(ies) not a regular file or directory`] : []),
@@ -270,8 +271,9 @@ export function writeOutputs(
   deps: {
     write: (p: string, b: string | Uint8Array) => void;
     restrict: (dir: string) => void;
+    remove?: (dir: string) => void;
   } = { write: writeFileSync, restrict: restrictToOwner },
-): void {
+): string | undefined {
   const id = randomBytes(8).toString("hex");
   const tmp = `${outDir}.tmp-${id}`;
   const old = `${outDir}.old-${id}`;
@@ -291,13 +293,37 @@ export function writeOutputs(
     if (movedAside && !existsSync(outDir)) renameSync(old, outDir);
     throw e;
   }
-  if (movedAside) rmSync(old, { recursive: true, force: true });
+  if (!movedAside) return undefined;
+  // the new outputs are in place; an old copy that will not delete is left for the next sweep
+  try {
+    (deps.remove ?? removeDir)(old);
+    return undefined;
+  } catch {
+    return old;
+  }
+}
+
+const removeDir = (dir: string): void => rmSync(dir, { recursive: true, force: true });
+
+/** Delete `<out>.old-*` / `<out>.tmp-*` siblings: credential copies left by a crash mid-swap. */
+export function sweepSwapFolders(outDir: string): string[] {
+  const parent = dirname(outDir);
+  if (!existsSync(parent)) return [];
+  const base = basename(outDir);
+  const swept = readdirSync(parent).filter((n) => {
+    const rest =
+      n.startsWith(`${base}.old-`) || n.startsWith(`${base}.tmp-`) ? n.slice(base.length + 5) : "";
+    return /^[0-9a-f]+$/.test(rest);
+  });
+  for (const n of swept) removeDir(join(parent, n));
+  return swept;
 }
 
 function main(): number {
   const repo = arg("--repo") ?? join(import.meta.dir, "..");
   const outDir = arg("--out") ?? "U:/Git/kraken/secrets/lethal";
   const pkgPath = arg("--bcdev-package") ?? "U:/Git/bc-dev-mcp/package.json";
+  for (const n of sweepSwapFolders(outDir)) console.log(`kraken-secrets: removed leftover ${n}`);
   const errors: string[] = [];
   const outputs: { name: string; bytes: string | Uint8Array }[] = [];
 
@@ -348,8 +374,11 @@ function main(): number {
     console.error("kraken-secrets: nothing written");
     return 1;
   }
-  writeOutputs(outDir, outputs);
+  const stuck = writeOutputs(outDir, outputs);
   for (const { name } of outputs) console.log(`kraken-secrets: wrote ${name}`);
+  if (stuck !== undefined) {
+    console.error(`kraken-secrets: warning: could not delete ${stuck}; the next run removes it`);
+  }
   return 0;
 }
 

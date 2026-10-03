@@ -18,9 +18,11 @@ import {
   hasWindowsPath,
   icaclsArgv,
   isSecretEntry,
+  listingProblems,
   nonRegularEntries,
   rewrite,
   secretFiles,
+  sweepSwapFolders,
   writeOutputs,
 } from "./kraken-secrets.ts";
 
@@ -381,6 +383,10 @@ describe("hasWindowsPath", () => {
     "1C:/x",
     "H:\\x",
     "\\\\srv\\s",
+    "/usr/bin:/c/tools/bin",
+    "//server",
+    "C:x",
+    "run C:al.exe",
   ])("%s is a leftover", (s) => {
     expect(hasWindowsPath(s)).toBe(true);
   });
@@ -393,8 +399,90 @@ describe("hasWindowsPath", () => {
     "file:///home/dev/x",
     "12:30",
     "CRONUS Danmark A/S",
+    "http://bc:8080/a/b",
+    "/usr/bin:/opt/x/bin",
   ])("%s is not", (s) => {
     expect(hasWindowsPath(s)).toBe(false);
+  });
+});
+
+describe("tar listing check", () => {
+  test("only the symlink line is reported; relative regular entries pass", () => {
+    const names = [
+      "fixtures/a/.alpackages/",
+      "fixtures/a/.alpackages/x.app",
+      "fixtures/a/.alpackages/l.app",
+      "",
+    ];
+    const long = [
+      "drwxr-xr-x dev/dev 0 2026-10-03 10:00 fixtures/a/.alpackages/",
+      "-rw-r--r-- dev/dev 7 2026-10-03 10:00 fixtures/a/.alpackages/x.app",
+      "lrwxrwxrwx dev/dev 0 2026-10-03 10:00 fixtures/a/.alpackages/l.app -> /etc/passwd",
+      "",
+    ];
+    expect(listingProblems(names, long)).toEqual(["1 entry(ies) not a regular file or directory"]);
+    expect(
+      listingProblems(
+        names,
+        long.filter((l) => !l.startsWith("l")),
+      ),
+    ).toEqual([]);
+  });
+
+  test("an absolute or .. entry name is reported", () => {
+    expect(listingProblems(["/etc/x", "a/../../b", "C:/x", "ok/x"], [])).toEqual([
+      "unsafe entry /etc/x",
+      "unsafe entry a/../../b",
+      "unsafe entry C:/x",
+    ]);
+  });
+});
+
+describe("sweepSwapFolders", () => {
+  test("removes <out>.old-* and <out>.tmp-* siblings (credential copies after a crash), nothing else", () => {
+    const parent = temp();
+    const out = join(parent, "lethal");
+    for (const d of [
+      "lethal",
+      "lethal.old-0a1b",
+      "lethal.tmp-ff00",
+      "lethal.old-notes",
+      "other.tmp-0a1b",
+    ]) {
+      mkdirSync(join(parent, d));
+    }
+    writeFileSync(join(parent, "lethal.old-0a1b", "sandbox-app.local.json"), "copy");
+    expect(sweepSwapFolders(out).sort()).toEqual(["lethal.old-0a1b", "lethal.tmp-ff00"]);
+    expect(readdirSync(parent).sort()).toEqual(["lethal", "lethal.old-notes", "other.tmp-0a1b"]);
+  });
+
+  test("the CLI sweeps before anything else, even on a refused run", () => {
+    const { repo, pkg } = makeRepo({ "mcp.json": "{" });
+    const parent = temp();
+    const out = join(parent, "secrets");
+    mkdirSync(join(parent, "secrets.old-abc123"));
+    const r = cli(repo, pkg, out);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("removed leftover secrets.old-abc123");
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  test("an old folder that will not delete after a good swap is returned (warned), new outputs in place", () => {
+    const parent = temp();
+    const out = join(parent, "secrets");
+    mkdirSync(out);
+    writeFileSync(join(out, "a.json"), "old");
+    const stuck = writeOutputs(out, [{ name: "a.json", bytes: "new" }], {
+      write: writeFileSync,
+      restrict: () => {},
+      remove: () => {
+        throw new Error("busy");
+      },
+    });
+    expect(stuck).toMatch(/secrets\.old-[0-9a-f]+$/);
+    expect(readFileSync(join(out, "a.json"), "utf8")).toBe("new");
+    expect(sweepSwapFolders(out)).toHaveLength(1);
+    expect(readdirSync(parent)).toEqual(["secrets"]);
   });
 });
 
