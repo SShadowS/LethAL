@@ -129,6 +129,20 @@ const GUID_RE = new RegExp(`^${GUID_PATTERN}$`);
  *  only at the very end, so a trailing newline or a second clause does not pass. */
 const EXTENSIONS_FILTER_RE = new RegExp(`^id eq ${GUID_PATTERN}$`);
 
+/** Every `%XX` escape replaced by its character, repeated until nothing changes (so `%2565` ends as
+ *  `e`). Lenient: a malformed escape stays as written and never throws. */
+function decodePercentEscapes(path: string): string {
+  let cur = path;
+  for (let i = 0; i < 16; i++) {
+    const next = cur.replace(/%([0-9a-fA-F]{2})/g, (_m, h: string) =>
+      String.fromCharCode(Number.parseInt(h, 16)),
+    );
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return cur;
+}
+
 /** R433: throws unless an `extensions` request is filtered by exactly one GUID. Any path naming
  *  `extensions` in any case counts (an encoded slash included); the path itself may carry no
  *  query or fragment, and `extra` must be exactly `{ $filter: "id eq <GUID>" }`. */
@@ -136,11 +150,12 @@ function refuseUnfilteredExtensionsQuery(
   path: string,
   extra: Readonly<Record<string, string>>,
 ): void {
-  if (!/extensions/i.test(path)) return;
+  const decoded = decodePercentEscapes(path);
+  if (!/extensions/i.test(decoded)) return;
   const keys = Object.keys(extra);
   const filter = extra.$filter;
   const ok =
-    !/[?#&]/.test(path) &&
+    !/[?#&]/.test(decoded) &&
     keys.length === 1 &&
     keys[0] === "$filter" &&
     filter !== undefined &&

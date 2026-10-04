@@ -78,6 +78,18 @@ describe("fetchApiRows refuses an extensions query not filtered by one GUID (R43
     ["a fragment in the path", `${EXT}#x`, { $filter: `id eq ${GUID}` }],
     ["the path in another case", EXT.replace("extensions", "Extensions"), undefined],
     ["the path with an encoded slash", EXT.replace("/extensions", "%2Fextensions"), undefined],
+    // Review r1 #2: any percent-encoding of `extensions` is still `extensions`.
+    ["a percent-encoded letter", EXT.replace("extensions", "ext%65nsions"), undefined],
+    ["an upper-case hex escape", EXT.replace("extensions", "ext%45nsions"), undefined],
+    ["a lower-case hex escape", EXT.replace("extensions", "extensio%6es"), undefined],
+    [
+      "every letter encoded",
+      EXT.replace("extensions", "%65%78%74%65%6e%73%69%6f%6e%73"),
+      undefined,
+    ],
+    ["a double-encoded letter", EXT.replace("extensions", "ext%2565nsions"), undefined],
+    ["an encoded `?` in the path", `${EXT}%3F$top=5`, { $filter: `id eq ${GUID}` }],
+    ["a malformed escape beside the name", EXT.replace("extensions", "extensions%zz"), undefined],
   ];
   for (const [name, path, extra] of refused) {
     test(`refuses ${name}, with zero fetches`, async () => {
@@ -106,6 +118,12 @@ describe("fetchApiRows refuses an extensions query not filtered by one GUID (R43
     expect(EXT.startsWith("api/microsoft/")).toBe(true);
     expect(EXT.endsWith("/companies(c-1)/extensions")).toBe(true);
     expect(urls).toEqual([ALLOWED_URL]);
+  });
+
+  test("the companies path, which carries an encoded character, is not refused", async () => {
+    const { urls, fetchFn } = fake();
+    await rowsOf(new HarnessVerifier(CFG, fetchFn))("api/v2.0/companies%281%29", "x");
+    expect(urls.length).toBe(1);
   });
 
   test("ALLOWS an upper-case GUID", async () => {
