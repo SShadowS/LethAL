@@ -10,7 +10,13 @@ import {
   gapIdOf,
 } from "@lethal/schemata";
 import { InstalledArtifactError } from "../src/artifact";
-import type { CoverageMode, TestMethodRef } from "../src/backend";
+import type {
+  CoverageEntry,
+  CoverageMode,
+  TestMethodRef,
+  TestOutcome,
+  TestVerdict,
+} from "../src/backend";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import {
   DependencyUnreadableError,
@@ -1723,6 +1729,11 @@ describe("C02-09: gap ids", () => {
       readonly sourceCoverage?: CoverageMode | null;
       /** R-278: `null` records no test digests on the source run (a run from before R-278). */
       readonly sourceDigests?: null;
+      /** R-384: verify's stderr line sink, its event sink, and `--no-reach-filter`. */
+      readonly log?: VerifyDeps["log"];
+      readonly emit?: VerifyDeps["emit"];
+      readonly noReachFilter?: boolean;
+      readonly maxNewTests?: number;
     } = {},
   ) {
     const projectDir = scratch("lethal-verify-gap-proj-");
@@ -1828,9 +1839,20 @@ describe("C02-09: gap ids", () => {
           baseline: [],
           rerun: [],
         })),
+      log: over.log ?? (() => {}),
+      ...(over.emit !== undefined ? { emit: over.emit } : {}),
     };
     const verify = (survivors: readonly string[]) =>
-      runVerify({ artifact: A1, survivors, testDir }, deps);
+      runVerify(
+        {
+          artifact: A1,
+          survivors,
+          testDir,
+          ...(over.noReachFilter !== undefined ? { noReachFilter: over.noReachFilter } : {}),
+          ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+        },
+        deps,
+      );
     return { store, verify };
   }
 
@@ -2060,5 +2082,286 @@ describe("C02-09: gap ids", () => {
       expect(req.ids.map((i) => i.mutantCode)).toEqual([...g.members]);
     }
     store.close();
+  });
+
+  // R-384 Task 3: verify's reach filter, wired. `T.M` is the source run's covering test; `New.N1`
+  // and `New.N2` are new. The `runNamed` below stands in for the server: it measures every
+  // requested method's baseline with the coverage given per method, calls `narrow` exactly where
+  // runNamedMutants does, and answers each mutant left with a method `survived` (`error` when one
+  // of its methods was not green, decision 13's rule).
+  describe("R-384: the reach filter in runVerify", () => {
+    const POST = [{ objectType: "Codeunit", objectId: 50000, procedure: "Post" }];
+    const OTHER = [{ objectType: "Codeunit", objectId: 50000, procedure: "Other" }];
+
+    function reachTestDir(): string {
+      const dir = scratch("lethal-verify-reach-");
+      writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
+      const proc = (m: string) => `    [Test]\n    procedure ${m}()\n    begin\n    end;\n`;
+      writeFileSync(
+        join(dir, "50100.Codeunit.al"),
+        `codeunit 50100 "T"\n{\n    Subtype = Test;\n\n${proc("M")}}\n`,
+      );
+      writeFileSync(
+        join(dir, "50101.Codeunit.al"),
+        `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n${proc("N1")}\n${proc("N2")}}\n`,
+      );
+      return dir;
+    }
+
+    function reachRunNamed(
+      coverage: Readonly<Record<string, readonly CoverageEntry[]>>,
+      o: {
+        readonly seen?: NamedMutantsConfig[];
+        readonly alSources?: readonly { path: string; text: string }[];
+        readonly outcome?: Readonly<Record<string, TestOutcome>>;
+      } = {},
+    ): NonNullable<VerifyDeps["runNamed"]> {
+      return async (cfg) => {
+        o.seen?.push(cfg);
+        const keys = new Set<string>();
+        const refs = cfg.requests
+          .flatMap((r) => r.methods)
+          .filter((m) => !keys.has(testKeyOf(m)) && keys.add(testKeyOf(m)) !== undefined);
+        const rows = refs.map((ref, i) => {
+          const entries = coverage[ref.method];
+          const verdict: TestVerdict = {
+            ref,
+            outcome: o.outcome?.[ref.method] ?? "pass",
+            durationMs: 1,
+            sessionId: i + 1,
+            testRunsBefore: 0,
+            ...(entries !== undefined ? { coverage: { granularity: "line", entries } } : {}),
+          };
+          return { ref, verdict };
+        });
+        const n = cfg.narrow?.(rows, { coverage: "fenced", alSources: o.alSources ?? [] });
+        const unreached = n === undefined ? undefined : [...n.unreached];
+        const outcomes = cfg.requests
+          .filter((r) => !(unreached ?? []).includes(r.mutantId))
+          .map((r) => {
+            const methods = n?.methods.get(r.mutantId) ?? r.methods;
+            const red = methods.some(
+              (m) =>
+                rows.find((x) => testKeyOf(x.ref) === testKeyOf(m))?.verdict.outcome !== "pass",
+            );
+            return {
+              mutant: entry(r.mutantId),
+              verdict: red ? ("error" as const) : ("survived" as const),
+              batchIndex: 0,
+            };
+          });
+        const unmutated = (ref: TestMethodRef, outcome: TestOutcome) => ({
+          ref,
+          outcome,
+          fresh: true,
+          sessionId: 90,
+          testRunsBefore: 0,
+        });
+        return {
+          outcomes,
+          ...(unreached !== undefined ? { unreached } : {}),
+          baseline: rows.map((r) => unmutated(r.ref, r.verdict.outcome)),
+          rerun: (cfg.rerunOnUnmutated ?? []).map((ref) => unmutated(ref, "pass")),
+        };
+      };
+    }
+
+    const fenced = { sourceCoverage: "fenced", backendCoverage: "fenced" } as const;
+    const T_M = { codeunitId: 50100, codeunitName: "T", method: "M" };
+
+    test("a new test whose coverage does not reach the survivor is not sent to it", async () => {
+      const lines: string[] = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+        log: (l) => lines.push(l),
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      expect(out.results.map((r) => [r.verdict, r.testsRun])).toEqual([
+        ["survived", ["T.M", "New.N1"]],
+      ]);
+      // Both new tests still run twice unmutated (decision 11).
+      expect(out.newTests.map((t) => t.test)).toEqual(["New.N1", "New.N2"]);
+      expect(lines).toEqual([
+        "[lethal] verify: reach filter on (fenced coverage): 2 new test(s), 0 joined every survivor because their coverage could not be used; 1 mutant run(s) instead of 2 without the filter; 0 survivor(s) no new test reaches.",
+      ]);
+      w.store.close();
+    });
+
+    test("a survivor no new test reaches, with no covering test, stays survived and nothing is run", async () => {
+      const lines: string[] = [];
+      const w = await verifyWorld([seed("M0001", undefined, "no-coverage")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        coveringTests: [],
+        runNamed: reachRunNamed({ N1: OTHER, N2: OTHER }),
+        log: (l) => lines.push(l),
+      });
+      const out = await w.verify(["0/M0001"]);
+      const [r] = out.results;
+      expect(r?.verdict).toBe("survived");
+      expect(r?.testsRun).toEqual([]);
+      expect(r?.failureNote).toBe(
+        "no new test reaches it: the coverage of the 2 new test(s) that could be read shows none of them running Post, so nothing was run (R-384)",
+      );
+      expect(out.exitCode).toBe(VERIFY_EXIT.notAllKilled);
+      expect(lines).toEqual([
+        "[lethal] verify: reach filter on (fenced coverage): 2 new test(s), 0 joined every survivor because their coverage could not be used; 0 mutant run(s) instead of 2 without the filter; 1 survivor(s) no new test reaches.",
+        "[lethal] verify: survivors no new test reaches: 0/M0001",
+      ]);
+      w.store.close();
+    });
+
+    // RO: refusedObjects come from the INSTALLED sources narrow is handed, never the project on
+    // disk (which holds `Logic` unwrapped here).
+    test("RO: a survivor in an #if-wrapped object of the stored sources takes every new test", async () => {
+      const events: Array<{ code: string; message: string }> = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: reachRunNamed(
+          { M: POST, N1: POST, N2: OTHER },
+          {
+            alSources: [
+              {
+                path: "src/Logic.Codeunit.al",
+                text: '#if FOO\ncodeunit 50000 "Logic"\n{\n    procedure Post()\n    begin\n    end;\n}\n#endif\n',
+              },
+            ],
+          },
+        ),
+        emit: [
+          (e) => {
+            if (e.type === "warning") events.push({ code: e.code, message: e.message });
+          },
+        ],
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
+      expect(events).toEqual([
+        {
+          code: "verify-reach-fail-closed",
+          message:
+            "1 survivor(s) take every new test because coverage cannot place their code (R175/R298): 0/M0001",
+        },
+      ]);
+      w.store.close();
+    });
+
+    test("a fallback-2 table trigger and a red new test are named in verify-reach-fail-closed warnings", async () => {
+      const events: Array<{ code: string; message: string }> = [];
+      const trig = seed("M0001", undefined, "survived", {
+        objectType: "table",
+        codeunitId: 50200,
+        procedureName: "",
+        triggerName: "OnInsert",
+      });
+      const w = await verifyWorld([trig], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: reachRunNamed({ M: POST, N1: OTHER, N2: OTHER }, { outcome: { N2: "fail" } }),
+        emit: [
+          (e) => {
+            if (e.type === "warning") events.push({ code: e.code, message: e.message });
+          },
+        ],
+      });
+      await w.verify(["0/M0001"]);
+      expect(events).toEqual([
+        {
+          code: "verify-reach-fail-closed",
+          message:
+            "1 new test(s) join every survivor because their coverage could not be used: New.N2 (fail)",
+        },
+        {
+          code: "verify-reach-fail-closed",
+          message:
+            "1 table-trigger survivor(s) take all 1 new test(s) whose coverage could be read, because none of them touched that table: 0/M0001",
+        },
+      ]);
+      w.store.close();
+    });
+
+    test("decision 13: a red new test joins every survivor, so every survivor is error, as before", async () => {
+      const seen: NamedMutantsConfig[] = [];
+      const w = await verifyWorld(
+        [seed("M0001", undefined, "survived"), seed("M0002", undefined, "survived")],
+        [],
+        {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed(
+            { M: POST, N1: POST, N2: OTHER },
+            { seen, outcome: { N2: "fail" } },
+          ),
+        },
+      );
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(out.results.map((r) => [r.verdict, r.testsRun])).toEqual([
+        ["error", ["T.M", "New.N1", "New.N2"]],
+        ["error", ["T.M", "New.N1", "New.N2"]],
+      ]);
+      w.store.close();
+    });
+
+    test("case 9: a coverage-mode change is still refused first, and no state line is written", async () => {
+      const lines: string[] = [];
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        sourceCoverage: "procedure",
+        backendCoverage: "fenced",
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: async () => {
+          throw new Error("runNamed must not be called when verify refuses");
+        },
+        log: (l) => lines.push(l),
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused?.reason).toBe("coverage-mode-changed");
+      expect(lines).toEqual([]);
+      w.store.close();
+    });
+
+    const offCases: Array<[string, Partial<Parameters<typeof verifyWorld>[2]>, string]> = [
+      ["--no-reach-filter", { ...fenced, noReachFilter: true }, "--no-reach-filter"],
+      [
+        "hub mode procedure",
+        { sourceCoverage: "procedure", backendCoverage: "procedure" },
+        'coverage mode "procedure" is a hub mode',
+      ],
+      [
+        "hub mode line",
+        { sourceCoverage: "line", backendCoverage: "line" },
+        'coverage mode "line" is a hub mode',
+      ],
+      ["mode none", { sourceCoverage: "none", backendCoverage: "none" }, 'coverage mode "none"'],
+    ];
+    for (const [name, modes, why] of offCases) {
+      test(`filter off (${name}): every new test joins every survivor, and the off line says why`, async () => {
+        const lines: string[] = [];
+        const seen: NamedMutantsConfig[] = [];
+        const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...modes,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { seen }),
+          log: (l) => lines.push(l),
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(seen.map((c) => c.narrow)).toEqual([undefined]);
+        expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
+        expect(lines).toEqual([
+          `[lethal] verify: reach filter off (${why}): every new test runs against every survivor.`,
+        ]);
+        w.store.close();
+      });
+    }
   });
 });

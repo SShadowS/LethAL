@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { initParser } from "@lethal/engine";
+import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
@@ -26,6 +26,7 @@ import {
 } from "./equivalence-marks";
 import { createEmitter } from "./events";
 import { type GapRow, tallyGaps } from "./gaps";
+import { type AlSource, coverageRefusedObjects } from "./line-map";
 import {
   type InstalledArtifactRef,
   type NamedMutantRequest,
@@ -35,6 +36,7 @@ import {
 } from "./named-mutants";
 import {
   type LeaseSessionConfig,
+  type NamedMutantsConfig,
   type UnmutatedRun as NamedUnmutatedRun,
   type SessionConfig,
   qualifiedTestName,
@@ -61,6 +63,7 @@ import {
 } from "./test-digest";
 import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
+import { type ReachResult, narrowVerifyRequests, reachStateOf } from "./verify-reach";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -657,6 +660,12 @@ export interface VerifyPlan {
   /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
    *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
+  /** R-384: per requested mutant code, its source covering tests that run, in request order. The
+   *  reach filter never removes one of these. */
+  readonly covering: ReadonlyMap<string, readonly TestMethodRef[]>;
+  /** R-384: S, the survivors left after equivalence marks (`running.length`), fixed here before
+   *  any filtering. The budget and the state line are computed from this, never recomputed. */
+  readonly survivorCount: number;
 }
 
 /**
@@ -742,6 +751,8 @@ export async function planVerify(a: {
       notRun: new Map(),
       allRefused: new Set(),
       marksUnderOtherScheme: staleMarks,
+      covering: new Map(),
+      survivorCount: 0,
     };
   }
 
@@ -895,6 +906,7 @@ export async function planVerify(a: {
   const requests: NamedMutantRequest[] = [];
   const notRun = new Map<string, readonly string[]>();
   const allRefused = new Set<string>();
+  const covering = new Map<string, readonly TestMethodRef[]>();
   for (const t of running) {
     const notRunHere: string[] = [];
     const seen = new Set<string>();
@@ -911,6 +923,7 @@ export async function planVerify(a: {
       else if (isRefused(ref)) notRunHere.push(qualifiedTestName(ref));
       else add(ref);
     }
+    const coveringHere = [...methods];
     for (const ref of newTests) add(ref);
     notRunHere.push(...refusedNew.map(qualifiedTestName));
     if (notRunHere.length > 0) notRun.set(t.mutantCode, notRunHere);
@@ -921,6 +934,7 @@ export async function planVerify(a: {
       continue;
     }
     requests.push({ mutantId: t.mutantCode, methods });
+    covering.set(t.mutantCode, coveringHere);
   }
   if (unmatched.length > 0) {
     throw new VerifyError(
@@ -943,6 +957,8 @@ export async function planVerify(a: {
     notRun,
     allRefused,
     marksUnderOtherScheme: staleMarks,
+    covering,
+    survivorCount: running.length,
   };
 }
 
@@ -1251,6 +1267,9 @@ export interface VerifyDeps {
   readonly now?: () => number;
   /** Seam for tests; defaults to runNamedMutants. */
   readonly runNamed?: typeof runNamedMutants;
+  /** R-384: where verify's reach-filter state lines go. Default: stderr. Never stdout, which holds
+   *  the JSON only. */
+  readonly log?: (line: string) => void;
 }
 
 const NO_COUNTS = { killed: 0, survived: 0, error: 0, skipped: 0 } as const;
@@ -1269,6 +1288,8 @@ export async function runVerify(
     readonly testDir: string;
     /** R-371: `--max-new-tests`; default `DEFAULT_MAX_NEW_TESTS`. */
     readonly maxNewTests?: number;
+    /** R-384: `--no-reach-filter`: every new test runs against every survivor, as before. */
+    readonly noReachFilter?: boolean;
   },
   deps: VerifyDeps,
 ): Promise<VerifyOutput> {
@@ -1387,6 +1408,41 @@ export async function runVerify(
     }
 
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
+    // R-384: rule 1. Off, verify sends exactly what it sent before: no `narrow` at all.
+    const reachState = reachStateOf(coverageMode, args.noReachFilter !== true);
+    const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    let reach: ReachResult | undefined;
+    const planned = source;
+    if (plan.requests.length > 0 && !reachState.on) {
+      log(
+        `[lethal] verify: reach filter off (${reachState.why}): every new test runs against every survivor.`,
+      );
+    }
+    const narrow: NamedMutantsConfig["narrow"] = reachState.on
+      ? (baseline, ctx) => {
+          if (ctx.coverage !== coverageMode) {
+            throw new Error(
+              `verify.ts: the baseline was measured under coverage mode ${ctx.coverage}, but verify planned under ${coverageMode}`,
+            );
+          }
+          const r = narrowVerifyRequests({
+            mode: ctx.coverage,
+            enabled: true,
+            survivors: plan.requests.map((q) => {
+              const e = plan.entries.get(q.mutantId);
+              if (e === undefined) throw new Error(`verify.ts: ${q.mutantId} has no entry`);
+              return e;
+            }),
+            coveringKeys: plan.covering,
+            newTests: plan.newTests,
+            baseline,
+            refusedObjects: refusedObjectsOfSources(ctx.alSources),
+          });
+          reach = r;
+          reportReach(r, plan, planned, log, deps.emit);
+          return { methods: r.methods, unreached: r.unreached };
+        }
+      : undefined;
     if (plan.requests.length > 0) {
       // Before any lease: a compile failure costs no lease, no run row and no server call.
       const tc = now();
@@ -1427,6 +1483,7 @@ export async function runVerify(
           published = await backend.publishTestApp(fence, compiled);
           publishMs = now() - tp;
         },
+        ...(narrow !== undefined ? { narrow } : {}),
       });
     }
 
@@ -1482,15 +1539,33 @@ export async function runVerify(
             "TestPage refused, not run: every test that reaches this mutant has a reachable call that may open a TestPage, so none was sent (R-236c)",
         };
       }
+      const notRun = plan.notRun.get(t.mutantCode);
+      // R-384 (ruled R2): a survivor no new test reaches, with no covering test, is sent nothing and
+      // stays `survived`. No new verdict.
+      if (ran?.unreached?.includes(t.mutantCode) === true) {
+        if (reach === undefined || !reach.unreached.has(t.mutantCode)) {
+          throw new Error(
+            `verify.ts: runNamedMutants answered ${t.mutantCode} unreached, but the reach filter did not leave it without tests`,
+          );
+        }
+        return {
+          ...base,
+          verdict: "survived",
+          testsRun: [],
+          ...(notRun !== undefined ? { notRun } : {}),
+          failureNote: `no new test reaches it: the coverage of the ${reach.filterable} new test(s) that could be read shows none of them running ${memberOf(entry)}, so nothing was run (R-384)`,
+        };
+      }
       const o = outcomeBy.get(t.mutantCode);
       const request = requestBy.get(t.mutantCode);
       if (o === undefined || request === undefined) {
         throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
       }
-      const notRun = plan.notRun.get(t.mutantCode);
+      // R-384: the methods actually sent, after the reach filter when it ran.
+      const sent = reach?.methods.get(t.mutantCode) ?? request.methods;
       return {
         ...base,
-        ...measuredResultOf(o, request.methods, newKeys, published),
+        ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
       };
     });
@@ -1555,6 +1630,73 @@ export function refusalOutput(
     ...out,
     timings,
   };
+}
+
+/** R-384: the member a survivor's coverage is looked up by, for its `failureNote`. */
+function memberOf(e: MutantManifestEntry): string {
+  if (e.procedureName !== "") return e.procedureName;
+  if (e.triggerName !== undefined) return e.triggerName;
+  return (e.coverageArmNames ?? []).join(" or ");
+}
+
+/**
+ * R-384 (rule 3): R298's refused objects of the INSTALLED sources, parsed as `lineMapFromSources`
+ * parses them. These are the files `attach` built the fenced line map from, so the coverage lines
+ * were placed in them; the project on disk may have changed since, the installed build has not.
+ * The parser was initialised by `planVerify`.
+ */
+function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
+  return coverageRefusedObjects(
+    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+  );
+}
+
+/** R-384 rules 7 and 8: the `verify-reach-fail-closed` warnings and the state lines. */
+function reportReach(
+  r: ReachResult,
+  plan: VerifyPlan,
+  source: VerifySource,
+  log: (line: string) => void,
+  emitTo: SessionConfig["emit"],
+): void {
+  const batchOf = new Map(source.targets.map((t) => [t.mutantCode, t.batchIndex] as const));
+  const ids = (codes: Iterable<string>) =>
+    [...codes]
+      .map((c) => {
+        const b = batchOf.get(c);
+        if (b === undefined) throw new Error(`verify.ts: ${c} is not a target`);
+        return mutantRef(b, c);
+      })
+      .join(", ");
+  const warnings: string[] = [];
+  if (r.failClosedTests.length > 0) {
+    warnings.push(
+      `${r.failClosedTests.length} new test(s) join every survivor because their coverage could not be used: ${r.failClosedTests.map((f) => `${qualifiedTestName(f.ref)} (${f.why})`).join("; ")}`,
+    );
+  }
+  if (r.failClosedSurvivors.length > 0) {
+    warnings.push(
+      `${r.failClosedSurvivors.length} survivor(s) take every new test because coverage cannot place their code (R175/R298): ${ids(r.failClosedSurvivors.map((s) => s.mutantId))}`,
+    );
+  }
+  if (r.untargeted.length > 0) {
+    warnings.push(
+      `${r.untargeted.length} table-trigger survivor(s) take all ${r.filterable} new test(s) whose coverage could be read, because none of them touched that table: ${ids(r.untargeted)}`,
+    );
+  }
+  if (emitTo !== undefined) {
+    const emit = createEmitter(emitTo);
+    for (const message of warnings) {
+      emit({ type: "warning", code: "verify-reach-fail-closed", message });
+    }
+  }
+  const n = plan.newTests.length;
+  // The survivors' order is the request order, which is the source's target order.
+  const noNew = plan.requests.map((q) => q.mutantId).filter((id) => r.noNewTest.has(id));
+  log(
+    `[lethal] verify: reach filter on (fenced coverage): ${n} new test(s), ${r.failClosedTests.length} joined every survivor because their coverage could not be used; ${r.joins} mutant run(s) instead of ${plan.survivorCount * n} without the filter; ${noNew.length} survivor(s) no new test reaches.`,
+  );
+  if (noNew.length > 0) log(`[lethal] verify: survivors no new test reaches: ${ids(noNew)}`);
 }
 
 type MeasuredPart = Omit<
