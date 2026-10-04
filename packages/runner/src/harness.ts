@@ -418,6 +418,29 @@ export class HarnessVerifier {
   }
 
   /**
+   * R-385: the versions of `appId`'s INSTALLED rows in the configured company, read by id (R433).
+   * A published-but-not-installed row is left out: tests cannot run from it. Usually one version;
+   * the caller decides what none or two mean. A row whose `isInstalled` is not a boolean, or whose
+   * version parts are not numbers, throws: an unreadable row must not read as "not installed".
+   */
+  async fetchInstalledVersions(appId: string): Promise<readonly string[]> {
+    const out: string[] = [];
+    for (const r of await this.fetchExtensionRows(appId)) {
+      const parts = [r.versionMajor, r.versionMinor, r.versionBuild, r.versionRevision];
+      if (typeof r.isInstalled !== "boolean" || !parts.every((p) => typeof p === "number")) {
+        throw new HarnessVerificationError(
+          `extensions list returned a malformed row for app ${appId}: ${JSON.stringify(r).slice(0, 200)}`,
+        );
+      }
+      if (r.isInstalled) out.push(parts.join("."));
+    }
+    return out;
+  }
+
+  /** The configured company's id, looked up once per verifier (only a found id is kept). */
+  private companyId: string | undefined;
+
+  /**
    * R433: the ONLY code that builds the automation `extensions` path. It refuses an `appId` that is
    * not a bare GUID before any request, and always sends `$filter=id eq <guid>`; `fetchApiRows`
    * refuses anything else again, at run time.
@@ -436,21 +459,24 @@ export class HarnessVerifier {
         `app id ${JSON.stringify(appId)} is not a GUID; the extensions list is read only by one app id (R433)`,
       );
     }
-    const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
-    const wanted = this.cfg.company.trim().toLowerCase();
-    const company = companies.find(
-      (r) =>
-        String((r as { name?: unknown }).name)
-          .trim()
-          .toLowerCase() === wanted,
-    ) as { id?: unknown } | undefined;
-    if (typeof company?.id !== "string") {
-      throw new HarnessVerificationError(
-        `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
-      );
+    if (this.companyId === undefined) {
+      const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
+      const wanted = this.cfg.company.trim().toLowerCase();
+      const company = companies.find(
+        (r) =>
+          String((r as { name?: unknown }).name)
+            .trim()
+            .toLowerCase() === wanted,
+      ) as { id?: unknown } | undefined;
+      if (typeof company?.id !== "string") {
+        throw new HarnessVerificationError(
+          `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
+        );
+      }
+      this.companyId = company.id;
     }
     return (await this.fetchApiRows(
-      `api/microsoft/automation/v2.0/companies(${company.id})/extensions`,
+      `api/microsoft/automation/v2.0/companies(${this.companyId})/extensions`,
       "extensions list",
       { $filter: `id eq ${appId}` },
     )) as readonly {
