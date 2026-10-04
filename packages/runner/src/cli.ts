@@ -1123,10 +1123,12 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
                              coverage, a new test runs only against the survivors its own
                              coverage reaches; one stderr line says whether the filter was on
   Every other flag is refused, --out included: the JSON always goes to stdout.
-  Exit codes: 0 every survivor killed and every new test stable; 3 quarantined; 4 nothing
-  measured (every survivor error); 5 some survivor survived or errored, or a new test is not
-  stable; 6 refused before measuring (refused.reason says why); 1 error. A new test that already
-  fails with no mutant active makes every survivor an error, so it gives 4, not 5.
+  Exit codes: 0 every survivor killed and every new test stable or not-rerun; 3 quarantined; 4
+  nothing measured (every survivor error); 5 some survivor survived or errored, or a new test is
+  neither stable nor not-rerun; 6 refused before measuring (refused.reason says why); 1 error. A
+  new test that already fails with no mutant active makes every survivor an error, so it gives 4,
+  not 5. not-rerun: the reach filter sent the test to no survivor, so it ran once, unmutated, and
+  was not rerun; it gated no verdict.
 
 OTHER
   -h, --help                 this text

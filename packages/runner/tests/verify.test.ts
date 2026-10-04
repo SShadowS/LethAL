@@ -1033,8 +1033,9 @@ describe("planVerify", () => {
       expect(e.detail).toContain("The coverage filter is off (--no-reach-filter)");
     });
 
-    // R-384 C2: filter on, check 1. With S = 1 the budget is 3 x max; 2N = B passes, 2N = B + 2
-    // refuses, before anything is sent.
+    // R-384 C2, moved by R-427 (ruling 3): filter on, check 1 is N > B, the baseline runs alone,
+    // since a test sent to no survivor is not rerun. With S = 1 the budget is 3 x max; N = B
+    // passes, N = B + 1 refuses, before anything is sent.
     const checkOne = (methods: readonly string[], max: number) =>
       planUnchanged({
         source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
@@ -1048,16 +1049,18 @@ describe("planVerify", () => {
         coverage: "fenced",
       });
 
-    test("R-384 C2: filter on, 2N = B passes check 1 even above today's N <= max", async () => {
-      const plan = await checkOne(["N1", "N2", "N3"], 2);
-      expect(keys(plan.newTests)).toHaveLength(3);
+    const sixNew = ["N1", "N2", "N3", "N4", "N5", "N6"];
+
+    test("R-427 C2: filter on, N = B passes check 1 (2N = 2B, which R-384 refused)", async () => {
+      const plan = await checkOne(sixNew, 2);
+      expect(keys(plan.newTests)).toHaveLength(6);
     });
 
-    test("R-384 C2: filter on, 2N = B + 2 refuses with the check-1 text", async () => {
-      const e = await planRefusal(checkOne(["N1", "N2", "N3", "N4"], 2));
+    test("R-427 C2: filter on, N = B + 1 refuses with the check-1 text", async () => {
+      const e = await planRefusal(checkOne([...sixNew, "N7"], 2));
       expect(e.reason).toBe("too-many-new-tests");
       expect(e.detail).toBe(
-        "4 tests are new or edited since run 1. Each runs twice unmutated, 8 extra test runs, and the coverage filter cannot lower that; without the filter they would need 12. The budget is --max-new-tests 2 x (1 survivor(s) + 2) = 6 extra test runs. Edit classes: added: 4 test(s), added or renamed tests. To run them all, pass --max-new-tests 4; or run lethal run again so this source is the recorded one",
+        "7 tests are new or edited since run 1. Each runs at least once unmutated, 7 extra test runs, and the coverage filter cannot lower that; without the filter they would need 21. The budget is --max-new-tests 2 x (1 survivor(s) + 2) = 6 extra test runs. Edit classes: added: 7 test(s), added or renamed tests. To run them all, pass --max-new-tests 7; or run lethal run again so this source is the recorded one",
       );
     });
 
@@ -1449,6 +1452,18 @@ describe("killedByOf and verifyExitCode (C02-06 Task 5.4)", () => {
     expect(verifyExitCode({ results: [killed, skipped], newTests: [stable] })).toBe(0);
     // Every survivor skipped: nothing measured, and nothing wrong either.
     expect(verifyExitCode({ results: [skipped], newTests: [] })).toBe(0);
+  });
+
+  // R-427 (ruling 2): a test sent to no survivor gated no verdict, so it does not block exit 0.
+  test("R-427: not-rerun does not block exit 0; it does not mask another state", () => {
+    const killed = { verdict: "killed" as const };
+    const notRerun = { state: "not-rerun" as const };
+    expect(verifyExitCode({ results: [killed], newTests: [notRerun] })).toBe(0);
+    expect(verifyExitCode({ results: [killed], newTests: [{ state: "stable" }, notRerun] })).toBe(
+      0,
+    );
+    expect(verifyExitCode({ results: [killed], newTests: [notRerun, { state: "flaky" }] })).toBe(5);
+    expect(verifyExitCode({ results: [{ verdict: "survived" }], newTests: [notRerun] })).toBe(5);
   });
 });
 // C02-09 Task 6: gap ids in --survivors.
@@ -2196,6 +2211,14 @@ describe("C02-09: gap ids", () => {
         readonly seen?: NamedMutantsConfig[];
         readonly alSources?: readonly { path: string; text: string }[];
         readonly outcome?: Readonly<Record<string, TestOutcome>>;
+        /** R-427: a backend that ignores `notRerun`: reruns every method, reports no notRerun. */
+        readonly ignoreNotRerun?: boolean;
+        /** R-427: a broken backend that answers a notRerun method in `rerun` as well. */
+        readonly rerunAll?: boolean;
+        /** R-427: these methods' baseline answers are reported not fresh (narrow saw them fresh). */
+        readonly staleBaseline?: readonly string[];
+        /** R-427: a broken backend that reports these SENT methods notRerun and drops their rerun. */
+        readonly skipSent?: readonly string[];
       } = {},
     ): NonNullable<VerifyDeps["runNamed"]> {
       return async (cfg) => {
@@ -2232,18 +2255,36 @@ describe("C02-09: gap ids", () => {
               batchIndex: 0,
             };
           });
-        const unmutated = (ref: TestMethodRef, outcome: TestOutcome) => ({
+        const unmutated = (ref: TestMethodRef, outcome: TestOutcome, fresh = true) => ({
           ref,
           outcome,
-          fresh: true,
+          fresh,
           sessionId: 90,
           testRunsBefore: 0,
         });
+        // R-427: as runNamedMutants does, a notRerun method runs its baseline only.
+        const skip = o.ignoreNotRerun === true ? new Set<string>() : (n?.notRerun ?? new Set());
+        const rerunRefs = cfg.rerunOnUnmutated ?? [];
+        const sentSkip = new Set(
+          rerunRefs.filter((r) => (o.skipSent ?? []).includes(r.method)).map(testKeyOf),
+        );
+        const notRerun =
+          n === undefined || o.ignoreNotRerun === true
+            ? undefined
+            : rerunRefs.map(testKeyOf).filter((k) => skip.has(k) || sentSkip.has(k));
         return {
           outcomes,
           ...(unreached !== undefined ? { unreached } : {}),
-          baseline: rows.map((r) => unmutated(r.ref, r.verdict.outcome)),
-          rerun: (cfg.rerunOnUnmutated ?? []).map((ref) => unmutated(ref, "pass")),
+          baseline: rows.map((r) =>
+            unmutated(r.ref, r.verdict.outcome, !(o.staleBaseline ?? []).includes(r.ref.method)),
+          ),
+          rerun: rerunRefs
+            .filter(
+              (ref) =>
+                o.rerunAll === true || !(skip.has(testKeyOf(ref)) || sentSkip.has(testKeyOf(ref))),
+            )
+            .map((ref) => unmutated(ref, "pass")),
+          ...(notRerun !== undefined ? { notRerun } : {}),
         };
       };
     }
@@ -2269,7 +2310,8 @@ describe("C02-09: gap ids", () => {
       expect(out.reachFilter).toEqual({ state: "on" });
       // R-425: New.N2 was left out of this survivor's request.
       expect(out.results.map((r) => r.reachNarrowed)).toEqual([true]);
-      // Both new tests still run twice unmutated (decision 11).
+      // Both new tests are still reported (decision 11); since R-427 New.N2, sent to no
+      // survivor, runs once (see the R-427 describe below).
       expect(out.newTests.map((t) => t.test)).toEqual(["New.N1", "New.N2"]);
       expect(lines).toEqual([
         "[lethal] verify: reach filter on (fenced coverage): 2 new test(s), 0 joined every survivor because their coverage could not be used; 1 mutant run(s) instead of 2 without the filter; 0 survivor(s) no new test reaches.",
@@ -2435,10 +2477,11 @@ describe("C02-09: gap ids", () => {
     });
 
     test("R-425: check 1 of the cap refuses after the decision, so reachFilter is present", async () => {
-      // Filter on, S = 1, max 1: B = 3, and 2N = 4 > B refuses in planVerify, before the lease.
+      // Filter on, S = 1, max 1: B = 3, and N = 4 > B refuses in planVerify, before the lease.
+      // (R-427: check 1 is N > B; R-384's 2N > B refused this at N = 2.)
       const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
         ...fenced,
-        testDir: reachTestDir(),
+        testDir: reachTestDir(["N1", "N2", "N3", "N4"]),
         baseline: [T_M],
         maxNewTests: 1,
         runNamed: async () => {
@@ -2683,8 +2726,124 @@ describe("C02-09: gap ids", () => {
       });
     }
 
+    // R-427: a filterable new test sent to no survivor is not rerun. N1 reaches M0001 (Post); N2
+    // reaches only `Other`, which no survivor is in.
+    describe("R-427: a new test sent to no survivor is not rerun", () => {
+      const world = (over: Partial<Parameters<typeof verifyWorld>[2]> = {}) =>
+        verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+          log: () => {},
+          ...over,
+        });
+      const shapeOf = (out: Awaited<ReturnType<Awaited<ReturnType<typeof world>>["verify"]>>) =>
+        out.newTests.map((t) => [t.test, t.state, t.runs.length, "failure" in t]);
+
+      test("acceptance 1: N1 is stable with two runs; N2 is not-rerun with its one fresh baseline run", async () => {
+        const seen: NamedMutantsConfig[] = [];
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { seen }),
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.refused).toBeUndefined();
+        expect(shapeOf(out)).toEqual([
+          ["New.N1", "stable", 2, false],
+          ["New.N2", "not-rerun", 1, false],
+        ]);
+        expect(out.newTests[1]?.runs).toEqual([
+          { outcome: "pass", fresh: true, sessionId: 90, testRunsBefore: 0 },
+        ]);
+        // Both are still asked for a rerun; runNamedMutants is told, through narrow, to skip N2.
+        expect(seen[0]?.rerunOnUnmutated?.map(testKeyOf)).toEqual(["50101::N1", "50101::N2"]);
+        // Ruling 2: had every row been killed, these new tests would not block exit 0.
+        expect(
+          verifyExitCode({
+            results: out.results.map(() => ({ verdict: "killed" as const })),
+            newTests: out.newTests,
+          }),
+        ).toBe(VERIFY_EXIT.ok);
+        w.store.close();
+      });
+
+      const failClosed: Array<[string, Partial<Parameters<typeof verifyWorld>[2]>, string]> = [
+        ["--no-reach-filter", { noReachFilter: true }, "stable"],
+        [
+          "hub mode procedure",
+          { sourceCoverage: "procedure", backendCoverage: "procedure" },
+          "stable",
+        ],
+        [
+          "N2 red",
+          {
+            runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { outcome: { N2: "fail" } }),
+          },
+          "red",
+        ],
+        [
+          "N2 with empty coverage",
+          { runNamed: reachRunNamed({ M: POST, N1: POST, N2: [] }) },
+          "stable",
+        ],
+      ];
+      for (const [name, over, state] of failClosed) {
+        test(`fail-closed (${name}): N2 is rerun, never not-rerun`, async () => {
+          const w = await world(over);
+          const out = await w.verify(["0/M0001"]);
+          expect(out.refused).toBeUndefined();
+          expect(shapeOf(out).map(([t, s, n]) => [t, s, n])).toEqual([
+            ["New.N1", "stable", 2],
+            ["New.N2", state, 2],
+          ]);
+          w.store.close();
+        });
+      }
+
+      test("REQUIRED: a backend that ignores notRerun is refused, never read as stable", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { ignoreNotRerun: true }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "the reach filter sent 50101::N2 to no survivor, but runNamedMutants did not skip its rerun",
+        );
+        w.store.close();
+      });
+
+      test("a SENT test the backend reports notRerun is refused (reverse cross-check)", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { skipSent: ["N1"] }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "verify.ts: runNamedMutants skipped the rerun of 50101::N1, but the reach filter did not leave it unsent",
+        );
+        w.store.close();
+      });
+
+      test("a backend answering a test in both rerun and notRerun is refused", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { rerunAll: true }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "runNamedMutants answered new test 50101::N2 both rerun and not rerun",
+        );
+        w.store.close();
+      });
+
+      test("a notRerun test whose baseline answer is not a fresh pass is refused", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { staleBaseline: ["N2"] }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "new test 50101::N2 was not rerun, but its baseline was not a fresh pass",
+        );
+        w.store.close();
+      });
+    });
+
     // R-384 The cap (R4): check 2 counts EXECUTIONS after the filter, E = 2N + P, against
-    // B = max x (S + 2), with S fixed in planVerify before any filtering.
+    // B = max x (S + 2), with S fixed in planVerify before any filtering. Since R-427,
+    // E = N + R + P, R being the new tests sent to at least one survivor (R = N gives 2N + P).
     describe("check 2", () => {
       const at = (procedure: string) => [{ objectType: "Codeunit", objectId: 50000, procedure }];
       // Two survivors, `Post` and `Other`, both covered by T.M; four new tests; max 2, so B = 8.
@@ -2714,7 +2873,41 @@ describe("C02-09: gap ids", () => {
         w.store.close();
       });
 
+      // R-427: every new test here reaches a survivor (R = N), so E = 2N + P and the text keeps
+      // R-384's exact form. (R-384's own fixture left three tests unsent; since R-427 they are not
+      // rerun, so it no longer refuses: see the R-427 boundary tests below.)
       test("C3/C4: E = B + 1 refuses after the baseline, naming ceil(E / (S + 2))", async () => {
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(["N1", "N2", "N3"]),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: POST,
+            N2: at("Other"),
+            N3: POST,
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused?.reason).toBe("too-many-new-tests");
+        expect(out.refused?.detail).toBe(
+          "3 tests are new or edited since run 1. After the coverage filter they need 9 extra test runs (6 unmutated, 3 against 2 survivor(s); 0 test(s) joined every survivor because their coverage could not be used); without the filter they would need 12. The budget is --max-new-tests 2 x (2 survivor(s) + 2) = 8 extra test runs. The unmutated runs had already run when this was found. Edit classes: added: 3 test(s), added or renamed tests. To run them all, pass --max-new-tests 3; or run lethal run again so this source is the recorded one",
+        );
+        // Refused after the run row was made: the output names it.
+        expect(out.verifyRunId).toBeDefined();
+        // R-425: refused after the decision, so the state is recorded.
+        expect(out.reachFilter).toEqual({ state: "on" });
+        expect(out.results).toEqual([]);
+        expect(out.exitCode).toBe(VERIFY_EXIT.refused);
+        w.store.close();
+      });
+
+      // R-427 moved expectation: this is R-384's ORIGINAL C3/C4 fixture, kept as a POSITIVE test.
+      // Before R-427 it REFUSED (2N + P = 9 > B = 8). Now N = 4, S = 2, max 2, B = 8: only N1
+      // reaches a survivor (Post), so R = 1, P = 1 and E = N + R + P = 6 <= B. Check 2 passes
+      // and the run proceeds; N2..N4 reach no survivor and run their baseline only.
+      test("R-427: R-384's old C3/C4 fixture (3 of 4 new tests reach no survivor) no longer refuses; E = 6 <= B = 8", async () => {
         const w = await verifyWorld(twoSurvivors(), [], {
           ...fenced,
           testDir: reachTestDir(fourNew),
@@ -2729,15 +2922,68 @@ describe("C02-09: gap ids", () => {
           }),
         });
         const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.exitCode).not.toBe(VERIFY_EXIT.refused);
+        expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1"], ["T.M"]]);
+        expect(out.newTests.map((t) => [t.test, t.state, t.runs.length])).toEqual([
+          ["New.N1", "stable", 2],
+          ["New.N2", "not-rerun", 1],
+          ["New.N3", "not-rerun", 1],
+          ["New.N4", "not-rerun", 1],
+        ]);
+        w.store.close();
+      });
+
+      // R-427: E = N + R + P, where R is the new tests sent to at least one survivor; a test sent
+      // to none runs its baseline only. N = 3, S = 2, max 2, B = 8.
+      test("R-427: E = N + R + P = B passes where R-384's 2N + P = B + 1 refused", async () => {
+        // N1 reaches Post and Other, N2 Post, N3 neither: R = 2, P = 3, E = 8; 2N + P = 9.
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(["N1", "N2", "N3"]),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: [...at("Post"), ...at("Other")],
+            N2: at("Post"),
+            N3: at("Third"),
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.results.map((r) => r.testsRun)).toEqual([
+          ["T.M", "New.N1", "New.N2"],
+          ["T.M", "New.N1"],
+        ]);
+        expect(out.newTests.map((t) => [t.test, t.state])).toEqual([
+          ["New.N1", "stable"],
+          ["New.N2", "stable"],
+          ["New.N3", "not-rerun"],
+        ]);
+        w.store.close();
+      });
+
+      test("R-427: E = B + 1 with R < N refuses with the not-rerun breakdown", async () => {
+        // N1 and N2 reach Post and Other, N3 neither: R = 2, P = 4, E = 9.
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(["N1", "N2", "N3"]),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: [...at("Post"), ...at("Other")],
+            N2: [...at("Post"), ...at("Other")],
+            N3: at("Third"),
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
         expect(out.refused?.reason).toBe("too-many-new-tests");
         expect(out.refused?.detail).toBe(
-          "4 tests are new or edited since run 1. After the coverage filter they need 9 extra test runs (8 unmutated, 1 against 2 survivor(s); 0 test(s) joined every survivor because their coverage could not be used); without the filter they would need 16. The budget is --max-new-tests 2 x (2 survivor(s) + 2) = 8 extra test runs. The unmutated runs had already run when this was found. Edit classes: added: 4 test(s), added or renamed tests. To run them all, pass --max-new-tests 3; or run lethal run again so this source is the recorded one",
+          "3 tests are new or edited since run 1. After the coverage filter they need 9 extra test runs (5 unmutated: 3 baseline, 2 rerun, 1 test(s) sent to no survivor are not rerun; 4 against 2 survivor(s); 0 test(s) joined every survivor because their coverage could not be used); without the filter they would need 12. The budget is --max-new-tests 2 x (2 survivor(s) + 2) = 8 extra test runs. The unmutated runs had already run when this was found. Edit classes: added: 3 test(s), added or renamed tests. To run them all, pass --max-new-tests 3; or run lethal run again so this source is the recorded one",
         );
-        // Refused after the run row was made: the output names it.
         expect(out.verifyRunId).toBeDefined();
-        // R-425: refused after the decision, so the state is recorded.
-        expect(out.reachFilter).toEqual({ state: "on" });
-        expect(out.results).toEqual([]);
         expect(out.exitCode).toBe(VERIFY_EXIT.refused);
         w.store.close();
       });

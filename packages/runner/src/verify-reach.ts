@@ -119,6 +119,9 @@ export interface ReachResult {
   /** R-425: survivors whose final request lacks at least one new test, i.e. the filter left a new
    *  test out. Empty with the filter off: it cannot narrow. */
   readonly narrowed: ReadonlySet<string>;
+  /** R-427: test keys of the filterable new tests in NO survivor's final `methods`, in plan order.
+   *  Verify does not rerun them. Always empty with the filter off. */
+  readonly unsent: ReadonlySet<string>;
   /** P: summed over survivors, the new tests joined that were not already covering tests. */
   readonly joins: number;
   /** K: how many new tests were filterable (their coverage could be read). */
@@ -238,6 +241,18 @@ export function narrowVerifyRequests(a: ReachInput): ReachResult {
     if (!a.newTests.every((r) => seen.has(testKeyOf(r)))) narrowed.add(id);
   }
 
+  // R-427: a filterable new test in no survivor's final list. Read from the final lists, so a
+  // covering test, a fail-closed survivor (which takes every new test) and a reaching hit all
+  // keep a test out. Only a filterable test can be unsent: a fail-closed test joins every
+  // survivor. Empty with the filter off, since `filterable` is empty then.
+  const sent = new Set<string>();
+  for (const out of methods.values()) for (const r of out) sent.add(testKeyOf(r));
+  const unsent = new Set<string>();
+  for (const ref of filterable) {
+    const k = testKeyOf(ref);
+    if (!sent.has(k)) unsent.add(k);
+  }
+
   return {
     state,
     methods,
@@ -247,6 +262,7 @@ export function narrowVerifyRequests(a: ReachInput): ReachResult {
     unreached,
     noNewTest,
     narrowed,
+    unsent,
     joins,
     filterable: filterable.length,
   };
