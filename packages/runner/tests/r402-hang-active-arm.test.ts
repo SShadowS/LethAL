@@ -162,6 +162,13 @@ const get = (shape: Shape, build: Build): Result => {
   if (r === undefined) throw new Error(`no result for ${shape}/${build}`);
   return r;
 };
+/** The loop condition's spec text where it is not `A < 10`. */
+const LOOP_CONDITION: Partial<Record<Shape, string>> = {
+  s9: "Check(A #if LETHALX + B #endif , 10)",
+  s10: "Arr[1 #if LETHALX + B #endif ] < 10",
+  s11: "A in [1, 2 #if LETHALX , B #endif ]",
+  s14: "B < 5",
+};
 /**
  * Is the `remove-assignment` site on `v` REFUSED as hang-capable (R196: zero sites) rather than
  * claimed (exactly one)? Every statement in these shapes compiles in every build except S14's loop,
@@ -170,6 +177,15 @@ const get = (shape: Shape, build: Build): Result => {
 const refused = (shape: Shape, build: Build, v: string): boolean => {
   const sites = get(shape, build).assigns.get(v) ?? [];
   expect(sites.length, `${shape}/${build}: remove-assignment on ${v}`).toBeLessThanOrEqual(1);
+  if (sites.length === 0) {
+    // A refusal needs an ADMITTED file that still has the loop: a refused file or a lost site
+    // would also have zero sites.
+    const r = get(shape, build);
+    expect(r.undecided, `${shape}/${build}: file admitted`).toEqual([]);
+    expect(r.texts, `${shape}/${build}: loop condition kept`).toContain(
+      LOOP_CONDITION[shape] ?? "A < 10",
+    );
+  }
   return sites.length === 0;
 };
 

@@ -3791,6 +3791,10 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(
       events.some((e) => e.type === "warning" && e.code === "hang-capable-sites-deployed"),
     ).toBe(false);
+    // Count 0 also holds if the step is emitted UNTAGGED (the unsafe direction): it must not exist.
+    const { files } = await generateMutationSet(dirs.projectDir);
+    const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
+    expect(texts).not.toContain("Remaining := Remaining - 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
