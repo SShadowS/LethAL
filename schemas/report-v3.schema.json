@@ -631,7 +631,8 @@
                   "declarative",
                   "compiled-out",
                   "preproc-undecided",
-                  "instrumentation-refused"
+                  "instrumentation-refused",
+                  "hang-refused"
                 ]
               },
               "detail": {
