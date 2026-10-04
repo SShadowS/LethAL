@@ -1,6 +1,8 @@
 # R396 campaign manifest: al-runner old vs new defaults on a real app
 
-**Status: NO RUN COMPLETED. Both runs are redone on the new machine.**
+**Status: (i) and (ii) COMPLETED on 2026-10-04 in the kraken container; per-mutant verdicts IDENTICAL.**
+Run (iii) (optional) also completed. Results are in the section "Results, 2026-10-04" below. The
+"What happened on 2026-10-02" section is old-machine history only.
 
 The pre-commitment `docs/superpowers/specs/2026-10-02-r396-alrunner-speedup-precommitment.md`
 (commit `1527811f`) stays valid as written. It fixes the project, commit, scope, configs, gates and
@@ -68,3 +70,77 @@ settings, so the comparison is like for like:
 The `--server` path may send the whole test directory per mutant (`ensureServerSuite`), so the
 expected speed-up on CDO is about 1.2x to 4x, not the fixture's 5.7x. The pre-commitment states this
 as a hypothesis for run (ii) to settle.
+
+## Results, 2026-10-04 (kraken container)
+
+**Read this first.** These figures describe Continia Document Output at `5f2a71d` (2026-07-07, app
+28.4), not the current product. They are a new baseline from the kraken container (32 cores) and
+are not comparable with any old-machine figure.
+
+**Setup, the same in all three runs**
+- LethAL code: `678754ae`. No code changed between the runs; later branch commits were docs only.
+- al-runner `v2.12.0-main.c39ad5de` in every run (its own banner: BC 28.5.54151.55132).
+- Selector ids 6175460 / 6175459 / 6175458 in every run.
+- Gates: all four PASS in every run. Build line OK; 63 mutants deployed from 65 sites, in 1 of 554
+  files; baseline 21 of 21 tests green; `coverageMode` none in (i) and (ii), al-runner in (iii).
+- Start deviations (recorded above): run (i) attempt 1 was refused on the default selector id. The
+  offline `alc` compile of `Cloud` fails on the `app.json` logo backslash (R422), but al-runner
+  deployed the UNPATCHED copy fine (deploy took 0.4 s), so no patch was made.
+
+**Verdicts (checked first)**
+- (i) OLD defaults: killed 51 / survived 12 / no-coverage 0 / error 0. Score 81.0%.
+- (ii) NEW defaults: the same counts.
+- `bun scripts/report-diff.ts` on (i) against (ii): 63 against 63 mutants, 0 differences,
+  IDENTICAL. Also identical per mutant: the covering-test set (all 21 tests, for all 63 mutants),
+  `killingTest` (0 differ) and the runner (fenced). No timeout or deadline fired in either run.
+- So R-387's claim that verdicts do not move holds on this app.
+
+**Timings.** They carry machine-load noise: other sessions ran test suites on the same 32 cores.
+The 1-minute load average, noted every 10 minutes, ranged 0.9 to 11.6 in (i), 2.3 to 10.1 in (ii)
+and 1.9 to 4.7 in (iii).
+
+| Run | Total (report) | Shell wall | Baseline | Mutants phase |
+|---|---|---|---|---|
+| (i) OLD | 9828.3 s | 9982 s | 285.0 s | 9048.9 s |
+| (ii) NEW | 3460.9 s | 3512 s | 114.0 s | 12767.6 s (sum of concurrent per-mutant time) |
+| (iii) NEW + coverage | 3709.2 s | 3745 s | 129.9 s | 4518.0 s (59 mutants run) |
+
+Wall-time speed-up, (i) to (ii): **2.84x**. The ratio carries the load noise; treat it as a rough
+figure, not a precise one.
+
+**Per mutant.** (i): mean 143.6 s, median 101.6 s, p95 273.0 s, max 283.5 s. In (ii) the per-mutant
+durations OVERLAP: they sum to 12767.6 s, more than the 3460.9 s total, and overhead shows 0.0. So
+(ii)'s mean 202.7 s, median 58.5 s, p95 647.8 s and max 689.0 s are NOT comparable with (i). Only
+the wall totals compare.
+
+**Hypothesis: UNDETERMINED.** The pre-commitment said that if NEW per-mutant time is near the
+whole-suite time, the `--server` path sends the whole test directory. That cannot be read from
+these reports, because the per-mutant times overlap. It is neither confirmed nor refuted.
+
+**Compile count and compile time: NOT MEASURED.** LethAL consumes al-runner's stderr (the
+`[layered] WROTE` and `cache HIT` lines), so it never reaches the run log. `~/.cache/al-runner` is
+shared by every session on the machine, so cache file counts cannot be attributed to one run. This
+was not a checked gate (the pre-commitment says so). Run (ii) was deliberately not changed to
+capture it: a separate cache would have made (ii) cold, unlike (i).
+
+**Run (iii), coverage on (optional, pre-committed in `1527811f` as R394 sizing)**
+- `report-diff` of (ii) against (iii): 4 differences, all `survived` to `no-coverage`
+  (`coverageFiltered` false to true). All four are in procedure `ShowRecipientsSetup`, the one
+  procedure with 4 survivors and 0 kills: the narrowed tests never reach it.
+- Killed 51 to 51 and `killingTest` identical for all 51. The pre-committed check (coverage never
+  changes a killed mutant) PASSES.
+- (iii): killed 51 / survived 8 / no-coverage 4. Score 86.4%. 59 mutants were executed.
+- Coverage narrowed each mutant's tests to 0, 5, 10 or 15 of the 21.
+- For R394: on this scope coverage reclassified 4 of 12 survivors (33%) and skipped 4 of 63
+  mutants. Wall time was 3709.2 s against 3460.9 s for (ii): no saving here (within load noise).
+- The multi-object guard did not refuse coverage (`coverageMode` al-runner was recorded).
+
+**Committed files** (each redacted with `bun scripts/redact-campaign-report.ts`, and each passed
+`--check`):
+- `run-i-old.report.json`
+- `run-ii-new.report.json`
+- `run-iii-cov.report.json`
+
+The run logs are not committed: they hold paths and test output.
+
+Machine: kraken container, 32 cores.
