@@ -515,8 +515,10 @@ run that included the test, possibly with other tests. `unknown`: no answer
 (an error, a timeout, a session that latched or lost its lease, a carried or reader-marked
 equivalent mutant, a procedure written on one line, or over the cap; `overCap` counts the last
 kind). Read `unknown` as unknown, never as not killed. A long `alsoKills` list suggests the test is
-broad rather than aimed at the survivor you named. The field never changes `results`, `counts` or
-the exit code.
+broad rather than aimed at the survivor you named. The field never changes `results` or `counts`.
+It does not change the exit code either, with one exception, by design: a probe that latches (a
+timeout, or an in-flight call whose outcome is unknown) quarantines the whole call, so verify
+exits `3`.
 
 ### Verify exit codes (checked)
 

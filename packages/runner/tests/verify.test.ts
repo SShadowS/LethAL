@@ -3386,6 +3386,88 @@ describe("C02-09: gap ids", () => {
       expect(pairAnswerOf(o, [{ ...N1, codeunitId: 50199 }], K1)).toBeUndefined();
     });
 
+    /** `scripted`, plus the store writes the real run makes: one row per target and per probe. */
+    const recordingWorld = (
+      seeds: readonly Seed[],
+      o: Parameters<typeof scripted>[1],
+    ): ReturnType<typeof verifyWorld> => {
+      const inner = scripted(seeds, o);
+      return verifyWorld(seeds, [], {
+        testDir: newTestDir(),
+        baseline: [T_M],
+        published: PUBLISHED,
+        runNamed: async (cfg) => {
+          const res = await inner(cfg);
+          for (const r of [...cfg.requests, ...(res.probes ?? []).map((p) => p.request)]) {
+            cfg.store.recordMutant(
+              cfg.runId,
+              mutantRow(r.mutantId, "survived", { astHash: `h-${r.mutantId}` }),
+            );
+          }
+          return res;
+        },
+      });
+    };
+
+    test("a target sibling is probed too: two rows in the verify run, the target's own result unchanged", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const seen: NamedMutantRequest[] = [];
+      const w = await recordingWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: killedBy(N2) },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen).sort()).toEqual([`M0001|${testKeyOf(N2)}`, `M0002|${K1}`]);
+      expect(out.results.map((r) => [r.id, r.verdict, r.killingTest?.method])).toEqual([
+        ["0/M0001", "killed", "N1"],
+        ["0/M0002", "killed", "N2"],
+      ]);
+      const rows = w.store.db
+        .query(
+          "SELECT mutant_code, COUNT(*) AS n FROM mutants WHERE run_id = (SELECT id FROM runs WHERE backend = 'lethal-verify') GROUP BY mutant_code ORDER BY mutant_code",
+        )
+        .all();
+      expect(rows).toEqual([
+        { mutant_code: "M0001", n: 2 },
+        { mutant_code: "M0002", n: 2 },
+      ]);
+      w.store.close();
+    });
+
+    test("verify's target and probe rows never reach priorSurvivorKeys (verify never finishes its run)", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const w = await recordingWorld(seeds, { target: { M0001: killedBy(N1) } });
+      // The verify run copies its source's hidden files; a NULL there would make the history
+      // refuse the run for a reason that has nothing to do with `finished_at`.
+      w.store.db.run("UPDATE runs SET carry_hidden = ?", [
+        JSON.stringify({ tuples: [], files: [] }),
+      ]);
+      await w.verify(["0/M0001"]);
+      const run = w.store.db
+        .query("SELECT id, project_path FROM runs WHERE backend = 'lethal-verify'")
+        .get() as { id: number; project_path: string };
+      const rows = w.store.db
+        .query("SELECT mutant_code FROM mutants WHERE run_id = ? ORDER BY mutant_code")
+        .all(run.id) as Array<{ mutant_code: string }>;
+      // M0001 is the target, M0002 its probe sibling.
+      expect(rows.map((r) => r.mutant_code)).toEqual(["M0001", "M0002"]);
+      const info = w.store.getRun(run.id);
+      if (info?.coverageMode == null || info.testAppHash === null || info.carryHidden === null) {
+        throw new Error("the verify run did not record what priorSurvivorKeys checks");
+      }
+      // Exactly the arguments the next `lethal run` of this project would pass.
+      expect(
+        w.store.priorSurvivorKeys(
+          run.project_path,
+          info.coverageMode,
+          info.testAppHash,
+          info.buildSymbols ?? [],
+          info.carryHidden.files,
+        ).size,
+      ).toBe(0);
+      w.store.close();
+    });
+
     test("a target killed by another test is probed with the new test, never read as killed by it", async () => {
       const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
       const seen: NamedMutantRequest[] = [];

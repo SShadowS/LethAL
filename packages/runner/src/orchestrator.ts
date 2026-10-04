@@ -6978,6 +6978,11 @@ interface ProbeRun {
  * request order before anything runs; then each one-method group is a covering pass of its own
  * through `selectNamed` (the same green-baseline rule) and `runMutantsOnBackend` (the same
  * kill confirmation and session checks), with section G's attestation gate as in `scoreBatch`.
+ *
+ * A sibling that is also a requested target, and was not answered for the new test, is probed, so
+ * the run holds TWO `mutants` rows for it (no unique index). Safe today: a verify run records no
+ * artifact, so verify.ts's `installedOf` refuses its id as `unknown-artifact` and it is never a
+ * source; `resolveVerifySource`'s "a mutant twice" guard would fire if one ever were.
  */
 async function runProbes(
   scope: BatchScope,
