@@ -182,6 +182,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   has the shape, re-checked: no file under `fixtures/` holds an unindexed object at all). Every
   top-level object now moves the base. A `#pragma` line does not, as before: it is not an object
   (BaseApp has 166 at top level).
+- **Test discovery found no `[Test]` whose declaration its regular expression could not read**
+  (R420). Such a test was dropped silently, so it never ran and the mutants only it kills could
+  score survived or no-coverage. Discovery now reads these shapes as the compiler does: `#if`/`#else`
+  around a test's attributes or around whole test procedures, a `#pragma` or `#region` line between
+  `[Test]` and `procedure`, and an `internal procedure`. A file the regular expression reads in full
+  is not parsed again, so every existing project discovers exactly what it did. A test procedure
+  whose HEADER is split by `#if` (one name per arm) is still not discovered: it now raises a
+  `test-shape-unsupported` warning naming both names (R424). When the published test app holds a
+  test the source did not yield, the bcdev refusal now names that as a third possible cause. The
+  resume fingerprint's `testDiscovery` gains `"tree-v1"` (and `"arms-v1+tree-v1"`) when discovery
+  found a test the regular expression missed, so such a run does not resume a run from before.
+- **A `[HandlerFunctions]` inside `#if` was invisible to the TestPage scan and the test digest**
+  (R420). Both now read the attributes of every `#if` arm in a test's attribute run (the union),
+  and a test's span starts at the first node of that run, the `#if` included. So editing a handler
+  named only inside `#if` now changes the test's digest. A test whose attribute run already
+  contained such an `#if` block (before `[Test]`, a shape discovery always found) has its digest
+  change ONCE after upgrading, and `lethal verify` treats it as a new test on the first run, which
+  is the safe direction. No committed fixture has the shape, and their digests are unchanged
+  (pinned by test).
 
 
 ## [0.1.0-alpha.3] — 2026-08-27

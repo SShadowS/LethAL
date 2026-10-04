@@ -422,40 +422,98 @@ function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   return out;
 }
 
-/**
- * Where `decl`'s span starts: its first attribute directly before it (they are its siblings,
- * possibly with trivia between), R-278's rule. With `andTrivia`, trivia directly before is taken
- * too: R-371's object parts leave a doc comment above a procedure out, so adding a commented test
- * to a codeunit does not read as an edit to its header.
- */
-function spanStart(decl: ALSyntaxNode, andTrivia = false): number {
-  let start = decl.startIndex;
-  const siblings = decl.parent?.namedChildren ?? [];
-  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
-  for (i -= 1; i >= 0; i -= 1) {
-    const x = siblings[i];
-    if (x === undefined) break;
-    if (x.rawKind === "attribute_item" || (andTrivia && TRIVIA.has(x.rawKind)))
-      start = x.startIndex;
-    else if (!TRIVIA.has(x.rawKind)) break;
-  }
-  return start;
-}
-
-/** The attribute texts directly before `decl`, nearest first. */
-function attributesOf(decl: ALSyntaxNode): string[] {
-  const out: string[] = [];
-  const siblings = decl.parent?.namedChildren ?? [];
-  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
-  for (i -= 1; i >= 0; i -= 1) {
-    const x = siblings[i];
-    if (x === undefined) break;
-    if (x.rawKind === "attribute_item") out.push(x.text.trim());
-    else if (!TRIVIA.has(x.rawKind)) break;
+/** Every `attribute_item` in an `#if` that holds attributes only, every arm, in source order. */
+function attributesInConditional(n: ALSyntaxNode, out: ALSyntaxNode[] = []): ALSyntaxNode[] {
+  for (const c of n.namedChildren) {
+    if (c.rawKind === "attribute_item") out.push(c);
+    else if (c.rawKind === "preproc_conditional") attributesInConditional(c, out);
   }
   return out;
 }
 
+/**
+ * R420: whether `n` is an `#if` whose every arm holds attributes only (comments and nested
+ * attribute-only `#if`s allowed), with at least one attribute: `#if X [HandlerFunctions('H')]
+ * #endif` in a member's attribute run. Its attributes belong to the member after it.
+ */
+function isAttributeConditional(n: ALSyntaxNode): boolean {
+  if (n.rawKind !== "preproc_conditional") return false;
+  const onlyAttributes = (c: ALSyntaxNode): boolean =>
+    c.namedChildren.every(
+      (x) =>
+        x.rawKind === "attribute_item" ||
+        PREPROC_BRANCH_MARKER.has(x.rawKind) ||
+        TRIVIA.has(x.rawKind) ||
+        (x.rawKind === "preproc_conditional" && onlyAttributes(x)),
+    );
+  return onlyAttributes(n) && attributesInConditional(n).length > 0;
+}
+
+/** Where an arm of a `preproc_conditional` starts. */
+const ARM_START = new Set(["preproc_if", "preproc_elif", "preproc_else"]);
+
+/** A member's attribute run: the source it spans and the attributes in it. */
+interface AttributeRun {
+  /** `[from, to)` pieces in source order; the last ends at the member's end. One piece, except
+   *  for S11 below. */
+  readonly pieces: ReadonlyArray<readonly [number, number]>;
+  /** Every attribute in the run, every `#if` arm's included, nearest first. */
+  readonly attributes: readonly ALSyntaxNode[];
+}
+
+/**
+ * `decl`'s attribute run, R-278's span rule as R420 extends it. The run is the siblings directly
+ * before `decl`: attributes, trivia between them, and (R420) an `#if` that holds attributes only,
+ * whose attributes are taken from EVERY arm (the union: the digest walks every handler a build
+ * might use, the TestPage scan sees every TestPage one might touch). The span starts at the run's
+ * first node, so editing a handler list inside `#if` edits the test.
+ *
+ * With `andTrivia`, trivia directly before is taken too: R-371's object parts leave a doc comment
+ * above a procedure out, so adding a commented test to a codeunit does not read as an edit to its
+ * header.
+ *
+ * S11 (`[Test]` then `#if X procedure A ... #else procedure B ... #endif`): the compiler gives
+ * each arm's procedure the attributes before the `#if`. When the run inside the arm reaches the
+ * arm's start, and the run before the `#if` holds an attribute, that run is the procedure's too.
+ * The span is then two pieces, that outer run and the arm's own run to the procedure's end, so
+ * an edit to the other arm's procedure is not an edit to this one.
+ */
+function attributeRun(decl: ALSyntaxNode, andTrivia = false, end = decl.endIndex): AttributeRun {
+  let start = decl.startIndex;
+  const attributes: ALSyntaxNode[] = [];
+  const siblings = decl.parent?.namedChildren ?? [];
+  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
+  let atArmStart = false;
+  for (i -= 1; i >= 0; i -= 1) {
+    const x = siblings[i];
+    if (x === undefined) break;
+    if (x.rawKind === "attribute_item") {
+      attributes.push(x);
+      start = x.startIndex;
+    } else if (isAttributeConditional(x)) {
+      attributes.push(...attributesInConditional(x).reverse());
+      start = x.startIndex;
+    } else if (TRIVIA.has(x.rawKind)) {
+      if (andTrivia) start = x.startIndex;
+    } else {
+      atArmStart = ARM_START.has(x.rawKind);
+      break;
+    }
+  }
+  const own: AttributeRun = { pieces: [[start, end]], attributes };
+  const cond = decl.parent;
+  if (!atArmStart || cond === null || cond.rawKind !== "preproc_conditional") return own;
+  const outer = attributeRun(cond, andTrivia, cond.startIndex);
+  if (outer.attributes.length === 0) return own;
+  return {
+    pieces: [...outer.pieces, [start, end]],
+    attributes: [...attributes, ...outer.attributes],
+  };
+}
+
+/** A span's text: its pieces joined by a newline (one piece is the plain slice, as before R420). */
+const spanText = (source: string, run: AttributeRun): string =>
+  run.pieces.map(([from, to]) => source.slice(from, to)).join("\n");
 const HANDLER_ATTRIBUTE = /^\[\s*HandlerFunctions\s*\(\s*'([^']*)'/i;
 const SUBSCRIBER_ATTRIBUTE = /^\[\s*EventSubscriber\s*\(/i;
 const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
@@ -467,15 +525,19 @@ const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
  * adding or editing a procedure leaves it unchanged.
  */
 function partsText(source: string, node: ALSyntaxNode): string {
-  const cuts: Array<[number, number]> = [];
+  const cuts: Array<readonly [number, number]> = [];
   visit(node, (n) => {
-    if (n.rawKind === "procedure") cuts.push([spanStart(n, true), n.endIndex]);
+    if (n.rawKind === "procedure") cuts.push(...attributeRun(n, true).pieces);
   });
   cuts.sort((x, y) => x[0] - y[0]);
   const pieces: string[] = [];
   let at = node.startIndex;
   for (const [from, to] of cuts) {
-    if (from < at) continue; // nested inside a cut already taken
+    // Nested inside a cut already taken, or (S11) the outer run two arms' procedures share.
+    if (from < at) {
+      at = Math.max(at, to);
+      continue;
+    }
     pieces.push(source.slice(at, from));
     at = to;
   }
@@ -522,8 +584,17 @@ function procOf(
       isTrigger || problems === null ? [] : problems,
     );
   const block = p.namedChildren.find((c) => c.rawKind === "code_block");
-  const attributes = attributesOf(p);
-  const handlerList = attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h);
+  const run = attributeRun(p);
+  const attributes = run.attributes.map((x) => x.text.trim());
+  // R420: every `[HandlerFunctions]` in the run, so every `#if` arm's (the union).
+  const handlers = [
+    ...new Set(
+      attributes
+        .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
+        .map((h) => normalizeAlName(h.trim()))
+        .filter((h) => h.length > 0),
+    ),
+  ];
   const display = `${unit.display}.${id2.text}`;
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
   const suffix = isTrigger ? " (trigger)" : "";
@@ -539,11 +610,8 @@ function procOf(
     params: params.length,
     returnType,
     scope,
-    handlers: (handlerList ?? "")
-      .split(",")
-      .map((h) => normalizeAlName(h.trim()))
-      .filter((h) => h.length > 0),
-    spanHash: sha256(normalizeSource(source.slice(spanStart(p), p.endIndex))),
+    handlers,
+    spanHash: sha256(normalizeSource(spanText(source, run))),
     key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`,
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
   };
