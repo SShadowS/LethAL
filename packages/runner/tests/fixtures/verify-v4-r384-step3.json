@@ -1,0 +1,95 @@
+{
+  "verifySchemaVersion": 4,
+  "source": {
+    "runId": 1,
+    "batchIndex": 0,
+    "artifactId": "4e8e29d3e63001f0276d343b93a43896",
+    "artifactSha256": "27ad0bec64c17d08b7a6b0510eb52712589765d2ee32627359506851eaec8f6f",
+    "sourceSha256": "d422cfe1bb1267b4236ef1061d788c56298ed9a49fedafee5b4e1ad00c1aff5f",
+    "projectPath": "/work/lethal-wt/r384/fixtures/sandbox-app"
+  },
+  "verifyRunId": 2,
+  "testApp": {
+    "name": "LethAL Sandbox Tests",
+    "version": "1.0.0.3",
+    "sha256": "1130341105af082951dee233fa972d48385a6509247fb02b5945e162c56432b9",
+    "compiledAgainst": {
+      "artifactId": "4e8e29d3e63001f0276d343b93a43896",
+      "sha256": "27ad0bec64c17d08b7a6b0510eb52712589765d2ee32627359506851eaec8f6f"
+    }
+  },
+  "ok": false,
+  "exitCode": 5,
+  "newTests": [
+    {
+      "test": "Sandbox Tests.ZzC0206ClampRejectsAboveHundred",
+      "codeunitId": 79100,
+      "state": "stable",
+      "runs": [
+        {
+          "outcome": "pass",
+          "fresh": true,
+          "sessionId": 3649,
+          "testRunsBefore": 0
+        },
+        {
+          "outcome": "pass",
+          "fresh": true,
+          "sessionId": 3653,
+          "testRunsBefore": 0
+        }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "0/M0005",
+      "batchIndex": 0,
+      "mutantCode": "M0005",
+      "file": "src/SandboxLogic.Codeunit.al",
+      "line": 12,
+      "operatorName": "lethal.negate-conditional",
+      "procedureName": "ClampPercent",
+      "gapId": "G72826da4c976",
+      "testsRun": [
+        "Sandbox Tests.ClampPercentRuns",
+        "Sandbox Tests.ZzC0206ClampRejectsAboveHundred"
+      ],
+      "verdict": "killed",
+      "killingTest": {
+        "codeunitId": 79100,
+        "codeunitName": "Sandbox Tests",
+        "method": "ZzC0206ClampRejectsAboveHundred"
+      },
+      "killedByNewTest": true,
+      "killedBy": "other",
+      "killingTestFailure": "ZzC0206: ClampPercent(150) must return 0\nSandbox Tests(CodeUnit 79100).ZzC0206ClampRejectsAboveHundred line 3 - LethAL Sandbox Tests by LethAL version 1.0.0.3;Test Runner - Mgt(CodeUnit 130454).RunTests line 26 - Test Runner by Microsoft version 28.4.53241.53758;Test Runner - Isol. Codeunit(CodeUnit 130450).OnRun(Trigger) line 4 - Test Runner by Microsoft version 28.4.53241.53758;Test Suite Mgt.(CodeUnit 130456).RunTests line 2 - Test Runner by Microsoft version 28.4.53241.53758;LC Run Many(CodeUnit 91012).RunAll line 126 - LethAL Control by LethAL version 1.0.0.20;LC Run Many(CodeUnit 91012).OnRun(Trigger) line 2 - LethAL Control by LethAL version 1.0.0.20;LC Control API(CodeUnit 91003).RunMutantMany line 33 - LethAL Control by LethAL version 1.0.0.20;"
+    },
+    {
+      "id": "0/M0012",
+      "batchIndex": 0,
+      "mutantCode": "M0012",
+      "file": "src/SandboxLogic.Codeunit.al",
+      "line": 24,
+      "operatorName": "lethal.negate-conditional",
+      "procedureName": "LogAudit",
+      "gapId": "G4e97ec8a420a",
+      "testsRun": [
+        "Sandbox Tests.ClampPercentRuns"
+      ],
+      "verdict": "survived"
+    }
+  ],
+  "counts": {
+    "killed": 1,
+    "survived": 1,
+    "error": 0,
+    "skipped": 0
+  },
+  "timings": {
+    "totalMs": 3216,
+    "compileMs": 1327,
+    "publishMs": 939
+  }
+}
+

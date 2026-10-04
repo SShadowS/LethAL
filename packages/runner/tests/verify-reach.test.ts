@@ -2,7 +2,14 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { CoverageEntry, CoverageMode, TestMethodRef, TestVerdict } from "../src/backend";
 import { testKeyOf } from "../src/selection";
-import { type ReachInput, narrowVerifyRequests, reachStateOf } from "../src/verify-reach";
+import {
+  REACH_FILTER_OFF_REASONS,
+  REACH_FILTER_STATES,
+  type ReachInput,
+  type ReachState,
+  narrowVerifyRequests,
+  reachStateOf,
+} from "../src/verify-reach";
 
 // R-384: verify's reach filter. Every fixture that pins a fail-closed case gives the failing test
 // coverage of a SIBLING member of S's object only, so the case goes red if its clause is reverted
@@ -102,11 +109,57 @@ describe("R-384: reachStateOf (rule 1)", () => {
   ];
   for (const [mode, enabled, why] of cases) {
     test(`${mode}, enabled ${enabled}: ${why ?? "on"}`, () => {
-      expect(reachStateOf(mode, enabled)).toEqual(
+      // R-425: the off state also carries a reason; `why` is unchanged.
+      expect(reachStateOf(mode, enabled)).toMatchObject(
         why === undefined ? { on: true } : { on: false, why },
       );
     });
   }
+});
+
+describe("R-425: reachStateOf reasons, every mode x flag", () => {
+  // `why` is the stderr text R-384 pins with toBe; it must stay byte-identical. The flag wins over
+  // every mode, as before.
+  const cases: Array<[CoverageMode, boolean, ReachState]> = [
+    ["fenced", true, { on: true }],
+    ["fenced", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    ["none", true, { on: false, reason: "coverage-mode-none", why: 'coverage mode "none"' }],
+    ["none", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "procedure",
+      true,
+      {
+        on: false,
+        reason: "coverage-mode-procedure",
+        why: 'coverage mode "procedure" is a hub mode',
+      },
+    ],
+    ["procedure", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "line",
+      true,
+      { on: false, reason: "coverage-mode-line", why: 'coverage mode "line" is a hub mode' },
+    ],
+    ["line", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "al-runner",
+      true,
+      { on: false, reason: "coverage-mode-al-runner", why: 'coverage mode "al-runner"' },
+    ],
+    ["al-runner", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+  ];
+  for (const [mode, enabled, expected] of cases) {
+    test(`${mode}, enabled ${enabled}`, () => {
+      expect(reachStateOf(mode, enabled)).toEqual(expected);
+    });
+  }
+
+  test("the reason list is exactly the reasons reachStateOf can return", () => {
+    expect([...REACH_FILTER_OFF_REASONS].sort()).toEqual(
+      [...new Set(cases.flatMap(([, , s]) => (s.on ? [] : [s.reason])))].sort(),
+    );
+    expect([...REACH_FILTER_STATES]).toEqual(["on", "off"]);
+  });
 });
 
 describe("R-384: narrowVerifyRequests, fail-closed cases", () => {
@@ -132,7 +185,7 @@ describe("R-384: narrowVerifyRequests, fail-closed cases", () => {
 
   test("case 2b: --no-reach-filter joins every new test to every survivor", () => {
     const r = narrowVerifyRequests(offInput("fenced", false));
-    expect(r.state).toEqual({ on: false, why: "--no-reach-filter" });
+    expect(r.state).toEqual({ on: false, reason: "no-reach-filter", why: "--no-reach-filter" });
     expect(keysOf(r, "M0001")).toEqual(["50100::T1", "50100::T2"]);
   });
 
@@ -392,6 +445,80 @@ describe("R-384: narrowVerifyRequests, positives", () => {
     expect(keysOf(r, "M0001")).toEqual(["50101::Old"]);
     expect(r.unreached.size).toBe(0);
     expect([...r.noNewTest]).toEqual(["M0001"]);
+  });
+});
+
+describe("R-425: the narrowed set", () => {
+  const T1 = ref("T1");
+  const T2 = ref("T2");
+
+  test("filter off: nothing is narrowed, though the same fixture narrows with it on", () => {
+    const base = {
+      survivors: [S],
+      newTests: [T1, T2],
+      baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+    };
+    for (const mode of ["none", "procedure", "line"] as const) {
+      expect([...narrowVerifyRequests(input({ ...base, mode })).narrowed]).toEqual([]);
+    }
+    expect([...narrowVerifyRequests(input({ ...base, enabled: false })).narrowed]).toEqual([]);
+    expect([...narrowVerifyRequests(input(base)).narrowed]).toEqual(["M0001"]);
+  });
+
+  test("a sibling-only new test left out narrows the survivor", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1, T2],
+        baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50100::T2"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
+  });
+
+  test("a fail-closed survivor takes every new test and is not narrowed", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1],
+        baseline: [pass(T1, SIB)],
+        refusedObjects: new Map([[`codeunit:${OBJ}`, "Logic is wrapped in #if (R298)"]]),
+      }),
+    );
+    expect(r.failClosedSurvivors).toEqual([{ mutantId: "M0001", why: "refused" }]);
+    expect([...r.narrowed]).toEqual([]);
+  });
+
+  test("N = 0: no new test, nothing to drop, not narrowed", () => {
+    const old = ref("Old", 50101, "U");
+    const r = narrowVerifyRequests(
+      input({ survivors: [S], coveringKeys: new Map([["M0001", [old]]]), newTests: [] }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50101::Old"]);
+    expect([...r.narrowed]).toEqual([]);
+  });
+
+  test("an unreached survivor with N > 0 is narrowed", () => {
+    const r = narrowVerifyRequests(
+      input({ survivors: [S], newTests: [T1], baseline: [pass(T1, SIB)] }),
+    );
+    expect([...r.unreached]).toEqual(["M0001"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
+  });
+
+  test("per survivor: one reached by every new test, one not", () => {
+    const S2 = mutant("M0002", { procedureName: "Other" });
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S, S2],
+        newTests: [T1, T2],
+        baseline: [pass(T1, [hit("Post"), hit("Other")]), pass(T2, [hit("Other")], 2)],
+      }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50100::T1"]);
+    expect(keysOf(r, "M0002")).toEqual(["50100::T1", "50100::T2"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
   });
 });
 

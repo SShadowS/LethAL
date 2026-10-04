@@ -57,6 +57,8 @@ import {
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
+import type { ReachFilterOffReason } from "../src/verify-reach";
+import { droppedNewTestsOf } from "../src/verify-read";
 import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -1954,6 +1956,8 @@ describe("C02-09: gap ids", () => {
     expect(r?.notRun).toEqual(["Old.P", "New.NP"]);
     expect(r?.testsRun).toEqual([]);
     expect(r?.failureNote).toContain("TestPage refused, not run");
+    // R-425: never planned, so the filter never decided for this row.
+    expect(r !== undefined && "reachNarrowed" in r).toBe(false);
     expect(out.testPageRefused?.tests).toEqual(["New.NP", "Old.P"]);
     expect(out.testPageRefused?.diagnosis).toBe(TESTPAGE_REFUSED_DIAGNOSIS);
     expect(out.exitCode).toBe(VERIFY_EXIT.nothingMeasured);
@@ -2261,6 +2265,10 @@ describe("C02-09: gap ids", () => {
       expect(out.results.map((r) => [r.verdict, r.testsRun])).toEqual([
         ["survived", ["T.M", "New.N1"]],
       ]);
+      // R-425: the JSON records the state; on carries no reason.
+      expect(out.reachFilter).toEqual({ state: "on" });
+      // R-425: New.N2 was left out of this survivor's request.
+      expect(out.results.map((r) => r.reachNarrowed)).toEqual([true]);
       // Both new tests still run twice unmutated (decision 11).
       expect(out.newTests.map((t) => t.test)).toEqual(["New.N1", "New.N2"]);
       expect(lines).toEqual([
@@ -2287,6 +2295,8 @@ describe("C02-09: gap ids", () => {
         "no new test reaches it: the coverage of the 2 new test(s) that could be read shows none of them running Post, so nothing was run (R-384)",
       );
       expect(out.exitCode).toBe(VERIFY_EXIT.notAllKilled);
+      // R-425: an unreached survivor with new tests left out is narrowed.
+      expect(r?.reachNarrowed).toBe(true);
       expect(lines).toEqual([
         "[lethal] verify: reach filter on (fenced coverage): 2 new test(s), 0 joined every survivor because their coverage could not be used; 0 mutant run(s) instead of 2 without the filter; 1 survivor(s) no new test reaches.",
         "[lethal] verify: survivors no new test reaches: 0/M0001",
@@ -2404,23 +2414,254 @@ describe("C02-09: gap ids", () => {
       const out = await w.verify(["0/M0001"]);
       expect(out.refused?.reason).toBe("coverage-mode-changed");
       expect(lines).toEqual([]);
+      // R-425: refused before the filter was decided, so the field is absent.
+      expect("reachFilter" in out).toBe(false);
       w.store.close();
     });
 
-    const offCases: Array<[string, Partial<Parameters<typeof verifyWorld>[2]>, string]> = [
-      ["--no-reach-filter", { ...fenced, noReachFilter: true }, "--no-reach-filter"],
+    test("R-425: a malformed request is refused before the decision, so reachFilter is absent", async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: async () => {
+          throw new Error("runNamed must not be called when verify refuses");
+        },
+      });
+      const out = await w.verify(["not-an-id"]);
+      expect(out.refused?.reason).toBe("malformed-request");
+      expect("reachFilter" in out).toBe(false);
+      w.store.close();
+    });
+
+    test("R-425: check 1 of the cap refuses after the decision, so reachFilter is present", async () => {
+      // Filter on, S = 1, max 1: B = 3, and 2N = 4 > B refuses in planVerify, before the lease.
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        maxNewTests: 1,
+        runNamed: async () => {
+          throw new Error("runNamed must not be called when verify refuses");
+        },
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused?.reason).toBe("too-many-new-tests");
+      expect(out.verifyRunId).toBeUndefined();
+      expect(out.reachFilter).toEqual({ state: "on" });
+      w.store.close();
+    });
+
+    const offCases: Array<
+      [string, Partial<Parameters<typeof verifyWorld>[2]>, string, ReachFilterOffReason]
+    > = [
+      [
+        "--no-reach-filter",
+        { ...fenced, noReachFilter: true },
+        "--no-reach-filter",
+        "no-reach-filter",
+      ],
       [
         "hub mode procedure",
         { sourceCoverage: "procedure", backendCoverage: "procedure" },
         'coverage mode "procedure" is a hub mode',
+        "coverage-mode-procedure",
       ],
       [
         "hub mode line",
         { sourceCoverage: "line", backendCoverage: "line" },
         'coverage mode "line" is a hub mode',
+        "coverage-mode-line",
       ],
-      ["mode none", { sourceCoverage: "none", backendCoverage: "none" }, 'coverage mode "none"'],
+      [
+        "mode none",
+        { sourceCoverage: "none", backendCoverage: "none" },
+        'coverage mode "none"',
+        "coverage-mode-none",
+      ],
     ];
+    for (const [name, modes, , reason] of offCases) {
+      test(`R-425: filter off (${name}): reachFilter is off with reason ${reason}, and no other key`, async () => {
+        const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...modes,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+          log: () => {},
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.reachFilter).toEqual({ state: "off", reason });
+        expect(Object.keys(out.reachFilter ?? {}).sort()).toEqual(["reason", "state"]);
+        // R-425: off cannot narrow; with the filter on, this fixture narrows M0001 (New.N2).
+        expect(out.results.map((r) => r.reachNarrowed)).toEqual([false]);
+        w.store.close();
+      });
+    }
+
+    test("R-425: filter on, reachNarrowed is per survivor, from the filter's own answer", async () => {
+      const w = await verifyWorld(
+        [
+          seed("M0001", undefined, "survived"),
+          seed("M0002", undefined, "survived", { procedureName: "Other" }),
+        ],
+        [],
+        {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: [...POST, ...OTHER], N2: OTHER }),
+        },
+      );
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(out.results.map((r) => [r.mutantCode, r.testsRun, r.reachNarrowed])).toEqual([
+        ["M0001", ["T.M", "New.N1"], true],
+        ["M0002", ["T.M", "New.N1", "New.N2"], false],
+      ]);
+      w.store.close();
+    });
+
+    // R-425: the dropped list is not stored, because it is derivable. On every reach fixture of this
+    // describe, the reader's derivation (newTests minus testsRun) equals the unfiltered request
+    // runNamed was handed minus what was sent, and is non-empty exactly when the row says narrowed.
+    test("R-425 invariant: droppedNewTestsOf equals request minus sent on every reach fixture", async () => {
+      const at = (procedure: string) => [{ objectType: "Codeunit", objectId: 50000, procedure }];
+      const fixtures: Array<{
+        seeds: Seed[];
+        ids: string;
+        newMethods?: string[];
+        coverage: Record<string, readonly CoverageEntry[]>;
+        outcome?: Record<string, TestOutcome>;
+        coveringTests?: string[];
+      }> = [
+        {
+          seeds: [seed("M0001", undefined, "survived")],
+          ids: "0/M0001",
+          coverage: { M: POST, N1: POST, N2: OTHER },
+        },
+        {
+          seeds: [seed("M0001", undefined, "no-coverage")],
+          ids: "0/M0001",
+          coverage: { N1: OTHER, N2: OTHER },
+          coveringTests: [],
+        },
+        {
+          seeds: [
+            seed("M0001", undefined, "survived"),
+            seed("M0002", undefined, "survived", { procedureName: "Other" }),
+          ],
+          ids: "0/M0001,0/M0002",
+          coverage: { M: POST, N1: [...POST, ...OTHER], N2: OTHER },
+        },
+        {
+          seeds: [
+            seed("M0001", undefined, "survived"),
+            seed("M0002", undefined, "survived", { procedureName: "Other" }),
+            seed("M0003", undefined, "survived", { procedureName: "Third" }),
+          ],
+          ids: "0/M0001,0/M0002,0/M0003",
+          newMethods: ["T1", "T2", "T3"],
+          coverage: {
+            M: POST,
+            T1: [...at("Post"), ...at("Other")],
+            T2: at("Post"),
+            T3: at("Other"),
+          },
+        },
+        {
+          seeds: [seed("M0001", undefined, "survived"), seed("M0002", undefined, "survived")],
+          ids: "0/M0001,0/M0002",
+          coverage: { M: POST, N1: POST, N2: OTHER },
+          outcome: { N2: "fail" },
+        },
+      ];
+      let narrowedRows = 0;
+      for (const f of fixtures) {
+        const seen: NamedMutantsConfig[] = [];
+        const w = await verifyWorld(f.seeds, [], {
+          ...fenced,
+          testDir: reachTestDir(f.newMethods),
+          baseline: [T_M],
+          ...(f.coveringTests !== undefined ? { coveringTests: f.coveringTests } : {}),
+          runNamed: reachRunNamed(f.coverage, {
+            seen,
+            ...(f.outcome !== undefined ? { outcome: f.outcome } : {}),
+          }),
+        });
+        const out = await w.verify([f.ids]);
+        expect(out.refused).toBeUndefined();
+        const [cfg] = seen;
+        if (cfg === undefined) throw new Error("runNamed was not called");
+        for (const row of out.results) {
+          const request = cfg.requests.find((q) => q.mutantId === row.mutantCode);
+          if (request === undefined) throw new Error(`no request for ${row.mutantCode}`);
+          const sent = new Set(row.testsRun ?? []);
+          const requestMinusSent = request.methods
+            .map((m) => `${m.codeunitName}.${m.method}`)
+            .filter((n) => !sent.has(n));
+          const dropped = droppedNewTestsOf(out, row);
+          expect(dropped ?? []).toEqual(requestMinusSent);
+          expect(row.reachNarrowed).toBe(requestMinusSent.length > 0);
+          if (row.reachNarrowed === true) narrowedRows += 1;
+        }
+        w.store.close();
+      }
+      // The fixtures do reach both sides of the invariant.
+      expect(narrowedRows).toBeGreaterThan(0);
+    });
+
+    test("R-425: a skipped (marked equivalent) row has no reachNarrowed", async () => {
+      const w = await verifyWorld(
+        [seed("M0001", undefined, "survived"), seed("M0002", undefined, "survived")],
+        ["M0001"],
+        {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+        },
+      );
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(out.reachFilter).toEqual({ state: "on" });
+      expect(out.results.map((r) => [r.mutantCode, r.verdict, "reachNarrowed" in r])).toEqual([
+        ["M0001", "skipped", false],
+        ["M0002", "survived", true],
+      ]);
+      w.store.close();
+    });
+
+    test("R-425: filter on but narrow never called (session latched unsafe): error rows have no reachNarrowed", async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        // Stands in for runNamedMutants latching unsafe before `select`: no `narrow`, every
+        // requested mutant `error`, the unfiltered methods.
+        runNamed: async (cfg) => ({
+          outcomes: cfg.requests.map((r) => ({
+            mutant: entry(r.mutantId),
+            verdict: "error" as const,
+            batchIndex: 0,
+          })),
+          baseline: (cfg.rerunOnUnmutated ?? []).map((ref) => ({
+            ref,
+            outcome: "not-run" as const,
+            fresh: false,
+          })),
+          rerun: (cfg.rerunOnUnmutated ?? []).map((ref) => ({
+            ref,
+            outcome: "not-run" as const,
+            fresh: false,
+          })),
+        }),
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.reachFilter).toEqual({ state: "on" });
+      const [r] = out.results;
+      expect(r?.verdict).toBe("error");
+      expect(r?.testsRun).toEqual(["T.M", "New.N1", "New.N2"]);
+      expect(r !== undefined && "reachNarrowed" in r).toBe(false);
+      w.store.close();
+    });
     for (const [name, modes, why] of offCases) {
       test(`filter off (${name}): every new test joins every survivor, and the off line says why`, async () => {
         const lines: string[] = [];
@@ -2494,6 +2735,8 @@ describe("C02-09: gap ids", () => {
         );
         // Refused after the run row was made: the output names it.
         expect(out.verifyRunId).toBeDefined();
+        // R-425: refused after the decision, so the state is recorded.
+        expect(out.reachFilter).toEqual({ state: "on" });
         expect(out.results).toEqual([]);
         expect(out.exitCode).toBe(VERIFY_EXIT.refused);
         w.store.close();

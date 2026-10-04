@@ -445,7 +445,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 4`. Schema: [../schemas/verify-v4.schema.json](../schemas/verify-v4.schema.json).
+`verifySchemaVersion: 5`. Schema: [../schemas/verify-v5.schema.json](../schemas/verify-v5.schema.json).
 
 | field | values |
 |---|---|
@@ -453,6 +453,8 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error` |
 | `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
+| `reachFilter.state` | `on`, `off` |
+| `reachFilter.reason` | `no-reach-filter`, `coverage-mode-none`, `coverage-mode-procedure`, `coverage-mode-line`, `coverage-mode-al-runner` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
 `invalidBaseline` and `gapId`.
@@ -600,8 +602,15 @@ filter is off under the hub modes (`procedure`, `line`), whose coverage comes fr
 session, and under `none`. One stderr line says which:
 `[lethal] verify: reach filter on (fenced coverage): ...` with the runs it saved, or
 `[lethal] verify: reach filter off (<why>): every new test runs against every survivor.`; a
-`verify-reach-fail-closed` warning names each test and survivor that took every new test. The JSON
-is unchanged; per survivor, `testsRun` shows which new tests were sent.
+`verify-reach-fail-closed` warning names each test and survivor that took every new test. Since
+schema v5 (R-425) the JSON records it too: `reachFilter` is `{"state": "on"}` or
+`{"state": "off", "reason": ...}`, and each planned row carries `reachNarrowed`, true when the filter
+left at least one new test out of that survivor's request. The tests left out are
+`newTests[].test` minus that row's `testsRun`. A MISSING field is unknown, never off: in a v5
+document, a missing `reachFilter` means verify stopped before deciding it (an early refusal), and a
+row without `reachNarrowed` is one the filter never decided for (skipped, every test
+TestPage-refused, or the session stopped first). A document below v5 cannot say whether the filter
+ran, so do not infer it from `testsRun`.
 
 The filter sees only code a new test runs itself, in its own session. A test that fails only
 because an EARLIER test in the same call left state behind (SingleInstance globals, committed
