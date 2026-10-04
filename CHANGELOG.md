@@ -13,6 +13,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal verify` sends a new test only to the survivors its coverage reaches** (R384). Under
+  `fenced` coverage, verify reads each new test's coverage from the unmutated run it already makes
+  and joins the test only to the survivors whose procedure (or, for a trigger, object) it ran, by
+  the source run's own selection rule. A new test whose coverage cannot be used, and a survivor
+  coverage cannot place, fail closed: they take every new test. A survivor's covering tests are
+  never dropped. A survivor no new test reaches and with no covering test stays `survived` with
+  `testsRun: []`. Off under the hub modes and `none`, and with the new `--no-reach-filter`. One
+  stderr line states the filter's state; the JSON is unchanged (schema v4). Stated limit: state
+  left by an earlier test in the same call, or code run in another session, is not seen.
+
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
@@ -24,6 +34,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   names `coverage`.
 
 ### Changed
+
+- **`--max-new-tests` budgets extra test runs, not new tests** (R384). The budget is
+  `--max-new-tests` x (survivors + 2) extra test runs. With the reach filter off, the boundary is
+  unchanged (more new tests than `--max-new-tests` refuses). With it on, verify refuses before the
+  lease only when two unmutated runs per new test exceed the budget, and otherwise after those
+  runs, before any mutant, when the runs left after the filter still do. No verify that passed
+  before refuses now. The `too-many-new-tests` texts change; the refusal value does not.
+- **`coverageFilter` takes an optional `warn` sink** (R384). `lethal run` prints the same lines.
 
 - **The hang tag reads loop-condition operands in `#if` arms the build compiles, and only those** (R402). A `while (A < 10)` `#if X and (B < 5) #endif` tail is now read, so `B := B + 1` is tagged `loop-condition-target` under `X`. Tails inside a condition (call arguments, subscripts, list elements) are no longer read when their arm is compiled out. Directive symbols are never read as variables.
 - **A file where a statement-level `#if` continues an unterminated statement is not mutated** (R402, R408). For example, `repeat ... until (A > 10)` `#if X or (B > 5) #endif ;`. The parser places the tail as a separate statement, and the instrumented artifact then failed alc (`AL0111`), taking down every mutant in its batch. Such a file is reported as `preproc-undecided` with the reason `directive-continues-statement at line N`, and it is still compiled and published. Measured on DC, System Application, Business Foundation and BaseApp: no file is refused by this, and no mutant, key or tag changes.
