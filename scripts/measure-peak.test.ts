@@ -7,8 +7,8 @@ describe("maxRssToMb", () => {
     expect(maxRssToMb(1024 * 1024 * 1024, "linux")).toBe(1024);
     expect(maxRssToMb(BigInt(2 * 1024 * 1024), "linux")).toBe(2);
   });
-  test("win32 reads kilobytes", () => {
-    expect(maxRssToMb(1024 * 1024, "win32")).toBe(1024);
+  test("win32 reads bytes (Bun 1.4.2, R448)", () => {
+    expect(maxRssToMb(1024 * 1024 * 1024, "win32")).toBe(1024);
   });
   test("an unmeasured platform throws, naming it", () => {
     expect(() => maxRssToMb(1, "darwin")).toThrow(UnknownMaxRssUnitError);

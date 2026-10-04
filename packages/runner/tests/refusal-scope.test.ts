@@ -73,8 +73,9 @@ const TEST_AL = `codeunit 79400 "Good Tests"
 }
 `;
 
-const GOOD = join("src", "Good.Codeunit.al");
-const MIXED = join("src", "Mixed.al");
+// Report paths are always "/"-separated (targetAlFiles normalises them), so never `join` these (R448).
+const GOOD = "src/Good.Codeunit.al";
+const MIXED = "src/Mixed.al";
 
 /** Every test passes and covers `Good.Compute`, so every mutant survives. */
 class SurviveBackend implements ExecutionBackend {
