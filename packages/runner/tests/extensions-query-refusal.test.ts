@@ -143,6 +143,54 @@ describe("fetchApiRows refuses an extensions query not filtered by one GUID (R43
   });
 });
 
+/** `s` with every `%` escaped `n` more times: `nest("%65", 2)` is `%252565`. */
+function nest(s: string, n: number): string {
+  let cur = s;
+  for (let i = 0; i < n; i++) cur = cur.replaceAll("%", "%25");
+  return cur;
+}
+
+describe("the refusal also covers the query and leftover escapes (R438)", () => {
+  const COMPANIES = "api/v2.0/companies";
+  const refusedKV: [string, string, Record<string, string>][] = [
+    ["an $expand value naming extensions", COMPANIES, { $expand: "extensions" }],
+    ["an encoded value naming extensions", COMPANIES, { $expand: "%65xtensions" }],
+    ["a key naming extensions", COMPANIES, { "extensions($select=id)": "x" }],
+    ["a $filter value naming extensions", COMPANIES, { $filter: "extensions/any()" }],
+  ];
+  const refusedLeftover: [string, string, Record<string, string>][] = [
+    ["a 17-deep escape in the path", nest("%65xtensions", 17), {}],
+    ["a 17-deep escape in a value", COMPANIES, { $expand: nest("%65xtensions", 17) }],
+    ["a 17-deep escape in a key", COMPANIES, { [nest("%65xtensions", 17)]: "x" }],
+  ];
+  for (const [name, path, extra] of [...refusedKV, ...refusedLeftover]) {
+    test(`refuses ${name}, with zero fetches`, async () => {
+      const { urls, fetchFn } = fake();
+      const call = rowsOf(new HarnessVerifier(CFG, fetchFn))(path, "x", extra);
+      await expect(call).rejects.toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(urls).toEqual([]);
+    });
+  }
+
+  test("a 3-deep escape of a harmless string still passes", async () => {
+    const { urls, fetchFn } = fake();
+    await rowsOf(new HarnessVerifier(CFG, fetchFn))(COMPANIES, "x", { $top: nest("%41", 2) });
+    expect(urls.length).toBe(1);
+  });
+
+  test("a harmless query on the companies path still sends", async () => {
+    const { urls, fetchFn } = fake();
+    await rowsOf(new HarnessVerifier(CFG, fetchFn))(COMPANIES, "x", { $top: "5" });
+    expect(urls.length).toBe(1);
+  });
+
+  test("the allowed GUID filter on the extensions path still sends", async () => {
+    const { urls, fetchFn } = fake();
+    await rowsOf(new HarnessVerifier(CFG, fetchFn))(EXT, "x", { $filter: `id eq ${GUID}` });
+    expect(urls).toEqual([ALLOWED_URL]);
+  });
+});
+
 describe("fetchExtensionInstalled refuses a non-GUID id before any request (R433)", () => {
   for (const id of ["", "app-1", ` ${GUID}`, `{${GUID}}`, `${GUID} or publisher eq 'x'`]) {
     test(`refuses ${JSON.stringify(id)} with zero fetches`, async () => {

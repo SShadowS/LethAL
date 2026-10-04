@@ -131,16 +131,17 @@ const EXTENSIONS_FILTER_RE = new RegExp(`^id eq ${GUID_PATTERN}$`);
 
 /** Every `%XX` escape replaced by its character, repeated until nothing changes (so `%2565` ends as
  *  `e`). Lenient: a malformed escape stays as written and never throws. */
-function decodePercentEscapes(path: string): string {
+function decodePercentEscapes(path: string): { text: string; leftover: boolean } {
   let cur = path;
   for (let i = 0; i < 16; i++) {
     const next = cur.replace(/%([0-9a-fA-F]{2})/g, (_m, h: string) =>
       String.fromCharCode(Number.parseInt(h, 16)),
     );
-    if (next === cur) return cur;
+    if (next === cur) return { text: cur, leftover: false };
     cur = next;
   }
-  return cur;
+  // R438: after the last round, a `%XX` still in the text means it was nested too deep to read.
+  return { text: cur, leftover: /%[0-9a-fA-F]{2}/.test(cur) };
 }
 
 /** R433: throws unless an `extensions` request is filtered by exactly one GUID. Any path naming
@@ -150,8 +151,24 @@ function refuseUnfilteredExtensionsQuery(
   path: string,
   extra: Readonly<Record<string, string>>,
 ): void {
-  const decoded = decodePercentEscapes(path);
-  if (!/extensions/i.test(decoded)) return;
+  const refuse = (): never => {
+    throw new UnfilteredExtensionsQueryError(
+      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(extra)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
+    );
+  };
+  const pathDecoded = decodePercentEscapes(path);
+  const decoded = pathDecoded.text;
+  const queryDecoded = Object.entries(extra).flatMap(([k, v]) => [
+    decodePercentEscapes(k),
+    decodePercentEscapes(v),
+  ]);
+  // R438: text still encoded after the last round cannot be read, so it is refused.
+  if ([pathDecoded, ...queryDecoded].some((p) => p.leftover)) refuse();
+  if (!/extensions/i.test(decoded)) {
+    // R438: a key or value naming extensions counts on any path, not only on the path itself.
+    if (queryDecoded.some((p) => /extensions/i.test(p.text))) refuse();
+    return;
+  }
   const keys = Object.keys(extra);
   const filter = extra.$filter;
   const ok =
@@ -160,11 +177,7 @@ function refuseUnfilteredExtensionsQuery(
     keys[0] === "$filter" &&
     filter !== undefined &&
     EXTENSIONS_FILTER_RE.test(filter);
-  if (!ok) {
-    throw new UnfilteredExtensionsQueryError(
-      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(extra)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
-    );
-  }
+  if (!ok) refuse();
 }
 
 /**

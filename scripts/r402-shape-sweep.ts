@@ -14,7 +14,14 @@
 // or a shape filter that matches nothing.
 // alc: $ALC, else the AL extension's bin/alc.exe (newest ms-dynamics-smb.al-*, both layouts).
 // Symbols come from fixtures/sandbox-symbols/.alpackages (source) and fixtures/sandbox-app's
-// (artifact, which also needs LethAL Control). Not in `bun run typecheck` (dynamic imports by --repo).
+// (artifact, which also needs LethAL Control).
+// Not in `bun run typecheck`, and type-only casts (`as typeof import(...)`) do not fix that (tried
+// 2026-10-05, R440). The casts expose four errors that need code changes, not casts: the mutable
+// `unknown[]` / `{...}[]` annotations on `res.files` and `res.preprocExcluded` are not assignable
+// from the readonly package types; `res.identityOrdinals` does not exist on the current
+// `MutationSetResult`; and, once typed, `writeInstrumentedProject` requires `identityOrdinals`, which
+// the tolerant `--repo` form (older trees may lack `identityOrdinalsOf`) makes optional. Typing it
+// means dropping `--repo` support for old trees, a decision for the owner, not a cast.
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -36,7 +43,7 @@ const only = args.filter((a, i) => a !== "--repo" && args[i - 1] !== "--repo");
 const here = join(import.meta.dir, "..");
 
 const { initParser } = await import(`${repo}/packages/engine/src/index.ts`);
-const { generateMutationSet, operatorTiers } = await import(
+const { generateMutationSet, identityOrdinalsOf, operatorTiers } = await import(
   `${repo}/packages/runner/src/orchestrator.ts`
 );
 const { writeInstrumentedProject } = await import(`${repo}/packages/schemata/src/index.ts`);
@@ -141,9 +148,14 @@ try {
       if (specs.length > 0) {
         const out = join(scratch, "art");
         rmSync(out, { recursive: true, force: true });
+        // R-307 made run-wide `identityOrdinals` a required input (numbered by `identityOrdinalsOf`,
+        // the call `runSession` makes). `--repo` may point at an older tree: one between R374 and
+        // R400 returns them on the set, and one without R374 has neither (same as r214-capture.ts).
+        const identityOrdinals = identityOrdinalsOf?.(res) ?? res.identityOrdinals;
         await writeInstrumentedProject({
           targetDir: out,
           files: res.files,
+          ...(identityOrdinals !== undefined ? { identityOrdinals } : {}),
           selectorIds: { selectorId: 79647, controlId: 79648, tableId: 79649 },
           artifactId: "0123456789abcdef0123456789abcdef",
           targetAppId: "fda67638-2fee-4a1c-94bd-bc37c357f0d9",
