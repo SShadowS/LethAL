@@ -156,6 +156,7 @@ has the complete set.
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
 | `--max-new-tests` | `verify` |
+| `--no-reach-filter` | `verify` |
 
 `lethal run --dry-run` executes no tests, so it refuses every execution flag by name (`--tests`,
 `--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
@@ -521,7 +522,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-publish-failed` | Read the detail. |
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
-| `too-many-new-tests` | More tests are new or edited than `--max-new-tests` allows (default 50). The detail names the count, the exact value to pass, what made them new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
+| `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the two unmutated runs per new test alone exceed the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do; the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
 | `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
@@ -582,9 +583,34 @@ handler it reaches, the header, globals or triggers of an object it reaches, ANY
 codeunit in the test app (every test is then new), or a dependency (a non-Microsoft one by the
 package the server holds; a Microsoft one by its version only, so a rebuild at an unchanged version
 is not seen). A test with a call the walk cannot follow (an interface, a `RecordRef` insert, a run by
-id) is new after ANY test-app edit. So one shared-helper edit can make many tests new; above
-`--max-new-tests` (default 50) verify refuses `too-many-new-tests` and names the value that would
-run them. A run recorded before R371 is refused once as `source-predates-verify`. An edited test
+id) is new after ANY test-app edit. So one shared-helper edit can make many tests new.
+
+Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
+coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
+costs no extra call. It reaches a survivor when it ran at least one line of the survivor's
+procedure, or, for a trigger, of its object. A new test whose coverage cannot be used (its run did
+not pass in a fresh session, or reported no coverage) runs against every survivor, and so does a
+survivor coverage cannot place (an object inside `#if`, an unplaceable line, no member name). A
+survivor's own covering tests are never dropped. A survivor that no new test reaches and that has
+no covering test is sent nothing and stays `survived`, with `testsRun: []` and a `failureNote`
+that says so; it still counts toward exit `5`. Every new test still runs twice unmutated. The
+filter is off under the hub modes (`procedure`, `line`), whose coverage comes from another
+session, and under `none`. One stderr line says which:
+`[lethal] verify: reach filter on (fenced coverage): ...` with the runs it saved, or
+`[lethal] verify: reach filter off (<why>): every new test runs against every survivor.`; a
+`verify-reach-fail-closed` warning names each test and survivor that took every new test. The JSON
+is unchanged; per survivor, `testsRun` shows which new tests were sent.
+
+The filter sees only code a new test runs itself, in its own session. A test that fails only
+because an EARLIER test in the same call left state behind (SingleInstance globals, committed
+data), or because of code run in another session (StartSession, a scheduled task, the job queue),
+is not sent to that survivor. A fresh `lethal run` has the same blind spot. Pass
+`--no-reach-filter` to send every new test to every survivor, as before R-384.
+
+The cap counts extra test runs: two unmutated runs per new test, plus one per survivor a new test
+joins, against `--max-new-tests` (default 50) x (survivors + 2). Above it verify refuses
+`too-many-new-tests` and names the value that would run them. A run recorded before R371 is
+refused once as `source-predates-verify`. An edited test
 gets the same two unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session

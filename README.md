@@ -450,6 +450,17 @@ named survivor on the build the run left installed; the reference's
 [hardening loop](docs/using-lethal-from-an-agent.md#the-hardening-loop-checked) walks the steps and
 its own exit codes.
 
+Under `fenced` coverage (bcdev's default), `lethal verify` sends a new or edited test only to the
+survivors its own coverage reaches. The coverage comes from the unmutated run verify already makes
+of every test, so the filter costs no extra call. A test whose coverage cannot be used (it did not
+pass in a fresh session, or reported none) still runs against every survivor, and so does a
+survivor whose code coverage cannot place. One stderr line says whether the filter was on and how
+many runs it saved. The filter sees only code a new test runs itself, in its own session. A test
+that fails only because an EARLIER test in the same call left state behind (SingleInstance
+globals, committed data), or because of code run in another session (StartSession, a scheduled
+task, the job queue), is not sent to that survivor. A fresh `lethal run` has the same blind spot.
+Pass `--no-reach-filter` to send every new test to every survivor, as before R-384.
+
 Two documents collect that contract so nobody has to derive it from the source:
 
 - [`docs/using-lethal-from-an-agent.md`](docs/using-lethal-from-an-agent.md), the reference: argv,
