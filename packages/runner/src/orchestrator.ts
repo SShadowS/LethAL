@@ -1587,7 +1587,7 @@ async function prepareArtifactDir(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
   readonly excludeOutputs: readonly string[];
-}): Promise<void> {
+}): Promise<readonly AppJsonPathChange[]> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
     args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
@@ -1599,7 +1599,7 @@ async function prepareArtifactDir(args: {
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
   });
-  await prepareBatchProject(
+  return await prepareBatchProject(
     args.projectDir,
     args.targetDir,
     args.projectManifest,
@@ -5029,6 +5029,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
       testPageRefused,
     };
+    // R-422: the backslash-path warning fires once per session; every batch re-reads the same
+    // manifest snapshot, so every batch would report the same changes.
+    let appJsonPathsWarned = false;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts at session end — earlier batches stand, every RunMutant in them having been
@@ -5079,7 +5082,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // spec in THIS artifact (see packages/schemata/src/project.ts), so alc
       // would fail to compile the batch dir without the rest of the
       // project's `.al` files.
-      await prepareArtifactDir({
+      const pathChanges = await prepareArtifactDir({
         targetDir: batchDir,
         files: batchFiles,
         selectorIds: cfg.selectorIds,
@@ -5090,6 +5093,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         source: sourceSnapshot,
         excludeOutputs: cfg.excludeOutputs ?? [],
       });
+      if (pathChanges.length > 0 && !appJsonPathsWarned) {
+        appJsonPathsWarned = true;
+        emit({
+          type: "warning",
+          code: "app-json-backslash-path",
+          message: appJsonPathWarning(pathChanges),
+        });
+      }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
         if (
@@ -8133,9 +8144,66 @@ async function writeStampedAppJson(
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
   version: string,
-): Promise<void> {
-  const manifest = { ...projectManifest, version };
+): Promise<readonly AppJsonPathChange[]> {
+  const { manifest: normalised, changes } = normaliseAppJsonPaths(projectManifest);
+  const manifest = { ...normalised, version };
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return changes;
+}
+
+/** R-422: one `\` -> `/` replacement made in the batch app.json. `field` is `logo`, `screenshots[<i>]` or `resourceFolders[<i>]`. */
+export type AppJsonPathChange = {
+  readonly field: string;
+  readonly from: string;
+  readonly to: string;
+};
+
+/**
+ * R-422: the app.json array fields that name files or folders, from the alc schema (`logo` is the
+ * one string field). The Linux `alc` reads a `\` there as part of the name and stops with AL1001
+ * (a file) or AL0863 (a folder) before compiling a line. Everything else (URLs, names, text, ids)
+ * is left exactly as written.
+ */
+const APP_JSON_PATH_ARRAY_FIELDS = ["screenshots", "resourceFolders"] as const;
+
+/**
+ * R-422: returns a copy of the manifest with `/` in place of `\` in `logo`, each string element of
+ * `screenshots` and each string element of `resourceFolders`, plus what changed. Never mutates the
+ * input. A missing field, a non-string value and a non-string element are kept as they are.
+ */
+export function normaliseAppJsonPaths(manifest: Readonly<Record<string, unknown>>): {
+  readonly manifest: Record<string, unknown>;
+  readonly changes: readonly AppJsonPathChange[];
+} {
+  const changes: AppJsonPathChange[] = [];
+  const out: Record<string, unknown> = { ...manifest };
+  const fix = (field: string, value: string): string => {
+    const to = value.replaceAll("\\", "/");
+    if (to !== value) changes.push({ field, from: value, to });
+    return to;
+  };
+  const { logo } = manifest;
+  if (typeof logo === "string") out.logo = fix("logo", logo);
+  for (const key of APP_JSON_PATH_ARRAY_FIELDS) {
+    const value = manifest[key];
+    if (Array.isArray(value)) {
+      out[key] = value.map((el: unknown, i: number) =>
+        typeof el === "string" ? fix(`${key}[${i}]`, el) : el,
+      );
+    }
+  }
+  return { manifest: out, changes };
+}
+
+/** R-422: the once-per-session warning text for the changes `normaliseAppJsonPaths` made. */
+function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
+  const parts = changes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
+  return [
+    `app.json names a path with "\\": ${parts}. LethAL wrote "/" in the app.json it compiles `,
+    'for each batch, because the Linux alc reads "\\" as part of the name and fails with ',
+    'AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove ',
+    "this warning.",
+  ].join("");
 }
 
 /**
@@ -8183,8 +8251,8 @@ export async function prepareBatchProject(
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
   excludeOutputs: readonly string[] = [],
-): Promise<void> {
-  await writeStampedAppJson(batchDir, projectManifest, appVersion);
+): Promise<readonly AppJsonPathChange[]> {
+  const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
   // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
   // is copied like any resource, and nothing is guessed from an extension.
@@ -8295,6 +8363,7 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+  return pathChanges;
 }
 
 /** R363: one comparable form of a path. Windows paths compare case-insensitively. */
