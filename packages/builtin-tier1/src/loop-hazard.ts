@@ -5,6 +5,7 @@ import {
   type SemanticContext,
   armOfNode,
   isProcedureLike,
+  normalizeAlName,
   resolveVarRef,
 } from "@lethal/engine";
 
@@ -182,12 +183,18 @@ function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSynta
  * different files, this comparison is wrong and needs a file component added to the key. See
  * ROADMAP R209 for the underlying `resolveVarRef` identity gap this works around, and for why
  * fixing it at the source (caching `triggerScopeVar`'s result) is not a small change.
+ *
+ * AND THE NAME (R295): every name of `A, B: Integer` is its own symbol, but all of them share the
+ * one declaration node. Position alone would make A and B one variable and tag
+ * `while A < 10 do B := B + 1` as a hang. Compared as AL compares names: unquoted, any case.
  */
 function sameDeclaration(
   a: NonNullable<ReturnType<typeof resolveVarRef>>,
   b: NonNullable<ReturnType<typeof resolveVarRef>>,
 ): boolean {
-  return a.node.startIndex === b.node.startIndex;
+  return (
+    a.node.startIndex === b.node.startIndex && normalizeAlName(a.name) === normalizeAlName(b.name)
+  );
 }
 
 /**

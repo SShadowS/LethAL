@@ -145,9 +145,11 @@ export function coarseIdentityTupleOf(
  * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key. 9:
  * R307 (R374), identity ordinals are numbered once over the whole run instead of per batch, so
  * keys move only where batching split twins (two twins in two batches both held ordinal 0
- * before).
+ * before). (10 is R-196's.) 11: R295 and R294, every name of `A, B: T` is declared and a
+ * member-expression receiver resolves again (and a name inside a `with` body types as nothing),
+ * so sites are added and removed and same-tuple ordinals move.
  */
-export const IDENTITY_SCHEME = 9;
+export const IDENTITY_SCHEME = 11;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

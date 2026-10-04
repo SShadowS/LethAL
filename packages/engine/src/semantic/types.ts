@@ -239,6 +239,7 @@ function findBinaryOperands(
 function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   const scope = enclosingObjectScopeKey(node);
   if (scope === null) return null;
+  if (insideWithBody(node)) return null;
   const proc = findEnclosingProcedure(node);
   // R330 (run 002 fix round): inside a trigger, a name the trigger declares in its own header is
   // unknown. Without this it fell through to the object's globals, and since R322 also to a global
@@ -282,6 +283,23 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   const global = symbols.globalsOf(scope).find((g) => sameName(g.name, node.text));
   if (global !== undefined) return extractType(global.typeText);
   return null;
+}
+
+/**
+ * Inside `with R do <body>`, a bare name resolves to R's field of that name BEFORE any variable,
+ * and this layer does not read R's fields, so a name there types as nothing. Measured with `alc`
+ * 18.0 (R295 build): `with R do Take(Q, Z)` where R's table has a Text field Z and Q, Z are
+ * Integer locals compiles, and the swap `Take(Z, Q)` that typing Z by the local emitted is
+ * rejected (AL0133). R295 made later names of `Q, Z: Integer` visible, which widened this.
+ */
+function insideWithBody(node: ALSyntaxNode): boolean {
+  for (let p = node.parent; p !== null; p = p.parent) {
+    if (p.rawKind !== "with_statement") continue;
+    const body = p.childForFieldName("body");
+    if (body !== null && node.startIndex >= body.startIndex && node.endIndex <= body.endIndex)
+      return true;
+  }
+  return false;
 }
 
 /** R322: AL compares names case-insensitively. */
