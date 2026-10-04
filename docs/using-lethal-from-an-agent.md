@@ -339,7 +339,10 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 `unobservedBlock` says whether every RECORDED mutant of the block survived. It speaks about the
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
 `--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
-quarantined run, which stops scheduling mutants mid-run. Each gap has
+quarantined run, which stops scheduling mutants mid-run. It is also absent for every gap in a file
+the source report lists as hang-refused among its excluded sites (R447): there a loop's own step was
+refused and never generated, so "every recorded mutant survived" would overstate what was measured.
+Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.

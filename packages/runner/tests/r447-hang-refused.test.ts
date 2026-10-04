@@ -141,7 +141,7 @@ describe("R447: generation", () => {
     );
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain(
-      `"lethal.remove-assignment" DID find site(s), but every one writes a variable an enclosing loop's condition reads and was refused as hang-capable (R196): ${HANG} (1)`,
+      `"lethal.remove-assignment" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${HANG} (1)`,
     );
   });
 });
