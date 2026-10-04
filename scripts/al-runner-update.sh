@@ -84,7 +84,7 @@ fi
 
 if [ "$(readlink "$tools/current" 2>/dev/null || true)" = "$final" ]; then
   echo "al-runner $sha is already current: nothing to do"
-elif pgrep -f '/al-runner( |$)' >/dev/null 2>&1; then
+elif pgrep -x al-runner >/dev/null 2>&1; then # the process NAME, so a path in a command line never matches
   echo "deferred: al-runner in use; $sha passed the gate and stays at $final, current is unchanged"
 else
   ln -sfn "$final" "$tools/.current.tmp"
