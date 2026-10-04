@@ -648,7 +648,7 @@ export async function assertTestProjectSeparate(
   testDir: string,
 ): Promise<void> {
   const fix =
-    "Move the test project out of the target folder so it sits beside the target, point --tests (and lethal run's --tests or config) at that folder, run lethal run again, then verify with its artifact id.";
+    "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id.";
   let target: string;
   let tests: string;
   try {

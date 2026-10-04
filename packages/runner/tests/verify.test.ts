@@ -17,6 +17,7 @@ import type {
   TestOutcome,
   TestVerdict,
 } from "../src/backend";
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import {
   DependencyUnreadableError,
@@ -508,28 +509,50 @@ describe("assertSourceUnchanged", () => {
 
   // R-260: a nested test project is compiled into the target build, so verify refuses the layout
   // by name. A test edit or add there is refused as `test-project-nested`, never `source-changed`.
-  test("a nested test edit or add is refused as test-project-nested, not source-changed", async () => {
+  /** A target with a nested `test/T.Codeunit.al`, its hash recorded with the test inside. */
+  async function nestedProject(): Promise<{ nestedTests: string; recorded: VerifySource }> {
     const { dir, source } = await project();
     const nestedTests = join(dir, "test");
     mkdirSync(nestedTests);
     writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { }");
-    const recorded = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
-    const refusal = (): Promise<unknown> =>
-      assertSourceUnchanged(recorded, SYMBOLS, nestedTests).then(
+    return {
+      nestedTests,
+      recorded: { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) },
+    };
+  }
+
+  /** Runs the source check with the target hash spied on: the refusal must come before any hash. */
+  async function refusalWithoutHashing(recorded: VerifySource, testDir: string): Promise<unknown> {
+    const hash = spyOn(baselineSnapshotModule, "hashTargetSource");
+    try {
+      const e = await assertSourceUnchanged(recorded, SYMBOLS, testDir).then(
         () => undefined,
-        (e: unknown) => e,
+        (err: unknown) => err,
       );
-    // Edit a test.
+      expect(hash).toHaveBeenCalledTimes(0);
+      return e;
+    } finally {
+      hash.mockRestore();
+    }
+  }
+
+  test("a nested test EDIT is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
     writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { var x: Integer; }");
-    const edited = await refusal();
+    const edited = await refusalWithoutHashing(recorded, nestedTests);
     expect(edited).toBeInstanceOf(VerifyError);
     expect((edited as VerifyError).reason).toBe("test-project-nested");
     expect((edited as VerifyError).detail).toContain("lies inside the target project");
     expect((edited as VerifyError).detail).toContain("beside the target");
     expect((edited as VerifyError).detail).toContain("--tests");
-    // Add a test.
+  });
+
+  test("a nested test ADD is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
+    // The original test file is untouched; only a new one appears.
     writeFileSync(join(nestedTests, "U.Codeunit.al"), "codeunit 50201 U { }");
-    const added = await refusal();
+    const added = await refusalWithoutHashing(recorded, nestedTests);
+    expect(added).toBeInstanceOf(VerifyError);
     expect((added as VerifyError).reason).toBe("test-project-nested");
   });
 
@@ -586,9 +609,10 @@ describe("assertTestProjectSeparate (R-260)", () => {
     expect(await reasonOf(target, relative(process.cwd(), join(target, "test")))).toBe(
       "test-project-nested",
     );
-    expect(await reasonOf(target, join(root, "target", "..", "target", "test"))).toBe(
-      "test-project-nested",
-    );
+    // Unnormalised on purpose: `join` would fold the `..` away before the guard saw it.
+    const dotted = `${root}${sep}target${sep}..${sep}target${sep}test`;
+    expect(dotted).toContain(`${sep}..${sep}`);
+    expect(await reasonOf(target, dotted)).toBe("test-project-nested");
     // The same folder.
     expect(await reasonOf(target, target)).toBe("test-project-nested");
   });

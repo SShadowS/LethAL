@@ -537,7 +537,7 @@ The set of reasons is checked; the advice is guidance.
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
 | `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. A gap id against an artifact whose manifest was written before gap ids existed refuses this way too; name its mutants as `<batchIndex>/<mutantCode>` ids instead, or run again. |
 | `source-changed` | The target changed since it was instrumented. Run again. |
-| `test-project-nested` | The `--tests` folder lies inside the target project, contains it, or cannot be resolved (R-260). The target build compiles every `.al` under its folder, so nested tests are part of the installed target app. Move the test project out of the target folder so it sits beside it, point `--tests` (and `lethal run`'s `--tests` or config) at that folder, run `lethal run` again, then verify with its artifact id. |
+| `test-project-nested` | The `--tests` folder lies inside the target project, contains it, or cannot be resolved (R-260). The target build compiles every `.al` under its folder, so nested tests are part of the installed target app. Move the test project out of the target folder so it sits beside it, update the `--tests` you pass to both `lethal run` and `lethal verify` to that folder (no config field names the test folder), run `lethal run` again, then verify with its artifact id. |
 | `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
 | `no-tests-to-run` | Write a test first. |
 | `unsupported-config` | Verify runs on `bcdev` only, with no `envTool`. |
