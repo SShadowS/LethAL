@@ -307,6 +307,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
+  of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
+  type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a
+  Codeunit's `SetRange`. Every name is now declared with the full shared type. A bare name inside a
+  `with` body now types as nothing, because the record's field of that name wins there (an
+  `alc`-failing swap was possible before too). Measured: BaseApp +1,169 sites and 129 wrong rows
+  gone, CDO +4 and 1 wrong row gone, no fixture or gate figure moves.
+- **Member-expression receivers resolve again** (R294): the `R` of `R.Field` and `Txt` of
+  `Txt.Contains(...)` were always refused, so a loop such as
+  `while Txt.Contains('a') do Txt := Txt.Replace('a', 'b')` was not seen as hang-capable. Such sites
+  are now refused by R196's rule (20 BaseApp, 1 CDO).
+- **Identity scheme 11** (R295, R294): sites are added and removed, so same-tuple ordinals can
+  move. Every older store stops resuming once, the next `--skip-known-survivors` run skips nothing
+  once, and marks files need `"identityScheme": 11` after re-checking each mark (R325).
 - **`reliability` is now `narrowed` when a file with sites was left out for an undecided `#if` or
   because its object kind cannot carry the selector** (R399). R307 did this for refused files
   only, so a run that left such a file out still said `full`. A zero-site undecided row, a
