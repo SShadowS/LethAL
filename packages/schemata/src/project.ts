@@ -93,19 +93,24 @@ export function identityTupleOf(
 }
 
 /**
- * R307: the LOOSE identity tuple: `identityTupleOf` without the object name. A file refused by the
- * header rule (`no-header`, `site-before-header`) has no object name to give, so the run records
- * these instead of reserving exact entries (fail closed, I3).
+ * R442: the COARSE identity tuple, `astHash|operatorName|major`: `identityTupleOf` without the
+ * object name and the scope. A site a run numbered no ordinal for (a header-rule refusal, a site
+ * a line filter dropped) records this, and every mutant sharing it carries no verdict across that
+ * run (fail closed, R307 I3).
+ *
+ * Why it covers every ordinal twin even though names and scopes may hold `|`: the exact tuple is
+ * `hash|name|scope|op|major` and a key adds `|ordinal` only above 0. The hash is hex, operator
+ * names come from the built-in registry (no `|`, never all digits) and the major is an integer.
+ * So two equal tuple or key strings share the first field and, read from the right, the operator
+ * and major (an ordinal tail cannot pose as a major: the field before it would then be an
+ * all-digit operator name). R307's loose tuple kept the scope, and so missed object `"A|B"` with
+ * procedure `C` against object `A` with procedure `"B|C"`.
  */
-export function looseIdentityTupleOf(
-  m: Pick<
-    MutantManifestEntry,
-    "astHash" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
-  >,
+export function coarseIdentityTupleOf(
+  m: Pick<MutantManifestEntry, "astHash" | "operatorName" | "operatorVersion">,
 ): string {
-  const scope = m.procedureName || m.triggerName || "";
   const major = Number(m.operatorVersion.split(".")[0] ?? "0");
-  return `${m.astHash}|${scope}|${m.operatorName}|${major}`;
+  return `${m.astHash}|${m.operatorName}|${major}`;
 }
 
 /**

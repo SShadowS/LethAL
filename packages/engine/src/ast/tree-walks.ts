@@ -52,7 +52,7 @@ export function isStatementPosition(node: ALSyntaxNode): boolean {
  * are NOT here, and deliberately: both wrap their statements in a `statement_block`, so those are
  * already statement position and `isStatementPosition` answers for them.
  */
-const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
+export const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
   `${ALNodeKind.if_statement}.then_branch`,
   `${ALNodeKind.if_statement}.else_branch`,
   "case_branch.body",
@@ -67,6 +67,105 @@ const SINGLE_STATEMENT_SLOTS: ReadonlySet<string> = new Set([
   "preproc_split_if_else_statement.else_branch",
   // R285: `#if` around a case label, the arm's body shared after `#endif`.
   "preproc_split_case_extended.body",
+]);
+
+/** R217: why a grammar container that can hold a statement is NOT a statement slot. */
+export interface NotASlot {
+  /** "unsupported": a real loss, tracked by `item`. "not-executable": no executable statement. */
+  readonly kind: "unsupported" | "not-executable";
+  readonly reason: string;
+  /** The roadmap item that tracks it; `null` for "not-executable". */
+  readonly item: string | null;
+}
+
+const declarationContainer: NotASlot = {
+  kind: "not-executable",
+  reason: "a declaration container; it qualifies only through `empty_statement`",
+  item: null,
+};
+const usingContainer: NotASlot = {
+  kind: "not-executable",
+  reason: "holds `using_statement` (a namespace import), which is not executable",
+  item: null,
+};
+const unsupported = (reason: string, item: string): NotASlot => ({
+  kind: "unsupported",
+  reason,
+  item,
+});
+
+/**
+ * R217: every `<container>.<field>` (or `<container>.children`) in `statement-containers.json`,
+ * the grammar places where a statement can sit, belongs to EXACTLY ONE of: `SINGLE_STATEMENT_SLOTS`,
+ * `STATEMENT_LISTS`, `CONDITIONAL_LISTS`, or this map (checked by `statement-containers.test.ts`).
+ * A new container after a grammar bump fails that test until it is classified here.
+ *
+ * Limit: the pin is per container, not per context. It does not see a `#if` that fills an
+ * un-braced branch (`isStatementPosition`'s comment).
+ */
+export const NOT_A_SLOT: Readonly<Record<string, NotASlot>> = {
+  "with_statement.body": unsupported(
+    "deliberately unsupported (R286 ruling): guard placement skips `with_statement`, injected names can be captured by the record's fields, and a newly admitted twin moves keys",
+    "R286",
+  ),
+  "asserterror_statement.body": unsupported("not admitted: measured inert on app corpora", "R216"),
+  "preproc_split_if_then_begin.children": unsupported(
+    "statements in a block opened by a split `#if` if-header are not in a statement list",
+    "R304",
+  ),
+  "preproc_split_if_begin_asymmetric.children": unsupported(
+    "statements in a block opened by a split `#if` if-header are not in a statement list",
+    "R304",
+  ),
+  "preproc_fragmented_else_tail.children": unsupported(
+    "R287's C7: direct children of the tail, no statement-list parent",
+    "R304",
+  ),
+  "preproc_split_case_end_branch.body": unsupported(
+    "a 4.4.1 split kind `isStatementSlot` does not know",
+    "R214",
+  ),
+  "preproc_guarded_statement.then_branch": unsupported("not classified before R217", "R444"),
+  "preproc_guarded_statement.children": unsupported(
+    "expression statements between a guard and the `if` it precedes",
+    "R444",
+  ),
+  "preproc_split_case_branch.body": unsupported("not classified before R217", "R444"),
+  "preproc_split_code_block_end.children": unsupported("not classified before R217", "R444"),
+  "preproc_split_code_block_over_endif.children": unsupported("not classified before R217", "R444"),
+  "preproc_split_else_begin_over_endif.children": unsupported("not classified before R217", "R444"),
+  "preproc_split_if_begin_else.children": unsupported("not classified before R217", "R444"),
+  "preproc_split_if_then_begin_else_shared.children": unsupported(
+    "not classified before R217",
+    "R444",
+  ),
+  "action_group_body.children": declarationContainer,
+  "assembly_body.children": declarationContainer,
+  "controladdin_body.children": declarationContainer,
+  "dataset_mod_body.children": declarationContainer,
+  "declaration_body.children": declarationContainer,
+  "interface_body.children": declarationContainer,
+  "layout_container_body.children": declarationContainer,
+  "preproc_conditional.children": declarationContainer,
+  "preproc_conditional_controladdin.children": declarationContainer,
+  "preproc_conditional_layout_mixed.children": declarationContainer,
+  "preproc_conditional_query.children": declarationContainer,
+  "preproc_conditional_report.children": declarationContainer,
+  "preproc_conditional_var.children": declarationContainer,
+  "preproc_conditional_xmlport.children": declarationContainer,
+  "query_body.children": declarationContainer,
+  "report_body.children": declarationContainer,
+  "xmlport_body.children": declarationContainer,
+  "preproc_conditional_object.children": usingContainer,
+  "source_file.children": usingContainer,
+};
+
+/** R217: containers whose children ARE a statement list (`isStatementPosition`). */
+export const STATEMENT_LISTS: ReadonlySet<string> = new Set(["statement_block.children"]);
+
+/** R217: a statement-level `#if`'s arms: a list when the `#if` itself sits in a list. */
+export const CONDITIONAL_LISTS: ReadonlySet<string> = new Set([
+  "preproc_conditional_statement.children",
 ]);
 
 /**

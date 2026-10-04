@@ -33,7 +33,7 @@ export {
   clipMutationText,
   identityTupleOf,
   instrumentOneFile,
-  looseIdentityTupleOf,
+  coarseIdentityTupleOf,
   assignIdentityOrdinals,
   identitySiteKey,
   identityFieldsOf,

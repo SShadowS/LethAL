@@ -457,6 +457,7 @@ describe("assertSourceUnchanged", () => {
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       coverageMode: "procedure",
+      carryHidden: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
     return { dir, source };
@@ -591,6 +592,7 @@ describe("planVerify", () => {
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       coverageMode: "procedure",
+      carryHidden: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
     };
   }
@@ -2093,6 +2095,27 @@ describe("C02-09: gap ids", () => {
     expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
     w.store.close();
   });
+
+  // R442: verify's run row carries the SOURCE run's keys, so it copies the source's carry_hidden
+  // exactly (a later history or resume reads it). Through runVerify's own writer, three values.
+  for (const [label, stored] of [
+    ["a non-empty list", '{"tuples":["ab|lethal.empty-block|1"],"files":["src/A.al"]}'],
+    ["empty lists", '{"tuples":[],"files":[]}'],
+    ["NULL", null],
+  ] as const) {
+    test(`R442: runVerify copies the source run's carry_hidden (${label}) onto its own run row`, async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")]);
+      w.store.db.run("UPDATE runs SET carry_hidden = ?", [stored]);
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      const rows = w.store.db
+        .query("SELECT backend, carry_hidden FROM runs ORDER BY id")
+        .all() as Array<{ backend: string; carry_hidden: string | null }>;
+      expect(rows.map((r) => r.backend)).toEqual(["bcdev", "lethal-verify"]);
+      expect(rows.map((r) => r.carry_hidden)).toEqual([stored, stored]);
+      w.store.close();
+    });
+  }
 
   describe("R354: verify refuses a source run measured under another coverage mode", () => {
     const neverRun: VerifyDeps["runNamed"] = async () => {
