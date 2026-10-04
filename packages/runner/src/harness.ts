@@ -146,19 +146,22 @@ function decodePercentEscapes(path: string): { text: string; leftover: boolean }
 
 /** R433: throws unless an `extensions` request is filtered by exactly one GUID. Any path naming
  *  `extensions` in any case counts (an encoded slash included); the path itself may carry no
- *  query or fragment, and `extra` must be exactly `{ $filter: "id eq <GUID>" }`. */
+ *  query or fragment, and the query must be exactly one `$filter: "id eq <GUID>"` plus at most one
+ *  `tenant` equal to `tenant`, the configured one. `query` is a LIST (R-441 review): a map would
+ *  keep one of two `$filter`s while the URL sends both. */
 function refuseUnfilteredExtensionsQuery(
   path: string,
-  extra: Readonly<Record<string, string>>,
+  query: readonly (readonly [string, string])[],
+  tenant: string | undefined,
 ): void {
   const refuse = (): never => {
     throw new UnfilteredExtensionsQueryError(
-      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(extra)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
+      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(query)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
     );
   };
   const pathDecoded = decodePercentEscapes(path);
   const decoded = pathDecoded.text;
-  const queryDecoded = Object.entries(extra).flatMap(([k, v]) => [
+  const queryDecoded = query.flatMap(([k, v]) => [
     decodePercentEscapes(k),
     decodePercentEscapes(v),
   ]);
@@ -169,14 +172,16 @@ function refuseUnfilteredExtensionsQuery(
     if (queryDecoded.some((p) => /extensions/i.test(p.text))) refuse();
     return;
   }
-  const keys = Object.keys(extra);
-  const filter = extra.$filter;
+  const tenants = query.filter(([k]) => k === "tenant");
+  const [only, ...more] = query.filter(([k]) => k !== "tenant");
   const ok =
     !/[?#&]/.test(decoded) &&
-    keys.length === 1 &&
-    keys[0] === "$filter" &&
-    filter !== undefined &&
-    EXTENSIONS_FILTER_RE.test(filter);
+    only !== undefined &&
+    more.length === 0 &&
+    only[0] === "$filter" &&
+    EXTENSIONS_FILTER_RE.test(only[1]) &&
+    tenants.length <= 1 &&
+    tenants.every(([, v]) => v === tenant);
   if (!ok) refuse();
 }
 
@@ -524,16 +529,14 @@ export class HarnessVerifier {
     extra: Readonly<Record<string, string>> = {},
   ): Promise<readonly unknown[]> {
     // R433: before the URL is built, so a refused query never reaches the network.
-    refuseUnfilteredExtensionsQuery(path, extra);
+    // `extra` comes from a caller, so no tenant is allowed in it: the configured one is added below.
+    refuseUnfilteredExtensionsQuery(path, Object.entries(extra), undefined);
     const params = new URLSearchParams(extra);
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
     // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
     const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
-    refuseUnfilteredExtensionsQuery(
-      sent.pathname,
-      Object.fromEntries([...sent.searchParams].filter(([k]) => k !== "tenant")),
-    );
+    refuseUnfilteredExtensionsQuery(sent.pathname, [...sent.searchParams], this.cfg.tenant);
     const url = sent.href;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);

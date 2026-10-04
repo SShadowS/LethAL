@@ -205,6 +205,43 @@ describe("the refusal reads the URL fetch actually sends (R441)", () => {
       expect(urls).toEqual([]);
     });
   }
+
+  // R-441 review: the parsed query is a LIST. A map kept only the last `$filter` and dropped every
+  // `tenant`, while the URL sent them all.
+  const TAB = EXT.replace("extensions", "ext\tensions");
+  const { tenant: _unused, ...NO_TENANT } = CFG;
+  const cases: [string, ActivationConfig, string, Record<string, string>][] = [
+    [
+      // No tenant configured: otherwise `?tenant=` lands inside the last value and hides the bypass.
+      "a second $filter beside the GUID one",
+      NO_TENANT,
+      `${TAB}?$filter=publisher eq 'Microsoft'&$filter=id eq ${GUID}`,
+      {},
+    ],
+    [
+      "a caller tenant with none configured",
+      NO_TENANT,
+      TAB,
+      { $filter: `id eq ${GUID}`, tenant: "other" },
+    ],
+  ];
+  for (const [name, cfg, path, extra] of cases) {
+    test(`refuses ${name}, with zero fetches`, async () => {
+      const { urls, fetchFn } = fake();
+      const call = rowsOf(new HarnessVerifier(cfg, fetchFn))(path, "x", extra);
+      await expect(call).rejects.toBeInstanceOf(UnfilteredExtensionsQueryError);
+      expect(urls).toEqual([]);
+    });
+  }
+
+  test("a caller tenant is replaced by the configured one, so only that one is sent", async () => {
+    const { urls, fetchFn } = fake();
+    await rowsOf(new HarnessVerifier(CFG, fetchFn))(TAB, "x", {
+      $filter: `id eq ${GUID}`,
+      tenant: "other",
+    });
+    expect(urls).toEqual([ALLOWED_URL]);
+  });
 });
 
 describe("fetchExtensionInstalled refuses a non-GUID id before any request (R433)", () => {
