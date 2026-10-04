@@ -1,5 +1,5 @@
 {
-  "_source": "R-420: the Codeunits of SymbolReference.json from each shape compiled under [] (-none) and [X] (-X) by alc 18.0.41.45789, runtime 13.0, 2026-10-04 (plan section 1). Only Id, Name, Properties and each method's Id, Name and Attributes are kept. S11 ([Test] before an #if/#else holding one whole procedure per arm) was measured the same way by the implementing agent. S12 ([Test] before an #if with no #else holding procedure A, then procedure Helper) and S12b (the same with #if X / #elif Y, procedure B in the #elif arm) were measured the same way for the R-420 review (S12b also under [Y]): the [Test] goes to Helper when no explicit arm is compiled in.",
+  "_source": "R-420: the Codeunits of SymbolReference.json from each shape compiled under [] (-none) and [X] (-X) by alc 18.0.41.45789, runtime 13.0, 2026-10-04 (plan section 1). Only Id, Name, Properties and each method's Id, Name and Attributes are kept. S11 ([Test] before an #if/#else holding one whole procedure per arm) was measured the same way by the implementing agent. S12 ([Test] before an #if with no #else holding procedure A, then procedure Helper) and S12b (the same with #if X / #elif Y, procedure B in the #elif arm) were measured the same way for the R-420 review (S12b also under [Y]): the [Test] goes to Helper when no explicit arm is compiled in. R-424: V1, V3, V4, V6 and V7 (procedure headers split by #if; plan docs/superpowers/plans/2026-10-04-R-424-split-procedure-tests.md section 1) compiled the same way under [], [X] and [Y].",
   "S1-none": {
     "Codeunits": [
       {
@@ -327,6 +327,156 @@
           { "Id": 2021342778, "Name": "B", "Attributes": [{ "Name": "Test" }] },
           { "Id": 1414509570, "Name": "Helper" }
         ]
+      }
+    ]
+  },
+  "V1-none": {
+    "Codeunits": [
+      {
+        "Id": 92461,
+        "Name": "V1",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1772974321, "Name": "T10b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V1-X": {
+    "Codeunits": [
+      {
+        "Id": 92461,
+        "Name": "V1",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1342126207, "Name": "T10a", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V1-Y": {
+    "Codeunits": [
+      {
+        "Id": 92461,
+        "Name": "V1",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1772974321, "Name": "T10b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V3-none": {
+    "Codeunits": [
+      {
+        "Id": 92463,
+        "Name": "V3",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -520175409, "Name": "T3b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V3-X": {
+    "Codeunits": [
+      {
+        "Id": 92463,
+        "Name": "V3",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1812719752, "Name": "T3a", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V3-Y": {
+    "Codeunits": [
+      {
+        "Id": 92463,
+        "Name": "V3",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -520175409, "Name": "T3b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V4-none": {
+    "Codeunits": [
+      {
+        "Id": 92464,
+        "Name": "V4",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1538914537, "Name": "T4b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V4-X": {
+    "Codeunits": [
+      {
+        "Id": 92464,
+        "Name": "V4",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -246370194, "Name": "T4a", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V4-Y": {
+    "Codeunits": [
+      {
+        "Id": 92464,
+        "Name": "V4",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -1538914537, "Name": "T4b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V6-none": {
+    "Codeunits": [
+      {
+        "Id": 92466,
+        "Name": "V6",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 623778720, "Name": "T6z", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V6-X": {
+    "Codeunits": [
+      {
+        "Id": 92466,
+        "Name": "V6",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -237917509, "Name": "T6x", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V6-Y": {
+    "Codeunits": [
+      {
+        "Id": 92466,
+        "Name": "V6",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 192930606, "Name": "T6y", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V7-none": {
+    "Codeunits": [
+      {
+        "Id": 92467,
+        "Name": "V7",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 936330651, "Name": "T7b", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V7-X": {
+    "Codeunits": [
+      {
+        "Id": 92467,
+        "Name": "V7",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": -356213692, "Name": "T7a", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "V7-Y": {
+    "Codeunits": [
+      {
+        "Id": 92467,
+        "Name": "V7",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 936330651, "Name": "T7b", "Attributes": [{ "Name": "Test" }] }]
       }
     ]
   }

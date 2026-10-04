@@ -4669,9 +4669,11 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // no-evidence path the unfiltered suite runs, so the digest is unchanged there.
     // R420: `tree-v1` whenever the tree finder returned a test the regex did not, whether or not
     // the arm policy was applied: the no-evidence path runs that test too.
+    // R424: `split-v1` whenever a discovered test is an arm of a split-header procedure.
     ...testDiscoveryMarker(
       armPolicyApplied && discovery.excluded.length > 0,
       discovery.treeOnlyTests.length > 0,
+      discovery.splitTests.length > 0,
     ),
   });
   const resumeState = resolveResume(

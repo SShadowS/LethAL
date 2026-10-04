@@ -5,6 +5,7 @@ import {
   evaluateArms,
   hasDirectiveLine,
   maskAlNonCode,
+  memberArms,
   parseAL,
   startsInInactiveArm,
   wrapRoot,
@@ -184,7 +185,7 @@ export class TreeDiscoveryMismatchError extends Error {
     readonly missing: readonly string[],
   ) {
     super(
-      `Test discovery's parser did not return ${missing.length} test(s) the regular expression found in "${file}": ${missing.join(", ")}. The file most likely holds a syntax error that makes the parser read those procedures as part of another one. Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage (see R420).`,
+      `Test discovery's parser did not return ${missing.length} test(s) the regular expression found in "${file}": ${missing.join(", ")}. The file most likely holds a syntax error that makes the parser read those procedures as part of another one, or the file uses a construct the parser (tree-sitter-al) does not read correctly yet; please report the file. Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage (see R420).`,
     );
     this.name = "TreeDiscoveryMismatchError";
   }
@@ -204,6 +205,8 @@ interface FileTests {
   readonly warnings: DiscoveryWarning[];
   /** Tests the tree returned that the regex did not (empty on the regex path). */
   readonly treeOnly: TestMethodRef[];
+  /** R424: tests the tree returned from a split-header procedure (empty on the regex path). */
+  readonly split: TestMethodRef[];
   /** The tree path's parse, reused by the arm filter so a file is parsed once. */
   readonly root?: ALSyntaxNode;
 }
@@ -222,7 +225,7 @@ function testsOfFile(rel: string, source: string): FileTests {
   if (tokens.length === regexMatches) {
     const regex = regexTests(rel, masked);
     assertEveryTestConsumed(rel, tokens, regex.consumed);
-    return { found: regex.found, warnings: [], treeOnly: [] };
+    return { found: regex.found, warnings: [], treeOnly: [], split: [] };
   }
   const tree = treeTests(rel, source, masked);
   const regexFound = regexTests(rel, masked).found;
@@ -233,6 +236,7 @@ function testsOfFile(rel: string, source: string): FileTests {
     found: tree.found,
     warnings: tree.warnings,
     treeOnly: tree.found.filter((t) => !regexKeys.has(refKey(t.ref))).map((t) => t.ref),
+    split: tree.split,
     root: tree.root,
   };
 }
@@ -337,7 +341,8 @@ const MEMBER_TRIVIA: ReadonlySet<string> = new Set([
   "preproc_region",
   "preproc_endregion",
 ]);
-/** A procedure header split by `#if` (S10, R424): one name per arm. Out of R420's scope. */
+/** A procedure header split by `#if` (S10, R424): one name per arm, one shared body. A preamble has
+ *  a `var` section per arm as well (measured: `[Test]` before it compiles exactly one arm's name). */
 const SPLIT_PROCEDURES: ReadonlySet<string> = new Set([
   "preproc_split_procedure",
   "preproc_split_procedure_preamble",
@@ -415,8 +420,10 @@ function bodyToken(root: ALSyntaxNode, offset: number): boolean {
  *   member inside `#if` (R403's shape) and `[Test]` before one whole procedure per arm (S11) all
  *   read as the compiler reads them. What leaves the `#if` is `conditional`'s union (S12, S12b);
  * - a `procedure` with a pending `[Test]` is a candidate; the list is then cleared;
- * - a split-header procedure (S10) with a pending `[Test]` is not a candidate: the file gets a
- *   `test-shape-unsupported` warning naming both arm names, and its tokens count as consumed;
+ * - a split-header procedure (S10, R424) gives one candidate per arm that carries a `[Test]`, the
+ *   pending list's or the arm's own; its `procedureOffset` is the arm's NAME. A pending `[Test]`
+ *   is consumed by the split member as a whole, an arm's own by that arm. Only an arm whose name
+ *   cannot be read gets a `test-shape-unsupported` warning;
  * - any other node clears the list.
  */
 interface Pending {
@@ -440,11 +447,14 @@ function treeTests(
   readonly consumed: Set<number>;
   readonly warnings: DiscoveryWarning[];
   readonly root: ALSyntaxNode;
+  /** R424: every candidate that is an arm of a split-header procedure. */
+  readonly split: TestMethodRef[];
 } {
   const root = wrapRoot(parseAL(source));
   const found: FoundTest[] = [];
   const consumed = new Set<number>();
   const warnings: DiscoveryWarning[] = [];
+  const split: TestMethodRef[] = [];
 
   for (const cu of codeunitsOf(root)) {
     const { id: codeunitId, name: codeunitName } = codeunitHeader(cu);
@@ -484,21 +494,46 @@ function treeTests(
         return { pending: [], enders: [n.startIndex] };
       }
       if (SPLIT_PROCEDURES.has(n.rawKind)) {
-        // An arm's header region can hold attributes of its own.
-        const inside = n.children
-          .filter((c) => c.rawKind === "attribute_item" && isTestAttribute(c))
-          .map((c) => c.startIndex);
-        const all = [...pending.map((p) => p.at), ...inside];
+        // R424: one candidate per arm that carries `[Test]`, through the run before the split
+        // node (V1) or the arm's own attribute (V4). Each arm is filtered by where its NAME
+        // starts, so exactly the compiled arm's name is in a decided build.
+        const arms = memberArms(n).map((arm) => ({
+          name: arm.find((c) => c.fieldName === "name"),
+          own: arm
+            .filter((c) => c.rawKind === "attribute_item" && isTestAttribute(c))
+            .map((c) => c.startIndex),
+        }));
+        const all = [...pending.map((p) => p.at), ...arms.flatMap((a) => a.own)];
         if (all.length === 0) return { pending: [], enders: [] };
         for (const o of all) consumed.add(o);
-        if (isTestCodeunit) {
-          const names = n.children
-            .filter((c) => c.fieldName === "name")
-            .map((c) => unquote(c.text));
+        if (!isTestCodeunit) return { pending: [], enders: [n.startIndex] };
+        const unnamed: number[] = [];
+        for (const [i, arm] of arms.entries()) {
+          const own: Pending[] = arm.own.map((at) => ({ at, unless: [] }));
+          const tests = [...pending, ...own];
+          if (tests.length === 0) continue;
+          if (arm.name === undefined) {
+            unnamed.push(i + 1);
+            continue;
+          }
+          const [first] = tests;
+          const ref = { codeunitId, codeunitName, method: unquote(arm.name.text), file: rel };
+          found.push({
+            ref,
+            offset: first?.at ?? n.startIndex,
+            testOffsets: tests.map((p) => p.at),
+            procedureOffset: arm.name.startIndex,
+            ...(tests.some((p) => p.unless.length > 0)
+              ? { unless: tests.map((p) => p.unless) }
+              : {}),
+          });
+          split.push(ref);
+        }
+        if (unnamed.length > 0) {
           warnings.push({
             code: "test-shape-unsupported",
             file: rel,
-            message: `[lethal] "${rel}": a [Test] procedure in codeunit ${codeunitId} "${codeunitName}" has its header split by #if/#else (one name per arm: ${names.join(", ")}). LethAL does not discover this shape yet, so the test is NOT run and the mutants only it would kill can score survived or no-coverage (see R424).`,
+            message: `[lethal] "${rel}": a [Test] procedure in codeunit ${codeunitId} "${codeunitName}" has its header split by #if/#else, and LethAL could not read the name in arm ${unnamed.join(", ")}. That arm's test is NOT run, and the mutants only it would kill can score survived or no-coverage (see R424).`,
           });
         }
         return { pending: [], enders: [n.startIndex] };
@@ -565,7 +600,7 @@ function treeTests(
     let pending: readonly Pending[] = [];
     for (const member of body.children) pending = step(member, pending).pending;
   }
-  return { found, consumed, warnings, root };
+  return { found, consumed, warnings, root, split };
 }
 
 /** R403 phase B: the id of every codeunit `source` declares (on code only, every arm read). The
@@ -720,13 +755,18 @@ export interface ArmAwareDiscovery {
   /** R403 phase B: every file in scope with a `[Test]` between an `#if` and its `#endif` (any arm),
    *  or in a file whose arms are undecided, sorted. What `test-symbols-unverified` names. */
   readonly conditionalTestFiles: readonly string[];
-  /** R420: test declarations discovery read and could not take (`test-shape-unsupported`, a
-   *  procedure header split by `#if`, R424), in file order. `runSession` emits each as a warning. */
+  /** R420: test declarations discovery read and could not take (`test-shape-unsupported`; since
+   *  R424 only a split-header arm whose name cannot be read), in file order. `runSession` emits
+   *  each as a warning. */
   readonly warnings: readonly DiscoveryWarning[];
   /** R420: every test (unfiltered, every arm) the tree finder returned that the regex did not.
    *  Non-empty means the suite differs from what discovery returned before R420, which the resume
    *  fingerprint records as `tree-v1`. */
   readonly treeOnlyTests: readonly TestMethodRef[];
+  /** R424: every test (unfiltered, every arm) the tree finder returned from a split-header
+   *  procedure. Non-empty means the suite differs from what discovery returned before R424, which
+   *  the resume fingerprint records as `split-v1`. */
+  readonly splitTests: readonly TestMethodRef[];
 }
 
 /**
@@ -754,6 +794,7 @@ export async function discoverTests(
   const conditionalTestFiles: string[] = [];
   const warnings: DiscoveryWarning[] = [];
   const treeOnlyTests: TestMethodRef[] = [];
+  const splitTests: TestMethodRef[] = [];
   const entries = await readdir(testDir, { recursive: true });
   // R421: normalised to `/` once and sorted in that form; matched and labelled with `rel`, read
   // through the raw name.
@@ -774,6 +815,7 @@ export async function discoverTests(
     unfiltered.push(...found.map((t) => t.ref));
     warnings.push(...file.warnings);
     treeOnlyTests.push(...file.treeOnly);
+    splitTests.push(...file.split);
     if (buildSymbols === undefined) continue;
     if (inScopeCodeunits !== undefined) {
       for (const id of declaredCodeunitIds(source)) inScopeCodeunits.add(id);
@@ -809,5 +851,6 @@ export async function discoverTests(
     conditionalTestFiles,
     warnings,
     treeOnlyTests,
+    splitTests,
   };
 }

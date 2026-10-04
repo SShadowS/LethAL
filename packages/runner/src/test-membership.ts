@@ -105,7 +105,7 @@ export class TestAppDiffersError extends Error {
   constructor(diff: TestMembershipDifference, buildSymbols: readonly string[]) {
     const names = (n: readonly string[]) => (n.length === 0 ? "none" : n.join(", "));
     // R420: a published-only test can also be one whose declaration discovery did not recognise
-    // (a shape nobody has seen yet; a header split by `#if`, R424).
+    // (a shape nobody has seen yet; until R424, a header split by `#if`).
     const unrecognised =
       diff.publishedOnly.length > 0
         ? ", or LethAL did not recognise a test declaration in the source (please report the shape; see R420)"
