@@ -51,7 +51,8 @@ const BODY = [
   "            Done := true;",
   "        until Done;",
   "        Show(I, X);",
-  "        exit(I);",
+  // R196: an additive outside the loop, so swap-additive keeps a site (`I + 1` in the loop is refused).
+  "        exit(I + 1);",
   "    end;",
 ];
 
@@ -124,7 +125,7 @@ const OPERATORS: ReadonlyArray<readonly [string, MutationOperator]> = [
   ["shift-integer", shiftInteger],
   ["loop-skip", loopSkip],
   ["loop-truncate", loopTruncate],
-  ["remove-assignment (the loop-hazard hang tag)", removeAssignment],
+  ["remove-assignment (the loop-hazard hang refusal)", removeAssignment],
   ["swap-additive (types only; a Task 1 regression pin)", swapAdditive],
   ["swap-call-arguments (types only; a Task 1 regression pin)", swapCallArguments],
 ];

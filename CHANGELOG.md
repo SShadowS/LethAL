@@ -222,6 +222,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 10** (R196, R239): mutants that can stop a loop from ending are no longer
+  made. `remove-assignment`, `shift-integer`, `swap-additive` and `flip-boolean-literal` now refuse
+  a site that writes a variable an enclosing `while`/`repeat` condition reads (these were tagged
+  `hangCapable` and deployed before), and `flip-boolean-literal` also refuses a literal nested in a
+  loop condition (through parentheses, `not`, `and`/`or`, or a `#if` tail) or in the condition of
+  an `if` inside a loop. The refusal is silent, like every other operator refusal: no report field,
+  warning or event changes, and `hangCapableCount` now reads 0 for built-in operators (the field
+  stays for plug-in operators). Keys can move where such a site is refused: a later twin (same
+  object, member, operator and code) takes the refused mutant's ordinal and its old key, and `M`
+  codes after it renumber. Every older store stops resuming (`--resume` and `--resume-run` refuse
+  it by name), the next `--skip-known-survivors` run skips nothing once, and marks files need
+  `"identityScheme": 10` after re-checking each mark against a fresh report (R325).
 - **Identity scheme 9** (R307, R374): identity ordinals are now numbered once over the whole run,
   not per batch. Before, two twin mutants (same object, member, operator and code) that
   `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so

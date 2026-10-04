@@ -127,8 +127,8 @@ beforeAll(async () => {
 });
 
 describe("R-405 (a): a newly admitted same-tuple twin moves a key", () => {
-  test("the identity scheme is 9 (8 for this key move, 9 for R307's run-wide ordinals)", () => {
-    expect(IDENTITY_SCHEME).toBe(9);
+  test("the identity scheme is 10 (8 for this key move, 9 for R307, 10 for R196's refusals)", () => {
+    expect(IDENTITY_SCHEME).toBe(10);
   });
 
   test("under [X] B.Modify() takes ordinal 0 and A.Modify()'s key moves to ordinal 1", () => {

@@ -5057,7 +5057,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
-  // satisfy a presence check while being useless to the person it is for.
+  // satisfy a presence check while being useless to the person it is for. Built-in operators now
+  // REFUSE these sites, so only a plug-in operator's tag can raise this warning.
   //
   // The message states what is true in THIS build, not spec §5.3's own wording. §5.3's text
   // promises that an over-budget mutant ends the BC session regardless of `--stop-hung-sessions`,

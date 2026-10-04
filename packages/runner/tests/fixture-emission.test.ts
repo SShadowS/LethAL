@@ -22,7 +22,9 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * `\`-keyed snapshot (the shape a Windows read gives) and must give the same hashes.
  *
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
- * the same commit, and says so.
+ * the same commit, and says so. R196: sandbox-hang's `HangLogic.Codeunit.al` and manifest were
+ * re-pinned because its line-104 `remove-assignment` and `shift-integer` sites are now refused as
+ * hang-capable (they were 977eb7bb...ef67 and f7b49d85...86e6).
  */
 const PINNED: Record<
   string,
@@ -104,14 +106,14 @@ const PINNED: Record<
   "sandbox-hang": {
     selectorIds: { selectorId: 79449, controlId: 79448, tableId: 79447 },
     hashes: {
-      "HangLogic.Codeunit.al": "977eb7bb07ca49400fda1c94d8bb021579f0032217e15a4d145f5cae97e9ef67",
+      "HangLogic.Codeunit.al": "2ccc529539ddd590aab5be08e801c316d3dcf67882ec1843953c340c5d9e5746",
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "f7b49d85171168e3a2403e55ad69b077fc1ab6645ecf44492b7d9de2de1f86e6",
+      "mutant-manifest.json": "cdfb8da1c27398281faa615f9665812eca960ab4d5eaae74047b0f54669cdd3b",
     },
   },
   "sandbox-harden": {

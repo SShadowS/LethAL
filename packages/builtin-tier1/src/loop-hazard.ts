@@ -12,7 +12,8 @@ import {
  * WHY THIS EXISTS (R196). Four operators can turn a terminating loop into a non-terminating one by
  * mutating a variable the loop's condition reads. Measured on the Document Output Templates slice:
  * eight of 741 mutants never terminate, costing about 40 of the run's 148 minutes in strands,
- * quarantines and resumes.
+ * quarantines and resumes. Those four operators now REFUSE every site this names (owner ruling
+ * 2026-10-05) rather than tagging it; the `hangCapable` channel stays for plug-in operators.
  *
  * WHAT A CLAIM MEANS, EXACTLY. That the assignment's target is a CONDITION-RELEVANT VARIABLE of an
  * enclosing loop. It does NOT establish that the mutation prevents progress, that the assignment
@@ -251,8 +252,15 @@ export function hangCapableForMutatedNode(
     if (cur.kind === ALNodeKind.assignment_statement) {
       const right = cur.childForFieldName("right");
       if (right === null) return null;
-      const insideValueSide =
-        node.startIndex >= right.startIndex && node.endIndex <= right.endIndex;
+      // A `#if` tail of the value (`Done := Go` `#if X and true #endif` `;`) sits BESIDE `right`,
+      // the shape `conditionIdentifiers` reads for a loop condition, so it is value side too.
+      const valueParts = [
+        right,
+        ...cur.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
+      ];
+      const insideValueSide = valueParts.some(
+        (v) => node.startIndex >= v.startIndex && node.endIndex <= v.endIndex,
+      );
       return insideValueSide ? classifyHangCapable(cur, ctx) : null;
     }
     // Early exit, not a guard that changes any answer: this walk climbs `.parent` pointers only,

@@ -178,14 +178,11 @@ const EXPECTED_ON: ReadonlyArray<{
   // `while` body, and `loop-skip` asks the same question in a way that cannot hang. A SECOND mutant
   // appearing at line 103's body is the regression to look for.
   { line: 103, operator: "lethal.loop-skip", verdict: "killed" },
-  // Killed by ARITHMETIC OVERFLOW, not by the budget, and worth knowing. Deleting `Pending -= 1`
-  // freezes the condition exactly as emptying the body does, but the surviving `Drained += 1` keeps
-  // accumulating and overflows Int32 in ~4.4 s ("Arithmetic operation resulted in an overflow").
-  // A frozen loop only STRANDS when nothing in it accumulates, which is why `empty-block` (whole
-  // body gone) hangs and this does not. Predicted `timeout-killed` and measured `killed`: the one
-  // miss in that pre-commitment, and its cause is measured rather than reasoned.
-  { line: 104, operator: "lethal.remove-assignment", verdict: "killed" },
-  { line: 104, operator: "lethal.shift-integer", verdict: "killed" },
+  // Line 104 (`Pending -= 1`) has NO row since R196: `while Pending > 0` reads `Pending`, so
+  // `remove-assignment` and `shift-integer` refuse it as hang-capable. Both were measured `killed`
+  // by ARITHMETIC OVERFLOW, not by the budget: the frozen condition left `Drained += 1` to overflow
+  // Int32 in ~4.4 s. They are the refusal's measured over-approximation, not hangs
+  // (docs/superpowers/specs/2026-10-04-r196-refuse-precommitment.md).
   { line: 105, operator: "lethal.remove-assignment", verdict: "killed" },
   { line: 105, operator: "lethal.shift-integer", verdict: "killed" },
   { line: 107, operator: "lethal.return-value", verdict: "killed" },

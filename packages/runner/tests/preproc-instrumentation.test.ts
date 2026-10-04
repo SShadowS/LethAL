@@ -2989,13 +2989,13 @@ describe("R302: split-member sites through the real pipeline", () => {
     expect(declarativeSites).toEqual([]);
   });
 
-  test("t5-hang: both remove-assignment mutants carry the loop hang tag", async () => {
+  test("t5-hang: both remove-assignment sites are refused as hang-capable (R196)", async () => {
+    // The refusal needs `I` and `Done` resolved inside the split member: an unresolved target is
+    // never refused, so both would be emitted. The loops themselves still draw mutants.
     const { manifest } = await instrument({ "H.Codeunit.al": T3_HANG });
     const ra = manifest.mutants.filter((x) => x.operatorName === "lethal.remove-assignment");
-    expect(ra.map((x) => [x.startLine, x.hangCapable])).toEqual([
-      [13, "loop-condition-target"],
-      [15, "loop-condition-target"],
-    ]);
+    expect(ra).toEqual([]);
+    expect(manifest.mutants.some((x) => x.startLine === 12)).toBe(true);
   });
 
   test("c3: the overload after the preamble takes ordinal 1; the preamble's keys have none", async () => {

@@ -23,7 +23,9 @@ describe("flipBooleanLiteral", () => {
     await initParser();
   });
 
-  it("tags an in-loop boolean guard that advances the condition (R196), and does NOT tag the preheader one", () => {
+  // Same-loop controls, R239's shapes and the targets()/generate() agreement check:
+  // loop-exit-refusal.test.ts.
+  it("REFUSES an in-loop boolean guard that advances the condition (R196), and claims the preheader ones", () => {
     const src = `codeunit 50000 P
 {
     procedure Go()
@@ -43,13 +45,12 @@ describe("flipBooleanLiteral", () => {
       .filter((n) => flipBooleanLiteral.targets(n, ctx))
       .flatMap((n) => flipBooleanLiteral.generate(n, ctx));
 
-    const inLoop = specs.filter((s) => s.before.text === "false");
-    expect(inLoop.length).toBeGreaterThan(0);
-    for (const s of inLoop) expect(s.hangCapable).toBe("loop-condition-target");
-
-    const preheader = specs.filter((s) => s.before.text === "true" && s.after.text === "false");
-    expect(preheader.length).toBeGreaterThan(0);
-    for (const s of preheader) expect(s.hangCapable).toBeUndefined();
+    // Only the two preheader `true`s; the in-loop `Continue := false` is refused.
+    expect(specs.map((s) => `${s.before.text}->${s.after.text}`)).toEqual([
+      "true->false",
+      "true->false",
+    ]);
+    for (const s of specs) expect(s.hangCapable).toBeUndefined();
   });
 
   /**
@@ -166,40 +167,21 @@ describe("flipBooleanLiteral", () => {
   });
 
   /**
-   * The over-refusal guard. `while Go and true do` flips to `while Go and false do`, which runs the
-   * body zero times and ends. The literal is not the whole condition, so it stays claimed.
+   * R239 refuses a literal nested in a compound loop condition in BOTH polarities. The terminating
+   * flips (`while Go and true` -> `and false`, `until Done or false` -> `or true`) are lost with the
+   * hanging ones: a polarity-aware rule was measured at zero sites and is more code to get wrong.
+   * The in-loop writes to `Go` and `Done` are R196's refusal (the condition reads them).
    */
-  it("does NOT over-refuse a boolean nested inside a compound while condition", () => {
+  it("REFUSES a boolean nested inside a compound loop condition, in both polarities (R239)", () => {
     expect(
       flipsIn(
         "codeunit 50000 R { procedure P() var Go: Boolean; begin while Go and true do Go := false; end; }",
       ),
-    ).toEqual(["true->false", "false->true"]);
-  });
-
-  /**
-   * A boolean nested INSIDE a compound exit condition is deliberately NOT refused. Flipping the
-   * `false` in `until Done or false` gives `until Done or true`, which exits after one iteration
-   * and terminates, so it is a working mutant rather than a hang. Measured 0 sites on both
-   * reference corpora, so this line is about being precise, not about a number.
-   */
-  it("does NOT over-refuse a boolean nested inside a compound exit condition", () => {
-    const src = `codeunit 50000 R
-{
-    procedure P()
-    var
-        Done: Boolean;
-    begin
-        repeat
-            Done := true;
-        until Done or false;
-    end;
-}`;
-    const root = wrapRoot(parseAL(src));
-    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
-    const specs = findAll(root, ALNodeKind.boolean_literal)
-      .filter((n) => flipBooleanLiteral.targets(n, ctx))
-      .flatMap((n) => flipBooleanLiteral.generate(n, ctx));
-    expect(specs.some((s) => s.before.text === "false" && s.after.text === "true")).toBe(true);
+    ).toEqual([]);
+    expect(
+      flipsIn(
+        "codeunit 50000 R { procedure P() var Done: Boolean; begin repeat Done := true; until Done or false; end; }",
+      ),
+    ).toEqual([]);
   });
 });
