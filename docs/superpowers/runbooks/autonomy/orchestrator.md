@@ -43,10 +43,10 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 1. Freeze the submitted files (`git show <sha>:<path>`) into `<coord root>/reviews/<id>-<run>/`.
 2. `pi_ask` with `gpt-6.1-sol`, absolute paths, `require_evidence` on; for test changes ask
    specifically whether a test or frozen figure was weakened.
-3. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
+3. **GitHub CI on the submitted branch must be green on BOTH jobs** (`gh run list --branch <branch> --limit 1`; `check` is Windows, `unit-linux` is Linux). This container is Linux, so a Windows-only failure (path separators, CRLF, platform APIs) never shows locally: CI is the only Windows check we have. Red or missing: send it back. Merge onto current `master` in the main checkout. Run on that exact tree: `bun run typecheck`,
    `rm -rf packages/*/dist`, `bun test`, `bunx biome check <touched files>`, and
    `bun run compile:fixtures` when fixtures changed. Live gates the plan names: run them yourself on Cronus28 under `coord lease Cronus28 orchestrator` (standing owner authorization, README), one at a time; a moved figure is a block for the owner.
-4. Commit the merge, `git push origin master`, `coord accept <id> <run> <sha>`, close the issue
+4. Commit the merge, `git push origin master`, check master's CI run on the next loop tick (`gh run list --branch master --limit 3`; red master is the next dispatch, ahead of the queue), `coord accept <id> <run> <sha>`, close the issue
    (`gh issue close <n> -R SShadowS/LethAL --comment "Done in <sha>"`), message the lane
    `accepted <id>` and `master moved to <sha>: merge it`; tell the other lane `master moved to <sha>` too.
 5. Rejected: `coord reject` with a reason file in the review folder, message the lane.
