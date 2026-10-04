@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**110 of 425 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**111 of 428 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -165,6 +165,7 @@ that ordering is the priority.
 - **R419** · R-307's per-file trial checks the latch refusals (C1-C4) only on the FULL mutant set, but the writer re-instruments BATCH SUBSETS, where a member's reach grain can change and a latch refusal can first appear at write time · [R419.md](docs/roadmap/R419.md) · open
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
+- **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
 
 ## Product gaps a real project hits
 
@@ -290,7 +291,9 @@ that ordering is the priority.
 - **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
 - **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
 - **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · done (31f5de45)
-- **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · open, filed 2026-10-04
+- **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · done (8f74a681)
+- **R429** · TypeTable (buildTypeTable) may read member-level #if declarations without arms; UNMEASURED · [R429.md](docs/roadmap/R429.md) · open, filed 2026-10-04
+- **R430** · a test that hands a test-app mock codeunit to another app sits on verify's whole-source fallback · [R430.md](docs/roadmap/R430.md) · open, filed 2026-10-04
 
 ## Backends and tooling
 
@@ -455,7 +458,7 @@ that ordering is the priority.
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
 - **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · closed 2026-10-02: ruling (option A), the whole-run multi-object refusal stays. Upstream #3713's object loss…
-- **R396** · Measure the R-387 al-runner speed-up on a real app: one timed run with the old defaults and one with the new, verdicts identical per mutant · [R396.md](docs/roadmap/R396.md) · open, filed 2026-10-01
+- **R396** · Measure the R-387 al-runner speed-up on a real app: one timed run with the old defaults and one with the new, verdicts identical per mutant · [R396.md](docs/roadmap/R396.md) · done (d3fd29b8)
 - **R395** · al-runner's `--server` path runs the whole suite under ONE long deadline, so a hung test becomes an error after at least 10 minutes rather than a per-test timeout, and no live gate checks an al-runner hang · [R395.md](docs/roadmap/R395.md) · open, filed 2026-10-01 (a stated limit)
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
 - **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)

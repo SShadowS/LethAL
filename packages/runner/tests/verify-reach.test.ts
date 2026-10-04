@@ -522,6 +522,86 @@ describe("R-425: the narrowed set", () => {
   });
 });
 
+describe("R-427: the unsent set (new tests sent to no survivor)", () => {
+  const T1 = ref("T1");
+  const T2 = ref("T2");
+  const unsentOf = (r: ReturnType<typeof narrowVerifyRequests>) => [...r.unsent];
+
+  test("a sibling-only filterable test is unsent; a test reaching a survivor is not", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1, T2],
+        baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(unsentOf(r)).toEqual(["50100::T1"]);
+  });
+
+  test("a red test with sibling-only coverage is fail-closed, so sent, so not unsent", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1, T2],
+        baseline: [{ ...pass(T1, SIB), outcome: "fail" }, pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50100::T2", "50100::T1"]);
+    expect(unsentOf(r)).toEqual([]);
+  });
+
+  test("a green test with empty coverage is fail-closed, so not unsent", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1, T2],
+        baseline: [pass(T1, []), pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(unsentOf(r)).toEqual([]);
+  });
+
+  test("a fail-closed survivor takes every new test, so nothing is unsent", () => {
+    const S2 = mutant("M0002", { codeunitId: 50001, procedureName: "Other2" });
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S, S2],
+        newTests: [T1],
+        baseline: [pass(T1, SIB)],
+        refusedObjects: new Map([[`codeunit:${OBJ}`, "Logic is wrapped in #if (R298)"]]),
+      }),
+    );
+    expect(r.failClosedSurvivors).toEqual([{ mutantId: "M0001", why: "refused" }]);
+    expect(keysOf(r, "M0002")).toEqual([]);
+    expect(unsentOf(r)).toEqual([]);
+  });
+
+  test("filter off: nothing is unsent, though the same fixture leaves T1 unsent with it on", () => {
+    const base = {
+      survivors: [S],
+      newTests: [T1, T2],
+      baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+    };
+    for (const mode of ["none", "procedure", "line"] as const) {
+      expect(unsentOf(narrowVerifyRequests(input({ ...base, mode })))).toEqual([]);
+    }
+    expect(unsentOf(narrowVerifyRequests(input({ ...base, enabled: false })))).toEqual([]);
+    expect(unsentOf(narrowVerifyRequests(input(base)))).toEqual(["50100::T1"]);
+  });
+
+  test("a new test that is also a covering test is kept, so not unsent", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        coveringKeys: new Map([["M0001", [T1]]]),
+        newTests: [T1, T2],
+        baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(unsentOf(r)).toEqual([]);
+  });
+});
+
 describe("R-384: console lines (review 2)", () => {
   // W1: verify prints its own true lines; coverageFilter's are false inside verify.
   test("W1: an unplaceable survivor and a fallback-2 trigger write nothing to console.warn", () => {

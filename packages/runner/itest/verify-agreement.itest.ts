@@ -470,6 +470,17 @@ async function main(): Promise<void> {
       );
       for (const nt of out.newTests) {
         assert.equal(nt.codeunitId, SCRATCH_ANSWERS.codeunitId, `step 3: ${nt.test} codeunit`);
+        if (nt.test === "Harden Verify Answers.BonusForTwiceOnOneInstance") {
+          // K5, R-427 addendum: no survivor reaches it, so it is run ONCE, not twice.
+          assert.equal(nt.state, "not-rerun", `step 3: K5 not-rerun (${JSON.stringify(nt)})`);
+          assert.equal(nt.runs.length, 1, `step 3: K5 exactly one run (${JSON.stringify(nt)})`);
+          const [only] = nt.runs;
+          assert.ok(only !== undefined, "step 3: K5 has its one run");
+          assert.equal(only.outcome, "pass", `step 3: K5 (${JSON.stringify(only)})`);
+          assert.equal(only.fresh, true, `step 3: K5 fresh (${JSON.stringify(only)})`);
+          assert.ok(only.sessionId !== undefined, "step 3: K5 sessionId defined");
+          continue;
+        }
         assert.equal(nt.state, "stable", `step 3: ${nt.test} stable (${JSON.stringify(nt)})`);
         const [b, r] = nt.runs;
         assert.ok(

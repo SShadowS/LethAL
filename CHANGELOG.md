@@ -62,6 +62,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify` does not rerun a new test the reach filter sent to no survivor** (R427,
+  verify schema v6). Every new test still runs once, unmutated, before the mutants. Only a test
+  sent to at least one survivor runs again after them. A test sent to none reads the new
+  `newTests[].state` value `not-rerun`, with its one fresh `pass` as `runs` (one entry, not two).
+  Its stability is unknown and it is never `stable`, but it does not block exit `0`, because it
+  is in no row's `testsRun` and gated no verdict. What is lost: a flaky test that reaches no
+  survivor is no longer caught (`flaky`, exit `5`) in that verify; it is caught when a later
+  verify sends it to a survivor. A test whose coverage cannot be used (a red or non-fresh
+  baseline, no coverage) still joins every survivor, so it is still rerun. The schema bumps
+  because a value domain grew; v5 is kept as published, so a v5 reader never sees `not-rerun`.
+  The budget follows: check 2 (after the baseline) counts N + R + P extra runs, R being the new
+  tests sent to a survivor, and its text is unchanged when R = N. Check 1 (before the lease, filter
+  on) now refuses only when N, the one unmutated run per new test, exceeds the budget B, where it
+  refused at 2N > B. So a run with N <= B < 2N now passes check 1. With at least one survivor to
+  run it takes the lease, runs the N baselines, and may still refuse at check 2. With no survivor
+  to run (S = 0, every named survivor skipped) it finishes with nothing run and `newTests: []`, as
+  any S = 0 verify does. No verdict is wrong in either case; the refusal only moves later.
 - **`--max-new-tests` budgets extra test runs, not new tests** (R384). The budget is
   `--max-new-tests` x (survivors + 2) extra test runs. With the reach filter off, the boundary is
   unchanged (more new tests than `--max-new-tests` refuses). With it on, verify refuses before the

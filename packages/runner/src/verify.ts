@@ -912,7 +912,9 @@ export async function planVerify(a: {
   if (!reachState.on && cap.s * cap.n + 2 * cap.n > budget) {
     throw new VerifyError("too-many-new-tests", capOffDetail(cap, reachState.why));
   }
-  if (reachState.on && 2 * cap.n > budget) {
+  // R-427 (ruling 3): check 1 is N > B. A new test sent to no survivor is not rerun, so the
+  // baseline run is the one count no filter can lower.
+  if (reachState.on && cap.n > budget) {
     throw new VerifyError("too-many-new-tests", capCheckOneDetail(cap));
   }
 
@@ -1046,25 +1048,39 @@ function capOffDetail(c: CapNumbers, why: string): string {
   return `${c.n} tests are new or edited since run ${c.runId}. The coverage filter is off (${why}), so they need ${c.s * c.n + 2 * c.n} extra test runs (${2 * c.n} unmutated, ${c.s * c.n} against ${c.s} survivor(s)). ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
 }
 
-/** R-384 The cap, filter on, check 1 (before any lease): the filter cannot lower 2N. */
+/**
+ * R-384 The cap, filter on, check 1 (before any lease): the filter cannot lower N, each new
+ * test's one baseline run. R-427 (ruling 3): N, not 2N, since a test sent to no survivor is not
+ * rerun.
+ */
 function capCheckOneDetail(c: CapNumbers): string {
   const { classes, helpers } = c.editClasses();
-  return `${c.n} tests are new or edited since run ${c.runId}. Each runs twice unmutated, ${2 * c.n} extra test runs, and the coverage filter cannot lower that; without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
+  return `${c.n} tests are new or edited since run ${c.runId}. Each runs at least once unmutated, ${c.n} extra test runs, and the coverage filter cannot lower that; without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
 }
 
 /**
  * R-384 The cap, filter on, check 2 (inside `narrow`, after the baseline, before the first
- * mutant): E = 2N + P extra test runs against the same budget. `undefined` when E fits.
+ * mutant): E extra test runs against the same budget. `undefined` when E fits. R-427:
+ * E = N + R + P, where R (`rerun`) counts the new tests sent to at least one survivor, the only
+ * ones rerun. With R = N the text is R-384's, byte for byte (ruling 4).
  */
 export function capCheckTwoDetail(
   c: CapNumbers,
   joins: number,
   failClosed: number,
+  rerun: number,
 ): string | undefined {
-  const e = 2 * c.n + joins;
+  if (rerun < 0 || rerun > c.n) {
+    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
+  }
+  const e = c.n + rerun + joins;
   if (e <= c.max * (c.s + 2)) return undefined;
   const { classes, helpers } = c.editClasses();
-  return `${c.n} tests are new or edited since run ${c.runId}. After the coverage filter they need ${e} extra test runs (${2 * c.n} unmutated, ${joins} against ${c.s} survivor(s); ${failClosed} test(s) joined every survivor because their coverage could not be used); without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} The unmutated runs had already run when this was found. Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${Math.ceil(e / (c.s + 2))}; or run lethal run again so this source is the recorded one`;
+  const unmutated =
+    rerun === c.n
+      ? `${2 * c.n} unmutated,`
+      : `${c.n + rerun} unmutated: ${c.n} baseline, ${rerun} rerun, ${c.n - rerun} test(s) sent to no survivor are not rerun;`;
+  return `${c.n} tests are new or edited since run ${c.runId}. After the coverage filter they need ${e} extra test runs (${unmutated} ${joins} against ${c.s} survivor(s); ${failClosed} test(s) joined every survivor because their coverage could not be used); without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} The unmutated runs had already run when this was found. Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${Math.ceil(e / (c.s + 2))}; or run lethal run again so this source is the recorded one`;
 }
 
 /**
@@ -1092,11 +1108,19 @@ export async function verifyDependencyFingerprint(
  *  frozen. 5 since R-425 added `reachFilter` and `results[].reachNarrowed`. Adding a field does
  *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
  *  report it means the report predates the record; the version is the one thing that tells the
- *  two apart, so it bumps. v4 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 5;
+ *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
+ *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 6;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
-export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
+export const NEW_TEST_STATES = [
+  "stable",
+  "flaky",
+  "red",
+  "flaky-unknown",
+  "infra-error",
+  "not-rerun",
+] as const;
 /** R262: an unmutated run's outcome exactly as the backend answered it, plus `not-run`. */
 export const UNMUTATED_OUTCOMES = [
   "pass",
@@ -1140,7 +1164,8 @@ export interface NewTestResult {
   readonly test: string;
   readonly codeunitId: number;
   readonly state: NewTestState;
-  /** `[baseline, rerun]`. */
+  /** `[baseline, rerun]`; `[baseline]` alone when `state` is `not-rerun` (R-427: the reach
+   *  filter sent the test to no survivor, so its stability is unknown, never `stable`). */
   readonly runs: readonly UnmutatedRun[];
   /** The first failing run's text. */
   readonly failure?: string;
@@ -1286,7 +1311,9 @@ export function verifyExitCode(o: {
   }
   if (
     measured.some((r) => r.verdict !== "killed") ||
-    o.newTests.some((t) => t.state !== "stable")
+    // R-427 (ruling 2): `not-rerun` gated no verdict (it was sent to no survivor), so it does
+    // not block exit 0; it never reads as `stable` either.
+    o.newTests.some((t) => t.state !== "stable" && t.state !== "not-rerun")
   ) {
     return VERIFY_EXIT.notAllKilled;
   }
@@ -1341,6 +1368,25 @@ function newTestResultOf(
     state,
     runs: [b, r],
     ...(failed !== undefined ? { failure: failed.failureMessage ?? failed.outcome } : {}),
+  };
+}
+
+/**
+ * R-427: a new test the reach filter sent to no survivor ran its baseline only. Only a filterable
+ * test can be unsent, and that needs a fresh green baseline, so anything else is a bug.
+ */
+function notRerunResultOf(ref: TestMethodRef, baseline: NamedUnmutatedRun): NewTestResult {
+  const b = unmutatedRunOf(baseline);
+  if (!(b.fresh && b.outcome === "pass")) {
+    throw new Error(
+      `verify.ts: new test ${testKeyOf(ref)} was not rerun, but its baseline was not a fresh pass (${b.outcome}, fresh ${b.fresh}); only a test with a fresh green baseline can be sent to no survivor (a bug)`,
+    );
+  }
+  return {
+    test: qualifiedTestName(ref),
+    codeunitId: ref.codeunitId,
+    state: "not-rerun",
+    runs: [b],
   };
 }
 
@@ -1538,11 +1584,18 @@ export async function runVerify(
           });
           // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
           // on the way out, so the refusal is safe here.
-          const over = capCheckTwoDetail(plan.cap, r.joins, r.failClosedTests.length);
+          // R-427: R, the new tests sent to at least one survivor, the only ones rerun.
+          const over = capCheckTwoDetail(
+            plan.cap,
+            r.joins,
+            r.failClosedTests.length,
+            plan.cap.n - r.unsent.size,
+          );
           if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
           reach = r;
           reportReach(r, plan, planned, log, deps.emit);
-          return { methods: r.methods, unreached: r.unreached };
+          // R-427: a new test sent to no survivor is not rerun.
+          return { methods: r.methods, unreached: r.unreached, notRerun: r.unsent };
         }
       : undefined;
     if (plan.requests.length > 0) {
@@ -1592,6 +1645,27 @@ export async function runVerify(
     // Decision 11: every new test's two unmutated runs, from this call's own answers.
     const newKeys = new Set(plan.newTests.map(testKeyOf));
     const ran = res;
+    // R-427: the tests runNamedMutants did not rerun must be exactly the ones the reach filter
+    // sent to no survivor, as `unreached` is cross-checked below, so a backend that ignores
+    // `notRerun` cannot report a test it never skipped, nor skip one the filter sent.
+    if (ran !== undefined) {
+      const skipped = new Set(ran.notRerun ?? []);
+      const unsent = reach?.unsent ?? new Set<string>();
+      for (const k of unsent) {
+        if (!skipped.has(k)) {
+          throw new Error(
+            `verify.ts: the reach filter sent ${k} to no survivor, but runNamedMutants did not skip its rerun`,
+          );
+        }
+      }
+      for (const k of skipped) {
+        if (!unsent.has(k)) {
+          throw new Error(
+            `verify.ts: runNamedMutants skipped the rerun of ${k}, but the reach filter did not leave it unsent`,
+          );
+        }
+      }
+    }
     const newTests =
       ran === undefined
         ? []
@@ -1599,6 +1673,13 @@ export async function runVerify(
             const key = testKeyOf(ref);
             const b = ran.baseline.find((x) => testKeyOf(x.ref) === key);
             const r = ran.rerun.find((x) => testKeyOf(x.ref) === key);
+            const notRerun = (ran.notRerun ?? []).includes(key);
+            if (b !== undefined && r !== undefined && notRerun) {
+              throw new Error(
+                `verify.ts: runNamedMutants answered new test ${key} both rerun and not rerun`,
+              );
+            }
+            if (b !== undefined && notRerun) return notRerunResultOf(ref, b);
             if (b === undefined || r === undefined) {
               throw new Error(`verify.ts: runNamedMutants did not answer new test ${key}`);
             }
