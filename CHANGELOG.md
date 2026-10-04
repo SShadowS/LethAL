@@ -29,8 +29,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   never dropped. A survivor no new test reaches and with no covering test stays `survived` with
   `testsRun: []`. Off under the hub modes and `none`, and with the new `--no-reach-filter`. One
   stderr line states the filter's state; the JSON is unchanged (schema v4) (R425 records it, v5).
-  Stated limit: state
-  left by an earlier test in the same call, or code run in another session, is not seen.
+  Stated limit: state left by an earlier test in the same call, or code run in another session, is
+  not seen.
 
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
