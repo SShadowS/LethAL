@@ -109,6 +109,15 @@ describe("R-307 O6: the writer walks FilePlan.mutants by position", () => {
     });
   });
 
+  it("a plan with ONE EXTRA mutant makes the writer throw, naming the file and the extra mutant", async () => {
+    planWith((m) => [...m, ...m.slice(0, 1)]);
+    await withDir(async (dir) => {
+      await expect(writeInstrumentedProject(inputFor(dir))).rejects.toThrow(
+        /Two\.Codeunit\.al: the plan holds 3 mutant\(s\) for 2 ided spec\(s\); first unmatched: M0001/,
+      );
+    });
+  });
+
   it("a plan with fewer mutants than ided makes the writer throw, naming file and mutant", async () => {
     planWith((m) => m.slice(0, 1));
     await withDir(async (dir) => {
