@@ -458,6 +458,13 @@ export class ResultsStore {
     this.db = new Database(dbPath, { create: true });
     this.db.exec(`PRAGMA busy_timeout = ${STORE_BUSY_TIMEOUT_MS};`);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    // R449: SQLite's default (FULL) fsyncs the WAL on EVERY commit, and opening a new store alone
+    // is about 16 commits (90 ms on Linux ext4). An fsync waits on the whole machine's disk, so
+    // under other load one store-backed unit test took 3 s here and 6.7 to 8.3 s on GitHub's
+    // Windows runner. NORMAL, the setting SQLite recommends for WAL, fsyncs at checkpoints only:
+    // a crashed or killed process loses nothing, and an OS crash or power cut can lose the last
+    // commits but never corrupts the file. A lost verdict row is a mutant resume runs again.
+    this.db.exec("PRAGMA synchronous = NORMAL;");
     this.db.exec(SCHEMA);
     this.migrate();
   }
