@@ -287,8 +287,7 @@ interface ImportEdge {
  * like any other module. A dynamic `import(...)` whose target is not a string literal or a
  * no-substitution template gives an edge with origin `unclassified-dynamic-import`.
  */
-function importsOf(file: string): ImportEdge[] {
-  const sf = parse(file);
+function importsOf(file: string, sf: ts.SourceFile = parse(file)): ImportEdge[] {
   const edges: ImportEdge[] = [];
   const at = (n: ts.Node): string =>
     `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
@@ -313,6 +312,9 @@ function importsOf(file: string): ImportEdge[] {
         else if (n.importClause.name !== undefined) whole = true; // a default import
       }
       if (named !== undefined && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
+        // `import {} from "x"` / `export {} from "x"` still load the module: a whole-module edge.
+        if (named.elements.length === 0) whole = true;
+        // `import {} from "x"` / `export {} from "x"` still load the module: a whole-module edge.
         for (const el of named.elements)
           names.push({
             name: el.propertyName?.text ?? el.name.text,
@@ -420,17 +422,36 @@ describe("R-307 O7: the PLAN/EMIT boundary", () => {
     expect(bad).toEqual([]);
   });
 
+  // Allowed: other EMIT modules (they cannot refuse, by the rules above) and reach-latch.ts
+  // (one pure constant, REACH_LATCH, read by both halves). Nothing else is needed: a composition
+  // such as printWithRewrites runs planEdits and can refuse, and a "neither" module may throw.
+  const allowed = new Set([...EMIT_MODULES, "packages/schemata/src/reach-latch.ts"]);
+  const allowListViolations = (file: string, sf?: ts.SourceFile): string[] =>
+    importsOf(file, sf)
+      .filter((e) => !e.typeOnly && !allowed.has(e.origin))
+      .map((e) => `${e.where} EMIT value import of ${e.origin} is not on the allow-list`);
+
   test("EMIT value imports come only from the allow-list; everything else is import type", () => {
-    // Allowed: other EMIT modules (they cannot refuse, by the rules above) and reach-latch.ts
-    // (one pure constant, REACH_LATCH, read by both halves). Nothing else is needed: a composition
-    // such as printWithRewrites runs planEdits and can refuse, and a "neither" module may throw.
-    const allowed = new Set([...EMIT_MODULES, "packages/schemata/src/reach-latch.ts"]);
-    const bad: string[] = [];
-    for (const f of EMIT_MODULES)
-      for (const e of importsOf(f))
-        if (!e.typeOnly && !allowed.has(e.origin))
-          bad.push(`${e.where} EMIT value import of ${e.origin} is not on the allow-list`);
-    expect(bad).toEqual([]);
+    expect(EMIT_MODULES.flatMap((f) => allowListViolations(f))).toEqual([]);
+  });
+
+  describe("the allow-list check rejects synthetic EMIT sources (R-442 regression plants)", () => {
+    const host = EMIT_MODULES[0] ?? "";
+    const run = (text: string): string[] =>
+      allowListViolations(host, ts.createSourceFile(host, text, ts.ScriptTarget.Latest, true));
+    test.each([
+      ["static value import", 'import { readFileSync } from "node:fs";'],
+      ["empty named import", 'import {} from "node:fs";'],
+      ["empty named re-export", 'export {} from "node:fs";'],
+      ["template-literal dynamic import", "const m = import(`node:fs`);"],
+      ["concatenated dynamic import", 'const m = import("node:" + "fs");'],
+    ])("rejects %s", (_name, text) => {
+      expect(run(text)).toHaveLength(1);
+    });
+    test("accepts import type", () => {
+      expect(run('import type { X } from "node:fs";')).toEqual([]);
+      expect(run('import type {} from "node:fs";')).toEqual([]);
+    });
   });
 
   test("EMIT modules use no ??, no ||, no .get( and no .find( (total lookups, no fallback)", () => {
