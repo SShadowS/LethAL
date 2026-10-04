@@ -140,9 +140,12 @@ export function looseIdentityTupleOf(
  * another file can change ordinal. 8: R405, a member-level #if now hides a procedure or trigger
  * by arm for the symbol table, the table-trigger readers and the receiver filter, so a call that
  * was refused (or read against an inactive arm) is admitted, and a newly admitted mutant with the
- * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key.
+ * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key. 9:
+ * R307 (R374), identity ordinals are numbered once over the whole run instead of per batch, so
+ * keys move only where batching split twins (two twins in two batches both held ordinal 0
+ * before).
  */
-export const IDENTITY_SCHEME = 8;
+export const IDENTITY_SCHEME = 9;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
