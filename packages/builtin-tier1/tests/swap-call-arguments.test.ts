@@ -144,4 +144,22 @@ describe("swapCallArguments", () => {
     const src = `codeunit 50161 "T" { var G: Integer; procedure P(Param: Integer) begin Foo(Param, G); end; }`;
     expect(specsFor(src)[0]?.after.text).toBe("Foo(G, Param)");
   });
+
+  // R295: Z is the SECOND name of `Y1, Z: Record T1`. Read as the global `Z: Record T2`, it looked
+  // like Q's type and the swap was emitted; `alc` 18.0 rejects the mutated source with AL0133
+  // (census synthetic app, both arguments).
+  it("R295: refuses Take(Q, Z) when the later local name Z differs in type from Q", () => {
+    const src = `codeunit 50172 "T" {
+      var Z: Record "T2";
+      procedure P() var Q: Record "T2"; Y1, Z: Record "T1"; begin Take(Q, Z); end; }`;
+    expect(specsFor(src).map((s) => s.after.text)).toEqual([]);
+  });
+
+  // The positive half, so a fix that refuses every later name goes red.
+  it("R295: swaps Take(Q, Z) when the later local name Z truly equals Q's type", () => {
+    const src = `codeunit 50173 "T" {
+      var Z: Text;
+      procedure P() var Q: Integer; Y1, Z: Integer; begin Take(Q, Z); end; }`;
+    expect(specsFor(src).map((s) => s.after.text)).toEqual(["Take(Z, Q)"]);
+  });
 });

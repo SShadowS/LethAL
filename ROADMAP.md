@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**104 of 445 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**103 of 447 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -112,8 +112,8 @@ that ordering is the priority.
 - **R285** · A `case` label split by `#if`/`#else` builds a `preproc_split_case_extended` node, which escapes R214's `preproc_conditional*` framing, and mutants are planted in the arm the compiler never builds · [R285.md](docs/roadmap/R285.md) · done (84f72d33) for its four inactive-arm mutants; the block-body empty-block loss stays open, see R304 and…
 - **R288** · tree-sitter-al 4.3.0 parses a page property value `Type = Type::X` (or `Type <> Type::X`) into an ERROR node; `Kind = Kind::X` or a qualified `Rec.Type = Rec.Type::X` parse clean · [R288.md](docs/roadmap/R288.md) · done (50e98d1), closed 2026-09-27 by tree-sitter-al 4.4.1 (#27, upstream 551829e)
 - **R289** · itest:hang M0004 is sometimes not stopped (StopHungRunAt flake), second recurrence · [R289.md](docs/roadmap/R289.md) · closed 2026-09-28, ruling: not reproducible on a restarted server with a separate probe user; P1 3/3 PASS…
-- **R294** · `resolveVarRef` returns null for every member-expression receiver: `isMemberName` compares rebuilt wrapper nodes by reference · [R294.md](docs/roadmap/R294.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
-- **R295** · `collectVarDeclarations` keeps only the first name of `A, B: T`: every later name is invisible to scope resolution · [R295.md](docs/roadmap/R295.md) · open, filed 2026-09-27 while building R-236c's TestPage scanner
+- **R294** · `resolveVarRef` returns null for every member-expression receiver: `isMemberName` compares rebuilt wrapper nodes by reference · [R294.md](docs/roadmap/R294.md) · done (6154426f)
+- **R295** · `collectVarDeclarations` keeps only the first name of `A, B: T`: every later name is invisible to scope resolution · [R295.md](docs/roadmap/R295.md) · done (6154426f)
 - **R296** · itest:tables' assertMatchesBaseline fails with a bare Error: the per-mutant difference lines never reach the output · [R296.md](docs/roadmap/R296.md) · done (b2085e51)
 - **R297** · `printWithRewrites` refuses two real corpora with 'overlapping rewrites': a wide rewrite span collides with a nested zero-width insert · [R297.md](docs/roadmap/R297.md) · done (0185b3a); whole BaseApp UNMET (parser and manifest-serialization limits, see [[R292]] and [[R311]])
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · closed 2026-10-05 — no sites lost; about 7,140 BaseApp sites (0.31%) run without coverage, which is R300's…
@@ -138,7 +138,7 @@ that ordering is the priority.
 - **R331** · The Tier-2 rule-3 guard does not see a `#if`-wrapped procedure, so a table's own procedure of a built-in name can be claimed as the built-in · [R331.md](docs/roadmap/R331.md) · done (84f38b9f)
 - **R336** · The grammar does not parse `tableextension ... extends <number>`, so the whole extension becomes a root ERROR node · [R336.md](docs/roadmap/R336.md) · open, filed 2026-09-29, reported upstream
 - **R339** · A `#if` inside one procedure header (around a named return or its type) makes the whole member an ERROR node, so no mutant is generated in that member (measured on a one-member file) · [R339.md](docs/roadmap/R339.md) · open, filed 2026-09-29
-- **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · open, filed 2026-09-29
+- **R341** · A QUOTED use of a named return value (`"My Result"`) is not typed: `computeType` handles `identifier` only, so typed operators lose that site · [R341.md](docs/roadmap/R341.md) · closed 2026-10-05 — ruled not worth fixing: the R-294 census found 0 sites lost and 0 wrong mutants on every…
 - **R342** · `fixtures/sandbox-symbols` has six `unplaced`-grain mutants that GH-24's every-fixture reach-grain test would reject, but that test's fixture list leaves the symbol pair out · [R342.md](docs/roadmap/R342.md) · done (38a82a55)
 - **R343** · Typed operators emit nothing inside an object wrapped in `#if`: the symbol table leaves wrapped objects unindexed (R331's fail-safe), and no item records that loss · [R343.md](docs/roadmap/R343.md) · open, filed 2026-09-29
 - **R346** · Every gate's catch prints err.stack, which Bun can strip of its message after a GC: only the baseline errors are protected · [R346.md](docs/roadmap/R346.md) · done (4e131268)
@@ -174,6 +174,7 @@ that ordering is the priority.
 - **R443** · An equivalence mark written from a run that had a header refusal can name the wrong mutant once that file's header is readable again · [R443.md](docs/roadmap/R443.md) · open, filed 2026-10-05
 - **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
 - **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
+- **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · open
 
 ## Product gaps a real project hits
 
@@ -490,6 +491,7 @@ that ordering is the priority.
 - **R435** · On al-runner the dependency fingerprint still reads Microsoft apps by declared version; resolve them from the provisioned platform-apps directory before verify supports al-runner · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
+- **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · open, filed 2026-10-05
 
 ---
 

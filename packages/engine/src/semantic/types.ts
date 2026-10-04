@@ -16,7 +16,7 @@ import { ALNodeKind, isBinaryExpressionKind } from "../ast/node-kinds";
  *     (mapped via ALNodeKind.integer_literal etc.).
  */
 import type { ALSyntaxNode } from "../ast/syntax-node";
-import { findEnclosingProcedure } from "../ast/tree-walks";
+import { declarationMembers, findEnclosingProcedure } from "../ast/tree-walks";
 import {
   enclosingObjectScopeKey,
   enclosingTrigger,
@@ -239,6 +239,7 @@ function findBinaryOperands(
 function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   const scope = enclosingObjectScopeKey(node);
   if (scope === null) return null;
+  if (insideWithBody(node)) return null;
   const proc = findEnclosingProcedure(node);
   // R330 (run 002 fix round): inside a trigger, a name the trigger declares in its own header is
   // unknown. Without this it fell through to the object's globals, and since R322 also to a global
@@ -279,9 +280,82 @@ function resolveIdentifierType(node: ALSyntaxNode, symbols: SymbolTable): string
   // referring to a global inside a procedure that a DIFFERENT object also declares resolved
   // against the wrong object's globals or not at all. Here the scope is the identifier's own by
   // construction, so this is the same object either way.
+  if (implicitRecordShadowsGlobals(node)) return null;
   const global = symbols.globalsOf(scope).find((g) => sameName(g.name, node.text));
   if (global !== undefined) return extractType(global.typeText);
   return null;
+}
+
+/**
+ * Inside `with R do <body>`, a bare name resolves to R's field of that name BEFORE any variable,
+ * and this layer does not read R's fields, so a name there types as nothing. Measured with `alc`
+ * 18.0 (R295 build): `with R do Take(Q, Z)` where R's table has a Text field Z and Q, Z are
+ * Integer locals compiles, and the swap `Take(Z, Q)` that typing Z by the local emitted is
+ * rejected (AL0133). R295 made later names of `Q, Z: Integer` visible, which widened this.
+ */
+function insideWithBody(node: ALSyntaxNode): boolean {
+  for (let p = node.parent; p !== null; p = p.parent) {
+    if (p.rawKind !== "with_statement") continue;
+    const body = p.childForFieldName("body");
+    if (body !== null && node.startIndex >= body.startIndex && node.endIndex <= body.endIndex)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * R294 review: some bodies have an IMPLICIT `with` over a record, and there a field of that record
+ * wins over an object GLOBAL of the same name (a procedure's local or parameter still wins over the
+ * field). This layer does not read the record's fields, so a name that would fall through to the
+ * globals types as nothing. Measured with `alc` 18.0.43 (`I := Z` with an Integer global Z and a
+ * Text field Z; AL0122 means the field won):
+ *   - page with a `SourceTable`: every trigger, field trigger and procedure. Without one: global.
+ *   - pageextension: every body (the extended page's source table is not visible here).
+ *   - codeunit with `TableNo`: the `OnRun` trigger only; its other procedures see the global.
+ *   - report: dataitem triggers, including a nested dataitem's (an OUTER dataitem's field wins
+ *     too), and a request page that declares a `SourceTable`; report triggers and procedures see
+ *     the global. reportextension: `modify` triggers measured; its request page is not, so it is
+ *     refused as well.
+ *   - safe, measured: table, tableextension, xmlport `tableelement` triggers.
+ * Before this, `PTake(Q2, Z)` on a page over a table with a Text field Z, Q2 and Z Integer page
+ * globals, was swapped to `PTake(Z, Q2)`, which `alc` rejects (AL0133).
+ */
+function implicitRecordShadowsGlobals(node: ALSyntaxNode): boolean {
+  for (let p = node.parent; p !== null; p = p.parent) {
+    switch (p.rawKind) {
+      case "report_dataitem":
+      case "dataset_section":
+        return true;
+      case "requestpage_section":
+        return (
+          hasProperty(p, "SourceTable") ||
+          p.parent?.parent?.rawKind === "reportextension_declaration"
+        );
+      case ALNodeKind.pageextension:
+        return true;
+      case ALNodeKind.page:
+        return hasProperty(p, "SourceTable");
+      case ALNodeKind.codeunit: {
+        if (!hasProperty(p, "TableNo")) return false;
+        const name = enclosingTrigger(node)?.childForFieldName("name")?.text;
+        return name !== undefined && sameName(name, "OnRun");
+      }
+      case ALNodeKind.report:
+      case "reportextension_declaration":
+      case ALNodeKind.table:
+      case ALNodeKind.tableextension:
+        return false;
+    }
+  }
+  return false;
+}
+
+function hasProperty(objectNode: ALSyntaxNode, name: string): boolean {
+  return declarationMembers(objectNode).some((m) => {
+    if (m.kind !== ALNodeKind.property) return false;
+    const n = m.childForFieldName("name");
+    return n !== null && sameName(n.text, name);
+  });
 }
 
 /** R322: AL compares names case-insensitively. */

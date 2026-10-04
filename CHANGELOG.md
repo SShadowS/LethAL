@@ -322,6 +322,38 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
+  of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
+  type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a
+  Codeunit's `SetRange`. Every name is now declared with the full shared type. A bare name inside a
+  `with` body now types as nothing, because the record's field of that name wins there (an
+  `alc`-failing swap was possible before too). Measured: BaseApp +1,169 sites, and all 129 wrong
+  rows of the later-name class gone (30 `swap-call-arguments`, 99 `flip-boolean-literal`); CDO +4,
+  and its 1 wrong row gone. No fixture or gate figure moves. These counts cover the class the
+  census looked for (a later name typed by a global); they do not prove that no other class of
+  wrong mutant exists.
+- **Member-expression receivers resolve again** (R294): the `R` of `R.Field` and `Txt` of
+  `Txt.Contains(...)` were always refused, so a loop such as
+  `while Txt.Contains('a') do Txt := Txt.Replace('a', 'b')` was not seen as hang-capable. Such sites
+  are now refused by R196's rule (36 BaseApp, 1 CDO, measured with the R295 fix: both together).
+- **No more swaps typed by a global that an implicit record's field hides** (R294 review). Some
+  bodies run inside an implicit `with` over a record. There, a field of that record wins over an
+  object global of the same name (a procedure's local or parameter still wins over the field). The
+  type layer does not read those fields, so in these places a bare name that would fall through to
+  the globals now types as nothing. The places, measured with `alc` 18.0: a page with a
+  `SourceTable`, every pageextension, a codeunit's `OnRun` when it has `TableNo`, report dataitem
+  triggers, a report request page with a `SourceTable`, and reportextension dataset and request
+  page triggers. Table, tableextension and xmlport triggers were measured safe and are unchanged.
+  Before, on a page over a table with a Text field `Z`, two Integer page globals `Q2` and `Z` were
+  swapped, which `alc` rejects (AL0133). Measured: 1,961 BaseApp and 38 CDO rows removed
+  (`swap-call-arguments` and `swap-additive`), and 12 BaseApp swaps moved to another argument pair,
+  each new pair made of procedure locals, parameters or named returns of one type. A type-level
+  check found none of the removed rows wrong in these corpora: in each one the implicit record has
+  no field of the refused name, or (2 rows) has one of the same type. So the refusal closes a real
+  door (the synthetic case), but these corpora had not used it; the cost is the lost sites.
+- **Identity scheme 11** (R295, R294): sites are added and removed, so same-tuple ordinals can
+  move. Every older store stops resuming once, the next `--skip-known-survivors` run skips nothing
+  once, and marks files need `"identityScheme": 11` after re-checking each mark (R325).
 - **`reliability` is now `narrowed` when a file with sites was left out for an undecided `#if` or
   because its object kind cannot carry the selector** (R399). R307 did this for refused files
   only, so a run that left such a file out still said `full`. A zero-site undecided row, a

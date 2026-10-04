@@ -321,3 +321,63 @@ describe("R402: an UNDECIDED arm is read, so the tag errs toward claiming", () =
     );
   });
 });
+
+// R295: every name of `A, B: Integer` is declared, and both share ONE declaration node. So
+// `sameDeclaration` keys by that node's position AND the name: by position alone A and B would be
+// one variable and `while A < 10 do B := B + 1` would be tagged, a false hang.
+describe("R295: a multi-name declaration in the hang classifier", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (loop: string) =>
+    load(`codeunit 50295 "R" {
+      procedure P() var A, B: Integer; begin
+        ${loop}
+      end; }`);
+
+  it("CLAIMS the later name's own write: while B < 10 do B := B + 1", () => {
+    const { root, ctx } = src("while B < 10 do B := B + 1;");
+    expect(classifyHangCapable(assignment(root, "B := B + 1"), ctx)).toBe("loop-condition-target");
+  });
+
+  it("control: CLAIMS the first name's own write: while A < 10 do A := A + 1", () => {
+    const { root, ctx } = src("while A < 10 do A := A + 1;");
+    expect(classifyHangCapable(assignment(root, "A := A + 1"), ctx)).toBe("loop-condition-target");
+  });
+
+  // WRONG-FIX CONTROLS: pass on the unfixed code (B was invisible), red under a position-only key.
+  it("DECLINES a write to the OTHER name: while A < 10 do B := B + 1", () => {
+    const { root, ctx } = src("while A < 10 do B := B + 1;");
+    expect(classifyHangCapable(assignment(root, "B := B + 1"), ctx)).toBeNull();
+  });
+
+  it("DECLINES the reverse: while B < 10 do A := A + 1", () => {
+    const { root, ctx } = src("while B < 10 do A := A + 1;");
+    expect(classifyHangCapable(assignment(root, "A := A + 1"), ctx)).toBeNull();
+  });
+});
+
+// R294: a member-expression RECEIVER in a loop condition resolves again, so its own write is a hang.
+describe("R294: a member receiver in the loop condition", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("CLAIMS while Txt.Contains('a') do Txt := Txt.Replace('a', 'b')", () => {
+    const { root, ctx } = load(`codeunit 50294 "R" {
+      procedure P() var Txt: Text; begin
+        while Txt.Contains('a') do Txt := Txt.Replace('a', 'b');
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "Txt := Txt.Replace"), ctx)).toBe(
+      "loop-condition-target",
+    );
+  });
+
+  it("control: DECLINES when the member name, not the receiver, matches the target", () => {
+    const { root, ctx } = load(`codeunit 50296 "R" {
+      procedure P() var R: Record Customer; Amount: Decimal; begin
+        while R.Amount < 10 do Amount := Amount + 1;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "Amount := Amount + 1"), ctx)).toBeNull();
+  });
+});
