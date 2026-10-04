@@ -1,6 +1,6 @@
 # Rung-3 workspace contract
 
-The DO campaign is a host-only campaign: it runs on the owner's Windows host, not in the kraken container. If you are in the container, host-only: ask the owner.
+The DO campaign is a host-only campaign: it runs on the owner's Windows host, not in the kraken container. If you are in the container, host-only: ask the owner. The host checkout is `U:/Git/do-lethal`; in the kraken container the checkout is at `/work/src/do-lethal` (no remote).
 
 This is what the DO campaign's rung-3 `claude -p` agent gets, what it does not get, and — this is
 the part that matters — **which guarantee comes from where, and how strong each one actually is**.

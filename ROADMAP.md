@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**111 of 428 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**115 of 434 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -166,6 +166,8 @@ that ordering is the priority.
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
 - **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
+- **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · open, filed 2026-10-04
+- **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · open, filed 2026-10-04
 
 ## Product gaps a real project hits
 
@@ -292,8 +294,9 @@ that ordering is the priority.
 - **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
 - **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · done (31f5de45)
 - **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · done (8f74a681)
-- **R429** · TypeTable (buildTypeTable) may read member-level #if declarations without arms; UNMEASURED · [R429.md](docs/roadmap/R429.md) · open, filed 2026-10-04
+- **R429** · TypeTable (buildTypeTable) may read member-level #if declarations without arms; UNMEASURED · [R429.md](docs/roadmap/R429.md) · closed 2026-10-04 — no defect: buildTypeTable types through the symbol table R-405a made arm-aware; 0 wrong…
 - **R430** · a test that hands a test-app mock codeunit to another app sits on verify's whole-source fallback · [R430.md](docs/roadmap/R430.md) · open, filed 2026-10-04
+- **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · closed 2026-10-04 — stated limit: never-typed #if positions lose 1 of 55 typed mutants on fixtures and 0 of…
 
 ## Backends and tooling
 
@@ -471,8 +474,11 @@ that ordering is the priority.
 - **R414** · R393's 'CI unset' control fails on every GitHub runner: Bun also reads GITHUB_ACTIONS as CI, and the control removed only CI · [R414.md](docs/roadmap/R414.md) · done (443e2ec6)
 - **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · done (5a8b8f3c)
 - **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
+- **R436** · Biome is pinned at 1.9.4; 2.5.15 is out and out of the declared range (migration) · [R436.md](docs/roadmap/R436.md) · open
+- **R437** · TypeScript is at 5.9; 7.0 (the native compiler) is out and LethAL has not migrated · [R437.md](docs/roadmap/R437.md) · open
 - **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
 - **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
+- **R435** · On al-runner the dependency fingerprint still reads Microsoft apps by declared version; resolve them from the provisioned platform-apps directory before verify supports al-runner · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
 
 ---
 

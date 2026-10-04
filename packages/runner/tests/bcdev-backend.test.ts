@@ -5,6 +5,7 @@ import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
 import {
@@ -241,7 +242,10 @@ function makeDeployment(
 // (see node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js). A permissive
 // passthrough object schema lets the fake tools receive whatever shape the adapter sends
 // without the fake server needing to mirror the production request shape.
-const anyArgs = z.object({}).passthrough();
+// Cast to the SDK's `AnySchema`: the SDK now carries its own zod 4 copy, and checking this zod 3
+// schema against its generics overflows the compiler's instantiation depth (TS2589). The runtime
+// schema is unchanged.
+const anyArgs = z.object({}).passthrough() as unknown as AnySchema;
 
 function makeBackend(
   runHandler: (args: unknown) => unknown,
@@ -253,12 +257,12 @@ function makeBackend(
   // scenario) must keep this tool call pending, not synchronously serialize the Promise
   // object itself (JSON.stringify(new Promise(...)) resolves to "{}" instantly otherwise).
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
-    content: [{ type: "text", text: JSON.stringify(await runHandler(args)) }],
+    content: [{ type: "text" as const, text: JSON.stringify(await runHandler(args)) }],
   }));
   // status() treats the response's text content as an opaque details string (no JSON
   // parsing), so the fake tool returns statusHandler's result as plain text.
   server.registerTool("bcdev_status", { inputSchema: anyArgs }, async (args: unknown) => ({
-    content: [{ type: "text", text: String(await statusHandler(args)) }],
+    content: [{ type: "text" as const, text: String(await statusHandler(args)) }],
   }));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
@@ -334,7 +338,7 @@ function makeRejectAfterDispatchTransport(inner: Transport, failMessage: string)
 function makeBackendWhoseCallRejectsAfterDispatch(message: string): BcDevMcpBackend {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
-    content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+    content: [{ type: "text" as const, text: JSON.stringify({ results: [] }) }],
   }));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
@@ -370,7 +374,7 @@ async function makeBackendWithDeploy(
 }> {
   const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
   server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
-    content: [{ type: "text", text: JSON.stringify(await runHandler(args)) }],
+    content: [{ type: "text" as const, text: JSON.stringify(await runHandler(args)) }],
   }));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   void server.connect(serverTransport);
@@ -461,7 +465,7 @@ describe("BcDevMcpBackend.attach", () => {
       : base;
     const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
     server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
-      content: [{ type: "text", text: JSON.stringify(hubRun()) }],
+      content: [{ type: "text" as const, text: JSON.stringify(hubRun()) }],
     }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     void server.connect(serverTransport);
@@ -1015,7 +1019,7 @@ describe("BcDevMcpBackend env passthrough", () => {
     let capturedEnv: Record<string, string> | undefined;
     const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
     server.registerTool("bcdev_status", { inputSchema: anyArgs }, async () => ({
-      content: [{ type: "text", text: "ok" }],
+      content: [{ type: "text" as const, text: "ok" }],
     }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     void server.connect(serverTransport);
@@ -1613,7 +1617,7 @@ describe("BcDevMcpBackend.compileCheck", () => {
       server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async () => ({
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify({
               results: [
                 {
@@ -1741,7 +1745,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       const runHandler = mock((_args: unknown) => ({ results: [] }));
       const server = new McpServer({ name: "fake-bc-dev", version: "0.0.0" });
       server.registerTool("bcdev_test_run", { inputSchema: anyArgs }, async (args: unknown) => ({
-        content: [{ type: "text", text: JSON.stringify(runHandler(args)) }],
+        content: [{ type: "text" as const, text: JSON.stringify(runHandler(args)) }],
       }));
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       void server.connect(serverTransport);

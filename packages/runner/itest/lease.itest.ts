@@ -1134,7 +1134,7 @@ async function probeSlowRunMutantGenuinelyInFlight(
         );
       }
       const renewed = await a.client.renew(a.tuple(), MAX_TTL_SECONDS);
-      const stillPendingAfter = !runSettled;
+      const stillPendingAfter: boolean = !runSettled;
       overlapConfirmedAt.push(stillPendingAfter);
       assert.equal(
         renewed.renewed,
