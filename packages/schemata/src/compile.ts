@@ -15,13 +15,8 @@ import {
   printWithRewrites,
 } from "@lethal/engine";
 import { type Component, buildComponents } from "./components";
-import {
-  REACH_LATCH,
-  emitDispatch,
-  preambleArmHeaderEnds,
-  reachGrainOf,
-  splitVarHoistAnchor,
-} from "./dispatch";
+import { REACH_LATCH, emitDispatch } from "./dispatch";
+import { preambleArmHeaderEnds, reachGrainOf, splitVarHoistAnchor } from "./dispatch-plan";
 import { type IdedSpec, assignMutantIds } from "./ids";
 
 export function compileSchemataForFile(
@@ -50,11 +45,14 @@ export function compileSchemataForFile(
   const rewrites = new Map<ALSyntaxNode, string>();
   // R246. Before the chains: a latch insertion can end exactly where a body-rooted chain starts,
   // and the printer keeps map order on a tie, so the zero-width insertion must come first.
-  const latches = injectReachLatches(components, rewrites, filePath ?? "<file>");
+  const latches = injectReachLatches(components, rewrites, filePath ?? "<file>", source);
   for (const component of components) {
     rewrites.set(
       component.root,
-      wrapIfSingleStatementSlot(component.root, emitDispatch(component, latches.get(component))),
+      wrapIfSingleStatementSlot(
+        component.root,
+        emitDispatch(component, source, latches.get(component)),
+      ),
     );
   }
 
@@ -88,11 +86,12 @@ function injectReachLatches(
   components: readonly Component[],
   rewrites: Map<ALSyntaxNode, string>,
   filePath: string,
+  source: string,
 ): Map<Component, string> {
   const latches = new Map<Component, string>();
   const byOwner = new Map<number, string>();
   for (const c of components) {
-    if (!c.members.some((m) => reachGrainOf(m, c.root) === "statement")) continue;
+    if (!c.members.some((m) => reachGrainOf(m, c.root, source) === "statement")) continue;
     let owner: ALSyntaxNode | null = c.root;
     // R301: a split-header procedure's shared var section and body are its own direct children.
     while (owner !== null && !isProcedureLike(owner) && owner.kind !== ALNodeKind.trigger)

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
+import type { Component } from "../src/components";
 import { emitDispatch } from "../src/dispatch";
+
+/** `emitDispatch` reads the root's text from the file source: a source holding the stand-in root
+ *  at its own offset. */
+function emit(component: Component): string {
+  const { root } = component;
+  return emitDispatch(component, " ".repeat(root.startIndex) + root.text);
+}
 
 /**
  * Minimal stand-ins. `parent` is explicit and `null` rather than absent: R161's `emptiedSlotFiller`
@@ -29,7 +37,7 @@ function member(mutantId: string, beforeText: string, beforeStart: number, after
 describe("emitDispatch", () => {
   it("emits one branch per mutant plus an original branch", () => {
     const root = node("exit(A > B);", 100);
-    const out = emitDispatch({
+    const out = emit({
       root,
       members: [
         member("M0002", "exit(A > B);", 100, "exit(false);"),
@@ -50,7 +58,7 @@ describe("emitDispatch", () => {
 
   it("a deletion mutant's branch omits the deleted span", () => {
     const root = node("LogAudit(Amount);", 50);
-    const out = emitDispatch({
+    const out = emit({
       root,
       members: [member("M0001", "LogAudit(Amount)", 50, "")],
     } as never);
@@ -63,7 +71,7 @@ describe("emitDispatch", () => {
 
   it("a single-mutant component still emits a two-branch chain", () => {
     const root = node("exit(V);", 10);
-    const out = emitDispatch({
+    const out = emit({
       root,
       members: [member("M0001", "exit(V);", 10, "exit(0);")],
     } as never);
@@ -88,7 +96,7 @@ describe("emitDispatch — member splice reproduces the consumed terminator (C1)
     const innerText = "begin\n        A := A;\n    end;";
     const rootStart = 100;
     const innerStart = rootStart + rootText.indexOf(innerText);
-    const out = emitDispatch({
+    const out = emit({
       root: node(rootText, rootStart),
       members: [member("M0001", innerText, innerStart, "begin end")],
     } as never);
@@ -108,7 +116,7 @@ describe("emitDispatch — member splice reproduces the consumed terminator (C1)
     const innerText = "begin\n        Y := 1;\n    end";
     const rootStart = 200;
     const innerStart = rootStart + rootText.indexOf(innerText);
-    const out = emitDispatch({
+    const out = emit({
       root: node(rootText, rootStart),
       members: [member("M0001", innerText, innerStart, "begin end")],
     } as never);
@@ -124,7 +132,7 @@ describe("emitDispatch — member splice reproduces the consumed terminator (C1)
     const innerText = "exit(A > B);";
     const rootStart = 300;
     const innerStart = rootStart + rootText.indexOf(innerText);
-    const out = emitDispatch({
+    const out = emit({
       root: node(rootText, rootStart),
       members: [member("M0001", innerText, innerStart, "exit(false);")],
     } as never);

@@ -14,9 +14,8 @@ import {
   renamedMemberCoverageNames,
 } from "@lethal/engine";
 import { compileSchemataForFile } from "./compile";
-import { buildComponents } from "./components";
 import { type TierResolver, dedupeSpecs } from "./dedup";
-import { type ReachGrain, reachGrainOf } from "./dispatch";
+import { type ReachGrain, planReachGrains } from "./dispatch-plan";
 import type { DeclaredObject } from "./id-ranges";
 import { type IdedSpec, assignMutantIds } from "./ids";
 import {
@@ -793,10 +792,7 @@ export function instrumentOneFile(
   const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
   // The same components `compileSchemataForFile` builds from the same `ided`, so the grain
   // recorded here is the one the emitted chain placed (or omitted) its marker by.
-  const grainOf = new Map<string, ReachGrain>();
-  for (const c of buildComponents(ided)) {
-    for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
-  }
+  const grainOf: ReadonlyMap<string, ReachGrain> = planReachGrains(ided, f.source);
   // R6: attributed to ITS OWN enclosing object, not always the file's first header.
   const headerOf = new Map<string, ObjectHeader>();
   for (const { mutantId, spec } of ided)

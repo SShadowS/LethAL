@@ -13,10 +13,12 @@ import {
   wrapRoot,
 } from "@lethal/engine";
 import {
+  type IdedSpec,
   type TierResolver,
   assignMutantIds,
   dedupeSpecs,
   instrumentOneFile,
+  planReachGrains,
 } from "@lethal/schemata";
 import { generateMutationSet, operatorTiers } from "../src/orchestrator";
 
@@ -111,6 +113,11 @@ async function takeProject(
       mutants: ided.length,
     };
     if (out.grains !== undefined) {
+      grainInputs.push({
+        source: f.source,
+        ided,
+        keyOf: (id) => `${label}/${f.path}/${id}`,
+      });
       for (const { mutantId } of ided) {
         const grain = grainOf.get(mutantId);
         if (grain === undefined) throw new Error(`${label}/${f.path}/${mutantId}: no grain`);
@@ -122,6 +129,13 @@ async function takeProject(
     out.outputs[`${label}/${r.file}`] = { refused: { shape: r.shape, file: r.file } };
   }
 }
+
+/** Every file whose grains record (a) holds, kept so O3 can recompute them through PLAN. */
+const grainInputs: {
+  readonly source: string;
+  readonly ided: readonly IdedSpec[];
+  readonly keyOf: (mutantId: string) => string;
+}[] = [];
 
 /** A spec shaped as the hand-built ones in `compile.test.ts`. */
 function handSpec(before: ALSyntaxNode, afterText: string, operatorName: string): MutationSpec {
@@ -177,6 +191,12 @@ function takeHand(grains: Record<string, string>): void {
     const path = `Hand${h.name}.Codeunit.al`;
     const ided = assignMutantIds(new Map([[path, specs]])).get(path) ?? [];
     const { grainOf } = instrumentOneFile({ path, source: h.src, root }, specs, ided);
+    const ops = new Map(ided.map(({ mutantId, spec }) => [mutantId, spec.operatorName]));
+    grainInputs.push({
+      source: h.src,
+      ided,
+      keyOf: (id) => `hand/${h.name}/${id}:${ops.get(id)}`,
+    });
     for (const { mutantId, spec } of ided) {
       const grain = grainOf.get(mutantId);
       if (grain === undefined) throw new Error(`hand ${h.name}/${mutantId}: no grain`);
@@ -245,6 +265,18 @@ describe("R-307 O1: golden records taken before the PLAN/EMIT split", () => {
     expect(keys.filter((k) => k.startsWith("hand/"))).toHaveLength(6);
     expect(keys.length).toBeGreaterThan(100);
     expect(taken.grains).toEqual(golden.grains);
+  });
+
+  test("O3: PLAN's grain (describeSplice + leadingBeginEnd) equals the golden table", async () => {
+    const golden = await readGolden<{ grains: Record<string, string> }>(GRAIN_FILE);
+    const plan: Record<string, string> = {};
+    for (const g of grainInputs) {
+      const grains = planReachGrains(g.ided, g.source);
+      expect(grains.size).toBe(g.ided.length);
+      for (const [mutantId, grain] of grains) plan[g.keyOf(mutantId)] = grain;
+    }
+    expect(Object.keys(plan).length).toBe(Object.keys(golden.grains).length);
+    expect(sorted(plan)).toEqual(golden.grains);
   });
 
   test("(a) the hand cases read the replacement and the filler", async () => {

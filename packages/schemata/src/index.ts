@@ -52,7 +52,13 @@ export type {
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
-export { REACH_MARKER, reachGrainOf, reachLatchRefusedOwner, varSectionUnparsed } from "./dispatch";
+export {
+  REACH_MARKER,
+  planReachGrains,
+  reachGrainOf,
+  reachLatchRefusedOwner,
+  varSectionUnparsed,
+} from "./dispatch";
 export type { ReachGrain } from "./dispatch";
 export { resolveSite, isMutableSite } from "./enclosing";
 export type { ResolvedSite } from "./enclosing";

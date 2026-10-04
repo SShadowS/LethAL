@@ -1078,7 +1078,7 @@ describe("GH-24: reach grain and marker placement", () => {
     const ided = assignMutantIds(new Map([["<file>", s.specs]])).get("<file>") ?? [];
     const out = new Map<string, string>();
     for (const c of buildComponents(ided)) {
-      for (const m of c.members) out.set(m.mutantId, reachGrainOf(m, c.root));
+      for (const m of c.members) out.set(m.mutantId, reachGrainOf(m, c.root, s.src));
     }
     return out;
   };
@@ -2348,7 +2348,7 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
     const specs = [spec(firstAssignment(root), "Glob := 0", "lethal.op")];
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     return { grains, out: compileSchemataForFile(src, root, specs, ided) };
   };
@@ -2576,7 +2576,7 @@ ${u.member}
       expect(reachLatchRefusedOwner(plain.before)).toBeNull();
       const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
       const grains = buildComponents(ided).flatMap((c) =>
-        c.members.map((m) => reachGrainOf(m, c.root)),
+        c.members.map((m) => reachGrainOf(m, c.root, src)),
       );
       expect(grains).toEqual(["unplaced", "statement"]);
       const out = compileSchemataForFile(src, root, specs, ided);
@@ -2658,7 +2658,7 @@ ${u.member}
     );
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     expect(grains).toEqual(["unplaced", "unplaced"]);
     const out = compileSchemataForFile(src, root, specs, ided);
@@ -3058,7 +3058,7 @@ describe("R316: a split-header procedure whose arms each have their own var sect
     );
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     return { specs, grains, out: compileSchemataForFile(src, root, specs, ided) };
   };

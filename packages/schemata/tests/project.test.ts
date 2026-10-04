@@ -1645,7 +1645,7 @@ describe("GH-24: the manifest records each mutant's reach grain", () => {
       const expected = new Map<string, string>();
       const ided = assignMutantIds(new Map([["G.Codeunit.al", specs]])).get("G.Codeunit.al") ?? [];
       for (const c of buildComponents(ided)) {
-        for (const m of c.members) expected.set(m.mutantId, reachGrainOf(m, c.root));
+        for (const m of c.members) expected.set(m.mutantId, reachGrainOf(m, c.root, src));
       }
       // Both grains occur, so a manifest that wrote one constant for every entry fails here.
       expect([...expected.values()].sort()).toEqual(["enclosing", "statement"]);
