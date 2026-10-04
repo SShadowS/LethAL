@@ -13280,6 +13280,122 @@ describe("R-384: runNamedMutants' narrow seam", () => {
   });
 });
 
+// R-427 Task 2: `narrow` may name new tests that are sent to no survivor; they skip the rerun.
+describe("R-427: runNamedMutants' notRerun", () => {
+  const OVER_KEY = `${OVER.codeunitId}::${OVER.method}`;
+  const OVER2_KEY = `${OVER2.codeunitId}::${OVER2.method}`;
+  const RED_KEY = `${RED.codeunitId}::${RED.method}`;
+  const mutantActivations = (t: Trace) =>
+    (calls(t) as Array<{ call: string; id?: string | null }>).filter(
+      (c) => c.call === "activate" && typeof c.id === "string",
+    ).length;
+  /** A stateful dispatch counter: how many times each method ran with no mutant active. */
+  const counting = () => {
+    const dispatched = new Map<string, number>();
+    const unmutated = ({ ref, nth }: { ref: TestMethodRef; nth: number }) => {
+      dispatched.set(`${ref.codeunitId}::${ref.method}`, nth);
+      return undefined;
+    };
+    return { dispatched, unmutated };
+  };
+
+  test("a notRerun test is dispatched once (baseline only); a sent test twice", async () => {
+    const c = counting();
+    const fx = await installedFixture({
+      killer: "none",
+      session: freshSessions(),
+      unmutated: c.unmutated,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      rerunOnUnmutated: [OVER, OVER2],
+      narrow: () => ({
+        methods: new Map([["M0001", [OVER]]]),
+        unreached: new Set(),
+        notRerun: new Set([OVER2_KEY]),
+      }),
+    });
+    expect(c.dispatched.get(OVER_KEY)).toBe(2);
+    expect(c.dispatched.get(OVER2_KEY)).toBe(1);
+    expect(res.notRerun).toEqual([OVER2_KEY]);
+    expect(res.rerun.map((r) => r.ref)).toEqual([OVER]);
+    expect(res.baseline.map((b) => b.ref)).toEqual([OVER, OVER2]);
+  });
+
+  test("without notRerun every rerun method is rerun and notRerun is empty", async () => {
+    const c = counting();
+    const fx = await installedFixture({
+      killer: "none",
+      session: freshSessions(),
+      unmutated: c.unmutated,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      rerunOnUnmutated: [OVER, OVER2],
+      narrow: () => ({ methods: new Map([["M0001", [OVER]]]), unreached: new Set() }),
+    });
+    expect(c.dispatched.get(OVER2_KEY)).toBe(2);
+    expect(res.notRerun).toEqual([]);
+    expect(res.rerun.map((r) => r.ref)).toEqual([OVER, OVER2]);
+  });
+
+  test("a notRerun key in a kept mutant's method list is refused before any mutant run", async () => {
+    const fx = await installedFixture({ killer: "none", session: freshSessions() });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      rerunOnUnmutated: [OVER, OVER2],
+      narrow: () => ({
+        methods: new Map([["M0001", [OVER, OVER2]]]),
+        unreached: new Set(),
+        notRerun: new Set([OVER2_KEY]),
+      }),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect(String(err)).toContain(OVER2_KEY);
+    expect(String(err)).toContain("M0001");
+    expect(mutantActivations(fx.trace)).toBe(0);
+  });
+
+  test("a notRerun key not in rerunOnUnmutated is refused before any mutant run", async () => {
+    const fx = await installedFixture({ killer: "none", session: freshSessions() });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      rerunOnUnmutated: [OVER],
+      narrow: () => ({
+        methods: new Map([["M0001", [OVER]]]),
+        unreached: new Set(),
+        notRerun: new Set([OVER2_KEY]),
+      }),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect(String(err)).toContain(OVER2_KEY);
+    expect(String(err)).toContain("rerunOnUnmutated");
+    expect(mutantActivations(fx.trace)).toBe(0);
+  });
+
+  test("a notRerun key whose baseline is invalid is refused before any mutant run", async () => {
+    const fx = await installedFixture({ killer: "none", session: freshSessions() });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, RED] }],
+      rerunOnUnmutated: [OVER, RED],
+      narrow: () => ({
+        methods: new Map([["M0001", [OVER]]]),
+        unreached: new Set(),
+        notRerun: new Set([RED_KEY]),
+      }),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NamedMutantError);
+    expect(String(err)).toContain(RED_KEY);
+    expect(String(err)).toContain("boom-red");
+    expect(mutantActivations(fx.trace)).toBe(0);
+  });
+});
+
 describe("C02-06 Task 5.4: the rerun's own contract (5.3 review)", () => {
   test("a rerun the dispatch stopped on is never fresh, so a lease loss or strand cannot read as flaky", async () => {
     // The stranded rerun answers `fail` from a fresh-looking session. Its verdict is not a result
