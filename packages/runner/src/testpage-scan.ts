@@ -31,6 +31,7 @@ import { join } from "node:path";
 import {
   type ALSyntaxNode,
   initParser,
+  memberArms,
   normalizeAlName,
   parseAL,
   visit,
@@ -68,6 +69,16 @@ const PREPROC_BRANCH_MARKER = new Set([
   "preproc_else",
   "preproc_endif",
 ]);
+/**
+ * R424: a procedure whose HEADER is split by `#if` (tree-sitter-al 4.4.1): one header per arm and
+ * one shared body. `preproc_split_procedure` shares its `var` section too; a
+ * `preproc_split_procedure_preamble` has a `var` section per arm. Each arm is its own `Proc`
+ * (`splitProcsOf`).
+ */
+const SPLIT_PROCEDURE = new Set(["preproc_split_procedure", "preproc_split_procedure_preamble"]);
+/** A member a body walk stops at: a procedure, a trigger, or a split-header procedure. */
+const isMemberKind = (kind: string): boolean =>
+  kind === "procedure" || kind === "trigger_declaration" || SPLIT_PROCEDURE.has(kind);
 
 /**
  * Unwraps every `preproc_conditional`/`preproc_conditional_var`/`preproc_conditional_object` node,
@@ -138,7 +149,7 @@ function insideWithStatement(n: ALSyntaxNode): boolean {
   let cur = n.parent;
   while (cur !== null) {
     if (cur.rawKind === "with_statement") return true;
-    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") return false;
+    if (isMemberKind(cur.rawKind)) return false;
     cur = cur.parent;
   }
   return false;
@@ -156,7 +167,7 @@ function withTargets(n: ALSyntaxNode): readonly Recv[] {
       out ??= [];
       out.push(r === null ? { k: "opaque", kind: "with_statement" } : toRecv(r));
     }
-    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") break;
+    if (isMemberKind(cur.rawKind)) break;
     cur = cur.parent;
   }
   return out ?? NO_WITH;
@@ -379,7 +390,7 @@ function addType(into: Map<string, string[]>, name: string, type: string): void 
 /**
  * Every name of every `variable_declaration` under `section`, into `into`. With `skipProcedures`,
  * a `procedure` subtree is not entered: see `procsInVarSection`, whose procedures' locals must not
- * read as globals.
+ * read as globals. R424: nor is a split-header procedure's.
  */
 function addDeclarations(
   section: ALSyntaxNode,
@@ -389,7 +400,7 @@ function addDeclarations(
   skipProcedures = false,
 ): void {
   const walk = (d: ALSyntaxNode): void => {
-    if (skipProcedures && d.rawKind === "procedure") return;
+    if (skipProcedures && (d.rawKind === "procedure" || SPLIT_PROCEDURE.has(d.rawKind))) return;
     if (d.rawKind === "variable_declaration") {
       const type = d.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
       const names = d.namedChildren.filter((c) => NAME_KINDS.has(c.rawKind));
@@ -407,12 +418,13 @@ function addDeclarations(
  * tree-sitter-al 4.4.1 parses an `#if` region that directly follows the global `var` section INSIDE
  * that section (`var_section > var_body > preproc_conditional_var > procedure`), where the AL
  * compiler places the same procedures at codeunit level (upstream tree-sitter-al #29). Kept until
- * the grammar is fixed. Every branch's procedures are returned, in source order.
+ * the grammar is fixed. Every branch's procedures are returned, in source order. R424: a
+ * split-header procedure directly after the global `var` section lands there too (measured).
  */
 function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   const walk = (n: ALSyntaxNode): void => {
-    if (n.rawKind === "procedure") {
+    if (n.rawKind === "procedure" || SPLIT_PROCEDURE.has(n.rawKind)) {
       out.push(n);
       return;
     }
@@ -476,7 +488,14 @@ const TEST_ATTRIBUTE = /^\[\s*Test\s*\]$/i;
  */
 function memberRun(decl: ALSyntaxNode, andTrivia = false): AttributeRun {
   const wide = attributeRun(decl, andTrivia, decl.endIndex, true);
-  if (wide.attributes.some((a) => TEST_ATTRIBUTE.test(a.text.trim()))) return wide;
+  const isTest = (a: ALSyntaxNode): boolean => TEST_ATTRIBUTE.test(a.text.trim());
+  if (wide.attributes.some(isTest)) return wide;
+  // R424: a split-header procedure whose `[Test]` sits inside an arm (V4) is a test procedure too.
+  if (
+    SPLIT_PROCEDURE.has(decl.rawKind) &&
+    decl.children.some((c) => c.rawKind === "attribute_item" && isTest(c))
+  )
+    return wide;
   return attributeRun(decl, andTrivia, decl.endIndex, false);
 }
 
@@ -577,6 +596,24 @@ function partsText(source: string, node: ALSyntaxNode): string {
     .join("\n");
 }
 
+/** One declaration's header as `procFrom` reads it: a plain procedure or trigger, or one arm of a
+ *  split-header procedure (R424). */
+interface Header {
+  readonly name: ALSyntaxNode;
+  /** The `parameter` nodes. */
+  readonly params: readonly ALSyntaxNode[];
+  readonly returnType: string | undefined;
+  readonly returnValue: ALSyntaxNode | undefined;
+  /** Every `var` section of the declaration: a plain procedure's one; a split arm's own (a
+   *  preamble's) and the shared one. */
+  readonly vars: readonly ALSyntaxNode[];
+  readonly block: ALSyntaxNode | undefined;
+  /** The member's attribute run; for a split arm, the run before the split node. */
+  readonly run: AttributeRun;
+  /** R424: a split arm's own attributes (V4), nearest first. Empty for a plain procedure. */
+  readonly own: readonly ALSyntaxNode[];
+}
+
 /** A procedure or trigger as plain facts; `problems` is the scan's list, `null` for R-371 only. */
 function procOf(
   p: ALSyntaxNode,
@@ -585,71 +622,194 @@ function procOf(
   problems: string[] | null,
   keys: Map<string, number>,
 ): Proc | undefined {
-  const isTrigger = p.rawKind === "trigger_declaration";
-  const id2 = nameNode(p);
-  if (id2 === undefined) return undefined;
-  const scope = new Map<string, string[]>();
+  const name = nameNode(p);
+  if (name === undefined) return undefined;
   const plist = p.namedChildren.find((c) => c.rawKind === "parameter_list");
-  const params = plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
-  for (const prm of params) {
+  const block = p.namedChildren.find((c) => c.rawKind === "code_block");
+  const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
+  return procFrom(
+    {
+      name,
+      params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
+      returnType: p.childForFieldName("return_type")?.text,
+      returnValue: p.childForFieldName("return_value") ?? undefined,
+      vars: vars === undefined ? [] : [vars],
+      block,
+      run: memberRun(p),
+      own: [],
+    },
+    p.rawKind === "trigger_declaration",
+    unit,
+    source,
+    problems,
+    keys,
+    block === undefined ? undefined : callSites(block),
+    block === undefined ? NO_IDS : idRefsIn(block),
+  );
+}
+
+/**
+ * R424: one `Proc` per arm of a split-header procedure, never merged (plan r2 §3(a)). Each arm has
+ * its own name, parameters, return type, named return value and (in a preamble) `var` section,
+ * read from the node's children between two `#if`/`#elif`/`#else` markers (`memberArms`). Every
+ * arm shares:
+ * - the `var` section and body after `#endif`, so `sites` is one array for all of them;
+ * - the attribute run before the split node, to which each arm adds its own attributes (V4), the
+ *   handler lists as a union;
+ * - the span: that run plus the WHOLE split node, so an edit to either arm's header or to the body
+ *   moves every arm's span hash.
+ * An arm with no readable name is left out, as `procOf` leaves out a procedure with none.
+ */
+function splitProcsOf(
+  p: ALSyntaxNode,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+): Proc[] {
+  let endif = -1;
+  for (const [i, c] of p.children.entries()) if (c.rawKind === "preproc_endif") endif = i;
+  const tail = endif < 0 ? [] : p.children.slice(endif + 1);
+  const shared = tail.filter((c) => c.rawKind === "var_section");
+  const block = tail.find((c) => c.rawKind === "code_block");
+  const sites = block === undefined ? undefined : callSites(block);
+  const idRefs = block === undefined ? NO_IDS : idRefsIn(block);
+  const run = memberRun(p);
+  const out: Proc[] = [];
+  for (const arm of memberArms(p)) {
+    const name = arm.find((c) => c.fieldName === "name");
+    if (name === undefined) continue;
+    const plist = arm.find((c) => c.rawKind === "parameter_list");
+    const proc = procFrom(
+      {
+        name,
+        params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
+        returnType: arm.find((c) => c.fieldName === "return_type")?.text,
+        returnValue: arm.find((c) => c.fieldName === "return_value"),
+        vars: [...arm.filter((c) => c.rawKind === "var_section"), ...shared],
+        block,
+        run,
+        own: arm.filter((c) => c.rawKind === "attribute_item").reverse(),
+      },
+      false,
+      unit,
+      source,
+      problems,
+      keys,
+      sites,
+      idRefs,
+      true,
+    );
+    out.push(proc);
+  }
+  return out;
+}
+
+/** The declarations of one member: `procOf`'s one, or a split-header procedure's arms. */
+function procsOf(
+  p: ALSyntaxNode,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+): Proc[] {
+  if (SPLIT_PROCEDURE.has(p.rawKind)) return splitProcsOf(p, unit, source, problems, keys);
+  const proc = procOf(p, unit, source, problems, keys);
+  return proc === undefined ? [] : [proc];
+}
+
+function procFrom(
+  h: Header,
+  isTrigger: boolean,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+  sites: readonly Site[] | undefined,
+  idRefs: readonly string[],
+  deferKey = false,
+): Proc {
+  const id2 = h.name;
+  const scope = new Map<string, string[]>();
+  for (const prm of h.params) {
     const n = nameNode(prm);
     const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
     if (n !== undefined) addType(scope, n.text, t);
   }
   // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
   // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
-  const returnType = p.childForFieldName("return_type")?.text;
-  const returnValue = p.childForFieldName("return_value");
-  if (returnValue !== null && returnType !== undefined)
+  const { returnType, returnValue, run } = h;
+  if (returnValue !== undefined && returnType !== undefined)
     addType(scope, returnValue.text, returnType);
-  const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
   // A trigger's locals, and anything outside a codeunit, are read by R-371's walk only, so they
   // report no scan problem.
-  if (vars !== undefined)
+  for (const vars of h.vars)
     addDeclarations(
       vars,
       scope,
       `${unit.display}.${id2.text}`,
       isTrigger || problems === null ? [] : problems,
     );
-  const block = p.namedChildren.find((c) => c.rawKind === "code_block");
-  const run = memberRun(p);
-  const attributes = run.attributes.map((x) => x.text.trim());
+  const attributes = [...h.own, ...run.attributes].map((x) => x.text.trim());
   // R420: where the run took an `#if`, every `[HandlerFunctions]` in it, so every arm's (the
   // union). Otherwise the pre-R420 reading: the nearest `[HandlerFunctions]`, duplicates kept.
-  const handlers = run.conditional
-    ? [
-        ...new Set(
-          attributes
-            .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
-            .map((h) => normalizeAlName(h.trim()))
-            .filter((h) => h.length > 0),
-        ),
-      ]
-    : (attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h) ?? "")
-        .split(",")
-        .map((h) => normalizeAlName(h.trim()))
-        .filter((h) => h.length > 0);
+  // R424: a split arm's handlers are the union of its own attributes and the run before it.
+  const handlers =
+    run.conditional || h.own.length > 0
+      ? [
+          ...new Set(
+            attributes
+              .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
+              .map((x) => normalizeAlName(x.trim()))
+              .filter((x) => x.length > 0),
+          ),
+        ]
+      : (attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((x) => x) ?? "")
+          .split(",")
+          .map((x) => normalizeAlName(x.trim()))
+          .filter((x) => x.length > 0);
   const display = `${unit.display}.${id2.text}`;
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
   const suffix = isTrigger ? " (trigger)" : "";
   const keyBase = `${kind}${unit.id}:${display}${suffix}`.toLowerCase();
-  const seen = keys.get(keyBase) ?? 0;
-  keys.set(keyBase, seen + 1);
-  return {
+  const keyFor = (): string => {
+    const seen = keys.get(keyBase) ?? 0;
+    keys.set(keyBase, seen + 1);
+    return `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`;
+  };
+  // R424 review: a split arm is keyed AFTER every plain procedure of the app, so a plain
+  // procedure keeps the key it had at 61ad4d84 and a test that never reaches a split member
+  // keeps its digest. `finishDeferredKeys` numbers the arms, in source order.
+  const proc: { -readonly [K in keyof Proc]: Proc[K] } = {
     unit,
-    sites: block === undefined ? undefined : callSites(block),
-    idRefs: block === undefined ? NO_IDS : idRefsIn(block),
+    sites,
+    idRefs,
     name: normalizeAlName(id2.text),
     display,
-    params: params.length,
+    params: h.params.length,
     returnType,
     scope,
     handlers,
     spanHash: sha256(normalizeSource(spanText(source, run))),
-    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`,
+    key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
   };
+  if (deferKey) {
+    const pending = DEFERRED_KEYS.get(keys) ?? [];
+    pending.push(() => {
+      proc.key = keyFor();
+    });
+    DEFERRED_KEYS.set(keys, pending);
+  } else proc.key = keyFor();
+  return proc;
+}
+
+/** The split arms whose keys wait for the plain procedures', per key counter. */
+const DEFERRED_KEYS = new WeakMap<Map<string, number>, Array<() => void>>();
+
+function finishDeferredKeys(keys: Map<string, number>): void {
+  for (const assign of DEFERRED_KEYS.get(keys) ?? []) assign();
+  DEFERRED_KEYS.delete(keys);
 }
 
 /** The value of a declaration_body-level property (`TableNo`, `SourceTable`), as written. */
@@ -713,11 +873,12 @@ function buildUnit(
     addDeclarations(body, all, `${display}`, []);
     for (const [n, ts] of all) if (ts.some((t) => PAGE_TYPE.test(t))) pageNamesAnywhere.add(n);
     for (const p of members) {
-      if (p.rawKind !== "procedure" && p.rawKind !== "trigger_declaration") continue;
-      const proc = procOf(p, unitShell, source, problems, keys);
-      if (proc === undefined) continue;
-      if (proc.subscriber) unitShell.subscriber = true;
-      (p.rawKind === "trigger_declaration" ? unitShell.triggers : unitShell.procs).push(proc);
+      // R424: a split-header procedure is a member too, one `Proc` per arm.
+      if (!isMemberKind(p.rawKind)) continue;
+      for (const proc of procsOf(p, unitShell, source, problems, keys)) {
+        if (proc.subscriber) unitShell.subscriber = true;
+        (p.rawKind === "trigger_declaration" ? unitShell.triggers : unitShell.procs).push(proc);
+      }
     }
   }
   return unitShell;
@@ -816,9 +977,8 @@ function buildObjectUnit(
     implementations: kind.startsWith("enum") ? implementationsIn(text) : [],
   };
   const walk = (n: ALSyntaxNode): void => {
-    if (n.rawKind === "procedure" || n.rawKind === "trigger_declaration") {
-      const proc = procOf(n, unit, source, null, keys);
-      if (proc !== undefined)
+    if (isMemberKind(n.rawKind)) {
+      for (const proc of procsOf(n, unit, source, null, keys))
         (n.rawKind === "trigger_declaration" ? unit.triggers : unit.procs).push(proc);
       return;
     }
@@ -1995,6 +2155,7 @@ export function buildTestAppModel(
     scanFile(f.path, f.text, parsed, units, suspect, objects, keys);
     fileHashes.push(sha256(normalizeSource(f.text)));
   }
+  finishDeferredKeys(keys);
   return { units, objects, suspect, damaged, fileHashes: fileHashes.sort() };
 }
 

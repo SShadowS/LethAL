@@ -191,6 +191,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   codes, since one procedure's mutants are always in one batch. `lethal export` uses the same id, so
   a multi-batch export no longer repeats mutant ids. `lethal explain` still reads v2 reports, and
   `schemas/report-v2.schema.json` is frozen beside the new `report-v3.schema.json`.
+- **A test that opens a TestPage only through a helper whose header is split by `#if` is now
+  refused on bcdev** (R424). Before, the TestPage scan could not see such a helper, so the test was
+  sent into the fenced session like any other. Now the scan walks the helper's body, and the test
+  is refused like every other TestPage test, with a reason naming the helper. Its verdicts move
+  where this applies: the test leaves the suite that runs, and the session's
+  `baselineGreenOverall` becomes false, as for every TestPage refusal. The old silence was the bug.
+  On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
 
@@ -224,6 +231,28 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   so the digest of every test that reaches that codeunit changes, the test's codeunit siblings
   included. `lethal verify` treats each as a new test on the first run, which is the safe
   direction. No committed fixture has the shape, and their digests are unchanged (pinned by test).
+- **A procedure whose HEADER is split by `#if` (one header per arm, one shared body) was invisible
+  to the test-app model** (R424). tree-sitter-al reads it as one `preproc_split_procedure` node (or
+  a `preproc_split_procedure_preamble`, when each arm has its own `var` section), and the TestPage
+  scan and the test digest kept only plain `procedure` nodes. Now:
+  - **A split TEST is discovered**, one candidate per arm, each kept or dropped by the `#if` arm
+    its NAME starts in, exactly as alc compiles it (measured with alc 18.0.41.45789 for a `[Test]`
+    before the `#if`, a `[Test]` inside each arm, an `#elif` arm, an `internal` arm, a shared and a
+    per-arm `var` section). The `test-shape-unsupported` warning no longer fires for it. The resume
+    fingerprint's `testDiscovery` gains `"split-v1"` (in every combination with `"arms-v1"` and
+    `"tree-v1"`) when a discovered test comes from a split member, so such a run does not resume a
+    run from before. A split HELPER alone does not set it.
+  - **A split HELPER is resolved.** Each arm is its own declaration, never merged: a call resolves
+    by name and parameter count, and a helper whose return type differs per arm is followed into
+    every codeunit either arm can return. Before, a call to it was silently treated as a built-in.
+    A split member's locals are no longer read as globals.
+  - **Digests move once, only for tests that REACH a split member**: the member is now a reach
+    edge with its own span (both headers and the body). Its text stays in its codeunit's parts hash,
+    as before, so a test that does not reach it keeps its digest byte for byte. A test that
+    reaches one is treated as new by `lethal verify` on its first run after upgrading, the safe
+    direction. No committed fixture has a split member, so their digests are unchanged.
+  - `TreeDiscoveryMismatchError` names a second possible cause: the file uses a construct the
+    parser (tree-sitter-al) does not read correctly yet, with a request to report the file.
 
 
 ## [0.1.0-alpha.3] — 2026-08-27

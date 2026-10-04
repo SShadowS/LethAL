@@ -296,7 +296,8 @@ const EXPECTED: Record<
   S6: { none: ["T6"], X: ["T6"] },
   S8: { none: ["T8"], X: ["T8"] },
   S9: { none: ["T9"], X: ["T9"] },
-  S10: { none: [], X: [] },
+  // R424: discovered since the split-header model landed.
+  S10: { none: ["T10b"], X: ["T10a"] },
   S11: { none: ["B"], X: ["A", "OnlyX"] },
   S12: { none: ["Helper"], X: ["A"] },
   S12b: { none: ["Helper"], X: ["A"] },
@@ -344,21 +345,18 @@ describe("R420: discovery against the compiler, per shape and build", () => {
     }
   }
 
-  test("unfiltered (every arm) holds each shape's test, S10's excepted", () => {
+  test("unfiltered (every arm) holds each shape's test", () => {
     for (const shape of Object.keys(EXPECTED)) {
       const all = methods(testsInAlSource(`${shape}.al`, SHAPES[shape] ?? ""));
       // S12b's `#elif Y` arm compiles B under [Y] only (measured), a build EXPECTED does not list.
       const otherBuilds = shape === "S12b" ? ["B"] : [];
-      const want =
-        shape === "S10"
-          ? []
-          : [
-              ...new Set([
-                ...(EXPECTED[shape]?.none ?? []),
-                ...(EXPECTED[shape]?.X ?? []),
-                ...otherBuilds,
-              ]),
-            ];
+      const want = [
+        ...new Set([
+          ...(EXPECTED[shape]?.none ?? []),
+          ...(EXPECTED[shape]?.X ?? []),
+          ...otherBuilds,
+        ]),
+      ];
       expect(all.sort()).toEqual(want.sort());
     }
   });
@@ -395,15 +393,11 @@ describe("R420: discovery against the compiler, per shape and build", () => {
     expect(methods(testsInAlSource("Err.al", src))).toEqual(["Real"]);
   });
 
-  test("S10 is not discovered, and the file gets a test-shape-unsupported warning naming both arms", async () => {
+  test("R424: S10 is discovered, one candidate per arm, with no test-shape-unsupported warning", async () => {
     const dir = await testDirWith({ "S10.Codeunit.al": SHAPES.S10 ?? "" });
     const d = await discoverTests(dir, { buildSymbols: [] });
-    expect(d.unfiltered).toEqual([]);
-    expect(d.warnings).toHaveLength(1);
-    expect(d.warnings[0]?.code).toBe("test-shape-unsupported");
-    expect(d.warnings[0]?.file).toBe("S10.Codeunit.al");
-    expect(d.warnings[0]?.message).toContain("T10a, T10b");
-    expect(d.warnings[0]?.message).toContain("R424");
+    expect(methods(d.unfiltered)).toEqual(["T10a", "T10b"]);
+    expect(d.warnings).toEqual([]);
   });
 
   test("treeOnlyTests names what the regex missed, and nothing for a regex-read file", async () => {
@@ -446,7 +440,7 @@ ${SHAPES.S4}`;
     );
   });
 
-  test("S10's token is consumed by its warning, so it does not refuse", () => {
+  test("S10's token is consumed by its split member, so it does not refuse", () => {
     expect(() => testsInAlSource("S10.al", SHAPES.S10 ?? "")).not.toThrow();
   });
 
@@ -656,7 +650,20 @@ describe("R420: the fast path adds no parse", () => {
 });
 
 describe("R420: R403's compiled-membership check against the measured packages", () => {
-  const COMPILED_SHAPES = ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "S11", "S12", "S12b"];
+  const COMPILED_SHAPES = [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S8",
+    "S9",
+    "S10",
+    "S11",
+    "S12",
+    "S12b",
+  ];
 
   test("S12b published [Y], derived the same: PASS, and B is the test, not Helper", () => {
     const filtered = armFilteredTestsInAlSource("S12b.al", SHAPES.S12b ?? "", ["Y"]);
@@ -735,19 +742,22 @@ describe("R420: R403's compiled-membership check against the measured packages",
     expect(b.sourceOnly).toEqual(["S11.A", "S11.OnlyX"]);
   });
 
-  for (const [build, name] of [
-    ["none", "T10b"],
-    ["X", "T10a"],
-  ] as const) {
-    test(`S10 published [${SETS[build].join(", ")}]: published-only ${name}, with R420's added cause`, () => {
-      const err = mismatch("S10", build, build);
-      expect(err).toBeInstanceOf(TestAppDiffersError);
-      expect((err as TestAppDiffersError).publishedOnly).toEqual([`S10.${name}`]);
-      expect((err as Error).message).toEndWith(
-        ", or LethAL did not recognise a test declaration in the source (please report the shape; see R420).",
-      );
-    });
-  }
+  test("a published-only difference carries R420's added cause", () => {
+    // Was pinned on S10 until R424 made it discoverable; S2 crossed is the same message path.
+    const err = mismatch("S2", "X", "none");
+    expect((err as Error).message).toEndWith(
+      ", or LethAL did not recognise a test declaration in the source (please report the shape; see R420).",
+    );
+  });
+
+  test("R424: S10 crossed, each side names its own arm's name", () => {
+    const a = mismatch("S10", "X", "none") as TestAppDiffersError;
+    expect(a.publishedOnly).toEqual(["S10.T10a"]);
+    expect(a.sourceOnly).toEqual(["S10.T10b"]);
+    const b = mismatch("S10", "none", "X") as TestAppDiffersError;
+    expect(b.publishedOnly).toEqual(["S10.T10b"]);
+    expect(b.sourceOnly).toEqual(["S10.T10a"]);
+  });
 
   test("a source-only difference does not carry the unrecognised-declaration cause", () => {
     const err = mismatch("S2", "none", "X");
@@ -934,20 +944,7 @@ describe("R420: runSession", () => {
     }
   });
 
-  test("S10 on al-runner: the test-shape-unsupported warning reaches the event stream", async () => {
-    const root = await project("S10");
-    const events: RunEvent[] = [];
-    await session(root, new ResultsStore(":memory:"), new StubBackend(false), {
-      emit: [(e) => events.push(e)],
-    });
-    const warned = events.filter(
-      (e) => e.type === "warning" && e.code === "test-shape-unsupported",
-    );
-    expect(warned).toHaveLength(1);
-    expect(warned[0] && "message" in warned[0] ? warned[0].message : "").toContain("T10a, T10b");
-  });
-
-  test("S10 on bcdev, published []: warned first, then refused with T10b published-only", async () => {
+  test("R424: S10 on bcdev, published [], derived []: T10b runs, no warning", async () => {
     const root = await project("S10");
     const s10 = SYMBOL_REFERENCES["S10-none"] as { readonly Codeunits: readonly unknown[] };
     const plain = {
@@ -964,14 +961,12 @@ describe("R420: runSession", () => {
     });
     const events: RunEvent[] = [];
     const backend = new PkgBackend(pkg);
-    const err = await session(root, new ResultsStore(":memory:"), backend, {
+    await session(root, new ResultsStore(":memory:"), backend, {
       emit: [(e) => events.push(e)],
-    }).catch((e) => e);
-    expect(err).toBeInstanceOf(TestAppDiffersError);
-    expect((err as TestAppDiffersError).publishedOnly).toEqual(["S10.T10b"]);
+    });
     expect(events.some((e) => e.type === "warning" && e.code === "test-shape-unsupported")).toBe(
-      true,
+      false,
     );
-    expect(backend.baselineMethods).toEqual([]);
+    expect([...new Set(backend.baselineMethods)].sort()).toEqual(["PlainTest", "T10b"]);
   });
 });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**112 of 422 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**111 of 422 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -285,7 +285,7 @@ that ordering is the priority.
 - **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed 2026-10-02
 - **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
 - **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
-- **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · open, filed 2026-10-04
+- **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
 - **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · open
 - **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · open, filed 2026-10-04
 
