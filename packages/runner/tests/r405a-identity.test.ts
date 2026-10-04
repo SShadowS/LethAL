@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import { IDENTITY_SCHEME, writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
 /**
@@ -90,6 +90,7 @@ async function swapKeys(symbols: readonly string[]): Promise<KeyRow[]> {
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: "00000000-0000-0000-0000-000000000000",
       operatorTiers,
+      identityOrdinals: identityOrdinalsOf(set),
     });
     const manifest = JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8"));
     const rows: KeyRow[] = [];
@@ -126,8 +127,8 @@ beforeAll(async () => {
 });
 
 describe("R-405 (a): a newly admitted same-tuple twin moves a key", () => {
-  test("the identity scheme is 8 (a key moved for unchanged source)", () => {
-    expect(IDENTITY_SCHEME).toBe(8);
+  test("the identity scheme is 9 (8 for this key move, 9 for R307's run-wide ordinals)", () => {
+    expect(IDENTITY_SCHEME).toBe(9);
   });
 
   test("under [X] B.Modify() takes ordinal 0 and A.Modify()'s key moves to ordinal 1", () => {

@@ -27,7 +27,7 @@ const MANIFEST = {
   selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
   artifactId: ARTIFACT_ID,
   mutants: [
-    { mutantId: "M0001", file: "A.Codeunit.al" },
+    { mutantId: "M0001", file: "A.Codeunit.al", objectType: "codeunit", codeunitId: 79000 },
     {
       mutantId: "M0002",
       file: "A.Codeunit.al",
@@ -286,6 +286,8 @@ describe("loadInstalledArtifact (C02-04b Task 6)", () => {
       alSources: [{ path: "src/A.Codeunit.al", text: AL_SOURCE }],
       // R318: from the VERIFIED manifest, for the fenced line map `attach` builds.
       renamedMemberNames: new Map([["codeunit:79000", [["Pick", "Choose"]]]]),
+      // R-307 section 4: the verified manifest's object keys, which `attach` checks.
+      manifestObjectKeys: new Set(["codeunit:79000"]),
     });
   });
 });

@@ -222,6 +222,27 @@ saved mutant verdict that such a test took part in (it killed the mutant, or it 
 tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
 test, and says so in a `resume-testpage-rescored` warning.
 
+A file LethAL cannot instrument is refused whole and published unchanged (R307). The run goes on
+with the other files, so the score does not cover the refused file's sites: `reliability` is
+`narrowed` (or `narrowed-degraded`), `validity.caveats` carries `files-refused`,
+`scoreDescribes` says "N file(s) refused, M site(s) not mutated", the
+`instrumentation-refused-files` warning names each file, and `excludedSites` has one row per file
+with reason `instrumentation-refused` and the cause in `detail`. When every file with mutation sites
+is refused, nothing is left to measure and the run exits `1`, naming each file. When it was refused
+because no object name could be read from it, a mutant elsewhere that matches one of its sites
+apart from the object name could hold a key an earlier run gave that file. For that run such a
+mutant is not skipped by `--skip-known-survivors`, not carried by `--resume` or `--resume-run`, and
+takes no equivalence mark (a mark on its key reads stale). The `identity-carry-disabled` warning
+names the file and the count, and the refused file's row says "identity carry disabled for N
+mutant(s)". Its key is still recorded, so the next run without the refusal carries it normally.
+
+Every such refusal is decided in PLAN, the first of the two steps LethAL uses to instrument a file
+(PLAN decides what to change; EMIT writes the new text). So a `--dry-run` sees every refusal a real
+run would, with one exception: the latch-owner and no-anchor refusals can first fire when the
+writer re-instruments a smaller batch of a file's mutants (see R419). EMIT can fail in one named way only: a RangeError "Invalid string length", when a file's
+instrumented text is too large for one string. That is a real-run crash a dry run does not see (it
+is the one entry in `EMIT_CRASHES`).
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.
@@ -234,7 +255,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v10.schema.json](../schemas/explain-v10.schema.json)
+- `lethal explain`: [../schemas/explain-v11.schema.json](../schemas/explain-v11.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -280,7 +301,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 10`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 11`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`.
 
@@ -539,7 +560,7 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 8, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 9, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. To mark a survivor:

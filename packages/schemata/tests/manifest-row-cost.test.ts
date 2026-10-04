@@ -15,6 +15,7 @@ import {
   gapIdOf,
   lineOfIndex,
   lineStartsOf,
+  runIdentityOrdinals,
   writeInstrumentedProject,
 } from "../src/project";
 
@@ -86,9 +87,16 @@ function specsOver(root: ALSyntaxNode): MutationSpec[] {
 }
 
 function inputFor(dir: string, source: string, root: ALSyntaxNode): WriteInput {
+  const specs = specsOver(root);
+  // R374: numbered over the plain SRC, so the counted source's reads stay the writer's alone.
+  const identityOrdinals = runIdentityOrdinals(
+    [{ path: "Cost.Codeunit.al", source: SRC, root, specs }],
+    new Map(),
+  );
   return {
     targetDir: dir,
-    files: [{ path: "Cost.Codeunit.al", source, root, specs: specsOver(root) }],
+    files: [{ path: "Cost.Codeunit.al", source, root, specs }],
+    identityOrdinals,
     selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
     artifactId: "0123456789abcdef0123456789abcdef",
     targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",

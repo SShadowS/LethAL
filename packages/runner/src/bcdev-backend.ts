@@ -36,10 +36,13 @@ import type { Lease } from "./lease";
 import {
   type AlSource,
   type LineMap,
+  ManifestDeclarationError,
+  assertManifestObjectsDeclared,
   buildLineMap,
+  coverageRefusedFromSources,
   lineMapFromSources,
+  manifestObjectKeys,
   readAlSources,
-  refusedCoverageFromSources,
 } from "./line-map";
 import type { LeaseFence } from "./orchestrator";
 import type { AppPublisher } from "./publisher";
@@ -623,10 +626,21 @@ export class BcDevMcpBackend implements ExecutionBackend {
   // published. `instrumentedDir`, not `staged`: `staged` differs from it only in `app.json` (the
   // control dependency injection), and when deploy() calls this, `staged` has already been
   // deleted.
-  private async indexArtifact(appPath: string, instrumentedDir: string): Promise<void> {
+  //
+  // R-307 section 4: the manifest's objects are checked against the index here, before publish and
+  // so before any baseline (`assertManifestObjectsDeclared`): fenced checks A and B against the
+  // line map, the hub checks B against the compiled declarations, and coverage "none" reads no
+  // coverage, so it checks nothing.
+  private async indexArtifact(
+    appPath: string,
+    instrumentedDir: string,
+    manifest: MutantManifest,
+  ): Promise<void> {
     this.methodIndex = await AppMethodIndex.fromAppFile(appPath);
+    const keys = manifestObjectKeys(manifest.mutants);
     if ((this.cfg.coverageMode ?? DEFAULT_COVERAGE_MODE) === "fenced") {
       this.lineMap = await buildLineMap(instrumentedDir, this.methodIndex.declaredObjects());
+      this.checkFencedManifest(keys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = await coverageObjectIdFilterOf(instrumentedDir);
     } else {
@@ -634,7 +648,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       this.coverageObjectIdFilter = undefined;
       this.hubRefused = new Map();
       if (this.cfg.coverageMode === "procedure") {
-        await this.indexHubRefusals(await readAlSources(instrumentedDir));
+        await this.indexHubRefusals(await readAlSources(instrumentedDir), keys);
       }
     }
   }
@@ -648,6 +662,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         this.methodIndex.declaredObjects(),
         artifact.renamedMemberNames,
       );
+      this.checkFencedManifest(artifact.manifestObjectKeys, this.lineMap);
       this.nameRefusals(this.lineMap.refusedByKey());
       this.coverageObjectIdFilter = coverageObjectIdFilterFromText(
         artifact.appJsonText,
@@ -657,12 +672,34 @@ export class BcDevMcpBackend implements ExecutionBackend {
       this.lineMap = undefined;
       this.coverageObjectIdFilter = undefined;
       this.hubRefused = new Map();
-      if (this.cfg.coverageMode === "procedure") await this.indexHubRefusals(artifact.alSources);
+      if (this.cfg.coverageMode === "procedure") {
+        await this.indexHubRefusals(artifact.alSources, artifact.manifestObjectKeys);
+      }
     }
   }
 
-  /** R298: the hub builds no line map, so its refusals are read from the sources directly. */
-  private async indexHubRefusals(sources: readonly AlSource[]): Promise<void> {
+  /** R-307 section 4, fenced: A and B against the line map, exempt by its own R298 refusals. */
+  private checkFencedManifest(keys: ReadonlySet<string>, lineMap: LineMap): void {
+    const methodIndex = this.methodIndex;
+    if (methodIndex === undefined) {
+      throw new Error("BcDevMcpBackend: no method index; the artifact must be indexed first");
+    }
+    assertManifestObjectsDeclared(
+      keys,
+      methodIndex.declaredObjects(),
+      lineMap.mappedKeys(),
+      lineMap.sourceRefusedKeys(),
+    );
+  }
+
+  /**
+   * R298: the hub builds no line map, so its refusals are read from the sources directly.
+   * R-307 section 4: B against the compiled declarations, exempt by the same refusals undeclared.
+   */
+  private async indexHubRefusals(
+    sources: readonly AlSource[],
+    manifestKeys: ReadonlySet<string>,
+  ): Promise<void> {
     const methodIndex = this.methodIndex;
     if (methodIndex === undefined) {
       // An empty declared set would refuse nothing, silently. Both callers assign the index first.
@@ -670,7 +707,10 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: no method index; the artifact must be indexed before its hub refusals",
       );
     }
-    this.hubRefused = await refusedCoverageFromSources(sources, methodIndex.declaredObjects());
+    const declared = methodIndex.declaredObjects();
+    const all = await coverageRefusedFromSources(sources);
+    assertManifestObjectsDeclared(manifestKeys, declared, undefined, new Set(all.keys()));
+    this.hubRefused = new Map([...all].filter(([key]) => declared.has(key)));
     this.nameRefusals(this.hubRefused);
   }
 
@@ -713,7 +753,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       );
     }
     // See `indexArtifact`'s doc comment: must happen before publish().
-    await this.indexArtifact(artifact.appPath, instrumentedDir);
+    await this.indexArtifact(artifact.appPath, instrumentedDir, artifact.mutantManifest);
 
     let publishOk = true;
     let publishError: string | undefined;
@@ -787,6 +827,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     try {
       await this.indexInstalled(artifact);
     } catch (err) {
+      if (err instanceof ManifestDeclarationError) throw err; // R-307: the real cause, not "unreadable"
       throw new InstalledArtifactError(
         "local-copy-unreadable",
         `indexing ${artifact.appPath}: ${describeThrown(err)}`,

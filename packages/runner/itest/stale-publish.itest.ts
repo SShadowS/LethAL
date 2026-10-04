@@ -51,7 +51,7 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { InstrumentedFile, MutantManifest, SelectorConfig } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
 import { parseVersionConflict, reserveAppVersion } from "../src/app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
@@ -285,14 +285,16 @@ async function compileArtifact(
   appVersion: string,
 ): Promise<CompiledArtifact> {
   await rm(scratchDir, { recursive: true, force: true });
-  await writeInstrumentedProject({
-    targetDir: scratchDir,
-    files: ctx.files,
-    selectorIds: SELECTOR_IDS,
-    artifactId,
-    targetAppId: ctx.appId,
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: scratchDir,
+      files: ctx.files,
+      selectorIds: SELECTOR_IDS,
+      artifactId,
+      targetAppId: ctx.appId,
+      operatorTiers,
+    }),
+  );
   // Layer 5C-A: the instrumented target's selector delegates to `Codeunit "LC Control State"`, so
   // it cannot compile without the LethAL Control dependency (+ its symbol staged in the package
   // cache, done once in main()). BcDevMcpBackend.deploy() injects this in a private staging copy;

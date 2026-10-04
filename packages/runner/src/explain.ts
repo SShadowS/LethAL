@@ -198,8 +198,11 @@ import type { MutantVerdict } from "./store";
  *
  * 10: R403 added the caveat values `tests-compiled-out` and `test-symbols-unverified`. New values,
  * so it bumps (R233).
+ *
+ * 11: R307 added the caveat value `files-refused` (a file refused whole at instrumentation). A new
+ * value, so it bumps (R233); v10 is frozen. R307 added no explain field.
  */
-export const EXPLAIN_SCHEMA_VERSION = 10;
+export const EXPLAIN_SCHEMA_VERSION = 11;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

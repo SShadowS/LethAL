@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import {
   ALNodeKind,
+  FileRefusedError,
   declarationMembers,
   findAll,
   findEnclosingStatement,
   findFirst,
+  formatRefusal,
   initParser,
   parseAL,
   visit,
@@ -27,6 +29,7 @@ import {
   varSectionUnparsed,
 } from "../src/dispatch";
 import { assignMutantIds } from "../src/ids";
+import { instrumentOneFile } from "../src/project";
 
 /** Builds a MutationSpec matching the shape the existing tests construct by hand. */
 function spec(before: ALSyntaxNode, afterText: string, operatorName: string): MutationSpec {
@@ -801,6 +804,14 @@ describe("compileSchemataForFile — selector var injection into table objects",
     const message = thrown instanceof Error ? thrown.message : "";
     expect(message).toContain("MyPort.XmlPort.al");
     expect(message).toContain("AL0118");
+    // R307: a per-file refusal, typed, with the file's own object and the guarded line.
+    expect(thrown).toBeInstanceOf(FileRefusedError);
+    if (!(thrown instanceof FileRefusedError)) return;
+    expect(thrown.file).toBe("MyPort.XmlPort.al");
+    expect(thrown.shape).toBe("unsupported-kind");
+    expect(thrown.site).toBe("compile.unsupported-kind");
+    expect(thrown.objects).toEqual([{ type: "xmlport", id: 50100, name: "My Port" }]);
+    expect(thrown.lines).toEqual([11, 11]);
   });
 
   it("does NOT throw when there are no specs — an unmutated page emits no guards to strand", () => {
@@ -1067,7 +1078,7 @@ describe("GH-24: reach grain and marker placement", () => {
     const ided = assignMutantIds(new Map([["<file>", s.specs]])).get("<file>") ?? [];
     const out = new Map<string, string>();
     for (const c of buildComponents(ided)) {
-      for (const m of c.members) out.set(m.mutantId, reachGrainOf(m, c.root));
+      for (const m of c.members) out.set(m.mutantId, reachGrainOf(m, c.root, s.src));
     }
     return out;
   };
@@ -2337,7 +2348,7 @@ describe("R303: a member whose var section is split by #if gets one unconditiona
     const specs = [spec(firstAssignment(root), "Glob := 0", "lethal.op")];
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     return { grains, out: compileSchemataForFile(src, root, specs, ided) };
   };
@@ -2565,7 +2576,7 @@ ${u.member}
       expect(reachLatchRefusedOwner(plain.before)).toBeNull();
       const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
       const grains = buildComponents(ided).flatMap((c) =>
-        c.members.map((m) => reachGrainOf(m, c.root)),
+        c.members.map((m) => reachGrainOf(m, c.root, src)),
       );
       expect(grains).toEqual(["unplaced", "statement"]);
       const out = compileSchemataForFile(src, root, specs, ided);
@@ -2647,7 +2658,7 @@ ${u.member}
     );
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     expect(grains).toEqual(["unplaced", "unplaced"]);
     const out = compileSchemataForFile(src, root, specs, ided);
@@ -3047,7 +3058,7 @@ describe("R316: a split-header procedure whose arms each have their own var sect
     );
     const ided = assignMutantIds(new Map([["f.al", specs]])).get("f.al") ?? [];
     const grains = buildComponents(ided).flatMap((c) =>
-      c.members.map((m) => reachGrainOf(m, c.root)),
+      c.members.map((m) => reachGrainOf(m, c.root, src)),
     );
     return { specs, grains, out: compileSchemataForFile(src, root, specs, ided) };
   };
@@ -3268,6 +3279,119 @@ describe("The injector's guard: a statement marker with no owning member still t
     const s = spec(before, "L := 2", "lethal.op");
     expect(() => compileSchemataForFile("L := 1", before, [s])).toThrow(
       "a reach marker sits outside any procedure or trigger body",
+    );
+    // R307: a per-file refusal, typed. No enclosing object, so no `objects`.
+    let thrown: unknown;
+    try {
+      compileSchemataForFile("L := 1", before, [s], undefined, "src/Detached.al");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(FileRefusedError);
+    if (!(thrown instanceof FileRefusedError)) return;
+    expect(thrown.file).toBe("src/Detached.al");
+    expect(thrown.shape).toBe("latch-owner");
+    expect(thrown.site).toBe("compile.latch-owner");
+    expect(thrown.objects).toBeUndefined();
+    expect(thrown.lines).toEqual([1, 1]);
+  });
+});
+
+describe("R307 T4b: refusals no real AL reaches, driven through instrumentOneFile", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const SRC = [
+    'codeunit 79390 "Probe"', // 1
+    "{", // 2
+    "    procedure P()", // 3
+    "    var", // 4
+    "        X: Integer;", // 5
+    "    begin", // 6
+    "        X := 1;", // 7
+    "        X := 2;", // 8
+    "    end;", // 9
+    "}", // 10
+    "",
+  ].join("\n");
+
+  function refusalOf(fn: () => unknown): FileRefusedError {
+    try {
+      fn();
+    } catch (e) {
+      if (e instanceof FileRefusedError) return e;
+      throw e;
+    }
+    throw new Error("expected a FileRefusedError, got none");
+  }
+
+  function ctx(): { root: ALSyntaxNode } {
+    return { root: wrapRoot(parseAL(SRC)) };
+  }
+
+  it("latch-owner: a statement marker with no owning member refuses the file", () => {
+    const { root } = ctx();
+    const before = {
+      kind: ALNodeKind.assignment_statement,
+      rawKind: "assignment_statement",
+      text: "L := 1",
+      startIndex: 0,
+      endIndex: 6,
+      startPosition: { row: 0, column: 0 },
+      endPosition: { row: 0, column: 6 },
+      parent: null,
+      children: [],
+      namedChildren: [],
+      fieldName: null,
+      isMissing: false,
+      hasError: false,
+      childForFieldName: () => null,
+    } as ALSyntaxNode;
+    const s = spec(before, "L := 2", "lethal.op");
+    const ided = assignMutantIds(new Map([["src/P.al", [s]]])).get("src/P.al") ?? [];
+    const err = refusalOf(() =>
+      instrumentOneFile({ path: "src/P.al", source: SRC, root }, [s], ided),
+    );
+    expect(err.shape).toBe("latch-owner");
+    expect(err.site).toBe("compile.latch-owner");
+    expect(err.file).toBe("src/P.al");
+    expect(err.objects).toBeUndefined();
+    expect(err.lines).toEqual([1, 1]);
+    expect(formatRefusal(err)).toBe(
+      "latch-owner in src/P.al: a reach marker sits outside any member that could declare its latch; lines 1-1",
+    );
+  });
+
+  it("overlap: two partially overlapping rewrites refuse the file, last line from the last covered character", () => {
+    const { root } = ctx();
+    const a = findFirst(root, ALNodeKind.assignment_statement);
+    const body = a?.parent?.parent;
+    if (a === null || a === undefined || body === null || body === undefined)
+      throw new Error("fixture shape");
+    // Real AL ranges are laminar, so two partially overlapping rewrite roots are hand-built: two
+    // copies of the procedure body block (each its own component root). The second one ends just
+    // AFTER the newline that closes line 8, so its exclusive end offset reads as line 9 while the
+    // last character it covers is the newline on line 8.
+    const end2 = SRC.indexOf("\n", SRC.indexOf("X := 2")) + 1;
+    expect(SRC[end2 - 1]).toBe("\n");
+    const withSpan = (start: number, end: number): ALSyntaxNode =>
+      Object.create(body, { startIndex: { value: start }, endIndex: { value: end } });
+    const first = withSpan(body.startIndex, a.endIndex + 3);
+    const second = withSpan(a.startIndex + 2, end2);
+    const sa = spec(first, "begin end", "lethal.op");
+    const sb = spec(second, "begin end", "lethal.op");
+    const ided = assignMutantIds(new Map([["src/P.al", [sa, sb]]])).get("src/P.al") ?? [];
+    const err = refusalOf(() =>
+      instrumentOneFile({ path: "src/P.al", source: SRC, root }, [sa, sb], ided),
+    );
+    expect(err.shape).toBe("overlap");
+    expect(err.site).toBe("rewrite.overlap");
+    expect(err.file).toBe("src/P.al");
+    expect(err.objects).toBeUndefined();
+    expect(err.lines).toEqual([6, 8]);
+    expect(formatRefusal(err)).toBe(
+      "overlap in src/P.al: two rewrites of this file overlap; lines 6-8",
     );
   });
 });

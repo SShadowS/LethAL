@@ -259,6 +259,7 @@ describe("Caveat union", () => {
       "line-narrowed": true,
       "tests-narrowed": true,
       "uninstrumentable-files": true,
+      "files-refused": true,
       "stale-test-app": true,
       "tests-permission-refused": true,
       "tests-testpage-unsupported": true,
@@ -277,7 +278,7 @@ describe("Caveat union", () => {
       "tests-compiled-out": true,
       "test-symbols-unverified": true,
     };
-    expect(Object.keys(all).length).toBe(23);
+    expect(Object.keys(all).length).toBe(24);
   });
 });
 

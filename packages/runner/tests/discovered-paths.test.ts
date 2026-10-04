@@ -3,11 +3,16 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { runIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { DiscoveredPathError, isEnumeratedAl } from "../src/line-filter";
-import { generateMutationSet, operatorTiers, planArtifacts } from "../src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+  planArtifacts,
+} from "../src/orchestrator";
 import { identityKeyOf, serializeKey } from "../src/selection";
 
 /**
@@ -77,11 +82,15 @@ async function bothForms(files: Record<string, string>) {
 
 async function manifestOf(
   files: Parameters<typeof writeInstrumentedProject>[0]["files"],
+  // R307: identity ordinals are numbered once over the whole run, so a batch takes them from
+  // every file of the run, as the orchestrator does.
+  runFiles: Parameters<typeof writeInstrumentedProject>[0]["files"] = files,
 ): Promise<Buffer> {
   const targetDir = await tempDir();
   await writeInstrumentedProject({
     targetDir,
     files,
+    identityOrdinals: runIdentityOrdinals(runFiles, operatorTiers),
     selectorIds: SELECTOR_IDS,
     artifactId: ARTIFACT_ID,
     targetAppId: "11111111-2222-3333-4444-555555555555",
@@ -136,7 +145,7 @@ test("3. batching keeps identity: the twin in `src/Foo0` shares a batch with `sr
     ]);
     const rows: Array<{ file: string; ordinal: number; key: string }> = [];
     for (const batch of batches) {
-      const manifest = JSON.parse((await manifestOf(batch)).toString("utf8")) as {
+      const manifest = JSON.parse((await manifestOf(batch, files)).toString("utf8")) as {
         mutants: readonly MutantManifestEntry[];
       };
       for (const m of manifest.mutants) {
@@ -189,6 +198,7 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
     await writeInstrumentedProject({
       targetDir,
       files: set.files,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 60000, controlId: 60001, tableId: 60002 },
       artifactId: ARTIFACT_ID,
       targetAppId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",

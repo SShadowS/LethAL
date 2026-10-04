@@ -72,6 +72,7 @@ async function fixture(
     appJsonText: "{}",
     alSources: [],
     renamedMemberNames: new Map(),
+    manifestObjectKeys: new Set(),
   };
   return { dir, target, controlPath, out: await temp("c0205-out-") };
 }

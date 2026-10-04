@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -53,6 +53,7 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
@@ -2624,6 +2625,125 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file
   });
 
+  // R307 Task 7: a refused file is published uninstrumented and its tests still run.
+  const R307_GOOD_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure P1(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+    procedure P2(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+}
+`;
+  // An object-mix file (table + enum + codeunit): the per-file trial refuses it whole.
+  const R307_BAD_AL = `table 79310 "Mixed Table"
+{
+    fields { field(1; Code; Code[20]) { } }
+}
+
+enum 79311 "Mixed Enum"
+{
+    value(0; Zero) { }
+}
+
+codeunit 79312 "Mixed Code"
+{
+    procedure Compute()
+    var
+        Counter: Integer;
+    begin
+        Counter := 1;
+    end;
+}
+`;
+  const R307_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GoodAndBad()
+    begin
+    end;
+
+    [Test]
+    procedure GoodP2ThenBadFails()
+    begin
+    end;
+}
+`;
+
+  test("R307: a refused file is copied byte-identical, keeps its tests' coverage, and a red test in it makes the covered mutants error", async () => {
+    const dirs = await makeProject(R307_TESTS_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), R307_GOOD_AL);
+    await Bun.write(join(dirs.projectDir, "Bad.Mixed.al"), R307_BAD_AL);
+    // The baseline failure of GoodP2ThenBadFails is set by this fake, not caused by Bad's source.
+    const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
+      mutant === null && ref.method === "GoodP2ThenBadFails" ? "fail" : "pass",
+    );
+    backend.coverageEntriesFor = (ref) =>
+      ref.method === "GoodAndBad"
+        ? [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P1" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ]
+        : [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P2" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ];
+    // Bad really is refused by the per-file trial (so the checks below are about a refused file).
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      ["Bad.Mixed.al", "object-mix"],
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+      e.match(/^run-\d+-batch-0$/),
+    );
+    expect(batchDirs.length).toBe(1);
+    const batchDir = join(dirs.instrumentedDir, batchDirs[0] as string);
+    expect(await readFile(join(batchDir, "Bad.Mixed.al"), "utf8")).toBe(R307_BAD_AL);
+
+    const p1 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 5);
+    const p2 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 10);
+    expect(p1.length).toBeGreaterThan(0);
+    expect(p2.length).toBeGreaterThan(0);
+    // Good's coverage survives the refusal: P1 is still covered by the green test and scored.
+    for (const m of p1) expect(m.verdict).toBe("survived");
+    // P2's only covering test is red at baseline: never a finding.
+    for (const m of p2) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain("did not pass at baseline");
+      expect(m.failureNote).toContain("Sandbox Tests.GoodP2ThenBadFails");
+    }
+    expect(report.mutants.some((m) => m.file.includes("Bad.Mixed"))).toBe(false);
+  });
+
+  test("R307: a refused file and a good file sharing a basename still abort with the duplicate-basename message", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "a", "Dup.Codeunit.al"), R307_BAD_AL);
+    await Bun.write(
+      join(dirs.projectDir, "b", "Dup.Codeunit.al"),
+      TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
+    );
+    // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      [join("a", "Dup.Codeunit.al"), "object-mix"],
+    ]);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /cannot build the batch project: two source files share the basename "Dup\.Codeunit\.al" \(.*Dup\.Codeunit\.al and .*Dup\.Codeunit\.al\)\. Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app\. Rename one of them\./,
+    );
+    expect(backend.deploys.length).toBe(0);
+  });
+
   test("missing app.json aborts with a clear error before deploy", async () => {
     const dirs = await makeProject();
     await rm(join(dirs.projectDir, "app.json"));
@@ -4056,14 +4176,16 @@ describe("generateMutationSet: real cross-tier collisions", () => {
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
     try {
       const { files } = await generateMutationSet(projectDir);
-      await writeInstrumentedProject({
-        targetDir: outDir,
-        files,
-        selectorIds,
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: outDir,
+          files,
+          selectorIds,
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(outDir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{ startIndex: number; operatorName: string }>;
       };
@@ -5371,14 +5493,16 @@ async function manifestMutants(
   scratchDir: string,
 ): Promise<readonly MutantManifestEntry[]> {
   const { files } = await generateMutationSet(projectDir);
-  await writeInstrumentedProject({
-    targetDir: scratchDir,
-    files,
-    selectorIds,
-    artifactId: "seed00000000000000000000000000",
-    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: scratchDir,
+      files,
+      selectorIds,
+      artifactId: "seed00000000000000000000000000",
+      targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      operatorTiers,
+    }),
+  );
   const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
     mutants: MutantManifestEntry[];
   };
@@ -8748,6 +8872,31 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(client.endPublishArgs[0]?.outcome).toBe("failed");
     expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
     // The assertion that actually matters: no durable tier quarantine for a CONFIRMED failure.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a ManifestDeclarationError (R-307 section 4) is a confirmed terminal: EndPublish once as failed, no recycle record", async () => {
+    // The manifest-vs-declarations check refuses BEFORE anything is published. As a plain Error it
+    // fell to the "UNKNOWN result" branch: marker left set, `container-needs-recycle` written, and
+    // the next session's publish blocked by a publish that never happened.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    // The REAL check raises it, so a plain `Error` there would fail this test, not only a missing
+    // case in the fence's classifier.
+    const backend = leaseBackend({
+      deploy: async () => {
+        assertManifestObjectsDeclared(["codeunit:50145"], new Set(), undefined, new Set());
+        return null;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toThrow(
+      "a mutant is attributed to codeunit:50145, which the compiled app does not declare.",
+    );
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    // `recordRecycle` is the only writer of this record: null means it was never called.
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 

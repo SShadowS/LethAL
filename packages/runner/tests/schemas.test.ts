@@ -901,11 +901,13 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   });
 
   test("R214: the report schema names the two preprocessor exclusion reasons", () => {
+    // R307's `instrumentation-refused` follows them.
     expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
       "not-instrumentable",
       "declarative",
       "compiled-out",
       "preproc-undecided",
+      "instrumentation-refused",
     ]);
   });
 
@@ -1124,6 +1126,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v11.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1272,6 +1286,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "line-narrowed",
         "tests-narrowed",
         "uninstrumentable-files",
+        "files-refused",
         "stale-test-app",
         "tests-permission-refused",
         "tests-testpage-unsupported",
@@ -1362,6 +1377,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v9.schema.json")).toEqual(required("explain-v8.schema.json"));
     // R403's v10 added two caveat values, not a required field.
     expect(required("explain-v10.schema.json")).toEqual(required("explain-v9.schema.json"));
+    // R307's v11 added a caveat value, not a required field.
+    expect(required("explain-v11.schema.json")).toEqual(required("explain-v10.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

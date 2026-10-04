@@ -1,5 +1,5 @@
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
-import { resolveSite } from "./enclosing";
+import { resolveStatement } from "./enclosing";
 import type { IdedSpec } from "./ids";
 
 export interface ComponentMember {
@@ -33,8 +33,9 @@ function contains(outer: ALSyntaxNode, inner: ALSyntaxNode): boolean {
 export function buildComponents(ided: readonly IdedSpec[]): Component[] {
   const resolved: ComponentMember[] = ided.map((entry) => {
     const afterText = (entry.spec.after as unknown as { text?: string }).text ?? "";
-    const site = resolveSite(entry.spec.before, afterText);
-    return { mutantId: entry.mutantId, spec: entry.spec, statement: site.statement, afterText };
+    // R-307 O5: by span, E1 and E2 only; the mutated statement text is never built here.
+    const statement = resolveStatement(entry.spec.before);
+    return { mutantId: entry.mutantId, spec: entry.spec, statement, afterText };
   });
 
   // Widest statement first, so the first member of a chain is always its root.

@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { IDENTITY_SCHEME, writeInstrumentedProject } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  withRunIdentityOrdinals,
+  writeInstrumentedProject,
+} from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import type {
   BackendCapabilities,
@@ -339,14 +343,16 @@ async function instrument(files: Record<string, string>): Promise<MutantManifest
     await writeFile(join(src, "app.json"), JSON.stringify(APP_JSON));
     for (const [name, text] of Object.entries(files)) await writeFile(join(src, name), text);
     const set = await generateMutationSet(src);
-    await writeInstrumentedProject({
-      targetDir: out,
-      files: set.files,
-      selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
-      artifactId: "0123456789abcdef0123456789abcdef",
-      targetAppId: APP_JSON.id,
-      operatorTiers,
-    });
+    await writeInstrumentedProject(
+      withRunIdentityOrdinals({
+        targetDir: out,
+        files: set.files,
+        selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: APP_JSON.id,
+        operatorTiers,
+      }),
+    );
     return JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8")) as MutantManifest;
   } finally {
     await rm(src, { recursive: true, force: true });

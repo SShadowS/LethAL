@@ -48,6 +48,23 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
+- **A file whose instrumentation throws is refused whole, and the rest of the project still runs**
+  (R307). Before, one such file (an object mix, no object header, a statement the injector cannot
+  place) aborted the whole run. Now LethAL tries each file on its own, skips the one that fails,
+  and measures the others. The report shows it: an `excludedSites` row with reason
+  `instrumentation-refused` (file, object kinds, site count and the reason), the caveat
+  `files-refused`, the warning `instrumentation-refused-files`, and `reliability` `narrowed`,
+  because the score then leaves that file out. A refused file's mutants carry no identity, so
+  history, resume and equivalence marks skip them, and a warning says so. If EVERY file with sites
+  is refused, nothing is left to measure and the run exits 1 naming each file. The explain document
+  is now version 10. A mixed-object file is still refused whole: [[R299]] tracks per-object
+  dropping. Instrumenting a file is now two steps, PLAN (decides the edits and every refusal) and
+  EMIT (writes the text), and the per-file trial runs PLAN only. A dry run therefore sees every
+  refusal a real run would, with one exception: the latch-owner and no-anchor refusals can first
+  fire when the writer re-instruments a smaller batch of a file's mutants (see R419); EMIT can fail only with the RangeError "Invalid string length", a
+  real-run crash. Measured on Base Application (dry run): peak memory 4520 MB against 4473 MB on
+  master (+1.0%) and 4888 MB before the split; wall time +13.7% over master. Output is
+  byte-identical to the build before the split.
 
 ### Changed
 
@@ -189,6 +206,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 9** (R307, R374): identity ordinals are now numbered once over the whole run,
+  not per batch. Before, two twin mutants (same object, member, operator and code) that
+  `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so
+  `--skip-known-survivors` could skip one on the other's verdict. Keys move only where batching
+  split twins; a one-batch run keeps every key. Every older store stops resuming (`--resume` and
+  `--resume-run` refuse it by name), the next `--skip-known-survivors` run skips nothing once, and
+  marks files need `"identityScheme": 9` after re-checking each mark against a fresh report (R325).
 - **Identity scheme 8** (R405, part a): a procedure or trigger inside a member-level `#if` is now
   seen by arm in the symbol table, the table-trigger readers and the receiver filter. A call that
   was refused is admitted, and when the new mutant has the same tuple as an existing one earlier in

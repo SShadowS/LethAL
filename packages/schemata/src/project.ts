@@ -8,16 +8,14 @@ import {
   astSubtreeHash,
   gapBlockOf,
   isProcedureLike,
-  maskAlNonCode,
   procedureLikeNameNode,
   renamedMemberCoverageNames,
 } from "@lethal/engine";
-import { compileSchemataForFile } from "./compile";
-import { buildComponents } from "./components";
 import { type TierResolver, dedupeSpecs } from "./dedup";
-import { type ReachGrain, reachGrainOf } from "./dispatch";
-import type { DeclaredObject } from "./id-ranges";
-import { assignMutantIds } from "./ids";
+import type { ReachGrain } from "./dispatch-plan";
+import { type IdedSpec, assignMutantIds } from "./ids";
+import { emitOneFile } from "./project-emit";
+import { type PlannedMutant, attributeHeader, objectHeadersOf, planOneFile } from "./project-plan";
 import {
   type SelectorConfig,
   emitMutationSelector,
@@ -52,6 +50,13 @@ export interface WriteInput {
   readonly operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">;
   /** C02-09: a test seam for the gap id function; production passes nothing and gets `gapIdOf`. */
   readonly gapIdOf?: typeof gapIdOf;
+  /**
+   * R374: every mutant's identity ordinal, numbered ONCE over the whole run (`runIdentityOrdinals`,
+   * or the runner's `identityOrdinalsOf` for a generated set), keyed by `identitySiteKey`. Required: a batch
+   * that numbered its own rows would give twins in two batches the same key. A row with no entry
+   * is refused, never defaulted to 0.
+   */
+  readonly identityOrdinals: ReadonlyMap<string, number>;
 }
 
 /** C02-09: a gap's id. Reads the file (separators normalised), the block's offsets and its raw
@@ -88,6 +93,22 @@ export function identityTupleOf(
 }
 
 /**
+ * R307: the LOOSE identity tuple: `identityTupleOf` without the object name. A file refused by the
+ * header rule (`no-header`, `site-before-header`) has no object name to give, so the run records
+ * these instead of reserving exact entries (fail closed, I3).
+ */
+export function looseIdentityTupleOf(
+  m: Pick<
+    MutantManifestEntry,
+    "astHash" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
+  >,
+): string {
+  const scope = m.procedureName || m.triggerName || "";
+  const major = Number(m.operatorVersion.split(".")[0] ?? "0");
+  return `${m.astHash}|${scope}|${m.operatorName}|${major}`;
+}
+
+/**
  * R325: the version of the rules that turn AL source into identity keys.
  *
  * An identity key carries no version of its own. So when an engine or operator change moves an
@@ -116,9 +137,12 @@ export function identityTupleOf(
  * another file can change ordinal. 8: R405, a member-level #if now hides a procedure or trigger
  * by arm for the symbol table, the table-trigger readers and the receiver filter, so a call that
  * was refused (or read against an inactive arm) is admitted, and a newly admitted mutant with the
- * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key.
+ * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key. 9:
+ * R307 (R374), identity ordinals are numbered once over the whole run instead of per batch, so
+ * keys move only where batching split twins (two twins in two batches both held ordinal 0
+ * before).
  */
-export const IDENTITY_SCHEME = 8;
+export const IDENTITY_SCHEME = 9;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -132,8 +156,7 @@ export function assignIdentityOrdinals(
   return entries.map((e) => ({ ...e, identityOrdinal: ordinalOf.get(e) ?? 0 }));
 }
 
-/** The numbering `assignIdentityOrdinals` applies, without copying the entries (RUST-03 S4.2a:
- *  the writer sets it on its own rows, so a whole-BaseApp manifest is not held twice). */
+/** The numbering `assignIdentityOrdinals` applies, without copying the entries (RUST-03 S4.2a). */
 function identityOrdinalsOf(
   entries: readonly MutantManifestEntry[],
 ): Map<MutantManifestEntry, number> {
@@ -152,6 +175,115 @@ function identityOrdinalsOf(
     next.set(tuple, n + 1);
   }
   return ordinalOf;
+}
+
+/** R374: the key a run-wide identity ordinal is stored under: (file, span, operator), the triple
+ *  `narrowFilesToSubset` (runner) already matches a manifest row back to its spec by. */
+export function identitySiteKey(
+  file: string,
+  startIndex: number,
+  endIndex: number,
+  operatorName: string,
+): string {
+  // R400: `join`, not a template literal: the same value, built flat. A template string held as a
+  // Map key keeps its pieces alive (a rope), and the run-wide ordinal Map holds one per mutant.
+  return [file, startIndex, endIndex, operatorName].join("\0");
+}
+
+/** R374: the identity fields the writer's row carries for `spec`, from ONE place, so a run-wide
+ *  numbering and the manifest row cannot build two different tuples for one mutant. */
+export function identityFieldsOf(
+  spec: MutationSpec,
+  headerName: string,
+): Pick<
+  MutantManifestEntry,
+  "astHash" | "codeunitName" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
+> {
+  const triggerName = triggerNameOf(spec);
+  return {
+    astHash: astSubtreeHash(spec.before),
+    codeunitName: headerName,
+    procedureName: procedureNameOf(spec),
+    ...(triggerName !== undefined ? { triggerName } : {}),
+    operatorName: spec.operatorName,
+    operatorVersion: spec.operatorVersion,
+  };
+}
+
+/** R374: one mutant (or one reserved refused-file site) in the run-wide numbering. */
+export interface IdentityEntry {
+  readonly file: string;
+  readonly startIndex: number;
+  /** With `file`, `startIndex` and `operatorName`, rebuilds the site's `identitySiteKey` at
+   *  numbering time, so the entry does not hold a second copy of it (R400). */
+  readonly endIndex: number;
+  readonly operatorName: string;
+  /** `identityTupleOf` of the site's `identityFieldsOf`. */
+  readonly tuple: string;
+}
+
+/** R374: the identity entries of one file's DEDUPED specs, attributed by the writer's own header
+ *  rule (`objectHeadersOf` + `attributeHeader`). Throws exactly where the writer would. */
+export function identityEntriesOf(
+  path: string,
+  source: string,
+  deduped: readonly MutationSpec[],
+): IdentityEntry[] {
+  const headers = objectHeadersOf(source, path);
+  return deduped.map((spec) => {
+    const header = attributeHeader(headers, spec, path);
+    return {
+      file: path,
+      startIndex: spec.before.startIndex,
+      endIndex: spec.before.endIndex,
+      operatorName: spec.operatorName,
+      tuple: identityTupleOf(identityFieldsOf(spec, header.name)),
+    };
+  });
+}
+
+/**
+ * R374: number identity twins ONCE over every entry of the run, in source order: file, start,
+ * then operator name, the order `assignMutantIds` gives the same specs (the sort is stable, so
+ * two entries equal on all three keep their input order, as `assignMutantIds` keeps them).
+ * Reserved entries (R-307) take a number like any other. Two entries on one key are refused.
+ */
+export function numberIdentityOrdinals(entries: readonly IdentityEntry[]): Map<string, number> {
+  const order = [...entries].sort(
+    (a, b) =>
+      a.file.localeCompare(b.file) ||
+      a.startIndex - b.startIndex ||
+      a.operatorName.localeCompare(b.operatorName),
+  );
+  const next = new Map<string, number>();
+  const out = new Map<string, number>();
+  for (const e of order) {
+    const key = identitySiteKey(e.file, e.startIndex, e.endIndex, e.operatorName);
+    if (out.has(key)) {
+      throw new Error(
+        `numberIdentityOrdinals: two mutants share one site key ${JSON.stringify(key)}, so a run-wide identity ordinal cannot name one of them`,
+      );
+    }
+    const n = next.get(e.tuple) ?? 0;
+    out.set(key, n);
+    next.set(e.tuple, n + 1);
+  }
+  return out;
+}
+
+/** R374: the run-wide ordinals of `files`, deduped as the writer dedupes them, plus `reserved`
+ *  (R307: the entries of files refused whole, which take a number and get no row). A real run
+ *  passes `generateMutationSet`'s files and reserved entries (`identityOrdinalsOf`, runner). */
+export function runIdentityOrdinals(
+  files: readonly InstrumentedFile[],
+  operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
+  reserved: readonly IdentityEntry[] = [],
+): Map<string, number> {
+  const tierOf: TierResolver = (name) => operatorTiers.get(name);
+  return numberIdentityOrdinals([
+    ...files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
+    ...reserved,
+  ]);
 }
 
 export interface MutantManifestEntry {
@@ -331,178 +463,13 @@ export function lineOfIndex(starts: readonly number[], index: number): number {
   return Math.max(1, lo);
 }
 
-/** Global, so `matchAll` can find EVERY object header in the file, not just the first. */
-// Extension kinds first: alternation is tried left to right, so a bare `page`/`table` would
-// engage on `pageextension`/`tableextension` before failing its `\s+\d+`.
-const OBJECT_HEADER =
-  /^\s*(codeunit|tableextension|pageextension|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
-
-/**
- * Blanks out AL comments, preserving length (so any index computed against the result still
- * addresses the same character of the original).
- *
- * `objectHeadersOf` counts headers with a regex, and the mixed-kind check it feeds
- * (`assertNoUnsupportedObjectMix`) turns a false positive into a refused file. A commented-out
- * object is exactly that false positive, and it is a shape real AL carries: an old
- * `codeunit 50100 "Old Impl"` left inside a block comment above the live
- * `codeunit 50101 "New Impl"`.
- *
- * The regex anchors at line start, so a `//`-commented header never matched — but a block-
- * commented one starts its own line and does. Worse, if the commented object came FIRST it won
- * the `matches[0]` race and mislabelled every mutant in the file, silently. Both go away by
- * scanning the comment-free text.
- *
- * String literals are tracked because AL text may legally contain `//` or a block-comment opener
- * (`Error('use // here')`), and a stripper blind to them would blank the rest of the file and
- * report "no AL object header" on a valid one. Their CONTENTS are deliberately left intact here —
- * see `maskAlNonCode`'s `blankStringContents` for why this consumer differs from test discovery.
- */
-export function stripAlComments(source: string): string {
-  // R80: one shared lexer, two policies. `blankStringContents: false` is this consumer's policy
-  // and it is load-bearing — `objectHeadersOf` decides which object a mutant belongs to, so what
-  // this function sees is mutant ATTRIBUTION. Measured over 717 real `.al` files, both policies
-  // yield identical object-header sets, so the choice is documented rather than fragile.
-  return maskAlNonCode(source, { blankStringContents: false });
-}
-
-/** One AL object header found in a file: kind (lowercased keyword), id, quote-stripped name,
- *  and the header's own start offset in the comment-stripped source (see `objectHeadersOf`).
- *  Exported for `attributeHeader`'s own direct unit tests (project.test.ts), the same pattern
- *  `stripAlComments` already uses — module-level export, not re-exported through `index.ts`. */
-export interface ObjectHeader {
-  readonly type: string;
-  readonly id: number;
-  readonly name: string;
-  readonly startIndex: number;
-}
-
-/** AL object kinds that can carry the injected `var MutationSelector: Codeunit "Mutation
- *  Selector";` declaration — mirrors `canCarryMutationSelectorVar` (compile.ts) at object
- *  granularity: that predicate answers "does this FILE have at least one", this answers
- *  "is THIS object one". Kept in sync by hand (both are short, stable lists tied to the same
- *  AL grammar fact — only a codeunit or a table can hold a `var` before/around its members in a
- *  position `injectSelectorVarIntoObject` can anchor against). */
-const INJECTABLE_OBJECT_TYPES: ReadonlySet<string> = new Set(["codeunit", "table"]);
-
-/**
- * Every AL object header this file declares, kind lowercased, in source order. `type` is the
- * matched AL keyword lowercased (`table`, `codeunit`, ...) — a BC object id is unique only
- * WITHIN a type, so every consumer that identifies an object (coverage lookup above all) needs
- * the pair, not the id alone.
- *
- * AL permits several objects in one file (rare, but legal); this is R6's per-object
- * attribution seam — `attributeHeader` uses the returned `startIndex`es to find which object a
- * given mutant actually sits inside, instead of the old behaviour of labelling every mutant in
- * the file with the FIRST header's `(type, id)` regardless of which object it was really in
- * (silently wrong coverage-lookup keys, the exact failure `MutantManifestEntry.objectType`'s
- * doc comment warns about). `assertNoUnsupportedObjectMix` is the remaining refusal: it still
- * throws for a file that mixes an injectable object with a non-injectable one, since dropping
- * only the non-injectable object's mutants (rather than the whole file) isn't implemented yet.
- */
-function objectHeadersOf(source: string, filePath: string): readonly ObjectHeader[] {
-  // Comment-free text, so a commented-out object neither appears in the result nor wins any
-  // position race against a live one — see `stripAlComments`.
-  // `matchAll` operates on an internal clone, so the shared `g` regex's `lastIndex` never carries
-  // between calls (a plain `.exec` loop on OBJECT_HEADER would).
-  const matches = [...stripAlComments(source).matchAll(OBJECT_HEADER)];
-  if (matches.length === 0) throw new Error(`${filePath}: file has no AL object header`);
-  return matches.map((m) => {
-    const type = m[1];
-    if (type === undefined) {
-      // Unreachable while OBJECT_HEADER keeps group 1 — asserted rather than defaulted, because a
-      // wrong/absent object type silently merges two objects' coverage (see MutantManifestEntry).
-      throw new Error(`${filePath}: AL object header matched without an object keyword`);
-    }
-    if (m.index === undefined) {
-      // Unreachable: `matchAll` always sets `.index` on every match it yields. Asserted, not
-      // defaulted — a wrong start offset would misattribute every mutant after it.
-      throw new Error(`${filePath}: AL object header matched with no source offset`);
-    }
-    return {
-      type: type.toLowerCase(),
-      id: Number(m[2]),
-      name: m[4] ?? m[5] ?? "",
-      startIndex: m.index,
-    };
-  });
-}
-
-/**
- * Refuses a file only when it mixes an injectable object (codeunit/table) with a non-injectable
- * one (page/report/query/xmlport/enum/...). Two-or-more objects that are ALL injectable are
- * supported (R6): each mutant is attributed to its own enclosing object by `attributeHeader`,
- * and `injectMutationSelectorVar` (compile.ts) injects a declaration into every object that
- * actually received a guard, not just the first.
- *
- * The mixed-kind shape stays refused. `generateMutationSet` (@lethal/runner) drops a file's
- * specs only when the WHOLE file has zero injectable objects — a file holding one codeunit and
- * one page still reaches here with specs generated for both, and there is no per-object
- * DROPPING of just the page's specs (the same kind-filter `canCarryMutationSelectorVar` already
- * applies file-wide, applied at object granularity instead) — that is a real capability
- * extension, not yet built. Refusing the shape is the honest answer until it is.
- */
-function assertNoUnsupportedObjectMix(headers: readonly ObjectHeader[], filePath: string): void {
-  if (headers.length <= 1) return;
-  const unsupported = headers.filter((h) => !INJECTABLE_OBJECT_TYPES.has(h.type));
-  if (unsupported.length === 0) return; // every object is injectable — R6 per-object path.
-  const found = headers.map((h) => `${h.type} ${h.id} ${h.name}`);
-  const unsupportedKinds = [...new Set(unsupported.map((h) => h.type))].join(", ");
-  const why = `LethAL attributes mutants per object only when every object in the file can carry the injected selector var (a codeunit or a table). This file also declares a ${unsupportedKinds}, and dropping only that object's mutants (rather than refusing the whole file) is not yet implemented. Split them into one file each.`;
-  throw new Error(
-    `writeInstrumentedProject: cannot instrument ${filePath} — it mixes ${found.join("; ")} in one file. ${why}`,
-  );
-}
-
-/**
- * The object a mutant belongs to: the LAST header at or before the mutant's own start offset.
- * Headers partition the file left to right — an AL object's body cannot contain another
- * object's header — so this is exact, not a heuristic; it is the fix for the old "always the
- * first header" rule that mislabelled every mutant in a file's second-and-later object (R6).
- *
- * The boundary is deliberately `<=` (a header AT `spec.before.startIndex` still counts, so the
- * loop below breaks only on strictly-greater): a mutant whose `before` node starts at the exact
- * same offset as a header belongs to THAT object, not the previous one — the header's own text
- * is the first thing at that offset, so "at or after" is "inside this object", never "still
- * inside the previous one". Exported (module-level, not through `index.ts` — see `ObjectHeader`)
- * so this exact boundary is unit-testable without constructing a real multi-object AL fixture.
- */
-export function attributeHeader(
-  headers: readonly ObjectHeader[],
-  spec: MutationSpec,
-  filePath: string,
-): ObjectHeader {
-  let best: ObjectHeader | undefined;
-  for (const header of headers) {
-    if (header.startIndex > spec.before.startIndex) break;
-    best = header;
-  }
-  if (best === undefined) {
-    // Unreachable via the normal pipeline (spec generation walks nodes inside the parsed
-    // objects), but a caller-constructed spec whose `before` sits before every header would
-    // otherwise silently fall through to `undefined` — fail loudly instead.
-    throw new Error(
-      `${filePath}: mutation site at offset ${spec.before.startIndex} sits before this file's first AL object header — cannot attribute it to an object.`,
-    );
-  }
-  return best;
-}
-
-/**
- * Every AL object header declared in `source` — unlike `objectHeaderOf` above (which enforces
- * exactly one object per file and throws otherwise, a rule that only applies to files THIS TOOL
- * instruments), this returns however many there are. Used for a structural id-collision scan
- * (`validateSelectorIds`, `id-ranges.ts`) across every `.al` file in a target project, including
- * ones with no mutation sites at all — those are never passed through `objectHeaderOf`, but their
- * object ids still occupy real AL id space the injected selector ids must not collide with.
- */
-export function scanDeclaredObjects(source: string): DeclaredObject[] {
-  const clean = stripAlComments(source);
-  return [...clean.matchAll(OBJECT_HEADER)].map((m) => ({
-    type: (m[1] ?? "").toLowerCase(),
-    id: Number(m[2]),
-    name: m[4] ?? m[5] ?? "",
-  }));
-}
+// R-307 O6: the header rules (H1-H3) and `stripAlComments` moved to project-plan.ts (PLAN).
+export {
+  type ObjectHeader,
+  attributeHeader,
+  scanDeclaredObjects,
+  stripAlComments,
+} from "./project-plan";
 
 function stripQuotes(s: string): string {
   if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
@@ -611,6 +578,27 @@ function enclosingMemberOf(spec: MutationSpec): ALSyntaxNode | null {
   return current;
 }
 
+/** R374: `input` with its run-wide ordinals numbered over `input.files` alone. For a caller that
+ *  writes ONE hand-built file set (tests, scripts); a real run passes `identityOrdinalsOf`'s. */
+export function withRunIdentityOrdinals(input: Omit<WriteInput, "identityOrdinals">): WriteInput {
+  return { ...input, identityOrdinals: runIdentityOrdinals(input.files, input.operatorTiers) };
+}
+
+/**
+ * R307, R-307 O6: the writer's per-file steps, as a composition: PLAN (`planOneFile`, every
+ * per-file refusal and every decision; `generateMutationSet`'s trial runs this alone) then EMIT
+ * (`emitOneFile`, the instrumented text). `mutants` is the plan's, unchanged: one entry per ided
+ * spec, in `ided` order, carrying its header and grain.
+ */
+export function instrumentOneFile(
+  f: Pick<InstrumentedFile, "path" | "source" | "root">,
+  deduped: readonly MutationSpec[],
+  ided: readonly IdedSpec[],
+): { readonly compiled: string; readonly mutants: readonly PlannedMutant[] } {
+  const plan = planOneFile(f, deduped, ided);
+  return { compiled: emitOneFile(plan), mutants: plan.mutants };
+}
+
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
   await mkdir(input.targetDir, { recursive: true });
 
@@ -622,7 +610,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) specsByFile.set(f.path, dedupeSpecs(f.specs, tierOf));
   const idedByFile = assignMutantIds(specsByFile);
 
-  // RUST-03 S4.2a: rows are built once and numbered in place (`identityOrdinalsOf`), not copied.
+  // R374: rows are numbered from the run-wide `identityOrdinals`, never per batch.
   const rows: { -readonly [K in keyof MutantManifestEntry]: MutantManifestEntry[K] }[] = [];
   // C02-09: gap id -> "<file>\n<start>\n<end>" of the block it names. Offsets decide: two blocks
   // on one line are two blocks. A second, different block under one id is refused, never merged.
@@ -631,18 +619,17 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
   for (const f of input.files) {
     const ided = idedByFile.get(f.path) ?? [];
     const deduped = specsByFile.get(f.path) ?? [];
-    // Read every object header BEFORE instrumenting: both remaining throws (no object header,
-    // an injectable object mixed with a non-injectable one) mean this file can never be
-    // attributed correctly, and failing before the write keeps a refused file from being left
-    // behind, half-instrumented, in the artifact dir.
-    const headers = objectHeadersOf(f.source, f.path);
-    assertNoUnsupportedObjectMix(headers, f.path);
-    const compiled = compileSchemataForFile(f.source, f.root, deduped, ided, f.path);
-    // The same components `compileSchemataForFile` builds from the same `ided`, so the grain
-    // recorded here is the one the emitted chain placed (or omitted) its marker by.
-    const grainOf = new Map<string, ReachGrain>();
-    for (const c of buildComponents(ided)) {
-      for (const m of c.members) grainOf.set(m.mutantId, reachGrainOf(m, c.root));
+    const { compiled, mutants } = instrumentOneFile(f, deduped, ided);
+    // R-307 O6: `mutants` is walked in step with `ided`, by position, so a missing or reordered
+    // entry is a caller-contract violation, refused before anything of this file is written.
+    if (mutants.length !== ided.length) {
+      const unmatched =
+        mutants.length < ided.length
+          ? ided[mutants.length]?.mutantId
+          : mutants[ided.length]?.mutantId;
+      throw new Error(
+        `writeInstrumentedProject: ${f.path}: the plan holds ${mutants.length} mutant(s) for ${ided.length} ided spec(s); first unmatched: ${unmatched}`,
+      );
     }
     await writeFile(join(input.targetDir, basename(f.path)), compiled, "utf8");
     // RUST-03 S4.2a: per file, not per mutant: the line index, and each gap block's id and lines.
@@ -652,12 +639,33 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       { gapId: string; blockStartLine: number; blockEndLine: number }
     >();
     const armNamesCache = new Map<number, string[]>();
+    let at = 0;
     for (const { mutantId, spec } of ided) {
-      const triggerName = triggerNameOf(spec);
+      const planned = mutants[at];
+      if (planned === undefined || planned.mutantId !== mutantId) {
+        throw new Error(
+          `writeInstrumentedProject: ${f.path}: mutant ${at} of the plan is ${planned?.mutantId ?? "missing"}, where ided holds ${mutantId}`,
+        );
+      }
+      at++;
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
-      const header = attributeHeader(headers, spec, f.path);
+      const { header, grain: reachGrain } = planned;
+      const id = identityFieldsOf(spec, header.name);
+      const triggerName = id.triggerName;
+      const siteKey = identitySiteKey(
+        f.path,
+        spec.before.startIndex,
+        spec.before.endIndex,
+        spec.operatorName,
+      );
+      const identityOrdinal = input.identityOrdinals.get(siteKey);
+      if (identityOrdinal === undefined) {
+        throw new Error(
+          `writeInstrumentedProject: ${mutantId} (${f.path}, ${spec.before.startIndex}..${spec.before.endIndex}, ${spec.operatorName}) has no run-wide identity ordinal; the caller's identityOrdinals was built over a different spec set (R374)`,
+        );
+      }
       const procedureScope = procedureScopeOf(spec, f.source);
       const coverageArmNames = coverageArmNamesOf(spec, armNamesCache);
       const member = enclosingMemberOf(spec);
@@ -686,27 +694,23 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         };
         gapOf.set(inFile, gap);
       }
-      const reachGrain = grainOf.get(mutantId);
-      if (reachGrain === undefined) {
-        throw new Error(`writeInstrumentedProject: no reach grain for ${mutantId} in ${f.path}`);
-      }
       rows.push({
         mutantId,
         file: f.path,
         startIndex: spec.before.startIndex,
         endIndex: spec.before.endIndex,
         startLine: lineOfIndex(starts, spec.before.startIndex),
-        operatorName: spec.operatorName,
-        operatorVersion: spec.operatorVersion,
-        astHash: astSubtreeHash(spec.before),
+        operatorName: id.operatorName,
+        operatorVersion: id.operatorVersion,
+        astHash: id.astHash,
         gapId: gap.gapId,
         blockStartLine: gap.blockStartLine,
         blockEndLine: gap.blockEndLine,
         reachGrain,
         objectType: header.type,
         codeunitId: header.id,
-        codeunitName: header.name,
-        procedureName: procedureNameOf(spec),
+        codeunitName: id.codeunitName,
+        procedureName: id.procedureName,
         originalText: clipMutationText(spec.before.text),
         mutatedText: clipMutationText(spec.after.text),
         ...(procedureScope !== undefined ? { procedureScope } : {}),
@@ -723,16 +727,11 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
-        identityOrdinal: 0,
+        identityOrdinal,
       });
     }
   }
 
-  // R193: identity ordinals are assigned over the WHOLE manifest, after every file's entries exist,
-  // because a twin pair sits in one procedure and therefore one file, but numbering per file
-  // would still be a second implementation of the same rule.
-  const ordinalOf = identityOrdinalsOf(rows);
-  for (const r of rows) r.identityOrdinal = ordinalOf.get(r) ?? 0;
   const manifest: readonly MutantManifestEntry[] = rows;
 
   // The delegating selector (Active -> LC Control State.IsActive) and the register-install

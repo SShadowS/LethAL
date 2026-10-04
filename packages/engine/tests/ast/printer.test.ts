@@ -5,6 +5,7 @@ import { ALNodeKind } from "../../src/ast/node-kinds";
 import { initParser, parseAL } from "../../src/ast/parser";
 import { print, printWithRewrites } from "../../src/ast/printer";
 import { findFirst, wrapRoot } from "../../src/ast/syntax-node";
+import { FileRefusedError } from "../../src/file-refused";
 
 describe("printer", () => {
   beforeAll(async () => {
@@ -61,7 +62,7 @@ describe("printer", () => {
     const proc = findFirst(root, ALNodeKind.procedure);
     const call = findFirst(root, ALNodeKind.procedure_call);
     if (proc === null || call === null) throw new Error("fixture shape");
-    expect(() =>
+    const run = (): string =>
       printWithRewrites(
         source,
         root,
@@ -70,9 +71,23 @@ describe("printer", () => {
           [call, "y"],
         ]),
         "src/X.Codeunit.al",
-      ),
-    ).toThrow(
+      );
+    expect(run).toThrow(
       `overlapping rewrites in src/X.Codeunit.al at ${proc.startIndex}..${proc.endIndex} (procedure) and ${call.startIndex}..${call.endIndex} (${call.rawKind})`,
     );
+    // R307: typed, so a run can refuse this one file instead of aborting.
+    let thrown: unknown;
+    try {
+      run();
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(FileRefusedError);
+    if (!(thrown instanceof FileRefusedError)) return;
+    expect(thrown.shape).toBe("overlap");
+    expect(thrown.site).toBe("rewrite.overlap");
+    expect(thrown.file).toBe("src/X.Codeunit.al");
+    expect(thrown.lines).toEqual([3, 6]);
+    expect(thrown.objects).toBeUndefined();
   });
 });

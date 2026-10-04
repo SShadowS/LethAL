@@ -63,6 +63,7 @@
               "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
+              "files-refused",
               "stale-test-app",
               "tests-permission-refused",
               "tests-testpage-unsupported",
@@ -629,7 +630,8 @@
                   "not-instrumentable",
                   "declarative",
                   "compiled-out",
-                  "preproc-undecided"
+                  "preproc-undecided",
+                  "instrumentation-refused"
                 ]
               },
               "detail": {

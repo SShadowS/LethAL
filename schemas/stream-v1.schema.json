@@ -432,6 +432,74 @@
         "excludedByLines": {
           "type": "number"
         },
+        "refusedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "shape",
+              "kinds",
+              "sites"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "shape": {
+                "type": "string",
+                "enum": [
+                  "overlap",
+                  "unsupported-kind",
+                  "latch-owner",
+                  "no-anchor",
+                  "no-header",
+                  "object-mix",
+                  "site-before-header"
+                ]
+              },
+              "objects": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "id",
+                    "name"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              },
+              "carryDisabled": {
+                "type": "number"
+              }
+            }
+          }
+        },
         "seq": {
           "type": "number"
         }

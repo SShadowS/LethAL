@@ -1,7 +1,12 @@
 import type { BackendCapabilities } from "./backend";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
-import { type ExcludedSites, type PreprocExcludedFile, buildExcludedSites } from "./excluded-sites";
+import {
+  type ExcludedSites,
+  type PreprocExcludedFile,
+  type RefusedExcludedFile,
+  buildExcludedSites,
+} from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
@@ -86,6 +91,12 @@ export interface FoldStatics {
    * are stale, which this run contradicted) are computed against the mutants in `buildReport`.
    */
   readonly equivalenceMarks?: readonly EquivalenceMark[];
+  /**
+   * R307 section 3 (fail closed): loose tuples of files this run refused under the header rule. A
+   * mutant matching one takes no equivalence mark this run (`isCarryDisabled`, selection.ts). An
+   * input to `buildReport`, never a report field.
+   */
+  readonly carryDisabled?: ReadonlySet<string>;
   /**
    * R101(c): the AL preprocessor symbols this run compiled the target WITH. Always present, even as
    * an empty array, because `[]` is a real configuration (it selects every `#else` branch) and not
@@ -225,6 +236,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
+  let refusedFiles: readonly RefusedExcludedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let preprocExcludedFiles: readonly PreprocExcludedFile[] = [];
   let excludedByOnly = 0;
@@ -315,6 +327,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         sawMutationSetGenerated = true;
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
+        refusedFiles = e.refusedFiles ?? [];
         declarativeSiteFiles = e.declarativeSiteFiles;
         preprocExcludedFiles = e.preprocExcludedFiles ?? [];
         excludedByOnly = e.excludedByOnly;
@@ -598,6 +611,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       skipped: notInstrumentedFiles,
       declarative: declarativeSiteFiles,
       preproc: preprocExcludedFiles,
+      refused: refusedFiles,
       totalFiles,
     }),
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count

@@ -22,7 +22,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
-import type { PreprocExcludedFile } from "./excluded-sites";
+import type { PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type {
@@ -173,6 +173,9 @@ export type RunEventInput =
       /** Issue #19: post-dedup sites the line filter excluded. Present exactly when a line filter
        *  was given, so a measured 0 and "no filter" do not look alike. */
       readonly excludedByLines?: number;
+      /** R307: files the instrumentation trial refused whole. Present only when non-empty, so a
+       *  stream from before R307 stays valid and folds to the same report bytes. */
+      readonly refusedFiles?: readonly RefusedExcludedFile[];
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

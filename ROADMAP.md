@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**112 of 432 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**113 of 435 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -119,7 +119,9 @@ that ordering is the priority.
 - **R298** · An object declaration wrapped in `preproc_conditional_object` defeats `enclosingObjectDeclaration`, so the injector throws instead of instrumenting or filtering the file · [R298.md](docs/roadmap/R298.md) · open; writer fixed 2026-09-28 (dd14626), coverage refused pending R300
 - **R300** · R298 follow-up (R-298b): measure how BC and al-runner number a `#if`-wrapped object's lines, then score wrapped objects instead of refusing their coverage · [R300.md](docs/roadmap/R300.md) · open, filed 2026-09-28
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
+- **R399** · Undecided-#if and not-instrumentable rows in excludedSites do not make the report's reliability narrowed, while R-307's refused rows do · [R399.md](docs/roadmap/R399.md) · open, filed 2026-10-02
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
+- **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · open, filed 2026-10-02
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
@@ -257,9 +259,10 @@ that ordering is the priority.
 - **R292** · Retaining every parse tree exhausts wasm memory on BC.History/BaseApp's 9,620 files: the census script needs it split into halves, and the PRODUCT path (`locate`/`identity-keys`) aborts the same way on a whole-BaseApp run · [R292.md](docs/roadmap/R292.md) · done (9f7cb5f0)
 - **R293** · The cross-check's directive guard (R2) recognises only `preproc_conditional*`, so directive code under `preproc_split_*`, `preproc_fragmented_*` and 4.4.1's six new `preproc_*` kinds reads as UNEXPLAINED instead of guarded · [R293.md](docs/roadmap/R293.md) · open, filed 2026-09-27
 - **R299** · A file mixing an injectable object with a non-injectable one is refused outright, so a real project using that shape cannot be instrumented (Sentinel) · [R299.md](docs/roadmap/R299.md) · open, filed 2026-09-28
+- **R398** · The object-header scan is ASCII-only and line-anchored, so valid AL such as an unquoted non-ASCII object name or `namespace X; codeunit ...` on one line is refused whole (no-header) · [R398.md](docs/roadmap/R398.md) · open, filed 2026-10-02
 - **R304** · Statements inside a block OPENED by a split `#if` if-header (`preproc_split_if_then_begin`, `preproc_split_if_begin_asymmetric`) are not in statement position, so they are not sites · [R304.md](docs/roadmap/R304.md) · open, filed 2026-09-28
 - **R305** · An object whose HEADER is split by `#if` (`preproc_split_declaration`) is refused as a whole file, so none of its sites are instrumented · [R305.md](docs/roadmap/R305.md) · open, filed 2026-09-28
-- **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · open, filed 2026-09-28
+- **R307** · One bad file still aborts the whole run: `assertNoOverlap`, the injector's unsupported-kind throw, the latch's no-owner throw and the line map's declared-but-unmapped throw all stay whole-run throws · [R307.md](docs/roadmap/R307.md) · done (cf354d51)
 - **R308** · `describeObjectKinds` reads a file's top-level children directly, so it names the `#if` wrapper (or reports no object at all) instead of the object inside it · [R308.md](docs/roadmap/R308.md) · open, filed 2026-09-28
 - **R309** · A split-header procedure whose arms EACH have their own `var` section (`preproc_split_procedure_preamble`) has no single place for a reach latch, and is refused by name instead of throwing · [R309.md](docs/roadmap/R309.md) · done (24e7169..34f9780)
 - **R310** · R303's reach-latch refusal has no SessionReport field, so a mutant it refuses reads only as an unplaced reachGrain, never named as R303's · [R310.md](docs/roadmap/R310.md) · closed 2026-09-28, ruling: after R303's hoist, a member is refused only by R303's header-end predicate…
@@ -454,7 +457,7 @@ that ordering is the priority.
 - **R379** · `scripts/campaign/compile-only.ts` enumerates with no config symbols, so its sites differ from a real run's · [R379.md](docs/roadmap/R379.md) · open, filed 2026-10-01
 - **R356** · The al-runner backend leaves its lethal-alrunner-cov-* Cobertura scratch directory behind when it closes · [R356.md](docs/roadmap/R356.md) · done (0924cd93)
 - **R358** · Something in the unit suite leaks one lethal-alrunner-canary-* temp directory per run, although the canary removes its directory in a finally · [R358.md](docs/roadmap/R358.md) · done (64488c59)
-- **R382** · `scripts/r214-capture.ts` must be updated when R-307 lands: `writeInstrumentedProject` gains a required `identityOrdinals` · [R382.md](docs/roadmap/R382.md) · open, filed 2026-10-01
+- **R382** · `scripts/r214-capture.ts` must be updated when R-307 lands: `writeInstrumentedProject` gains a required `identityOrdinals` · [R382.md](docs/roadmap/R382.md) · done (99edf1ef)
 - **R359** · The unit-test preload's fake home (R264) and private temp folder (R358) do not reach child processes · [R359.md](docs/roadmap/R359.md) · open, filed 2026-09-30
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)

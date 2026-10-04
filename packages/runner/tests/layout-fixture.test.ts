@@ -6,6 +6,7 @@ import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
   generateMutationSet,
+  identityOrdinalsOf,
   operatorTiers,
   planArtifacts,
   prepareBatchProject,
@@ -65,7 +66,9 @@ interface Built {
 
 /** Instruments both batches once, as `runSession` does, into a scratch directory. */
 async function build(root: string): Promise<Built> {
-  const { files } = await generateMutationSet(PROJECT);
+  const set = await generateMutationSet(PROJECT);
+  const { files } = set;
+  const identityOrdinals = identityOrdinalsOf(set);
   const batches = planArtifacts(files, { maxGuardsPerBatch: 7 });
   const manifest = JSON.parse(await readFile(join(PROJECT, "app.json"), "utf8")) as Record<
     string,
@@ -78,6 +81,7 @@ async function build(root: string): Promise<Built> {
     await writeInstrumentedProject({
       targetDir: dir,
       files: batch,
+      identityOrdinals,
       selectorIds: { selectorId: 79749, controlId: 79748, tableId: 79747 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: String(manifest.id),

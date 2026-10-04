@@ -32,7 +32,15 @@ export {
   MAX_MUTATION_TEXT,
   clipMutationText,
   identityTupleOf,
+  instrumentOneFile,
+  looseIdentityTupleOf,
   assignIdentityOrdinals,
+  identitySiteKey,
+  identityFieldsOf,
+  identityEntriesOf,
+  numberIdentityOrdinals,
+  runIdentityOrdinals,
+  withRunIdentityOrdinals,
   IDENTITY_SCHEME,
   gapIdOf,
   coverageArmNamesComputed,
@@ -40,12 +48,24 @@ export {
 export type {
   InstrumentedFile,
   WriteInput,
+  IdentityEntry,
   MutantManifest,
   MutantManifestEntry,
 } from "./project";
-export { REACH_MARKER, reachGrainOf, reachLatchRefusedOwner, varSectionUnparsed } from "./dispatch";
+export {
+  REACH_MARKER,
+  planReachGrains,
+  reachGrainOf,
+  reachLatchRefusedOwner,
+  varSectionUnparsed,
+} from "./dispatch";
 export type { ReachGrain } from "./dispatch";
-export { resolveSite, isMutableSite } from "./enclosing";
+export { resolveSite, resolveStatement, isMutableSite } from "./enclosing";
+// R-307 O6: the trial runs PLAN only (`planOneFile`); `emitOneFile` is exported so a test can pin
+// that the trial never calls it.
+export { planOneFile } from "./project-plan";
+export type { FilePlan, PlannedMutant } from "./project-plan";
+export { emitOneFile } from "./project-emit";
 export type { ResolvedSite } from "./enclosing";
 export { parseIdRanges, pickSelectorIds, validateSelectorIds } from "./id-ranges";
 export type { AppIdRange, DeclaredObject } from "./id-ranges";

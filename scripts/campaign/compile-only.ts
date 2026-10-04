@@ -36,6 +36,7 @@ import {
 import { injectControlDependency } from "../../packages/runner/src/harness";
 import {
   generateMutationSet,
+  identityOrdinalsOf,
   operatorTiers,
   prepareBatchProject,
   targetAppIdOf,
@@ -72,6 +73,7 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     await writeInstrumentedProject({
       targetDir: target,
       files: set.files,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: args.selectorIds,
       artifactId,
       targetAppId,

@@ -271,6 +271,8 @@ export interface BoundArtifact {
   readonly alSources: readonly AlSource[];
   /** R318: the verified manifest's renamed-member coverage names (`renamedMemberNamesOf`). */
   readonly renamedMemberNames: RenamedMemberNames;
+  /** R-307 section 4: the verified manifest's object keys (`manifestObjectKeys`), checked by `attach`. */
+  readonly manifestObjectKeys: ReadonlySet<string>;
 }
 
 export interface ExecutionBackend {
