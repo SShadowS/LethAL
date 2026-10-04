@@ -79,6 +79,7 @@ import {
   compareVerifyToFullRun,
   writeScratchSuite,
 } from "./verify-agreement";
+import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_AGREEMENT) {
   console.log(
@@ -559,6 +560,24 @@ async function main(): Promise<void> {
         `step 3: a lease acquire right after must succeed: ${JSON.stringify(outcome)}`,
       );
       await client.release(outcome.lease);
+      // R-425 pre-commitment: the JSON records the filter. Each Sx is narrowed, dropping the four
+      // answer tests other than its own killer; S5 is skipped, so it carries no reachNarrowed.
+      assertReachFields("step 3", out, {
+        filter: { state: "on" },
+        rows: {
+          ...Object.fromEntries(
+            KILLED_PLANTED.map((p) => {
+              const own = `${SCRATCH_ANSWERS.codeunitName}.${ANSWER_KILLERS[p]}`;
+              assert.ok(answerNames.includes(own), `step 3: ${own} is an answer test`);
+              return [
+                idOf(p),
+                { narrowed: true, dropped: answerNames.filter((t) => t !== own) },
+              ] as const;
+            }),
+          ),
+          [idOf("S5")]: "absent",
+        },
+      });
       const verifyMs = out.timings.totalMs;
       console.log(
         `step 3 PASS: 4 killed by the answer tests, S5 skipped; testsRun and reach line as pre-committed (R-384); exit 0; one test-app publish; read-back equal; lease free; verify totalMs ${verifyMs}`,

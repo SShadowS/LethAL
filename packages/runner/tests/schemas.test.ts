@@ -46,6 +46,7 @@ import {
   type VerifyOutput,
   runVerify,
 } from "../src/verify";
+import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
@@ -662,6 +663,20 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(v3, "$.refused.reason")).not.toContain("dependency-unreadable");
   });
 
+  // R-425: v5 added `reachFilter` and `results[].reachNarrowed`. v4 stays as it was published, and
+  // a REAL v4 report (the R-384 gate's step-3 JSON) still validates against it.
+  test("verify-v4.schema.json is kept as published", () => {
+    const v4 = loadSchema("verify-v4.schema.json");
+    expect((v4.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(4);
+    expect(enumAt(v4, "$.refused.reason")).toContain("too-many-new-tests");
+    expect([...schemaLeafPaths(v4)]).not.toContain("$.reachFilter.state");
+    expect([...schemaLeafPaths(v4)]).not.toContain("$.results[].reachNarrowed");
+    const real = JSON.parse(
+      readFileSync(join(import.meta.dir, "fixtures", "verify-v4-r384-step3.json"), "utf8"),
+    ) as unknown;
+    expect(conformsTo(v4, real)).toEqual([]);
+  });
+
   test("results[].gapId is a declared leaf of the current verify schema", () => {
     expect([...schemaLeafPaths(verifySchema)]).toContain("$.results[].gapId");
   });
@@ -676,6 +691,8 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
         "NewTestState",
         "UnmutatedOutcome",
         "VerifyRefusal",
+        "ReachFilterState",
+        "ReachFilterOffReason",
       ],
     });
     expect([...schemaLeafPaths(verifySchema)].sort()).toEqual([...fromType].sort());
@@ -687,6 +704,17 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(verifySchema, "$.results[].killedBy")).toEqual([...KILLED_BY]);
     expect(enumAt(verifySchema, "$.newTests[].state")).toEqual([...NEW_TEST_STATES]);
     expect(enumAt(verifySchema, "$.newTests[].runs[].outcome")).toEqual([...UNMUTATED_OUTCOMES]);
+    expect(enumAt(verifySchema, "$.reachFilter.state")).toEqual([...REACH_FILTER_STATES]);
+    expect(enumAt(verifySchema, "$.reachFilter.reason")).toEqual([...REACH_FILTER_OFF_REASONS]);
+    // R-425: literal pins, for the same reason as the two below.
+    expect([...REACH_FILTER_STATES]).toEqual(["on", "off"]);
+    expect([...REACH_FILTER_OFF_REASONS]).toEqual([
+      "no-reach-filter",
+      "coverage-mode-none",
+      "coverage-mode-procedure",
+      "coverage-mode-line",
+      "coverage-mode-al-runner",
+    ]);
     // Independent of the constants: a coordinated change to a constant AND the schema moves the
     // published value domain, which needs a deliberate edit here too (R262 review).
     expect([...UNMUTATED_OUTCOMES]).toEqual([
@@ -734,6 +762,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     // `newTests[].runs` touch -- closing that gap without a runNamed fake or a committed report.
     const measured: VerifyOutput = {
       verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+      reachFilter: { state: "off", reason: "coverage-mode-procedure" },
       ok: false,
       exitCode: 5,
       source: {
@@ -782,6 +811,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
           killedByNewTest: false,
           killedBy: "assertion",
           killingTestFailure: "Assert.AreEqual failed. Expected:<400> Actual:<0>.",
+          reachNarrowed: false,
         },
         {
           id: "0/M0002",
@@ -905,6 +935,25 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       expect(conformsTo(reportSchema, { ...without, coverageMode: mode })).toEqual([]);
     }
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
+  });
+
+  test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
+    const without = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect("buildSymbols" in without).toBe(false);
+    // Optional: required, it would reject every report written before R381.
+    const props = (reportSchema as { properties: Record<string, unknown>; required: string[] })
+      .properties;
+    expect(props.buildSymbols).toBeDefined();
+    expect((reportSchema as { required: string[] }).required).not.toContain("buildSymbols");
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: [] })).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: ["A", "B"] })).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: "A" })).not.toEqual([]);
   });
 
   test("OLDER reports are also v2 and do NOT validate — the schema is one BUILD's shape (R157)", () => {
@@ -1138,6 +1187,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "verifySchemaVersion",
       ],
       "verify-v4.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R-425: the same seven; `reachFilter` is optional (absent = not decided).
+      "verify-v5.schema.json": [
         "counts",
         "exitCode",
         "newTests",

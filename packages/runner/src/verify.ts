@@ -63,7 +63,14 @@ import {
 } from "./test-digest";
 import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
-import { type ReachResult, narrowVerifyRequests, reachStateOf } from "./verify-reach";
+import {
+  type ReachFilterOffReason,
+  type ReachFilterState,
+  type ReachResult,
+  type ReachState,
+  narrowVerifyRequests,
+  reachStateOf,
+} from "./verify-reach";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -1082,8 +1089,11 @@ export async function verifyDependencyFingerprint(
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons.
  *  3 since R354 added the refusal reason `coverage-mode-changed`: a new value, so it bumps (R233);
  *  v2 is frozen. 4 since R-371 added `too-many-new-tests` and `dependency-unreadable`; v3 is
- *  frozen. */
-export const VERIFY_SCHEMA_VERSION = 4;
+ *  frozen. 5 since R-425 added `reachFilter` and `results[].reachNarrowed`. Adding a field does
+ *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
+ *  report it means the report predates the record; the version is the one thing that tells the
+ *  two apart, so it bumps. v4 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 5;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
@@ -1170,10 +1180,31 @@ export interface VerifyResult {
     readonly reason: "reader-marked-equivalent";
     readonly mark: { readonly key: string; readonly reason: string };
   };
+  /** R-425: true when R-384's reach filter left at least one new test out of this survivor's
+   *  request; false when it did not, or the filter was off. Absent when the filter never decided
+   *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
+   *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
+  readonly reachNarrowed?: boolean;
+}
+
+/** R-425: R-384's reach-filter state, as the JSON records it. */
+export interface VerifyReachFilter {
+  readonly state: ReachFilterState;
+  /** Present exactly when `state` is "off". */
+  readonly reason?: ReachFilterOffReason;
+}
+
+/** R-425: the JSON form of a decided `ReachState`. `why` is stderr's and is not repeated. */
+export function verifyReachFilterOf(s: ReachState): VerifyReachFilter {
+  return s.on ? { state: "on" } : { state: "off", reason: s.reason };
 }
 
 export interface VerifyOutput {
   readonly verifySchemaVersion: number;
+  /** R-425: whether R-384's reach filter ran, and when not, why. Present whenever verify got past
+   *  the `coverage-mode-changed` check, later refusals included; absent when it stopped before
+   *  deciding. */
+  readonly reachFilter?: VerifyReachFilter;
   /** `exitCode === 0`. */
   readonly ok: boolean;
   readonly exitCode: number;
@@ -1361,8 +1392,11 @@ export async function runVerify(
   let compileMs: number | undefined;
   let publishMs: number | undefined;
   let published: PublishedTestApp | undefined;
+  // R-425: set once, right after the coverage-mode-changed check; undefined means "not decided".
+  let decided: ReachState | undefined;
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+    ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
     ...(source !== undefined && artifactId !== undefined
       ? {
           source: {
@@ -1414,6 +1448,10 @@ export async function runVerify(
         }, but verify measures under coverage mode ${coverageMode}. Its survived and no-coverage verdicts and its covering-test lists were attributed under that mode, so they do not say which tests reach a mutant under this one (R354). Run lethal run again under this configuration, then verify with its artifact id.`,
       );
     }
+    // R-384: rule 1. Off, verify sends exactly what it sent before: no `narrow` at all. R-425:
+    // decided here, so every later refusal records it too.
+    const reachState = reachStateOf(coverageMode, args.noReachFilter !== true);
+    decided = reachState;
     // R214: a run recorded before its build symbols were cannot tie its keys to one build. Never
     // read as `[]`.
     if (source.buildSymbols === null) {
@@ -1470,8 +1508,6 @@ export async function runVerify(
     }
 
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
-    // R-384: rule 1. Off, verify sends exactly what it sent before: no `narrow` at all.
-    const reachState = reachStateOf(coverageMode, args.noReachFilter !== true);
     const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
     let reach: ReachResult | undefined;
     const planned = source;
@@ -1569,6 +1605,14 @@ export async function runVerify(
             return newTestResultOf(ref, b, r);
           });
 
+    // R-425: off, nothing can be narrowed; on, the filter's own answer, and nothing when it never
+    // ran (the session latched unsafe before `select`, so the row keeps the unfiltered request).
+    const narrowedOf = (id: string): { reachNarrowed?: boolean } =>
+      !reachState.on
+        ? { reachNarrowed: false }
+        : reach !== undefined
+          ? { reachNarrowed: reach.narrowed.has(id) }
+          : {};
     const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
     const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
     const results = source.targets.map((t): VerifyResult => {
@@ -1619,6 +1663,7 @@ export async function runVerify(
           verdict: "survived",
           testsRun: [],
           ...(notRun !== undefined ? { notRun } : {}),
+          ...narrowedOf(t.mutantCode),
           failureNote: `no new test reaches it: the coverage of the ${reach.filterable} new test(s) that could be read shows none of them running ${memberOf(entry)}, so nothing was run (R-384)`,
         };
       }
@@ -1633,6 +1678,7 @@ export async function runVerify(
         ...base,
         ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
+        ...narrowedOf(t.mutantCode),
       };
     });
 

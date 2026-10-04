@@ -13,6 +13,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`SessionReport.buildSymbols`: the target's effective build symbols** (R381). The set the build
+  used (config, the target `app.json`, and on al-runner its predefined symbols), sorted. Written on
+  every new report, `[]` included, so `[]` means "built with no symbols" and absent means a report
+  from before this change. `preprocessorSymbols` still holds the config set alone. The console
+  report prints `build symbols beyond config: [...]` when the two differ (the al-runner
+  `CLEANSCHEMA` run is shortened to `CLEANSCHEMA1..25`). Optional in the schema, so the report stays
+  v3 and older reports still validate.
+- **The verify JSON records the reach filter's state** (R425, verify schema v5). `reachFilter` is
+  `{"state": "on"}` or `{"state": "off", "reason": ...}`, with one reason per R384 stderr text, and
+  each planned `results[]` row carries `reachNarrowed`, true when the filter left at least one new
+  test out of that survivor's request (the tests left out are `newTests[].test` minus `testsRun`).
+  A missing field is unknown, never off: in v5 it means verify had not decided yet (an early
+  refusal, or a row the filter never decided for). The version bumps although the fields are
+  additive, because only the version tells "not decided" from "predates the record". v4 is kept
+  as published. `packages/runner/src/verify-read.ts` reads both fields by that rule.
 - **`lethal verify` sends a new test only to the survivors its coverage reaches** (R384). Under
   `fenced` coverage, verify reads each new test's coverage from the unmutated run it already makes
   and joins the test only to the survivors whose procedure (or, for a trigger, object) it ran, by
@@ -20,8 +35,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   coverage cannot place, fail closed: they take every new test. A survivor's covering tests are
   never dropped. A survivor no new test reaches and with no covering test stays `survived` with
   `testsRun: []`. Off under the hub modes and `none`, and with the new `--no-reach-filter`. One
-  stderr line states the filter's state; the JSON is unchanged (schema v4). Stated limit: state
-  left by an earlier test in the same call, or code run in another session, is not seen.
+  stderr line states the filter's state; the JSON is unchanged (schema v4) (R425 records it, v5).
+  Stated limit: state left by an earlier test in the same call, or code run in another session, is
+  not seen.
 
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
@@ -263,7 +279,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   - **A split HELPER is resolved.** Each arm is its own declaration, never merged: a call resolves
     by name and parameter count, and a helper whose return type differs per arm is followed into
     every codeunit either arm can return. Before, a call to it was silently treated as a built-in.
-    A split member's locals are no longer read as globals.
+    A split member's locals are no longer read as globals. A split helper's body can now raise the
+    same `TestPageScanError` problems as a plain helper (an unresolved receiver), not only the
+    ruled TestPage case.
   - **Digests move once, only for tests that REACH a split member**: the member is now a reach
     edge with its own span (both headers and the body). Its text stays in its codeunit's parts hash,
     as before, so a test that does not reach it keeps its digest byte for byte. A test that

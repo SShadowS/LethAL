@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**112 of 425 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**110 of 425 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -270,7 +270,7 @@ that ordering is the priority.
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · open, filed 2026-10-01
 - **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
-- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · open, filed 2026-10-01
+- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
 - **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
 - **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
 - **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30
@@ -289,7 +289,7 @@ that ordering is the priority.
 - **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
 - **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
 - **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
-- **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · open
+- **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · done (31f5de45)
 - **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · open, filed 2026-10-04
 
 ## Backends and tooling

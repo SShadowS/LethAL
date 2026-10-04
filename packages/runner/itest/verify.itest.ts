@@ -53,6 +53,7 @@ import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { diffMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
+import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_VERIFY) {
   console.log(
@@ -595,6 +596,15 @@ async function main(): Promise<void> {
         `step 3: a lease acquire right after must succeed: ${JSON.stringify(outcome)}`,
       );
       await client.release(outcome.lease);
+      // R-425 pre-commitment: the JSON records the filter; LogAudit is the narrowed row. Last, so
+      // it never stops an R-384 check above from running.
+      assertReachFields("step 3", out, {
+        filter: { state: "on" },
+        rows: {
+          [clampId]: { narrowed: false },
+          [logAuditId]: { narrowed: true, dropped: [NEW_TEST_QUALIFIED] },
+        },
+      });
       verifyMs = out.timings.totalMs;
       console.log(
         `step 3 PASS: ${NEW_TEST_QUALIFIED} stable (sessions ${b.sessionId}, ${r.sessionId}); ClampPercent killed by it (other), LogAudit survived without it (reach filter); reach lines as pre-committed; exit 5; read-back equal; lease free`,
@@ -633,6 +643,11 @@ async function main(): Promise<void> {
         assertTestsRun("step 4", rowOf("step 4", out, logAuditId), [COVERING_TEST], "LogAudit");
         // The "on" line prints with zero new tests too; the two ids' order is not pre-committed.
         assertReachLog("step 4", reachLog, REACH_NO_NEW_TESTS, [clampId, logAuditId]);
+        // R-425 pre-commitment: N = 0, so nothing can be dropped.
+        assertReachFields("step 4", out, {
+          filter: { state: "on" },
+          rows: { [clampId]: { narrowed: false }, [logAuditId]: { narrowed: false } },
+        });
         console.log("step 4 PASS (R-384): testsRun and reach lines as pre-committed");
       } catch (err) {
         step4ReachErr = err;
@@ -674,6 +689,11 @@ async function main(): Promise<void> {
           REACH_NO_NEW_TESTS,
           out.results.map((r) => r.id),
         );
+        // R-425 pre-commitment: N = 0, so neither member is narrowed.
+        assertReachFields("step 4b", out, {
+          filter: { state: "on" },
+          rows: Object.fromEntries(out.results.map((r) => [r.id, { narrowed: false }] as const)),
+        });
         console.log(
           `step 4b PASS: verify --artifact ${thenArtifact} --survivors ${thenGap.gapId} ran ${out.results.map((r) => r.id).join(", ")}, both survived, exit 5, one lease acquire`,
         );
@@ -716,6 +736,8 @@ async function main(): Promise<void> {
       assert.equal(out.refused?.reason, reason, `${step}: ${JSON.stringify(out.refused)}`);
       assert.equal(acquired, 0, `${step}: no lease acquire`);
       assert.equal(out.verifyRunId, undefined, `${step}: no verify run row`);
+      // R-425 pre-commitment: each refuses before the filter is decided, so the field is absent.
+      assertReachFields(step, out, { filter: "absent", rows: {} });
       console.log(`${step} PASS: refused ${reason}, no lease acquire`);
     };
     await refused("step 5a", lastArtifact.artifactId, [killId], "not-a-survivor");
