@@ -51,6 +51,30 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify` sees a Microsoft dependency rebuilt or upgraded on the server** (R385). On
+  bcdev, the dependency fingerprint in every test digest now hashes Microsoft packages by the bytes
+  the server holds, as it already did for the others, over the whole closure (so a Microsoft app
+  reached only through another counts too). It also always hashes `System`, hashes `Application`
+  (by its id) when any app in the closure declares one, and hashes the dependencies of the
+  `LethAL Control` app the server runs, today Test Runner, which runs every test. The control
+  package is read from the server and must be the version the running control app reports. Each
+  Microsoft app (except `System`, which is not an extension) must have exactly one installed
+  version, equal to the package served, read by app id. Any failure refuses by name: the run
+  records no digests (`test-digests-unavailable`) and verify refuses `dependency-unreadable`; it
+  never falls back to declared versions and never treats every test as new. Cost: about 4.3 s per
+  run and per verify, measured on Cronus284 (BC 28.4): 3.2 s to download 14 packages (68.9 MB),
+  0.6 s for the per-id installed checks, 0.4 s to read the running control version. No cache.
+  Stated limits, each of which verify reports as OLD tests with no warning: an installed app
+  outside the closure, and a non-Microsoft dependency that is published but not installed (R434);
+  a body-only rebuild of a symbols-only package, which is `Application` (0 `.al`, expected for a
+  wrapper app whose dependencies carry the source) and the `LethAL Control` package (0 `.al`; its
+  bytes are not hashed anyway); a service-tier update with no new `System` package (unmeasured);
+  and the control app's own changes (its bytes are not hashed, or every control-app upgrade would
+  make every test new). al-runner keeps Microsoft apps by declared version, under a tag that never
+  matches a bytes digest (R435); verify is bcdev only. The test digest scheme is now `v3`, so every
+  digest moves once: verify refuses, once per source run, every run recorded before R385 as
+  `source-predates-verify` (the detail names both schemes); run `lethal run` again. The verify
+  JSON schema stays v6.
 - **`lethal verify` does not rerun a new test the reach filter sent to no survivor** (R427,
   verify schema v6). Every new test still runs once, unmutated, before the mutants. Only a test
   sent to at least one survivor runs again after them. A test sent to none reads the new
@@ -148,7 +172,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   non-Microsoft dependency by the SHA-256 of its package. A call the walk cannot follow makes the
   digest cover the whole test-app source, so it can only make a test new; so does a test-app object passed to code in another app (R386: on
   BaseApp Test every test is on the whole-source digest today). Microsoft dependencies are
-  covered by their declared version only (R385). A Variant holding a test-app codeunit or interface that
+  covered by their declared version only (R385, since changed: see its entry above). A Variant holding a test-app codeunit or interface that
   code in another app runs is not seen (R389), nor is a test-app codeunit whose id the test
   reads from the platform, such as an `AllObj` loop, or computes, such as `50000 + 101` passed to
   code in another app that runs it (R390). An unreadable test-app `app.json` is

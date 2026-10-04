@@ -172,7 +172,7 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
   "gap-has-no-survivor":
     "every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap",
   "dependency-unreadable":
-    "check the dev credentials with lethal doctor, and that every non-Microsoft dependency of the test app is installed on the server",
+    "check the dev credentials with lethal doctor; that every dependency of the test app is installed on the server; that the server serves each Microsoft package in the closure (Library Assert, the test libraries, Base and System Application), System, and the LethAL Control app at the version it runs; and that each Microsoft app has exactly one installed version, the one served (an app mid-upgrade is refused by name)",
 };
 
 /**

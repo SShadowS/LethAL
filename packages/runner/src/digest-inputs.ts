@@ -6,16 +6,38 @@
  *    package's NavxManifest (R-372's rule: the body the server runs), verify and al-runner from the
  *    test project's `app.json`, so both are read into one canonical text that compares equal when
  *    they say the same thing.
- * 2. The DEPENDENCY FINGERPRINT: every dependency the test app runs against, transitive ones too.
- *    A Microsoft one by publisher, id and version: rebuilding one at an UNCHANGED version is not
- *    seen, a stated limit (filed on the roadmap). Every other one by the SHA-256 of the package
- *    that RAN: read one at a time, hashed and dropped. The target app itself is left out: verify
- *    requires its source unchanged (`assertSourceUnchanged`), and the package the server holds for
- *    it is the instrumented build of whichever run published last. Its own dependencies are taken
- *    from the target project's `app.json` and walked like any other.
+ * 2. The DEPENDENCY FINGERPRINT: every dependency the test app runs against, transitive ones too,
+ *    by the SHA-256 of the package that RAN: read one at a time, hashed and dropped. The target app
+ *    itself is left out: verify requires its source unchanged (`assertSourceUnchanged`), and the
+ *    package the server holds for it is the instrumented build of whichever run published last.
+ *    Its own dependencies are taken from the target project's `app.json` and walked like any other.
+ *    R-385 (bcdev, `MicrosoftMode` `bytes`): Microsoft apps are hashed by bytes too, and each must
+ *    have exactly one INSTALLED row at the hashed version. Three roots: the test app's
+ *    dependencies; `System` always, plus `Application` (by its id) when any walked app declares
+ *    one; and the dependencies of the `LethAL Control` app the server runs (Test Runner, which runs
+ *    every test). al-runner keeps Microsoft apps by declared version (`declared`, tagged so it
+ *    never equals a bytes fingerprint; R435).
  *
  * A package that cannot be read throws `DependencyUnreadableError`: the run then records no
  * digests (`test-digests-unavailable`) and verify refuses, never a partial fingerprint.
+ *
+ * Stated limits (bytes mode). In each, verify reports the affected tests as OLD (not re-run, no
+ * cause) with no warning; only the docs say it can happen.
+ * - L0: an INSTALLED app outside the closure (any publisher) that changes a test, for example
+ *   through a global event subscriber, is not read; nor is a non-Microsoft dependency checked to be
+ *   the installed version (R434).
+ * - L1: a symbols-only package (no `.al` entries, only `SymbolReference.json`) keeps its bytes when
+ *   only procedure bodies change. Measured on Cronus28 and Cronus284: `Application` (0 `.al`; that
+ *   is expected, it is a wrapper app whose dependencies carry the source) and the `LethAL Control`
+ *   package (0 `.al`, 4 entries; its bytes are not hashed anyway, L3). Every other closure package
+ *   holds source.
+ * - L2: a server-only binary update (new service-tier DLLs, no new `System` package) changes how
+ *   tests run; whether `System`'s bytes move with it is unmeasured.
+ * - L3: the control app's own bytes are not hashed: that would make every recorded test new on
+ *   every control-app upgrade. Its version is checked against `MIN_CONTROL_VERSION`, and the live
+ *   gates measure its behaviour.
+ * Cost: about 4.3 s per run and per verify on Cronus284 (3.2 s to download 14 packages, 68.9 MB;
+ * 0.6 s of per-id installed checks; 0.4 s to read the running control version). No cache.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -458,7 +480,7 @@ export async function targetOf(
 /**
  * The bcdev step on its own (the build measures its live cost with it: see
  * scripts/r371-reach-measure/dep-download.ts). Reads the PUBLISHED test app for its dependency
- * list, then every non-Microsoft dependency's resident package.
+ * list, then every dependency's resident package (Microsoft ones as `microsoft` says).
  */
 export async function bcdevDependencyFingerprint(
   fetchPackage: (app: {
