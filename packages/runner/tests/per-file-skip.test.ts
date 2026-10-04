@@ -174,7 +174,7 @@ describe("R307: one refused row per shape, the rest of the run intact", () => {
   }
 
   test("an unforeseen plain Error from the trial propagates and makes no row", async () => {
-    const spy = spyOn(schemata, "instrumentOneFile").mockImplementation(() => {
+    const spy = spyOn(schemata, "planOneFile").mockImplementation(() => {
       throw new Error("an unforeseen instrumenter bug");
     });
     try {

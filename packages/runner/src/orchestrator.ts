@@ -39,9 +39,9 @@ import {
   identityEntriesOf,
   identityFieldsOf,
   identitySiteKey,
-  instrumentOneFile,
   isMutableSite,
   looseIdentityTupleOf,
+  planOneFile,
   reachLatchRefusedOwner,
   runIdentityOrdinals,
   varSectionUnparsed,
@@ -1041,7 +1041,8 @@ export async function generateMutationSet(
       skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
       continue;
     }
-    // R307: the writer's own per-file steps, run once here as a trial. A `FileRefusedError` refuses
+    // R307: the writer's own per-file PLAN (R-307 O6: `planOneFile`, every decision and every
+    // throw, and no instrumented text), run once here as a trial. A `FileRefusedError` refuses
     // THIS file whole; anything else is a LethAL bug and still aborts the run. Only a refused file
     // has its exact identity entries computed here, to reserve them: a header-rule refusal (no
     // object name) has none, and records loose tuples instead (fail closed, I3). The trial runs
@@ -1049,7 +1050,7 @@ export async function generateMutationSet(
     // has entries (R400: they are built at numbering time, not here).
     const deduped = dedupeSpecs(fileSpecs, tierOf);
     try {
-      instrumentOneFile(
+      planOneFile(
         { path: rel, source, root },
         deduped,
         assignMutantIds(new Map([[rel, deduped]])).get(rel) ?? [],

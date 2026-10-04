@@ -104,7 +104,8 @@ async function takeProject(
   for (const f of set.files) {
     const deduped = dedupeSpecs(f.specs, tierOf);
     const ided = assignMutantIds(new Map([[f.path, deduped]])).get(f.path) ?? [];
-    const { compiled, grainOf } = instrumentOneFile(f, deduped, ided);
+    const { compiled, mutants } = instrumentOneFile(f, deduped, ided);
+    const grainOf = new Map(mutants.map((m) => [m.mutantId, m.grain]));
     if (grainOf.size !== ided.length) {
       throw new Error(`${label}/${f.path}: ${grainOf.size} grains for ${ided.length} mutants`);
     }
@@ -190,7 +191,8 @@ function takeHand(grains: Record<string, string>): void {
     ];
     const path = `Hand${h.name}.Codeunit.al`;
     const ided = assignMutantIds(new Map([[path, specs]])).get(path) ?? [];
-    const { grainOf } = instrumentOneFile({ path, source: h.src, root }, specs, ided);
+    const { mutants } = instrumentOneFile({ path, source: h.src, root }, specs, ided);
+    const grainOf = new Map(mutants.map((m) => [m.mutantId, m.grain]));
     const ops = new Map(ided.map(({ mutantId, spec }) => [mutantId, spec.operatorName]));
     grainInputs.push({
       source: h.src,

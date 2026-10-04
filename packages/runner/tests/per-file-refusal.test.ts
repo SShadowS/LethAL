@@ -191,7 +191,7 @@ describe("R307: the per-file trial", () => {
     ));
 
   test("a non-FileRefusedError thrown inside the trial still aborts the run", async () => {
-    const spy = spyOn(schemata, "instrumentOneFile").mockImplementation(() => {
+    const spy = spyOn(schemata, "planOneFile").mockImplementation(() => {
       throw new Error("an unforeseen instrumenter bug");
     });
     try {
