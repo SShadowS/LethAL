@@ -281,7 +281,12 @@ interface ImportEdge {
   readonly typeOnly: boolean;
 }
 
-/** Every import and re-export of `file` that resolves inside the repo, one edge per name. */
+/**
+ * Every import and re-export of `file`, one edge per name. A package outside the scan (`node:fs`)
+ * gives an edge whose `origin` is `external:<specifier>` (R442), so the EMIT allow-list judges it
+ * like any other module. A dynamic `import(...)` whose target is not a string literal or a
+ * no-substitution template gives an edge with origin `unclassified-dynamic-import`.
+ */
 function importsOf(file: string): ImportEdge[] {
   const sf = parse(file);
   const edges: ImportEdge[] = [];
@@ -293,46 +298,44 @@ function importsOf(file: string): ImportEdge[] {
       n.moduleSpecifier !== undefined &&
       ts.isStringLiteral(n.moduleSpecifier)
     ) {
-      const direct = resolveSpecifier(file, n.moduleSpecifier.text);
-      if (direct !== undefined) {
-        const wholeType = ts.isImportDeclaration(n)
-          ? n.importClause?.isTypeOnly === true
-          : n.isTypeOnly;
-        const named = ts.isImportDeclaration(n) ? n.importClause?.namedBindings : n.exportClause;
-        const names: { name: string; typeOnly: boolean }[] = [];
-        let whole = false;
-        if (ts.isImportDeclaration(n)) {
-          if (n.importClause === undefined)
-            whole = true; // a side-effect import runs the module
-          else if (n.importClause.name !== undefined) whole = true; // a default import
-        }
-        if (named !== undefined && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
-          for (const el of named.elements)
-            names.push({
-              name: el.propertyName?.text ?? el.name.text,
-              typeOnly: wholeType || el.isTypeOnly,
-            });
-        } else if (named !== undefined || ts.isExportDeclaration(n)) {
-          whole = true; // `* as ns` or `export *`
-        }
-        if (whole) edges.push({ where: at(n), direct, origin: direct, typeOnly: wholeType });
-        for (const x of names)
-          edges.push({
-            where: at(n),
-            direct,
-            origin: originOf(direct, x.name),
-            typeOnly: x.typeOnly,
-          });
+      const spec = n.moduleSpecifier.text;
+      const resolved = resolveSpecifier(file, spec);
+      const direct = resolved ?? `external:${spec}`;
+      const wholeType = ts.isImportDeclaration(n)
+        ? n.importClause?.isTypeOnly === true
+        : n.isTypeOnly;
+      const named = ts.isImportDeclaration(n) ? n.importClause?.namedBindings : n.exportClause;
+      const names: { name: string; typeOnly: boolean }[] = [];
+      let whole = false;
+      if (ts.isImportDeclaration(n)) {
+        if (n.importClause === undefined)
+          whole = true; // a side-effect import runs the module
+        else if (n.importClause.name !== undefined) whole = true; // a default import
       }
-    } else if (
-      ts.isCallExpression(n) &&
-      n.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      n.arguments[0] !== undefined &&
-      ts.isStringLiteral(n.arguments[0])
-    ) {
-      const direct = resolveSpecifier(file, n.arguments[0].text);
-      if (direct !== undefined)
-        edges.push({ where: at(n), direct, origin: direct, typeOnly: false });
+      if (named !== undefined && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
+        for (const el of named.elements)
+          names.push({
+            name: el.propertyName?.text ?? el.name.text,
+            typeOnly: wholeType || el.isTypeOnly,
+          });
+      } else if (named !== undefined || ts.isExportDeclaration(n)) {
+        whole = true; // `* as ns` or `export *`
+      }
+      if (whole) edges.push({ where: at(n), direct, origin: direct, typeOnly: wholeType });
+      for (const x of names)
+        edges.push({
+          where: at(n),
+          direct,
+          origin: resolved === undefined ? direct : originOf(resolved, x.name),
+          typeOnly: x.typeOnly,
+        });
+    } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = n.arguments[0];
+      const direct =
+        arg !== undefined && ts.isStringLiteralLike(arg)
+          ? (resolveSpecifier(file, arg.text) ?? `external:${arg.text}`)
+          : "unclassified-dynamic-import";
+      edges.push({ where: at(n), direct, origin: direct, typeOnly: false });
     }
     ts.forEachChild(n, visit);
   };
