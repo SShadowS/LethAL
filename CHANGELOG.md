@@ -288,6 +288,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`reliability` is now `narrowed` when a file with sites was left out for an undecided `#if` or
+  because its object kind cannot carry the selector** (R399). R307 did this for refused files
+  only, so a run that left such a file out still said `full`. A zero-site undecided row, a
+  compiled-out row and a declarative row still do not narrow. `scoreDescribes` and the console
+  `SCOPE:` line now name the left-out files and sites, and the "nothing is left to measure" error
+  also names undecided files. The console text that said only a codeunit or a table can carry the
+  selector now lists the real carrier kinds. The explain document's `score.reliability` copies the
+  same value. Treated as a correction like R307's: no report or explain version change. Measured
+  at generation: the `fixtures/sandbox-data` run (its query object, 5 sites) and the r214
+  `p12-refused` unit fixture flip from `full` to `narrowed`; every other `fixtures/` and `examples/`
+  project under its gate symbol sets, the r214 and r364 unit fixtures, and the six CDO at 5f2a71d
+  projects (with and without `DOSMTP`) do not move. No live-gate assertion reads these values.
 - **A codeunit after an enum, interface or permission set in the same file got the wrong base line**
   (R383). The line map moved a file's base line only past objects with a coverage identity, so every
   covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture

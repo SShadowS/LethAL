@@ -1,6 +1,6 @@
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
-import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { type AlRunnerCanaryResult, alRunnerCanaryWarnings } from "./al-runner-canary";
 import {
@@ -128,8 +128,8 @@ export interface SessionOutcome {
 
 /**
  * A file `generateMutationSet` (orchestrator.ts) dropped because no object it declares can carry
- * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard — only a codeunit or
- * a table can (page/report/query/xmlport cannot). See `SessionReport.notInstrumented`.
+ * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard (`CARRIER_KINDS` in
+ * @lethal/schemata lists the kinds that can; query and xmlport cannot). See `SessionReport.notInstrumented`.
  */
 export interface NotInstrumentedFile {
   readonly file: string;
@@ -333,7 +333,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "uninstrumentable-files": {
     meaning:
       "Some files were never instrumented because no object they declare can carry the " +
-      "selector-var guard (R5). `mutationScore` is computed ONLY over instrumented sites.",
+      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query or xmlport " +
+      "cannot). `mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
+      "`narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "A project whose skipped files hold a large share of its code can otherwise read as a " +
       "confident, near-complete score while most of the project was never measured at all.",
@@ -527,7 +529,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "At least one file holds a preprocessor directive LethAL cannot evaluate exactly as alc " +
       "does, so NO mutant was generated anywhere in that file. It is still compiled and " +
       "published unchanged. `excludedSites.files` names each such file with the reason " +
-      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files.",
+      "`preproc-undecided` and a reason code; `mutationScore` is computed only over the other files, " +
+      "so `reliability` is `narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "Not a gap in the target's tests and not a failed run: the refused files were never " +
       "measured, in either direction. A refused file can have 0 sites, so count its rows, not " +
@@ -2516,6 +2519,14 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (f) => f.reason === "instrumentation-refused",
   );
   if (refusedRows.length > 0) caveats.push("files-refused");
+  // R399: undecided-#if and not-instrumentable rows that hold sites, which narrow `reliability`.
+  const undecidedRows = input.excludedSites.files.filter(
+    (f) => f.reason === "preproc-undecided" && f.sites > 0,
+  );
+  const notInstrumentableRows = input.excludedSites.files.filter(
+    (f) => f.reason === "not-instrumentable" && f.sites > 0,
+  );
+  const leftOutRows = [...undecidedRows, ...notInstrumentableRows];
   // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
@@ -2670,7 +2681,12 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.lines !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0) ||
     // R307: a refused file's sites were never mutated, so the score is not a whole-project score.
-    refusedRows.length > 0;
+    refusedRows.length > 0 ||
+    // R399: the same holds for a file left out because its `#if` is undecided (R214) or its
+    // object kind cannot carry the selector var. Only rows WITH sites: an undecided file can hold
+    // none, and then nothing is missing from the score. Compiled-out and declarative rows are not
+    // measurable sites, so they stay out of this.
+    leftOutRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
   const reliability =
@@ -2713,6 +2729,16 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     refusedRows.length > 0
       ? `; ${refusedRows.length} file(s) refused, ${refusedRows.reduce((n, f) => n + f.sites, 0)} site(s) not mutated`
       : "";
+  // R399: said the same way as the refused files, because they narrow the score the same way.
+  const sitesOf = (rows: readonly { readonly sites: number }[]) =>
+    rows.reduce((n, f) => n + f.sites, 0);
+  const leftOutText =
+    (undecidedRows.length > 0
+      ? `; ${undecidedRows.length} file(s) with undecided #if, ${sitesOf(undecidedRows)} site(s) not mutated`
+      : "") +
+    (notInstrumentableRows.length > 0
+      ? `; ${notInstrumentableRows.length} file(s) not instrumentable, ${sitesOf(notInstrumentableRows)} site(s) not mutated`
+      : "");
   const refusedText =
     testPageRefusedTests.length > 0
       ? ` and ${testPageRefusedTests.length} refused before sending (TestPage), not run`
@@ -2737,7 +2763,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     validity: {
       reliability,
       caveats,
-      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${refusedFilesText}${baselineText}`,
+      scoreDescribes: `${scored} scored mutant(s) in ${scopeText}${refusedFilesText}${leftOutText}${baselineText}`,
       baselineTests: { total: input.baselineTests.length, failing: input.unsupportedTests.length },
       scoredMutants: { scored, recorded: input.outcomes.length },
       executionContexts,
@@ -3005,7 +3031,7 @@ export function renderConsole(r: SessionReport): string {
         ? `${((r.notInstrumented.fileCount / r.notInstrumented.totalFiles) * 100).toFixed(1)}%`
         : "?";
     lines.push(
-      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only a codeunit or a table can carry the injected selector var; page/report/query/xmlport objects are published unchanged.`,
+      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, xmlport) are published unchanged.`,
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);
