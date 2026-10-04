@@ -2736,7 +2736,7 @@ codeunit 79312 "Mixed Code"
     // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
     const set = await generateMutationSet(dirs.projectDir);
     expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
-      [join("a", "Dup.Codeunit.al"), "object-mix"],
+      ["a/Dup.Codeunit.al", "object-mix"],
     ]);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     const store = new ResultsStore(":memory:");

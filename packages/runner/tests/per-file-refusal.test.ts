@@ -99,10 +99,11 @@ async function withProject(
   }
 }
 
-const GOOD = join("src", "Good.Codeunit.al");
-const MIXED = join("src", "Mixed.al");
-const NO_HEADER = join("src", "Odd.al");
-const XMLPORT = join("src", "Only.XmlPort.al");
+// Report paths are always "/"-separated (targetAlFiles normalises them), so never `join` these (R448).
+const GOOD = "src/Good.Codeunit.al";
+const MIXED = "src/Mixed.al";
+const NO_HEADER = "src/Odd.al";
+const XMLPORT = "src/Only.XmlPort.al";
 
 beforeAll(async () => {
   await initParser();
