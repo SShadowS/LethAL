@@ -1,7 +1,6 @@
 # R389 probe: can another app run a test-app codeunit it receives in a Variant?
 
-Status: **phase 1 done (design, offline compile, pre-commitment). Not yet run live.** The results
-section is filled in after phase 2.
+Status: **phase 2 done on Cronus284 (2026-10-04). See Results at the end.**
 
 - Question, routes, compile results and expected outcomes: `PRECOMMITMENT.md` (written before
   any live run; do not edit it after the run, add results here instead).
@@ -57,5 +56,50 @@ user name or password on a command line.
 
 ## Results
 
-(Filled in after phase 2: container, BC build, date, one row per test with its verbatim failure
-text, and the decision.)
+Run 2026-10-04 on **Cronus284** (NOT Cronus28; the phase-2 steps above name Cronus28 but the
+lease was on Cronus284). Server reports `runtimeVersion 17.0` (BC 28.x; the repo's notes give
+Cronus284 application 28.4.53241.53758, not re-read this run). Both apps published with `altool
+publishapp` (external first, then tests), exit 0 each, no version refusal. Tests ran with
+`bcdev_test_run` (codeunit 91532, coverage none): 21 tests, 21 failed as designed, plus one
+synthetic result with an empty method name that repeats S1's text (platform artefact of the hub
+run; ignore). Raw output was kept outside the repo.
+
+Controls: C0 MARK, R3 MARK, so the run is **valid**. `is` controls (Integer, NonImplementer) both
+say `false`, so `is` is a real type test.
+
+| Test | Observed | Predicted | Match |
+|---|---|---|---|
+| C0_IfaceDirect | MARK (Ping via C0) | MARK | yes |
+| R1c_As_FromIface | MARK (Ping via R1c) | MARK | yes |
+| R1c_As_FromCodeunit | MARK (Ping via R1c) | MARK (less sure) | yes |
+| R1d_IsThenAs_FromIface | MARK (via R1d) | MARK | yes |
+| R1d_IsThenAs_FromCodeunit | MARK (via R1d) | MARK | yes |
+| R1d_Control_Integer | MEASURED `V is ...` = false | MEASURED false | yes |
+| R1d_Control_NonImplementer | MEASURED `V is ...` = false | MEASURED false | yes |
+| R2a_RunVariantAsId | `Unable to convert from ...Codeunit91530 to System.Int32.` | conversion error, no MARK | yes |
+| R2b_..._FromCodeunit | same Int32 conversion error | IsCodeunit true, then R2a error | yes |
+| R2b_..._FromIface | same Int32 conversion error (so IsCodeunit was true) | unknown | recorded |
+| R2c_RunVariantTry | same Int32 conversion error, uncaught | uncaught error | yes |
+| R2d_RunWithVariantAsRecord | `Unable to convert from ...Codeunit91530 to ...INavRecordHandle.` | platform record error | yes |
+| R3_HandBackByEvent | MARK (test-app subscriber) | MARK | yes |
+| R4a_UnrelatedCodeunitVar | `The requested operation is not supported.` | type-mismatch error, no MARK | yes (refused) |
+| R4b_UnrelatedCodeunitVarRun | `The requested operation is not supported.` | refused, no MARK | yes (refused) |
+| R4c_Format_FromCodeunit | MEASURED `Format(V) = [91530]` | some text | yes, but the text is the id |
+| R4c_Format_FromIface | MEASURED `Format(V) = [91530]` | some text | yes, but the text is the id |
+| **R4d_FormatEvaluateRun** | **MARK (ran the mock's OnRun)** | `MEASURED ... does not evaluate to an Integer` | **NO** |
+| R4e_RecordRefGetTable | `Unable to convert ...Codeunit91530 to ...INavRecordHandle.` | platform error | yes |
+| R4f_VariantChainToIface | MARK (via R1c) | same as R1c_As_FromCodeunit | yes |
+| S1_RunById | MARK (mock OnRun) | MARK | yes |
+
+**S1:** `Codeunit.Run(<integer id>)` from the external app ran the test-app mock's `OnRun`.
+
+**Surprise:** `Format(V)` on a Variant holding a codeunit returns its object ID (`91530`), not a
+name. So external code can turn a Variant into an id with no test-app name (R4d), then
+`Codeunit.Run(id)` runs the mock. The pre-commitment missed this.
+
+**Verdict per the decision rule: SEND THE PLAN TO REVIEW (build the safe version). R389 does
+NOT close as a ruling.** Routes that let external code run a Variant-held test-app codeunit
+without test-app code: R1c, R1d (cast or `is`+cast to the shared interface, either way the
+Variant was built), and R4d (`Format` then `Evaluate` then `Codeunit.Run`). R2*, R4a, R4b, R4e
+are refused at run time. S1 shows an integer id handed out is equally enough. The pre-committed
+expectation (R1c and R1d MARK) held; R4d is an additional route found.
