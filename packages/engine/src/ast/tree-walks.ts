@@ -363,6 +363,56 @@ export function declarationMembers(objectNode: ALSyntaxNode): readonly ALSyntaxN
   return inner === undefined ? objectNode.namedChildren : inner.namedChildren;
 }
 
+/** R405 (a): where a member sits: a direct member of the object, or inside a member-level `#if`. */
+export type MemberPlace = "direct" | "inside-if";
+
+/** R405 (a): one member `liveMembers` yields, with its place. */
+export interface PlacedMember {
+  readonly node: ALSyntaxNode;
+  readonly place: MemberPlace;
+}
+
+/**
+ * R405 (a): the members of an object the BUILD has, for the readers that index or look up members
+ * (the symbol table, `findTableTrigger`, `onInsertTrigger`). Not for "does the object declare this
+ * name" questions: those must also count what the grammar put elsewhere (`allProcedureLikes`).
+ *
+ * - The direct members (`declarationMembers`), each `direct`, minus one the build compiles out.
+ * - When `armOf` is given, also the members inside each member-level `#if` (a `preproc_conditional`
+ *   in the object body), recursively for a nested one, each `inside-if`, but ONLY when its arm is
+ *   `active`. An undecided arm is dropped there: "undecided" is per FILE, so every arm of every
+ *   `#if` in the file is undecided, and keeping them would let the first arm in the text win.
+ *   An undecided DIRECT member stays, as before.
+ * - A member-level `#if` itself is never yielded (no reader selects its kind).
+ * - When `armOf` is ABSENT (no arm map), the direct members only, exactly as before. Callers pass
+ *   the raw optional `SemanticContext.armOf`, never a closure that answers "active" without a map:
+ *   that would yield BOTH arms.
+ */
+export function liveMembers(
+  objectNode: ALSyntaxNode,
+  armOf?: (node: ALSyntaxNode) => "active" | "inactive" | "undecided",
+): PlacedMember[] {
+  const out: PlacedMember[] = [];
+  const inside = (cond: ALSyntaxNode): void => {
+    if (armOf === undefined) return;
+    for (const c of cond.namedChildren) {
+      if (c.rawKind === "preproc_conditional") inside(c);
+      // The `#if`/`#elif`/`#else`/`#endif` markers; a split member is `preproc_*` but a member.
+      else if (c.rawKind.startsWith("preproc_") && !isProcedureLike(c)) continue;
+      else if (armOf(c) === "active") out.push({ node: c, place: "inside-if" });
+    }
+  };
+  for (const member of declarationMembers(objectNode)) {
+    if (member.rawKind === "preproc_conditional") {
+      inside(member);
+      continue;
+    }
+    if (armOf !== undefined && armOf(member) === "inactive") continue;
+    out.push({ node: member, place: "direct" });
+  }
+  return out;
+}
+
 /**
  * R327: split members the grammar placed INSIDE an object-level `var` section. A split member that
  * follows the object's global `var` section parses as a child of that section's `var_body`, where
