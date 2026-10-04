@@ -445,12 +445,12 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 5`. Schema: [../schemas/verify-v5.schema.json](../schemas/verify-v5.schema.json).
+`verifySchemaVersion: 6`. Schema: [../schemas/verify-v6.schema.json](../schemas/verify-v6.schema.json).
 
 | field | values |
 |---|---|
 | `results[].verdict` | `killed`, `survived`, `error`, `skipped` |
-| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error` |
+| `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error`, `not-rerun` |
 | `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
 | `reachFilter.state` | `on`, `off` |
@@ -473,17 +473,24 @@ run verify again. If the test's state is `infra-error`, read both runs before ed
 reasons (its `runs[].outcome` is `error` or `deadline-exceeded`: the call failed, not the test).
 Read both runs' `outcome` and `fresh` before concluding anything about the test: the other run may
 still be evidence, for example a fresh `fail`. Then run verify again, and run `lethal doctor` if it
-repeats. It blocks exit `0` like every state other than `stable`.
+repeats. It blocks exit `0` like every state other than `stable` and `not-rerun`.
+
+`not-rerun` (schema v6, R-427) means the reach filter sent the new test to no survivor, so verify
+ran it once, unmutated, and did not rerun it. That one run passed in a fresh session; `runs` holds
+just it. Its stability is unknown: it is never `stable`, and a test that is flaky but reaches no
+survivor is not caught in this verify. It is caught when a later verify sends it to a survivor,
+because then it is rerun. It does not block exit `0`, because it gated no verdict: it is in no
+row's `testsRun` and killed nothing.
 
 ### Verify exit codes (checked)
 
 | code | meaning |
 |---|---|
-| `0` | Every named survivor was killed and every new test is `stable`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
+| `0` | Every named survivor was killed and every new test is `stable` or `not-rerun`. Also returned when every survivor skipped, which measured nothing. Skipped rows are left out: some killed and the rest skipped is `0`. |
 | `1` | An error, including an argv verify refuses (a missing flag, the `--out` trap). The message is on stderr and there is no JSON. |
 | `3` | **Quarantined**, including the test-app outcomes `publish-indeterminate` and `publish-anomalous`. |
 | `4` | Every non-skipped survivor is `error`: verify measured nothing. |
-| `5` | Not every named survivor was killed, or a new test is not `stable`. |
+| `5` | Not every named survivor was killed, or a new test is neither `stable` nor `not-rerun`. |
 | `6` | Refused before measuring; `refused.reason` says why. |
 
 When several apply, the first in this order wins. Precedence: `3`, `6`, `4`, `5`, `0`.
@@ -524,7 +531,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-publish-failed` | Read the detail. |
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
-| `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the two unmutated runs per new test alone exceed the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do; the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
+| `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the one unmutated run per new test alone exceeds the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do (a second unmutated run per new test sent to a survivor, plus one run per survivor a new test joins); the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
 | `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
@@ -597,7 +604,9 @@ not pass in a fresh session, or reported no coverage) runs against every survivo
 survivor coverage cannot place (an object inside `#if`, an unplaceable line, no member name). A
 survivor's own covering tests are never dropped. A survivor that no new test reaches and that has
 no covering test is sent nothing and stays `survived`, with `testsRun: []` and a `failureNote`
-that says so; it still counts toward exit `5`. Every new test still runs twice unmutated. The
+that says so; it still counts toward exit `5`. Every new test still runs once unmutated, and
+again after the mutants when it was sent to at least one survivor; one sent to none is not rerun
+and reads `not-rerun` (R-427). The
 filter is off under the hub modes (`procedure`, `line`), whose coverage comes from another
 session, and under `none`. One stderr line says which:
 `[lethal] verify: reach filter on (fenced coverage): ...` with the runs it saved, or
@@ -619,10 +628,12 @@ is not sent to that survivor. A fresh `lethal run` has the same blind spot. Pass
 `--no-reach-filter` to send every new test to every survivor, as before R-384.
 
 The cap counts extra test runs: two unmutated runs per new test, plus one per survivor a new test
-joins, against `--max-new-tests` (default 50) x (survivors + 2). Above it verify refuses
+joins, against `--max-new-tests` (default 50) x (survivors + 2). With the reach filter on, a new
+test sent to no survivor is not rerun, so it counts one unmutated run, not two (R-427); before the
+lease only the one run per new test is checked. Above it verify refuses
 `too-many-new-tests` and names the value that would run them. A run recorded before R371 is
 refused once as `source-predates-verify`. An edited test
-gets the same two unmutated runs as an added one. On bcdev the run records each test's source from the
+gets the same unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
 that publishes its own test apps, a package without source) it records none and warns

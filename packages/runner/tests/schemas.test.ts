@@ -677,6 +677,21 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(conformsTo(v4, real)).toEqual([]);
   });
 
+  // R-427: v6 added the newTests[].state value `not-rerun`. v5 stays as it was published, so a v5
+  // reader never sees `not-rerun`.
+  test("verify-v5.schema.json is kept as published", () => {
+    const v5 = loadSchema("verify-v5.schema.json");
+    expect((v5.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(5);
+    expect([...schemaLeafPaths(v5)]).toContain("$.reachFilter.state");
+    expect(enumAt(v5, "$.newTests[].state")).toEqual([
+      "stable",
+      "flaky",
+      "red",
+      "flaky-unknown",
+      "infra-error",
+    ]);
+  });
+
   test("results[].gapId is a declared leaf of the current verify schema", () => {
     expect([...schemaLeafPaths(verifySchema)]).toContain("$.results[].gapId");
   });
@@ -726,12 +741,14 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
       "error",
       "not-run",
     ]);
+    // R-427: `not-rerun` (v6).
     expect([...NEW_TEST_STATES]).toEqual([
       "stable",
       "flaky",
       "red",
       "flaky-unknown",
       "infra-error",
+      "not-rerun",
     ]);
   });
 
@@ -789,6 +806,13 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
             { outcome: "pass", fresh: true, sessionId: 11, testRunsBefore: 0 },
             { outcome: "pass", fresh: true, sessionId: 12, testRunsBefore: 0 },
           ],
+        },
+        // R-427: a test sent to no survivor, with its one baseline run.
+        {
+          test: "New Tests.ReachesNothing",
+          codeunitId: 79102,
+          state: "not-rerun",
+          runs: [{ outcome: "pass", fresh: true, sessionId: 13, testRunsBefore: 0 }],
         },
       ],
       results: [
@@ -1183,6 +1207,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R-425: the same seven; `reachFilter` is optional (absent = not decided).
       "verify-v5.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R-427: the same seven; v6 only grew newTests[].state.
+      "verify-v6.schema.json": [
         "counts",
         "exitCode",
         "newTests",

@@ -1108,8 +1108,9 @@ export async function verifyDependencyFingerprint(
  *  frozen. 5 since R-425 added `reachFilter` and `results[].reachNarrowed`. Adding a field does
  *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
  *  report it means the report predates the record; the version is the one thing that tells the
- *  two apart, so it bumps. v4 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 5;
+ *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
+ *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 6;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = [
