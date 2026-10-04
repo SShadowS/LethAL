@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**103 of 447 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**102 of 447 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -306,7 +306,7 @@ that ordering is the priority.
 - **R430** · a test that hands a test-app mock codeunit to another app sits on verify's whole-source fallback · [R430.md](docs/roadmap/R430.md) · open, filed 2026-10-04
 - **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · closed 2026-10-04 — stated limit: never-typed #if positions lose 1 of 55 typed mutants on fixtures and 0 of…
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
-- **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · open
+- **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
 
 ## Backends and tooling
 
