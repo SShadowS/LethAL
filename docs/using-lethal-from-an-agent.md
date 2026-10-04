@@ -238,7 +238,8 @@ mutant(s)". Its key is still recorded, so the next run without the refusal carri
 
 Every such refusal is decided in PLAN, the first of the two steps LethAL uses to instrument a file
 (PLAN decides what to change; EMIT writes the new text). So a `--dry-run` sees every refusal a real
-run would. EMIT can fail in one named way only: a RangeError "Invalid string length", when a file's
+run would, with one exception: the latch-owner and no-anchor refusals can first fire when the
+writer re-instruments a smaller batch of a file's mutants (see R419). EMIT can fail in one named way only: a RangeError "Invalid string length", when a file's
 instrumented text is too large for one string. That is a real-run crash a dry run does not see (it
 is the one entry in `EMIT_CRASHES`).
 
