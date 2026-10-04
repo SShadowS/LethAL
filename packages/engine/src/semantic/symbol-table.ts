@@ -667,8 +667,7 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
       if (c.kind === ALNodeKind.block) continue;
       // R330 (run 003 fix round): a trigger's PARAMETERS are its header's names too.
       if (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter) {
-        const name = c.childForFieldName("name")?.text ?? "";
-        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+        for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
       // R323: a trigger's named return value is a header name too.
       if (c.fieldName === "return_value") out.add(stripQuotes(c.text).toLowerCase());
@@ -696,8 +695,7 @@ function conditionallyDeclared(member: ALSyntaxNode): string[] {
         under &&
         (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter)
       ) {
-        const name = c.childForFieldName("name")?.text ?? "";
-        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+        for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
       walk(c, under);
     }
@@ -738,18 +736,8 @@ function parseSplitProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol
         c.kind === ALNodeKind.var_section ||
         c.rawKind === "preproc_conditional_var_block"
       ) {
-        for (const d of findAll(c, ALNodeKind.variable_declaration)) {
-          const name = d.childForFieldName("name")?.text ?? "";
-          if (name !== "")
-            add(
-              {
-                name: stripQuotes(name),
-                typeText: d.childForFieldName("type")?.text ?? "",
-                node: d,
-              },
-              false,
-            );
-        }
+        for (const d of findAll(c, ALNodeKind.variable_declaration))
+          for (const sym of declarationSymbols(d)) add(sym, false);
       }
     }
     return { m, bad };
@@ -810,13 +798,31 @@ export function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
   const out: VarSymbol[] = [];
   for (const decl of varDeclarations(varSection)) {
     if (decl.kind !== ALNodeKind.variable_declaration) continue;
-    const name = decl.childForFieldName("name")?.text ?? "";
-    const type = decl.childForFieldName("type")?.text ?? "";
-    if (name !== "") {
-      out.push({ name: stripQuotes(name), typeText: type, node: decl });
-    }
+    out.push(...declarationSymbols(decl));
   }
   return out;
+}
+
+/**
+ * R295: every name a declaration declares. `A, B: T` repeats the grammar's `name` field, and
+ * `childForFieldName("name")` returns only the first, so B was invisible and a use of it resolved
+ * to a same-named global of another type. DIRECT children only: a Label's attributes
+ * (`Comment = '...'`) carry `name` fields of their own one level down. The four readers of a
+ * declaration (`collectVarDeclarations`, `triggerLocalNames`, `conditionallyDeclared`,
+ * `parseSplitProcedure`) all go through this, so they cannot drift apart.
+ */
+function declaredNames(decl: ALSyntaxNode): string[] {
+  return decl.children
+    .filter((c) => c.fieldName === "name" && c.text !== "")
+    .map((c) => stripQuotes(c.text));
+}
+
+/** One symbol per name, each with the declaration's full type text and the SHARED declaration
+ *  node (`receiver.ts` reads that node's `type` field; `loop-hazard.ts` keys by its position AND
+ *  the name, since all names of one declaration share it). */
+function declarationSymbols(decl: ALSyntaxNode): VarSymbol[] {
+  const typeText = decl.childForFieldName("type")?.text ?? "";
+  return declaredNames(decl).map((name) => ({ name, typeText, node: decl }));
 }
 
 function stripQuotes(s: string): string {

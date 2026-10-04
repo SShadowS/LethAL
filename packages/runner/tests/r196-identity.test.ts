@@ -68,8 +68,8 @@ beforeAll(async () => {
 });
 
 describe("R196: refusing an earlier identity twin moves a later twin's key", () => {
-  test("the identity scheme is 10", () => {
-    expect(IDENTITY_SCHEME).toBe(10);
+  test("the identity scheme is 11 (10 for this key move, 11 for R295/R294)", () => {
+    expect(IDENTITY_SCHEME).toBe(11);
   });
 
   test("the in-loop flip is refused and the last flip takes ordinal 1, the refused one's old key", () => {

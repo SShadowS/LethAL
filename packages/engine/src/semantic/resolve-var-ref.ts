@@ -45,17 +45,24 @@ export function normalizeAlName(raw: string): string {
 
 /**
  * Is this identifier a MEMBER name rather than a variable read? `Rec.Name` parses as a
- * `member_expression` (`ALNodeKind.field_access`) whose first named child is the receiver; every
- * later child is a member name and refers to no declaration `lookupVar` can see.
+ * `member_expression` (`ALNodeKind.field_access`) whose `object` field is the receiver; anything
+ * else under it is a member name and refers to no declaration `lookupVar` can see.
  *
  * Without this guard, a member name that happens to collide with a declared variable of the same
  * name resolves to that UNRELATED declaration instead of refusing: silently wrong, not merely
  * incomplete, so this is checked before anything else.
+ *
+ * Compared by SPAN, never by reference (R294): `ALSyntaxNode` builds a fresh wrapper on every
+ * access, so the old `parent.namedChildren[0] !== node` was always true and every receiver was
+ * refused as a member name. In `A.B.C` only `A` is an `object`; `B` and `C` are members.
  */
 function isMemberName(node: ALSyntaxNode): boolean {
   const parent = node.parent;
   if (parent === null || parent.kind !== ALNodeKind.field_access) return false;
-  return parent.namedChildren[0] !== node;
+  const object = parent.childForFieldName("object");
+  return (
+    object === null || object.startIndex !== node.startIndex || object.endIndex !== node.endIndex
+  );
 }
 
 /**
