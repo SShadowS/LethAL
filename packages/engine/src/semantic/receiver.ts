@@ -47,7 +47,10 @@ import {
   findEnclosingProcedure,
   isProcedureLike,
 } from "../ast/tree-walks";
-import type { SemanticContext } from "./context";
+import { type NodeArm, type SemanticContext, rawArmOf } from "./context";
+
+/** R405 (a): the context's raw arm reader (`rawArmOf`); `undefined` without an arm map. */
+type ArmReader = ((node: ALSyntaxNode) => NodeArm) | undefined;
 import {
   type ObjectSymbol,
   type ProcedureSymbol,
@@ -150,6 +153,8 @@ export function claimsRecordMethod(
   }
 
   if (callKind !== ALNodeKind.procedure_call) return false;
+  // R405 (a): rule 3 ignores a namesake declared only in an arm the build compiles out.
+  const armOf = rawArmOf(ctx);
 
   const callee = node.childForFieldName("function");
   if (callee === null) return false;
@@ -193,8 +198,8 @@ export function claimsRecordMethod(
     // it — an extension's procedure is callable on the implicit `Rec` here exactly as the table's
     // own is. Keyed on the EXTENDED table, so a site inside one extension is still guarded by a
     // procedure another extension declares on the same table.
-    if (declaresProcedure(objectNode, target.name)) return false;
-    if (projectDeclaresProcedureOnTable(symbols, implicitTable, target.name)) return false;
+    if (declaresProcedure(objectNode, target.name, armOf)) return false;
+    if (projectDeclaresProcedureOnTable(symbols, implicitTable, target.name, armOf)) return false;
     return true;
   }
 
@@ -210,7 +215,7 @@ export function claimsRecordMethod(
   // so the call is that procedure and not the builtin.
   if (
     receiver.tableRef !== null &&
-    projectDeclaresProcedureOnTable(symbols, receiver.tableRef, target.name)
+    projectDeclaresProcedureOnTable(symbols, receiver.tableRef, target.name, armOf)
   ) {
     return false;
   }
@@ -314,6 +319,8 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
   }
 
   if (callKind !== ALNodeKind.procedure_call) return false;
+  // R405 (a): guard 2 ignores a namesake declared only in an arm the build compiles out.
+  const armOf = rawArmOf(ctx);
   const callee = node.childForFieldName("function");
   if (callee === null) return false;
   const target = describeCallee(callee);
@@ -328,7 +335,7 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
   if (objectName === null) return false;
 
   // GUARD 2: the enclosing object's own declaration wins over the system function.
-  if (declaresProcedure(objectNode, target.name)) return false;
+  if (declaresProcedure(objectNode, target.name, armOf)) return false;
   // …and so does one added to the enclosing TABLE by an extension, which is callable on the
   // implicit `Rec` here exactly as the table's own is.
   const enclosingTable =
@@ -344,7 +351,7 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
           : null;
   if (
     enclosingTable !== null &&
-    projectDeclaresProcedureOnTable(symbols, enclosingTable, target.name)
+    projectDeclaresProcedureOnTable(symbols, enclosingTable, target.name, armOf)
   ) {
     return false;
   }
@@ -594,12 +601,16 @@ function classifyDeclaredType(declaration: VarSymbol): ResolvedReceiver {
  * through `declarationMembers` so v3's `declaration_body` container is skipped
  * — a hand-rolled `namedChildren` walk silently matches nothing here.
  */
-function declaresProcedure(objectNode: ALSyntaxNode, name: string): boolean {
+function declaresProcedure(objectNode: ALSyntaxNode, name: string, armOf: ArmReader): boolean {
   // R327: a split member swallowed into the global var section is still a member of the object.
   // R327, R331: every procedure-like declaration counts, wherever the grammar put it: a direct
   // member, one swallowed by the global var section, or one wrapped whole in `#if`.
+  // R405 (a): except one the build compiles out (`inactive`). Deliberately NOT `liveMembers`, which
+  // would drop the swallowed and `#if`-object ones, and an undecided one still counts: over-refusal
+  // costs one site, a wrong claim costs a mislabelled mutant or the build.
   for (const member of allProcedureLikes(objectNode)) {
     if (!isProcedureLike(member)) continue;
+    if (armOf !== undefined && armOf(member) === "inactive") continue;
     for (const nameNode of member.children.filter((c) => c.fieldName === "name"))
       if (equalsIgnoreCase(stripQuotes(nameNode.text), name)) return true;
   }
@@ -639,6 +650,7 @@ function projectDeclaresProcedureOnTable(
   symbols: SymbolTable,
   tableRef: string,
   procName: string,
+  armOf: ArmReader,
 ): boolean {
   // R331 (run 004): every spelling of the table, gathered BEFORE any extension is compared. A
   // receiver may name the table by id (`Record 50101`) and an extension may extend it by name, or
@@ -661,13 +673,18 @@ function projectDeclaresProcedureOnTable(
     aliases.add(nameOf(t).toLowerCase());
     if (idOf(t) !== "") aliases.add(idOf(t));
   }
-  if (tables.some((t) => declaresProcedure(t, procName))) return true;
+  if (tables.some((t) => declaresProcedure(t, procName, armOf))) return true;
   for (const o of symbols.unindexedObjects) {
     const base = stripQuotes(o.childForFieldName("base_object")?.text ?? "").toLowerCase();
-    if (o.kind === ALNodeKind.tableextension && aliases.has(base) && declaresProcedure(o, procName))
+    if (
+      o.kind === ALNodeKind.tableextension &&
+      aliases.has(base) &&
+      declaresProcedure(o, procName, armOf)
+    )
       return true;
   }
-  if ([...aliases].some((a) => extensionDeclaresProcedure(symbols, a, procName))) return true;
+  if ([...aliases].some((a) => extensionDeclaresProcedure(symbols, a, procName, armOf)))
+    return true;
   // R331 (run 005): a CONSERVATIVE fallback for source the grammar could not parse, not a parser.
   // Any ERROR node, at any depth (under a `#if` wrapper too), that could be a table or
   // `tableextension` and that holds the called name as an identifier token once comments are
@@ -720,10 +737,11 @@ function extensionDeclaresProcedure(
   symbols: SymbolTable,
   tableName: string,
   procName: string,
+  armOf: ArmReader,
 ): boolean {
   for (const ext of symbols.tableExtensions) {
     if (!equalsIgnoreCase(ext.baseObject, tableName)) continue;
-    if (declaresProcedure(ext.node, procName)) return true;
+    if (declaresProcedure(ext.node, procName, armOf)) return true;
   }
   return false;
 }

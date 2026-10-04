@@ -457,8 +457,7 @@ describe("sessionFingerprint (R47)", () => {
   // it was 4a8c47ac...288a under scheme 3. It moved again for R214 (the next scheme after R318's);
   // it was 25fdc64a...3be4f under scheme 4. It moved again for R418 (scheme 6); it was
   // ef3bb9d1...daf5 under scheme 5. It moved again for R421 (scheme 7); it was b3f6072b...0c0e
-  // under scheme 6. It moved again for R307 (scheme 8, R374's run-wide ordinals); it was
-  // 5c8357ec...0c4b under scheme 7.
+  // under scheme 6. It moved again for R405 (scheme 8); it was 5c8357ec...0c4b under scheme 7.
   const PINNED = "cf9df227106f6e473fbd6dd68acd370e5df846497434036fd0232459bff428d7";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);

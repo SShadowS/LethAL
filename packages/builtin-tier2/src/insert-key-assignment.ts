@@ -56,11 +56,13 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type NodeArm,
   type SemanticContext,
   type SymbolTable,
   armOfNode,
-  declarationMembers,
   findAll,
+  liveMembers,
+  rawArmOf,
   resolveReceiverTable,
   visit,
 } from "@lethal/engine";
@@ -129,16 +131,23 @@ export function primaryKeyFields(
   return [];
 }
 
-/** The table's own `OnInsert` trigger, or `null`. Name-matched, case-insensitively. */
+/**
+ * The table's own `OnInsert` trigger, or `null`. Name-matched, case-insensitively.
+ *
+ * R405 (a): `armOf` is the context's RAW arm reader (`rawArmOf`). With it, a trigger inside a
+ * member-level `#if` is found when its arm is active (`liveMembers`); without it, direct members
+ * only, as before.
+ */
 export function onInsertTrigger(
   tableNode: ALSyntaxNode,
   isLive: (node: ALSyntaxNode) => boolean = () => true,
+  armOf?: (node: ALSyntaxNode) => NodeArm,
 ): ALSyntaxNode | null {
   const named = (n: ALSyntaxNode): string | null => {
     const id = n.namedChildren.find((c) => c.rawKind === "identifier");
     return id === null || id === undefined ? null : id.text;
   };
-  for (const member of declarationMembers(tableNode)) {
+  for (const { node: member } of liveMembers(tableNode, armOf)) {
     if (member.kind !== ALNodeKind.trigger) continue;
     if (!isLive(member)) continue;
     const name = named(member);
@@ -178,8 +187,9 @@ function referencesOwnField(node: ALSyntaxNode, field: string): boolean {
 export function onInsertAssignsPrimaryKey(
   tableNode: ALSyntaxNode,
   isLive: (node: ALSyntaxNode) => boolean = () => true,
+  armOf?: (node: ALSyntaxNode) => NodeArm,
 ): boolean {
-  const trigger = onInsertTrigger(tableNode, isLive);
+  const trigger = onInsertTrigger(tableNode, isLive, armOf);
   if (trigger === null) return false;
   const key = primaryKeyFields(tableNode, isLive);
   if (key.length === 0) return false;
@@ -229,10 +239,12 @@ export function insertSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   // the unsafe direction is under-tagging, and an undecided arm could hold the key assignment.
   if (armOfNode(ctx, table.node) === "undecided") return true;
   const isLive = (n: ALSyntaxNode): boolean => armOfNode(ctx, n) === "active";
+  // R405 (a): the raw arm reader, so an `OnInsert` inside an active member-level `#if` is found.
+  const armOf = rawArmOf(ctx);
   // No compiled `OnInsert`: `Insert(false)` skips nothing, so there is no mechanism to tag.
-  if (onInsertTrigger(table.node, isLive) === null) return false;
+  if (onInsertTrigger(table.node, isLive, armOf) === null) return false;
   // R378: "not assigned" is proven only against a readable, non-empty primary key. No compiled key,
   // or one whose field list this parser cannot read, proves nothing, so the tag stays.
   if (primaryKeyFields(table.node, isLive).length === 0) return true;
-  return onInsertAssignsPrimaryKey(table.node, isLive);
+  return onInsertAssignsPrimaryKey(table.node, isLive, armOf);
 }

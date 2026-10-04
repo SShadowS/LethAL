@@ -137,9 +137,10 @@ export function looseIdentityTupleOf(
  * found, a phantom commented-out header is gone, and a header's offset matches the source. 7:
  * R421, discovered paths are normalised to `/`, so on Windows a project with subfolders gets the
  * file order, mutant ids and batches Linux gets, and with per-batch ordinals an identity twin in
- * another file can change ordinal. 8: R307 (R374), identity ordinals are numbered once over the
- * whole run instead of per batch, so keys move only where batching split twins (two twins in two
- * batches both held ordinal 0 before).
+ * another file can change ordinal. 8: R405, a member-level #if now hides a procedure or trigger
+ * by arm for the symbol table, the table-trigger readers and the receiver filter, so a call that
+ * was refused (or read against an inactive arm) is admitted, and a newly admitted mutant with the
+ * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key.
  */
 export const IDENTITY_SCHEME = 8;
 
