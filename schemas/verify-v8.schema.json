@@ -207,7 +207,7 @@
           },
           "sameProcedure": {
             "type": "object",
-            "description": "R259: present exactly when killedByNewTest is true, empty lists included; absent on every other row (not applicable). For each other survived or no-coverage mutant of the source run's installed batch in the same declaration (the line span of the enclosing procedure or trigger, from the manifest), what `test` ALONE does to it. Reported, never gating: it is not in counts and does not move the exit code.",
+            "description": "R259: present exactly when killedByNewTest is true, empty lists included; absent on every other row (not applicable). For each other survived or no-coverage mutant of the source run's installed batch in the same declaration (the line span of the enclosing procedure or trigger, from the manifest), what is known about `test` against it. Only alsoKills is a claim about `test` alone. Reported, never gating: it is not in counts and does not move the exit code.",
             "additionalProperties": false,
             "required": ["test", "alsoKills", "notKilled", "unknown", "overCap"],
             "properties": {
@@ -229,7 +229,7 @@
               },
               "notKilled": {
                 "type": "array",
-                "description": "Ids test was sent to and that survived. Says it did not kill on this run, not that it reached the mutated code.",
+                "description": "Ids that survived a run that included test (a named survivor's own run with its other tests, or a run of test alone). Says test did not kill it on that run, not that test ran alone or reached the mutated code.",
                 "items": { "type": "string" }
               },
               "unknown": {

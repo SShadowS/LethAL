@@ -1295,15 +1295,16 @@ export interface VerifyResult {
    *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
    *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
   readonly reachNarrowed?: boolean;
-  /** R259: on every row killed by a new test, what that test ALONE does to each other source
-   *  survivor in the same declaration. Absent on every other row: not applicable. */
+  /** R259: on every row killed by a new test, what is known about that test against each other
+   *  source survivor in the same declaration. Absent on every other row: not applicable. */
   readonly sameProcedure?: SameProcedure;
 }
 
 /**
  * R259. `alsoKills`: `test` ran first, in a fresh session, against that mutant, failed (verdict
- * `killed`, never `timeout-killed`) and passed its unmutated confirmation. `notKilled`: `test` was
- * sent to that mutant and it survived. `unknown`: no accepted answer for the pair (an error, a
+ * `killed`, never `timeout-killed`) and passed its unmutated confirmation; the only claim about
+ * `test` alone. `notKilled`: that mutant survived a run that included `test` (possibly with other
+ * tests). `unknown`: no accepted answer for the pair (an error, a
  * timeout, a carried or equivalence-marked mutant, a declaration that cannot be told apart, or
  * over the cap). Full `<batch>/<code>` ids; the three lists are disjoint.
  */
@@ -2199,7 +2200,8 @@ const pairKeyOf = (code: string, t: string) => `${code}|${t}`;
 
 /**
  * R259: the (sibling, test) pairs to probe, in row then sibling order, each once: every eligible
- * pair `answered` does not answer. The first `budget` are probed; the rest are over the cap.
+ * pair `answered` does not answer. Each probe reserves two of `budget`'s runs (the run, and the
+ * unmutated confirmation a kill needs), so probes never overrun the cap; the rest are over it.
  */
 export function pairsToProbe(a: {
   readonly rows: ReadonlyArray<{
@@ -2218,7 +2220,7 @@ export function pairsToProbe(a: {
       const key = pairKeyOf(code, t);
       if (seen.has(key) || a.answered(code, t) !== undefined) continue;
       seen.add(key);
-      if (probe.length < a.budget) probe.push({ mutantId: code, methods: [test] });
+      if (2 * (probe.length + 1) <= a.budget) probe.push({ mutantId: code, methods: [test] });
       else overCap.add(key);
     }
   }

@@ -54,6 +54,7 @@ import {
   isSameOrInside,
   killedByOf,
   pairAnswerOf,
+  pairsToProbe,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
@@ -3424,22 +3425,42 @@ describe("C02-09: gap ids", () => {
       w.store.close();
     });
 
-    test("timeout-killed, by a target or a probe, is unknown, never alsoKills", async () => {
-      const seeds = ["M0001", "M0002", "M0003"].map((c) => inPost(c, "survived"));
-      const timeout: Script = { verdict: "timeout-killed", killingTestRef: N1, killPosition: 1 };
+    const TIMEOUT: Script = { verdict: "timeout-killed", killingTestRef: N1, killPosition: 1 };
+
+    test("a target timeout-killed by the new test is probed, never reused as alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
       const seen: NamedMutantRequest[] = [];
       const w = await sameWorld(seeds, {
-        target: { M0001: killedBy(N1), M0002: timeout },
-        probe: () => timeout,
+        target: { M0001: killedBy(N1), M0002: TIMEOUT },
         seen,
       });
       const out = await w.verify(["0/M0001,0/M0002"]);
-      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: ["0/M0002"],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("a probe answering timeout-killed is unknown, never alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1) },
+        probe: () => TIMEOUT,
+        seen,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
       expect(sameOf(out, "0/M0001")).toEqual({
         test: N1,
         alsoKills: [],
         notKilled: [],
-        unknown: ["0/M0002", "0/M0003"],
+        unknown: ["0/M0002"],
         overCap: 0,
       });
       w.store.close();
@@ -3471,7 +3492,8 @@ describe("C02-09: gap ids", () => {
     });
 
     test("pairs past R-384's budget are unknown and counted in overCap; nothing past it is sent", async () => {
-      // S = 1, N = 2: the cap counts S*N + 2N = 6 runs, so --max-new-tests 3 leaves 3 x 3 - 6 = 3.
+      // S = 1, N = 2: the cap counts S*N + 2N = 6 runs, so --max-new-tests 4 leaves 4 x 3 - 6 = 6,
+      // and each probe reserves 2 (its run and a kill's unmutated confirmation): 3 probes.
       const seeds = ["M0001", "M0002", "M0003", "M0004", "M0005", "M0006"].map((c) =>
         inPost(c, "survived"),
       );
@@ -3479,10 +3501,18 @@ describe("C02-09: gap ids", () => {
       const w = await sameWorld(
         seeds,
         { target: { M0001: killedBy(N1) }, probe: () => killedBy(N1), seen },
-        { maxNewTests: 3 },
+        { maxNewTests: 4 },
       );
       const out = await w.verify(["0/M0001"]);
       expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`, `M0004|${K1}`]);
+      // An odd budget: 5 runs pay for floor(5 / 2) = 2 probes.
+      const odd = pairsToProbe({
+        rows: [{ test: N1, eligible: ["M0002", "M0003", "M0004"] }],
+        answered: () => undefined,
+        budget: 5,
+      });
+      expect(odd.probe.map((r) => r.mutantId)).toEqual(["M0002", "M0003"]);
+      expect([...odd.overCap]).toEqual([`M0004|${K1}`]);
       expect(sameOf(out, "0/M0001")).toEqual({
         test: N1,
         alsoKills: ["0/M0002", "0/M0003", "0/M0004"],
@@ -3539,7 +3569,7 @@ describe("C02-09: gap ids", () => {
       const measurable = (...es: MutantManifestEntry[]) =>
         es.map((e) => ({ entry: e, measurable: true }));
 
-      test("two overloads, and two fields' OnValidate triggers, are not siblings", () => {
+      test("two overloads are not siblings", () => {
         const a = at("M0001", { procedureName: "Post" });
         const b = at("M0002", {
           procedureName: "Post",
@@ -3547,6 +3577,9 @@ describe("C02-09: gap ids", () => {
           procedureEndLine: 15,
         });
         expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("two fields' OnValidate triggers are not siblings", () => {
         const t1 = at("M0003", { procedureName: "", triggerName: "OnValidate" });
         const t2 = at("M0004", {
           procedureName: "",

@@ -13813,8 +13813,15 @@ describe("R259: runNamedMutants' probes", () => {
         mutant === "M0002" && ref.codeunitId === OVER2.codeunitId ? { outcome: "fail" } : undefined,
     });
     const handed: string[][] = [];
+    const scored: string[] = [];
     const res = await runNamedMutants({
       ...fx.cfg,
+      emit: [
+        ...(fx.cfg.emit ?? []),
+        (e) => {
+          if (e.type === "mutant-scored") scored.push(e.mutant.mutantId);
+        },
+      ],
       // A probe's method must have run at the baseline: OVER2 does through M0001's request.
       requests: [
         { mutantId: "M0001", methods: [OVER, OVER2] },
@@ -13840,6 +13847,68 @@ describe("R259: runNamedMutants' probes", () => {
       ["M0003", "survived", undefined],
     ]);
     expect(res.probes?.[0]?.outcome.killingTestRef).toEqual(OVER2);
+    // A progress reader counts mutant-scored events: only the two requested mutants emit one.
+    expect(scored).toEqual(["M0001", "M0002"]);
+  });
+
+  test("a rerun in a session a probe used is not fresh: probe rows stay in the run's store", async () => {
+    // Every group call gets a new session id; OVER2's rerun (its 2nd unmutated run) is handed the
+    // session of the last group call, which is the probe's.
+    let lastMany = 0;
+    let over2Unmutated = 0;
+    const fx = await installedFixture({
+      session: ({ kind, n, ref }) => {
+        if (kind === "many" || kind === "replay") {
+          lastMany = 1000 + n + (kind === "replay" ? 500 : 0);
+          return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        if (kind === "unmutated" && ref.codeunitId === OVER2.codeunitId) {
+          over2Unmutated += 1;
+          if (over2Unmutated === 2) return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        return { sessionId: 100 + n, testRunsBefore: 0 };
+      },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.probes?.map((p) => p.outcome.verdict)).toEqual(["survived"]);
+    expect(res.rerun.map((r) => [r.outcome, r.sessionId, r.fresh])).toEqual([
+      ["pass", lastMany, false],
+    ]);
+  });
+
+  test("a probe that no run attested is error, never a verdict", async () => {
+    let op = 0;
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0003"
+          ? {
+              kind: "verdicts",
+              endedBy: "complete",
+              ranCount: 1,
+              verdicts: [{ ref, outcome: "pass", durationMs: 5 }],
+              durationMs: 5,
+              fencedOp: { attemptId: `unattested-${++op}`, opSeq: 800 + op },
+            }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      probe: () => [{ mutantId: "M0003", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 18)]),
+    ).toEqual([["error", "unattested probe: "]]);
   });
 
   test("a lease lost during the reruns discards the probes' verdicts too", async () => {
@@ -15098,27 +15167,29 @@ describe("C02-06 Task 5.4: runVerify", () => {
       });
     }
 
-    test("a probe kill whose unmutated confirmation also fails is unknown", async () => {
-      let probed = false;
-      let failed = false;
-      const out = await probing(
-        () => {
-          probed = true;
-          return { outcome: "fail" };
-        },
-        {
-          unmutated: ({ ref }) => {
-            if (isNew(ref) && probed && !failed) {
-              failed = true;
-              return { ref, outcome: "fail", durationMs: 5, failureMessage: "red unmutated" };
-            }
-            return { ref, outcome: "pass", durationMs: 5 };
+    for (const confirmation of ["fail", "error"] as const) {
+      test(`a probe kill whose unmutated confirmation ends in ${confirmation} is unknown`, async () => {
+        let probed = false;
+        let failed = false;
+        const out = await probing(
+          () => {
+            probed = true;
+            return { outcome: "fail" };
           },
-        },
-      );
-      expect(failed).toBe(true);
-      expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
-    });
+          {
+            unmutated: ({ ref }) => {
+              if (isNew(ref) && probed && !failed) {
+                failed = true;
+                return { ref, outcome: confirmation, durationMs: 5, failureMessage: "unmutated" };
+              }
+              return { ref, outcome: "pass", durationMs: 5 };
+            },
+          },
+        );
+        expect(failed).toBe(true);
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+      });
+    }
 
     test("a session that latches mid-probe leaves every sibling unknown", async () => {
       const out = await probing(() => ({ outcome: "fail" }), { strand: "M0003" });

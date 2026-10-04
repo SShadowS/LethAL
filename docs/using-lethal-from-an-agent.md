@@ -504,12 +504,14 @@ because then it is rerun. It does not block exit `0`, because it gated no verdic
 row's `testsRun` and killed nothing.
 
 `sameProcedure` (schema v8, R259) is on every row killed by a new test, and on no other row. It
-says what that test (`sameProcedure.test`) does on its own to each OTHER survived or no-coverage
+says what is known about that test (`sameProcedure.test`) against each OTHER survived or no-coverage
 mutant of the source run in the same procedure or trigger (the same line span in the manifest).
 Verify runs the test once more against each one it has no answer for yet, after the named survivors
-and inside the same lease. These extra runs count against `--max-new-tests` with the rest.
-`alsoKills`: the test ran first, in a fresh session, against that mutant, failed, and passed when
-rerun unmutated. `notKilled`: the test was sent to that mutant and it survived. `unknown`: no answer
+and inside the same lease. These extra runs count against `--max-new-tests` with the rest, two per
+mutant (the run, and the unmutated rerun a kill needs).
+`alsoKills`, the only claim about the test on its own: the test ran first, in a fresh session,
+against that mutant, failed, and passed when rerun unmutated. `notKilled`: that mutant survived a
+run that included the test, possibly with other tests. `unknown`: no answer
 (an error, a timeout, a session that latched or lost its lease, a carried or reader-marked
 equivalent mutant, a procedure written on one line, or over the cap; `overCap` counts the last
 kind). Read `unknown` as unknown, never as not killed. A long `alsoKills` list suggests the test is

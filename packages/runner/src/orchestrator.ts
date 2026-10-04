@@ -7007,11 +7007,22 @@ async function runProbes(
     if (mutant === undefined) throw new Error(`runNamedMutants: probe ${r.mutantId} was resolved`);
     into.push({ request: r, mutant });
   }
+  // A probe is not a requested mutant: its `mutant-scored` would be counted as one by a progress
+  // reader. Its rows stay in the store, under this never-finished run, where `sessionIdsOf` must
+  // see its sessions so a rerun in one is not fresh. Every other event (warnings) goes through.
+  const probeEmit: RunEmitter = (e) => {
+    if (e.type !== "mutant-scored") scope.emit(e);
+  };
   for (const { key, named } of resolved) {
     if (scope.safety.isUnsafe) return;
     // A throw from here (a latch) loses this group's outcomes: they are answered "not run".
     const outcomes: SessionOutcome[] = [];
-    const probeScope: BatchScope = { ...scope, outcomes, killLedger: newKillLedger() };
+    const probeScope: BatchScope = {
+      ...scope,
+      outcomes,
+      killLedger: newKillLedger(),
+      emit: probeEmit,
+    };
     const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
     if (plan !== undefined) {
       const attestation = { clean: false };
@@ -7033,7 +7044,7 @@ async function runProbes(
         resourceKey: scope.resourceKey,
         nowIso: scope.nowIso,
         attestation,
-        emit: scope.emit,
+        emit: probeEmit,
         killLedger: probeScope.killLedger,
         memberCountsByTest: plan.memberCountsByTest,
         groupRuns: scope.groupRuns,
