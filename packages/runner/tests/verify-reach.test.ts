@@ -448,6 +448,80 @@ describe("R-384: narrowVerifyRequests, positives", () => {
   });
 });
 
+describe("R-425: the narrowed set", () => {
+  const T1 = ref("T1");
+  const T2 = ref("T2");
+
+  test("filter off: nothing is narrowed, though the same fixture narrows with it on", () => {
+    const base = {
+      survivors: [S],
+      newTests: [T1, T2],
+      baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+    };
+    for (const mode of ["none", "procedure", "line"] as const) {
+      expect([...narrowVerifyRequests(input({ ...base, mode })).narrowed]).toEqual([]);
+    }
+    expect([...narrowVerifyRequests(input({ ...base, enabled: false })).narrowed]).toEqual([]);
+    expect([...narrowVerifyRequests(input(base)).narrowed]).toEqual(["M0001"]);
+  });
+
+  test("a sibling-only new test left out narrows the survivor", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1, T2],
+        baseline: [pass(T1, SIB), pass(T2, [hit("Post")], 2)],
+      }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50100::T2"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
+  });
+
+  test("a fail-closed survivor takes every new test and is not narrowed", () => {
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S],
+        newTests: [T1],
+        baseline: [pass(T1, SIB)],
+        refusedObjects: new Map([[`codeunit:${OBJ}`, "Logic is wrapped in #if (R298)"]]),
+      }),
+    );
+    expect(r.failClosedSurvivors).toEqual([{ mutantId: "M0001", why: "refused" }]);
+    expect([...r.narrowed]).toEqual([]);
+  });
+
+  test("N = 0: no new test, nothing to drop, not narrowed", () => {
+    const old = ref("Old", 50101, "U");
+    const r = narrowVerifyRequests(
+      input({ survivors: [S], coveringKeys: new Map([["M0001", [old]]]), newTests: [] }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50101::Old"]);
+    expect([...r.narrowed]).toEqual([]);
+  });
+
+  test("an unreached survivor with N > 0 is narrowed", () => {
+    const r = narrowVerifyRequests(
+      input({ survivors: [S], newTests: [T1], baseline: [pass(T1, SIB)] }),
+    );
+    expect([...r.unreached]).toEqual(["M0001"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
+  });
+
+  test("per survivor: one reached by every new test, one not", () => {
+    const S2 = mutant("M0002", { procedureName: "Other" });
+    const r = narrowVerifyRequests(
+      input({
+        survivors: [S, S2],
+        newTests: [T1, T2],
+        baseline: [pass(T1, [hit("Post"), hit("Other")]), pass(T2, [hit("Other")], 2)],
+      }),
+    );
+    expect(keysOf(r, "M0001")).toEqual(["50100::T1"]);
+    expect(keysOf(r, "M0002")).toEqual(["50100::T1", "50100::T2"]);
+    expect([...r.narrowed]).toEqual(["M0001"]);
+  });
+});
+
 describe("R-384: console lines (review 2)", () => {
   // W1: verify prints its own true lines; coverageFilter's are false inside verify.
   test("W1: an unplaceable survivor and a fallback-2 trigger write nothing to console.warn", () => {

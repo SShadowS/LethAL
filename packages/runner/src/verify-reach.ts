@@ -116,6 +116,9 @@ export interface ReachResult {
   readonly unreached: ReadonlySet<string>;
   /** Survivors whose final request holds no new test. A superset of `unreached`. */
   readonly noNewTest: ReadonlySet<string>;
+  /** R-425: survivors whose final request lacks at least one new test, i.e. the filter left a new
+   *  test out. Empty with the filter off: it cannot narrow. */
+  readonly narrowed: ReadonlySet<string>;
   /** P: summed over survivors, the new tests joined that were not already covering tests. */
   readonly joins: number;
   /** K: how many new tests were filterable (their coverage could be read). */
@@ -202,6 +205,7 @@ export function narrowVerifyRequests(a: ReachInput): ReachResult {
   const methods = new Map<string, readonly TestMethodRef[]>();
   const unreached = new Set<string>();
   const noNewTest = new Set<string>();
+  const narrowed = new Set<string>();
   let joins = 0;
   for (const s of a.survivors) {
     const id = s.mutantId;
@@ -231,6 +235,7 @@ export function narrowVerifyRequests(a: ReachInput): ReachResult {
     methods.set(id, out);
     if (out.length === 0) unreached.add(id);
     if (!out.some((r) => newKeys.has(testKeyOf(r)))) noNewTest.add(id);
+    if (!a.newTests.every((r) => seen.has(testKeyOf(r)))) narrowed.add(id);
   }
 
   return {
@@ -241,6 +246,7 @@ export function narrowVerifyRequests(a: ReachInput): ReachResult {
     untargeted,
     unreached,
     noNewTest,
+    narrowed,
     joins,
     filterable: filterable.length,
   };
