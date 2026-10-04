@@ -629,6 +629,7 @@ describe("runSession", () => {
       );
       expect(digestWarning).toEqual([]);
       const plan = await planVerify({
+        coverage: "procedure",
         source: {
           runId,
           projectPath: dirs.projectDir,
@@ -760,6 +761,7 @@ describe("runSession", () => {
         const { dirs, store, runId } = r;
         const recorded = store.testDigests(runId);
         const plan = await planVerify({
+          coverage: "procedure",
           source: {
             runId,
             projectPath: dirs.projectDir,

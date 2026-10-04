@@ -603,14 +603,22 @@ describe("planVerify", () => {
   /** `planVerify` against a source run that recorded the test project's CURRENT digests: every
    *  test in it reads as unchanged since the source run (R-278). */
   async function planUnchanged(
-    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests" | "dependencies">,
+    a: Omit<Parameters<typeof planVerify>[0], "sourceTestDigests" | "dependencies" | "coverage"> & {
+      /** R-384: verify's coverage mode; default `procedure`, a hub mode, so the filter is off. */
+      readonly coverage?: CoverageMode;
+    },
   ): Promise<VerifyPlan> {
     const recorded = await testDigests(a.testDir, await discoverTests(a.testDir), INPUTS);
     // A source run records a digest for every test it ran (or none): a baseline test that is gone
     // from the project now still had one then.
     for (const r of a.sourceBaseline)
       recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??= `v2:${"0".repeat(64)}`;
-    return planVerify({ ...a, sourceTestDigests: recorded, dependencies: DEPS });
+    return planVerify({
+      coverage: "procedure",
+      ...a,
+      sourceTestDigests: recorded,
+      dependencies: DEPS,
+    });
   }
 
   async function planRefusal(p: Promise<unknown>): Promise<VerifyError> {
@@ -669,6 +677,7 @@ describe("planVerify", () => {
     }) as unknown as typeof realDiscover);
     try {
       await planVerify({
+        coverage: "procedure",
         source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "Old", "A")],
@@ -701,6 +710,7 @@ describe("planVerify", () => {
   test("R403: a test compiled out under the test build set is neither new nor rerun, and never counts toward maxNewTests", async () => {
     const { dir, recorded } = onlyUnderXDir();
     const plan = await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "Old", "A")],
@@ -717,6 +727,7 @@ describe("planVerify", () => {
   test("R403 control: the same test with LETHALX in the test build set and no baseline row IS new", async () => {
     const { dir, recorded } = onlyUnderXDir();
     const plan = await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "Old", "A")],
@@ -801,6 +812,7 @@ describe("planVerify", () => {
       { id: 50101, name: "B", methods: ["M"] },
     ];
     const plan = await planVerify({
+      coverage: "procedure",
       source: source(project(), [
         { mutantCode: "M0001", coveringTests: [] },
         { mutantCode: "M0002", coveringTests: [] },
@@ -823,6 +835,7 @@ describe("planVerify", () => {
 
   test("R-278: an edited COVERING test is new, and is in its survivor's request once", async () => {
     const plan = await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M", "T.K"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
@@ -852,6 +865,7 @@ describe("planVerify", () => {
     for (const map of [withoutK, {}]) {
       const e = await planRefusal(
         planVerify({
+          coverage: "procedure",
           source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
           manifest: manifest([entry("M0001")]),
           sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
@@ -868,6 +882,7 @@ describe("planVerify", () => {
   test("R-278: an unchanged test in the source baseline is not new", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M", "K"] }];
     const plan = await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
@@ -882,6 +897,7 @@ describe("planVerify", () => {
   test("R-278: a source run with no recorded test digests is source-predates-verify, never planned", async () => {
     const e = await planRefusal(
       planVerify({
+        coverage: "procedure",
         source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "T", "M")],
@@ -902,6 +918,7 @@ describe("planVerify", () => {
     const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
     const e = await planRefusal(
       planVerify({
+        coverage: "procedure",
         source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "T", "M")],
@@ -924,6 +941,7 @@ describe("planVerify", () => {
     const dir = testDir(codeunits);
     rmSync(join(dir, "app.json"));
     const e = await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M")],
@@ -948,6 +966,7 @@ describe("planVerify", () => {
     let reads = 0;
     const e = await planRefusal(
       planVerify({
+        coverage: "procedure",
         source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
         manifest: manifest([entry("M0001")]),
         sourceBaseline: [row(50100, "T", "M")],
@@ -983,6 +1002,63 @@ describe("planVerify", () => {
       expect(keys(plan.newTests)).toEqual(["50101::N1", "50101::N2", "50101::N3"]);
     });
 
+    // R-384 C1: with the filter off the budget is today's boundary, N = max passes, N = max + 1
+    // refuses, and the text says why the filter is off.
+    test("R-384 C1: filter off, N = max + 1 refuses with the off text", async () => {
+      const e = await planRefusal(capPlan(2));
+      expect(e.reason).toBe("too-many-new-tests");
+      expect(e.detail).toBe(
+        '3 tests are new or edited since run 1. The coverage filter is off (coverage mode "procedure" is a hub mode), so they need 9 extra test runs (6 unmutated, 3 against 1 survivor(s)). The budget is --max-new-tests 2 x (1 survivor(s) + 2) = 6 extra test runs. Edit classes: added: 3 test(s), added or renamed tests. To run them all, pass --max-new-tests 3; or run lethal run again so this source is the recorded one',
+      );
+    });
+
+    test("R-384 C1: --no-reach-filter under fenced is the same boundary, naming the flag", async () => {
+      const plan = (max: number) =>
+        planUnchanged({
+          source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+          manifest: manifest([entry("M0001")]),
+          sourceBaseline: [row(50100, "T", "M")],
+          testDir: testDir([
+            { id: 50100, name: "T", methods: ["M"] },
+            { id: 50101, name: "New", methods: ["N1", "N2", "N3"] },
+          ]),
+          maxNewTests: max,
+          coverage: "fenced",
+          noReachFilter: true,
+        });
+      expect(keys((await plan(3)).newTests)).toHaveLength(3);
+      const e = await planRefusal(plan(2));
+      expect(e.detail).toContain("The coverage filter is off (--no-reach-filter)");
+    });
+
+    // R-384 C2: filter on, check 1. With S = 1 the budget is 3 x max; 2N = B passes, 2N = B + 2
+    // refuses, before anything is sent.
+    const checkOne = (methods: readonly string[], max: number) =>
+      planUnchanged({
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([
+          { id: 50100, name: "T", methods: ["M"] },
+          { id: 50101, name: "New", methods },
+        ]),
+        maxNewTests: max,
+        coverage: "fenced",
+      });
+
+    test("R-384 C2: filter on, 2N = B passes check 1 even above today's N <= max", async () => {
+      const plan = await checkOne(["N1", "N2", "N3"], 2);
+      expect(keys(plan.newTests)).toHaveLength(3);
+    });
+
+    test("R-384 C2: filter on, 2N = B + 2 refuses with the check-1 text", async () => {
+      const e = await planRefusal(checkOne(["N1", "N2", "N3", "N4"], 2));
+      expect(e.reason).toBe("too-many-new-tests");
+      expect(e.detail).toBe(
+        "4 tests are new or edited since run 1. Each runs twice unmutated, 8 extra test runs, and the coverage filter cannot lower that; without the filter they would need 12. The budget is --max-new-tests 2 x (1 survivor(s) + 2) = 6 extra test runs. Edit classes: added: 4 test(s), added or renamed tests. To run them all, pass --max-new-tests 4; or run lethal run again so this source is the recorded one",
+      );
+    });
+
     test("one above the limit is too-many-new-tests, naming N, the value to pass and the edit class", async () => {
       const e = await planRefusal(capPlan(2));
       expect(e.reason).toBe("too-many-new-tests");
@@ -1011,6 +1087,7 @@ describe("planVerify", () => {
       const refuse = async (dir: string) =>
         planRefusal(
           planVerify({
+            coverage: "procedure",
             source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
             manifest: manifest([entry("M0001")]),
             sourceBaseline: [row(50100, "T", "M"), row(50100, "T", "K")],
@@ -1038,6 +1115,7 @@ describe("planVerify", () => {
     const recorded = await testDigests(dir, await discoverTests(dir), INPUTS);
     const before = parsesSinceStart();
     await planVerify({
+      coverage: "procedure",
       source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
       manifest: manifest([entry("M0001")]),
       sourceBaseline: [row(50100, "T", "M"), row(50101, "U", "K")],
@@ -2093,7 +2171,7 @@ describe("C02-09: gap ids", () => {
     const POST = [{ objectType: "Codeunit", objectId: 50000, procedure: "Post" }];
     const OTHER = [{ objectType: "Codeunit", objectId: 50000, procedure: "Other" }];
 
-    function reachTestDir(): string {
+    function reachTestDir(newMethods: readonly string[] = ["N1", "N2"]): string {
       const dir = scratch("lethal-verify-reach-");
       writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
       const proc = (m: string) => `    [Test]\n    procedure ${m}()\n    begin\n    end;\n`;
@@ -2103,7 +2181,7 @@ describe("C02-09: gap ids", () => {
       );
       writeFileSync(
         join(dir, "50101.Codeunit.al"),
-        `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n${proc("N1")}\n${proc("N2")}}\n`,
+        `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n${newMethods.map(proc).join("\n")}}\n`,
       );
       return dir;
     }
@@ -2363,5 +2441,113 @@ describe("C02-09: gap ids", () => {
         w.store.close();
       });
     }
+
+    // R-384 The cap (R4): check 2 counts EXECUTIONS after the filter, E = 2N + P, against
+    // B = max x (S + 2), with S fixed in planVerify before any filtering.
+    describe("check 2", () => {
+      const at = (procedure: string) => [{ objectType: "Codeunit", objectId: 50000, procedure }];
+      // Two survivors, `Post` and `Other`, both covered by T.M; four new tests; max 2, so B = 8.
+      const twoSurvivors = () => [
+        seed("M0001", undefined, "survived"),
+        seed("M0002", undefined, "survived", { procedureName: "Other" }),
+      ];
+      const fourNew = ["N1", "N2", "N3", "N4"];
+
+      test("C3: E = B passes", async () => {
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(fourNew),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: at("Third"),
+            N2: at("Third"),
+            N3: at("Third"),
+            N4: at("Third"),
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.results.map((r) => r.testsRun)).toEqual([["T.M"], ["T.M"]]);
+        w.store.close();
+      });
+
+      test("C3/C4: E = B + 1 refuses after the baseline, naming ceil(E / (S + 2))", async () => {
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(fourNew),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: POST,
+            N2: at("Third"),
+            N3: at("Third"),
+            N4: at("Third"),
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused?.reason).toBe("too-many-new-tests");
+        expect(out.refused?.detail).toBe(
+          "4 tests are new or edited since run 1. After the coverage filter they need 9 extra test runs (8 unmutated, 1 against 2 survivor(s); 0 test(s) joined every survivor because their coverage could not be used); without the filter they would need 16. The budget is --max-new-tests 2 x (2 survivor(s) + 2) = 8 extra test runs. The unmutated runs had already run when this was found. Edit classes: added: 4 test(s), added or renamed tests. To run them all, pass --max-new-tests 3; or run lethal run again so this source is the recorded one",
+        );
+        // Refused after the run row was made: the output names it.
+        expect(out.verifyRunId).toBeDefined();
+        expect(out.results).toEqual([]);
+        expect(out.exitCode).toBe(VERIFY_EXIT.refused);
+        w.store.close();
+      });
+
+      test("C5: S is fixed before filtering, so a survivor no new test reaches still counts", async () => {
+        // Survivors A (Post), B (Other), C (Third); T1 reaches A and B, T2 A, T3 B, none C.
+        // P = 4, E = 10; S = 3, B = 2 x 5 = 10: passes.
+        const w = await verifyWorld(
+          [
+            seed("M0001", undefined, "survived"),
+            seed("M0002", undefined, "survived", { procedureName: "Other" }),
+            seed("M0003", undefined, "survived", { procedureName: "Third" }),
+          ],
+          [],
+          {
+            ...fenced,
+            testDir: reachTestDir(["T1", "T2", "T3"]),
+            baseline: [T_M],
+            maxNewTests: 2,
+            runNamed: reachRunNamed({
+              M: POST,
+              T1: [...at("Post"), ...at("Other")],
+              T2: at("Post"),
+              T3: at("Other"),
+            }),
+          },
+        );
+        const out = await w.verify(["0/M0001,0/M0002,0/M0003"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.results.map((r) => r.testsRun)).toEqual([
+          ["T.M", "New.T1", "New.T2"],
+          ["T.M", "New.T1", "New.T3"],
+          ["T.M"],
+        ]);
+        w.store.close();
+      });
+
+      test("C6: filter on, every new test fail-closed, N = max passes", async () => {
+        const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed(
+            { M: POST, N1: POST, N2: POST },
+            { outcome: { N1: "fail", N2: "fail" } },
+          ),
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
+        w.store.close();
+      });
+    });
   });
 });
