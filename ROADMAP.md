@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**113 of 435 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**114 of 437 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -121,7 +121,7 @@ that ordering is the priority.
 - **R301** · A split-header procedure (`preproc_split_procedure`) has no reach-latch owner, so the injector throws · [R301.md](docs/roadmap/R301.md) · done (4575882..4da7a01); remaining gaps moved to R302 and R309
 - **R399** · Undecided-#if and not-instrumentable rows in excludedSites do not make the report's reliability narrowed, while R-307's refused rows do · [R399.md](docs/roadmap/R399.md) · open, filed 2026-10-02
 - **R302** · Semantic resolution does not see inside a split-header procedure, so its type-dependent sites are lost · [R302.md](docs/roadmap/R302.md) · done (db641338..234cb4b1)
-- **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · open, filed 2026-10-02
+- **R400** · R-307's per-file refusal raises Base Application's dry-run peak by 31% and its wall time by 18% against master · [R400.md](docs/roadmap/R400.md) · done (4bd4b66b)
 - **R303** · A procedure or trigger whose `var` section sits inside `#if` (`preproc_conditional_var_block`) gets a SECOND `var` section from the reach latch, and alc rejects the artifact · [R303.md](docs/roadmap/R303.md) · done (9a308e1)
 - **R306** · A mutant inside an arm the build's preprocessor symbols compile out gets a different fate depending on where the `#if` sits, and one of the three shapes is predicted, not measured · [R306.md](docs/roadmap/R306.md) · open, filed 2026-09-28
 - **R312** · A member whose `var` section ENDS in an `#if` block of declarations gets its reach latch written on the `#endif` line, and alc rejects the artifact (AL0631) · [R312.md](docs/roadmap/R312.md) · done (4001282)
@@ -480,6 +480,8 @@ that ordering is the priority.
 - **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
 - **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
 - **R435** · On al-runner the dependency fingerprint still reads Microsoft apps by declared version; resolve them from the provisioned platform-apps directory before verify supports al-runner · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
+- **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · open, filed 2026-10-05
+- **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · open, filed 2026-10-05
 
 ---
 
