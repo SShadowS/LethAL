@@ -327,7 +327,10 @@ function implicitRecordShadowsGlobals(node: ALSyntaxNode): boolean {
       case "dataset_section":
         return true;
       case "requestpage_section":
-        return hasProperty(p, "SourceTable") || p.parent?.parent?.rawKind === "reportextension_declaration";
+        return (
+          hasProperty(p, "SourceTable") ||
+          p.parent?.parent?.rawKind === "reportextension_declaration"
+        );
       case ALNodeKind.pageextension:
         return true;
       case ALNodeKind.page:
