@@ -56,7 +56,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
 
       - name: Rust standard library for the cross target
         if: matrix.cross
