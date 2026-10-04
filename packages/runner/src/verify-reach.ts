@@ -17,20 +17,65 @@ import { invalidBaselineReason } from "./orchestrator";
 import { isHubCoverageMode } from "./runner-disagreement";
 import { buildCoverageIndex, coverageFilter, testKeyOf } from "./selection";
 
-/** Whether the filter runs this session, and when it does not, why (rule 1). */
-export type ReachState = { readonly on: true } | { readonly on: false; readonly why: string };
+/** R-425: the values of the verify report's `reachFilter.state`. */
+export const REACH_FILTER_STATES = ["on", "off"] as const;
+export type ReachFilterState = (typeof REACH_FILTER_STATES)[number];
 
 /**
- * Rule 1. On only under `fenced` and without `--no-reach-filter`. A hub mode's coverage comes from
- * a `GuiAllowed=Yes` Web session, not the fenced session that decides verdicts (R55), so it can
- * under-report the fenced path; `none` has no coverage. Verify runs on bcdev only, so `al-runner`
- * never reaches here; it is off all the same.
+ * R-425: the values of the verify report's `reachFilter.reason`, one per R-384 `why` text.
+ * `coverage-mode-al-runner` cannot occur today (verify runs on bcdev only), but `reachStateOf` is
+ * total over `CoverageMode`, so the list names everything the function can return.
+ */
+export const REACH_FILTER_OFF_REASONS = [
+  "no-reach-filter",
+  "coverage-mode-none",
+  "coverage-mode-procedure",
+  "coverage-mode-line",
+  "coverage-mode-al-runner",
+] as const;
+export type ReachFilterOffReason = (typeof REACH_FILTER_OFF_REASONS)[number];
+
+/** Whether the filter runs this session, and when it does not, why (rule 1). `why` is the stderr
+ *  text; `reason` is the same fact as a stable value for the JSON (R-425). */
+export type ReachState =
+  | { readonly on: true }
+  | { readonly on: false; readonly reason: ReachFilterOffReason; readonly why: string };
+
+/** One table from reason to stderr text, so every R-384 line stays byte-identical. */
+const WHY_OF: Readonly<Record<ReachFilterOffReason, string>> = {
+  "no-reach-filter": "--no-reach-filter",
+  "coverage-mode-none": 'coverage mode "none"',
+  "coverage-mode-procedure": 'coverage mode "procedure" is a hub mode',
+  "coverage-mode-line": 'coverage mode "line" is a hub mode',
+  "coverage-mode-al-runner": 'coverage mode "al-runner"',
+};
+
+const off = (reason: ReachFilterOffReason): ReachState => ({
+  on: false,
+  reason,
+  why: WHY_OF[reason],
+});
+
+/**
+ * Rule 1. On only under `fenced` and without `--no-reach-filter`; the flag wins over every mode.
+ * A hub mode's coverage comes from a `GuiAllowed=Yes` Web session, not the fenced session that
+ * decides verdicts (R55), so it can under-report the fenced path; `none` has no coverage. Verify
+ * runs on bcdev only, so `al-runner` never reaches here; it is off all the same.
  */
 export function reachStateOf(mode: CoverageMode, enabled: boolean): ReachState {
-  if (!enabled) return { on: false, why: "--no-reach-filter" };
-  if (mode === "fenced") return { on: true };
-  if (isHubCoverageMode(mode)) return { on: false, why: `coverage mode "${mode}" is a hub mode` };
-  return { on: false, why: `coverage mode "${mode}"` };
+  if (!enabled) return off("no-reach-filter");
+  switch (mode) {
+    case "fenced":
+      return { on: true };
+    case "none":
+      return off("coverage-mode-none");
+    case "procedure":
+      return off("coverage-mode-procedure");
+    case "line":
+      return off("coverage-mode-line");
+    case "al-runner":
+      return off("coverage-mode-al-runner");
+  }
 }
 
 export interface ReachInput {

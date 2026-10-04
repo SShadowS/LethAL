@@ -2,7 +2,14 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { CoverageEntry, CoverageMode, TestMethodRef, TestVerdict } from "../src/backend";
 import { testKeyOf } from "../src/selection";
-import { type ReachInput, narrowVerifyRequests, reachStateOf } from "../src/verify-reach";
+import {
+  REACH_FILTER_OFF_REASONS,
+  REACH_FILTER_STATES,
+  type ReachInput,
+  type ReachState,
+  narrowVerifyRequests,
+  reachStateOf,
+} from "../src/verify-reach";
 
 // R-384: verify's reach filter. Every fixture that pins a fail-closed case gives the failing test
 // coverage of a SIBLING member of S's object only, so the case goes red if its clause is reverted
@@ -102,11 +109,57 @@ describe("R-384: reachStateOf (rule 1)", () => {
   ];
   for (const [mode, enabled, why] of cases) {
     test(`${mode}, enabled ${enabled}: ${why ?? "on"}`, () => {
-      expect(reachStateOf(mode, enabled)).toEqual(
+      // R-425: the off state also carries a reason; `why` is unchanged.
+      expect(reachStateOf(mode, enabled)).toMatchObject(
         why === undefined ? { on: true } : { on: false, why },
       );
     });
   }
+});
+
+describe("R-425: reachStateOf reasons, every mode x flag", () => {
+  // `why` is the stderr text R-384 pins with toBe; it must stay byte-identical. The flag wins over
+  // every mode, as before.
+  const cases: Array<[CoverageMode, boolean, ReachState]> = [
+    ["fenced", true, { on: true }],
+    ["fenced", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    ["none", true, { on: false, reason: "coverage-mode-none", why: 'coverage mode "none"' }],
+    ["none", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "procedure",
+      true,
+      {
+        on: false,
+        reason: "coverage-mode-procedure",
+        why: 'coverage mode "procedure" is a hub mode',
+      },
+    ],
+    ["procedure", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "line",
+      true,
+      { on: false, reason: "coverage-mode-line", why: 'coverage mode "line" is a hub mode' },
+    ],
+    ["line", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+    [
+      "al-runner",
+      true,
+      { on: false, reason: "coverage-mode-al-runner", why: 'coverage mode "al-runner"' },
+    ],
+    ["al-runner", false, { on: false, reason: "no-reach-filter", why: "--no-reach-filter" }],
+  ];
+  for (const [mode, enabled, expected] of cases) {
+    test(`${mode}, enabled ${enabled}`, () => {
+      expect(reachStateOf(mode, enabled)).toEqual(expected);
+    });
+  }
+
+  test("the reason list is exactly the reasons reachStateOf can return", () => {
+    expect([...REACH_FILTER_OFF_REASONS].sort()).toEqual(
+      [...new Set(cases.flatMap(([, , s]) => (s.on ? [] : [s.reason])))].sort(),
+    );
+    expect([...REACH_FILTER_STATES]).toEqual(["on", "off"]);
+  });
 });
 
 describe("R-384: narrowVerifyRequests, fail-closed cases", () => {
@@ -132,7 +185,7 @@ describe("R-384: narrowVerifyRequests, fail-closed cases", () => {
 
   test("case 2b: --no-reach-filter joins every new test to every survivor", () => {
     const r = narrowVerifyRequests(offInput("fenced", false));
-    expect(r.state).toEqual({ on: false, why: "--no-reach-filter" });
+    expect(r.state).toEqual({ on: false, reason: "no-reach-filter", why: "--no-reach-filter" });
     expect(keysOf(r, "M0001")).toEqual(["50100::T1", "50100::T2"]);
   });
 
