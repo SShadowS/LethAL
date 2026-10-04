@@ -53,8 +53,10 @@ import {
   type TestAppRefusal,
 } from "./test-app-publish";
 import {
+  DIGEST_SCHEME_WORDS,
   type NewTestCause,
   TEST_DIGEST_SCHEME,
+  digestSchemeOf,
   explainNewTests,
   isCurrentDigest,
   parseDigestParts,
@@ -170,7 +172,7 @@ const REFUSAL_HINTS: Partial<Record<VerifyRefusal, string>> = {
   "gap-has-no-survivor":
     "every recorded mutant in this block is killed, not measured or no-coverage; there is nothing to verify as a gap",
   "dependency-unreadable":
-    "check the dev credentials with lethal doctor, and that every non-Microsoft dependency of the test app is installed on the server",
+    "check the dev credentials with lethal doctor; that every dependency of the test app is installed on the server; that the server serves each Microsoft package in the closure (Library Assert, the test libraries, Base and System Application), System, and the LethAL Control app at the version it runs; and that each Microsoft app has exactly one installed version, the one served (an app mid-upgrade is refused by name)",
 };
 
 /**
@@ -833,10 +835,13 @@ export async function planVerify(a: {
 
   // R-371: a digest of another scheme covers other things, so no comparison with it means
   // anything. The test is on the values, not a column: every digest of one run has one scheme.
-  if (Object.values(sourceTestDigests).some((d) => !isCurrentDigest(d))) {
+  const stale = Object.values(sourceTestDigests).find((d) => !isCurrentDigest(d));
+  if (stale !== undefined) {
+    const recorded = digestSchemeOf(stale);
+    const words = (s: string): string => DIGEST_SCHEME_WORDS[s] ?? "an unknown scheme";
     throw new VerifyError(
       "source-predates-verify",
-      `run ${source.runId} recorded its test digests under R-278's scheme, which covers each test's own method only. This build's digests (scheme ${TEST_DIGEST_SCHEME}, R-371) also cover every helper, handler, subscriber and dependency a test reaches, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
+      `run ${source.runId} recorded its test digests under scheme ${recorded}, this build ${TEST_DIGEST_SCHEME}. Scheme ${recorded} is ${words(recorded)}; scheme ${TEST_DIGEST_SCHEME} is ${words(TEST_DIGEST_SCHEME)}, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
     );
   }
 
@@ -1085,19 +1090,29 @@ export function capCheckTwoDetail(
 
 /**
  * R-371: this verify's dependency fingerprint, over the test project's app.json (the test app
- * verify compiles and publishes) and the packages the server holds for its non-Microsoft
- * dependencies, read one at a time through the same /packages read as R-372. Throws
- * `DependencyUnreadableError` (refused as `dependency-unreadable`) when one cannot be read.
+ * verify compiles and publishes) and the packages the server holds for its dependencies, read one
+ * at a time through the same /packages read as R-372. R-385: Microsoft ones too, plus `System` and
+ * the control app's dependencies, each checked against its installed version (the backend's
+ * `microsoftMode`; verify is the published path, so a backend without one is refused, never read
+ * by declared versions). Throws `DependencyUnreadableError` (refused as `dependency-unreadable`)
+ * when one cannot be read.
  */
 export async function verifyDependencyFingerprint(
-  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage">,
+  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage" | "microsoftMode">,
   testDir: string,
   projectPath: string,
 ): Promise<string> {
   const fetchPackage = backend.fetchPublishedAppPackage?.bind(backend);
+  if (backend.microsoftMode === undefined) {
+    throw new DependencyUnreadableError(
+      "this backend cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+    );
+  }
+  const microsoft = backend.microsoftMode();
   return dependencyFingerprint(
     await readAppJsonInputs(testDir),
     fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
+    microsoft,
     await targetOf(projectPath),
   );
 }

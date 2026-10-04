@@ -79,6 +79,7 @@ import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
+  type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
   packageFolderReader,
@@ -7155,7 +7156,24 @@ async function testAppIdentity(
       published && fetchPackage !== undefined
         ? publishedPackageReader(fetchPackage)
         : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
-    const dependencies = await dependencyFingerprint(inputs, read, await targetOf(cfg.projectDir));
+    // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
+    // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
+    // declared versions); al-runner keeps declared versions under a tag (D6).
+    let microsoft: MicrosoftMode = { kind: "declared" };
+    if (published) {
+      if (cfg.backend.microsoftMode === undefined) {
+        throw new DependencyUnreadableError(
+          "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+        );
+      }
+      microsoft = cfg.backend.microsoftMode();
+    }
+    const dependencies = await dependencyFingerprint(
+      inputs,
+      read,
+      microsoft,
+      await targetOf(cfg.projectDir),
+    );
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,

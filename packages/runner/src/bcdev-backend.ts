@@ -29,6 +29,7 @@ import { bcFetch } from "./bc-fetch";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
+import { DependencyUnreadableError, type MicrosoftMode } from "./digest-inputs";
 import { injectControlDependency } from "./harness";
 import type { HarnessVerifier } from "./harness";
 import type { Lease } from "./lease";
@@ -405,6 +406,30 @@ export class BcDevMcpBackend implements ExecutionBackend {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * R-385: the dependency fingerprint's bytes mode on this server. `System` and the `LethAL
+   * Control` package come from `dev/packages` (the bytes the server holds); the installed versions
+   * and the running control app's version from the deployment's harness verifier. With no harness
+   * verifier there is no way to check what is installed, so this throws rather than hand back a
+   * mode that would hash a package nobody checked.
+   */
+  microsoftMode(): MicrosoftMode {
+    const verifier = this.deployment?.harnessVerifier;
+    if (verifier === undefined) {
+      throw new DependencyUnreadableError(
+        "this bcdev backend has no harness verifier (no BcDevDeployment), so the installed versions of the Microsoft dependencies, System and the control app cannot be checked",
+      );
+    }
+    return {
+      kind: "bytes",
+      readSystem: () => this.fetchPublishedAppPackage({ publisher: "Microsoft", name: "System" }),
+      readControl: () =>
+        this.fetchPublishedAppPackage({ publisher: "LethAL", name: "LethAL Control" }),
+      controlVersion: () => verifier.fetchControlVersion(),
+      installed: (appId) => verifier.fetchInstalledVersions(appId),
+    };
   }
 
   private async connect(): Promise<Client> {

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**113 of 431 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**111 of 431 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -151,7 +151,7 @@ that ordering is the priority.
 - **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · open, filed 2026-09-30
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
-- **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · open, filed 2026-10-01
+- **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
 - **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
@@ -164,7 +164,7 @@ that ordering is the priority.
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
 - **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
-- **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · open, filed 2026-10-04
+- **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · done (4aeb224a)
 - **R434** · lethal verify cannot see an installed app outside the test app's dependency closure, nor a non-Microsoft dependency that is published but not the installed one · [R434.md](docs/roadmap/R434.md) · open, filed 2026-10-04
 
 ## Product gaps a real project hits

@@ -107,6 +107,67 @@ export class HarnessVerificationError extends Error {
 }
 
 /**
+ * R433: a request for BC's automation `extensions` list that is not filtered by exactly one app id
+ * (a bare GUID). Unfiltered, or filtered by publisher, that list never answered on Cronus28 (BC
+ * 28.4, 2026-10-04: the socket closed after about 166 s, three times) and the service tier then
+ * stopped answering until an owner restart; by id it answered in 39-49 ms. `fetchApiRows` throws
+ * this BEFORE any request is sent. Extends `Error` DIRECTLY, never `HarnessVerificationError`: it is
+ * a caller-contract violation inside LethAL, not a statement about the server, and nothing may
+ * read it as "the control app is missing".
+ */
+export class UnfilteredExtensionsQueryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnfilteredExtensionsQueryError";
+  }
+}
+
+/** A bare GUID, 8-4-4-4-12 hex digits: no braces, no quotes, no surrounding space. */
+const GUID_PATTERN = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const GUID_RE = new RegExp(`^${GUID_PATTERN}$`);
+/** The ONLY `$filter` an `extensions` request may carry (R433). JS `$` without the `m` flag matches
+ *  only at the very end, so a trailing newline or a second clause does not pass. */
+const EXTENSIONS_FILTER_RE = new RegExp(`^id eq ${GUID_PATTERN}$`);
+
+/** Every `%XX` escape replaced by its character, repeated until nothing changes (so `%2565` ends as
+ *  `e`). Lenient: a malformed escape stays as written and never throws. */
+function decodePercentEscapes(path: string): string {
+  let cur = path;
+  for (let i = 0; i < 16; i++) {
+    const next = cur.replace(/%([0-9a-fA-F]{2})/g, (_m, h: string) =>
+      String.fromCharCode(Number.parseInt(h, 16)),
+    );
+    if (next === cur) return cur;
+    cur = next;
+  }
+  return cur;
+}
+
+/** R433: throws unless an `extensions` request is filtered by exactly one GUID. Any path naming
+ *  `extensions` in any case counts (an encoded slash included); the path itself may carry no
+ *  query or fragment, and `extra` must be exactly `{ $filter: "id eq <GUID>" }`. */
+function refuseUnfilteredExtensionsQuery(
+  path: string,
+  extra: Readonly<Record<string, string>>,
+): void {
+  const decoded = decodePercentEscapes(path);
+  if (!/extensions/i.test(decoded)) return;
+  const keys = Object.keys(extra);
+  const filter = extra.$filter;
+  const ok =
+    !/[?#&]/.test(decoded) &&
+    keys.length === 1 &&
+    keys[0] === "$filter" &&
+    filter !== undefined &&
+    EXTENSIONS_FILTER_RE.test(filter);
+  if (!ok) {
+    throw new UnfilteredExtensionsQueryError(
+      `refusing to send an automation extensions query not filtered by exactly one app id: path ${JSON.stringify(path)}, query ${JSON.stringify(extra)}. Only \`$filter=id eq <GUID>\` is allowed — an unfiltered or publisher-filtered extensions list hung BC 28.4 and took the service tier down (R433).`,
+    );
+  }
+}
+
+/**
  * Design §7's single-tenant gate: app publication is service-instance-wide, so a per-tenant
  * lease cannot fence two tenants publishing to one container — 5C-B1 refuses such a container
  * outright, before any publish. Extends `Error` DIRECTLY (never `HarnessVerificationError`) so
@@ -361,30 +422,7 @@ export class HarnessVerifier {
     readonly installed: boolean;
     readonly versions: readonly string[];
   }> {
-    const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
-    const wanted = this.cfg.company.trim().toLowerCase();
-    const company = companies.find(
-      (r) =>
-        String((r as { name?: unknown }).name)
-          .trim()
-          .toLowerCase() === wanted,
-    ) as { id?: unknown } | undefined;
-    if (typeof company?.id !== "string") {
-      throw new HarnessVerificationError(
-        `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
-      );
-    }
-    const rows = (await this.fetchApiRows(
-      `api/microsoft/automation/v2.0/companies(${company.id})/extensions`,
-      "extensions list",
-      { $filter: `id eq ${appId}` },
-    )) as readonly {
-      isInstalled?: unknown;
-      versionMajor?: unknown;
-      versionMinor?: unknown;
-      versionBuild?: unknown;
-      versionRevision?: unknown;
-    }[];
+    const rows = await this.fetchExtensionRows(appId);
     return {
       installed: rows.some((r) => r.isInstalled === true),
       versions: rows.map(
@@ -394,6 +432,77 @@ export class HarnessVerifier {
     };
   }
 
+  /**
+   * R-385: the versions of `appId`'s INSTALLED rows in the configured company, read by id (R433).
+   * A published-but-not-installed row is left out: tests cannot run from it. Usually one version;
+   * the caller decides what none or two mean. A row whose `isInstalled` is not a boolean, or whose
+   * version parts are not numbers, throws: an unreadable row must not read as "not installed".
+   */
+  async fetchInstalledVersions(appId: string): Promise<readonly string[]> {
+    const out: string[] = [];
+    for (const r of await this.fetchExtensionRows(appId)) {
+      const parts = [r.versionMajor, r.versionMinor, r.versionBuild, r.versionRevision];
+      if (typeof r.isInstalled !== "boolean" || !parts.every((p) => typeof p === "number")) {
+        throw new HarnessVerificationError(
+          `extensions list returned a malformed row for app ${appId}: ${JSON.stringify(r).slice(0, 200)}`,
+        );
+      }
+      if (r.isInstalled) out.push(parts.join("."));
+    }
+    return out;
+  }
+
+  /** The configured company's id, looked up once per verifier (only a found id is kept). */
+  private companyId: string | undefined;
+
+  /**
+   * R433: the ONLY code that builds the automation `extensions` path. It refuses an `appId` that is
+   * not a bare GUID before any request, and always sends `$filter=id eq <guid>`; `fetchApiRows`
+   * refuses anything else again, at run time.
+   */
+  private async fetchExtensionRows(appId: string): Promise<
+    readonly {
+      isInstalled?: unknown;
+      versionMajor?: unknown;
+      versionMinor?: unknown;
+      versionBuild?: unknown;
+      versionRevision?: unknown;
+    }[]
+  > {
+    if (!GUID_RE.test(appId)) {
+      throw new HarnessVerificationError(
+        `app id ${JSON.stringify(appId)} is not a GUID; the extensions list is read only by one app id (R433)`,
+      );
+    }
+    if (this.companyId === undefined) {
+      const companies = await this.fetchApiRows("api/v2.0/companies", "companies list");
+      const wanted = this.cfg.company.trim().toLowerCase();
+      const company = companies.find(
+        (r) =>
+          String((r as { name?: unknown }).name)
+            .trim()
+            .toLowerCase() === wanted,
+      ) as { id?: unknown } | undefined;
+      if (typeof company?.id !== "string") {
+        throw new HarnessVerificationError(
+          `company ${JSON.stringify(this.cfg.company)} is not in this server's companies list`,
+        );
+      }
+      this.companyId = company.id;
+    }
+    return (await this.fetchApiRows(
+      `api/microsoft/automation/v2.0/companies(${this.companyId})/extensions`,
+      "extensions list",
+      { $filter: `id eq ${appId}` },
+    )) as readonly {
+      isInstalled?: unknown;
+      versionMajor?: unknown;
+      versionMinor?: unknown;
+      versionBuild?: unknown;
+      versionRevision?: unknown;
+    }[];
+  }
+
   /** One GET against a BC API list endpoint, returning its `value` rows. The company parameter is
    *  never sent: these endpoints address the company in the path, or list across companies. */
   private async fetchApiRows(
@@ -401,6 +510,8 @@ export class HarnessVerifier {
     what: string,
     extra: Readonly<Record<string, string>> = {},
   ): Promise<readonly unknown[]> {
+    // R433: before the URL is built, so a refused query never reaches the network.
+    refuseUnfilteredExtensionsQuery(path, extra);
     const params = new URLSearchParams(extra);
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
