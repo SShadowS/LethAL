@@ -25,7 +25,20 @@ import { ResultsStore } from "../src/store";
 // a concurrent full verify at load average up to 7.6. The 5 s default timeouts seen that day were
 // the whole process starved, not setup cost. 15 s is far above any measured cost, so a stall
 // past it is something we WANT to see fail.
-const test = (name: string, fn: () => Promise<void> | void) => bunTest(name, fn, 15_000);
+//
+// R428: the wrapper also tracks each WHOLE test (setup + body) in `inflight`. Bun does not cancel a
+// test that timed out, so its body keeps running; afterAll waits for all of them before cleaning.
+const inflight = new Set<Promise<unknown>>();
+const test = (name: string, fn: () => Promise<void> | void) =>
+  bunTest(
+    name,
+    () => {
+      const whole = Promise.resolve(fn());
+      inflight.add(whole);
+      return whole;
+    },
+    15_000,
+  );
 
 const HERE = import.meta.dir;
 const R214 = join(HERE, "fixtures", "r214");
@@ -76,11 +89,10 @@ class SurvivingBackend implements ExecutionBackend {
 }
 
 const roots: string[] = [];
-const inflight = new Set<Promise<unknown>>();
 afterAll(async () => {
-  // R428: bun does not cancel a test that timed out. Its mkdtemp/cp keeps running and can land
-  // AFTER this hook's rm, recreating the folder for R358's leak check to find. So wait for every
-  // setup still running first, then remove each root, then sweep by name for any folder whose
+  // R428: bun does not cancel a test that timed out. Its body (mkdtemp, cp, any later write) keeps
+  // running and can land AFTER this hook's rm, recreating the folder for R358's leak check to find.
+  // So wait for every whole test still running first, then remove each root, then sweep by name for any folder whose
   // path was never recorded. The sweep is safe: scripts/test-preload.ts points tmpdir() at a
   // folder private to this bun process, so it cannot touch another session's files.
   await Promise.allSettled(inflight);
@@ -91,18 +103,16 @@ afterAll(async () => {
 });
 
 /** A private copy of the R321 fixture pair, so a run never writes next to the committed one. */
-function makeSymbolsProject() {
-  const work = (async () => {
-    const root = await mkdtemp(join(tmpdir(), "lethal-r214-hist-"));
-    roots.push(root);
-    const projectDir = join(root, "app");
-    const testDir = join(root, "tests");
-    await cp(join(REPO, "fixtures", "sandbox-symbols"), projectDir, { recursive: true });
-    await cp(join(REPO, "fixtures", "sandbox-symbols-tests"), testDir, { recursive: true });
-    return { projectDir, testDir, instrumentedDir: join(root, "instr") };
-  })();
-  inflight.add(work);
-  return work;
+// Every caller is a test body, so the wrapper's whole-test promise already covers this setup; it
+// needs no tracking of its own.
+async function makeSymbolsProject() {
+  const root = await mkdtemp(join(tmpdir(), "lethal-r214-hist-"));
+  roots.push(root);
+  const projectDir = join(root, "app");
+  const testDir = join(root, "tests");
+  await cp(join(REPO, "fixtures", "sandbox-symbols"), projectDir, { recursive: true });
+  await cp(join(REPO, "fixtures", "sandbox-symbols-tests"), testDir, { recursive: true });
+  return { projectDir, testDir, instrumentedDir: join(root, "instr") };
 }
 
 /** The pre-committed key text of the arm pair's `return-value` under `set`, read from the committed
