@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { initParser } from "@lethal/engine";
+import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
@@ -26,6 +26,7 @@ import {
 } from "./equivalence-marks";
 import { createEmitter } from "./events";
 import { type GapRow, tallyGaps } from "./gaps";
+import { type AlSource, coverageRefusedObjects } from "./line-map";
 import {
   type InstalledArtifactRef,
   type NamedMutantRequest,
@@ -35,12 +36,13 @@ import {
 } from "./named-mutants";
 import {
   type LeaseSessionConfig,
+  type NamedMutantsConfig,
   type UnmutatedRun as NamedUnmutatedRun,
   type SessionConfig,
   qualifiedTestName,
   runNamedMutants,
 } from "./orchestrator";
-import { sameBuildSymbols } from "./preprocessor-symbols";
+import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
 import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
@@ -61,6 +63,14 @@ import {
 } from "./test-digest";
 import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
+import {
+  type ReachFilterOffReason,
+  type ReachFilterState,
+  type ReachResult,
+  type ReachState,
+  narrowVerifyRequests,
+  reachStateOf,
+} from "./verify-reach";
 
 /** C02-06 decision 7: every reason `lethal verify` can refuse for, before it measures anything. */
 export const VERIFY_REFUSALS = [
@@ -657,6 +667,24 @@ export interface VerifyPlan {
   /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
    *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
+  /** R-384: per requested mutant code, its source covering tests that run, in request order. The
+   *  reach filter never removes one of these. */
+  readonly covering: ReadonlyMap<string, readonly TestMethodRef[]>;
+  /** R-384: the cap's numbers, for check 2 after the filter and the state line. Its `s` is S,
+   *  fixed here before any filtering, never recomputed. */
+  readonly cap: CapNumbers;
+}
+
+/** R-384 The cap: what every too-many-new-tests text is built from. */
+export interface CapNumbers {
+  readonly runId: number;
+  /** N: new tests, TestPage-refused ones excluded. */
+  readonly n: number;
+  /** S: `running.length` in `planVerify`, fixed before any filtering (review 3). */
+  readonly s: number;
+  readonly max: number;
+  /** Built only when a check refuses: `explainNewTests` is not free. */
+  readonly editClasses: () => { readonly classes: string; readonly helpers: string };
 }
 
 /**
@@ -684,8 +712,17 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
-  /** R-371: refuse above this many new tests. Default `DEFAULT_MAX_NEW_TESTS`. */
+  /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
+   *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
+  /** R403: the test app's derived symbol set (`effectiveBuildSymbols(testDir, ...)`), under which
+   *  discovery evaluates the test files' arms. Absent means `[]`. */
+  readonly testBuildSymbols?: readonly string[];
+  /** R-384: verify's coverage mode (`backend.capabilities().coverage`), which with
+   *  `noReachFilter` decides whether the reach filter is on, and so which cap check runs here. */
+  readonly coverage: CoverageMode;
+  /** R-384: `--no-reach-filter`. */
+  readonly noReachFilter?: boolean;
 }): Promise<VerifyPlan> {
   const { source, manifest, sourceBaseline, sourceTestDigests, testDir } = a;
   const maxNewTests = a.maxNewTests ?? DEFAULT_MAX_NEW_TESTS;
@@ -739,6 +776,14 @@ export async function planVerify(a: {
       notRun: new Map(),
       allRefused: new Set(),
       marksUnderOtherScheme: staleMarks,
+      covering: new Map(),
+      cap: {
+        runId: source.runId,
+        n: 0,
+        s: 0,
+        max: maxNewTests,
+        editClasses: () => ({ classes: "", helpers: "" }),
+      },
     };
   }
 
@@ -795,7 +840,15 @@ export async function planVerify(a: {
     );
   }
 
-  const discovered = await discoverTests(testDir);
+  // R403: the parser before discovery, which parses each test file that holds a `[Test]`.
+  await initParser();
+  // R403: verify keeps the FILTERED list. It does not run a pre-published test-app package: it
+  // compiles the test app itself from `testDir` under the derived set (config symbols via alc's
+  // /define, plus the test app.json's own) and publishes exactly that build, after this plan. The
+  // suite it runs is therefore known from source, as on al-runner, so §3(c)'s no-evidence rule
+  // does not apply. A compiled-out test is not in that build, so it is never new and never rerun.
+  const discovered = (await discoverTests(testDir, { buildSymbols: a.testBuildSymbols ?? [] }))
+    .filtered;
   const baselineKeys = new Set(
     sourceBaseline.map((r) =>
       testKeyOf({ codeunitId: r.codeunitId, codeunitName: "", method: r.method }),
@@ -804,8 +857,7 @@ export async function planVerify(a: {
   // R-236c: verify runs fenced, so a test with a reachable call that may open a TestPage is never
   // planned. Throws TestPageScanError on unreadable reachable source, before anything is published.
   // Intended: it is rethrown raw (exit 1), not mapped to a verify refusal, so it fails loudly and
-  // VERIFY_REFUSALS keeps its value set.
-  await initParser();
+  // VERIFY_REFUSALS keeps its value set. (The parser was initialised before discovery, R403.)
   // R-371: ONE parse serves the scan and the digests.
   const model = buildTestAppModel(await readTestAppSources(testDir));
   const refusedWhy = scanTestPageModel(model, discovered);
@@ -835,27 +887,35 @@ export async function planVerify(a: {
   const isRefused = (ref: TestMethodRef) => testPageRefused.has(testKeyOf(ref));
   const newTests = discovered.filter((ref) => isNew(ref) && !isRefused(ref));
   const refusedNew = discovered.filter((ref) => isNew(ref) && isRefused(ref));
-  if (newTests.length > maxNewTests) {
-    const { causes, changedProcs } = explainNewTests(
-      model,
-      inputs,
-      newTests.map((ref) => ({
-        ref,
-        recorded: baselineKeys.has(testKeyOf(ref)) && recorded.has(testDigestKey(ref)),
-      })),
-      parseDigestParts(a.sourceTestDigestParts ?? null),
-    );
-    throw new VerifyError(
-      "too-many-new-tests",
-      tooManyNewTestsDetail(
-        source,
-        running.length,
-        newTests.length,
-        maxNewTests,
-        causes,
-        changedProcs,
+  // R-384 The cap (R4): EXTRA TEST RUNS against a budget, S fixed here, before any filtering.
+  // Built only when a check refuses, so a passing run pays no `explainNewTests`.
+  const cap: CapNumbers = {
+    runId: source.runId,
+    n: newTests.length,
+    s: running.length,
+    max: maxNewTests,
+    editClasses: () =>
+      editClassesOf(
+        explainNewTests(
+          model,
+          inputs,
+          newTests.map((ref) => ({
+            ref,
+            recorded: baselineKeys.has(testKeyOf(ref)) && recorded.has(testDigestKey(ref)),
+          })),
+          parseDigestParts(a.sourceTestDigestParts ?? null),
+        ),
       ),
-    );
+  };
+  const reachState = reachStateOf(a.coverage, a.noReachFilter !== true);
+  const budget = cap.max * (cap.s + 2);
+  if (!reachState.on && cap.s * cap.n + 2 * cap.n > budget) {
+    throw new VerifyError("too-many-new-tests", capOffDetail(cap, reachState.why));
+  }
+  // R-427 (ruling 3): check 1 is N > B. A new test sent to no survivor is not rerun, so the
+  // baseline run is the one count no filter can lower.
+  if (reachState.on && cap.n > budget) {
+    throw new VerifyError("too-many-new-tests", capCheckOneDetail(cap));
   }
 
   // Decision 5, ruling 10: a covering NAME picks exactly one source baseline row, and the test
@@ -885,6 +945,7 @@ export async function planVerify(a: {
   const requests: NamedMutantRequest[] = [];
   const notRun = new Map<string, readonly string[]>();
   const allRefused = new Set<string>();
+  const covering = new Map<string, readonly TestMethodRef[]>();
   for (const t of running) {
     const notRunHere: string[] = [];
     const seen = new Set<string>();
@@ -901,6 +962,7 @@ export async function planVerify(a: {
       else if (isRefused(ref)) notRunHere.push(qualifiedTestName(ref));
       else add(ref);
     }
+    const coveringHere = [...methods];
     for (const ref of newTests) add(ref);
     notRunHere.push(...refusedNew.map(qualifiedTestName));
     if (notRunHere.length > 0) notRun.set(t.mutantCode, notRunHere);
@@ -911,6 +973,7 @@ export async function planVerify(a: {
       continue;
     }
     requests.push({ mutantId: t.mutantCode, methods });
+    covering.set(t.mutantCode, coveringHere);
   }
   if (unmatched.length > 0) {
     throw new VerifyError(
@@ -933,6 +996,8 @@ export async function planVerify(a: {
     notRun,
     allRefused,
     marksUnderOtherScheme: staleMarks,
+    covering,
+    cap,
   };
 }
 
@@ -956,23 +1021,66 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
   unknown: "the source run recorded no parts to compare against",
 };
 
-function tooManyNewTestsDetail(
-  source: VerifySource,
-  survivors: number,
-  n: number,
-  max: number,
-  causes: ReadonlyMap<NewTestCause, number>,
-  changedProcs: readonly string[],
-): string {
-  const why = [...causes]
+/** R-371: the edit classes and changed procedures a too-many-new-tests refusal names. */
+function editClassesOf(e: {
+  readonly causes: ReadonlyMap<NewTestCause, number>;
+  readonly changedProcs: readonly string[];
+}): { readonly classes: string; readonly helpers: string } {
+  const classes = [...e.causes]
     .sort((x, y) => y[1] - x[1])
     .map(([c, k]) => `${c}: ${k} test(s), ${CAUSE_WORDS[c]}`)
     .join("; ");
-  const shown = changedProcs.slice(0, 5);
+  const shown = e.changedProcs.slice(0, 5);
   const more =
-    changedProcs.length > shown.length ? ` and ${changedProcs.length - shown.length} more` : "";
+    e.changedProcs.length > shown.length ? ` and ${e.changedProcs.length - shown.length} more` : "";
   const helpers = shown.length > 0 ? ` Changed procedures: ${shown.join(", ")}${more}.` : "";
-  return `${n} tests are new or edited since run ${source.runId}, above --max-new-tests ${max}. Each runs twice unmutated and joins every survivor's request, about ${survivors * n + 2 * n} extra test runs for ${survivors} survivor(s). Edit classes: ${why}.${helpers} To run them all, pass --max-new-tests ${n}; or run lethal run again so this source is the recorded one`;
+  return { classes, helpers };
+}
+
+/** R-384: the budget sentence every cap text shares. */
+function budgetSentence(c: CapNumbers): string {
+  return `The budget is --max-new-tests ${c.max} x (${c.s} survivor(s) + 2) = ${c.max * (c.s + 2)} extra test runs.`;
+}
+
+/** R-384 The cap, filter off: refuse iff S·N + 2N > B, which is today's N > max. */
+function capOffDetail(c: CapNumbers, why: string): string {
+  const { classes, helpers } = c.editClasses();
+  return `${c.n} tests are new or edited since run ${c.runId}. The coverage filter is off (${why}), so they need ${c.s * c.n + 2 * c.n} extra test runs (${2 * c.n} unmutated, ${c.s * c.n} against ${c.s} survivor(s)). ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
+}
+
+/**
+ * R-384 The cap, filter on, check 1 (before any lease): the filter cannot lower N, each new
+ * test's one baseline run. R-427 (ruling 3): N, not 2N, since a test sent to no survivor is not
+ * rerun.
+ */
+function capCheckOneDetail(c: CapNumbers): string {
+  const { classes, helpers } = c.editClasses();
+  return `${c.n} tests are new or edited since run ${c.runId}. Each runs at least once unmutated, ${c.n} extra test runs, and the coverage filter cannot lower that; without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
+}
+
+/**
+ * R-384 The cap, filter on, check 2 (inside `narrow`, after the baseline, before the first
+ * mutant): E extra test runs against the same budget. `undefined` when E fits. R-427:
+ * E = N + R + P, where R (`rerun`) counts the new tests sent to at least one survivor, the only
+ * ones rerun. With R = N the text is R-384's, byte for byte (ruling 4).
+ */
+export function capCheckTwoDetail(
+  c: CapNumbers,
+  joins: number,
+  failClosed: number,
+  rerun: number,
+): string | undefined {
+  if (rerun < 0 || rerun > c.n) {
+    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
+  }
+  const e = c.n + rerun + joins;
+  if (e <= c.max * (c.s + 2)) return undefined;
+  const { classes, helpers } = c.editClasses();
+  const unmutated =
+    rerun === c.n
+      ? `${2 * c.n} unmutated,`
+      : `${c.n + rerun} unmutated: ${c.n} baseline, ${rerun} rerun, ${c.n - rerun} test(s) sent to no survivor are not rerun;`;
+  return `${c.n} tests are new or edited since run ${c.runId}. After the coverage filter they need ${e} extra test runs (${unmutated} ${joins} against ${c.s} survivor(s); ${failClosed} test(s) joined every survivor because their coverage could not be used); without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} The unmutated runs had already run when this was found. Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${Math.ceil(e / (c.s + 2))}; or run lethal run again so this source is the recorded one`;
 }
 
 /**
@@ -997,11 +1105,22 @@ export async function verifyDependencyFingerprint(
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons.
  *  3 since R354 added the refusal reason `coverage-mode-changed`: a new value, so it bumps (R233);
  *  v2 is frozen. 4 since R-371 added `too-many-new-tests` and `dependency-unreadable`; v3 is
- *  frozen. */
-export const VERIFY_SCHEMA_VERSION = 4;
+ *  frozen. 5 since R-425 added `reachFilter` and `results[].reachNarrowed`. Adding a field does
+ *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
+ *  report it means the report predates the record; the version is the one thing that tells the
+ *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
+ *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 6;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
-export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
+export const NEW_TEST_STATES = [
+  "stable",
+  "flaky",
+  "red",
+  "flaky-unknown",
+  "infra-error",
+  "not-rerun",
+] as const;
 /** R262: an unmutated run's outcome exactly as the backend answered it, plus `not-run`. */
 export const UNMUTATED_OUTCOMES = [
   "pass",
@@ -1045,7 +1164,8 @@ export interface NewTestResult {
   readonly test: string;
   readonly codeunitId: number;
   readonly state: NewTestState;
-  /** `[baseline, rerun]`. */
+  /** `[baseline, rerun]`; `[baseline]` alone when `state` is `not-rerun` (R-427: the reach
+   *  filter sent the test to no survivor, so its stability is unknown, never `stable`). */
   readonly runs: readonly UnmutatedRun[];
   /** The first failing run's text. */
   readonly failure?: string;
@@ -1085,10 +1205,31 @@ export interface VerifyResult {
     readonly reason: "reader-marked-equivalent";
     readonly mark: { readonly key: string; readonly reason: string };
   };
+  /** R-425: true when R-384's reach filter left at least one new test out of this survivor's
+   *  request; false when it did not, or the filter was off. Absent when the filter never decided
+   *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
+   *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
+  readonly reachNarrowed?: boolean;
+}
+
+/** R-425: R-384's reach-filter state, as the JSON records it. */
+export interface VerifyReachFilter {
+  readonly state: ReachFilterState;
+  /** Present exactly when `state` is "off". */
+  readonly reason?: ReachFilterOffReason;
+}
+
+/** R-425: the JSON form of a decided `ReachState`. `why` is stderr's and is not repeated. */
+export function verifyReachFilterOf(s: ReachState): VerifyReachFilter {
+  return s.on ? { state: "on" } : { state: "off", reason: s.reason };
 }
 
 export interface VerifyOutput {
   readonly verifySchemaVersion: number;
+  /** R-425: whether R-384's reach filter ran, and when not, why. Present whenever verify got past
+   *  the `coverage-mode-changed` check, later refusals included; absent when it stopped before
+   *  deciding. */
+  readonly reachFilter?: VerifyReachFilter;
   /** `exitCode === 0`. */
   readonly ok: boolean;
   readonly exitCode: number;
@@ -1170,7 +1311,9 @@ export function verifyExitCode(o: {
   }
   if (
     measured.some((r) => r.verdict !== "killed") ||
-    o.newTests.some((t) => t.state !== "stable")
+    // R-427 (ruling 2): `not-rerun` gated no verdict (it was sent to no survivor), so it does
+    // not block exit 0; it never reads as `stable` either.
+    o.newTests.some((t) => t.state !== "stable" && t.state !== "not-rerun")
   ) {
     return VERIFY_EXIT.notAllKilled;
   }
@@ -1228,6 +1371,25 @@ function newTestResultOf(
   };
 }
 
+/**
+ * R-427: a new test the reach filter sent to no survivor ran its baseline only. Only a filterable
+ * test can be unsent, and that needs a fresh green baseline, so anything else is a bug.
+ */
+function notRerunResultOf(ref: TestMethodRef, baseline: NamedUnmutatedRun): NewTestResult {
+  const b = unmutatedRunOf(baseline);
+  if (!(b.fresh && b.outcome === "pass")) {
+    throw new Error(
+      `verify.ts: new test ${testKeyOf(ref)} was not rerun, but its baseline was not a fresh pass (${b.outcome}, fresh ${b.fresh}); only a test with a fresh green baseline can be sent to no survivor (a bug)`,
+    );
+  }
+  return {
+    test: qualifiedTestName(ref),
+    codeunitId: ref.codeunitId,
+    state: "not-rerun",
+    runs: [b],
+  };
+}
+
 export interface VerifyDeps {
   readonly store: ResultsStore;
   readonly backend: ExecutionBackend & Pick<BcDevMcpBackend, "compileTestApp" | "publishTestApp">;
@@ -1241,6 +1403,9 @@ export interface VerifyDeps {
   readonly now?: () => number;
   /** Seam for tests; defaults to runNamedMutants. */
   readonly runNamed?: typeof runNamedMutants;
+  /** R-384: where verify's reach-filter state lines go. Default: stderr. Never stdout, which holds
+   *  the JSON only. */
+  readonly log?: (line: string) => void;
 }
 
 const NO_COUNTS = { killed: 0, survived: 0, error: 0, skipped: 0 } as const;
@@ -1259,6 +1424,8 @@ export async function runVerify(
     readonly testDir: string;
     /** R-371: `--max-new-tests`; default `DEFAULT_MAX_NEW_TESTS`. */
     readonly maxNewTests?: number;
+    /** R-384: `--no-reach-filter`: every new test runs against every survivor, as before. */
+    readonly noReachFilter?: boolean;
   },
   deps: VerifyDeps,
 ): Promise<VerifyOutput> {
@@ -1271,8 +1438,11 @@ export async function runVerify(
   let compileMs: number | undefined;
   let publishMs: number | undefined;
   let published: PublishedTestApp | undefined;
+  // R-425: set once, right after the coverage-mode-changed check; undefined means "not decided".
+  let decided: ReachState | undefined;
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
+    ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
     ...(source !== undefined && artifactId !== undefined
       ? {
           source: {
@@ -1324,6 +1494,10 @@ export async function runVerify(
         }, but verify measures under coverage mode ${coverageMode}. Its survived and no-coverage verdicts and its covering-test lists were attributed under that mode, so they do not say which tests reach a mutant under this one (R354). Run lethal run again under this configuration, then verify with its artifact id.`,
       );
     }
+    // R-384: rule 1. Off, verify sends exactly what it sent before: no `narrow` at all. R-425:
+    // decided here, so every later refusal records it too.
+    const reachState = reachStateOf(coverageMode, args.noReachFilter !== true);
+    decided = reachState;
     // R214: a run recorded before its build symbols were cannot tie its keys to one build. Never
     // read as `[]`.
     if (source.buildSymbols === null) {
@@ -1344,6 +1518,16 @@ export async function runVerify(
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
+      // R-384: the filter state decides which cap check runs before the lease.
+      coverage: coverageMode,
+      ...(args.noReachFilter !== undefined ? { noReachFilter: args.noReachFilter } : {}),
+      // R403: verify runs on bcdev only, so alc's set: the config's symbols plus the test app.json's.
+      testBuildSymbols: await effectiveBuildSymbols(
+        args.testDir,
+        deps.preprocessorSymbols,
+        undefined,
+        { kind: "bcdev" },
+      ),
     });
     const skippedBy = new Map(plan.skipped.map((s) => [s.entry.mutantId, s] as const));
     const marksWarning = marksSchemeWarning(
@@ -1370,6 +1554,50 @@ export async function runVerify(
     }
 
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
+    const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+    let reach: ReachResult | undefined;
+    const planned = source;
+    if (plan.requests.length > 0 && !reachState.on) {
+      log(
+        `[lethal] verify: reach filter off (${reachState.why}): every new test runs against every survivor.`,
+      );
+    }
+    const narrow: NamedMutantsConfig["narrow"] = reachState.on
+      ? (baseline, ctx) => {
+          if (ctx.coverage !== coverageMode) {
+            throw new Error(
+              `verify.ts: the baseline was measured under coverage mode ${ctx.coverage}, but verify planned under ${coverageMode}`,
+            );
+          }
+          const r = narrowVerifyRequests({
+            mode: ctx.coverage,
+            enabled: true,
+            survivors: plan.requests.map((q) => {
+              const e = plan.entries.get(q.mutantId);
+              if (e === undefined) throw new Error(`verify.ts: ${q.mutantId} has no entry`);
+              return e;
+            }),
+            coveringKeys: plan.covering,
+            newTests: plan.newTests,
+            baseline,
+            refusedObjects: refusedObjectsOfSources(ctx.alSources),
+          });
+          // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
+          // on the way out, so the refusal is safe here.
+          // R-427: R, the new tests sent to at least one survivor, the only ones rerun.
+          const over = capCheckTwoDetail(
+            plan.cap,
+            r.joins,
+            r.failClosedTests.length,
+            plan.cap.n - r.unsent.size,
+          );
+          if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
+          reach = r;
+          reportReach(r, plan, planned, log, deps.emit);
+          // R-427: a new test sent to no survivor is not rerun.
+          return { methods: r.methods, unreached: r.unreached, notRerun: r.unsent };
+        }
+      : undefined;
     if (plan.requests.length > 0) {
       // Before any lease: a compile failure costs no lease, no run row and no server call.
       const tc = now();
@@ -1410,12 +1638,34 @@ export async function runVerify(
           published = await backend.publishTestApp(fence, compiled);
           publishMs = now() - tp;
         },
+        ...(narrow !== undefined ? { narrow } : {}),
       });
     }
 
     // Decision 11: every new test's two unmutated runs, from this call's own answers.
     const newKeys = new Set(plan.newTests.map(testKeyOf));
     const ran = res;
+    // R-427: the tests runNamedMutants did not rerun must be exactly the ones the reach filter
+    // sent to no survivor, as `unreached` is cross-checked below, so a backend that ignores
+    // `notRerun` cannot report a test it never skipped, nor skip one the filter sent.
+    if (ran !== undefined) {
+      const skipped = new Set(ran.notRerun ?? []);
+      const unsent = reach?.unsent ?? new Set<string>();
+      for (const k of unsent) {
+        if (!skipped.has(k)) {
+          throw new Error(
+            `verify.ts: the reach filter sent ${k} to no survivor, but runNamedMutants did not skip its rerun`,
+          );
+        }
+      }
+      for (const k of skipped) {
+        if (!unsent.has(k)) {
+          throw new Error(
+            `verify.ts: runNamedMutants skipped the rerun of ${k}, but the reach filter did not leave it unsent`,
+          );
+        }
+      }
+    }
     const newTests =
       ran === undefined
         ? []
@@ -1423,12 +1673,27 @@ export async function runVerify(
             const key = testKeyOf(ref);
             const b = ran.baseline.find((x) => testKeyOf(x.ref) === key);
             const r = ran.rerun.find((x) => testKeyOf(x.ref) === key);
+            const notRerun = (ran.notRerun ?? []).includes(key);
+            if (b !== undefined && r !== undefined && notRerun) {
+              throw new Error(
+                `verify.ts: runNamedMutants answered new test ${key} both rerun and not rerun`,
+              );
+            }
+            if (b !== undefined && notRerun) return notRerunResultOf(ref, b);
             if (b === undefined || r === undefined) {
               throw new Error(`verify.ts: runNamedMutants did not answer new test ${key}`);
             }
             return newTestResultOf(ref, b, r);
           });
 
+    // R-425: off, nothing can be narrowed; on, the filter's own answer, and nothing when it never
+    // ran (the session latched unsafe before `select`, so the row keeps the unfiltered request).
+    const narrowedOf = (id: string): { reachNarrowed?: boolean } =>
+      !reachState.on
+        ? { reachNarrowed: false }
+        : reach !== undefined
+          ? { reachNarrowed: reach.narrowed.has(id) }
+          : {};
     const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
     const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
     const results = source.targets.map((t): VerifyResult => {
@@ -1465,16 +1730,36 @@ export async function runVerify(
             "TestPage refused, not run: every test that reaches this mutant has a reachable call that may open a TestPage, so none was sent (R-236c)",
         };
       }
+      const notRun = plan.notRun.get(t.mutantCode);
+      // R-384 (ruled R2): a survivor no new test reaches, with no covering test, is sent nothing and
+      // stays `survived`. No new verdict.
+      if (ran?.unreached?.includes(t.mutantCode) === true) {
+        if (reach === undefined || !reach.unreached.has(t.mutantCode)) {
+          throw new Error(
+            `verify.ts: runNamedMutants answered ${t.mutantCode} unreached, but the reach filter did not leave it without tests`,
+          );
+        }
+        return {
+          ...base,
+          verdict: "survived",
+          testsRun: [],
+          ...(notRun !== undefined ? { notRun } : {}),
+          ...narrowedOf(t.mutantCode),
+          failureNote: `no new test reaches it: the coverage of the ${reach.filterable} new test(s) that could be read shows none of them running ${memberOf(entry)}, so nothing was run (R-384)`,
+        };
+      }
       const o = outcomeBy.get(t.mutantCode);
       const request = requestBy.get(t.mutantCode);
       if (o === undefined || request === undefined) {
         throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
       }
-      const notRun = plan.notRun.get(t.mutantCode);
+      // R-384: the methods actually sent, after the reach filter when it ran.
+      const sent = reach?.methods.get(t.mutantCode) ?? request.methods;
       return {
         ...base,
-        ...measuredResultOf(o, request.methods, newKeys, published),
+        ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
+        ...narrowedOf(t.mutantCode),
       };
     });
 
@@ -1515,8 +1800,10 @@ export async function runVerify(
 }
 
 /**
- * The output for a typed refusal or quarantine caught before anything was measured: `results: []`
- * always. `undefined` for any other error, which the caller rethrows (exit 1).
+ * The output for a typed refusal or quarantine caught before any mutant was measured: `results: []`
+ * always. Every refusal comes before anything runs except R-384's cap check 2, which comes after
+ * the unmutated baseline runs and before the first mutant. `undefined` for any other error, which
+ * the caller rethrows (exit 1).
  */
 export function refusalOutput(
   err: unknown,
@@ -1538,6 +1825,73 @@ export function refusalOutput(
     ...out,
     timings,
   };
+}
+
+/** R-384: the member a survivor's coverage is looked up by, for its `failureNote`. */
+function memberOf(e: MutantManifestEntry): string {
+  if (e.procedureName !== "") return e.procedureName;
+  if (e.triggerName !== undefined) return e.triggerName;
+  return (e.coverageArmNames ?? []).join(" or ");
+}
+
+/**
+ * R-384 (rule 3): R298's refused objects of the INSTALLED sources, parsed as `lineMapFromSources`
+ * parses them. These are the files `attach` built the fenced line map from, so the coverage lines
+ * were placed in them; the project on disk may have changed since, the installed build has not.
+ * The parser was initialised by `planVerify`.
+ */
+function refusedObjectsOfSources(sources: readonly AlSource[]): ReadonlyMap<string, string> {
+  return coverageRefusedObjects(
+    sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
+  );
+}
+
+/** R-384 rules 7 and 8: the `verify-reach-fail-closed` warnings and the state lines. */
+function reportReach(
+  r: ReachResult,
+  plan: VerifyPlan,
+  source: VerifySource,
+  log: (line: string) => void,
+  emitTo: SessionConfig["emit"],
+): void {
+  const batchOf = new Map(source.targets.map((t) => [t.mutantCode, t.batchIndex] as const));
+  const ids = (codes: Iterable<string>) =>
+    [...codes]
+      .map((c) => {
+        const b = batchOf.get(c);
+        if (b === undefined) throw new Error(`verify.ts: ${c} is not a target`);
+        return mutantRef(b, c);
+      })
+      .join(", ");
+  const warnings: string[] = [];
+  if (r.failClosedTests.length > 0) {
+    warnings.push(
+      `${r.failClosedTests.length} new test(s) join every survivor because their coverage could not be used: ${r.failClosedTests.map((f) => `${qualifiedTestName(f.ref)} (${f.why})`).join("; ")}`,
+    );
+  }
+  if (r.failClosedSurvivors.length > 0) {
+    warnings.push(
+      `${r.failClosedSurvivors.length} survivor(s) take every new test because coverage cannot place their code (R175/R298): ${ids(r.failClosedSurvivors.map((s) => s.mutantId))}`,
+    );
+  }
+  if (r.untargeted.length > 0) {
+    warnings.push(
+      `${r.untargeted.length} table-trigger survivor(s) take all ${r.filterable} new test(s) whose coverage could be read, because none of them touched that table: ${ids(r.untargeted)}`,
+    );
+  }
+  if (emitTo !== undefined) {
+    const emit = createEmitter(emitTo);
+    for (const message of warnings) {
+      emit({ type: "warning", code: "verify-reach-fail-closed", message });
+    }
+  }
+  const n = plan.newTests.length;
+  // The survivors' order is the request order, which is the source's target order.
+  const noNew = plan.requests.map((q) => q.mutantId).filter((id) => r.noNewTest.has(id));
+  log(
+    `[lethal] verify: reach filter on (fenced coverage): ${n} new test(s), ${r.failClosedTests.length} joined every survivor because their coverage could not be used; ${r.joins} mutant run(s) instead of ${plan.cap.s * n} without the filter; ${noNew.length} survivor(s) no new test reaches.`,
+  );
+  if (noNew.length > 0) log(`[lethal] verify: survivors no new test reaches: ${ids(noNew)}`);
 }
 
 type MeasuredPart = Omit<

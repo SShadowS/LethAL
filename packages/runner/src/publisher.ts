@@ -236,7 +236,9 @@ export async function defaultAlToolPaths(
   } catch {
     return undefined;
   }
-  const alExtensions = entries.filter((e) => e.startsWith("ms-dynamics-smb.al-"));
+  // A folder whose suffix is not a version (the kraken image's stable `ms-dynamics-smb.al-current`
+  // symlink) is skipped: it would parse as version 0 and could never be the newest.
+  const alExtensions = entries.filter((e) => /^ms-dynamics-smb\.al-\d/.test(e));
   if (alExtensions.length === 0) return undefined;
 
   const sorted = alExtensions.sort((a, b) => {

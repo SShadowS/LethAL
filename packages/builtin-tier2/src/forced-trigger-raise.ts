@@ -1,9 +1,12 @@
 import {
   ALNodeKind,
   type ALSyntaxNode,
+  type NodeArm,
   type SemanticContext,
   type SymbolTable,
   armOfNode,
+  liveMembers,
+  rawArmOf,
   resolveReceiverTable,
 } from "@lethal/engine";
 
@@ -90,8 +93,9 @@ export function resolveForcedTrigger(
   const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
   if (table === null) return null;
   // R378: a trigger declared in an arm this build compiles out is not in the build. An undecided
-  // file keeps today's lookup (only "inactive" is skipped), so no mutant can appear from this.
-  return findTableTrigger(table.node, triggerName, (n) => armOfNode(ctx, n) !== "inactive");
+  // file keeps today's lookup of DIRECT triggers (only "inactive" is skipped). R405 (a): a trigger
+  // inside a member-level `#if` is found only when its arm is active; never in an undecided file.
+  return findTableTrigger(table.node, triggerName, rawArmOf(ctx));
 }
 
 /**
@@ -122,18 +126,18 @@ export function forcedTriggerCanRaise(trigger: ALSyntaxNode, ctx?: SemanticConte
 /**
  * A TABLE-level trigger declaration by name, never a field's.
  *
- * Direct members only: a field's `OnValidate` sits inside a `field_declaration` inside a
- * `fields_section`, and a recursive search would find one and call it the table's `OnInsert`.
+ * Members only (`liveMembers`), never a recursive search: a field's `OnValidate` sits inside a
+ * `field_declaration` inside a `fields_section`, and a recursive search would find one and call it
+ * the table's `OnInsert`. R405 (a): `liveMembers` also yields a trigger inside a member-level
+ * `#if` whose arm is active, and drops a direct one the build compiles out.
  */
 function findTableTrigger(
   tableNode: ALSyntaxNode,
   triggerName: string,
-  isLive: (node: ALSyntaxNode) => boolean,
+  armOf: ((node: ALSyntaxNode) => NodeArm) | undefined,
 ): ALSyntaxNode | null {
-  const body = tableNode.namedChildren.find((c) => c.rawKind === "declaration_body") ?? tableNode;
-  for (const member of body.namedChildren) {
+  for (const { node: member } of liveMembers(tableNode, armOf)) {
     if (member.rawKind !== "trigger_declaration") continue;
-    if (!isLive(member)) continue;
     const name = member.namedChildren.find(
       (c) => c.rawKind === "identifier" || c.rawKind === "quoted_identifier",
     );

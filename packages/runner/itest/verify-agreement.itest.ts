@@ -56,7 +56,7 @@ import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
 import type { PublishedTestApp } from "../src/test-app-publish";
 import { scanTestPageTests } from "../src/testpage-scan";
-import { VERIFY_EXIT } from "../src/verify";
+import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
@@ -79,6 +79,7 @@ import {
   compareVerifyToFullRun,
   writeScratchSuite,
 } from "./verify-agreement";
+import { assertReachFields } from "./verify-reach-fields";
 
 if (!process.env.LETHAL_ITEST_AGREEMENT) {
   console.log(
@@ -127,6 +128,16 @@ const KILL_TEXTS: Readonly<Record<Exclude<Planted, "S5">, string>> = {
   S3: "FirstAmount() should be 7, got 9",
   S4: "SetAmount(Entry, 5) should leave Doubled 10, got 0",
 };
+/** R-384 pre-commitment: each killed survivor's ONE source covering test, in `Harden Tests`. */
+const BASE_COVERING: Readonly<Record<Exclude<Planted, "S5">, string>> = {
+  S1: "IsLargeSeparatesSmallFromLarge",
+  S2: "CountInCategoryCountsRows",
+  S3: "FirstAmountReadsARow",
+  S4: "SetAmountStoresTheAmount",
+};
+/** R-384 pre-commitment: verify's one reach line in step 3 (no survivor is left unreached). */
+const REACH_STEP3 =
+  "[lethal] verify: reach filter on (fenced coverage): 5 new test(s), 0 joined every survivor because their coverage could not be used; 4 mutant run(s) instead of 20 without the filter; 0 survivor(s) no new test reaches.";
 const PLANTED: readonly Planted[] = ["S1", "S2", "S3", "S4", "S5"];
 const KILLED_PLANTED = ["S1", "S2", "S3", "S4"] as const;
 const SCRATCH_TESTS = [
@@ -382,6 +393,9 @@ async function main(): Promise<void> {
       const acquiresBefore = acquires;
       const publishesBefore = testAppPublishes;
       let text = "";
+      // R-384: verifyFromCli hands runVerify a `log` that writes the reach filter's state lines to
+      // stderr; wrap its runVerify seam to capture them (still echoed to stderr).
+      const reachLog: string[] = [];
       const code = await verifyFromCli(
         {
           mode: "verify",
@@ -395,6 +409,14 @@ async function main(): Promise<void> {
           write: (t) => {
             text += t;
           },
+          runVerify: (args, deps) =>
+            runVerify(args, {
+              ...deps,
+              log: (line) => {
+                reachLog.push(line);
+                process.stderr.write(`${line}\n`);
+              },
+            }),
         },
       );
       const publishes = testAppPublishes - publishesBefore;
@@ -448,6 +470,17 @@ async function main(): Promise<void> {
       );
       for (const nt of out.newTests) {
         assert.equal(nt.codeunitId, SCRATCH_ANSWERS.codeunitId, `step 3: ${nt.test} codeunit`);
+        if (nt.test === "Harden Verify Answers.BonusForTwiceOnOneInstance") {
+          // K5, R-427 addendum: no survivor reaches it, so it is run ONCE, not twice.
+          assert.equal(nt.state, "not-rerun", `step 3: K5 not-rerun (${JSON.stringify(nt)})`);
+          assert.equal(nt.runs.length, 1, `step 3: K5 exactly one run (${JSON.stringify(nt)})`);
+          const [only] = nt.runs;
+          assert.ok(only !== undefined, "step 3: K5 has its one run");
+          assert.equal(only.outcome, "pass", `step 3: K5 (${JSON.stringify(only)})`);
+          assert.equal(only.fresh, true, `step 3: K5 fresh (${JSON.stringify(only)})`);
+          assert.ok(only.sessionId !== undefined, "step 3: K5 sessionId defined");
+          continue;
+        }
         assert.equal(nt.state, "stable", `step 3: ${nt.test} stable (${JSON.stringify(nt)})`);
         const [b, r] = nt.runs;
         assert.ok(
@@ -489,8 +522,28 @@ async function main(): Promise<void> {
           `step 3: ${p}'s failure text ${JSON.stringify(row.killingTestFailure)} lacks ${JSON.stringify(KILL_TEXTS[p])}`,
         );
       }
+      // R-384 pre-commitment: each Sx is sent its own base test plus the one answer test that
+      // reaches it, and nothing else (BonusForTwiceOnOneInstance reaches only the skipped S5).
+      for (const p of KILLED_PLANTED) {
+        const row = rowOf(p);
+        assert.ok(row.testsRun !== undefined, `step 3: ${p} carries testsRun`);
+        assert.deepEqual(
+          [...row.testsRun].sort(),
+          [
+            `${BASE_TESTS.codeunitName}.${BASE_COVERING[p]}`,
+            `${SCRATCH_ANSWERS.codeunitName}.${ANSWER_KILLERS[p]}`,
+          ].sort(),
+          `step 3: ${p} testsRun (${row.testsRun.join(", ")})`,
+        );
+      }
+      assert.deepEqual(
+        reachLog,
+        [REACH_STEP3],
+        `step 3: the reach log (${JSON.stringify(reachLog)})`,
+      );
       const s5 = rowOf("S5");
       assert.equal(s5.verdict, "skipped", "step 3: S5 skipped");
+      assert.equal(s5.testsRun, undefined, "step 3: S5 is sent nothing (skipped, no testsRun)");
       assert.equal(s5.skipped?.reason, "reader-marked-equivalent", "step 3: S5 skip reason");
       assert.equal(s5.skipped?.mark.key, PLANTED_KEYS.S5, "step 3: S5's mark key");
       assert.deepEqual(
@@ -518,9 +571,27 @@ async function main(): Promise<void> {
         `step 3: a lease acquire right after must succeed: ${JSON.stringify(outcome)}`,
       );
       await client.release(outcome.lease);
+      // R-425 pre-commitment: the JSON records the filter. Each Sx is narrowed, dropping the four
+      // answer tests other than its own killer; S5 is skipped, so it carries no reachNarrowed.
+      assertReachFields("step 3", out, {
+        filter: { state: "on" },
+        rows: {
+          ...Object.fromEntries(
+            KILLED_PLANTED.map((p) => {
+              const own = `${SCRATCH_ANSWERS.codeunitName}.${ANSWER_KILLERS[p]}`;
+              assert.ok(answerNames.includes(own), `step 3: ${own} is an answer test`);
+              return [
+                idOf(p),
+                { narrowed: true, dropped: answerNames.filter((t) => t !== own) },
+              ] as const;
+            }),
+          ),
+          [idOf("S5")]: "absent",
+        },
+      });
       const verifyMs = out.timings.totalMs;
       console.log(
-        `step 3 PASS: 4 killed by the answer tests, S5 skipped; exit 0; one test-app publish; read-back equal; lease free; verify totalMs ${verifyMs}`,
+        `step 3 PASS: 4 killed by the answer tests, S5 skipped; testsRun and reach line as pre-committed (R-384); exit 0; one test-app publish; read-back equal; lease free; verify totalMs ${verifyMs}`,
       );
 
       // ---- 4. Fresh full run B with the suite verify published. New store, no resume.

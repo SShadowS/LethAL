@@ -455,8 +455,10 @@ describe("sessionFingerprint (R47)", () => {
   // 16c632ac...9307 before), so no store keyed under an older scheme can be resumed. It moved again
   // for R323 (scheme 3; it was 9604b7d7...b2d5 under scheme 2). It moved again for R318, scheme 4;
   // it was 4a8c47ac...288a under scheme 3. It moved again for R214 (the next scheme after R318's);
-  // it was 25fdc64a...3be4f under scheme 4.
-  const PINNED = "ef3bb9d1f2134482a63cca3f4fe735ed677e0c5d644ede3979857d1fced7daf5";
+  // it was 25fdc64a...3be4f under scheme 4. It moved again for R418 (scheme 6); it was
+  // ef3bb9d1...daf5 under scheme 5. It moved again for R421 (scheme 7); it was b3f6072b...0c0e
+  // under scheme 6. It moved again for R405 (scheme 8); it was 5c8357ec...0c4b under scheme 7.
+  const PINNED = "cf9df227106f6e473fbd6dd68acd370e5df846497434036fd0232459bff428d7";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -475,6 +477,36 @@ describe("sessionFingerprint (R47)", () => {
   // above.
   test("no preprocessor symbols, or an empty list, keeps the pre-symbol digest", () => {
     expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(PINNED);
+  });
+
+  // R403: the test app's derived set and the arm-policy marker are conditional keys, so a session
+  // with no test symbols and nothing the policy changed keeps PINNED byte for byte.
+  test("R403: no test symbols and no arm-policy marker keep PINNED", () => {
+    expect(sessionFingerprint({ ...base, testBuildSymbols: [] })).toBe(PINNED);
+  });
+
+  test("R403: the test build set changes it, order does not, and it is apart from the target's", () => {
+    const x = sessionFingerprint({ ...base, testBuildSymbols: ["X", "A"] });
+    expect(x).not.toBe(PINNED);
+    expect(x).toBe(sessionFingerprint({ ...base, testBuildSymbols: ["A", "X"] }));
+    expect(x).not.toBe(sessionFingerprint({ ...base, testBuildSymbols: ["A"] }));
+    expect(x).not.toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["A", "X"] }));
+  });
+
+  // Plan §3(e)'s counterexample at the function: the target set is {X} both times, the test set
+  // moves {} -> {X}.
+  test("R403: the counterexample, a target set held at {X} while the test set moves {} -> {X}", () => {
+    const before = sessionFingerprint({ ...base, preprocessorSymbols: ["X"] });
+    const after = sessionFingerprint({
+      ...base,
+      preprocessorSymbols: ["X"],
+      testBuildSymbols: ["X"],
+    });
+    expect(after).not.toBe(before);
+  });
+
+  test("R403: the arm-policy marker changes it", () => {
+    expect(sessionFingerprint({ ...base, testDiscovery: "arms-v1" })).not.toBe(PINNED);
   });
 
   // R354: the coverage mode is a conditional key, so an input without it keeps PINNED (the
@@ -2666,6 +2698,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       // R354: what runSession computes: it always passes the mode, here the backend's.
       coverageMode: "procedure",
       preprocessorSymbols: ["R318A"],
+      // R403: no `testBuildSymbols`: no test file here holds a directive line, so runSession omits it.
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,

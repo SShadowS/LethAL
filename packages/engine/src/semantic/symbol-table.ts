@@ -27,6 +27,7 @@ import { findAll } from "../ast/syntax-node";
 import {
   allProcedureLikes,
   declarationMembers,
+  liveMembers,
   memberArms,
   objectDeclarationsOf,
   procedureLikeNameNode,
@@ -302,7 +303,15 @@ export function enclosingObjectScopeKey(node: ALSyntaxNode): string | null {
   return null;
 }
 
-export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
+/**
+ * `armOf` (R405 a) is `SemanticContext.armOf`, raw: present only when the context has an arm map.
+ * With it, members inside a member-level `#if` are read by arm (see `liveMembers`); without it,
+ * direct members only, exactly as before.
+ */
+export function buildSymbolTable(
+  files: readonly SourceFile[],
+  armOf?: (node: ALSyntaxNode) => "active" | "inactive" | "undecided",
+): SymbolTable {
   const objects: ObjectSymbol[] = [];
   const procedures = new Map<string, ProcedureSymbol[]>();
   // R327: `null` stands for a split member the grammar swallowed into the global var section. It
@@ -370,15 +379,24 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
   const indexMembers = (objectNode: ALSyntaxNode, ownerName: string): void => {
     // Object members (var_section, procedure) sit inside v3's
     // declaration_body container rather than being direct namedChildren.
-    const members = declarationMembers(objectNode);
+    // R405 (a): with an arm map, also the members inside a member-level `#if` whose arm is active
+    // (`liveMembers`); without one, the direct members only, as before.
+    const placed = liveMembers(objectNode, armOf);
+    const members = placed.map((m) => m.node);
 
-    // Globals: a var_section that's a direct member of the object.
-    const objectVarSection = members.find((c) => c.kind === ALNodeKind.var_section);
-    if (objectVarSection !== undefined) {
-      globals.set(ownerName, collectVarDeclarations(objectVarSection));
+    // Globals: the first var_section that's a direct member of the object, as before, plus (R405 a)
+    // every var_section inside a member-level `#if` whose arm the build compiles, in source order.
+    const varSections = placed.filter((m) => m.node.kind === ALNodeKind.var_section);
+    const firstDirect = varSections.find((m) => m.place === "direct");
+    const globalSections = varSections.filter((m) => m === firstDirect || m.place === "inside-if");
+    if (globalSections.length > 0) {
+      globals.set(
+        ownerName,
+        globalSections.flatMap((m) => collectVarDeclarations(m.node)),
+      );
     }
 
-    // Procedures: direct members of kind `procedure`. Avoid a recursive
+    // Procedures: members of kind `procedure`. Avoid a recursive
     // search so we don't misattribute nested future constructs.
     const procs: ProcedureSymbol[] = [];
     for (const child of members) {
@@ -405,10 +423,14 @@ export function buildSymbolTable(files: readonly SourceFile[]): SymbolTable {
     for (const p of procs) count(p.node, p);
     // R327, R330: a declaration the table did not index (swallowed by the global var section, or
     // inside a `#if` region) still counts under its names, as `null`, so no other procedure of the
-    // same name is "unique" and a call to that name gets no type.
+    // same name is "unique" and a call to that name gets no type. R405 (a): except one the build
+    // compiles out, which is not a declaration of this build at all. An undecided one still counts.
     const indexed = new Set(procs.map((p) => p.node.startIndex));
-    for (const other of allProcedureLikes(objectNode))
-      if (!indexed.has(other.startIndex)) count(other, null);
+    for (const other of allProcedureLikes(objectNode)) {
+      if (indexed.has(other.startIndex)) continue;
+      if (armOf !== undefined && armOf(other) === "inactive") continue;
+      count(other, null);
+    }
     procedureNames.set(ownerName, byName);
   };
 

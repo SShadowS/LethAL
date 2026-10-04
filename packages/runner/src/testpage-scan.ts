@@ -31,12 +31,14 @@ import { join } from "node:path";
 import {
   type ALSyntaxNode,
   initParser,
+  memberArms,
   normalizeAlName,
   parseAL,
   visit,
   wrapRoot,
 } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
+import { discoveredRelPaths } from "./line-filter";
 import { testKeyOf } from "./selection";
 
 /** Checked against Microsoft Learn's TestPage/TestRequestPage method lists (Task 1 Step 0). */
@@ -67,6 +69,16 @@ const PREPROC_BRANCH_MARKER = new Set([
   "preproc_else",
   "preproc_endif",
 ]);
+/**
+ * R424: a procedure whose HEADER is split by `#if` (tree-sitter-al 4.4.1): one header per arm and
+ * one shared body. `preproc_split_procedure` shares its `var` section too; a
+ * `preproc_split_procedure_preamble` has a `var` section per arm. Each arm is its own `Proc`
+ * (`splitProcsOf`).
+ */
+const SPLIT_PROCEDURE = new Set(["preproc_split_procedure", "preproc_split_procedure_preamble"]);
+/** A member a body walk stops at: a procedure, a trigger, or a split-header procedure. */
+const isMemberKind = (kind: string): boolean =>
+  kind === "procedure" || kind === "trigger_declaration" || SPLIT_PROCEDURE.has(kind);
 
 /**
  * Unwraps every `preproc_conditional`/`preproc_conditional_var`/`preproc_conditional_object` node,
@@ -137,7 +149,7 @@ function insideWithStatement(n: ALSyntaxNode): boolean {
   let cur = n.parent;
   while (cur !== null) {
     if (cur.rawKind === "with_statement") return true;
-    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") return false;
+    if (isMemberKind(cur.rawKind)) return false;
     cur = cur.parent;
   }
   return false;
@@ -155,7 +167,7 @@ function withTargets(n: ALSyntaxNode): readonly Recv[] {
       out ??= [];
       out.push(r === null ? { k: "opaque", kind: "with_statement" } : toRecv(r));
     }
-    if (cur.rawKind === "procedure" || cur.rawKind === "trigger_declaration") break;
+    if (isMemberKind(cur.rawKind)) break;
     cur = cur.parent;
   }
   return out ?? NO_WITH;
@@ -378,7 +390,7 @@ function addType(into: Map<string, string[]>, name: string, type: string): void 
 /**
  * Every name of every `variable_declaration` under `section`, into `into`. With `skipProcedures`,
  * a `procedure` subtree is not entered: see `procsInVarSection`, whose procedures' locals must not
- * read as globals.
+ * read as globals. R424: nor is a split-header procedure's.
  */
 function addDeclarations(
   section: ALSyntaxNode,
@@ -388,7 +400,7 @@ function addDeclarations(
   skipProcedures = false,
 ): void {
   const walk = (d: ALSyntaxNode): void => {
-    if (skipProcedures && d.rawKind === "procedure") return;
+    if (skipProcedures && (d.rawKind === "procedure" || SPLIT_PROCEDURE.has(d.rawKind))) return;
     if (d.rawKind === "variable_declaration") {
       const type = d.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
       const names = d.namedChildren.filter((c) => NAME_KINDS.has(c.rawKind));
@@ -406,12 +418,13 @@ function addDeclarations(
  * tree-sitter-al 4.4.1 parses an `#if` region that directly follows the global `var` section INSIDE
  * that section (`var_section > var_body > preproc_conditional_var > procedure`), where the AL
  * compiler places the same procedures at codeunit level (upstream tree-sitter-al #29). Kept until
- * the grammar is fixed. Every branch's procedures are returned, in source order.
+ * the grammar is fixed. Every branch's procedures are returned, in source order. R424: a
+ * split-header procedure directly after the global `var` section lands there too (measured).
  */
 function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   const out: ALSyntaxNode[] = [];
   const walk = (n: ALSyntaxNode): void => {
-    if (n.rawKind === "procedure") {
+    if (n.rawKind === "procedure" || SPLIT_PROCEDURE.has(n.rawKind)) {
       out.push(n);
       return;
     }
@@ -421,40 +434,134 @@ function procsInVarSection(section: ALSyntaxNode): ALSyntaxNode[] {
   return out;
 }
 
-/**
- * Where `decl`'s span starts: its first attribute directly before it (they are its siblings,
- * possibly with trivia between), R-278's rule. With `andTrivia`, trivia directly before is taken
- * too: R-371's object parts leave a doc comment above a procedure out, so adding a commented test
- * to a codeunit does not read as an edit to its header.
- */
-function spanStart(decl: ALSyntaxNode, andTrivia = false): number {
-  let start = decl.startIndex;
-  const siblings = decl.parent?.namedChildren ?? [];
-  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
-  for (i -= 1; i >= 0; i -= 1) {
-    const x = siblings[i];
-    if (x === undefined) break;
-    if (x.rawKind === "attribute_item" || (andTrivia && TRIVIA.has(x.rawKind)))
-      start = x.startIndex;
-    else if (!TRIVIA.has(x.rawKind)) break;
-  }
-  return start;
-}
-
-/** The attribute texts directly before `decl`, nearest first. */
-function attributesOf(decl: ALSyntaxNode): string[] {
-  const out: string[] = [];
-  const siblings = decl.parent?.namedChildren ?? [];
-  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
-  for (i -= 1; i >= 0; i -= 1) {
-    const x = siblings[i];
-    if (x === undefined) break;
-    if (x.rawKind === "attribute_item") out.push(x.text.trim());
-    else if (!TRIVIA.has(x.rawKind)) break;
+/** Every `attribute_item` in an `#if` that holds attributes only, every arm, in source order. */
+function attributesInConditional(n: ALSyntaxNode, out: ALSyntaxNode[] = []): ALSyntaxNode[] {
+  for (const c of n.namedChildren) {
+    if (c.rawKind === "attribute_item") out.push(c);
+    else if (c.rawKind === "preproc_conditional") attributesInConditional(c, out);
   }
   return out;
 }
 
+/**
+ * R420: whether `n` is an `#if` whose every arm holds attributes only (comments and nested
+ * attribute-only `#if`s allowed), with at least one attribute: `#if X [HandlerFunctions('H')]
+ * #endif` in a member's attribute run. Its attributes belong to the member after it.
+ */
+function isAttributeConditional(n: ALSyntaxNode): boolean {
+  if (n.rawKind !== "preproc_conditional") return false;
+  const onlyAttributes = (c: ALSyntaxNode): boolean =>
+    c.namedChildren.every(
+      (x) =>
+        x.rawKind === "attribute_item" ||
+        PREPROC_BRANCH_MARKER.has(x.rawKind) ||
+        TRIVIA.has(x.rawKind) ||
+        (x.rawKind === "preproc_conditional" && onlyAttributes(x)),
+    );
+  return onlyAttributes(n) && attributesInConditional(n).length > 0;
+}
+
+/** Where an arm of a `preproc_conditional` starts. */
+const ARM_START = new Set(["preproc_if", "preproc_elif", "preproc_else"]);
+
+/** A member's attribute run: the source it spans and the attributes in it. */
+interface AttributeRun {
+  /** `[from, to)` pieces in source order; the last ends at the member's end. One piece, except
+   *  for S11 below. */
+  readonly pieces: ReadonlyArray<readonly [number, number]>;
+  /** Every attribute in the run, every `#if` arm's included, nearest first. */
+  readonly attributes: readonly ALSyntaxNode[];
+  /** Whether the run took an `#if` (an attribute-only one, or S11's arm): only then are the
+   *  handler lists a union (`procOf`). */
+  readonly conditional: boolean;
+}
+
+/** `[Test]`, as an attribute item's text. */
+const TEST_ATTRIBUTE = /^\[\s*Test\s*\]$/i;
+
+/**
+ * R420: `decl`'s attribute run, WIDENED (an attribute-only `#if`, S11's outer run) only when the
+ * widened run holds a `[Test]`, i.e. for a test procedure. Every other member keeps R-278's
+ * pre-R420 run exactly (siblings only, stopping at any `#if`), so a helper under the common
+ * `#if not CLEAN24 [Obsolete(...)] #endif` keeps its span, its codeunit's parts and its
+ * subscriber reading byte for byte.
+ */
+function memberRun(decl: ALSyntaxNode, andTrivia = false): AttributeRun {
+  const wide = attributeRun(decl, andTrivia, decl.endIndex, true);
+  const isTest = (a: ALSyntaxNode): boolean => TEST_ATTRIBUTE.test(a.text.trim());
+  if (wide.attributes.some(isTest)) return wide;
+  // R424: a split-header procedure whose `[Test]` sits inside an arm (V4) is a test procedure too.
+  if (
+    SPLIT_PROCEDURE.has(decl.rawKind) &&
+    decl.children.some((c) => c.rawKind === "attribute_item" && isTest(c))
+  )
+    return wide;
+  return attributeRun(decl, andTrivia, decl.endIndex, false);
+}
+
+/**
+ * `decl`'s attribute run, R-278's span rule as R420 extends it. The run is the siblings directly
+ * before `decl`: attributes, trivia between them, and (R420) an `#if` that holds attributes only,
+ * whose attributes are taken from EVERY arm (the union: the digest walks every handler a build
+ * might use, the TestPage scan sees every TestPage one might touch). The span starts at the run's
+ * first node, so editing a handler list inside `#if` edits the test.
+ *
+ * With `andTrivia`, trivia directly before is taken too: R-371's object parts leave a doc comment
+ * above a procedure out, so adding a commented test to a codeunit does not read as an edit to its
+ * header.
+ *
+ * S11 (`[Test]` then `#if X procedure A ... #else procedure B ... #endif`): the compiler gives
+ * each arm's procedure the attributes before the `#if`. When the run inside the arm reaches the
+ * arm's start, and the run before the `#if` holds an attribute, that run is the procedure's too.
+ * The span is then two pieces, that outer run and the arm's own run to the procedure's end, so
+ * an edit to the other arm's procedure is not an edit to this one.
+ *
+ * Without `widen`, neither R420 extension applies: R-278's pre-R420 run (`memberRun` chooses).
+ */
+function attributeRun(
+  decl: ALSyntaxNode,
+  andTrivia: boolean,
+  end: number,
+  widen: boolean,
+): AttributeRun {
+  let start = decl.startIndex;
+  const attributes: ALSyntaxNode[] = [];
+  const siblings = decl.parent?.namedChildren ?? [];
+  let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
+  let atArmStart = false;
+  let conditional = false;
+  for (i -= 1; i >= 0; i -= 1) {
+    const x = siblings[i];
+    if (x === undefined) break;
+    if (x.rawKind === "attribute_item") {
+      attributes.push(x);
+      start = x.startIndex;
+    } else if (widen && isAttributeConditional(x)) {
+      attributes.push(...attributesInConditional(x).reverse());
+      start = x.startIndex;
+      conditional = true;
+    } else if (TRIVIA.has(x.rawKind)) {
+      if (andTrivia) start = x.startIndex;
+    } else {
+      atArmStart = ARM_START.has(x.rawKind);
+      break;
+    }
+  }
+  const own: AttributeRun = { pieces: [[start, end]], attributes, conditional };
+  const cond = decl.parent;
+  if (!widen || !atArmStart || cond === null || cond.rawKind !== "preproc_conditional") return own;
+  const outer = attributeRun(cond, andTrivia, cond.startIndex, true);
+  if (outer.attributes.length === 0) return own;
+  return {
+    pieces: [...outer.pieces, [start, end]],
+    attributes: [...attributes, ...outer.attributes],
+    conditional: true,
+  };
+}
+
+/** A span's text: its pieces joined by a newline (one piece is the plain slice, as before R420). */
+const spanText = (source: string, run: AttributeRun): string =>
+  run.pieces.map(([from, to]) => source.slice(from, to)).join("\n");
 const HANDLER_ATTRIBUTE = /^\[\s*HandlerFunctions\s*\(\s*'([^']*)'/i;
 const SUBSCRIBER_ATTRIBUTE = /^\[\s*EventSubscriber\s*\(/i;
 const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
@@ -466,15 +573,19 @@ const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
  * adding or editing a procedure leaves it unchanged.
  */
 function partsText(source: string, node: ALSyntaxNode): string {
-  const cuts: Array<[number, number]> = [];
+  const cuts: Array<readonly [number, number]> = [];
   visit(node, (n) => {
-    if (n.rawKind === "procedure") cuts.push([spanStart(n, true), n.endIndex]);
+    if (n.rawKind === "procedure") cuts.push(...memberRun(n, true).pieces);
   });
   cuts.sort((x, y) => x[0] - y[0]);
   const pieces: string[] = [];
   let at = node.startIndex;
   for (const [from, to] of cuts) {
-    if (from < at) continue; // nested inside a cut already taken
+    // Nested inside a cut already taken, or (S11) the outer run two arms' procedures share.
+    if (from < at) {
+      at = Math.max(at, to);
+      continue;
+    }
     pieces.push(source.slice(at, from));
     at = to;
   }
@@ -485,6 +596,24 @@ function partsText(source: string, node: ALSyntaxNode): string {
     .join("\n");
 }
 
+/** One declaration's header as `procFrom` reads it: a plain procedure or trigger, or one arm of a
+ *  split-header procedure (R424). */
+interface Header {
+  readonly name: ALSyntaxNode;
+  /** The `parameter` nodes. */
+  readonly params: readonly ALSyntaxNode[];
+  readonly returnType: string | undefined;
+  readonly returnValue: ALSyntaxNode | undefined;
+  /** Every `var` section of the declaration: a plain procedure's one; a split arm's own (a
+   *  preamble's) and the shared one. */
+  readonly vars: readonly ALSyntaxNode[];
+  readonly block: ALSyntaxNode | undefined;
+  /** The member's attribute run; for a split arm, the run before the split node. */
+  readonly run: AttributeRun;
+  /** R424: a split arm's own attributes (V4), nearest first. Empty for a plain procedure. */
+  readonly own: readonly ALSyntaxNode[];
+}
+
 /** A procedure or trigger as plain facts; `problems` is the scan's list, `null` for R-371 only. */
 function procOf(
   p: ALSyntaxNode,
@@ -493,59 +622,194 @@ function procOf(
   problems: string[] | null,
   keys: Map<string, number>,
 ): Proc | undefined {
-  const isTrigger = p.rawKind === "trigger_declaration";
-  const id2 = nameNode(p);
-  if (id2 === undefined) return undefined;
-  const scope = new Map<string, string[]>();
+  const name = nameNode(p);
+  if (name === undefined) return undefined;
   const plist = p.namedChildren.find((c) => c.rawKind === "parameter_list");
-  const params = plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [];
-  for (const prm of params) {
+  const block = p.namedChildren.find((c) => c.rawKind === "code_block");
+  const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
+  return procFrom(
+    {
+      name,
+      params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
+      returnType: p.childForFieldName("return_type")?.text,
+      returnValue: p.childForFieldName("return_value") ?? undefined,
+      vars: vars === undefined ? [] : [vars],
+      block,
+      run: memberRun(p),
+      own: [],
+    },
+    p.rawKind === "trigger_declaration",
+    unit,
+    source,
+    problems,
+    keys,
+    block === undefined ? undefined : callSites(block),
+    block === undefined ? NO_IDS : idRefsIn(block),
+  );
+}
+
+/**
+ * R424: one `Proc` per arm of a split-header procedure, never merged (plan r2 §3(a)). Each arm has
+ * its own name, parameters, return type, named return value and (in a preamble) `var` section,
+ * read from the node's children between two `#if`/`#elif`/`#else` markers (`memberArms`). Every
+ * arm shares:
+ * - the `var` section and body after `#endif`, so `sites` is one array for all of them;
+ * - the attribute run before the split node, to which each arm adds its own attributes (V4), the
+ *   handler lists as a union;
+ * - the span: that run plus the WHOLE split node, so an edit to either arm's header or to the body
+ *   moves every arm's span hash.
+ * An arm with no readable name is left out, as `procOf` leaves out a procedure with none.
+ */
+function splitProcsOf(
+  p: ALSyntaxNode,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+): Proc[] {
+  let endif = -1;
+  for (const [i, c] of p.children.entries()) if (c.rawKind === "preproc_endif") endif = i;
+  const tail = endif < 0 ? [] : p.children.slice(endif + 1);
+  const shared = tail.filter((c) => c.rawKind === "var_section");
+  const block = tail.find((c) => c.rawKind === "code_block");
+  const sites = block === undefined ? undefined : callSites(block);
+  const idRefs = block === undefined ? NO_IDS : idRefsIn(block);
+  const run = memberRun(p);
+  const out: Proc[] = [];
+  for (const arm of memberArms(p)) {
+    const name = arm.find((c) => c.fieldName === "name");
+    if (name === undefined) continue;
+    const plist = arm.find((c) => c.rawKind === "parameter_list");
+    const proc = procFrom(
+      {
+        name,
+        params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
+        returnType: arm.find((c) => c.fieldName === "return_type")?.text,
+        returnValue: arm.find((c) => c.fieldName === "return_value"),
+        vars: [...arm.filter((c) => c.rawKind === "var_section"), ...shared],
+        block,
+        run,
+        own: arm.filter((c) => c.rawKind === "attribute_item").reverse(),
+      },
+      false,
+      unit,
+      source,
+      problems,
+      keys,
+      sites,
+      idRefs,
+      true,
+    );
+    out.push(proc);
+  }
+  return out;
+}
+
+/** The declarations of one member: `procOf`'s one, or a split-header procedure's arms. */
+function procsOf(
+  p: ALSyntaxNode,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+): Proc[] {
+  if (SPLIT_PROCEDURE.has(p.rawKind)) return splitProcsOf(p, unit, source, problems, keys);
+  const proc = procOf(p, unit, source, problems, keys);
+  return proc === undefined ? [] : [proc];
+}
+
+function procFrom(
+  h: Header,
+  isTrigger: boolean,
+  unit: Unit,
+  source: string,
+  problems: string[] | null,
+  keys: Map<string, number>,
+  sites: readonly Site[] | undefined,
+  idRefs: readonly string[],
+  deferKey = false,
+): Proc {
+  const id2 = h.name;
+  const scope = new Map<string, string[]>();
+  for (const prm of h.params) {
     const n = nameNode(prm);
     const t = prm.namedChildren.find((c) => c.rawKind === "type_specification")?.text ?? "";
     if (n !== undefined) addType(scope, n.text, t);
   }
   // A named return value (`procedure H() R: Codeunit Lib`) is a variable in its procedure
   // (run 002 re-review): unscoped, `R.Helper()` read as an undeclared name and was dropped.
-  const returnType = p.childForFieldName("return_type")?.text;
-  const returnValue = p.childForFieldName("return_value");
-  if (returnValue !== null && returnType !== undefined)
+  const { returnType, returnValue, run } = h;
+  if (returnValue !== undefined && returnType !== undefined)
     addType(scope, returnValue.text, returnType);
-  const vars = p.namedChildren.find((c) => c.rawKind === "var_section");
   // A trigger's locals, and anything outside a codeunit, are read by R-371's walk only, so they
   // report no scan problem.
-  if (vars !== undefined)
+  for (const vars of h.vars)
     addDeclarations(
       vars,
       scope,
       `${unit.display}.${id2.text}`,
       isTrigger || problems === null ? [] : problems,
     );
-  const block = p.namedChildren.find((c) => c.rawKind === "code_block");
-  const attributes = attributesOf(p);
-  const handlerList = attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h);
+  const attributes = [...h.own, ...run.attributes].map((x) => x.text.trim());
+  // R420: where the run took an `#if`, every `[HandlerFunctions]` in it, so every arm's (the
+  // union). Otherwise the pre-R420 reading: the nearest `[HandlerFunctions]`, duplicates kept.
+  // R424: a split arm's handlers are the union of its own attributes and the run before it.
+  const handlers =
+    run.conditional || h.own.length > 0
+      ? [
+          ...new Set(
+            attributes
+              .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
+              .map((x) => normalizeAlName(x.trim()))
+              .filter((x) => x.length > 0),
+          ),
+        ]
+      : (attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((x) => x) ?? "")
+          .split(",")
+          .map((x) => normalizeAlName(x.trim()))
+          .filter((x) => x.length > 0);
   const display = `${unit.display}.${id2.text}`;
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
   const suffix = isTrigger ? " (trigger)" : "";
   const keyBase = `${kind}${unit.id}:${display}${suffix}`.toLowerCase();
-  const seen = keys.get(keyBase) ?? 0;
-  keys.set(keyBase, seen + 1);
-  return {
+  const keyFor = (): string => {
+    const seen = keys.get(keyBase) ?? 0;
+    keys.set(keyBase, seen + 1);
+    return `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`;
+  };
+  // R424 review: a split arm is keyed AFTER every plain procedure of the app, so a plain
+  // procedure keeps the key it had at 61ad4d84 and a test that never reaches a split member
+  // keeps its digest. `finishDeferredKeys` numbers the arms, in source order.
+  const proc: { -readonly [K in keyof Proc]: Proc[K] } = {
     unit,
-    sites: block === undefined ? undefined : callSites(block),
-    idRefs: block === undefined ? NO_IDS : idRefsIn(block),
+    sites,
+    idRefs,
     name: normalizeAlName(id2.text),
     display,
-    params: params.length,
+    params: h.params.length,
     returnType,
     scope,
-    handlers: (handlerList ?? "")
-      .split(",")
-      .map((h) => normalizeAlName(h.trim()))
-      .filter((h) => h.length > 0),
-    spanHash: sha256(normalizeSource(source.slice(spanStart(p), p.endIndex))),
-    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`,
+    handlers,
+    spanHash: sha256(normalizeSource(spanText(source, run))),
+    key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
   };
+  if (deferKey) {
+    const pending = DEFERRED_KEYS.get(keys) ?? [];
+    pending.push(() => {
+      proc.key = keyFor();
+    });
+    DEFERRED_KEYS.set(keys, pending);
+  } else proc.key = keyFor();
+  return proc;
+}
+
+/** The split arms whose keys wait for the plain procedures', per key counter. */
+const DEFERRED_KEYS = new WeakMap<Map<string, number>, Array<() => void>>();
+
+function finishDeferredKeys(keys: Map<string, number>): void {
+  for (const assign of DEFERRED_KEYS.get(keys) ?? []) assign();
+  DEFERRED_KEYS.delete(keys);
 }
 
 /** The value of a declaration_body-level property (`TableNo`, `SourceTable`), as written. */
@@ -609,11 +873,12 @@ function buildUnit(
     addDeclarations(body, all, `${display}`, []);
     for (const [n, ts] of all) if (ts.some((t) => PAGE_TYPE.test(t))) pageNamesAnywhere.add(n);
     for (const p of members) {
-      if (p.rawKind !== "procedure" && p.rawKind !== "trigger_declaration") continue;
-      const proc = procOf(p, unitShell, source, problems, keys);
-      if (proc === undefined) continue;
-      if (proc.subscriber) unitShell.subscriber = true;
-      (p.rawKind === "trigger_declaration" ? unitShell.triggers : unitShell.procs).push(proc);
+      // R424: a split-header procedure is a member too, one `Proc` per arm.
+      if (!isMemberKind(p.rawKind)) continue;
+      for (const proc of procsOf(p, unitShell, source, problems, keys)) {
+        if (proc.subscriber) unitShell.subscriber = true;
+        (p.rawKind === "trigger_declaration" ? unitShell.triggers : unitShell.procs).push(proc);
+      }
     }
   }
   return unitShell;
@@ -712,9 +977,8 @@ function buildObjectUnit(
     implementations: kind.startsWith("enum") ? implementationsIn(text) : [],
   };
   const walk = (n: ALSyntaxNode): void => {
-    if (n.rawKind === "procedure" || n.rawKind === "trigger_declaration") {
-      const proc = procOf(n, unit, source, null, keys);
-      if (proc !== undefined)
+    if (isMemberKind(n.rawKind)) {
+      for (const proc of procsOf(n, unit, source, null, keys))
         (n.rawKind === "trigger_declaration" ? unit.triggers : unit.procs).push(proc);
       return;
     }
@@ -1891,6 +2155,7 @@ export function buildTestAppModel(
     scanFile(f.path, f.text, parsed, units, suspect, objects, keys);
     fileHashes.push(sha256(normalizeSource(f.text)));
   }
+  finishDeferredKeys(keys);
   return { units, objects, suspect, damaged, fileHashes: fileHashes.sort() };
 }
 
@@ -1969,13 +2234,22 @@ export function scanTestPageModel(
   return refused;
 }
 
+/** R421: `path` is the `/`-separated form (`discoveredRelPaths`); the file is read through its raw
+ *  name. `platform` defaults to `process.platform`; tests pass `"win32"` to simulate Windows. */
 export async function readTestAppSources(
   testDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<Array<{ path: string; text: string }>> {
   const entries = await readdir(testDir, { recursive: true });
-  const alFiles = entries.filter((e) => e.toLowerCase().endsWith(".al")).sort();
+  const alFiles = discoveredRelPaths(
+    entries.filter((e) => e.toLowerCase().endsWith(".al")),
+    platform,
+  );
   return Promise.all(
-    alFiles.map(async (path) => ({ path, text: await readFile(join(testDir, path), "utf8") })),
+    alFiles.map(async ({ rel, raw }) => ({
+      path: rel,
+      text: await readFile(join(testDir, raw), "utf8"),
+    })),
   );
 }
 

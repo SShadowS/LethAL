@@ -107,9 +107,18 @@ export function identityTupleOf(
  * changed attribution of unchanged keys. 5: R214, a mutant in an #if arm the build compiles out is no
  * longer generated, a file whose directives cannot be evaluated as alc does is not mutated, and a
  * statement directly inside a statement-level #if became a statement position (measured moves in
- * the R-214 plan).
+ * the R-214 plan). 6: R418, `codeunitName` can move in a file holding a non-BMP character (an
+ * emoji) anywhere before a later comment or blanked string, in code, a quoted name, a comment or a
+ * string, in a file of one object or several: the mask no longer shifts, so an erased header is
+ * found, a phantom commented-out header is gone, and a header's offset matches the source. 7:
+ * R421, discovered paths are normalised to `/`, so on Windows a project with subfolders gets the
+ * file order, mutant ids and batches Linux gets, and with per-batch ordinals an identity twin in
+ * another file can change ordinal. 8: R405, a member-level #if now hides a procedure or trigger
+ * by arm for the symbol table, the table-trigger readers and the receiver filter, so a call that
+ * was refused (or read against an inactive arm) is admitted, and a newly admitted mutant with the
+ * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key.
  */
-export const IDENTITY_SCHEME = 5;
+export const IDENTITY_SCHEME = 8;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

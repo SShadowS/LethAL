@@ -301,3 +301,99 @@ describe("thinCoverageEvidence (issue #9 diagnosability)", () => {
     expect(thinCoverageEvidence([], 1, ["codeunit:1"], undefined)).toContain("none sent");
   });
 });
+
+/**
+ * R403 phase B: compiled test membership. The shape is the one alc 18.0.2732683 wrote for a probe
+ * test app (2026-10-03): `Properties` on a Test codeunit only, `Attributes` per method, namespaced
+ * objects one `Namespaces` level per dotted segment.
+ */
+describe("AppMethodIndex.compiledTests (R403)", () => {
+  const TEST_SUBTYPE = [{ Name: "Subtype", Value: "Test" }];
+  const names = (json: unknown) =>
+    AppMethodIndex.fromSymbolReference(json)
+      .compiledTests()
+      .map((t) => `${t.codeunitId}:${t.codeunitName}.${t.method}`);
+
+  it("counts a decorated test and not the handler it names", () => {
+    expect(
+      names({
+        Codeunits: [
+          {
+            Id: 79001,
+            Name: "Probe Tests",
+            Properties: TEST_SUBTYPE,
+            Methods: [
+              {
+                Id: 1,
+                Name: "Decorated",
+                Attributes: [
+                  { Name: "Test" },
+                  { Name: "HandlerFunctions", Arguments: [{ Value: "MsgH" }] },
+                ],
+              },
+              { Id: 2, Name: "MsgH", Attributes: [{ Name: "MessageHandler" }] },
+              { Id: 3, Name: "ConfirmH", Attributes: [{ Name: "ConfirmHandler" }] },
+              { Id: 4, Name: "NotATest" },
+            ],
+          },
+        ],
+      }),
+    ).toEqual(["79001:Probe Tests.Decorated"]);
+  });
+
+  it("ignores a Test-attributed method in a codeunit that is not Subtype = Test", () => {
+    expect(
+      names({
+        Codeunits: [
+          {
+            Id: 79002,
+            Name: "Plain CU",
+            Methods: [{ Id: 1, Name: "X", Attributes: [{ Name: "Test" }] }],
+          },
+          {
+            Id: 79003,
+            Name: "Runner",
+            Properties: [{ Name: "Subtype", Value: "TestRunner" }],
+            Methods: [{ Id: 1, Name: "Y", Attributes: [{ Name: "Test" }] }],
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("reads Test codeunits at every namespace depth, beside root-level ones", () => {
+    const cu = (Id: number, Name: string, method: string) => ({
+      Id,
+      Name,
+      Properties: TEST_SUBTYPE,
+      Methods: [{ Id: 1, Name: method, Attributes: [{ Name: "Test" }] }],
+    });
+    expect(
+      names({
+        Codeunits: [cu(79010, "Root Tests", "AtRoot")],
+        Namespaces: [
+          {
+            Name: "Probe",
+            Codeunits: [],
+            Namespaces: [{ Name: "Deep", Codeunits: [cu(79011, "Deep Tests", "Nested")] }],
+          },
+        ],
+      }).sort(),
+    ).toEqual(["79010:Root Tests.AtRoot", "79011:Deep Tests.Nested"]);
+  });
+
+  it("reads Subtype and the attribute name without regard to case", () => {
+    expect(
+      names({
+        Codeunits: [
+          {
+            Id: 79004,
+            Name: "Lower",
+            Properties: [{ Name: "subtype", Value: "test" }],
+            Methods: [{ Id: 1, Name: "T", Attributes: [{ Name: "test" }] }],
+          },
+        ],
+      }),
+    ).toEqual(["79004:Lower.T"]);
+  });
+});

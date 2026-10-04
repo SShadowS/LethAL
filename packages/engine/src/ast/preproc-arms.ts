@@ -214,6 +214,16 @@ function markersOf(root: ALSyntaxNode): ALSyntaxNode[] {
   return out;
 }
 
+/** R403: whether `source` holds a directive line `evaluateArms` would read. A file without one is
+ *  decided with no inactive range, so a caller can skip parsing it (R-371 pins one parse per test
+ *  file in `lethal verify`). The same scan `evaluateArms` starts with. */
+export function hasDirectiveLine(source: string): boolean {
+  DIRECTIVE_LINE.lastIndex = 0;
+  const found = DIRECTIVE_LINE.test(source);
+  DIRECTIVE_LINE.lastIndex = 0;
+  return found;
+}
+
 export function evaluateArms(
   root: ALSyntaxNode,
   source: string,
