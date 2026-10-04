@@ -2968,7 +2968,9 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     raw.close();
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => r.verdict === "error")).toBe(true);
-  });
+    // R439: 30 s, not bun's 5 s default. About 0.16 s inside this file normally, but measured at
+    // 6.04 s in a full verify under load on the kraken container.
+  }, 30_000);
 });
 
 describe("runSession — parallel workers", () => {
