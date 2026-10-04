@@ -104,8 +104,14 @@ export class TestAppDiffersError extends Error {
 
   constructor(diff: TestMembershipDifference, buildSymbols: readonly string[]) {
     const names = (n: readonly string[]) => (n.length === 0 ? "none" : n.join(", "));
+    // R420: a published-only test can also be one whose declaration discovery did not recognise
+    // (a shape nobody has seen yet; until R424, a header split by `#if`).
+    const unrecognised =
+      diff.publishedOnly.length > 0
+        ? ", or LethAL did not recognise a test declaration in the source (please report the shape; see R420)"
+        : "";
     super(
-      `the published test app's compiled tests differ from the tests LethAL discovered in the test source under symbols [${buildSymbols.join(", ")}]: published-only ${names(diff.publishedOnly)}; source-only ${names(diff.sourceOnly)}. Possible causes: the test app was built with other preprocessor symbols (set preprocessorSymbols in the config or the test app.json), or a test was added, renamed or removed in the source without republishing.`,
+      `the published test app's compiled tests differ from the tests LethAL discovered in the test source under symbols [${buildSymbols.join(", ")}]: published-only ${names(diff.publishedOnly)}; source-only ${names(diff.sourceOnly)}. Possible causes: the test app was built with other preprocessor symbols (set preprocessorSymbols in the config or the test app.json), or a test was added, renamed or removed in the source without republishing${unrecognised}.`,
     );
     this.name = "TestAppDiffersError";
     this.publishedOnly = diff.publishedOnly;

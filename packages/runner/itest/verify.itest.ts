@@ -46,7 +46,7 @@ import { defaultQuarantineDir, runSession } from "../src/orchestrator";
 import { ContainerDeployer, defaultAlToolPaths, defaultDeployerIo } from "../src/publisher";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import { ResultsStore } from "../src/store";
-import { VERIFY_EXIT } from "../src/verify";
+import { VERIFY_EXIT, runVerify } from "../src/verify";
 import type { VerifyOutput, VerifyResult } from "../src/verify";
 import { preflightReadOnlyBaseline } from "./baseline-guard";
 import { itestConfigName, itestConfigPath } from "./config-path";
@@ -77,6 +77,14 @@ const TEST_CODEUNIT_FILE = join("src", "SandboxTests.Codeunit.al");
 const NEW_TEST = "ZzC0206ClampRejectsAboveHundred";
 const NEW_TEST_QUALIFIED = `${TEST_CODEUNIT.codeunitName}.${NEW_TEST}`;
 const NEW_TEST_ERROR = "ZzC0206: ClampPercent(150) must return 0";
+/** The only source covering test of ClampPercent and LogAudit (R-384 pre-commitment). */
+const COVERING_TEST = `${TEST_CODEUNIT.codeunitName}.ClampPercentRuns`;
+/** R-384: the reach filter's state lines, as the blind pre-commitment predicts them. */
+const REACH_STEP3 =
+  "[lethal] verify: reach filter on (fenced coverage): 1 new test(s), 0 joined every survivor because their coverage could not be used; 1 mutant run(s) instead of 2 without the filter; 1 survivor(s) no new test reaches.";
+const REACH_NO_NEW_TESTS =
+  "[lethal] verify: reach filter on (fenced coverage): 0 new test(s), 0 joined every survivor because their coverage could not be used; 0 mutant run(s) instead of 0 without the filter; 2 survivor(s) no new test reaches.";
+const REACH_UNREACHED_PREFIX = "[lethal] verify: survivors no new test reaches: ";
 /** Microsoft's Base Application: its installed version is the BC build this gate ran against. */
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 /** The three frozen rows this gate drives, by identity key suffix in bcdev.baseline.json. */
@@ -407,14 +415,19 @@ async function main(): Promise<void> {
     );
     console.log(`step 2 PASS: scratch test project at ${newTestDir} with ${NEW_TEST_QUALIFIED}`);
 
-    /** One `lethal verify` through the CLI code path: its printed JSON, exit code and acquires. */
+    /**
+     * One `lethal verify` through the CLI code path: its printed JSON, exit code, acquires, and the
+     * reach filter's state lines. R-384: `verifyFromCli` hands `runVerify` a `log` that writes to
+     * stderr; the gate wraps its `runVerify` seam to capture those lines (still echoed to stderr).
+     */
     const verify = async (
       step: string,
       testDir: string,
       artifact: string,
       survivors: readonly string[],
-    ): Promise<{ code: number; out: VerifyOutput; acquired: number }> => {
+    ): Promise<{ code: number; out: VerifyOutput; acquired: number; reachLog: string[] }> => {
       let text = "";
+      const reachLog: string[] = [];
       const before = acquires;
       const code = await verifyFromCli(
         { mode: "verify", dbPath, artifact, testDir, survivors, configPath: CONFIG_LOCAL_PATH },
@@ -422,12 +435,63 @@ async function main(): Promise<void> {
           write: (t) => {
             text += t;
           },
+          runVerify: (args, deps) =>
+            runVerify(args, {
+              ...deps,
+              log: (line) => {
+                reachLog.push(line);
+                process.stderr.write(`${line}\n`);
+              },
+            }),
         },
       );
       const out = JSON.parse(text) as VerifyOutput;
       console.log(`${step}: lethal verify exit ${code}\n${text}`);
       assert.equal(out.exitCode, code, `${step}: printed exitCode = returned exit code`);
-      return { code, out, acquired: acquires - before };
+      return { code, out, acquired: acquires - before, reachLog };
+    };
+    /** R-384 pre-commitment: a row's `testsRun` is exactly this SET of qualified names. */
+    const assertTestsRun = (
+      step: string,
+      row: VerifyResult,
+      expected: readonly string[],
+      what: string,
+    ): void => {
+      assert.ok(row.testsRun !== undefined, `${step}: ${what} carries testsRun`);
+      assert.deepEqual(
+        [...row.testsRun].sort(),
+        [...expected].sort(),
+        `${step}: ${what} testsRun (${row.testsRun.join(", ")})`,
+      );
+    };
+    /**
+     * R-384 pre-commitment: the reach log is exactly `first`, then (when `unreached` is given) the
+     * "no new test reaches" line naming exactly that SET of ids. Order is checked only when the
+     * pre-commitment decides it, i.e. when there is one id.
+     */
+    const assertReachLog = (
+      step: string,
+      reachLog: readonly string[],
+      first: string,
+      unreached: readonly string[],
+    ): void => {
+      if (unreached.length === 0) {
+        assert.deepEqual(reachLog, [first], `${step}: the reach log`);
+        return;
+      }
+      assert.equal(reachLog.length, 2, `${step}: two reach lines (${JSON.stringify(reachLog)})`);
+      const [line1, line2] = reachLog;
+      assert.equal(line1, first, `${step}: the reach state line`);
+      assert.ok(line2 !== undefined, `${step}: the second reach line`);
+      assert.ok(
+        line2.startsWith(REACH_UNREACHED_PREFIX),
+        `${step}: the second reach line names the unreached survivors (${line2})`,
+      );
+      assert.deepEqual(
+        line2.slice(REACH_UNREACHED_PREFIX.length).split(", ").sort(),
+        [...unreached].sort(),
+        `${step}: the unreached survivors (${line2})`,
+      );
     };
     const rowOf = (step: string, out: VerifyOutput, id: string): VerifyResult => {
       const rows = out.results.filter((r) => r.id === id);
@@ -452,10 +516,12 @@ async function main(): Promise<void> {
     let step3Err: unknown;
     try {
       const quarantineBefore = await quarantineRecords(defaultQuarantineDir());
-      const { code, out, acquired } = await verify("step 3", newTestDir, lastArtifact.artifactId, [
-        clampId,
-        logAuditId,
-      ]);
+      const { code, out, acquired, reachLog } = await verify(
+        "step 3",
+        newTestDir,
+        lastArtifact.artifactId,
+        [clampId, logAuditId],
+      );
       assert.equal(code, VERIFY_EXIT.notAllKilled, "step 3: exit 5");
       assert.equal(out.quarantined, undefined, `step 3: no quarantine (${out.quarantined})`);
       assert.equal(out.refused, undefined, `step 3: no refusal (${JSON.stringify(out.refused)})`);
@@ -496,12 +562,14 @@ async function main(): Promise<void> {
         clamp.killingTestFailure?.includes(NEW_TEST_ERROR),
         `step 3: the kill carries the test's own text: ${clamp.killingTestFailure}`,
       );
+      // R-384 pre-commitment: the new test reaches ClampPercent and joins it.
+      assertTestsRun("step 3", clamp, [COVERING_TEST, NEW_TEST_QUALIFIED], "ClampPercent");
       const logAudit = rowOf("step 3", out, logAuditId);
       assert.equal(logAudit.verdict, "survived", "step 3: LogAudit survived");
-      assert.ok(
-        (logAudit.testsRun ?? []).includes(NEW_TEST_QUALIFIED),
-        `step 3: the new test ran against LogAudit (${logAudit.testsRun?.join(", ")})`,
-      );
+      // R-384 pre-commitment: the new test calls only ClampPercent and never reaches the local
+      // LogAudit, so the reach filter does NOT send it there (pre-R-384 it joined every survivor).
+      assertTestsRun("step 3", logAudit, [COVERING_TEST], "LogAudit (the new test filtered out)");
+      assertReachLog("step 3", reachLog, REACH_STEP3, [logAuditId]);
       assert.deepEqual(
         out.counts,
         { killed: 1, survived: 1, error: 0, skipped: 0 },
@@ -529,7 +597,7 @@ async function main(): Promise<void> {
       await client.release(outcome.lease);
       verifyMs = out.timings.totalMs;
       console.log(
-        `step 3 PASS: ${NEW_TEST_QUALIFIED} stable (sessions ${b.sessionId}, ${r.sessionId}); ClampPercent killed by it (other), LogAudit survived; exit 5; read-back equal; lease free`,
+        `step 3 PASS: ${NEW_TEST_QUALIFIED} stable (sessions ${b.sessionId}, ${r.sessionId}); ClampPercent killed by it (other), LogAudit survived without it (reach filter); reach lines as pre-committed; exit 5; read-back equal; lease free`,
       );
     } catch (err) {
       step3Err = err;
@@ -537,8 +605,9 @@ async function main(): Promise<void> {
 
     // ---- 4. Restore: the unchanged test project, also the "survived" leg. Always, once 3 began.
     let step4Err: unknown;
+    let step4Run: { out: VerifyOutput; reachLog: string[] } | undefined;
     try {
-      const { code, out } = await verify("step 4", TEST_DIR, lastArtifact.artifactId, [
+      const { code, out, reachLog } = await verify("step 4", TEST_DIR, lastArtifact.artifactId, [
         clampId,
         logAuditId,
       ]);
@@ -547,17 +616,33 @@ async function main(): Promise<void> {
       assert.equal(rowOf("step 4", out, clampId).verdict, "survived", "step 4: ClampPercent");
       assert.equal(rowOf("step 4", out, logAuditId).verdict, "survived", "step 4: LogAudit");
       await assertFreshReadBack("step 4", out);
+      step4Run = { out, reachLog };
       console.log(
         "step 4 PASS: restored; ClampPercent survived, so the new test is gone from the server",
       );
     } catch (err) {
       step4Err = err;
     }
+    // ---- 4 (R-384). The reach pins, apart from the restore proof: a wrong reach line is not a
+    // failed restore, so it must neither claim the container is dirty nor stop step 4b.
+    let step4ReachErr: unknown;
+    if (step4Run !== undefined) {
+      try {
+        const { out, reachLog } = step4Run;
+        assertTestsRun("step 4", rowOf("step 4", out, clampId), [COVERING_TEST], "ClampPercent");
+        assertTestsRun("step 4", rowOf("step 4", out, logAuditId), [COVERING_TEST], "LogAudit");
+        // The "on" line prints with zero new tests too; the two ids' order is not pre-committed.
+        assertReachLog("step 4", reachLog, REACH_NO_NEW_TESTS, [clampId, logAuditId]);
+        console.log("step 4 PASS (R-384): testsRun and reach lines as pre-committed");
+      } catch (err) {
+        step4ReachErr = err;
+      }
+    }
     // ---- 4b (C02-09). One gap by id, with the repo's test app. Only once step 4 restored it.
     let step4bErr: unknown;
     if (step4Err === undefined) {
       try {
-        const { code, out, acquired } = await verify("step 4b", TEST_DIR, thenArtifact, [
+        const { code, out, acquired, reachLog } = await verify("step 4b", TEST_DIR, thenArtifact, [
           thenGap.gapId,
         ]);
         assert.equal(code, VERIFY_EXIT.notAllKilled, "step 4b: exit 5");
@@ -580,7 +665,15 @@ async function main(): Promise<void> {
         for (const r of out.results) {
           assert.equal(r.verdict, "survived", `step 4b: ${r.id} survived`);
           assert.equal(r.gapId, thenGap.gapId, `step 4b: ${r.id} carries the requested gap id`);
+          assertTestsRun("step 4b", r, [COVERING_TEST], r.id);
         }
+        // R-384 pre-commitment: the gap's two members, in an order it does not decide.
+        assertReachLog(
+          "step 4b",
+          reachLog,
+          REACH_NO_NEW_TESTS,
+          out.results.map((r) => r.id),
+        );
         console.log(
           `step 4b PASS: verify --artifact ${thenArtifact} --survivors ${thenGap.gapId} ran ${out.results.map((r) => r.id).join(", ")}, both survived, exit 5, one lease acquire`,
         );
@@ -588,7 +681,12 @@ async function main(): Promise<void> {
         step4bErr = err;
       }
     }
-    if (step3Err !== undefined || step4Err !== undefined || step4bErr !== undefined) {
+    if (
+      step3Err !== undefined ||
+      step4Err !== undefined ||
+      step4ReachErr !== undefined ||
+      step4bErr !== undefined
+    ) {
       const describe = (e: unknown) => formatFailure(e);
       throw new Error(
         [
@@ -596,6 +694,9 @@ async function main(): Promise<void> {
           step4Err !== undefined
             ? `step 4 (restore) FAILED: ${describe(step4Err)}. The container may carry the scratch test app: restore fixtures/sandbox-tests by hand before any gate. Step 4b did not run.`
             : "step 4 (restore) PASSED: ClampPercent survived with the repo's test app",
+          ...(step4ReachErr !== undefined
+            ? [`step 4 (R-384 reach pins) FAILED: ${describe(step4ReachErr)}`]
+            : []),
           ...(step4bErr !== undefined ? [`step 4b FAILED: ${describe(step4bErr)}`] : []),
         ].join("\n"),
       );
@@ -608,8 +709,10 @@ async function main(): Promise<void> {
       survivors: readonly string[],
       reason: string,
     ): Promise<void> => {
-      const { code, out, acquired } = await verify(step, TEST_DIR, artifact, survivors);
+      const { code, out, acquired, reachLog } = await verify(step, TEST_DIR, artifact, survivors);
       assert.equal(code, VERIFY_EXIT.refused, `${step}: exit 6`);
+      // R-384 pre-commitment: a refusal comes before `narrow`, so no reach line is printed.
+      assert.deepEqual(reachLog, [], `${step}: no reach line`);
       assert.equal(out.refused?.reason, reason, `${step}: ${JSON.stringify(out.refused)}`);
       assert.equal(acquired, 0, `${step}: no lease acquire`);
       assert.equal(out.verifyRunId, undefined, `${step}: no verify run row`);

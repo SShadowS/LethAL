@@ -373,6 +373,9 @@ class PkgBackend extends StubBackend {
 
 const DIFFERS_TAIL =
   "Possible causes: the test app was built with other preprocessor symbols (set preprocessorSymbols in the config or the test app.json), or a test was added, renamed or removed in the source without republishing.";
+/** R420: a published-only test can also be a declaration discovery did not recognise. */
+const DIFFERS_TAIL_PUBLISHED_ONLY =
+  "Possible causes: the test app was built with other preprocessor symbols (set preprocessorSymbols in the config or the test app.json), or a test was added, renamed or removed in the source without republishing, or LethAL did not recognise a test declaration in the source (please report the shape; see R420).";
 
 describe("R403 phase B: bcdev's compiled-membership check (plan §3(b))", () => {
   test("built [] and derived []: equal, so the FILTERED suite runs", async () => {
@@ -392,7 +395,7 @@ describe("R403 phase B: bcdev's compiled-membership check (plan §3(b))", () => 
     expect(err).toBeInstanceOf(TestAppDiffersError);
     expect((err as TestAppDiffersError).code).toBe("test-app-differs");
     expect((err as Error).message).toBe(
-      `the published test app's compiled tests differ from the tests LethAL discovered in the test source under symbols []: published-only R403 Tests.OnlyUnderX; source-only none. ${DIFFERS_TAIL}`,
+      `the published test app's compiled tests differ from the tests LethAL discovered in the test source under symbols []: published-only R403 Tests.OnlyUnderX; source-only none. ${DIFFERS_TAIL_PUBLISHED_ONLY}`,
     );
     expect(backend.baselineMethods).toEqual([]);
   });

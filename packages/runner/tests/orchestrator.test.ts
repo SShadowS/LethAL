@@ -630,6 +630,7 @@ describe("runSession", () => {
       );
       expect(digestWarning).toEqual([]);
       const plan = await planVerify({
+        coverage: "procedure",
         source: {
           runId,
           projectPath: dirs.projectDir,
@@ -761,6 +762,7 @@ describe("runSession", () => {
         const { dirs, store, runId } = r;
         const recorded = store.testDigests(runId);
         const plan = await planVerify({
+          coverage: "procedure",
           source: {
             runId,
             projectPath: dirs.projectDir,
@@ -13333,6 +13335,97 @@ describe("C02-04b: runNamedMutants", () => {
     expect(tr.slice(stranded + 1).some((c) => c.call === "run" || c.call === "runMany")).toBe(
       false,
     );
+  });
+});
+
+// R-384 Task 2: `narrow`, verify's reach filter seam. It runs inside `select`, after the baseline
+// and before the first mutant, on the coverage the baseline just returned.
+describe("R-384: runNamedMutants' narrow seam", () => {
+  const tally = (t: Trace) => {
+    const cs = calls(t) as Array<{ call: string; id?: string | null }>;
+    return {
+      runs: cs.filter((c) => c.call === "run").length,
+      mutantActivations: cs.filter((c) => c.call === "activate" && typeof c.id === "string").length,
+    };
+  };
+
+  test("narrow runs after the last baseline run and before the first mutant run, with the loaded artifact's alSources", async () => {
+    const fx = await installedFixture({ killer: "none" });
+    const at: Array<ReturnType<typeof tally>> = [];
+    let seen:
+      | { coverage: string; alSources: readonly { path: string; text: string }[] }
+      | undefined;
+    let baselineRows = 0;
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER, OVER2] }],
+      narrow: (baseline, ctx) => {
+        at.push(tally(fx.trace));
+        baselineRows = baseline.length;
+        seen = ctx;
+        return { methods: new Map([["M0001", [OVER]]]), unreached: new Set() };
+      },
+    });
+    // Called once, when both baseline runs had happened and no mutant had been activated.
+    expect(at).toEqual([{ runs: 2, mutantActivations: 0 }]);
+    expect(baselineRows).toBe(2);
+    expect(tally(fx.trace).mutantActivations).toBeGreaterThan(0);
+    // The artifact `attach` was handed is the one whose sources narrow got.
+    const [attached] = fx.inner.attached;
+    expect(seen?.alSources).toBe(attached?.alSources);
+    expect(seen?.alSources.some((s) => s.text.includes("Sandbox Logic"))).toBe(true);
+    expect(seen?.coverage).toBe(PHASE_CAPS.coverage);
+    // The narrowed list is what ran against the mutant.
+    expect(res.outcomes.map((o) => [o.verdict, o.coveringTests])).toEqual([
+      ["survived", [`${OVER.codeunitName}.${OVER.method}`]],
+    ]);
+  });
+
+  test("an unreached mutant is answered in `unreached` and never sent", async () => {
+    const fx = await installedFixture({ killer: "none" });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+      narrow: () => ({
+        methods: new Map([
+          ["M0001", [OVER]],
+          ["M0002", []],
+        ]),
+        unreached: new Set(["M0002"]),
+      }),
+    });
+    expect(res.outcomes.map((o) => o.mutant.mutantId)).toEqual(["M0001"]);
+    expect(res.unreached).toEqual(["M0002"]);
+    expect(calls(fx.trace)).not.toContainEqual({ call: "activate", tag: "b", id: "M0002" });
+  });
+
+  test("a narrowed list may only remove methods: one the baseline never ran is refused", async () => {
+    const fx = await installedFixture({ killer: "none" });
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      narrow: () => ({ methods: new Map([["M0001", [OVER, OVER2]]]), unreached: new Set() }),
+    }).catch((e: unknown) => e);
+    expect(String(err)).toContain("M0001");
+    expect(String(err)).toContain("Zulu Tests.OverBudgetDetected");
+    expect(tally(fx.trace).mutantActivations).toBe(0);
+  });
+
+  test("a throw from narrow releases the lease", async () => {
+    const fx = await installedFixture();
+    class NarrowRefused extends Error {}
+    const err = await runNamedMutants({
+      ...fx.cfg,
+      narrow: () => {
+        throw new NarrowRefused("over budget");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NarrowRefused);
+    expect(fx.trace.filter((x) => x === "release").length).toBe(1);
+    expect(tally(fx.trace).mutantActivations).toBe(0);
   });
 });
 

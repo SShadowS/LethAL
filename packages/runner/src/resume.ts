@@ -344,8 +344,12 @@ export interface SessionFingerprintInput {
   readonly testBuildSymbols?: readonly string[];
   /** R403: `"arms-v1"` when the arm policy changed the discovered suite or recorded a file it
    *  could not decide; absent otherwise, so the digest stays the one recorded before R403 exactly
-   *  when the policy left the suite unchanged. */
-  readonly testDiscovery?: "arms-v1";
+   *  when the policy left the suite unchanged. R420: `"tree-v1"` when the tree finder returned a
+   *  test the regex did not, on EVERY path (the no-evidence bcdev path gains the test too), and
+   *  `"arms-v1+tree-v1"` when both apply. A project the regex already read in full keeps its digest
+   *  byte for byte. R424: `"split-v1"` when a discovered TEST comes from a split-header procedure
+   *  (a split helper alone does not set it); every combination is listed so none can be lost. */
+  readonly testDiscovery?: TestDiscoveryMarker;
   readonly skipKnownSurvivors: boolean;
   /**
    * R325: the identity scheme this session's keys are made under (`IDENTITY_SCHEME`). ALWAYS in
@@ -366,6 +370,35 @@ export interface SessionFingerprintInput {
     readonly controlId: number;
     readonly tableId: number;
   };
+}
+
+/** R403 + R420 + R424: every non-empty combination of the three discovery markers, in fixed order. */
+export type TestDiscoveryMarker =
+  | "arms-v1"
+  | "tree-v1"
+  | "split-v1"
+  | "arms-v1+tree-v1"
+  | "arms-v1+split-v1"
+  | "tree-v1+split-v1"
+  | "arms-v1+tree-v1+split-v1";
+
+/** R403 + R420 + R424: the `testDiscovery` key, or nothing (so a session no marker applies to
+ *  keeps its older digest). `arms`: the arm policy changed the suite this session runs; `tree`: the
+ *  tree finder returned a test the regex did not; `split`: a discovered test is an arm of a
+ *  split-header procedure. */
+export function testDiscoveryMarker(
+  arms: boolean,
+  tree: boolean,
+  split: boolean,
+): { readonly testDiscovery?: TestDiscoveryMarker } {
+  if (arms && tree && split) return { testDiscovery: "arms-v1+tree-v1+split-v1" };
+  if (tree && split) return { testDiscovery: "tree-v1+split-v1" };
+  if (arms && split) return { testDiscovery: "arms-v1+split-v1" };
+  if (arms && tree) return { testDiscovery: "arms-v1+tree-v1" };
+  if (split) return { testDiscovery: "split-v1" };
+  if (tree) return { testDiscovery: "tree-v1" };
+  if (arms) return { testDiscovery: "arms-v1" };
+  return {};
 }
 
 /** Stable hex digest of `SessionFingerprintInput`. Globs are sorted so pattern ORDER — which

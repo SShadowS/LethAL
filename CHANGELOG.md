@@ -13,6 +13,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`lethal verify` sends a new test only to the survivors its coverage reaches** (R384). Under
+  `fenced` coverage, verify reads each new test's coverage from the unmutated run it already makes
+  and joins the test only to the survivors whose procedure (or, for a trigger, object) it ran, by
+  the source run's own selection rule. A new test whose coverage cannot be used, and a survivor
+  coverage cannot place, fail closed: they take every new test. A survivor's covering tests are
+  never dropped. A survivor no new test reaches and with no covering test stays `survived` with
+  `testsRun: []`. Off under the hub modes and `none`, and with the new `--no-reach-filter`. One
+  stderr line states the filter's state; the JSON is unchanged (schema v4). Stated limit: state
+  left by an earlier test in the same call, or code run in another session, is not seen.
+
 - **`alRunner.selectorMode` and `alRunner.coverage` config keys** (R387). `selectorMode`
   (`"static"` or `"resource"`) picks R222's selector channel and `coverage` (`"al-runner"` or
   `"none"`) turns on R220's `--coverage`; neither was reachable from `lethal run` before. Coverage
@@ -35,6 +45,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   dropping.
 
 ### Changed
+
+- **`--max-new-tests` budgets extra test runs, not new tests** (R384). The budget is
+  `--max-new-tests` x (survivors + 2) extra test runs. With the reach filter off, the boundary is
+  unchanged (more new tests than `--max-new-tests` refuses). With it on, verify refuses before the
+  lease only when two unmutated runs per new test exceed the budget, and otherwise after those
+  runs, before any mutant, when the runs left after the filter still do. No verify that passed
+  before refuses now. The `too-many-new-tests` texts change; the refusal value does not.
+- **`coverageFilter` takes an optional `warn` sink** (R384). `lethal run` prints the same lines.
 
 - **The hang tag reads loop-condition operands in `#if` arms the build compiles, and only those** (R402). A `while (A < 10)` `#if X and (B < 5) #endif` tail is now read, so `B := B + 1` is tagged `loop-condition-target` under `X`. Tails inside a condition (call arguments, subscripts, list elements) are no longer read when their arm is compiled out. Directive symbols are never read as variables.
 - **A file where a statement-level `#if` continues an unterminated statement is not mutated** (R402, R408). For example, `repeat ... until (A > 10)` `#if X or (B > 5) #endif ;`. The parser places the tail as a separate statement, and the instrumented artifact then failed alc (`AL0111`), taking down every mutant in its batch. Such a file is reported as `preproc-undecided` with the reason `directive-continues-statement at line N`, and it is still compiled and published. Measured on DC, System Application, Business Foundation and BaseApp: no file is refused by this, and no mutant, key or tag changes.
@@ -191,6 +209,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   codes, since one procedure's mutants are always in one batch. `lethal export` uses the same id, so
   a multi-batch export no longer repeats mutant ids. `lethal explain` still reads v2 reports, and
   `schemas/report-v2.schema.json` is frozen beside the new `report-v3.schema.json`.
+- **A test that opens a TestPage only through a helper whose header is split by `#if` is now
+  refused on bcdev** (R424). Before, the TestPage scan could not see such a helper, so the test was
+  sent into the fenced session like any other. Now the scan walks the helper's body, and the test
+  is refused like every other TestPage test, with a reason naming the helper. Its verdicts move
+  where this applies: the test leaves the suite that runs, and the session's
+  `baselineGreenOverall` becomes false, as for every TestPage refusal. The old silence was the bug.
+  On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
 
@@ -200,6 +225,52 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   has the shape, re-checked: no file under `fixtures/` holds an unindexed object at all). Every
   top-level object now moves the base. A `#pragma` line does not, as before: it is not an object
   (BaseApp has 166 at top level).
+- **Test discovery found no `[Test]` whose declaration its regular expression could not read**
+  (R420). Such a test was dropped silently, so it never ran and the mutants only it kills could
+  score survived or no-coverage. Discovery now reads these shapes as the compiler does: `#if`/`#else`
+  around a test's attributes or around whole test procedures, a `#pragma` or `#region` line between
+  `[Test]` and `procedure`, and an `internal procedure`. A `[Test]` before an `#if` with no `#else`
+  (or an empty one) goes, as alc gives it, to the procedure after the `#endif` in a build that
+  compiles none of the arms. A file the regular expression reads in full
+  is not parsed again, so every existing project discovers exactly what it did. A test procedure
+  whose HEADER is split by `#if` (one name per arm) is still not discovered: it now raises a
+  `test-shape-unsupported` warning naming both names (R424). When the published test app holds a
+  test the source did not yield, the bcdev refusal now names that as a third possible cause. The
+  resume fingerprint's `testDiscovery` gains `"tree-v1"` (and `"arms-v1+tree-v1"`) when discovery
+  found a test the regular expression missed, so such a run does not resume a run from before.
+- **A `[HandlerFunctions]` inside `#if` was invisible to the TestPage scan and the test digest**
+  (R420). For a TEST procedure, both now read the attributes of every `#if` arm in its attribute
+  run (the union), and its span starts at the first node of that run, the `#if` included. So
+  editing a handler named only inside `#if` now changes the test's digest. Every other procedure
+  keeps its old span, so a helper under `#if not CLEAN24 [Obsolete(...)] #endif` changes nothing.
+  Digests change ONCE after upgrading in exactly one case: a codeunit holding a test procedure
+  whose attribute run already contained an attribute-only `#if` block (before `[Test]`, a shape
+  discovery always found). That `#if` moves from the codeunit's shared parts into the test's span,
+  so the digest of every test that reaches that codeunit changes, the test's codeunit siblings
+  included. `lethal verify` treats each as a new test on the first run, which is the safe
+  direction. No committed fixture has the shape, and their digests are unchanged (pinned by test).
+- **A procedure whose HEADER is split by `#if` (one header per arm, one shared body) was invisible
+  to the test-app model** (R424). tree-sitter-al reads it as one `preproc_split_procedure` node (or
+  a `preproc_split_procedure_preamble`, when each arm has its own `var` section), and the TestPage
+  scan and the test digest kept only plain `procedure` nodes. Now:
+  - **A split TEST is discovered**, one candidate per arm, each kept or dropped by the `#if` arm
+    its NAME starts in, exactly as alc compiles it (measured with alc 18.0.41.45789 for a `[Test]`
+    before the `#if`, a `[Test]` inside each arm, an `#elif` arm, an `internal` arm, a shared and a
+    per-arm `var` section). The `test-shape-unsupported` warning no longer fires for it. The resume
+    fingerprint's `testDiscovery` gains `"split-v1"` (in every combination with `"arms-v1"` and
+    `"tree-v1"`) when a discovered test comes from a split member, so such a run does not resume a
+    run from before. A split HELPER alone does not set it.
+  - **A split HELPER is resolved.** Each arm is its own declaration, never merged: a call resolves
+    by name and parameter count, and a helper whose return type differs per arm is followed into
+    every codeunit either arm can return. Before, a call to it was silently treated as a built-in.
+    A split member's locals are no longer read as globals.
+  - **Digests move once, only for tests that REACH a split member**: the member is now a reach
+    edge with its own span (both headers and the body). Its text stays in its codeunit's parts hash,
+    as before, so a test that does not reach it keeps its digest byte for byte. A test that
+    reaches one is treated as new by `lethal verify` on its first run after upgrading, the safe
+    direction. No committed fixture has a split member, so their digests are unchanged.
+  - `TreeDiscoveryMismatchError` names a second possible cause: the file uses a construct the
+    parser (tree-sitter-al) does not read correctly yet, with a request to report the file.
 
 
 ## [0.1.0-alpha.3] — 2026-08-27
