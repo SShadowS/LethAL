@@ -73,6 +73,7 @@ Three of the misses (S4, S5, S6) have no `#if` at all. `hasDirectiveLine` knows 
   - The union is the safe direction for both readers: the digest walks every handler a build might use, and the TestPage scan sees every TestPage a handler might touch.
   - Where the arm is decided, a narrower set would be possible, but nothing here needs it.
 - **The digest's span** starts at the first node of that attribute run, the `preproc_conditional` included, so editing the handler list changes the digest.
+- **[orchestrator, at adoption]** A test discovered TODAY can still carry a `preproc_conditional` in its attribute run when the `#if` block comes BEFORE `[Test]` (the regex finds `[Test]` directly before `procedure`). Its digest changes once with this fix, so `lethal verify` treats it as new on the first run after upgrading: more executions, never fewer, which is the safe direction. Say so in the CHANGELOG, and add one test that pins this shape: discovered both before and after, digest changed.
 - **No digest scheme bump:** no committed fixture has these shapes, so every existing digest is byte-identical, and a test pins that. These tests were never discovered before, so no stored digest exists for them.
 
 ## 4. The bcdev message (acceptance 4)
