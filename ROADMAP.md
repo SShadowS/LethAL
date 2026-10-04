@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**109 of 426 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**108 of 426 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -291,7 +291,7 @@ that ordering is the priority.
 - **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · done (8f74a681)
 - **R429** · TypeTable (buildTypeTable) may read member-level #if declarations without arms; UNMEASURED · [R429.md](docs/roadmap/R429.md) · closed 2026-10-04 — no defect: buildTypeTable types through the symbol table R-405a made arm-aware; 0 wrong…
 - **R430** · a test that hands a test-app mock codeunit to another app sits on verify's whole-source fallback · [R430.md](docs/roadmap/R430.md) · open, filed 2026-10-04
-- **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · open, filed 2026-10-04
+- **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · closed 2026-10-04 — stated limit: never-typed #if positions lose 1 of 55 typed mutants on fixtures and 0 of…
 
 ## Backends and tooling
 
