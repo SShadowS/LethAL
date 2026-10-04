@@ -7,7 +7,8 @@
       "**/node_modules/**",
       "**/*.tsbuildinfo",
       "scripts/r214/pp.ts",
-      "scripts/r214/presence.ts"
+      "scripts/r214/presence.ts",
+      "packages/runner/tests/fixtures/verify-v4-r384-step3.json"
     ]
   },
   "linter": {

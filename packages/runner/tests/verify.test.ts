@@ -58,6 +58,7 @@ import {
   verifyRefusalOf,
 } from "../src/verify";
 import type { ReachFilterOffReason } from "../src/verify-reach";
+import { droppedNewTestsOf } from "../src/verify-read";
 import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -2517,6 +2518,95 @@ describe("C02-09: gap ids", () => {
         ["M0002", ["T.M", "New.N1", "New.N2"], false],
       ]);
       w.store.close();
+    });
+
+    // R-425: the dropped list is not stored, because it is derivable. On every reach fixture of this
+    // describe, the reader's derivation (newTests minus testsRun) equals the unfiltered request
+    // runNamed was handed minus what was sent, and is non-empty exactly when the row says narrowed.
+    test("R-425 invariant: droppedNewTestsOf equals request minus sent on every reach fixture", async () => {
+      const at = (procedure: string) => [{ objectType: "Codeunit", objectId: 50000, procedure }];
+      const fixtures: Array<{
+        seeds: Seed[];
+        ids: string;
+        newMethods?: string[];
+        coverage: Record<string, readonly CoverageEntry[]>;
+        outcome?: Record<string, TestOutcome>;
+        coveringTests?: string[];
+      }> = [
+        {
+          seeds: [seed("M0001", undefined, "survived")],
+          ids: "0/M0001",
+          coverage: { M: POST, N1: POST, N2: OTHER },
+        },
+        {
+          seeds: [seed("M0001", undefined, "no-coverage")],
+          ids: "0/M0001",
+          coverage: { N1: OTHER, N2: OTHER },
+          coveringTests: [],
+        },
+        {
+          seeds: [
+            seed("M0001", undefined, "survived"),
+            seed("M0002", undefined, "survived", { procedureName: "Other" }),
+          ],
+          ids: "0/M0001,0/M0002",
+          coverage: { M: POST, N1: [...POST, ...OTHER], N2: OTHER },
+        },
+        {
+          seeds: [
+            seed("M0001", undefined, "survived"),
+            seed("M0002", undefined, "survived", { procedureName: "Other" }),
+            seed("M0003", undefined, "survived", { procedureName: "Third" }),
+          ],
+          ids: "0/M0001,0/M0002,0/M0003",
+          newMethods: ["T1", "T2", "T3"],
+          coverage: {
+            M: POST,
+            T1: [...at("Post"), ...at("Other")],
+            T2: at("Post"),
+            T3: at("Other"),
+          },
+        },
+        {
+          seeds: [seed("M0001", undefined, "survived"), seed("M0002", undefined, "survived")],
+          ids: "0/M0001,0/M0002",
+          coverage: { M: POST, N1: POST, N2: OTHER },
+          outcome: { N2: "fail" },
+        },
+      ];
+      let narrowedRows = 0;
+      for (const f of fixtures) {
+        const seen: NamedMutantsConfig[] = [];
+        const w = await verifyWorld(f.seeds, [], {
+          ...fenced,
+          testDir: reachTestDir(f.newMethods),
+          baseline: [T_M],
+          ...(f.coveringTests !== undefined ? { coveringTests: f.coveringTests } : {}),
+          runNamed: reachRunNamed(f.coverage, {
+            seen,
+            ...(f.outcome !== undefined ? { outcome: f.outcome } : {}),
+          }),
+        });
+        const out = await w.verify([f.ids]);
+        expect(out.refused).toBeUndefined();
+        const [cfg] = seen;
+        if (cfg === undefined) throw new Error("runNamed was not called");
+        for (const row of out.results) {
+          const request = cfg.requests.find((q) => q.mutantId === row.mutantCode);
+          if (request === undefined) throw new Error(`no request for ${row.mutantCode}`);
+          const sent = new Set(row.testsRun ?? []);
+          const requestMinusSent = request.methods
+            .map((m) => `${m.codeunitName}.${m.method}`)
+            .filter((n) => !sent.has(n));
+          const dropped = droppedNewTestsOf(out, row);
+          expect(dropped ?? []).toEqual(requestMinusSent);
+          expect(row.reachNarrowed).toBe(requestMinusSent.length > 0);
+          if (row.reachNarrowed === true) narrowedRows += 1;
+        }
+        w.store.close();
+      }
+      // The fixtures do reach both sides of the invariant.
+      expect(narrowedRows).toBeGreaterThan(0);
     });
 
     test("R-425: a skipped (marked equivalent) row has no reachNarrowed", async () => {

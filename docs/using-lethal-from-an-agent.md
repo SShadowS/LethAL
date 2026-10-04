@@ -445,7 +445,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 4`. Schema: [../schemas/verify-v4.schema.json](../schemas/verify-v4.schema.json).
+`verifySchemaVersion: 5`. Schema: [../schemas/verify-v5.schema.json](../schemas/verify-v5.schema.json).
 
 | field | values |
 |---|---|
@@ -453,6 +453,8 @@ nothing.
 | `newTests[].state` | `stable`, `flaky`, `red`, `flaky-unknown`, `infra-error` |
 | `newTests[].runs[].outcome` | `pass`, `fail`, `skip`, `timeout`, `deadline-exceeded`, `error`, `not-run` |
 | `results[].killedBy` | `assertion`, `runtime-error`, `other` |
+| `reachFilter.state` | `on`, `off` |
+| `reachFilter.reason` | `no-reach-filter`, `coverage-mode-none`, `coverage-mode-procedure`, `coverage-mode-line`, `coverage-mode-al-runner` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
 `invalidBaseline` and `gapId`.

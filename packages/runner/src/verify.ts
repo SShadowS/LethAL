@@ -1089,8 +1089,11 @@ export async function verifyDependencyFingerprint(
 /** C02-06 decision 7: the JSON `lethal verify` prints. 2 since C02-09 added two refusal reasons.
  *  3 since R354 added the refusal reason `coverage-mode-changed`: a new value, so it bumps (R233);
  *  v2 is frozen. 4 since R-371 added `too-many-new-tests` and `dependency-unreadable`; v3 is
- *  frozen. */
-export const VERIFY_SCHEMA_VERSION = 4;
+ *  frozen. 5 since R-425 added `reachFilter` and `results[].reachNarrowed`. Adding a field does
+ *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
+ *  report it means the report predates the record; the version is the one thing that tells the
+ *  two apart, so it bumps. v4 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 5;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
