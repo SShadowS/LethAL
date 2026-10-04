@@ -4171,6 +4171,110 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R-422: a project app.json written on Windows names its logo and resource folders with `\`,
+  // which the Linux alc reads as part of the file name (AL1001 / AL0863).
+  async function withBackslashPaths(dirs: { readonly projectDir: string }) {
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({
+        ...JSON.parse(APP_JSON),
+        logo: "Images\\Logo.png",
+        resourceFolders: ["Res\\Sub"],
+      }),
+    );
+    await Bun.write(join(dirs.projectDir, "Images/Logo.png"), "PNG");
+    await Bun.write(join(dirs.projectDir, "Res/Sub/a.txt"), "x");
+  }
+  const BACKSLASH_WARNING =
+    'app.json names a path with "\\": logo "Images\\Logo.png" -> "Images/Logo.png"; resourceFolders[0] "Res\\Sub" -> "Res/Sub". LethAL wrote "/" in the app.json it compiles for each batch, because the Linux alc reads "\\" as part of the name and fails with AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove this warning.';
+  async function twoBatchProject() {
+    const dirs = await makeProject();
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    return dirs;
+  }
+
+  test("warns ONCE per session, with the exact text, when app.json names a backslash path (R-422)", async () => {
+    const dirs = await twoBatchProject();
+    await withBackslashPaths(dirs);
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    const warnings = events.filter(
+      (e) => e.type === "warning" && e.code === "app-json-backslash-path",
+    );
+    expect(warnings).toHaveLength(1);
+    const [only] = warnings;
+    expect(only?.type === "warning" ? only.message : undefined).toBe(BACKSLASH_WARNING);
+    store.close();
+  });
+
+  test("an all-/ project raises no app-json-backslash-path warning (R-422)", async () => {
+    const dirs = await twoBatchProject();
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(
+      events.filter((e) => e.type === "warning" && e.code === "app-json-backslash-path"),
+    ).toHaveLength(0);
+    store.close();
+  });
+
+  test("the version-conflict re-stamp keeps / in the batch app.json (R-422)", async () => {
+    const dirs = await makeProject();
+    await withBackslashPaths(dirs);
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error(
+            "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed.",
+          );
+        }
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    expect(attempts).toBe(2);
+    const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+      e.match(/^run-\d+-batch-0$/),
+    );
+    const [batchDirName] = batchDirs;
+    if (batchDirName === undefined) throw new Error("no batch dir written");
+    const onDisk = JSON.parse(
+      await readFile(join(dirs.instrumentedDir, batchDirName, "app.json"), "utf8"),
+    ) as { version: string; logo: string; resourceFolders: string[] };
+    expect(onDisk.version).toBe("9.9.9.10");
+    expect(onDisk.logo).toBe("Images/Logo.png");
+    expect(onDisk.resourceFolders).toEqual(["Res/Sub"]);
+    store.close();
+  });
+
   test("fails loudly on a SECOND version conflict rather than retrying forever", async () => {
     const dirs = await makeProject();
     const backend = new PhaseBackend({
