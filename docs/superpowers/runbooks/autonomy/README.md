@@ -99,7 +99,10 @@ containers assigned to this project can be leased. A missing `allocation.json` t
   another al-runner session.
   - **On the Windows host only:** `H:/al-runner-builds/c39ad5de/al-runner.exe`; set it as
     `LETHAL_ALRUNNER_PATH` and as `alRunner.alRunnerPath` in your gitignored fixture configs.
-  - **Inside the kraken container:** `/opt/al-runner/c39ad5de/al-runner`. It is already in
+  - **Inside the kraken container:** al-runner is a daily local build of upstream `main`, not the
+    pinned c39ad5de: `/work/tools/al-runner/current/al-runner`. `scripts/al-runner-update.sh` builds
+    it and moves `current` onto it only after `itest:alrunner` passes on that build (until the first
+    update, `current` points at the c39ad5de build baked into the image). It is already in
     `LETHAL_ALRUNNER_PATH` there and the container's fixture configs already name it: do not
     overwrite either with the host path.
 - Pause: `coord checkpoint` answers `"paused": true` while the owner has paused the machine.
