@@ -417,6 +417,19 @@ describe("R-307 O7: the PLAN/EMIT boundary", () => {
     expect(bad).toEqual([]);
   });
 
+  test("EMIT value imports come only from the allow-list; everything else is import type", () => {
+    // Allowed: other EMIT modules (they cannot refuse, by the rules above) and reach-latch.ts
+    // (one pure constant, REACH_LATCH, read by both halves). Nothing else is needed: a composition
+    // such as printWithRewrites runs planEdits and can refuse, and a "neither" module may throw.
+    const allowed = new Set([...EMIT_MODULES, "packages/schemata/src/reach-latch.ts"]);
+    const bad: string[] = [];
+    for (const f of EMIT_MODULES)
+      for (const e of importsOf(f))
+        if (!e.typeOnly && !allowed.has(e.origin))
+          bad.push(`${e.where} EMIT value import of ${e.origin} is not on the allow-list`);
+    expect(bad).toEqual([]);
+  });
+
   test("EMIT modules use no ??, no ||, no .get( and no .find( (total lookups, no fallback)", () => {
     const fallback = new Set([
       ts.SyntaxKind.QuestionQuestionToken,
