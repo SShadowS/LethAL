@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**110 of 422 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**109 of 422 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -267,7 +267,7 @@ that ordering is the priority.
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · open, filed 2026-10-01
 - **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
-- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · open, filed 2026-10-01
+- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
 - **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
 - **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
 - **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30

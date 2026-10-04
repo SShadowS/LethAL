@@ -13,6 +13,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`SessionReport.buildSymbols`: the target's effective build symbols** (R381). The set the build
+  used (config, the target `app.json`, and on al-runner its predefined symbols), sorted. Written on
+  every new report, `[]` included, so `[]` means "built with no symbols" and absent means a report
+  from before this change. `preprocessorSymbols` still holds the config set alone. The console
+  report prints `build symbols beyond config: [...]` when the two differ (the al-runner
+  `CLEANSCHEMA` run is shortened to `CLEANSCHEMA1..25`). Optional in the schema, so the report stays
+  v3 and older reports still validate.
+
 - **`lethal verify` sends a new test only to the survivors its coverage reaches** (R384). Under
   `fenced` coverage, verify reads each new test's coverage from the unmutated run it already makes
   and joins the test only to the survivors whose procedure (or, for a trigger, object) it ran, by
@@ -245,7 +253,9 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   - **A split HELPER is resolved.** Each arm is its own declaration, never merged: a call resolves
     by name and parameter count, and a helper whose return type differs per arm is followed into
     every codeunit either arm can return. Before, a call to it was silently treated as a built-in.
-    A split member's locals are no longer read as globals.
+    A split member's locals are no longer read as globals. A split helper's body can now raise the
+    same `TestPageScanError` problems as a plain helper (an unresolved receiver), not only the
+    ruled TestPage case.
   - **Digests move once, only for tests that REACH a split member**: the member is now a reach
     edge with its own span (both headers and the body). Its text stays in its codeunit's parts hash,
     as before, so a test that does not reach it keeps its digest byte for byte. A test that

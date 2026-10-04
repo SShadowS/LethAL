@@ -541,9 +541,11 @@ Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
    build's, and a mark written from it would be stale on the next run. Re-run under this build
    first, then take the key from the new report's explain.
-5. If the project's `app.json` or its config defines preprocessor symbols, set the mark's
-   `"preprocessorSymbols"` to that build's symbols (config plus `app.json`, for example
-   `"preprocessorSymbols": ["CLEAN27"]`). A mark without the field means `[]`: it applies only to
+5. Set the mark's `"preprocessorSymbols"` to the report's `buildSymbols`, the build's effective
+   set (for example `"preprocessorSymbols": ["CLEAN27"]`). A report from before R381 has no
+   `buildSymbols`; for that, build the set by hand: the config's symbols plus the target
+   `app.json`'s, and on al-runner the predefined ones below. Do not use the report's
+   `preprocessorSymbols`: it is the config set alone. A mark without the field means `[]`: it applies only to
    a build with no symbols. A key names a site within one build, so a mark made under other
    symbols is reported stale and never applied (R214). A mark for an AL-RUNNER run must list the
    run's whole effective set, which includes `CLEANSCHEMA1` to `CLEANSCHEMA25` even when the

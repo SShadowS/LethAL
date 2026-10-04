@@ -50,7 +50,7 @@ import type { BatchArtifact } from "./store";
  * happens to arrive after the invalidation in the raw event order.
  */
 export interface FoldStatics {
-  /** R214: the effective build symbols, for matching equivalence marks. REQUIRED, so a builder that forgets it fails to compile rather than silently matching `[]`. Carried only in-process, like R325's scheme; not a report field. */
+  /** R214: the effective build symbols, for matching equivalence marks. REQUIRED, so a builder that forgets it fails to compile rather than silently matching `[]`. Carried only in-process, like R325's scheme, never in the event stream. Since R381 `buildReport` also writes it as `SessionReport.buildSymbols`; nothing is folded for it. */
   readonly buildSymbols: readonly string[];
   readonly caps: BackendCapabilities;
   /**

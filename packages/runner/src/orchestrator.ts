@@ -6121,10 +6121,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       ? { testsOnly: cfg.testsOnly }
       : {}),
     ...(cfg.stopHungSessions === true ? { stopHungSessions: true } : {}),
-    // R172 proposal 3. Carried on BOTH statics assemblies in this file — this one and the
-    // quarantine/early-report path above — because a run that ends early still produced verdicts a
-    // mark can be contradicted by, and a feature that silently vanished on the abnormal path would
-    // be exactly the kind of "works when you are watching" gap the marks exist to close.
+    // R172 proposal 3. Carried on BOTH the `run-configured` event (~line 4307) and these statics:
+    // one `cfg` source, two carriages. This is the only statics assembly and `buildReport`'s only
+    // call; a run that ends early takes its own return path and builds no report here, so there
+    // is no second assembly to keep in step.
     ...(cfg.equivalenceMarks !== undefined && cfg.equivalenceMarks.length > 0
       ? { equivalenceMarks: cfg.equivalenceMarks }
       : {}),

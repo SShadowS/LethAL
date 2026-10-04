@@ -905,6 +905,25 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, { ...without, coverageMode: "None" })).not.toEqual([]);
   });
 
+  test("R381: buildSymbols is additive under v3: optional, a report without it validates, and with it, [] included", () => {
+    const without = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect("buildSymbols" in without).toBe(false);
+    // Optional: required, it would reject every report written before R381.
+    const props = (reportSchema as { properties: Record<string, unknown>; required: string[] })
+      .properties;
+    expect(props.buildSymbols).toBeDefined();
+    expect((reportSchema as { required: string[] }).required).not.toContain("buildSymbols");
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: [] })).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: ["A", "B"] })).toEqual([]);
+    expect(conformsTo(reportSchema, { ...without, buildSymbols: "A" })).not.toEqual([]);
+  });
+
   test("OLDER reports are also v2 and do NOT validate — the schema is one BUILD's shape (R157)", () => {
     // Pinned rather than hidden. `declarativeSites` and `preprocessorSymbols` are REQUIRED by
     // today's SessionReport and absent from reports written before they existed, while
