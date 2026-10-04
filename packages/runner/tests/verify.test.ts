@@ -2217,6 +2217,8 @@ describe("C02-09: gap ids", () => {
         readonly rerunAll?: boolean;
         /** R-427: these methods' baseline answers are reported not fresh (narrow saw them fresh). */
         readonly staleBaseline?: readonly string[];
+        /** R-427: a broken backend that reports these SENT methods notRerun and drops their rerun. */
+        readonly skipSent?: readonly string[];
       } = {},
     ): NonNullable<VerifyDeps["runNamed"]> {
       return async (cfg) => {
@@ -2263,10 +2265,13 @@ describe("C02-09: gap ids", () => {
         // R-427: as runNamedMutants does, a notRerun method runs its baseline only.
         const skip = o.ignoreNotRerun === true ? new Set<string>() : (n?.notRerun ?? new Set());
         const rerunRefs = cfg.rerunOnUnmutated ?? [];
+        const sentSkip = new Set(
+          rerunRefs.filter((r) => (o.skipSent ?? []).includes(r.method)).map(testKeyOf),
+        );
         const notRerun =
           n === undefined || o.ignoreNotRerun === true
             ? undefined
-            : rerunRefs.map(testKeyOf).filter((k) => skip.has(k));
+            : rerunRefs.map(testKeyOf).filter((k) => skip.has(k) || sentSkip.has(k));
         return {
           outcomes,
           ...(unreached !== undefined ? { unreached } : {}),
@@ -2274,7 +2279,10 @@ describe("C02-09: gap ids", () => {
             unmutated(r.ref, r.verdict.outcome, !(o.staleBaseline ?? []).includes(r.ref.method)),
           ),
           rerun: rerunRefs
-            .filter((ref) => o.rerunAll === true || !skip.has(testKeyOf(ref)))
+            .filter(
+              (ref) =>
+                o.rerunAll === true || !(skip.has(testKeyOf(ref)) || sentSkip.has(testKeyOf(ref))),
+            )
             .map((ref) => unmutated(ref, "pass")),
           ...(notRerun !== undefined ? { notRerun } : {}),
         };
@@ -2798,6 +2806,16 @@ describe("C02-09: gap ids", () => {
         });
         await expect(w.verify(["0/M0001"])).rejects.toThrow(
           "the reach filter sent 50101::N2 to no survivor, but runNamedMutants did not skip its rerun",
+        );
+        w.store.close();
+      });
+
+      test("a SENT test the backend reports notRerun is refused (reverse cross-check)", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { skipSent: ["N1"] }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "verify.ts: runNamedMutants skipped the rerun of 50101::N1, but the reach filter did not leave it unsent",
         );
         w.store.close();
       });
