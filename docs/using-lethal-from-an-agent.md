@@ -236,6 +236,12 @@ takes no equivalence mark (a mark on its key reads stale). The `identity-carry-d
 names the file and the count, and the refused file's row says "identity carry disabled for N
 mutant(s)". Its key is still recorded, so the next run without the refusal carries it normally.
 
+Every such refusal is decided in PLAN, the first of the two steps LethAL uses to instrument a file
+(PLAN decides what to change; EMIT writes the new text). So a `--dry-run` sees every refusal a real
+run would. EMIT can fail in one named way only: a RangeError "Invalid string length", when a file's
+instrumented text is too large for one string. That is a real-run crash a dry run does not see (it
+is the one entry in `EMIT_CRASHES`).
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.

@@ -58,7 +58,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   history, resume and equivalence marks skip them, and a warning says so. If EVERY file with sites
   is refused, nothing is left to measure and the run exits 1 naming each file. The explain document
   is now version 10. A mixed-object file is still refused whole: [[R299]] tracks per-object
-  dropping.
+  dropping. Instrumenting a file is now two steps, PLAN (decides the edits and every refusal) and
+  EMIT (writes the text), and the per-file trial runs PLAN only. A dry run therefore sees every
+  refusal a real run would; EMIT can fail only with the RangeError "Invalid string length", a
+  real-run crash. Measured on Base Application (dry run): peak memory 4520 MB against 4473 MB on
+  master (+1.0%) and 4888 MB before the split; wall time +13.7% over master. Output is
+  byte-identical to the build before the split.
 
 ### Changed
 
