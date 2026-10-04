@@ -1177,6 +1177,11 @@ export interface VerifyResult {
     readonly reason: "reader-marked-equivalent";
     readonly mark: { readonly key: string; readonly reason: string };
   };
+  /** R-425: true when R-384's reach filter left at least one new test out of this survivor's
+   *  request; false when it did not, or the filter was off. Absent when the filter never decided
+   *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
+   *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
+  readonly reachNarrowed?: boolean;
 }
 
 /** R-425: R-384's reach-filter state, as the JSON records it. */
@@ -1597,6 +1602,14 @@ export async function runVerify(
             return newTestResultOf(ref, b, r);
           });
 
+    // R-425: off, nothing can be narrowed; on, the filter's own answer, and nothing when it never
+    // ran (the session latched unsafe before `select`, so the row keeps the unfiltered request).
+    const narrowedOf = (id: string): { reachNarrowed?: boolean } =>
+      !reachState.on
+        ? { reachNarrowed: false }
+        : reach !== undefined
+          ? { reachNarrowed: reach.narrowed.has(id) }
+          : {};
     const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
     const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
     const results = source.targets.map((t): VerifyResult => {
@@ -1647,6 +1660,7 @@ export async function runVerify(
           verdict: "survived",
           testsRun: [],
           ...(notRun !== undefined ? { notRun } : {}),
+          ...narrowedOf(t.mutantCode),
           failureNote: `no new test reaches it: the coverage of the ${reach.filterable} new test(s) that could be read shows none of them running ${memberOf(entry)}, so nothing was run (R-384)`,
         };
       }
@@ -1661,6 +1675,7 @@ export async function runVerify(
         ...base,
         ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
+        ...narrowedOf(t.mutantCode),
       };
     });
 
