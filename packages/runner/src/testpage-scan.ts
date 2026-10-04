@@ -698,6 +698,7 @@ function splitProcsOf(
       keys,
       sites,
       idRefs,
+      true,
     );
     out.push(proc);
   }
@@ -726,6 +727,7 @@ function procFrom(
   keys: Map<string, number>,
   sites: readonly Site[] | undefined,
   idRefs: readonly string[],
+  deferKey = false,
 ): Proc {
   const id2 = h.name;
   const scope = new Map<string, string[]>();
@@ -770,9 +772,15 @@ function procFrom(
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
   const suffix = isTrigger ? " (trigger)" : "";
   const keyBase = `${kind}${unit.id}:${display}${suffix}`.toLowerCase();
-  const seen = keys.get(keyBase) ?? 0;
-  keys.set(keyBase, seen + 1);
-  return {
+  const keyFor = (): string => {
+    const seen = keys.get(keyBase) ?? 0;
+    keys.set(keyBase, seen + 1);
+    return `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`;
+  };
+  // R424 review: a split arm is keyed AFTER every plain procedure of the app, so a plain
+  // procedure keeps the key it had at 61ad4d84 and a test that never reaches a split member
+  // keeps its digest. `finishDeferredKeys` numbers the arms, in source order.
+  const proc: { -readonly [K in keyof Proc]: Proc[K] } = {
     unit,
     sites,
     idRefs,
@@ -783,9 +791,25 @@ function procFrom(
     scope,
     handlers,
     spanHash: sha256(normalizeSource(spanText(source, run))),
-    key: `${kind}${unit.id}:${display}${seen > 0 ? `#${seen}` : ""}${suffix}`,
+    key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
   };
+  if (deferKey) {
+    const pending = DEFERRED_KEYS.get(keys) ?? [];
+    pending.push(() => {
+      proc.key = keyFor();
+    });
+    DEFERRED_KEYS.set(keys, pending);
+  } else proc.key = keyFor();
+  return proc;
+}
+
+/** The split arms whose keys wait for the plain procedures', per key counter. */
+const DEFERRED_KEYS = new WeakMap<Map<string, number>, Array<() => void>>();
+
+function finishDeferredKeys(keys: Map<string, number>): void {
+  for (const assign of DEFERRED_KEYS.get(keys) ?? []) assign();
+  DEFERRED_KEYS.delete(keys);
 }
 
 /** The value of a declaration_body-level property (`TableNo`, `SourceTable`), as written. */
@@ -2131,6 +2155,7 @@ export function buildTestAppModel(
     scanFile(f.path, f.text, parsed, units, suspect, objects, keys);
     fileHashes.push(sha256(normalizeSource(f.text)));
   }
+  finishDeferredKeys(keys);
   return { units, objects, suspect, damaged, fileHashes: fileHashes.sort() };
 }
 

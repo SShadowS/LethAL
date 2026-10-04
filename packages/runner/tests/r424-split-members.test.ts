@@ -921,6 +921,49 @@ describe("R424: digests", () => {
     ]);
   });
 
+  test("a plain overload after a split member keeps its key and its test's digest from 61ad4d84", () => {
+    const OVER = `codeunit 92492 "R424 Over"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure UsesPlain()
+    begin
+        H();
+    end;
+
+#if CLEAN25
+    local procedure H(A: Integer)
+#else
+    local procedure H(A: Integer; B: Integer)
+#endif
+    begin
+        Counter := 1;
+    end;
+
+    local procedure H()
+    begin
+        Counter := 2;
+    end;
+
+    var
+        Counter: Integer;
+}
+`;
+    const t = ref(92492, "R424 Over", "UsesPlain");
+    const files = [{ path: "R424 Over.al", text: OVER }];
+    // Keys and digest computed on 61ad4d84, where the split header was not a member.
+    expect(reached(files, t)).toEqual(["92492:R424 Over.H", "92492:R424 Over.UsesPlain"]);
+    expect(testDigestsOfSources(files, [t], INPUTS)["92492::usesplain"]).toBe(
+      "v2:fe7a88b4b2a85402b3a1e035d386e03fa3ca94f1a2ac3cf979efdb06140b32cc",
+    );
+    const keys = buildTestAppModel(files)
+      .units.flatMap((u) => u.procs)
+      .filter((p) => p.name === "h")
+      .map((p) => `${p.params}=${p.key}`);
+    expect(keys).toEqual(["1=92492:R424 Over.H#1", "2=92492:R424 Over.H#2", "0=92492:R424 Over.H"]);
+  });
+
   test("the caller's digest moves with the helper's body through its own edge, not only the parts", () => {
     const edited = DIGEST.replace("Counter := A;", "Counter := A + 1;");
     const model = (src: string) => buildTestAppModel([{ path: "R424 Digest.al", text: src }]);
@@ -930,6 +973,9 @@ describe("R424: digests", () => {
         .filter((p) => p.name === "help")
         .map((p) => p.spanHash);
     const [before] = helpSpans(DIGEST);
+    // Without these, a model that reads no `Help` arm at all (61ad4d84: `[]`) passes the line below.
+    expect(helpSpans(DIGEST).length).toBeGreaterThan(0);
+    expect(helpSpans(edited).length).toBe(helpSpans(DIGEST).length);
     expect(helpSpans(edited)).not.toContain(before);
     expect(digestOf(edited, "Caller")).not.toBe(digestOf(DIGEST, "Caller"));
     // As before R424, the split member's text is in its codeunit's parts hash (plan r2 §3(a)), so
