@@ -7155,7 +7155,12 @@ async function testAppIdentity(
       published && fetchPackage !== undefined
         ? publishedPackageReader(fetchPackage)
         : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
-    const dependencies = await dependencyFingerprint(inputs, read, await targetOf(cfg.projectDir));
+    const dependencies = await dependencyFingerprint(
+      inputs,
+      read,
+      { kind: "declared" },
+      await targetOf(cfg.projectDir),
+    );
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,

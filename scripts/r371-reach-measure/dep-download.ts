@@ -64,7 +64,9 @@ const timer = setInterval(sample, 5);
 const t0 = performance.now();
 let code = 0;
 try {
-  const fp = await bcdevDependencyFingerprint(fetchCounted, testDir, projectDir);
+  const fp = await bcdevDependencyFingerprint(fetchCounted, testDir, projectDir, {
+    kind: "declared",
+  });
   sample();
   console.log(
     JSON.stringify({

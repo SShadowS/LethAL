@@ -1098,6 +1098,7 @@ export async function verifyDependencyFingerprint(
   return dependencyFingerprint(
     await readAppJsonInputs(testDir),
     fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
+    { kind: "declared" },
     await targetOf(projectPath),
   );
 }

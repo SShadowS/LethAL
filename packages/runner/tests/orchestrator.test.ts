@@ -572,6 +572,7 @@ describe("runSession", () => {
         dependencies: await dependencyFingerprint(
           app,
           async () => null,
+          { kind: "declared" },
           await targetOf(dirs.projectDir),
         ),
         buildInputs: app.buildInputs,
