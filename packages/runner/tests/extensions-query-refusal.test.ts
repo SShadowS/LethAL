@@ -191,6 +191,22 @@ describe("the refusal also covers the query and leftover escapes (R438)", () => 
   });
 });
 
+describe("the refusal reads the URL fetch actually sends (R441)", () => {
+  // fetch's URL parser drops tab, CR and LF, so `ext\tensions` reaches the server as `extensions`.
+  for (const [name, path] of [
+    ["a tab inside extensions", EXT.replace("extensions", "ext\tensions")],
+    ["CR/LF inside extensions", EXT.replace("extensions", "ext\r\nensions")],
+  ] as const) {
+    test(`refuses ${name}, with zero fetches`, async () => {
+      const { urls, fetchFn } = fake();
+      await expect(rowsOf(new HarnessVerifier(CFG, fetchFn))(path, "x")).rejects.toBeInstanceOf(
+        UnfilteredExtensionsQueryError,
+      );
+      expect(urls).toEqual([]);
+    });
+  }
+});
+
 describe("fetchExtensionInstalled refuses a non-GUID id before any request (R433)", () => {
   for (const id of ["", "app-1", ` ${GUID}`, `{${GUID}}`, `${GUID} or publisher eq 'x'`]) {
     test(`refuses ${JSON.stringify(id)} with zero fetches`, async () => {

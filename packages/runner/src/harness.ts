@@ -528,7 +528,13 @@ export class HarnessVerifier {
     const params = new URLSearchParams(extra);
     if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
     const query = params.size > 0 ? `?${params.toString()}` : "";
-    const url = `${this.cfg.baseUrl}/${path}${query}`;
+    // R441: fetch's URL parser drops tab, CR and LF, so check the parsed URL and send exactly that.
+    const sent = new URL(`${this.cfg.baseUrl}/${path}${query}`);
+    refuseUnfilteredExtensionsQuery(
+      sent.pathname,
+      Object.fromEntries([...sent.searchParams].filter(([k]) => k !== "tenant")),
+    );
+    const url = sent.href;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
     let res: Response;
