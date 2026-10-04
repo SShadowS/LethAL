@@ -57,6 +57,7 @@ import {
   verifyExitCode,
   verifyRefusalOf,
 } from "../src/verify";
+import type { ReachFilterOffReason } from "../src/verify-reach";
 import { tinyBundle } from "./helpers/bundle";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -2261,6 +2262,8 @@ describe("C02-09: gap ids", () => {
       expect(out.results.map((r) => [r.verdict, r.testsRun])).toEqual([
         ["survived", ["T.M", "New.N1"]],
       ]);
+      // R-425: the JSON records the state; on carries no reason.
+      expect(out.reachFilter).toEqual({ state: "on" });
       // Both new tests still run twice unmutated (decision 11).
       expect(out.newTests.map((t) => t.test)).toEqual(["New.N1", "New.N2"]);
       expect(lines).toEqual([
@@ -2404,23 +2407,87 @@ describe("C02-09: gap ids", () => {
       const out = await w.verify(["0/M0001"]);
       expect(out.refused?.reason).toBe("coverage-mode-changed");
       expect(lines).toEqual([]);
+      // R-425: refused before the filter was decided, so the field is absent.
+      expect("reachFilter" in out).toBe(false);
       w.store.close();
     });
 
-    const offCases: Array<[string, Partial<Parameters<typeof verifyWorld>[2]>, string]> = [
-      ["--no-reach-filter", { ...fenced, noReachFilter: true }, "--no-reach-filter"],
+    test("R-425: a malformed request is refused before the decision, so reachFilter is absent", async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        runNamed: async () => {
+          throw new Error("runNamed must not be called when verify refuses");
+        },
+      });
+      const out = await w.verify(["not-an-id"]);
+      expect(out.refused?.reason).toBe("malformed-request");
+      expect("reachFilter" in out).toBe(false);
+      w.store.close();
+    });
+
+    test("R-425: check 1 of the cap refuses after the decision, so reachFilter is present", async () => {
+      // Filter on, S = 1, max 1: B = 3, and 2N = 4 > B refuses in planVerify, before the lease.
+      const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+        ...fenced,
+        testDir: reachTestDir(),
+        baseline: [T_M],
+        maxNewTests: 1,
+        runNamed: async () => {
+          throw new Error("runNamed must not be called when verify refuses");
+        },
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused?.reason).toBe("too-many-new-tests");
+      expect(out.verifyRunId).toBeUndefined();
+      expect(out.reachFilter).toEqual({ state: "on" });
+      w.store.close();
+    });
+
+    const offCases: Array<
+      [string, Partial<Parameters<typeof verifyWorld>[2]>, string, ReachFilterOffReason]
+    > = [
+      [
+        "--no-reach-filter",
+        { ...fenced, noReachFilter: true },
+        "--no-reach-filter",
+        "no-reach-filter",
+      ],
       [
         "hub mode procedure",
         { sourceCoverage: "procedure", backendCoverage: "procedure" },
         'coverage mode "procedure" is a hub mode',
+        "coverage-mode-procedure",
       ],
       [
         "hub mode line",
         { sourceCoverage: "line", backendCoverage: "line" },
         'coverage mode "line" is a hub mode',
+        "coverage-mode-line",
       ],
-      ["mode none", { sourceCoverage: "none", backendCoverage: "none" }, 'coverage mode "none"'],
+      [
+        "mode none",
+        { sourceCoverage: "none", backendCoverage: "none" },
+        'coverage mode "none"',
+        "coverage-mode-none",
+      ],
     ];
+    for (const [name, modes, , reason] of offCases) {
+      test(`R-425: filter off (${name}): reachFilter is off with reason ${reason}, and no other key`, async () => {
+        const w = await verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...modes,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+          log: () => {},
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.reachFilter).toEqual({ state: "off", reason });
+        expect(Object.keys(out.reachFilter ?? {}).sort()).toEqual(["reason", "state"]);
+        w.store.close();
+      });
+    }
     for (const [name, modes, why] of offCases) {
       test(`filter off (${name}): every new test joins every survivor, and the off line says why`, async () => {
         const lines: string[] = [];
@@ -2494,6 +2561,8 @@ describe("C02-09: gap ids", () => {
         );
         // Refused after the run row was made: the output names it.
         expect(out.verifyRunId).toBeDefined();
+        // R-425: refused after the decision, so the state is recorded.
+        expect(out.reachFilter).toEqual({ state: "on" });
         expect(out.results).toEqual([]);
         expect(out.exitCode).toBe(VERIFY_EXIT.refused);
         w.store.close();
