@@ -681,6 +681,8 @@ export interface VerifyCliConfig {
   readonly configPath?: string;
   /** R-371: `--max-new-tests <n>`; absent means verify's default (`DEFAULT_MAX_NEW_TESTS`). */
   readonly maxNewTests?: number;
+  /** R-384: `--no-reach-filter`; absent unless given. Every new test runs against every survivor. */
+  readonly noReachFilter?: boolean;
 }
 
 export interface ExplainCliConfig {
@@ -1117,6 +1119,9 @@ VERIFY — prove named survivors are now killed, on the build the run left insta
                              since the run (default 50). An edit to a helper, handler, subscriber
                              or dependency turns every test that reaches it new; the refusal
                              names the count, the value to pass and what changed
+  --no-reach-filter          send every new test to every survivor. By default, under fenced
+                             coverage, a new test runs only against the survivors its own
+                             coverage reaches; one stderr line says whether the filter was on
   Every other flag is refused, --out included: the JSON always goes to stdout.
   Exit codes: 0 every survivor killed and every new test stable; 3 quarantined; 4 nothing
   measured (every survivor error); 5 some survivor survived or errored, or a new test is not
@@ -1236,6 +1241,8 @@ export const RUN_FLAGS = {
   survivors: { type: "string", multiple: true },
   // R-371: `lethal verify --max-new-tests <n>`. Owned by `verify` alone in FLAG_OWNERS.
   "max-new-tests": { type: "string" },
+  // R-384: `lethal verify --no-reach-filter`. Owned by `verify` alone in FLAG_OWNERS.
+  "no-reach-filter": { type: "boolean", default: false },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
@@ -1364,6 +1371,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     owners: ["verify"],
     instead: "It caps how many new or edited tests `lethal verify` runs.",
   },
+  {
+    flag: "no-reach-filter",
+    owners: ["verify"],
+    instead: "It turns off lethal verify's coverage reach filter.",
+  },
   ...RUN_ONLY_FLAGS.map((flag) => ({
     flag,
     owners: ["run"] as const,
@@ -1379,7 +1391,13 @@ export const VERIFY_FLAGS: ReadonlySet<string> = new Set([
   "survivors",
   "config",
   "max-new-tests",
+  "no-reach-filter",
 ]);
+
+/** Plan decision 1: the refusal for a flag `lethal verify` does not read. */
+export function verifyFlagRefusal(flag: string): string {
+  return `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors, --config, --max-new-tests and --no-reach-filter. Its JSON goes to stdout.`;
+}
 
 /**
  * Refuse any shared flag the given subcommand does not own, rather than ignoring it.
@@ -1522,9 +1540,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     for (const [flag, given] of Object.entries(values)) {
       const present = typeof given === "boolean" ? given : given !== undefined;
       if (present && !VERIFY_FLAGS.has(flag)) {
-        throw new Error(
-          `--${flag} is not accepted by \`lethal verify\`, which reads only --db, --artifact, --tests, --survivors, --config and --max-new-tests. Its JSON goes to stdout.`,
-        );
+        throw new Error(verifyFlagRefusal(flag));
       }
     }
     const need = (flag: string, v: string | undefined, why: string): string => {
@@ -1558,6 +1574,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       survivors,
       ...(values.config !== undefined && values.config !== "" ? { configPath: values.config } : {}),
       ...(maxNewTestsRaw !== undefined ? { maxNewTests: Number(maxNewTestsRaw) } : {}),
+      ...(values["no-reach-filter"] === true ? { noReachFilter: true } : {}),
     };
   }
 
@@ -5214,6 +5231,8 @@ export async function verifyFromCli(
   deps: {
     readonly write?: (text: string) => void;
     readonly buildBackend?: typeof buildBackend;
+    /** R-384: seam for tests; defaults to runVerify. */
+    readonly runVerify?: typeof runVerify;
   } = {},
 ): Promise<number> {
   const started = Date.now();
@@ -5278,12 +5297,13 @@ export async function verifyFromCli(
       heartbeatMs: PROGRESS_HEARTBEAT_MS,
     });
     return print(
-      await runVerify(
+      await (deps.runVerify ?? runVerify)(
         {
           artifact: parsed.artifact,
           survivors: parsed.survivors,
           testDir: parsed.testDir,
           ...(parsed.maxNewTests !== undefined ? { maxNewTests: parsed.maxNewTests } : {}),
+          ...(parsed.noReachFilter !== undefined ? { noReachFilter: parsed.noReachFilter } : {}),
         },
         {
           store,
@@ -5293,6 +5313,8 @@ export async function verifyFromCli(
           resourceServerInstance,
           preprocessorSymbols: validatePreprocessorSymbols(configFile.preprocessorSymbols),
           emit: [progress],
+          // R-384: the reach filter's state lines go to stderr, beside the progress lines.
+          log: (line) => process.stderr.write(`${line}\n`),
         },
       ),
     );
