@@ -59,6 +59,7 @@ import {
   parseVerifyRequest,
   verifyExitCode,
 } from "../src/verify";
+import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 
 /**
  * R153. Two documents tell an OUTSIDE consumer how to call LethAL and how to read what it returns:
@@ -1226,6 +1227,9 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect(valuesOf("newTests[].state")).toEqual(new Set(NEW_TEST_STATES));
     expect(valuesOf("newTests[].runs[].outcome")).toEqual(new Set(UNMUTATED_OUTCOMES));
     expect(valuesOf("results[].killedBy")).toEqual(new Set(KILLED_BY));
+    // R-425: the reach filter's recorded state.
+    expect(valuesOf("reachFilter.state")).toEqual(new Set(REACH_FILTER_STATES));
+    expect(valuesOf("reachFilter.reason")).toEqual(new Set(REACH_FILTER_OFF_REASONS));
     // "`killedBy` never changes the exit code": every value, one exit code.
     const codes = new Set(
       KILLED_BY.map((k) =>

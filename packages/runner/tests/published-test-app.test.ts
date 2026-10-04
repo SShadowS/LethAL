@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { initParser } from "@lethal/engine";
 import {
   comparePublishedTestApp,
   parsePublishedApp,
@@ -66,6 +67,32 @@ describe("parsePublishedApp", () => {
     const published = parsePublishedApp(publishedPackage("1.0.0.11"));
     expect(published.version).toBe("1.0.0.11");
     expect(published.tests).toBeUndefined();
+  });
+
+  // R403 phase B: when the session runs the arm-FILTERED suite, R139's source-to-source comparison
+  // filters the published source alike. The embedded source holds every arm (measured, plan §1).
+  it("filters the published source's arms when given the derived set, and reads every arm without it", async () => {
+    await initParser();
+    const armed = GROWN_SOURCE.replace(
+      "    [Test]\n    procedure JustAdded()",
+      "#if LETHALX\n    [Test]\n    procedure JustAdded()",
+    ).replace(
+      "procedure JustAdded()\n    begin\n    end;\n",
+      "procedure JustAdded()\n    begin\n    end;\n#endif\n",
+    );
+    expect(armed).toContain("#endif");
+    const pkg = publishedPackage("1.0.0.11", armed);
+    expect(parsePublishedApp(pkg).tests).toEqual([
+      "Data Tests.AlreadyPublished",
+      "Data Tests.JustAdded",
+    ]);
+    expect(parsePublishedApp(pkg, { buildSymbols: [] }).tests).toEqual([
+      "Data Tests.AlreadyPublished",
+    ]);
+    expect(parsePublishedApp(pkg, { buildSymbols: ["LETHALX"] }).tests).toEqual([
+      "Data Tests.AlreadyPublished",
+      "Data Tests.JustAdded",
+    ]);
   });
 
   it("throws when the package has no manifest at all, rather than guessing a version", () => {

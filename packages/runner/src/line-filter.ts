@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import type { SpawnFn } from "./publisher";
 
 /**
@@ -24,6 +24,66 @@ export interface LineRange {
 
 export function normalizeRelPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+/** R421: thrown when a discovered file name cannot be given one `/`-separated path. */
+export class DiscoveredPathError extends Error {
+  constructor(
+    message: string,
+    readonly paths: readonly string[],
+  ) {
+    super(message);
+    this.name = "DiscoveredPathError";
+  }
+}
+
+/**
+ * R421: the ONE place a discovered file name becomes a project path. Each raw name (a readdir
+ * entry, or a source snapshot's key, both `\`-separated on Windows) is paired with its
+ * `normalizeRelPath` form, and the list is sorted by that form in plain code-unit order, the order
+ * discovery has always used. So file order, mutant ids, batches and every `file` written are the
+ * same on every platform. Callers keep `raw` to READ the file (a `\`-keyed snapshot is looked up by
+ * its own key) and use `rel` everywhere else.
+ *
+ * Throws `DiscoveredPathError` when two raw names give one `rel`: reading one and dropping the other
+ * would lose a file without a word. Also throws, off win32, on a raw name holding a literal `\`.
+ *
+ * `platform` is a parameter, defaulting to `process.platform`, so every branch is testable on any
+ * host (the `defaultAlToolPaths` pattern in `publisher.ts`).
+ */
+export function discoveredRelPaths(
+  raw: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Array<{ rel: string; raw: string }> {
+  // Off win32 `\` is an ordinary file-name character, not a separator. Normalising it would record
+  // a path that does not exist, and the batch copy (which takes the raw name's basename) would
+  // then hold two copies of one object. Checked before the collision check, so a POSIX `src\A`
+  // beside `src/A` is refused for the backslash.
+  if (platform !== "win32") {
+    for (const r of raw) {
+      if (!r.includes("\\")) continue;
+      throw new DiscoveredPathError(
+        `cannot use the file "${r}": its name contains a backslash. On ${platform} a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "${normalizeRelPath(r)}", which does not exist, and its batch would not compile. Rename the file.`,
+        [r],
+      );
+    }
+  }
+  const out = raw.map((r) => ({ rel: normalizeRelPath(r), raw: r }));
+  const byRel = new Map<string, string[]>();
+  for (const d of out) {
+    const same = byRel.get(d.rel);
+    if (same === undefined) byRel.set(d.rel, [d.raw]);
+    else same.push(d.raw);
+  }
+  for (const names of byRel.values()) {
+    if (names.length < 2) continue;
+    const sorted = [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw new DiscoveredPathError(
+      `two discovered files have the same path once "\\" is read as "/": ${sorted.map((n) => `"${n}"`).join(" and ")}. Refusing rather than reading one of them and dropping the other.`,
+      sorted,
+    );
+  }
+  return out.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 
 /** `<file>:<start>-<end>` or `<file>:<line>`. The LAST colon splits, so a Windows drive letter in
@@ -111,13 +171,16 @@ export interface ChangedSinceSource {
 const isAl = (p: string) => p.toLowerCase().endsWith(".al");
 
 /** The files `generateMutationSet` parses: `.al`, minus its own emitted `Mutation*` artifacts.
- *  Shared with it, so "LethAL parses this" means one thing in both places. */
-export const isEnumeratedAl = (p: string) => isAl(p) && !basename(p).startsWith("Mutation");
+ *  Shared with it, so "LethAL parses this" means one thing in both places.
+ *  R421: the base name follows `platform`, not the host (node:path's `basename` does): only win32
+ *  reads `\` as a separator, so off win32 `x\MutationFoo.al` is one ordinary name. */
+export const isEnumeratedAl = (p: string, platform: NodeJS.Platform = process.platform) =>
+  isAl(p) && !(platform === "win32" ? win32 : posix).basename(p).startsWith("Mutation");
 
 /** "Holds a file LethAL would parse", walked the way `generateMutationSet` walks the project. */
 async function holdsAlFile(dir: string): Promise<boolean> {
   try {
-    return (await readdir(dir, { recursive: true })).some(isEnumeratedAl);
+    return (await readdir(dir, { recursive: true })).some((e) => isEnumeratedAl(e));
   } catch (e) {
     // A submodule registered in the index but absent on disk: LethAL parses nothing there.
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;

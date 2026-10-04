@@ -1,6 +1,7 @@
-raw 6 deployed 6 skippedFiles 0
+raw 7 deployed 7 skippedFiles 0
 R214Probe.Codeunit.al:10	lethal.empty-block	proc=BehindDirective	hang=-	eda3b25ac20f9eba31b31f4a8e03c0e674a255d91f2ce38a39118fe36efd9798|R214 Probe|BehindDirective|lethal.empty-block|1	218-252	grain=statement	plat=-
 R214Probe.Codeunit.al:11	lethal.return-value	proc=BehindDirective	hang=-	c9159b460433d7e0187b40a3e9f1c6b24fa17f5d81145d1a4f5e81e464586890|R214 Probe|BehindDirective|lethal.return-value|1	232-243	grain=statement	plat=-
+R214Probe.Codeunit.al:11	lethal.swap-additive	proc=BehindDirective	hang=-	78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|R214 Probe|BehindDirective|lethal.swap-additive|1	237-242	grain=statement	plat=-
 R214Probe.Codeunit.al:16	lethal.empty-block	proc=StatementLevel	hang=-	fceab3ebf568fd85fec3408c3739e3b801987ebe778e952741d0e336ecf7f1e6|R214 Probe|StatementLevel|lethal.empty-block|1	307-406	grain=statement	plat=-
 R214Probe.Codeunit.al:20	lethal.swap-additive	proc=StatementLevel	hang=-	7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|R214 Probe|StatementLevel|lethal.swap-additive|1	365-370	grain=statement	plat=-
 R214Probe.Codeunit.al:20	lethal.void-method-call	proc=StatementLevel	hang=-	c1df5a953a5ac98f0c6db13e4197e04ce1c178b0483e4253cf03c724af9d57e5|R214 Probe|StatementLevel|lethal.void-method-call|1	358-371	grain=statement	plat=-

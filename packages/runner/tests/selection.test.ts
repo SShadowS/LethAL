@@ -1179,3 +1179,59 @@ describe("R318: a renamed split member is attributed under its coverage names", 
     expect(split.uncovered).toEqual([m]);
   });
 });
+
+// R-384 (review 2): `coverageFilter` takes a last optional `warn`. `lethal run` passes none, so it
+// must still print exactly today's lines through `console.warn`; verify passes a no-op.
+describe("R-384: coverageFilter's warn parameter", () => {
+  const fixture = () => {
+    const index = buildCoverageIndex([
+      {
+        ref: t1,
+        coverage: {
+          granularity: "line" as const,
+          entries: [{ objectType: "Codeunit", objectId: 70000, procedure: "Other" }],
+          namingGaps: [{ objectType: "Codeunit", objectId: 70000 }],
+        },
+      },
+    ]);
+    const unplaceable = entry({ mutantId: "M0001", procedureName: "Post" });
+    const trigger = entry({
+      mutantId: "M0002",
+      objectType: "table",
+      codeunitId: 99999,
+      procedureName: "",
+      triggerName: "OnInsert",
+    });
+    return { index, mutants: [unplaceable, trigger] };
+  };
+
+  test("W2: with no warn argument it still calls console.warn with today's exact two lines", () => {
+    const { index, mutants } = fixture();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      coverageFilter(mutants, index, [t1, t2], undefined, false);
+      expect(warnSpy.mock.calls.map((c) => c.length)).toEqual([1, 1]);
+      expect(String(warnSpy.mock.calls[0]?.[0])).toBe(
+        "[lethal] 1 table trigger mutant(s) could not be coverage-matched (no green test reported executing anything in that table, and no trigger is nameable at member level) — running each against all 2 green test(s).",
+      );
+      expect(String(warnSpy.mock.calls[1]?.[0])).toBe(
+        '[lethal] 1 mutant(s) are reported no-coverage because coverage saw their object execute a member it could not NAME, not because nothing executed them (R175). That is a limit of LethAL\'s attribution, NOT a statement that your tests miss this code. Re-run with coverageMode "none" to score them: it runs every mutant against every green test and uses no attribution at all.',
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("a warn argument receives the lines instead of console.warn", () => {
+    const { index, mutants } = fixture();
+    const lines: string[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      coverageFilter(mutants, index, [t1, t2], undefined, false, new Map(), (l) => lines.push(l));
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(lines.length).toBe(2);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

@@ -246,6 +246,17 @@ describe("startEnvToolSession", () => {
     const before = published.length;
     await session.publishTestApps();
     expect(published.length).toBe(before);
+    expect(session.publishApps).toEqual([]);
+  });
+
+  // R403 phase B: `runSession` reads the test app's compiled membership from the file this hook
+  // publishes, so the session names exactly the files `publishTestApps` publishes, in its order.
+  it("exposes the files publishTestApps publishes, in its order", async () => {
+    const { session, published } = await start({}, { publishApps: ["dep.app", "tests.app"] });
+    expect(session.publishApps).toEqual(["dep.app", "tests.app"]);
+    const before = published.length;
+    await session.publishTestApps();
+    expect(published.slice(before)).toEqual(["dep.app", "tests.app"]);
   });
 
   it("creates an env when none is configured and records it to state before use", async () => {

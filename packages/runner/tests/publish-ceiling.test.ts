@@ -347,6 +347,36 @@ describe("clearPublishCeiling — the operator escape from a transient failure (
       store.close();
     }
   });
+
+  // R421: from R421 on, the refusal names a file with `/` on every platform, while a row recorded
+  // by a Windows run before it holds `\`. The command the refusal prints must still clear it.
+  test("R421: --file matches a row whatever separator either side uses (`\\` row, `/` argument)", () => {
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, "tier-a", 900, "failed", "src\\Big\\Big.Codeunit.al");
+      recordPublishOutcome(store, "tier-a", 1200, "failed", "src/Other/Other.Codeunit.al");
+      const result = clearPublishCeiling(store, "tier-a", "src/Big/Big.Codeunit.al");
+      expect(result.removed.map((r) => r.file)).toEqual(["src\\Big\\Big.Codeunit.al"]);
+      expect(result.after.smallestFailure).toBe(1200);
+      expect(store.publishOutcomes("tier-a").map((r) => r.file)).toEqual([
+        "src/Other/Other.Codeunit.al",
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("R421: --file matches a row whatever separator either side uses (`/` row, `\\` argument)", () => {
+    const store = new ResultsStore(":memory:");
+    try {
+      recordPublishOutcome(store, "tier-a", 900, "failed", "src/Big/Big.Codeunit.al");
+      const result = clearPublishCeiling(store, "tier-a", "src\\Big\\Big.Codeunit.al");
+      expect(result.removed.map((r) => r.file)).toEqual(["src/Big/Big.Codeunit.al"]);
+      expect(knownCeiling(store, "tier-a")).toEqual({});
+    } finally {
+      store.close();
+    }
+  });
 });
 
 describe("guardsPerFile", () => {

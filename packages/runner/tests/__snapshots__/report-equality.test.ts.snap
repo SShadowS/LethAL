@@ -19,6 +19,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
   "backend": "bcdev",
   "baselineGreen": false,
   "batches": 3,
+  "buildSymbols": [],
   "counts": {
     "deadlineExceeded": 1,
     "errors": 4,
@@ -55,7 +56,7 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "totalFiles": 13,
   },
   "groupedCalls": 0,
-  "identityScheme": 6,
+  "identityScheme": 8,
   "mutants": [
     {
       "astHash": "hashA1",

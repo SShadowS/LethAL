@@ -68,6 +68,12 @@ export interface EnvToolSession {
    */
   publishTestApps(): Promise<void>;
   /**
+   * R403 phase B: the local `.app` files `publishTestApps` publishes, in its order (the configured
+   * `publishApps`, empty when none). `runSession` reads the test app's compiled membership from the
+   * one that is the test app, because that is the build the session RUNS, not the pre-lease read.
+   */
+  readonly publishApps: readonly string[];
+  /**
    * Deletes a created environment unless it is kept (`keepEnv`, or quarantined). Resolves
    * `"deleted"` only after a delete that succeeded (R360 I-1: the caller then drops the stored
    * bundles installed there); anything else means the environment may still exist.
@@ -330,6 +336,7 @@ export async function startEnvToolSession(args: {
       async publishTestApps(): Promise<void> {
         for (const app of cfg.publishApps ?? []) await publisher.publishFile(app);
       },
+      publishApps: [...(cfg.publishApps ?? [])],
       async teardown(opts) {
         if (createdEnvId === undefined) return;
         const block = cfg.deleteEnv;
