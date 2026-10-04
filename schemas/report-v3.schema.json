@@ -1039,6 +1039,12 @@
         "type": "string"
       }
     },
+    "buildSymbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "identityScheme": {
       "type": "number"
     },
