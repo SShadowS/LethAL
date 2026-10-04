@@ -329,8 +329,11 @@ export interface SessionFingerprintInput {
   readonly testBuildSymbols?: readonly string[];
   /** R403: `"arms-v1"` when the arm policy changed the discovered suite or recorded a file it
    *  could not decide; absent otherwise, so the digest stays the one recorded before R403 exactly
-   *  when the policy left the suite unchanged. */
-  readonly testDiscovery?: "arms-v1";
+   *  when the policy left the suite unchanged. R420: `"tree-v1"` when the tree finder returned a
+   *  test the regex did not, on EVERY path (the no-evidence bcdev path gains the test too), and
+   *  `"arms-v1+tree-v1"` when both apply. A project the regex already read in full keeps its digest
+   *  byte for byte. */
+  readonly testDiscovery?: "arms-v1" | "tree-v1" | "arms-v1+tree-v1";
   readonly skipKnownSurvivors: boolean;
   /**
    * R325: the identity scheme this session's keys are made under (`IDENTITY_SCHEME`). ALWAYS in
@@ -351,6 +354,19 @@ export interface SessionFingerprintInput {
     readonly controlId: number;
     readonly tableId: number;
   };
+}
+
+/** R403 + R420: the `testDiscovery` key, or nothing (so a session neither marker applies to keeps
+ *  its older digest). `arms`: the arm policy changed the suite this session runs; `tree`: the tree
+ *  finder returned a test the regex did not. */
+export function testDiscoveryMarker(
+  arms: boolean,
+  tree: boolean,
+): { readonly testDiscovery?: "arms-v1" | "tree-v1" | "arms-v1+tree-v1" } {
+  if (arms && tree) return { testDiscovery: "arms-v1+tree-v1" };
+  if (arms) return { testDiscovery: "arms-v1" };
+  if (tree) return { testDiscovery: "tree-v1" };
+  return {};
 }
 
 /** Stable hex digest of `SessionFingerprintInput`. Globs are sorted so pattern ORDER — which

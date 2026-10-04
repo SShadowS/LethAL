@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  type ALSyntaxNode,
   evaluateArms,
   hasDirectiveLine,
   maskAlNonCode,
@@ -14,6 +15,9 @@ import { discoveredRelPaths } from "./line-filter";
 const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
 const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
 const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/gi;
+/** R420: one `[Test]` attribute token, read on the masked source. `TEST_METHOD` starts at one of
+ *  these, so on one file the regex can never match more often than this does. */
+const TEST_TOKEN = /\[\s*Test\s*\]/gi;
 
 /**
  * R79: blank out everything the AL compiler does not read as code — comments AND string
@@ -50,15 +54,34 @@ function maskNonCode(source: string): string {
  * What it catches is the other shape: a codeunit header `CODEUNIT_HEADER_GLOBAL` failed to match
  * at all, leaving its tests in no section — today that is a silent, total loss of that file's
  * suite, the same direction as the bug this guard was written alongside.
+ *
+ * R420: one count on both paths. Every `[Test]` TOKEN in the masked file (`tokens`, their offsets)
+ * must be CONSUMED: by a test attributed to a codeunit (regex path: a `TEST_METHOD` match inside a
+ * section, which starts at its token; tree path: a procedure the token decorates, in any codeunit),
+ * or by a `test-shape-unsupported` warning. On the regex path, which runs only when the file's
+ * token count equals its regex match count, this is exactly the pre-R420 check. On the tree path
+ * it is what covers the candidates the regex never saw. `exempt` (tree path only) excuses a token
+ * the parser places inside a procedure BODY, which no attribute can be: `Arr[Test]` indexes an
+ * array by a variable named `Test`; since the R420 review, only in an object with no parse error
+ * (`bodyToken`).
  */
-function assertEveryTestAttributed(rel: string, masked: string, sections: readonly string[]): void {
-  const countTests = (text: string): number => Array.from(text.matchAll(TEST_METHOD)).length;
-  const inFile = countTests(masked);
-  const attributed = sections.reduce((sum, section) => sum + countTests(section), 0);
-  if (inFile === attributed) return;
+function assertEveryTestConsumed(
+  rel: string,
+  tokens: readonly number[],
+  consumed: ReadonlySet<number>,
+  exempt: (offset: number) => boolean = () => false,
+): void {
+  const counted = tokens.filter((o) => consumed.has(o) || !exempt(o));
+  const lost = counted.filter((o) => !consumed.has(o)).length;
+  if (lost === 0) return;
   throw new Error(
-    `Test discovery lost ${inFile - attributed} of ${inFile} [Test] procedures in "${rel}": they lie outside every codeunit section, so no codeunit id could be attributed to them. That means a codeunit header in this file did not parse. Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage.`,
+    `Test discovery lost ${lost} of ${counted.length} [Test] procedures in "${rel}": they lie outside every codeunit section, so no codeunit id could be attributed to them. That means a codeunit header in this file did not parse, or a [Test] is followed by a declaration LethAL does not recognise (please report the shape; see R420). Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage.`,
   );
+}
+
+/** R420: the offset of every `[Test]` token in a masked source. */
+function testTokenOffsets(masked: string): number[] {
+  return Array.from(masked.matchAll(TEST_TOKEN), (m) => m.index);
 }
 
 export interface DiscoverOptions {
@@ -128,23 +151,121 @@ function admittedTestFiles(
  * test" is the wrong thing to say when the truth is "two regexes disagree".
  */
 export function testsInAlSource(rel: string, source: string): TestMethodRef[] {
-  return testsWithOffsets(rel, source).map((t) => t.ref);
+  return testsOfFile(rel, source).found.map((t) => t.ref);
 }
 
-/** `testsInAlSource`, with each test's `[Test]` attribute offset in `source` (UTF-16 code units,
- *  the unit the parser's offsets are in; the mask keeps every offset). */
-function testsWithOffsets(
+/** One discovered test, with every offset the arm filter needs (UTF-16 code units, the unit the
+ *  parser's offsets are in; the mask keeps every offset). */
+interface FoundTest {
+  readonly ref: TestMethodRef;
+  /** The first `[Test]` attribute's offset: where the regex's match starts. */
+  readonly offset: number;
+  /** R420: every `[Test]` attribute that decorates the procedure, in any `#if` arm (the regex
+   *  path: `[offset]`). The test is in a build when at least one of them is compiled in. */
+  readonly testOffsets: readonly number[];
+  /** R420, tree path: where the procedure starts, which must be compiled in too (a `[Test]` before
+   *  an `#if` holding one whole procedure per arm decorates each arm's procedure). */
+  readonly procedureOffset?: number;
+  /** R420 review, tree path, index-aligned with `testOffsets`: each `[Test]` decorates this
+   *  procedure only when every procedure at these offsets is compiled OUT. They are the procedures
+   *  in an `#if`'s arms that would have taken the attribute first (S12: `[Test] #if X procedure A
+   *  #endif procedure Helper`, where `Helper` is a test only when `A` is not compiled). Absent when
+   *  no `[Test]` of the test has such a condition. */
+  readonly unless?: ReadonlyArray<readonly number[]>;
+}
+
+/** R420 review: the parser's test list lost a test the regex found in the same file. The regex is
+ *  only consulted on the tree path to name what the tree added, so without this check a test the
+ *  parser swallowed (a mis-nested member read as a body) would vanish silently. */
+export class TreeDiscoveryMismatchError extends Error {
+  constructor(
+    readonly file: string,
+    /** `<codeunit id>.<method>` for each regex-found test the tree did not return, sorted. */
+    readonly missing: readonly string[],
+  ) {
+    super(
+      `Test discovery's parser did not return ${missing.length} test(s) the regular expression found in "${file}": ${missing.join(", ")}. The file most likely holds a syntax error that makes the parser read those procedures as part of another one. Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage (see R420).`,
+    );
+    this.name = "TreeDiscoveryMismatchError";
+  }
+}
+
+/** R420: a test declaration discovery read and could not take, named rather than dropped
+ *  silently. Emitted by `runSession` as a `warning` event with this code. */
+export interface DiscoveryWarning {
+  readonly code: "test-shape-unsupported";
+  readonly file: string;
+  readonly message: string;
+}
+
+/** R420: one file's tests, from the regex or (where the regex is blind) the parsed tree. */
+interface FileTests {
+  readonly found: FoundTest[];
+  readonly warnings: DiscoveryWarning[];
+  /** Tests the tree returned that the regex did not (empty on the regex path). */
+  readonly treeOnly: TestMethodRef[];
+  /** The tree path's parse, reused by the arm filter so a file is parsed once. */
+  readonly root?: ALSyntaxNode;
+}
+
+/**
+ * R420: the trigger. The regex result stands when the file's `[Test]` token count equals its regex
+ * match count, which holds for every committed fixture, so their discovery is byte-identical and
+ * adds no parse (R-371's budget). When the counts differ, some `[Test]` has a declaration the regex
+ * cannot read (an `#if`, `#pragma` or `#region` line between it and `procedure`, an `internal`
+ * modifier, ...), and the tree finder replaces the regex for the whole file.
+ */
+function testsOfFile(rel: string, source: string): FileTests {
+  const masked = maskNonCode(source);
+  const tokens = testTokenOffsets(masked);
+  const regexMatches = Array.from(masked.matchAll(TEST_METHOD)).length;
+  if (tokens.length === regexMatches) {
+    const regex = regexTests(rel, masked);
+    assertEveryTestConsumed(rel, tokens, regex.consumed);
+    return { found: regex.found, warnings: [], treeOnly: [] };
+  }
+  const tree = treeTests(rel, source, masked);
+  const regexFound = regexTests(rel, masked).found;
+  assertTreeHoldsRegex(rel, regexFound, tree.found);
+  assertEveryTestConsumed(rel, tokens, tree.consumed, (o) => bodyToken(tree.root, o));
+  const regexKeys = new Set(regexFound.map((t) => refKey(t.ref)));
+  return {
+    found: tree.found,
+    warnings: tree.warnings,
+    treeOnly: tree.found.filter((t) => !regexKeys.has(refKey(t.ref))).map((t) => t.ref),
+    root: tree.root,
+  };
+}
+
+function refKey(ref: TestMethodRef): string {
+  return `${ref.codeunitId}:${ref.method.toLowerCase()}`;
+}
+
+/** R420 review: on the tree path every test the regex found must be among the tree's candidates
+ *  (every arm, before arm filtering), by codeunit id and method, case-insensitive. */
+function assertTreeHoldsRegex(
   rel: string,
-  source: string,
-): Array<{ readonly ref: TestMethodRef; readonly offset: number }> {
-  const refs: Array<{ readonly ref: TestMethodRef; readonly offset: number }> = [];
+  regexFound: readonly FoundTest[],
+  treeFound: readonly FoundTest[],
+): void {
+  const treeKeys = new Set(treeFound.map((t) => refKey(t.ref)));
+  const missing = regexFound
+    .filter((t) => !treeKeys.has(refKey(t.ref)))
+    .map((t) => `${t.ref.codeunitId}.${t.ref.method}`);
+  if (missing.length > 0) throw new TreeDiscoveryMismatchError(rel, [...new Set(missing)].sort());
+}
+
+/** The regex finder (pre-R420 discovery), on the masked source. `consumed`: the token each match
+ *  inside a codeunit section starts at. */
+function regexTests(
+  rel: string,
+  masked: string,
+): { readonly found: FoundTest[]; readonly consumed: Set<number> } {
+  const found: FoundTest[] = [];
+  const consumed = new Set<number>();
   // R79: section on CODE only. Prose of the shape `codeunit 50100 "Sales Post"` used to open a
   // bogus section and swallow every [Test] below it, without a word anywhere.
-  const masked = maskNonCode(source);
-
-  // Find all codeunit headers in the file
   const codeunitMatches = Array.from(masked.matchAll(CODEUNIT_HEADER_GLOBAL));
-  const sections: string[] = [];
 
   for (let i = 0; i < codeunitMatches.length; i++) {
     const headerMatch = codeunitMatches[i];
@@ -159,22 +280,292 @@ function testsWithOffsets(
     const sectionEnd = nextMatch?.index ?? masked.length;
 
     const section = masked.substring(sectionStart, sectionEnd);
-    sections.push(section);
+    const isTestCodeunit = SUBTYPE_TEST.test(section);
 
-    // Check if this codeunit section has Subtype = Test
-    if (!SUBTYPE_TEST.test(section)) continue;
-
-    // Find test methods in this section only
     for (const m of section.matchAll(TEST_METHOD)) {
-      refs.push({
+      const offset = sectionStart + m.index;
+      // Attributed to a section, test codeunit or not (a helper's `[Test]` is not lost).
+      consumed.add(offset);
+      if (!isTestCodeunit) continue;
+      found.push({
         ref: { codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel },
-        offset: sectionStart + m.index,
+        offset,
+        testOffsets: [offset],
       });
     }
   }
+  return { found, consumed };
+}
 
-  assertEveryTestAttributed(rel, masked, sections);
-  return refs;
+/** R420: exported for the tree = regex test only. The regex finder's result for one file, with
+ *  each test's `[Test]` offset, and R79's guard. */
+export function regexTestsWithOffsets(
+  rel: string,
+  source: string,
+): Array<{ readonly ref: TestMethodRef; readonly offset: number }> {
+  const masked = maskNonCode(source);
+  const regex = regexTests(rel, masked);
+  assertEveryTestConsumed(rel, testTokenOffsets(masked), regex.consumed);
+  return regex.found.map((t) => ({ ref: t.ref, offset: t.offset }));
+}
+
+/** R420: exported for the tree = regex test only. The tree finder forced on for one file, with
+ *  R79's guard, whatever the trigger would choose. The caller must have called `initParser()`. */
+export function treeTestsWithOffsets(
+  rel: string,
+  source: string,
+): {
+  readonly tests: Array<{ readonly ref: TestMethodRef; readonly offset: number }>;
+  readonly warnings: readonly DiscoveryWarning[];
+} {
+  const masked = maskNonCode(source);
+  const tree = treeTests(rel, source, masked);
+  assertEveryTestConsumed(rel, testTokenOffsets(masked), tree.consumed, (o) =>
+    bodyToken(tree.root, o),
+  );
+  return {
+    tests: tree.found.map((t) => ({ ref: t.ref, offset: t.offset })),
+    warnings: tree.warnings,
+  };
+}
+
+/** Grammar extras that sit between a member's attributes and the member (tree-sitter-al 4.4.1). */
+const MEMBER_TRIVIA: ReadonlySet<string> = new Set([
+  "comment",
+  "multiline_comment",
+  "pragma",
+  "preproc_region",
+  "preproc_endregion",
+]);
+/** A procedure header split by `#if` (S10, R424): one name per arm. Out of R420's scope. */
+const SPLIT_PROCEDURES: ReadonlySet<string> = new Set([
+  "preproc_split_procedure",
+  "preproc_split_procedure_preamble",
+]);
+
+/** `[Test]`: named `Test` (case-insensitive), no arguments, and parsed cleanly. An attribute with
+ *  an ERROR node (`[Test, HandlerFunctions(...)]`, which alc rejects as AL0104) is not a test. */
+function isTestAttribute(item: ALSyntaxNode): boolean {
+  if (item.hasError) return false;
+  const content = item.childForFieldName("attribute");
+  if (content === null || content.childForFieldName("arguments") !== null) return false;
+  return content.childForFieldName("name")?.text.toLowerCase() === "test";
+}
+
+/** AL's name as the regex reads it: `"My Test"` -> `My Test`. */
+function unquote(name: string): string {
+  return name.startsWith('"') && name.endsWith('"') && name.length >= 2 ? name.slice(1, -1) : name;
+}
+
+/** Every codeunit in a file, in source order, through `#if`-wrapped objects (a codeunit inside
+ *  `preproc_conditional_object`) and header-split ones (`preproc_split_declaration`). */
+function codeunitsOf(n: ALSyntaxNode, out: ALSyntaxNode[] = []): ALSyntaxNode[] {
+  for (const c of n.children) {
+    if (c.rawKind === "codeunit_declaration") out.push(c);
+    else if (
+      c.rawKind === "preproc_split_declaration" &&
+      c.children.some((k) => k.rawKind === "codeunit_keyword")
+    ) {
+      out.push(c);
+    } else if (c.rawKind === "preproc_conditional_object") codeunitsOf(c, out);
+  }
+  return out;
+}
+
+/** The codeunit's id and name. A header split by `#if` has one per arm: the LAST is taken, as the
+ *  regex's sectioning does (each header opens a section; the body falls in the last one). */
+function codeunitHeader(cu: ALSyntaxNode): { readonly id: number; readonly name: string } {
+  const last = (field: string) => cu.children.filter((c) => c.fieldName === field).at(-1);
+  return {
+    id: Number(last("object_id")?.text ?? Number.NaN),
+    name: unquote(last("object_name")?.text ?? ""),
+  };
+}
+
+/** Whether `offset` lies inside a procedure or trigger body (`code_block`). */
+function insideCodeBlock(root: ALSyntaxNode, offset: number): boolean {
+  let n: ALSyntaxNode | undefined = root;
+  while (n !== undefined) {
+    if (n.rawKind === "code_block") return true;
+    n = n.children.find((c) => c.startIndex <= offset && offset < c.endIndex);
+  }
+  return false;
+}
+
+/**
+ * R79's exemption on the tree path: a `[Test]` token inside a body (`Arr[Test]`), which no
+ * attribute can be. R420 review: only where the object holding it parsed cleanly (no ERROR or
+ * MISSING node). In an object with a syntax error the parser can read a mis-nested member as part
+ * of the body before it, and exempting that member's `[Test]` would drop the test silently.
+ */
+function bodyToken(root: ALSyntaxNode, offset: number): boolean {
+  const object = root.children.find((c) => c.startIndex <= offset && offset < c.endIndex);
+  if (object === undefined || object.hasError) return false;
+  return insideCodeBlock(object, offset);
+}
+
+/**
+ * R420: the tree finder. For each codeunit (a Test codeunit decided exactly as `SUBTYPE_TEST`
+ * decides it on the regex path: `Subtype = Test` in ANY arm), it walks the members in order with
+ * a list of pending `[Test]` attributes:
+ * - an `attribute_item` that is `[Test]` is added (any other attribute keeps the list);
+ * - comments, `#pragma`, `#region` and `#endregion` are skipped;
+ * - a `preproc_conditional` is walked arm by arm, each arm from the list as it stood before the
+ *   `#if`, so a `[Test]` inside `#if` (S2, S9), a handler list inside `#if` (S1, S3), a whole
+ *   member inside `#if` (R403's shape) and `[Test]` before one whole procedure per arm (S11) all
+ *   read as the compiler reads them. What leaves the `#if` is `conditional`'s union (S12, S12b);
+ * - a `procedure` with a pending `[Test]` is a candidate; the list is then cleared;
+ * - a split-header procedure (S10) with a pending `[Test]` is not a candidate: the file gets a
+ *   `test-shape-unsupported` warning naming both arm names, and its tokens count as consumed;
+ * - any other node clears the list.
+ */
+interface Pending {
+  /** The `[Test]` attribute's offset. */
+  readonly at: number;
+  /** It decorates the next procedure only when every procedure (or node) at these offsets is
+   *  compiled out (`FoundTest.unless`). */
+  readonly unless: readonly number[];
+}
+interface StepResult {
+  readonly pending: readonly Pending[];
+  /** The offsets of the nodes that ended a non-empty pending list. */
+  readonly enders: readonly number[];
+}
+function treeTests(
+  rel: string,
+  source: string,
+  masked: string,
+): {
+  readonly found: FoundTest[];
+  readonly consumed: Set<number>;
+  readonly warnings: DiscoveryWarning[];
+  readonly root: ALSyntaxNode;
+} {
+  const root = wrapRoot(parseAL(source));
+  const found: FoundTest[] = [];
+  const consumed = new Set<number>();
+  const warnings: DiscoveryWarning[] = [];
+
+  for (const cu of codeunitsOf(root)) {
+    const { id: codeunitId, name: codeunitName } = codeunitHeader(cu);
+    // No readable id: its `[Test]` tokens stay unconsumed, and R79's guard refuses the file.
+    if (!Number.isInteger(codeunitId)) continue;
+    const isTestCodeunit = SUBTYPE_TEST.test(masked.slice(cu.startIndex, cu.endIndex));
+    const body = cu.childForFieldName("body");
+    if (body === null) continue;
+
+    /** One member; returns the pending list after it and the offset of every node that ended a
+     *  non-empty pending list (a procedure that took it, or a node that cleared it). */
+    const step = (n: ALSyntaxNode, pending: readonly Pending[]): StepResult => {
+      if (n.rawKind === "attribute_item") {
+        return {
+          pending: isTestAttribute(n) ? [...pending, { at: n.startIndex, unless: [] }] : pending,
+          enders: [],
+        };
+      }
+      if (MEMBER_TRIVIA.has(n.rawKind)) return { pending, enders: [] };
+      if (n.rawKind === "preproc_conditional") return conditional(n, pending);
+      if (n.rawKind === "procedure") {
+        if (pending.length === 0) return { pending: [], enders: [] };
+        for (const p of pending) consumed.add(p.at);
+        const nameNode = n.childForFieldName("name");
+        if (isTestCodeunit && nameNode !== null) {
+          const [first] = pending;
+          found.push({
+            ref: { codeunitId, codeunitName, method: unquote(nameNode.text), file: rel },
+            offset: first?.at ?? n.startIndex,
+            testOffsets: pending.map((p) => p.at),
+            procedureOffset: n.startIndex,
+            ...(pending.some((p) => p.unless.length > 0)
+              ? { unless: pending.map((p) => p.unless) }
+              : {}),
+          });
+        }
+        return { pending: [], enders: [n.startIndex] };
+      }
+      if (SPLIT_PROCEDURES.has(n.rawKind)) {
+        // An arm's header region can hold attributes of its own.
+        const inside = n.children
+          .filter((c) => c.rawKind === "attribute_item" && isTestAttribute(c))
+          .map((c) => c.startIndex);
+        const all = [...pending.map((p) => p.at), ...inside];
+        if (all.length === 0) return { pending: [], enders: [] };
+        for (const o of all) consumed.add(o);
+        if (isTestCodeunit) {
+          const names = n.children
+            .filter((c) => c.fieldName === "name")
+            .map((c) => unquote(c.text));
+          warnings.push({
+            code: "test-shape-unsupported",
+            file: rel,
+            message: `[lethal] "${rel}": a [Test] procedure in codeunit ${codeunitId} "${codeunitName}" has its header split by #if/#else (one name per arm: ${names.join(", ")}). LethAL does not discover this shape yet, so the test is NOT run and the mutants only it would kill can score survived or no-coverage (see R424).`,
+          });
+        }
+        return { pending: [], enders: [n.startIndex] };
+      }
+      return { pending: [], enders: pending.length > 0 ? [n.startIndex] : [] };
+    };
+
+    /**
+     * An `#if`: every arm starts from the list as it stood before it (`before`), since only one
+     * arm is compiled. What leaves the `#if` is the union of what leaves each arm:
+     * - an attribute an arm added and did not consume, guarded by its own offset as before;
+     * - an entry of `before` that some arm, or the implicit empty arm of an `#if` with no `#else`
+     *   (measured, S12 and S12b), lets through. It now decorates the next procedure only when
+     *   every node that ended the list in some arm is compiled out, so its `unless` gains them
+     *   all. That is exact: the enders lie inside arms, and those of the arms not compiled in are
+     *   compiled out anyway. An `#if` with an `#else` whose every arm ended the list lets nothing
+     *   of `before` through.
+     */
+    const conditional = (n: ALSyntaxNode, before: readonly Pending[]): StepResult => {
+      const beforeAt = new Set(before.map((p) => p.at));
+      const through = new Map<number, Set<number>>();
+      const added: Pending[] = [];
+      const enders: number[] = [];
+      let hasElse = false;
+      let arm: readonly Pending[] = before;
+      const endArm = (): void => {
+        for (const p of arm) {
+          if (!beforeAt.has(p.at)) {
+            added.push(p);
+            continue;
+          }
+          const guards = through.get(p.at) ?? new Set<number>();
+          for (const g of p.unless) guards.add(g);
+          through.set(p.at, guards);
+        }
+      };
+      for (const c of n.children) {
+        if (c.rawKind === "preproc_elif" || c.rawKind === "preproc_else") {
+          endArm();
+          hasElse ||= c.rawKind === "preproc_else";
+          arm = before;
+          continue;
+        }
+        if (c.rawKind === "preproc_if" || c.rawKind === "preproc_endif") continue;
+        const r = step(c, arm);
+        arm = r.pending;
+        enders.push(...r.enders);
+      }
+      endArm();
+      if (!hasElse) {
+        // The implicit empty arm: compiled when no explicit arm is, and it consumes nothing.
+        arm = before;
+        endArm();
+      }
+      const kept = before
+        .filter((p) => through.has(p.at))
+        .map((p) => ({
+          at: p.at,
+          unless: [...new Set([...(through.get(p.at) ?? []), ...enders])],
+        }));
+      return { pending: [...kept, ...added], enders };
+    };
+
+    let pending: readonly Pending[] = [];
+    for (const member of body.children) pending = step(member, pending).pending;
+  }
+  return { found, consumed, warnings, root };
 }
 
 /** R403 phase B: the id of every codeunit `source` declares (on code only, every arm read). The
@@ -220,9 +611,10 @@ function conditionalTestOffsets(source: string, offsets: readonly number[]): boo
 function armsOfFile(
   rel: string,
   source: string,
-  found: ReadonlyArray<{ readonly ref: TestMethodRef; readonly offset: number }>,
+  file: Pick<FileTests, "found" | "root">,
   buildSymbols: readonly string[],
 ): { filtered: TestMethodRef[]; excluded: TestExclusion[]; directive: boolean } {
+  const { found } = file;
   const directive = hasDirectiveLine(source);
   // A file with no directive line compiles every test it declares; skipping its parse keeps
   // `lethal verify` at one parse per test file (R-371).
@@ -232,10 +624,21 @@ function armsOfFile(
   const filtered: TestMethodRef[] = [];
   const excluded: TestExclusion[] = [];
   // Offsets: `evaluateArms` returns offsets into the RAW source, in UTF-16 code units (the native
-  // parser's unit). `testsWithOffsets` matches on the masked source, which keeps every offset
-  // (R403 fixed `maskAlNonCode` for characters outside the BMP), so the two compare directly.
-  const arms = evaluateArms(wrapRoot(parseAL(source)), source, buildSymbols);
-  for (const { ref, offset } of found) {
+  // parser's unit). The regex matches on the masked source, which keeps every offset (R403 fixed
+  // `maskAlNonCode` for characters outside the BMP), so the two compare directly. R420: the tree
+  // path's parse is reused, so a file is never parsed twice here.
+  const arms = evaluateArms(file.root ?? wrapRoot(parseAL(source)), source, buildSymbols);
+  for (const { ref, testOffsets, procedureOffset, unless } of found) {
+    // R420: in the build when the procedure is compiled in and at least one of its `[Test]`
+    // attributes is (S2: the only `[Test]` is inside `#if`; S9: one `[Test]` per arm), with every
+    // procedure that would have taken that attribute first compiled out (S12, S12b).
+    const compiledIn = (inactive: readonly (readonly [number, number])[]): boolean =>
+      (procedureOffset === undefined || !startsInInactiveArm(inactive, procedureOffset)) &&
+      testOffsets.some(
+        (o, i) =>
+          !startsInInactiveArm(inactive, o) &&
+          (unless?.[i] ?? []).every((g) => startsInInactiveArm(inactive, g)),
+      );
     if (arms.kind === "undecided") {
       filtered.push(ref);
       excluded.push({
@@ -244,7 +647,7 @@ function armsOfFile(
         reason: "preproc-undecided-kept",
         detail: arms.reason,
       });
-    } else if (startsInInactiveArm(arms.inactive, offset)) {
+    } else if (!compiledIn(arms.inactive)) {
       excluded.push({ test: ref, file: rel, reason: "compiled-out" });
     } else {
       filtered.push(ref);
@@ -264,7 +667,7 @@ export function armFilteredTestsInAlSource(
   source: string,
   buildSymbols: readonly string[],
 ): TestMethodRef[] {
-  return armsOfFile(rel, source, testsWithOffsets(rel, source), buildSymbols).filtered;
+  return armsOfFile(rel, source, testsOfFile(rel, source), buildSymbols).filtered;
 }
 
 /** R403: options for arm-aware discovery. `buildSymbols` is the TEST app's derived symbol set
@@ -317,6 +720,13 @@ export interface ArmAwareDiscovery {
   /** R403 phase B: every file in scope with a `[Test]` between an `#if` and its `#endif` (any arm),
    *  or in a file whose arms are undecided, sorted. What `test-symbols-unverified` names. */
   readonly conditionalTestFiles: readonly string[];
+  /** R420: test declarations discovery read and could not take (`test-shape-unsupported`, a
+   *  procedure header split by `#if`, R424), in file order. `runSession` emits each as a warning. */
+  readonly warnings: readonly DiscoveryWarning[];
+  /** R420: every test (unfiltered, every arm) the tree finder returned that the regex did not.
+   *  Non-empty means the suite differs from what discovery returned before R420, which the resume
+   *  fingerprint records as `tree-v1`. */
+  readonly treeOnlyTests: readonly TestMethodRef[];
 }
 
 /**
@@ -342,6 +752,8 @@ export async function discoverTests(
   const excluded: TestExclusion[] = [];
   let anyDirective = false;
   const conditionalTestFiles: string[] = [];
+  const warnings: DiscoveryWarning[] = [];
+  const treeOnlyTests: TestMethodRef[] = [];
   const entries = await readdir(testDir, { recursive: true });
   // R421: normalised to `/` once and sorted in that form; matched and labelled with `rel`, read
   // through the raw name.
@@ -357,13 +769,16 @@ export async function discoverTests(
   for (const { rel, raw } of discovered) {
     if (admitted !== undefined && !admitted.has(rel)) continue;
     const source = await readFile(join(testDir, raw), "utf8");
-    const found = testsWithOffsets(rel, source);
+    const file = testsOfFile(rel, source);
+    const { found } = file;
     unfiltered.push(...found.map((t) => t.ref));
+    warnings.push(...file.warnings);
+    treeOnlyTests.push(...file.treeOnly);
     if (buildSymbols === undefined) continue;
     if (inScopeCodeunits !== undefined) {
       for (const id of declaredCodeunitIds(source)) inScopeCodeunits.add(id);
     }
-    const arms = armsOfFile(rel, source, found, buildSymbols);
+    const arms = armsOfFile(rel, source, file, buildSymbols);
     anyDirective ||= arms.directive;
     filtered.push(...arms.filtered);
     excluded.push(...arms.excluded);
@@ -373,7 +788,11 @@ export async function discoverTests(
       (arms.excluded.length > 0 ||
         conditionalTestOffsets(
           source,
-          found.map((t) => t.offset),
+          found.flatMap((t) => [
+            ...t.testOffsets,
+            ...(t.procedureOffset !== undefined ? [t.procedureOffset] : []),
+            ...(t.unless ?? []).flat(),
+          ]),
         ).some((c) => c))
     ) {
       conditionalTestFiles.push(rel);
@@ -388,5 +807,7 @@ export async function discoverTests(
     anyDirective,
     ...(inScopeCodeunits !== undefined ? { inScopeCodeunits } : {}),
     conditionalTestFiles,
+    warnings,
+    treeOnlyTests,
   };
 }

@@ -167,6 +167,7 @@ import {
   buildResumeIndex,
   carriedVerdictFor,
   sessionFingerprint,
+  testDiscoveryMarker,
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
@@ -4517,6 +4518,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {}),
     buildSymbols: testBuildSymbols,
   });
+  // R420: a test declaration discovery read and could not take (a header split by `#if`, R424) is
+  // named, not dropped silently. A warning code, so no report field or caveat changes. Emitted
+  // before bcdev's membership check, which refuses such a test as published-only.
+  for (const w of discovery.warnings) emit({ type: "warning", code: w.code, message: w.message });
   // R403 phase B: R139's one read of the published test app, moved here from `testAppIdentity`
   // (below) so its compiled membership is known before the suite is fixed. Its warnings are still
   // emitted below, where they always were.
@@ -4662,9 +4667,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // R403: only when the arm policy changed the suite this session runs, or kept a file it could
     // not decide. The policy is applied on al-runner and on bcdev with compiled evidence; on the
     // no-evidence path the unfiltered suite runs, so the digest is unchanged there.
-    ...(armPolicyApplied && discovery.excluded.length > 0
-      ? { testDiscovery: "arms-v1" as const }
-      : {}),
+    // R420: `tree-v1` whenever the tree finder returned a test the regex did not, whether or not
+    // the arm policy was applied: the no-evidence path runs that test too.
+    ...testDiscoveryMarker(
+      armPolicyApplied && discovery.excluded.length > 0,
+      discovery.treeOnlyTests.length > 0,
+    ),
   });
   const resumeState = resolveResume(
     cfg,
