@@ -148,6 +148,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 8** (R405, part a): a procedure or trigger inside a member-level `#if` is now
+  seen by arm in the symbol table, the table-trigger readers and the receiver filter. A call that
+  was refused is admitted, and when the new mutant has the same tuple as an existing one earlier in
+  the member it takes ordinal 0 and moves that one's key. Measured: no committed gate project
+  changes; the synthetic twin in `r405a-identity.test.ts` does. Marks files need
+  `"identityScheme": 8` after re-checking each mark against a fresh report.
 - **Identity scheme 7** (R421): discovered file paths are now normalised to `/` on every platform.
   On Windows a project with subfolders gets the file order, mutant ids and batches Linux gets, and
   with per-batch ordinals an identity twin in another file can change ordinal. Existing marks files
