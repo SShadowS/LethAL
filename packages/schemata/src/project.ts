@@ -145,9 +145,12 @@ export function coarseIdentityTupleOf(
  * same tuple as an existing one earlier in a member takes ordinal 0 and moves that one's key. 9:
  * R307 (R374), identity ordinals are numbered once over the whole run instead of per batch, so
  * keys move only where batching split twins (two twins in two batches both held ordinal 0
- * before). (10 is R-196's.) 11: R295 and R294, every name of `A, B: T` is declared and a
- * member-expression receiver resolves again (and a name inside a `with` body types as nothing),
- * so sites are added and removed and same-tuple ordinals move.
+ * before). 10: R196 and R239, the built-in value operators refuse a site that writes a loop
+ * condition's variable, and `flip-boolean-literal` refuses a literal that reaches a loop's exit, so
+ * a later same-tuple twin of a refused mutant takes its ordinal and its old key. 11: R295 and
+ * R294, every name of `A, B: T` is declared and a member-expression receiver resolves again (and
+ * a name inside a `with` body types as nothing), so sites are added and removed and same-tuple
+ * ordinals move.
  */
 export const IDENTITY_SCHEME = 11;
 

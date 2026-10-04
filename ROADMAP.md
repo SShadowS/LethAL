@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**105 of 443 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**104 of 445 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -79,7 +79,7 @@ that ordering is the priority.
 - **R189** · A deletion in an un-braced then-branch FOLLOWED BY `else` emitted `then ; else`, which is AL0110, and one such site made a whole artifact refuse to compile · [R189.md](docs/roadmap/R189.md) · done (`packages/schemata/src/dispatch.ts`, `emptiedSlotFiller`) — found and fixed 2026-09-02 by the R175…
 - **R191** · A test that stalls AFTER BC has sent the RunMutant response headers is outside every LethAL timer: the budget, the R53 stop hook and the hard cap all end when `fetch` resolves, and the body read runs until the runtime gives up, then quarantines · [R191.md](docs/roadmap/R191.md) · done (`run-mutant-transport.ts`, `settleTimers` / `abortedVerdict`) — 2026-09-02, same day. One abort…
 - **R193** · The identity key still collides INSIDE a procedure, and every collision costs twice: a colliding key is re-executed on every `--resume`, and a stranded mutant's key excludes every twin it has · [R193.md](docs/roadmap/R193.md) · done (`MutantManifestEntry.identityOrdinal`, `assignIdentityOrdinals`, `IdentityKey.ordinal`) — 2026-09-02…
-- **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · open — filed 2026-09-02 from the first DO 29 run. Not scheduled
+- **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · done (88de04e4)
 - **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · open, filed 2026-09-06 while building [[R196]]'s `classifyHangCapable`, which needed to compare two resolved…
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
@@ -172,6 +172,8 @@ that ordering is the priority.
 - **R441** · R433's extensions guard checks the request text before fetch normalises it: a tab, CR or LF inside `extensions` passes the check and is stripped by the URL parser · [R441.md](docs/roadmap/R441.md) · done (1a266901)
 - **R442** · A header-refused file reserves no identity ordinals, so a same-tuple twin's recorded key can later name the refused file's mutant and --skip-known-survivors carries the wrong verdict; and EMIT's import allow-list ignores external imports · [R442.md](docs/roadmap/R442.md) · done (5afbbe70)
 - **R443** · An equivalence mark written from a run that had a header refusal can name the wrong mutant once that file's header is readable again · [R443.md](docs/roadmap/R443.md) · open, filed 2026-10-05
+- **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
+- **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
 
 ## Product gaps a real project hits
 
@@ -234,7 +236,7 @@ that ordering is the priority.
 - **R221** · `--exclude <glob>`: the complement of `--only`, so a project can say which folders must never be mutated · [R221.md](docs/roadmap/R221.md) · done 2026-09-09, requested by the maintainer after pointing LethAL at a real project
 - **R222** · al-runner does NOT require a recompile per mutant: a source-backed resource file is a runtime host-to-AL channel, measured at 0.1 s per mutant against a full compile · [R222.md](docs/roadmap/R222.md) · done 2026-09-09, opt-in as `selectorMode: "resource"`, gate leg 4 asserts per-mutant equality with the…
 - **R227** · `--only` selects whole files, so a pull-request run spends most of its time re-measuring lines the PR never changed · [R227.md](docs/roadmap/R227.md) · done (this commit) — `--lines <file>:<start>-<end>` and `--changed-since <ref>`, GitHub issue #19
-- **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · open
+- **R239** · `flip-boolean-literal` can still make a loop that never exits: a literal NESTED in its condition, under a unary `not`, or governing its only exit from the body · [R239.md](docs/roadmap/R239.md) · done (88de04e4)
 - **R245** · Reach is measured only at a mutant's own statement: a call or block alone in a branch or case arm reports no reach · [R245.md](docs/roadmap/R245.md) · open
 - **R252** · `lethal explain` refuses a `coverageMode: "none"` report that LethAL itself wrote, because its survivors carry no `coverageAttribution` · [R252.md](docs/roadmap/R252.md) · done (a7bd0c55)
 - **R253** · `doctor`'s API checks call `api/v2.0` on the OData base URL, which is the wrong port on `bc-linux`, so a healthy setup reports `ok: false` · [R253.md](docs/roadmap/R253.md) · open

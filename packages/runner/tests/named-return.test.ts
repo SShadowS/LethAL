@@ -418,13 +418,14 @@ describe("R323: named return values through the real pipeline", () => {
     expect(at(manifest, "Repro.Codeunit.al", 7, "swap-call-arguments")).toHaveLength(1);
   });
 
-  test("n11: the loop's counter is the named return, so L7's assignment mutants are hang-tagged", async () => {
+  test("n11: the loop's counter is the named return, so L7's assignment mutants are refused (R196)", async () => {
+    // The refusal needs `Result` resolved as the named return: an unresolved target is never
+    // refused, so L7 would be emitted. L5's preheader assignment is the control.
     const manifest = await instrument(repro("n11"));
     for (const op of ["remove-assignment", "swap-additive"]) {
-      const hits = at(manifest, "Repro.Codeunit.al", 7, op);
-      expect(hits).toHaveLength(1);
-      expect(hits.map((m) => m.hangCapable)).toEqual(["loop-condition-target"]);
+      expect(at(manifest, "Repro.Codeunit.al", 7, op)).toEqual([]);
     }
+    expect(at(manifest, "Repro.Codeunit.al", 5, "remove-assignment")).toHaveLength(1);
   });
 
   test("n12: a codeunit-typed named return is not a record: no validate-to-assign at L8", async () => {

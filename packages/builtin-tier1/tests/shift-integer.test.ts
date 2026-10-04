@@ -86,7 +86,8 @@ describe("shiftInteger", () => {
     expect(specs.some((s) => s.before.text === "13")).toBe(false);
   });
 
-  it("tags a literal assigned inside a loop whose condition reads the target (R196)", async () => {
+  // Same-loop controls and the targets()/generate() agreement check: loop-exit-refusal.test.ts.
+  it("REFUSES a literal assigned inside a loop whose condition reads the target (R196)", async () => {
     const src = `codeunit 50000 P
 {
     procedure Go()
@@ -104,14 +105,9 @@ describe("shiftInteger", () => {
       .filter((n) => shiftInteger.targets(n, ctx))
       .flatMap((n) => shiftInteger.generate(n, ctx));
 
-    const inLoop = specs.filter((s) => s.before.text === "0");
-    expect(inLoop.length).toBeGreaterThan(0);
-    for (const s of inLoop) expect(s.hangCapable).toBe("loop-condition-target");
-
-    // The initialiser above the loop is section 3.2's excluded preheader shape: unclassified, and
-    // deliberately NOT tagged. It must not acquire a tag by accident.
-    const preheader = specs.filter((s) => s.before.text === "1");
-    expect(preheader.length).toBeGreaterThan(0);
-    for (const s of preheader) expect(s.hangCapable).toBeUndefined();
+    // The `0` in the body is refused (and the condition's `0` is R164's older refusal). The
+    // initialiser above the loop is section 3.2's excluded preheader shape, and stays claimed.
+    expect(specs.map((s) => s.before.text)).toEqual(["1"]);
+    for (const s of specs) expect(s.hangCapable).toBeUndefined();
   });
 });

@@ -307,8 +307,9 @@ const GOOD_AL = `codeunit 79301 "Good"\n${BODY}`;
 /** T4's no-header shape: the namespace and the header on one line. Refused, no object name. */
 const NO_HEADER_AL = `namespace Demo; codeunit 50100 "Alone"\n${BODY}`;
 
-const GOOD_FILE = join("src", "Good.Codeunit.al");
-const BAD_FILE = join("src", "Bad.al");
+// Report paths are always "/"-separated (targetAlFiles normalises them), so never `join` these (R448).
+const GOOD_FILE = "src/Good.Codeunit.al";
+const BAD_FILE = "src/Bad.al";
 
 const TEST_AL = `codeunit 79400 "Good Tests"
 {

@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
 import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
@@ -2736,7 +2737,7 @@ codeunit 79312 "Mixed Code"
     // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
     const set = await generateMutationSet(dirs.projectDir);
     expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
-      [join("a", "Dup.Codeunit.al"), "object-mix"],
+      ["a/Dup.Codeunit.al", "object-mix"],
     ]);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     const store = new ResultsStore(":memory:");
@@ -3697,34 +3698,24 @@ describe("runSession — single artifact", () => {
 // those would let the number silently shrink, and a warning emitted at the end would satisfy a
 // mere presence check while being useless to the person reading it live.
 //
-// Fixture shape measured, not guessed: `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
-// "tags an in-loop additive expression that advances the condition" case, a `while` loop whose
-// condition reads a counter that an additive expression in its body advances. Scoped to
-// `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
-// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`: `remove-assignment`,
-// `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped, TWO of the other three
-// also tag this fixture, not three, each at its own different-span site (see the unscoped test
-// below for the full derivation):
-//   - `remove-assignment` claims the whole loop-body statement `Remaining := Remaining - 1;` and
-//     tags it: that node IS the assignment `hangCapableForMutatedNode` classifies directly.
-//   - `shift-integer` claims NOTHING here. The only literal in the loop body, the `1` inside
-//     `Remaining - 1`, has an `additive_expression` for a parent rather than an
-//     `assignment_statement`, and `shifted()` (shift-integer.ts) refuses any literal whose parent
-//     is neither. (This is why that operator's OWN conformance fixture for the tag uses
-//     `Remaining := 0`, a direct literal assignment, rather than this shape.)
-//   - `flip-boolean-literal` claims nothing, because this fixture's loop body has no boolean
-//     literal for it to target, not because it is a third operator rather than a fourth.
-// So this test scopes to `swap-additive` alone to hold the count at exactly 1; the unscoped test
-// below deploys the default operator set on the same fixture and expects 2 (`remove-assignment`
-// plus `swap-additive`), derived by this same reading before it was ever run.
+// Since R196's refusal no BUILT-IN operator tags a site: the four that called
+// `hangCapableForMutatedNode` (`remove-assignment`, `shift-integer`, `swap-additive`,
+// `flip-boolean-literal`) now refuse it, so `hangCapableCount` reads 0 for them (the unscoped test
+// below pins that end to end on a loop whose body advances its condition). The channel stays for a
+// plug-in operator, so the count and the warning are exercised through a STAND-IN for one:
+// `swap-additive`'s `generate` wrapped to tag every spec it returns, scoped to that operator, on a
+// project whose one emitted additive (`Remaining + 1`, before the loop) gives exactly ONE tagged
+// mutant.
 describe("runSession, R196: hang-capable sites announced before deployment", () => {
   const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure Go()
     var
         Remaining: Integer;
+        Total: Integer;
     begin
         Remaining := 10;
+        Total := Remaining + 1;
         while Remaining > 0 do
             Remaining := Remaining - 1;
     end;
@@ -3748,14 +3739,25 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSession({
-      backend,
-      store,
-      ...dirs,
-      selectorIds,
-      operators: ["swap-additive"],
-      emit: [emit],
-    });
+    // The plug-in stand-in: tag whatever swap-additive emits (here only the preheader additive).
+    const original = swapAdditive.generate;
+    const spy = spyOn(swapAdditive, "generate").mockImplementation((node, ctx) =>
+      original
+        .call(swapAdditive, node, ctx)
+        .map((s): MutationSpec => ({ ...s, hangCapable: "loop-condition-target" })),
+    );
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        operators: ["swap-additive"],
+        emit: [emit],
+      });
+    } finally {
+      spy.mockRestore();
+    }
     store.close();
     return events;
   }
@@ -3770,15 +3772,9 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(generated.hangCapableCount).toBe(1);
   });
 
-  test("counts DISTINCT tagged mutants when several operators tag the same statement, unscoped (R196)", async () => {
-    // Same fixture as `collectFromHangCapableRun`, but with the DEFAULT operator set rather than
-    // scoped to `swap-additive` alone. Expected count derived by reading the four operators
-    // against this fixture BEFORE running it (full trace in the comment above this `describe`):
-    // `remove-assignment` tags the whole statement `Remaining := Remaining - 1;`, `swap-additive`
-    // tags the `Remaining - 1` additive expression nested inside it, a DIFFERENT span, and
-    // `shift-integer` and `flip-boolean-literal` tag nothing here. `dedupeSpecs`'s identity is
-    // (node kind, span, replacement text), and `assignment_statement` and `additive_expression`
-    // share neither kind nor span, so dedup does not collapse the two. Derived total: 2.
+  test("built-in operators REFUSE the loop's step, so nothing is tagged or announced, unscoped (R196)", async () => {
+    // Same fixture, DEFAULT operator set, no stand-in. Before R196's refusal `remove-assignment`
+    // and `swap-additive` both tagged `Remaining := Remaining - 1` (count 2); now neither emits it.
     const dirs = await makeHangCapableProject(HANG_CAPABLE_AL);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["Go"]);
     const store = new ResultsStore(":memory:");
@@ -3791,7 +3787,14 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
         e.type === "mutation-set-generated",
     );
     if (generated === undefined) throw new Error("no mutation-set-generated event");
-    expect(generated.hangCapableCount).toBe(2);
+    expect(generated.hangCapableCount).toBe(0);
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "hang-capable-sites-deployed"),
+    ).toBe(false);
+    // Count 0 also holds if the step is emitted UNTAGGED (the unsafe direction): it must not exist.
+    const { files } = await generateMutationSet(dirs.projectDir);
+    const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
+    expect(texts).not.toContain("Remaining := Remaining - 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
