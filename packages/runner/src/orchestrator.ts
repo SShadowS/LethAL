@@ -115,7 +115,7 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { coverageRefusedObjects } from "./line-map";
+import { type AlSource, coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -6209,6 +6209,23 @@ export interface NamedMutantsConfig {
    * caller send a TestPage test. A call without it is refused before anything is read or sent.
    */
   readonly testPageRefused: ReadonlyMap<string, string>;
+  /**
+   * R-384: verify's reach filter. Called once, inside `select`, after the last baseline run and
+   * before the first mutant run, with the baseline rows (each carrying the coverage its run
+   * returned), the session's coverage mode and the INSTALLED artifact's AL sources (the files the
+   * backend's line map was built from). Returns each mutant's narrowed method list and the
+   * mutants left with none. A narrowed list may only REMOVE methods: one the baseline did not
+   * run is refused. An unreached mutant is never sent and is answered in
+   * `NamedMutantsResult.unreached`, not in `outcomes`. A throw ends the call; the lease is
+   * released as for any other error.
+   */
+  readonly narrow?: (
+    baseline: ReadonlyArray<{ readonly ref: TestMethodRef; readonly verdict: TestVerdict }>,
+    ctx: { readonly coverage: CoverageMode; readonly alSources: readonly AlSource[] },
+  ) => {
+    readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
+    readonly unreached: ReadonlySet<string>;
+  };
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -6229,8 +6246,11 @@ export interface UnmutatedRun {
 }
 
 export interface NamedMutantsResult {
-  /** Exactly one per request, in request order. Never fewer, never an empty array. */
+  /** Exactly one per request, in request order, except the mutants in `unreached`. */
   readonly outcomes: readonly SessionOutcome[];
+  /** R-384: mutant ids `narrow` left with no method, in request order. Never sent, no outcome.
+   *  Absent when `narrow` was not given or not called. */
+  readonly unreached?: readonly string[];
   /** Set when the session latched unsafe: the text `SessionReport.quarantined.reason` would get. */
   readonly quarantined?: string;
   /** One per baseline method, in baseline order. */
@@ -6307,7 +6327,9 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     );
   }
   const { artifact, manifest } = await loadInstalledArtifact(store, installed);
-  const named = resolveNamedMutants(manifest, cfg.requests);
+  // R-384: `narrow` may replace this, inside `select`, before any mutant runs.
+  let named = resolveNamedMutants(manifest, cfg.requests);
+  let unreached: readonly string[] | undefined;
   // `rerun` is answered by `testKeyOf`, so a repeated ref would report its second run twice.
   const rerunKeys = (cfg.rerunOnUnmutated ?? []).map(testKeyOf);
   const repeatedRerun = [...new Set(rerunKeys.filter((k, i) => rerunKeys.indexOf(k) !== i))];
@@ -6430,6 +6452,13 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       tests: baselineTests,
       select: (baseline) => {
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
+        const narrow = cfg.narrow;
+        if (narrow !== undefined) {
+          const n = narrow(baseline, { coverage: caps.coverage, alSources: artifact.alSources });
+          const applied = applyNarrow(named, n, who);
+          named = applied.named;
+          unreached = applied.unreached;
+        }
         return selectNamed(baseline, named, scope, installed.batchIndex, strict);
       },
     });
@@ -6480,6 +6509,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   return {
     outcomes: answered,
     ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
+    ...(unreached !== undefined ? { unreached } : {}),
     baseline: baselineTests.map((ref) => {
       const v = baselineRan.get(testKeyOf(ref));
       return unmutatedRun(ref, v, v !== undefined && ranInFreshSession(v));
@@ -6488,6 +6518,52 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       (ref) => rerunRan.get(testKeyOf(ref)) ?? unmutatedRun(ref, undefined, false),
     ),
   };
+}
+
+/**
+ * R-384: apply `narrow`'s answer to the resolved requests. Fails loudly on any answer that is not
+ * a narrowing: a mutant it does not decide, a method its request did not name (the baseline never
+ * ran it), an unreached mutant with methods left, or a reached one with none.
+ */
+function applyNarrow(
+  named: readonly ResolvedNamedMutant[],
+  n: {
+    readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
+    readonly unreached: ReadonlySet<string>;
+  },
+  who: string,
+): { named: readonly ResolvedNamedMutant[]; unreached: readonly string[] } {
+  const ids = new Set(named.map(({ mutant }) => mutant.mutantId));
+  const strangers = [...n.unreached, ...n.methods.keys()].filter((id) => !ids.has(id));
+  if (strangers.length > 0) {
+    throw new NamedMutantError(
+      `${who}: narrow answered mutant(s) not in the request: ${[...new Set(strangers)].join(", ")}`,
+    );
+  }
+  const kept: ResolvedNamedMutant[] = [];
+  const unreached: string[] = [];
+  for (const r of named) {
+    const id = r.mutant.mutantId;
+    const methods = n.methods.get(id);
+    if (methods === undefined) {
+      throw new NamedMutantError(`${who}: narrow gave no method list for ${id}`);
+    }
+    const requested = new Set(r.methods.map(testKeyOf));
+    const added = methods.filter((m) => !requested.has(testKeyOf(m)));
+    if (added.length > 0) {
+      throw new NamedMutantError(
+        `${who}: narrow may only remove methods, but added to ${id}: ${added.map(qualifiedTestName).join(", ")} (the baseline did not run them)`,
+      );
+    }
+    if (n.unreached.has(id) !== (methods.length === 0)) {
+      throw new NamedMutantError(
+        `${who}: narrow ${n.unreached.has(id) ? "marked" : "did not mark"} ${id} unreached, with ${methods.length} method(s) left`,
+      );
+    }
+    if (methods.length === 0) unreached.push(id);
+    else kept.push({ mutant: r.mutant, methods });
+  }
+  return { named: kept, unreached };
 }
 
 /**
