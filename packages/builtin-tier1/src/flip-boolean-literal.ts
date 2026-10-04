@@ -6,7 +6,7 @@ import {
   type MutationSpec,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { hangCapableForMutatedNode } from "./loop-hazard";
+import { hangCapableForMutatedNode, hasEnclosingLoop } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.flip-boolean-literal";
@@ -103,7 +103,6 @@ export const flipBooleanLiteral: MutationOperator = {
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -112,7 +111,6 @@ export const flipBooleanLiteral: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -195,7 +193,7 @@ export const flipBooleanLiteral: MutationOperator = {
       ],
     },
     {
-      name: "tags an in-loop boolean guard that advances the condition (R196), and does NOT tag the preheader one",
+      name: "REFUSES an in-loop boolean guard that advances the condition (R196), and keeps the preheader one",
       sourceAL: `codeunit 51708 "C" { procedure P() var Continue: Boolean; begin Continue := true; while Continue do Continue := false; end; }`,
       expectedSpecs: [
         {
@@ -204,13 +202,12 @@ export const flipBooleanLiteral: MutationOperator = {
           afterText: "false",
           hangCapable: null,
         },
-        {
-          parentContext: "statement-position",
-          beforeText: "false",
-          afterText: "true",
-          hangCapable: "loop-condition-target",
-        },
       ],
+    },
+    {
+      name: "REFUSES a literal nested in a loop condition, or guarding an in-loop if (R239)",
+      sourceAL: `codeunit 51711 "C" { procedure P() var Go: Boolean; begin while not (Go or false) do if true then exit; end; }`,
+      expectedSpecs: [],
     },
   ],
 };
@@ -224,17 +221,19 @@ function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (isCaseLabel(node)) return null;
   if (isLoopCondition(node)) return null;
   if (isCededRunTriggerFlag(node, ctx)) return null;
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, silently.
+  if (hangCapableForMutatedNode(node, ctx) !== null) return null;
   return text === "true" ? "false" : "true";
 }
 
-/** The loop kinds whose WHOLE condition this operator refuses: see `isLoopCondition`. */
+/** The loop kinds whose condition this operator refuses: see `isLoopCondition`. */
 const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
   ALNodeKind.repeat_statement,
   ALNodeKind.while_statement,
 ]);
 
 /**
- * Is this literal a `repeat` or `while` loop's whole condition?
+ * Does this literal reach a `repeat` or `while` loop's exit: its condition, or an in-loop `if`'s?
  *
  * Refused for two reasons that arrive at the same line, one reported and one not.
  *
@@ -262,15 +261,17 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
  * issue #7 fix): `while true do` collided the identical way, one loop kind over, and the mistake
  * was recorded nowhere until it was measured (see `docs/mutation-testing-ourselves.md` on R175).
  *
- * Parentheses are walked through, because `until (false)` and `while (true)` are the same sites
- * wearing brackets. A literal NESTED in a compound condition is NOT refused: `until Done or false`
- * flips to `until Done or true`, and `while Go and true` flips to `while Go and false`, both of
- * which still terminate. Measured 0 sites of either shape across 725 `repeat` loops on both
- * reference corpora; the `while` forms were checked only by grep over `fixtures/` and `examples/`,
- * not counted in that corpus pass, so this is about being exact rather than about a count. The
- * OTHER polarity of a nested literal (`until Done and true` -> `until Done and false`, `while X or
- * false` -> `while X or true`) can hang and is not handled here: recorded as a known gap, filed as
- * [[R239]], not fixed in this change.
+ * R239 widened it from the WHOLE condition to any literal that reaches a loop's exit. The walk goes
+ * up through parentheses, `not` and `and`/`or`/`xor` (`until Done and true`, `while not false`),
+ * and it stops at a `while`/`repeat` OR at an `if` that sits inside one, since an in-loop `if`
+ * usually guards the body's `exit` (`while true do if true then exit;`). A `#if` tail of either
+ * condition (`while false` `#if X or false #endif` `do`) sits BESIDE the `condition` field in the
+ * grammar, so a tail that is a direct child of the statement counts as its condition, the way
+ * `loop-hazard.ts`'s `conditionIdentifiers` reads it. Both polarities are refused: `until Done or
+ * false` -> `or true` still terminates, but a polarity-aware rule tracks parity through every `not`
+ * for zero measured sites, so the terminating flip is lost with the hanging one. The walk stops at
+ * anything else, so a call ARGUMENT in such a condition (`if not Confirm('x', false) then exit;`)
+ * is still claimed.
  *
  * Spans are compared by POSITION, never by node identity, for the reason recorded in [[R209]]: the
  * AST wrappers are rebuilt on access, so reference equality is not reliable.
@@ -278,7 +279,11 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
 function isLoopCondition(node: ALSyntaxNode): boolean {
   let current = node;
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (LOOP_STATEMENTS.has(p.kind)) {
+    if (
+      LOOP_STATEMENTS.has(p.kind) ||
+      (p.kind === ALNodeKind.if_statement && hasEnclosingLoop(p))
+    ) {
+      if (current.rawKind === CONDITION_TAIL) return true;
       const condition = p.childForFieldName("condition");
       return (
         condition !== null &&
@@ -286,11 +291,20 @@ function isLoopCondition(node: ALSyntaxNode): boolean {
         condition.endIndex === current.endIndex
       );
     }
-    if (p.kind !== ALNodeKind.parenthesized_expression) return false;
+    if (!CONDITION_WRAPPERS.has(p.rawKind)) return false;
     current = p;
   }
   return false;
 }
+
+/** R239: what `isLoopCondition` walks up through from a literal towards its condition. */
+const CONDITION_TAIL = "preproc_conditional_expression_tail";
+const CONDITION_WRAPPERS: ReadonlySet<string> = new Set([
+  ALNodeKind.parenthesized_expression,
+  ALNodeKind.unary_expression,
+  ALNodeKind.logical_expression,
+  CONDITION_TAIL,
+]);
 
 /** A case LABEL, not a boolean in a branch body — see `CASE_LABEL_PARENTS`. */
 function isCaseLabel(node: ALSyntaxNode): boolean {

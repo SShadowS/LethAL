@@ -78,8 +78,8 @@ export const swapAdditive: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.additive_expression],
   producesNodeKinds: [ALNodeKind.additive_expression],
-  // R196: adds to what it already declared for the type guard. The tag also resolves symbols
-  // (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  // R196: adds to what it already declared for the type guard. The hang refusal also resolves
+  // symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
   requiresSemantic: ["type-info", "symbol-table"],
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
@@ -91,7 +91,6 @@ export const swapAdditive: MutationOperator = {
     if (flip === null) return [];
     const mutatedText = replaceOperatorToken(node, flip.token, flip.replacement);
     if (mutatedText === null) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -100,7 +99,6 @@ export const swapAdditive: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, mutatedText),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -139,7 +137,7 @@ export const swapAdditive: MutationOperator = {
       expectedSpecs: [],
     },
     {
-      name: "tags an in-loop subtraction that advances the condition (R196), and does NOT tag the preheader addition",
+      name: "REFUSES an in-loop subtraction that advances the condition (R196), and keeps the preheader addition",
       sourceAL: `codeunit 51604 "C" { procedure P() var Remaining: Integer; Total: Integer; begin Total := Remaining + 1; while Remaining > 0 do Remaining := Remaining - 1; end; }`,
       expectedSpecs: [
         {
@@ -147,12 +145,6 @@ export const swapAdditive: MutationOperator = {
           beforeText: "Remaining + 1",
           afterText: "Remaining - 1",
           hangCapable: null,
-        },
-        {
-          parentContext: "statement-position",
-          beforeText: "Remaining - 1",
-          afterText: "Remaining + 1",
-          hangCapable: "loop-condition-target",
         },
       ],
     },
@@ -191,6 +183,8 @@ function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null 
   // failing the whole project's compile.
   if (leftType === null || rightType === null) return null;
   if (!NUMERIC_TYPES.has(leftType) || !NUMERIC_TYPES.has(rightType)) return null;
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, silently.
+  if (hangCapableForMutatedNode(node, ctx) !== null) return null;
 
   return { token: token.text, replacement };
 }
