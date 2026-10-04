@@ -466,7 +466,7 @@ that ordering is the priority.
 - **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · done (5a8b8f3c)
 - **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
 - **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
-- **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (53394450)
+- **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
 
 ---
 
