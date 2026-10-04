@@ -69,11 +69,12 @@ const ROOT = join(import.meta.dir, "..");
 const SKIP_DIRS = new Set(["node_modules", "dist", ".git"]);
 
 /** The scanned roots, relative to the repo root: every package's src, itest and tests, plus
- *  `scripts/`, `tests/` (when present) and `.claude/`. */
+ *  `scripts/`, `tests/`, the shipped root `skills/` (when present) and `.claude/`; every
+ *  package's `scripts/` too. */
 function scannedRoots(root: string): string[] {
-  const roots = ["scripts", "tests", ".claude"];
+  const roots = ["scripts", "tests", ".claude", "skills"];
   for (const pkg of readdirSync(join(root, "packages"))) {
-    for (const sub of ["src", "itest", "tests"]) roots.push(`packages/${pkg}/${sub}`);
+    for (const sub of ["src", "itest", "tests", "scripts"]) roots.push(`packages/${pkg}/${sub}`);
   }
   return roots.filter((r) => existsSync(join(root, r)));
 }
@@ -140,13 +141,22 @@ describe("automation API guard (R433)", () => {
 
   test("the scan reaches every root it claims, itests and .claude included", () => {
     const roots = scannedRoots(ROOT);
-    for (const r of ["scripts", ".claude", "packages/runner/src", "packages/runner/itest"]) {
+    for (const r of [
+      "scripts",
+      ".claude",
+      "skills",
+      "packages/runner/src",
+      "packages/runner/itest",
+      "packages/runner/scripts",
+    ]) {
       expect(roots).toContain(r);
     }
     const paths = repoFiles().map((f) => f.path);
     expect(paths).toContain(BUILDER);
     expect(paths).toContain("packages/runner/itest/verify.itest.ts");
     expect(paths.some((p) => p.startsWith(".claude/skills/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("skills/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("packages/runner/scripts/"))).toBe(true);
   });
 
   test("the builder itself is a hit, so the scan is not blind", () => {
