@@ -1,5 +1,5 @@
 {
-  "_source": "R-420: the Codeunits of SymbolReference.json from each shape compiled under [] (-none) and [X] (-X) by alc 18.0.41.45789, runtime 13.0, 2026-10-04 (plan section 1). Only Id, Name, Properties and each method's Id, Name and Attributes are kept. S11 ([Test] before an #if/#else holding one whole procedure per arm) was measured the same way by the implementing agent.",
+  "_source": "R-420: the Codeunits of SymbolReference.json from each shape compiled under [] (-none) and [X] (-X) by alc 18.0.41.45789, runtime 13.0, 2026-10-04 (plan section 1). Only Id, Name, Properties and each method's Id, Name and Attributes are kept. S11 ([Test] before an #if/#else holding one whole procedure per arm) was measured the same way by the implementing agent. S12 ([Test] before an #if with no #else holding procedure A, then procedure Helper) and S12b (the same with #if X / #elif Y, procedure B in the #elif arm) were measured the same way for the R-420 review (S12b also under [Y]): the [Test] goes to Helper when no explicit arm is compiled in.",
   "S1-none": {
     "Codeunits": [
       {
@@ -267,6 +267,65 @@
         "Methods": [
           { "Id": -981080143, "Name": "A", "Attributes": [{ "Name": "Test" }] },
           { "Id": 557465570, "Name": "OnlyX", "Attributes": [{ "Name": "Test" }] }
+        ]
+      }
+    ]
+  },
+  "S12-none": {
+    "Codeunits": [
+      {
+        "Id": 92471,
+        "Name": "S12",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 1414509570, "Name": "Helper", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "S12-X": {
+    "Codeunits": [
+      {
+        "Id": 92471,
+        "Name": "S12",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [
+          { "Id": -981080143, "Name": "A", "Attributes": [{ "Name": "Test" }] },
+          { "Id": 1414509570, "Name": "Helper" }
+        ]
+      }
+    ]
+  },
+  "S12b-none": {
+    "Codeunits": [
+      {
+        "Id": 92472,
+        "Name": "S12b",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [{ "Id": 1414509570, "Name": "Helper", "Attributes": [{ "Name": "Test" }] }]
+      }
+    ]
+  },
+  "S12b-X": {
+    "Codeunits": [
+      {
+        "Id": 92472,
+        "Name": "S12b",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [
+          { "Id": -981080143, "Name": "A", "Attributes": [{ "Name": "Test" }] },
+          { "Id": 1414509570, "Name": "Helper" }
+        ]
+      }
+    ]
+  },
+  "S12b-Y": {
+    "Codeunits": [
+      {
+        "Id": 92472,
+        "Name": "S12b",
+        "Properties": [{ "Name": "Subtype", "Value": "Test" }],
+        "Methods": [
+          { "Id": 2021342778, "Name": "B", "Attributes": [{ "Name": "Test" }] },
+          { "Id": 1414509570, "Name": "Helper" }
         ]
       }
     ]

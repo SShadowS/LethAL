@@ -459,6 +459,25 @@ interface AttributeRun {
   readonly pieces: ReadonlyArray<readonly [number, number]>;
   /** Every attribute in the run, every `#if` arm's included, nearest first. */
   readonly attributes: readonly ALSyntaxNode[];
+  /** Whether the run took an `#if` (an attribute-only one, or S11's arm): only then are the
+   *  handler lists a union (`procOf`). */
+  readonly conditional: boolean;
+}
+
+/** `[Test]`, as an attribute item's text. */
+const TEST_ATTRIBUTE = /^\[\s*Test\s*\]$/i;
+
+/**
+ * R420: `decl`'s attribute run, WIDENED (an attribute-only `#if`, S11's outer run) only when the
+ * widened run holds a `[Test]`, i.e. for a test procedure. Every other member keeps R-278's
+ * pre-R420 run exactly (siblings only, stopping at any `#if`), so a helper under the common
+ * `#if not CLEAN24 [Obsolete(...)] #endif` keeps its span, its codeunit's parts and its
+ * subscriber reading byte for byte.
+ */
+function memberRun(decl: ALSyntaxNode, andTrivia = false): AttributeRun {
+  const wide = attributeRun(decl, andTrivia, decl.endIndex, true);
+  if (wide.attributes.some((a) => TEST_ATTRIBUTE.test(a.text.trim()))) return wide;
+  return attributeRun(decl, andTrivia, decl.endIndex, false);
 }
 
 /**
@@ -477,22 +496,31 @@ interface AttributeRun {
  * arm's start, and the run before the `#if` holds an attribute, that run is the procedure's too.
  * The span is then two pieces, that outer run and the arm's own run to the procedure's end, so
  * an edit to the other arm's procedure is not an edit to this one.
+ *
+ * Without `widen`, neither R420 extension applies: R-278's pre-R420 run (`memberRun` chooses).
  */
-function attributeRun(decl: ALSyntaxNode, andTrivia = false, end = decl.endIndex): AttributeRun {
+function attributeRun(
+  decl: ALSyntaxNode,
+  andTrivia: boolean,
+  end: number,
+  widen: boolean,
+): AttributeRun {
   let start = decl.startIndex;
   const attributes: ALSyntaxNode[] = [];
   const siblings = decl.parent?.namedChildren ?? [];
   let i = siblings.findIndex((x) => x.startIndex === decl.startIndex);
   let atArmStart = false;
+  let conditional = false;
   for (i -= 1; i >= 0; i -= 1) {
     const x = siblings[i];
     if (x === undefined) break;
     if (x.rawKind === "attribute_item") {
       attributes.push(x);
       start = x.startIndex;
-    } else if (isAttributeConditional(x)) {
+    } else if (widen && isAttributeConditional(x)) {
       attributes.push(...attributesInConditional(x).reverse());
       start = x.startIndex;
+      conditional = true;
     } else if (TRIVIA.has(x.rawKind)) {
       if (andTrivia) start = x.startIndex;
     } else {
@@ -500,14 +528,15 @@ function attributeRun(decl: ALSyntaxNode, andTrivia = false, end = decl.endIndex
       break;
     }
   }
-  const own: AttributeRun = { pieces: [[start, end]], attributes };
+  const own: AttributeRun = { pieces: [[start, end]], attributes, conditional };
   const cond = decl.parent;
-  if (!atArmStart || cond === null || cond.rawKind !== "preproc_conditional") return own;
-  const outer = attributeRun(cond, andTrivia, cond.startIndex);
+  if (!widen || !atArmStart || cond === null || cond.rawKind !== "preproc_conditional") return own;
+  const outer = attributeRun(cond, andTrivia, cond.startIndex, true);
   if (outer.attributes.length === 0) return own;
   return {
     pieces: [...outer.pieces, [start, end]],
     attributes: [...attributes, ...outer.attributes],
+    conditional: true,
   };
 }
 
@@ -527,7 +556,7 @@ const MANUAL_BINDING = /EventSubscriberInstance\s*=\s*Manual/i;
 function partsText(source: string, node: ALSyntaxNode): string {
   const cuts: Array<readonly [number, number]> = [];
   visit(node, (n) => {
-    if (n.rawKind === "procedure") cuts.push(...attributeRun(n, true).pieces);
+    if (n.rawKind === "procedure") cuts.push(...memberRun(n, true).pieces);
   });
   cuts.sort((x, y) => x[0] - y[0]);
   const pieces: string[] = [];
@@ -584,17 +613,23 @@ function procOf(
       isTrigger || problems === null ? [] : problems,
     );
   const block = p.namedChildren.find((c) => c.rawKind === "code_block");
-  const run = attributeRun(p);
+  const run = memberRun(p);
   const attributes = run.attributes.map((x) => x.text.trim());
-  // R420: every `[HandlerFunctions]` in the run, so every `#if` arm's (the union).
-  const handlers = [
-    ...new Set(
-      attributes
-        .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
+  // R420: where the run took an `#if`, every `[HandlerFunctions]` in it, so every arm's (the
+  // union). Otherwise the pre-R420 reading: the nearest `[HandlerFunctions]`, duplicates kept.
+  const handlers = run.conditional
+    ? [
+        ...new Set(
+          attributes
+            .flatMap((t) => (HANDLER_ATTRIBUTE.exec(t)?.[1] ?? "").split(","))
+            .map((h) => normalizeAlName(h.trim()))
+            .filter((h) => h.length > 0),
+        ),
+      ]
+    : (attributes.map((t) => HANDLER_ATTRIBUTE.exec(t)?.[1]).find((h) => h) ?? "")
+        .split(",")
         .map((h) => normalizeAlName(h.trim()))
-        .filter((h) => h.length > 0),
-    ),
-  ];
+        .filter((h) => h.length > 0);
   const display = `${unit.display}.${id2.text}`;
   const kind = unit.kind === "codeunit" ? "" : `${unit.kind} `;
   const suffix = isTrigger ? " (trigger)" : "";

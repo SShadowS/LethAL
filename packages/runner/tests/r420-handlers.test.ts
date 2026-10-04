@@ -272,6 +272,99 @@ describe("R420 part 2: an attribute #if BEFORE [Test], a shape discovered before
   });
 });
 
+/** The common BC shape: a helper (not a test) obsoleted under `#if not CLEAN24`, beside an
+ *  unchanged test. Review fix 2. */
+const OBS = `codeunit 50200 "Obs"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T()
+    begin
+        Helper();
+    end;
+
+#if not CLEAN24
+    [Obsolete('x', '24.0')]
+#endif
+    procedure Helper()
+    begin
+    end;
+}
+`;
+
+/** OBS under 099e6231's code (before part 2), with `INPUTS`: T's digest, the codeunit's parts hash
+ *  and Helper's span hash. Reproduced from that commit's tree, not from this file's code. */
+const OBS_BEFORE_R420 = {
+  digest: "v2:e0432f64ad4b2dc3fc0b0a934bc1023d3ebb58f27b2480fa29612eeed6917d61",
+  parts: "516f3dd855cebc5a",
+  helperSpan: "ff25a5070a8e3890",
+};
+
+/** An event subscriber (not a test) whose attribute sits in an `#if`. */
+const SUB = `codeunit 50201 "Sub"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T()
+    begin
+    end;
+
+#if not CLEAN24
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Sub", 'OnX', '', false, false)]
+#endif
+    local procedure OnX()
+    begin
+    end;
+}
+`;
+
+describe("R420 review fix 2: a non-test procedure keeps its pre-R420 attribute run", () => {
+  test("a helper under #if [Obsolete]: the test's digest and the parts hash are 099e6231's", () => {
+    const t = ref(50200, "Obs", "T");
+    const model = buildTestAppModel([{ path: t.file ?? "", text: OBS }]);
+    const { digests, parts } = testDigestsOfModel(model, [t], INPUTS);
+    expect(digests[testDigestKey(t)]).toBe(OBS_BEFORE_R420.digest);
+    expect(parts.objects["codeunit:50200:Obs"]).toBe(OBS_BEFORE_R420.parts);
+    expect(parts.procs["50200:Obs.Helper"]).toBe(OBS_BEFORE_R420.helperSpan);
+  });
+
+  test("an [EventSubscriber] inside #if on a non-test procedure is read as before", () => {
+    expect(procOf(SUB, "OnX").map((p) => p.subscriber)).toEqual([false]);
+  });
+});
+
+/** Two handler lists and a repeated handler, no `#if`: the pre-R420 reading (nearest list,
+ *  duplicates kept). Review fix 4. */
+const NEAR = `codeunit 50202 "Near"
+{
+    Subtype = Test;
+
+    [Test]
+    [HandlerFunctions('MsgH')]
+    [HandlerFunctions('ConfirmYes,ConfirmYes')]
+    procedure T()
+    begin
+    end;
+}
+`;
+
+describe("R420 review fix 4: the handler union only where the run took an #if", () => {
+  test("no #if in the run: the nearest [HandlerFunctions] only, duplicates kept", () => {
+    expect(procOf(NEAR, "T").map((p) => p.handlers)).toEqual([["confirmyes", "confirmyes"]]);
+  });
+
+  test("an #if in the run: the union, deduplicated", () => {
+    const withIf = replaceOnce(
+      NEAR,
+      "    [HandlerFunctions('MsgH')]\n",
+      "#if X\n    [HandlerFunctions('MsgH')]\n#endif\n",
+    );
+    expect(procOf(withIf, "T").map((p) => p.handlers)).toEqual([["confirmyes", "msgh"]]);
+  });
+});
+
 describe("R420 part 2: no committed fixture's digest moves", () => {
   const REPO = join(import.meta.dir, "..", "..", "..");
   const PROJECTS = [

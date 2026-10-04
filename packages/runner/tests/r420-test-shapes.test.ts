@@ -14,6 +14,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import {
+  TreeDiscoveryMismatchError,
   armFilteredTestsInAlSource,
   discoverTests,
   regexTestsWithOffsets,
@@ -208,6 +209,61 @@ const SHAPES: Record<string, string> = {
 #endif
 }
 `,
+  // R420 review: an #if with no #else has an implicit empty arm, and through it the [Test] goes
+  // to the next procedure (measured: Helper is the test under [], A under [X]).
+  S12: `codeunit 92471 "S12"
+{
+    Subtype = Test;
+
+    [Test]
+#if X
+    procedure A()
+    begin
+    end;
+#endif
+    procedure Helper()
+    begin
+    end;
+}
+`,
+  // The same through #if/#elif with no #else (measured: Helper under [], A under [X], B under [Y]).
+  S12b: `codeunit 92472 "S12b"
+{
+    Subtype = Test;
+
+    [Test]
+#if X
+    procedure A()
+    begin
+    end;
+#elif Y
+    procedure B()
+    begin
+    end;
+#endif
+    procedure Helper()
+    begin
+    end;
+}
+`,
+  // An explicit but EMPTY #else arm behaves as the implicit one (measured the same way: Helper
+  // under [], A under [X]).
+  S12c: `codeunit 92474 "S12c"
+{
+    Subtype = Test;
+
+    [Test]
+#if X
+    procedure A()
+    begin
+    end;
+#else
+#endif
+    procedure Helper()
+    begin
+    end;
+}
+`,
 };
 
 /** alc rejects it (AL0104): not a test under any build. */
@@ -242,12 +298,15 @@ const EXPECTED: Record<
   S9: { none: ["T9"], X: ["T9"] },
   S10: { none: [], X: [] },
   S11: { none: ["B"], X: ["A", "OnlyX"] },
+  S12: { none: ["Helper"], X: ["A"] },
+  S12b: { none: ["Helper"], X: ["A"] },
+  S12c: { none: ["Helper"], X: ["A"] },
 };
 
 const SYMBOL_REFERENCES = JSON.parse(
   readFileSync(join(import.meta.dir, "fixtures", "r420", "symbol-references.json"), "utf8"),
 ) as Record<string, unknown>;
-function compiledOf(shape: string, build: "none" | "X") {
+function compiledOf(shape: string, build: "none" | "X" | "Y") {
   const symbols = SYMBOL_REFERENCES[`${shape}-${build}`];
   if (symbols === undefined) throw new Error(`no measured symbols for ${shape}-${build}`);
   const membership = compiledMembershipOf(buildFakeApp(symbols));
@@ -288,10 +347,18 @@ describe("R420: discovery against the compiler, per shape and build", () => {
   test("unfiltered (every arm) holds each shape's test, S10's excepted", () => {
     for (const shape of Object.keys(EXPECTED)) {
       const all = methods(testsInAlSource(`${shape}.al`, SHAPES[shape] ?? ""));
+      // S12b's `#elif Y` arm compiles B under [Y] only (measured), a build EXPECTED does not list.
+      const otherBuilds = shape === "S12b" ? ["B"] : [];
       const want =
         shape === "S10"
           ? []
-          : [...new Set([...(EXPECTED[shape]?.none ?? []), ...(EXPECTED[shape]?.X ?? [])])];
+          : [
+              ...new Set([
+                ...(EXPECTED[shape]?.none ?? []),
+                ...(EXPECTED[shape]?.X ?? []),
+                ...otherBuilds,
+              ]),
+            ];
       expect(all.sort()).toEqual(want.sort());
     }
   });
@@ -400,6 +467,61 @@ ${SHAPES.S4}`;
 }
 `;
     expect(methods(testsInAlSource("Idx.al", src))).toEqual(["Indexes"]);
+  });
+});
+
+describe("R420 review fix 1: the tree path cannot silently lose a test", () => {
+  // `Arr[Test]` puts the file on the tree path; the unclosed `begin` makes the parser read B and
+  // C as part of A's body, where R79's body exemption used to excuse their tokens.
+  const BROKEN = `codeunit 50100 "T"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure A()
+    var
+        Arr: array[3] of Integer;
+        Test: Integer;
+    begin
+        Arr[Test] := 1;
+        if Test = 1 then begin
+    end;
+
+    [Test]
+    procedure B()
+    begin
+    end;
+
+    [Test]
+    procedure C()
+    begin
+    end;
+}
+`;
+
+  test("a test the regex found and the tree did not: refused, naming them", () => {
+    let err: unknown;
+    try {
+      testsInAlSource("Broken.al", BROKEN);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(TreeDiscoveryMismatchError);
+    expect((err as TreeDiscoveryMismatchError).file).toBe("Broken.al");
+    expect((err as TreeDiscoveryMismatchError).missing).toEqual(["50100.B", "50100.C"]);
+  });
+
+  test("a body token in an object with a parse error is not exempt", () => {
+    // B is `internal`, so the regex never sees it and the regex-vs-tree check cannot name it:
+    // only R79's token count can, and only when the body exemption does not excuse its token.
+    // `Arr[Test]`'s token counts too: in an object that did not parse cleanly nothing is exempt.
+    const src = BROKEN.replace("procedure B()", "internal procedure B()").replace(
+      "    [Test]\n    procedure C()\n    begin\n    end;\n",
+      "",
+    );
+    expect(() => testsInAlSource("Broken.al", src)).toThrow(
+      /lost 2 of 3 \[Test\] procedures in "Broken\.al"/,
+    );
   });
 });
 
@@ -534,7 +656,30 @@ describe("R420: the fast path adds no parse", () => {
 });
 
 describe("R420: R403's compiled-membership check against the measured packages", () => {
-  const COMPILED_SHAPES = ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "S11"];
+  const COMPILED_SHAPES = ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "S11", "S12", "S12b"];
+
+  test("S12b published [Y], derived the same: PASS, and B is the test, not Helper", () => {
+    const filtered = armFilteredTestsInAlSource("S12b.al", SHAPES.S12b ?? "", ["Y"]);
+    expect(methods(filtered)).toEqual(["B"]);
+    const compiled = compiledOf("S12b", "Y");
+    expect(compiled.map((t) => t.method)).toEqual(["B"]);
+    expect(() => assertTestMembership(compiled, { filtered, buildSymbols: ["Y"] })).not.toThrow();
+  });
+
+  test("S12 crossed: Helper is the test only in the build without X", () => {
+    const filtered = armFilteredTestsInAlSource("S12.al", SHAPES.S12 ?? "", []);
+    const err = (() => {
+      try {
+        assertTestMembership(compiledOf("S12", "X"), { filtered, buildSymbols: [] });
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+    expect(err).toBeInstanceOf(TestAppDiffersError);
+    expect((err as TestAppDiffersError).publishedOnly).toEqual(["S12.A"]);
+    expect((err as TestAppDiffersError).sourceOnly).toEqual(["S12.Helper"]);
+  });
   for (const shape of COMPILED_SHAPES) {
     for (const build of ["none", "X"] as const) {
       test(`${shape} published [${SETS[build].join(", ")}], derived the same: PASS`, () => {

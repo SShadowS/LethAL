@@ -62,7 +62,8 @@ function maskNonCode(source: string): string {
  * token count equals its regex match count, this is exactly the pre-R420 check. On the tree path
  * it is what covers the candidates the regex never saw. `exempt` (tree path only) excuses a token
  * the parser places inside a procedure BODY, which no attribute can be: `Arr[Test]` indexes an
- * array by a variable named `Test`.
+ * array by a variable named `Test`; since the R420 review, only in an object with no parse error
+ * (`bodyToken`).
  */
 function assertEveryTestConsumed(
   rel: string,
@@ -165,6 +166,28 @@ interface FoundTest {
   /** R420, tree path: where the procedure starts, which must be compiled in too (a `[Test]` before
    *  an `#if` holding one whole procedure per arm decorates each arm's procedure). */
   readonly procedureOffset?: number;
+  /** R420 review, tree path, index-aligned with `testOffsets`: each `[Test]` decorates this
+   *  procedure only when every procedure at these offsets is compiled OUT. They are the procedures
+   *  in an `#if`'s arms that would have taken the attribute first (S12: `[Test] #if X procedure A
+   *  #endif procedure Helper`, where `Helper` is a test only when `A` is not compiled). Absent when
+   *  no `[Test]` of the test has such a condition. */
+  readonly unless?: ReadonlyArray<readonly number[]>;
+}
+
+/** R420 review: the parser's test list lost a test the regex found in the same file. The regex is
+ *  only consulted on the tree path to name what the tree added, so without this check a test the
+ *  parser swallowed (a mis-nested member read as a body) would vanish silently. */
+export class TreeDiscoveryMismatchError extends Error {
+  constructor(
+    readonly file: string,
+    /** `<codeunit id>.<method>` for each regex-found test the tree did not return, sorted. */
+    readonly missing: readonly string[],
+  ) {
+    super(
+      `Test discovery's parser did not return ${missing.length} test(s) the regular expression found in "${file}": ${missing.join(", ")}. The file most likely holds a syntax error that makes the parser read those procedures as part of another one. Refusing rather than reporting a smaller suite, which would silently turn the mutants those tests cover into no-coverage (see R420).`,
+    );
+    this.name = "TreeDiscoveryMismatchError";
+  }
 }
 
 /** R420: a test declaration discovery read and could not take, named rather than dropped
@@ -202,8 +225,10 @@ function testsOfFile(rel: string, source: string): FileTests {
     return { found: regex.found, warnings: [], treeOnly: [] };
   }
   const tree = treeTests(rel, source, masked);
-  assertEveryTestConsumed(rel, tokens, tree.consumed, (o) => insideCodeBlock(tree.root, o));
-  const regexKeys = new Set(regexTests(rel, masked).found.map((t) => refKey(t.ref)));
+  const regexFound = regexTests(rel, masked).found;
+  assertTreeHoldsRegex(rel, regexFound, tree.found);
+  assertEveryTestConsumed(rel, tokens, tree.consumed, (o) => bodyToken(tree.root, o));
+  const regexKeys = new Set(regexFound.map((t) => refKey(t.ref)));
   return {
     found: tree.found,
     warnings: tree.warnings,
@@ -214,6 +239,20 @@ function testsOfFile(rel: string, source: string): FileTests {
 
 function refKey(ref: TestMethodRef): string {
   return `${ref.codeunitId}:${ref.method.toLowerCase()}`;
+}
+
+/** R420 review: on the tree path every test the regex found must be among the tree's candidates
+ *  (every arm, before arm filtering), by codeunit id and method, case-insensitive. */
+function assertTreeHoldsRegex(
+  rel: string,
+  regexFound: readonly FoundTest[],
+  treeFound: readonly FoundTest[],
+): void {
+  const treeKeys = new Set(treeFound.map((t) => refKey(t.ref)));
+  const missing = regexFound
+    .filter((t) => !treeKeys.has(refKey(t.ref)))
+    .map((t) => `${t.ref.codeunitId}.${t.ref.method}`);
+  if (missing.length > 0) throw new TreeDiscoveryMismatchError(rel, [...new Set(missing)].sort());
 }
 
 /** The regex finder (pre-R420 discovery), on the masked source. `consumed`: the token each match
@@ -282,7 +321,7 @@ export function treeTestsWithOffsets(
   const masked = maskNonCode(source);
   const tree = treeTests(rel, source, masked);
   assertEveryTestConsumed(rel, testTokenOffsets(masked), tree.consumed, (o) =>
-    insideCodeBlock(tree.root, o),
+    bodyToken(tree.root, o),
   );
   return {
     tests: tree.found.map((t) => ({ ref: t.ref, offset: t.offset })),
@@ -354,20 +393,44 @@ function insideCodeBlock(root: ALSyntaxNode, offset: number): boolean {
 }
 
 /**
+ * R79's exemption on the tree path: a `[Test]` token inside a body (`Arr[Test]`), which no
+ * attribute can be. R420 review: only where the object holding it parsed cleanly (no ERROR or
+ * MISSING node). In an object with a syntax error the parser can read a mis-nested member as part
+ * of the body before it, and exempting that member's `[Test]` would drop the test silently.
+ */
+function bodyToken(root: ALSyntaxNode, offset: number): boolean {
+  const object = root.children.find((c) => c.startIndex <= offset && offset < c.endIndex);
+  if (object === undefined || object.hasError) return false;
+  return insideCodeBlock(object, offset);
+}
+
+/**
  * R420: the tree finder. For each codeunit (a Test codeunit decided exactly as `SUBTYPE_TEST`
  * decides it on the regex path: `Subtype = Test` in ANY arm), it walks the members in order with
  * a list of pending `[Test]` attributes:
  * - an `attribute_item` that is `[Test]` is added (any other attribute keeps the list);
  * - comments, `#pragma`, `#region` and `#endregion` are skipped;
- * - a `preproc_conditional` is walked arm by arm with the same list, so a `[Test]` inside `#if`
- *   (S2, S9), a handler list inside `#if` (S1, S3) and a whole member inside `#if` (R403's shape)
- *   all read as the compiler reads them. When an arm consumed the list, the next arm starts again
- *   from the list as it stood before the `#if` (S11: `[Test]` before one whole procedure per arm);
+ * - a `preproc_conditional` is walked arm by arm, each arm from the list as it stood before the
+ *   `#if`, so a `[Test]` inside `#if` (S2, S9), a handler list inside `#if` (S1, S3), a whole
+ *   member inside `#if` (R403's shape) and `[Test]` before one whole procedure per arm (S11) all
+ *   read as the compiler reads them. What leaves the `#if` is `conditional`'s union (S12, S12b);
  * - a `procedure` with a pending `[Test]` is a candidate; the list is then cleared;
  * - a split-header procedure (S10) with a pending `[Test]` is not a candidate: the file gets a
  *   `test-shape-unsupported` warning naming both arm names, and its tokens count as consumed;
  * - any other node clears the list.
  */
+interface Pending {
+  /** The `[Test]` attribute's offset. */
+  readonly at: number;
+  /** It decorates the next procedure only when every procedure (or node) at these offsets is
+   *  compiled out (`FoundTest.unless`). */
+  readonly unless: readonly number[];
+}
+interface StepResult {
+  readonly pending: readonly Pending[];
+  /** The offsets of the nodes that ended a non-empty pending list. */
+  readonly enders: readonly number[];
+}
 function treeTests(
   rel: string,
   source: string,
@@ -391,38 +454,42 @@ function treeTests(
     const body = cu.childForFieldName("body");
     if (body === null) continue;
 
-    /** One member; returns the pending list after it and whether a member consumed it. */
-    const step = (
-      n: ALSyntaxNode,
-      pending: readonly number[],
-    ): { readonly pending: readonly number[]; readonly took: boolean } => {
+    /** One member; returns the pending list after it and the offset of every node that ended a
+     *  non-empty pending list (a procedure that took it, or a node that cleared it). */
+    const step = (n: ALSyntaxNode, pending: readonly Pending[]): StepResult => {
       if (n.rawKind === "attribute_item") {
-        return { pending: isTestAttribute(n) ? [...pending, n.startIndex] : pending, took: false };
+        return {
+          pending: isTestAttribute(n) ? [...pending, { at: n.startIndex, unless: [] }] : pending,
+          enders: [],
+        };
       }
-      if (MEMBER_TRIVIA.has(n.rawKind)) return { pending, took: false };
+      if (MEMBER_TRIVIA.has(n.rawKind)) return { pending, enders: [] };
       if (n.rawKind === "preproc_conditional") return conditional(n, pending);
       if (n.rawKind === "procedure") {
-        if (pending.length === 0) return { pending: [], took: false };
-        for (const o of pending) consumed.add(o);
+        if (pending.length === 0) return { pending: [], enders: [] };
+        for (const p of pending) consumed.add(p.at);
         const nameNode = n.childForFieldName("name");
         if (isTestCodeunit && nameNode !== null) {
           const [first] = pending;
           found.push({
             ref: { codeunitId, codeunitName, method: unquote(nameNode.text), file: rel },
-            offset: first ?? n.startIndex,
-            testOffsets: [...pending],
+            offset: first?.at ?? n.startIndex,
+            testOffsets: pending.map((p) => p.at),
             procedureOffset: n.startIndex,
+            ...(pending.some((p) => p.unless.length > 0)
+              ? { unless: pending.map((p) => p.unless) }
+              : {}),
           });
         }
-        return { pending: [], took: true };
+        return { pending: [], enders: [n.startIndex] };
       }
       if (SPLIT_PROCEDURES.has(n.rawKind)) {
         // An arm's header region can hold attributes of its own.
         const inside = n.children
           .filter((c) => c.rawKind === "attribute_item" && isTestAttribute(c))
           .map((c) => c.startIndex);
-        const all = [...pending, ...inside];
-        if (all.length === 0) return { pending: [], took: false };
+        const all = [...pending.map((p) => p.at), ...inside];
+        if (all.length === 0) return { pending: [], enders: [] };
         for (const o of all) consumed.add(o);
         if (isTestCodeunit) {
           const names = n.children
@@ -434,34 +501,68 @@ function treeTests(
             message: `[lethal] "${rel}": a [Test] procedure in codeunit ${codeunitId} "${codeunitName}" has its header split by #if/#else (one name per arm: ${names.join(", ")}). LethAL does not discover this shape yet, so the test is NOT run and the mutants only it would kill can score survived or no-coverage (see R424).`,
           });
         }
-        return { pending: [], took: true };
+        return { pending: [], enders: [n.startIndex] };
       }
-      return { pending: [], took: false };
+      return { pending: [], enders: pending.length > 0 ? [n.startIndex] : [] };
     };
 
-    const conditional = (
-      n: ALSyntaxNode,
-      before: readonly number[],
-    ): { readonly pending: readonly number[]; readonly took: boolean } => {
-      let pending = before;
-      let tookInArm = false;
-      let took = false;
+    /**
+     * An `#if`: every arm starts from the list as it stood before it (`before`), since only one
+     * arm is compiled. What leaves the `#if` is the union of what leaves each arm:
+     * - an attribute an arm added and did not consume, guarded by its own offset as before;
+     * - an entry of `before` that some arm, or the implicit empty arm of an `#if` with no `#else`
+     *   (measured, S12 and S12b), lets through. It now decorates the next procedure only when
+     *   every node that ended the list in some arm is compiled out, so its `unless` gains them
+     *   all. That is exact: the enders lie inside arms, and those of the arms not compiled in are
+     *   compiled out anyway. An `#if` with an `#else` whose every arm ended the list lets nothing
+     *   of `before` through.
+     */
+    const conditional = (n: ALSyntaxNode, before: readonly Pending[]): StepResult => {
+      const beforeAt = new Set(before.map((p) => p.at));
+      const through = new Map<number, Set<number>>();
+      const added: Pending[] = [];
+      const enders: number[] = [];
+      let hasElse = false;
+      let arm: readonly Pending[] = before;
+      const endArm = (): void => {
+        for (const p of arm) {
+          if (!beforeAt.has(p.at)) {
+            added.push(p);
+            continue;
+          }
+          const guards = through.get(p.at) ?? new Set<number>();
+          for (const g of p.unless) guards.add(g);
+          through.set(p.at, guards);
+        }
+      };
       for (const c of n.children) {
         if (c.rawKind === "preproc_elif" || c.rawKind === "preproc_else") {
-          if (tookInArm) pending = before;
-          tookInArm = false;
+          endArm();
+          hasElse ||= c.rawKind === "preproc_else";
+          arm = before;
           continue;
         }
         if (c.rawKind === "preproc_if" || c.rawKind === "preproc_endif") continue;
-        const r = step(c, pending);
-        pending = r.pending;
-        tookInArm ||= r.took;
-        took ||= r.took;
+        const r = step(c, arm);
+        arm = r.pending;
+        enders.push(...r.enders);
       }
-      return { pending, took };
+      endArm();
+      if (!hasElse) {
+        // The implicit empty arm: compiled when no explicit arm is, and it consumes nothing.
+        arm = before;
+        endArm();
+      }
+      const kept = before
+        .filter((p) => through.has(p.at))
+        .map((p) => ({
+          at: p.at,
+          unless: [...new Set([...(through.get(p.at) ?? []), ...enders])],
+        }));
+      return { pending: [...kept, ...added], enders };
     };
 
-    let pending: readonly number[] = [];
+    let pending: readonly Pending[] = [];
     for (const member of body.children) pending = step(member, pending).pending;
   }
   return { found, consumed, warnings, root };
@@ -527,12 +628,17 @@ function armsOfFile(
   // `maskAlNonCode` for characters outside the BMP), so the two compare directly. R420: the tree
   // path's parse is reused, so a file is never parsed twice here.
   const arms = evaluateArms(file.root ?? wrapRoot(parseAL(source)), source, buildSymbols);
-  for (const { ref, testOffsets, procedureOffset } of found) {
+  for (const { ref, testOffsets, procedureOffset, unless } of found) {
     // R420: in the build when the procedure is compiled in and at least one of its `[Test]`
-    // attributes is (S2: the only `[Test]` is inside `#if`; S9: one `[Test]` per arm).
+    // attributes is (S2: the only `[Test]` is inside `#if`; S9: one `[Test]` per arm), with every
+    // procedure that would have taken that attribute first compiled out (S12, S12b).
     const compiledIn = (inactive: readonly (readonly [number, number])[]): boolean =>
       (procedureOffset === undefined || !startsInInactiveArm(inactive, procedureOffset)) &&
-      testOffsets.some((o) => !startsInInactiveArm(inactive, o));
+      testOffsets.some(
+        (o, i) =>
+          !startsInInactiveArm(inactive, o) &&
+          (unless?.[i] ?? []).every((g) => startsInInactiveArm(inactive, g)),
+      );
     if (arms.kind === "undecided") {
       filtered.push(ref);
       excluded.push({
@@ -685,6 +791,7 @@ export async function discoverTests(
           found.flatMap((t) => [
             ...t.testOffsets,
             ...(t.procedureOffset !== undefined ? [t.procedureOffset] : []),
+            ...(t.unless ?? []).flat(),
           ]),
         ).some((c) => c))
     ) {

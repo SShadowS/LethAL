@@ -19,10 +19,11 @@
  *   closed), the WHOLE test-app source: every `.al` file's normalised text.
  *
  * A span is the method's text from the first attribute directly before the `procedure`, as R-278
- * defined it. R420 widens the attribute run to an `#if` holding only attributes, so the span then
- * starts at that `#if` and its every arm's `[HandlerFunctions]` are walked; for a procedure that is
- * a whole `#if` arm after its `[Test]` (S11), the run before the `#if` is its span's first piece
- * (testpage-scan.ts `attributeRun`). Only line endings, trailing spaces and tabs and a BOM are normalised: a comment edit
+ * defined it. For a TEST procedure (its widened run holds `[Test]`), R420 widens the attribute run
+ * to an `#if` holding only attributes, so the span then starts at that `#if` and its every arm's
+ * `[HandlerFunctions]` are walked; for a procedure that is a whole `#if` arm after its `[Test]`
+ * (S11), the run before the `#if` is its span's first piece. Every other procedure keeps R-278's
+ * run (testpage-scan.ts `memberRun`). Only line endings, trailing spaces and tabs and a BOM are normalised: a comment edit
  * inside a procedure is a real edit, and over-normalising is the unsafe direction (an edited test
  * read as unchanged skips verify's new-test checks).
  *
