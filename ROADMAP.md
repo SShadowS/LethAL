@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**110 of 439 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**111 of 440 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -171,6 +171,7 @@ that ordering is the priority.
 - **R438** · R433's run-time guard checks only the request path: an `extensions` expand in the query, or an escape left encoded after 16 decoding rounds, gets through · [R438.md](docs/roadmap/R438.md) · done (9c58e352)
 - **R441** · R433's extensions guard checks the request text before fetch normalises it: a tab, CR or LF inside `extensions` passes the check and is stripped by the URL parser · [R441.md](docs/roadmap/R441.md) · done (1a266901)
 - **R442** · A header-refused file reserves no identity ordinals, so a same-tuple twin's recorded key can later name the refused file's mutant and --skip-known-survivors carries the wrong verdict; and EMIT's import allow-list ignores external imports · [R442.md](docs/roadmap/R442.md) · open, filed 2026-10-05
+- **R446** · A loop whose only exit is a guard in its BODY still gets a non-terminating `remove-assignment` mutant on the counter that guard reads · [R446.md](docs/roadmap/R446.md) · open
 
 ## Product gaps a real project hits
 
