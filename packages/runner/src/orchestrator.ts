@@ -34,13 +34,13 @@ import {
   type TierResolver,
   assignMutantIds,
   canCarryMutationSelectorVar,
+  coarseIdentityTupleOf,
   dedupeSpecs,
   describeObjectKinds,
   identityEntriesOf,
   identityFieldsOf,
   identitySiteKey,
   isMutableSite,
-  looseIdentityTupleOf,
   planOneFile,
   reachLatchRefusedOwner,
   runIdentityOrdinals,
@@ -199,8 +199,9 @@ import {
   describeStaleTestApp,
   isRunMutantLineCountMessage,
 } from "./stale-test-app";
+import { sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
-import type { MutantVerdict, RunRow, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
@@ -394,14 +395,14 @@ export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
   readonly sites: number;
   /**
    * Only when the header rule refused it (no object name to reserve an exact entry under): the
-   * `looseIdentityTupleOf` of each deduped site. Absent for an exact refusal, whose sites are
-   * reserved in the set's `reservedIdentityEntries` instead.
+   * `coarseIdentityTupleOf` of each deduped site (R442). Absent for an exact refusal, whose sites
+   * are reserved in the set's `reservedIdentityEntries` instead.
    */
-  readonly looseTuples?: readonly string[];
+  readonly coarseTuples?: readonly string[];
   /**
-   * R307 section 3 (fail closed): how many of this run's deployed mutants share a loose tuple with
-   * this file's `looseTuples`, and so carry no verdict across runs this session (history, resume,
-   * equivalence marks). Present only when `looseTuples` is and the count is above zero.
+   * R307 section 3 (fail closed): how many of this run's deployed mutants share a coarse tuple with
+   * this file's `coarseTuples`, and so carry no verdict across runs this session (history, resume,
+   * equivalence marks). Present only when `coarseTuples` is and the count is above zero.
    */
   readonly carryDisabled?: number;
 }
@@ -474,6 +475,14 @@ export interface MutationSetResult {
   readonly preprocExcluded: readonly PreprocExcludedFile[];
   /** R214: the effective set generation used. */
   readonly buildSymbols: readonly string[];
+  /**
+   * R442: what this run numbered no ordinal for, stored on the run row (`runs.carry_hidden`) so a
+   * later run can tell which of its keys may have moved. `tuples`: the coarse tuples of sites the
+   * run generated but numbered nothing for (header-rule refusals, sites a line filter dropped).
+   * `files`: sorted paths of files hidden whole, whose sites cannot be listed exactly (outside
+   * `--only`/`--exclude`, `preproc-undecided`, no selector var fits).
+   */
+  readonly carryHidden: CarryHidden;
 }
 
 export interface MutationSetOptions {
@@ -909,10 +918,16 @@ export async function generateMutationSet(
   // ordinals are numbered (`identityOrdinalsOf`), not held across this loop (R400).
   const reservedIdentityEntries: IdentityEntry[] = [];
   const refusedFiles: RefusedFile[] = [];
+  // R442: what the run numbers no ordinal for (`MutationSetResult.carryHidden`).
+  const hiddenTuples: string[] = [];
+  const hiddenFiles: string[] = [];
+  const coarseOf = (spec: MutationSpec): string =>
+    coarseIdentityTupleOf(identityFieldsOf(spec, ""));
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
     if (admitted !== undefined && !admitted.has(rel)) {
+      hiddenFiles.push(rel); // R442: never walked, so its sites cannot be listed
       // R221: attributed to the flag that actually dropped it. One counter could not tell a caller
       // using BOTH flags which one removed a file, and the report reunites these with the patterns
       // that were given -- a count attributed to the wrong flag would send someone editing the
@@ -993,6 +1008,9 @@ export async function generateMutationSet(
         reason: "preproc-undecided",
         detail: arms.reason,
       });
+      // R442: walked under an undecided context, so a decided build may emit sites this walk
+      // missed: hidden whole, not by tuple.
+      hiddenFiles.push(rel);
       continue;
     }
     if (compiledOutHere > 0) {
@@ -1031,7 +1049,10 @@ export async function generateMutationSet(
         const first = spec.before.startPosition.row + 1;
         const last = spec.before.endPosition.row + 1;
         if (spanTouches(lineRanges, rel, first, last)) selected.push(spec);
-        else excludedByLines++;
+        else {
+          excludedByLines++;
+          hiddenTuples.push(coarseOf(spec)); // R442: generated, numbered nothing
+        }
       }
       fileSpecs = selected;
     }
@@ -1040,6 +1061,7 @@ export async function generateMutationSet(
     if (!canCarryMutationSelectorVar(root)) {
       for (const spec of fileSpecs) producedInSkipped.add(spec.operatorName);
       skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
+      hiddenFiles.push(rel); // R442: numbered nothing; flips only with the object's kind
       continue;
     }
     // R307: the writer's own per-file PLAN (R-307 O6: `planOneFile`, every decision and every
@@ -1075,10 +1097,9 @@ export async function generateMutationSet(
         ...(lines !== undefined ? { lines } : {}),
         kinds: describeObjectKinds(root),
         sites: deduped.length,
-        ...(entries === undefined
-          ? { looseTuples: deduped.map((spec) => looseIdentityTupleOf(identityFieldsOf(spec, ""))) }
-          : {}),
+        ...(entries === undefined ? { coarseTuples: deduped.map(coarseOf) } : {}),
       });
+      if (entries === undefined) hiddenTuples.push(...deduped.map(coarseOf));
       continue;
     }
     // Only AFTER the trial: an operator whose only sites sit in refused files deploys nothing.
@@ -1154,21 +1175,19 @@ export async function generateMutationSet(
     );
   }
   // R307 section 3 (fail closed, I3): a header-rule refusal reserved no exact entry, so a deployed
-  // mutant sharing one of its loose tuples may hold a key a prior run gave a site of the refused
-  // file. Counted here, per refused file; `runSession` turns carry off for each such mutant.
-  if (refusedFiles.some((r) => r.looseTuples !== undefined)) {
-    const deployedLoose = files.flatMap((f) =>
-      dedupeSpecs(f.specs, tierOf).map((spec) => looseIdentityTupleOf(identityFieldsOf(spec, ""))),
-    );
+  // mutant sharing one of its coarse tuples (R442) may hold a key a prior run gave a site of the
+  // refused file. Counted here, per refused file; `runSession` turns carry off for each such mutant.
+  if (refusedFiles.some((r) => r.coarseTuples !== undefined)) {
+    const deployedCoarse = files.flatMap((f) => dedupeSpecs(f.specs, tierOf).map(coarseOf));
     for (const [i, r] of refusedFiles.entries()) {
-      if (r.looseTuples === undefined) continue;
-      const loose = new Set(r.looseTuples);
-      const count = deployedLoose.filter((t) => loose.has(t)).length;
+      if (r.coarseTuples === undefined) continue;
+      const coarse = new Set(r.coarseTuples);
+      const count = deployedCoarse.filter((t) => coarse.has(t)).length;
       if (count === 0) continue;
       refusedFiles[i] = { ...r, carryDisabled: count };
       warn(
         "identity-carry-disabled",
-        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. A mutant an earlier run stranded on is still skipped (R53), so nothing that hung before runs again. Their keys are still recorded, so the next run without this refusal carries them normally. Keep any equivalence mark that reads stale this run: the marks file is untouched and the mark applies again once the refusal is gone (R307).`,
+        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. A mutant an earlier run stranded on is still skipped (R53), so nothing that hung before runs again. This run records the refused file's site shapes, so the next run without this refusal re-measures these mutants once more (their keys here may name another mutant there), and only the run after that carries them (R442). Keep any equivalence mark that reads stale this run: the marks file is untouched and the mark applies again once the refusal is gone (R307).`,
       );
     }
   }
@@ -1242,6 +1261,7 @@ export async function generateMutationSet(
     refusedFiles,
     preprocExcluded,
     buildSymbols,
+    carryHidden: { tuples: [...new Set(hiddenTuples)].sort(), files: hiddenFiles.sort() },
   };
 }
 
@@ -3431,6 +3451,15 @@ function describeTestApp(hash: string | null | undefined): string {
   return hash === null || hash === undefined ? "unknown" : hash;
 }
 
+/** R442: a run's hidden-file list in a refusal or warning. */
+function describeHiddenFiles(files: readonly string[]): string {
+  return files.length === 0 ? "no file" : files.join(", ");
+}
+
+/** R442: why a run without `carry_hidden` carries nothing, said the same way on every path. */
+const CARRY_UNTRUSTED_WHY =
+  "recorded no list of the sites it numbered no identity ordinal for (it ran before R442, or stopped before generation), so any of its keys may name another mutant in this run";
+
 /** R247: why no verdict crosses a test-app change, said the same way on every path. */
 const TEST_APP_WHY =
   "A verdict measured against one test app says nothing about another: a changed test is exactly what might kill a survivor or spare a kill. Any change to the package's bytes counts, including a republish that only moved the version stamp and a recompile alc did not reproduce byte for byte";
@@ -3490,10 +3519,11 @@ function resolveResume(
   buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
-): { runId: number; index: ResumeIndex } | undefined {
+): { runId: number; index: ResumeIndex; carryHidden: CarryHidden } | undefined {
   if (cfg.resume === undefined) return undefined;
 
   let priorRunId: number;
+  let priorHidden: CarryHidden | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -3550,6 +3580,12 @@ function resolveResume(
     // still never be read as a match.
     assertSameTestApp(foundRow, "--resume", testAppHash);
     assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
+    priorHidden = foundRow?.carryHidden ?? null;
+    if (priorHidden === null) {
+      throw new Error(
+        `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
+      );
+    }
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3588,6 +3624,12 @@ function resolveResume(
             ? " — that run predates configuration fingerprinting and cannot prove its scope at all"
             : ""
         }`,
+      );
+    }
+    priorHidden = row.carryHidden;
+    if (priorHidden === null) {
+      throw new Error(
+        `--resume-run ${cfg.resume} ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume-run to run from scratch.`,
       );
     }
     priorRunId = cfg.resume;
@@ -3642,7 +3684,7 @@ function resolveResume(
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
   });
-  return { runId: priorRunId, index };
+  return { runId: priorRunId, index, carryHidden: priorHidden };
 }
 
 /**
@@ -4915,6 +4957,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     refusedFiles,
     preprocExcluded,
     buildSymbols: generatedSymbols,
+    carryHidden,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4925,6 +4968,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backend: buildBackend,
     emit,
   });
+  // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
+  cfg.store.setCarryHidden(runId, carryHidden);
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
   const identityOrdinals = identityOrdinalsOf({ files: allFiles, reservedIdentityEntries });
@@ -4934,17 +4979,30 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
   }
   const generateMutationSetMs = Date.now() - generateStartedMs;
-  // R307 section 3 (fail closed, I3): the loose tuples of every header-rule refusal. A mutant
-  // matching one is not skipped by history, not carried by resume and takes no equivalence mark
-  // this run (`isCarryDisabled`); its key is still written. Undefined when nothing is disabled.
-  const looseRefused = refusedFiles.flatMap((r) =>
-    r.carryDisabled !== undefined ? (r.looseTuples ?? []) : [],
-  );
-  const carryDisabled = looseRefused.length > 0 ? new Set(looseRefused) : undefined;
-  const resumeState =
-    resolvedResume === undefined || carryDisabled === undefined
-      ? resolvedResume
-      : { ...resolvedResume, index: { ...resolvedResume.index, carryDisabled } };
+  // R307 section 3 (fail closed, I3), R442: the coarse tuples of every site this run numbered no
+  // ordinal for. A mutant matching one is not skipped by history, not carried by resume and takes
+  // no equivalence mark this run (`isCarryDisabled`); its key is still written. Undefined when
+  // nothing is disabled.
+  const carryDisabled = carryHidden.tuples.length > 0 ? new Set(carryHidden.tuples) : undefined;
+  // R442: a resume also distrusts what the RESUMED run hid: the union, never this run's alone
+  // (which would let a repaired refusal's twins carry). Other hidden files refuse the resume.
+  let resumeState = resolvedResume;
+  if (resolvedResume !== undefined) {
+    const prior = resolvedResume.carryHidden;
+    if (!sameHiddenFiles(prior.files, carryHidden.files)) {
+      throw new Error(
+        `--resume: run ${resolvedResume.runId} hid ${describeHiddenFiles(prior.files)} whole from identity numbering, and this run hides ${describeHiddenFiles(carryHidden.files)}. A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant (R442). Drop the resume flag to run from scratch.`,
+      );
+    }
+    const union = new Set([...prior.tuples, ...carryHidden.tuples]);
+    resumeState = {
+      ...resolvedResume,
+      index: {
+        ...resolvedResume.index,
+        ...(union.size > 0 ? { carryDisabled: union } : {}),
+      },
+    };
+  }
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
   const coverageRefused = coverageRefusedObjects(allFiles);
@@ -5091,6 +5149,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
   let historyTestAppWarned = false;
+  // R442: likewise for its untrusted-run and hidden-files warnings.
+  let historyCarryWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -5432,6 +5492,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         caps.coverage,
         testAppHash,
         buildSymbols,
+        carryHidden.files,
         {
           schemeChanged: (old) => {
             if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
@@ -5467,6 +5528,24 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               type: "warning",
               code: "history-test-app-changed",
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
+            });
+          },
+          carryUntrusted: (old) => {
+            if (historyCarryWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCarryWarned = true;
+            emit({
+              type: "warning",
+              code: "history-carry-untrusted",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${CARRY_UNTRUSTED_WHY}. No survivor from it is skipped: every mutant is executed, and the next run can skip from this one (R442).`,
+            });
+          },
+          hiddenFilesChanged: (old) => {
+            if (historyCarryWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCarryWarned = true;
+            emit({
+              type: "warning",
+              code: "history-hidden-files-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
             });
           },
         },

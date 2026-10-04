@@ -45,7 +45,7 @@ import {
 import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
 import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
-import { DuplicateArtifactRecordError, type ResultsStore } from "./store";
+import { type CarryHidden, DuplicateArtifactRecordError, type ResultsStore } from "./store";
 import {
   type CompiledTestApp,
   type PublishedTestApp,
@@ -276,6 +276,9 @@ export interface VerifySource {
   readonly buildSymbols: readonly string[] | null;
   /** R354: the coverage mode the source run measured under; `null` for a run from before R354. */
   readonly coverageMode: CoverageMode | null;
+  /** R442: the source run's `carry_hidden`, copied verbatim onto verify's run row (NULL stays
+   *  NULL): that row carries the source's keys, so it carries their trust too. */
+  readonly carryHidden: CarryHidden | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -592,6 +595,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     identityScheme: run.identityScheme,
     buildSymbols: run.buildSymbols,
     coverageMode: run.coverageMode,
+    carryHidden: run.carryHidden,
     targets,
   };
 }
@@ -1623,6 +1627,8 @@ export async function runVerify(
         identityScheme: source.identityScheme,
         // R214: the rows carry the SOURCE run's keys, so they carry its build too.
         buildSymbols: source.buildSymbols,
+        // R442: the rows carry the SOURCE run's keys, so they carry what it hid too.
+        carryHidden: source.carryHidden,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The

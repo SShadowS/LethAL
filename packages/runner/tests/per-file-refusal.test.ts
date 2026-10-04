@@ -124,12 +124,13 @@ describe("R307: the per-file trial", () => {
           { type: "codeunit", id: 79302, name: "Mixed" },
           { type: "page", id: 79303, name: "Mixed Page" },
         ]);
-        // Exact refusal: its sites are RESERVED in the run-wide numbering, so no loose tuples.
-        expect(mixed?.looseTuples).toBeUndefined();
-        // Header refusal: no object name to reserve under, so loose tuples instead (fail closed).
-        expect(noHeader?.looseTuples).toHaveLength(3);
-        for (const t of noHeader?.looseTuples ?? [])
-          expect(t).toMatch(/^[0-9a-f]{64}\|R\|lethal\.[a-z-]+\|1$/);
+        // Exact refusal: its sites are RESERVED in the run-wide numbering, so no coarse tuples.
+        expect(mixed?.coarseTuples).toBeUndefined();
+        // Header refusal: no object name to reserve under, so coarse tuples (R442) instead (fail
+        // closed): hash, operator and major, no name and no scope.
+        expect(noHeader?.coarseTuples).toHaveLength(3);
+        for (const t of noHeader?.coarseTuples ?? [])
+          expect(t).toMatch(/^[0-9a-f]{64}\|lethal\.[a-z-]+\|1$/);
         // 3 deployed + 3 reserved; the no-header file takes no number.
         expect(identityOrdinalsOf(set).size).toBe(6);
         const reserved = [...identityOrdinalsOf(set).keys()].filter((k) =>

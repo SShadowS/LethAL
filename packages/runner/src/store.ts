@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
-import { IDENTITY_SCHEME } from "@lethal/schemata";
+import { IDENTITY_SCHEME, coarseIdentityTupleOf } from "@lethal/schemata";
 import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
@@ -233,6 +233,44 @@ export interface RunRow {
    *  `source:<hash>`). `null` when unknown, including every row recorded before the column: never
    *  equal to anything, NULL included. */
   readonly testAppHash: string | null;
+  /** R442: what the run numbered no ordinal for. `null` on a row recorded before the column, or a
+   *  run that died before generation: untrusted, so no history or resume carries from it. */
+  readonly carryHidden: CarryHidden | null;
+}
+
+/**
+ * R442: what one run numbered no identity ordinal for, so a twin's ordinal there may differ from a
+ * run that did number it. `tuples`: sorted `coarseIdentityTupleOf` strings of sites the run
+ * generated but did not number. `files`: sorted paths of files hidden whole (their sites cannot be
+ * listed). A file hidden in both runs moves no ordinal, so carry needs equal `files` lists.
+ */
+export interface CarryHidden {
+  readonly tuples: readonly string[];
+  readonly files: readonly string[];
+}
+
+/** R442: two `files` lists are equal (both sorted by their writer). */
+export function sameHiddenFiles(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((f, i) => f === b[i]);
+}
+
+/** R442: a stored `carry_hidden`, checked. NULL stays `null`; anything that is not
+ *  `{"tuples": string[], "files": string[]}` is a corrupt row and throws. */
+function parseCarryHidden(value: string | null, runId: number): CarryHidden | null {
+  if (value === null) return null;
+  const parsed: unknown = JSON.parse(value);
+  const strings = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((s) => typeof s === "string");
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !strings((parsed as { tuples?: unknown }).tuples) ||
+    !strings((parsed as { files?: unknown }).files)
+  ) {
+    throw new Error(`store.ts: run ${runId} has a corrupt "carry_hidden" column value`);
+  }
+  const { tuples, files } = parsed as CarryHidden;
+  return { tuples, files };
 }
 
 /**
@@ -560,6 +598,8 @@ export class ResultsStore {
       // R360: the quarantine resource key of the run's server; NULL for al-runner and for a
       // backend with no server. `finishRun` prunes within (app_id, resource_key).
       ["runs", "resource_key TEXT", runCols],
+      // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
+      ["runs", "carry_hidden TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -601,13 +641,16 @@ export class ResultsStore {
     testDigests?: Readonly<Record<string, string>>;
     /** R-371: the parts those digests are made of (`TestDigestParts`), recorded with them. */
     testDigestParts?: unknown;
+    /** R442: what the run's keys numbered no ordinal for. Absent or `null` writes NULL (untrusted).
+     *  `runSession` writes it after generation (`setCarryHidden`); verify copies its source's here. */
+    carryHidden?: CarryHidden | null;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -621,10 +664,20 @@ export class ResultsStore {
         info.testAppHash ?? null,
         info.testDigests !== undefined ? JSON.stringify(info.testDigests) : null,
         info.testDigestParts !== undefined ? JSON.stringify(info.testDigestParts) : null,
+        info.carryHidden != null ? JSON.stringify(info.carryHidden) : null,
       ) as {
       id: number;
     };
     return r.id;
+  }
+
+  /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
+   *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
+  setCarryHidden(runId: number, hidden: CarryHidden): void {
+    const changed = this.db
+      .query("UPDATE runs SET carry_hidden = ? WHERE id = ?")
+      .run(JSON.stringify({ tuples: hidden.tuples, files: hidden.files }), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setCarryHidden: no run ${runId}`);
   }
 
   /**
@@ -781,9 +834,10 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden FROM runs WHERE id = ?",
       )
       .get(runId) as {
+      carry_hidden: string | null;
       id: number;
       project_path: string;
       backend: string;
@@ -805,6 +859,7 @@ export class ResultsStore {
       buildSymbols: parseBuildSymbols(row.build_symbols),
       coverageMode: parseCoverageMode(row.coverage_mode, row.id),
       testAppHash: row.test_app_hash,
+      carryHidden: parseCarryHidden(row.carry_hidden, row.id),
     };
   }
 
@@ -1589,7 +1644,19 @@ export class ResultsStore {
     /** R214: this build's effective symbols. A latest run built under another set, or an
      *  unrecorded one, yields no keys. */
     buildSymbols: readonly string[],
+    /** R442: THIS run's `carryHidden.files`. A latest run that hid other files whole numbered its
+     *  twins differently, so it yields no keys. */
+    hiddenFiles: readonly string[],
     on: {
+      /** R442: the latest finished run recorded no `carry_hidden` (before R442, or it died before
+       *  generation): untrusted, no keys. Checked after the symbols. */
+      readonly carryUntrusted?: (info: { runId: number }) => void;
+      /** R442: the latest finished run hid other files whole than this run does. */
+      readonly hiddenFilesChanged?: (info: {
+        runId: number;
+        before: readonly string[];
+        now: readonly string[];
+      }) => void;
       /**
        * R325: the latest finished run was keyed under another identity scheme. Its keys then name
        * nothing reliable in this build (a renumbering can hand one to a different mutant), so NO
@@ -1614,9 +1681,10 @@ export class ResultsStore {
   ): Set<string> {
     const run = this.db
       .query(
-        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        "SELECT id, COALESCE(identity_scheme, 1) AS scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden FROM runs WHERE project_path = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1",
       )
       .get(projectPath) as {
+      carry_hidden: string | null;
       id: number;
       scheme: number;
       build_symbols: string | null;
@@ -1642,6 +1710,19 @@ export class ResultsStore {
       on.symbolsChanged?.({ runId: run.id, buildSymbols: recordedSymbols });
       return new Set();
     }
+    // R442: a key of that run may name another mutant here when it hid a site this run numbers
+    // (or the other way round). NULL is untrusted; other hidden FILES refuse every key; a hidden
+    // TUPLE drops only the rows sharing it (`coarseIdentityTupleOf`, a superset of every twin).
+    const hidden = parseCarryHidden(run.carry_hidden, run.id);
+    if (hidden === null) {
+      on.carryUntrusted?.({ runId: run.id });
+      return new Set();
+    }
+    if (!sameHiddenFiles(hidden.files, hiddenFiles)) {
+      on.hiddenFilesChanged?.({ runId: run.id, before: hidden.files, now: hiddenFiles });
+      return new Set();
+    }
+    const hiddenTuples = new Set(hidden.tuples);
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal FROM mutants " +
@@ -1662,6 +1743,16 @@ export class ResultsStore {
     return new Set(
       rows
         .filter((r) => r.procedure_name !== null)
+        .filter(
+          (r) =>
+            !hiddenTuples.has(
+              coarseIdentityTupleOf({
+                astHash: r.ast_hash,
+                operatorName: r.operator_name,
+                operatorVersion: `${r.operator_major}`,
+              }),
+            ),
+        )
         .map((r) =>
           serializeKey({
             astHash: r.ast_hash,
