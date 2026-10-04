@@ -58,7 +58,7 @@ function temp(): string {
 
 const ENTRY = "/home/dev/src/bc-dev-mcp/dist/index.js";
 const map = CONTAINER_MAP(ENTRY);
-const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-18.0.2732683";
+const ALX = "/home/dev/.vscode/extensions/ms-dynamics-smb.al-current";
 
 describe("rewrite", () => {
   test("a fixture config gets all four host-path fields replaced; credentials kept", () => {
@@ -83,7 +83,7 @@ describe("rewrite", () => {
         server: "http://cronus28",
         password: "synthetic",
       },
-      alRunner: { alRunnerPath: "/opt/al-runner/c39ad5de/al-runner" },
+      alRunner: { alRunnerPath: "/work/tools/al-runner/current/al-runner" },
     });
     expect(leftovers).toEqual([]);
   });
@@ -222,7 +222,7 @@ describe("CLI", () => {
         .sort(),
     );
     expect(JSON.parse(readFileSync(join(out, "sandbox-app.local.json"), "utf8"))).toEqual({
-      alRunner: { alRunnerPath: "/opt/al-runner/c39ad5de/al-runner" },
+      alRunner: { alRunnerPath: "/work/tools/al-runner/current/al-runner" },
     });
     expect(readFileSync(join(out, "claude-settings.local.json"), "utf8")).toBe(
       readFileSync(join(repo, ".claude", "settings.local.json"), "utf8"),

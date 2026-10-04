@@ -31,7 +31,11 @@ You coordinate LethAL's autonomous run. You write plans, `task.md` files, decisi
 3. `coord stale`: message the lane once; a dead session with a live claim -> `coord abandon`
    only when no live gate of that run is still running, otherwise `coord ask`.
 4. New questions: push-notify the owner with the id and first line.
-5. Rewrite your handoff file. Next sweep in 5 to 10 minutes while work is active, 20 to 30
+5. Once per day run `bash scripts/al-runner-update.sh` from the main checkout. It builds
+   upstream al-runner `main` and moves `/work/tools/al-runner/current` onto it only if
+   `itest:alrunner` passes. On failure keep working on the current build and file what broke
+   (a roadmap item with the failing summary the script printed).
+6. Rewrite your handoff file. Next sweep in 5 to 10 minutes while work is active, 20 to 30
    when waiting on long gates.
 
 ## Review and integration

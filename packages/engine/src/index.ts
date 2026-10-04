@@ -35,9 +35,11 @@ export {
   procedureLikeNameNode,
   renamedMemberCoverageNames,
   declarationMembers,
+  liveMembers,
   isObjectContainer,
   objectDeclarationsOf,
 } from "./ast/tree-walks";
+export type { MemberPlace, PlacedMember } from "./ast/tree-walks";
 export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
@@ -70,7 +72,7 @@ export {
 export type { CallerIndex, CallSite } from "./semantic/callers";
 export { buildCallerIndex } from "./semantic/callers";
 export type { NodeArm, SemanticContext } from "./semantic/context";
-export { armOfNode, buildSemanticContext } from "./semantic/context";
+export { armOfNode, buildSemanticContext, rawArmOf } from "./semantic/context";
 export { normalizeAlName, resolveVarRef } from "./semantic/resolve-var-ref";
 
 // Operator contract

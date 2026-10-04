@@ -49,11 +49,40 @@ export function armOfNode(ctx: SemanticContext | undefined, node: ALSyntaxNode):
   return ctx?.armOf?.(node) ?? "active";
 }
 
+/**
+ * R405 (a): the context's RAW arm reader, `undefined` when it was built without an arm map. For the
+ * readers that must tell "no map" from "active" (`liveMembers`): with no map they read direct
+ * members only, where `armOfNode` would answer "active" for every arm of a `#if` and yield both.
+ */
+export function rawArmOf(
+  ctx: SemanticContext | undefined,
+): ((node: ALSyntaxNode) => NodeArm) | undefined {
+  const armOf = ctx?.armOf;
+  return armOf === undefined ? undefined : (node) => armOf.call(ctx, node);
+}
+
 export function buildSemanticContext(
   files: readonly SourceFile[],
   arms?: ReadonlyMap<ALSyntaxNode, ArmEvaluation>,
 ): SemanticContext {
-  const symbols = buildSymbolTable(files);
+  const armOf =
+    arms === undefined
+      ? undefined
+      : (node: ALSyntaxNode): NodeArm => {
+          let root = node;
+          while (root.parent !== null) root = root.parent;
+          const arm = arms.get(root);
+          if (arm === undefined) {
+            throw new Error(
+              `R378: the arm map has no entry for the tree holding the node at line ${node.startPosition.row + 1}; every file the context indexes must be evaluated`,
+            );
+          }
+          if (arm.kind === "undecided") return "undecided";
+          return startsInInactiveArm(arm.inactive, node.startIndex) ? "inactive" : "active";
+        };
+  // R405 (a): the symbol table reads members inside a member-level `#if` by arm; with no map it
+  // reads direct members only, as before.
+  const symbols = buildSymbolTable(files, armOf);
   const types = buildTypeTable(files, symbols);
   const callers = buildCallerIndex(files, symbols);
   const cfgCache = new WeakMap<object, CFG>();
@@ -61,22 +90,7 @@ export function buildSemanticContext(
     symbols,
     types,
     callers,
-    ...(arms !== undefined
-      ? {
-          armOf(node: ALSyntaxNode): NodeArm {
-            let root = node;
-            while (root.parent !== null) root = root.parent;
-            const arm = arms.get(root);
-            if (arm === undefined) {
-              throw new Error(
-                `R378: the arm map has no entry for the tree holding the node at line ${node.startPosition.row + 1}; every file the context indexes must be evaluated`,
-              );
-            }
-            if (arm.kind === "undecided") return "undecided";
-            return startsInInactiveArm(arm.inactive, node.startIndex) ? "inactive" : "active";
-          },
-        }
-      : {}),
+    ...(armOf !== undefined ? { armOf } : {}),
     cfgFor(procedure) {
       const cached = cfgCache.get(procedure);
       if (cached !== undefined) return cached;

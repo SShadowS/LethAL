@@ -6228,6 +6228,11 @@ export interface NamedMutantsConfig {
    * run is refused. An unreached mutant is never sent and is answered in
    * `NamedMutantsResult.unreached`, not in `outcomes`. A throw ends the call; the lease is
    * released as for any other error.
+   *
+   * R-427: `notRerun` names, by `testKeyOf`, `rerunOnUnmutated` methods that are NOT rerun: tests
+   * sent to no kept mutant. Refused when a key is not in `rerunOnUnmutated`, is in any kept
+   * mutant's narrowed list, or had an invalid baseline (`invalidBaselineReason`). Answered in
+   * `NamedMutantsResult.notRerun`.
    */
   readonly narrow?: (
     baseline: ReadonlyArray<{ readonly ref: TestMethodRef; readonly verdict: TestVerdict }>,
@@ -6235,6 +6240,7 @@ export interface NamedMutantsConfig {
   ) => {
     readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
     readonly unreached: ReadonlySet<string>;
+    readonly notRerun?: ReadonlySet<string>;
   };
 }
 
@@ -6265,8 +6271,12 @@ export interface NamedMutantsResult {
   readonly quarantined?: string;
   /** One per baseline method, in baseline order. */
   readonly baseline: readonly UnmutatedRun[];
-  /** One per `rerunOnUnmutated` method, in its order; empty without it. */
+  /** One per `rerunOnUnmutated` method NOT in `notRerun`, in its order; empty without it. */
   readonly rerun: readonly UnmutatedRun[];
+  /** R-427: test keys of the `rerunOnUnmutated` methods `narrow` said not to rerun, in
+   *  `rerunOnUnmutated` order. Each ran its baseline only. Absent when `narrow` was not given or
+   *  not called. */
+  readonly notRerun?: readonly string[];
 }
 
 /** R206 section 2.1: the server reported that tests had already run in this call's session. */
@@ -6340,6 +6350,8 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   // R-384: `narrow` may replace this, inside `select`, before any mutant runs.
   let named = resolveNamedMutants(manifest, cfg.requests);
   let unreached: readonly string[] | undefined;
+  // R-427: set by `narrow`; these rerun methods are skipped.
+  let notRerun: readonly string[] | undefined;
   // `rerun` is answered by `testKeyOf`, so a repeated ref would report its second run twice.
   const rerunKeys = (cfg.rerunOnUnmutated ?? []).map(testKeyOf);
   const repeatedRerun = [...new Set(rerunKeys.filter((k, i) => rerunKeys.indexOf(k) !== i))];
@@ -6465,9 +6477,10 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
         const narrow = cfg.narrow;
         if (narrow !== undefined) {
           const n = narrow(baseline, { coverage: caps.coverage, alSources: artifact.alSources });
-          const applied = applyNarrow(named, n, who);
+          const applied = applyNarrow(named, n, who, { rerunRefs, baselineRan });
           named = applied.named;
           unreached = applied.unreached;
+          notRerun = applied.notRerun;
         }
         return selectNamed(baseline, named, scope, installed.batchIndex, strict);
       },
@@ -6475,10 +6488,12 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
     // Decision 11: after the covering loop on purpose, so a test that passes clean but fails
     // once mutant runs have touched the server is caught. Freshness for a rerun also needs a
     // session no earlier call of this run used: the ids recorded so far, grown as the loop goes.
-    if (rerunRefs.length > 0 && !safety.isUnsafe) {
+    const skipRerun = new Set(notRerun ?? []);
+    const toRerun = rerunRefs.filter((ref) => !skipRerun.has(testKeyOf(ref)));
+    if (toRerun.length > 0 && !safety.isUnsafe) {
       const seen = store.sessionIdsOf(runId);
       await activateOnce(backend, safety, null);
-      for (const ref of rerunRefs) {
+      for (const ref of toRerun) {
         const { verdict, stop } = await dispatchUnmutated(scope, ref);
         // A verdict the dispatch stopped on (a lease loss, a strand) is not a result, so it is
         // never fresh: its method can only be `flaky-unknown`, never `flaky`.
@@ -6524,9 +6539,10 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       const v = baselineRan.get(testKeyOf(ref));
       return unmutatedRun(ref, v, v !== undefined && ranInFreshSession(v));
     }),
-    rerun: rerunRefs.map(
-      (ref) => rerunRan.get(testKeyOf(ref)) ?? unmutatedRun(ref, undefined, false),
-    ),
+    rerun: rerunRefs
+      .filter((ref) => !(notRerun ?? []).includes(testKeyOf(ref)))
+      .map((ref) => rerunRan.get(testKeyOf(ref)) ?? unmutatedRun(ref, undefined, false)),
+    ...(notRerun !== undefined ? { notRerun } : {}),
   };
 }
 
@@ -6534,15 +6550,28 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
  * R-384: apply `narrow`'s answer to the resolved requests. Fails loudly on any answer that is not
  * a narrowing: a mutant it does not decide, a method its request did not name (the baseline never
  * ran it), an unreached mutant with methods left, or a reached one with none.
+ *
+ * R-427: and on any `notRerun` key that is not a `rerunOnUnmutated` method, that is in a kept
+ * mutant's narrowed list (a test sent to a mutant can never skip its rerun), or whose baseline
+ * was not a valid green run, so that case fails here, before any mutant run.
  */
 function applyNarrow(
   named: readonly ResolvedNamedMutant[],
   n: {
     readonly methods: ReadonlyMap<string, readonly TestMethodRef[]>;
     readonly unreached: ReadonlySet<string>;
+    readonly notRerun?: ReadonlySet<string>;
   },
   who: string,
-): { named: readonly ResolvedNamedMutant[]; unreached: readonly string[] } {
+  rerun: {
+    readonly rerunRefs: readonly TestMethodRef[];
+    readonly baselineRan: ReadonlyMap<string, TestVerdict>;
+  },
+): {
+  named: readonly ResolvedNamedMutant[];
+  unreached: readonly string[];
+  notRerun: readonly string[];
+} {
   const ids = new Set(named.map(({ mutant }) => mutant.mutantId));
   const strangers = [...n.unreached, ...n.methods.keys()].filter((id) => !ids.has(id));
   if (strangers.length > 0) {
@@ -6573,7 +6602,35 @@ function applyNarrow(
     if (methods.length === 0) unreached.push(id);
     else kept.push({ mutant: r.mutant, methods });
   }
-  return { named: kept, unreached };
+  const skip = n.notRerun ?? new Set<string>();
+  const rerunKeys = new Set(rerun.rerunRefs.map(testKeyOf));
+  const notRerunnable = [...skip].filter((k) => !rerunKeys.has(k));
+  if (notRerunnable.length > 0) {
+    throw new NamedMutantError(
+      `${who}: narrow named test(s) not to rerun that are not in rerunOnUnmutated: ${notRerunnable.join(", ")}`,
+    );
+  }
+  for (const { mutant, methods } of kept) {
+    const sent = methods.map(testKeyOf).filter((k) => skip.has(k));
+    if (sent.length > 0) {
+      throw new NamedMutantError(
+        `${who}: narrow named test(s) not to rerun that are sent to ${mutant.mutantId}: ${sent.join(", ")} (a test sent to a mutant is always rerun)`,
+      );
+    }
+  }
+  for (const k of skip) {
+    const invalid = invalidBaselineReason(rerun.baselineRan.get(k));
+    if (invalid !== undefined) {
+      throw new NamedMutantError(
+        `${who}: narrow named ${k} not to rerun, but its baseline was not a valid green run (${invalid}); only a filterable test can skip its rerun`,
+      );
+    }
+  }
+  return {
+    named: kept,
+    unreached,
+    notRerun: rerun.rerunRefs.map(testKeyOf).filter((k) => skip.has(k)),
+  };
 }
 
 /**

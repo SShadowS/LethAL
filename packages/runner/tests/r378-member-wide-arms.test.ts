@@ -157,8 +157,9 @@ const TABLE_E = `table 50306 "E Tab"
 }
 `;
 
-// A trigger inside an object-level #if is not a direct member, so `findTableTrigger` never finds
-// it in either build: no forward mutant either way (the plan's A3-gone pin).
+// A trigger inside a MEMBER-level #if (a `preproc_conditional` in the object body). Before R405 (a)
+// `findTableTrigger` read direct members only and never found it, in either build; since R405 (a)
+// it is found exactly when the arm is compiled (the A3 pin below).
 const TABLE_D = `table 50305 "D Tab"
 {
     fields
@@ -173,6 +174,32 @@ const TABLE_D = `table 50305 "D Tab"
     trigger OnModify()
     begin
         Error('m');
+    end;
+#endif
+}
+`;
+
+// R405 (a): `#if and` cannot be evaluated (R214: unparsed-condition), so this FILE is undecided. A
+// direct trigger in an undecided file is found, as before; a trigger INSIDE the undecided `#if` is
+// not, because the first arm in the text would otherwise win (plan r2 point 2).
+const TABLE_UD = `table 50307 "UD Tab"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+    }
+    keys
+    {
+        key(PK; "Code") { Clustered = true; }
+    }
+    trigger OnModify()
+    begin
+        Error('m');
+    end;
+#if and
+    trigger OnDelete()
+    begin
+        Error('d');
     end;
 #endif
 }
@@ -260,6 +287,20 @@ const OPS = `codeunit 50310 "R378 Ops"
     begin
         DTab.Modify();
     end;
+
+    procedure ModUD()
+    var
+        UDRec: Record "UD Tab";
+    begin
+        UDRec.Modify();
+    end;
+
+    procedure DelUD()
+    var
+        UDRec: Record "UD Tab";
+    begin
+        UDRec.Delete();
+    end;
 }
 `;
 
@@ -271,6 +312,7 @@ const FILES: Record<string, string> = {
   "src/NTab.Table.al": TABLE_N,
   "src/DTab.Table.al": TABLE_D,
   "src/ETab.Table.al": TABLE_E,
+  "src/UDTab.Table.al": TABLE_UD,
   "src/Ops.Codeunit.al": OPS,
 };
 
@@ -352,13 +394,95 @@ describe("R378: tags read only the arms the build compiles", () => {
     expect(site("on", "ETab.Insert(true)", SWAP_FLAG).plat).toBe("-");
   });
 
-  test("A3-gone pin: a trigger inside an object-level #if yields no forward mutant in either build", () => {
+  test("A3 pin (R405 a): a trigger inside a member-level #if yields a forward mutant only in the build that compiles it", () => {
+    expect(site("on", "DTab.Modify()", SWAP_FLAG).plat).toBe("run-trigger-forced");
     const line = lineOf("DTab.Modify()");
+    expect(rowsByBuild.off.filter((r) => r.line === line && r.op === SWAP_FLAG)).toEqual([]);
+  });
+
+  test("A3 pin (R405 a): every other Ops row is unchanged in both builds (captured on master f396e037)", () => {
+    const dLine = lineOf("DTab.Modify()");
+    const other = (build: "off" | "on"): string[] =>
+      rowsByBuild[build]
+        .filter((r) => !(r.line === dLine && r.op === SWAP_FLAG))
+        .map((r) => `${r.line} ${r.op} ${r.plat}`);
+    expect(other("off")).toEqual(OTHER_ROWS_OFF);
+    expect(other("on")).toEqual(OTHER_ROWS_ON);
+  });
+
+  test("R405 a: in an UNDECIDED file a direct trigger is found and a trigger inside #if is not", () => {
+    expect(evaluateArms(wrapRoot(parseAL(TABLE_UD)), TABLE_UD, []).kind).toBe("undecided");
     for (const build of ["off", "on"] as const) {
+      expect(site(build, "UDRec.Modify()", SWAP_FLAG).plat).toBe("run-trigger-forced");
+      const line = lineOf("UDRec.Delete()");
       expect(rowsByBuild[build].filter((r) => r.line === line && r.op === SWAP_FLAG)).toEqual([]);
     }
   });
 });
+
+// Every Ops row except the D Tab forward mutant, as master f396e037 produced them (R405 a).
+const TAIL_ROWS: string[] = [
+  "38 lethal.empty-block -",
+  "39 lethal.void-method-call -",
+  "39 lethal.swap-modify-flag run-trigger-skipped-insert",
+  "45 lethal.empty-block -",
+  "46 lethal.void-method-call -",
+  "46 lethal.swap-modify-flag run-trigger-forced",
+  "52 lethal.empty-block -",
+  "53 lethal.void-method-call -",
+  "53 lethal.swap-modify-flag -",
+  "59 lethal.empty-block -",
+  "60 lethal.void-method-call -",
+  "60 lethal.swap-modify-flag -",
+  "66 lethal.empty-block -",
+  "67 lethal.void-method-call -",
+  "67 lethal.swap-modify-flag run-trigger-skipped-insert",
+  "73 lethal.empty-block -",
+  "74 lethal.void-method-call -",
+  "74 lethal.swap-modify-flag -",
+  "80 lethal.empty-block -",
+  "81 lethal.void-method-call -",
+  "87 lethal.empty-block -",
+  "88 lethal.void-method-call -",
+  "88 lethal.swap-modify-flag run-trigger-forced",
+  "94 lethal.empty-block -",
+  "95 lethal.void-method-call -",
+];
+const OTHER_ROWS_OFF: string[] = [
+  "6 lethal.empty-block -",
+  "7 lethal.remove-assignment -",
+  "7 lethal.flip-boolean-literal -",
+  "8 lethal.void-method-call -",
+  "8 lethal.remove-commit -",
+  "17 lethal.empty-block -",
+  "18 lethal.void-method-call -",
+  "18 lethal.swap-modify-flag -",
+  "24 lethal.empty-block -",
+  "25 lethal.void-method-call -",
+  "25 lethal.swap-modify-flag -",
+  "31 lethal.empty-block -",
+  "32 lethal.void-method-call -",
+  "32 lethal.swap-modify-flag run-trigger-skipped-insert",
+  ...TAIL_ROWS,
+];
+const OTHER_ROWS_ON: string[] = [
+  "6 lethal.empty-block -",
+  "7 lethal.remove-assignment -",
+  "7 lethal.flip-boolean-literal -",
+  "8 lethal.void-method-call -",
+  "8 lethal.remove-commit write-txn-codeunit-run",
+  "10 lethal.remove-assignment -",
+  "17 lethal.empty-block -",
+  "18 lethal.void-method-call -",
+  "18 lethal.swap-modify-flag run-trigger-skipped-insert",
+  "24 lethal.empty-block -",
+  "25 lethal.void-method-call -",
+  "25 lethal.swap-modify-flag run-trigger-forced",
+  "31 lethal.empty-block -",
+  "32 lethal.void-method-call -",
+  "32 lethal.swap-modify-flag -",
+  ...TAIL_ROWS,
+];
 
 describe("R378: an undecided receiver file keeps the tag (A2 and A3)", () => {
   const parsed = (text: string): ALSyntaxNode => wrapRoot(parseAL(text));
