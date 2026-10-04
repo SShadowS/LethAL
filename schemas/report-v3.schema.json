@@ -78,7 +78,9 @@
               "declarative-sites-dropped",
               "all-errors",
               "session-warm",
-              "preproc-files-refused"
+              "preproc-files-refused",
+              "tests-compiled-out",
+              "test-symbols-unverified"
             ]
           }
         },
@@ -1041,6 +1043,45 @@
     },
     "identityScheme": {
       "type": "number"
+    },
+    "testBuildSymbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "excludedTests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "test",
+          "file",
+          "reason"
+        ],
+        "properties": {
+          "test": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "compiled-out",
+              "preproc-undecided-kept"
+            ]
+          }
+        }
+      }
+    },
+    "testSymbolsUnverifiedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "untargetedTriggerCount": {
       "type": "number"

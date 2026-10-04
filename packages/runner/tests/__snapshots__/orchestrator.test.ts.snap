@@ -8665,6 +8665,33 @@ exports[`C02-04 characterization 11: parallel workers 1`] = `
     {
       "event": {
         "seq": 2,
+        "testBuildSymbols": [
+          "CLEANSCHEMA1",
+          "CLEANSCHEMA10",
+          "CLEANSCHEMA11",
+          "CLEANSCHEMA12",
+          "CLEANSCHEMA13",
+          "CLEANSCHEMA14",
+          "CLEANSCHEMA15",
+          "CLEANSCHEMA16",
+          "CLEANSCHEMA17",
+          "CLEANSCHEMA18",
+          "CLEANSCHEMA19",
+          "CLEANSCHEMA2",
+          "CLEANSCHEMA20",
+          "CLEANSCHEMA21",
+          "CLEANSCHEMA22",
+          "CLEANSCHEMA23",
+          "CLEANSCHEMA24",
+          "CLEANSCHEMA25",
+          "CLEANSCHEMA3",
+          "CLEANSCHEMA4",
+          "CLEANSCHEMA5",
+          "CLEANSCHEMA6",
+          "CLEANSCHEMA7",
+          "CLEANSCHEMA8",
+          "CLEANSCHEMA9",
+        ],
         "tests": [
           {
             "codeunitId": 79100,

@@ -233,6 +233,7 @@ describe("resolveEnvToolSession", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown() {
         return undefined;
       },
@@ -295,6 +296,7 @@ describe("resolveEnvToolSession", () => {
       bcdev: RESOLVED_BCDEV,
       envId: RESOLVED_BCDEV.serverInstance,
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown() {
         return undefined;
       },
@@ -519,6 +521,7 @@ describe("withEnvTeardown", () => {
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown(opts) {
         teardownCalls.push(opts);
         return undefined;
@@ -550,6 +553,7 @@ describe("withEnvTeardown", () => {
         envId: RESOLVED_BCDEV.serverInstance,
         createdEnvId: "env-created",
         publishTestApps: async () => {},
+        publishApps: [],
         async teardown() {
           // Mirrors env-tool-session.ts's own failure mode: `deleteEnv` names `{appFile}`, which
           // `renderCommand` cannot supply at teardown time.
@@ -572,6 +576,7 @@ describe("withEnvTeardown", () => {
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown() {
         throw new Error("deleteEnv boom");
       },
@@ -659,6 +664,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown(opts) {
         teardownCalls.push(opts);
         return undefined;
@@ -693,6 +699,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown() {
         throw new EnvToolError("envTool: no value available for placeholder {appFile}");
       },
@@ -758,6 +765,7 @@ describe("runFromCli (Task 7 review wiring)", () => {
       envId: RESOLVED_BCDEV.serverInstance,
       createdEnvId: "env-created",
       publishTestApps: async () => {},
+      publishApps: [],
       async teardown(opts) {
         teardownCalls.push(opts);
         return undefined;
@@ -982,6 +990,7 @@ describe("an environment deleted at teardown takes its stored bundles with it (R
       envId: bcdev.serverInstance,
       createdEnvId: "created",
       publishTestApps: async () => {},
+      publishApps: [],
       // Mirrors the real teardown: "deleted" only when the environment was actually deleted.
       async teardown(o) {
         return o.keepEnv || o.quarantined ? undefined : "deleted";
@@ -1430,6 +1439,22 @@ describe("afterLeaseAcquiredFor (R19)", () => {
     expect(fragment.afterLeaseAcquired).toBeDefined();
     await fragment.afterLeaseAcquired?.();
     expect(published).toBe(1);
+  });
+
+  // R403 phase B: the files the hook publishes travel with it, so `runSession` can check the test
+  // app's compiled membership on the build the session RUNS (plan §3(b)).
+  it("carries the files the hook publishes", () => {
+    const session = {
+      bcdev: RESOLVED_BCDEV,
+      envId: "env-4711",
+      publishTestApps: async () => {},
+      publishApps: ["dep.app", "tests.app"],
+      teardown: async () => undefined,
+    } satisfies EnvToolSession;
+    expect(afterLeaseAcquiredFor(session).afterLeaseAcquiredPublishes).toEqual([
+      "dep.app",
+      "tests.app",
+    ]);
   });
 
   it("produces nothing without an env-tool session — nobody asked LethAL to publish test apps", () => {

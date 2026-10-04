@@ -40,7 +40,7 @@ export {
   isObjectContainer,
   objectDeclarationsOf,
 } from "./ast/tree-walks";
-export { evaluateArms, startsInInactiveArm } from "./ast/preproc-arms";
+export { evaluateArms, hasDirectiveLine, startsInInactiveArm } from "./ast/preproc-arms";
 export type { ArmEvaluation } from "./ast/preproc-arms";
 
 // Semantic

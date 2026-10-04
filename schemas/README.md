@@ -5,8 +5,9 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v10.schema.json`](explain-v10.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 10 |
-| [`explain-v9.schema.json`](explain-v9.schema.json) | the same, from builds before R307; kept so a stored v9 document stays checkable (v10 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 9 |
+| [`explain-v11.schema.json`](explain-v11.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 11 |
+| [`explain-v10.schema.json`](explain-v10.schema.json) | the same, from builds before R307; kept so a stored v10 document stays checkable (v11 added the caveat `files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 10 |
+| [`explain-v9.schema.json`](explain-v9.schema.json) | the same, from builds before R403; kept so a stored v9 document stays checkable (v10 added the caveats `tests-compiled-out` and `test-symbols-unverified`) | `EXPLAIN_SCHEMA_VERSION` = 9 |
 | [`explain-v8.schema.json`](explain-v8.schema.json) | the same, from builds before R214; kept so a stored v8 document stays checkable (v9 added the caveat `preproc-files-refused`) | `EXPLAIN_SCHEMA_VERSION` = 8 |
 | [`explain-v7.schema.json`](explain-v7.schema.json) | the same, from builds before R252; kept so a stored v7 document stays checkable (v8 added the attribution value `not-measured`) | `EXPLAIN_SCHEMA_VERSION` = 7 |
 | [`explain-v6.schema.json`](explain-v6.schema.json) | the same, from builds before R265; kept so a stored v6 document stays checkable (v7 added the required `survivors[].markKey` and `markIdentityScheme`, and `markKeysStale`) | `EXPLAIN_SCHEMA_VERSION` = 6 |
@@ -22,10 +23,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the sixteen files, twelve are hand-written and four were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v10 and the kept v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v4 and the kept v3, v2 and v1) are hand-written; explain v10, `doctor` and
-verify v4 are pinned against their declarations, and explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+**Of the seventeen files, thirteen are hand-written and four were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v11 and the kept v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v4 and the kept v3, v2 and v1) are hand-written; explain v11, `doctor` and
+verify v4 are pinned against their declarations, and explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v3, verify v2 and verify v1 are frozen as they were published. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
 generator last wrote it.
 `SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
@@ -54,7 +55,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v10.schema.json`, capped and uncapped.
+   `explain-v11.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

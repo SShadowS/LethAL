@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/explain-v10.schema.json",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/explain-v11.schema.json",
   "title": "LethAL explain output",
   "description": "What `lethal explain <report.json>` prints on stdout. THE SPLIT CONTRACT, which the payload also states in its own `contract` block: STRUCTURE is contractual and versioned by explainSchemaVersion; PROSE is not, and may improve without a bump. Every machine-usable fact is a field, so no consumer has a reason to parse a `meaning` string. Additive fields do not bump the version, so tolerate properties you do not know.",
   "type": "object",
@@ -20,7 +20,7 @@
   "properties": {
     "explainSchemaVersion": {
       "type": "integer",
-      "const": 10,
+      "const": 11,
       "description": "The version of THIS document's structure."
     },
     "derivedFromReportSchemaVersion": {
@@ -98,6 +98,7 @@
               "line-narrowed",
               "tests-narrowed",
               "uninstrumentable-files",
+              "files-refused",
               "stale-test-app",
               "tests-permission-refused",
               "tests-testpage-unsupported",

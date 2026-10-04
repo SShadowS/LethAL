@@ -336,6 +336,16 @@ export interface SessionFingerprintInput {
    *  R192's baseline key hashes AL bytes only, so a resume across a symbol change would carry
    *  measurements made under the old ones. */
   readonly preprocessorSymbols?: readonly string[];
+  /** R403: the TEST app's DERIVED symbol set (`effectiveBuildSymbols(testDir, ...)`), which decides
+   *  which tests arm-aware discovery keeps. In the digest only when non-empty, so a run with no
+   *  test symbols keeps its old digest. Separate from `preprocessorSymbols` because the two sets
+   *  differ (each app's own `app.json`): a config change can leave the target's set unchanged and
+   *  still change the test app's. */
+  readonly testBuildSymbols?: readonly string[];
+  /** R403: `"arms-v1"` when the arm policy changed the discovered suite or recorded a file it
+   *  could not decide; absent otherwise, so the digest stays the one recorded before R403 exactly
+   *  when the policy left the suite unchanged. */
+  readonly testDiscovery?: "arms-v1";
   readonly skipKnownSurvivors: boolean;
   /**
    * R325: the identity scheme this session's keys are made under (`IDENTITY_SCHEME`). ALWAYS in
@@ -386,6 +396,11 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.preprocessorSymbols !== undefined && input.preprocessorSymbols.length > 0
       ? { preprocessorSymbols: [...input.preprocessorSymbols].sort() }
       : {}),
+    // R403: conditional for the same reason, see `SessionFingerprintInput.testBuildSymbols`.
+    ...(input.testBuildSymbols !== undefined && input.testBuildSymbols.length > 0
+      ? { testBuildSymbols: [...input.testBuildSymbols].sort() }
+      : {}),
+    ...(input.testDiscovery !== undefined ? { testDiscovery: input.testDiscovery } : {}),
     skipKnownSurvivors: input.skipKnownSurvivors,
     identityScheme: input.identityScheme,
     // R354: conditional, see `SessionFingerprintInput.coverageMode`.

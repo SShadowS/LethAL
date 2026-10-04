@@ -275,8 +275,10 @@ describe("Caveat union", () => {
       "all-errors": true,
       "session-warm": true,
       "preproc-files-refused": true,
+      "tests-compiled-out": true,
+      "test-symbols-unverified": true,
     };
-    expect(Object.keys(all).length).toBe(22);
+    expect(Object.keys(all).length).toBe(24);
   });
 });
 

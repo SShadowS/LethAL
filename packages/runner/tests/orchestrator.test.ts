@@ -110,6 +110,7 @@ import {
   publishTestApp,
 } from "../src/test-app-publish";
 import { testDigestsOfSources } from "../src/test-digest";
+import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
 import { TestPageScanError } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
@@ -4293,6 +4294,110 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R-422: a project app.json written on Windows names its logo and resource folders with `\`,
+  // which the Linux alc reads as part of the file name (AL1001 / AL0863).
+  async function withBackslashPaths(dirs: { readonly projectDir: string }) {
+    await Bun.write(
+      join(dirs.projectDir, "app.json"),
+      JSON.stringify({
+        ...JSON.parse(APP_JSON),
+        logo: "Images\\Logo.png",
+        resourceFolders: ["Res\\Sub"],
+      }),
+    );
+    await Bun.write(join(dirs.projectDir, "Images/Logo.png"), "PNG");
+    await Bun.write(join(dirs.projectDir, "Res/Sub/a.txt"), "x");
+  }
+  const BACKSLASH_WARNING =
+    'app.json names a path with "\\": logo "Images\\Logo.png" -> "Images/Logo.png"; resourceFolders[0] "Res\\Sub" -> "Res/Sub". LethAL wrote "/" in the app.json it compiles for each batch, because the Linux alc reads "\\" as part of the name and fails with AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove this warning.';
+  async function twoBatchProject() {
+    const dirs = await makeProject();
+    await Bun.write(
+      join(dirs.projectDir, "SandboxExtra.Codeunit.al"),
+      `codeunit 79002 "Sandbox Extra"
+{
+    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean
+    begin
+        exit(Amount < Limit);
+    end;
+}
+`,
+    );
+    return dirs;
+  }
+
+  test("warns ONCE per session, with the exact text, when app.json names a backslash path (R-422)", async () => {
+    const dirs = await twoBatchProject();
+    await withBackslashPaths(dirs);
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(report.batches).toBe(2);
+    const warnings = events.filter(
+      (e) => e.type === "warning" && e.code === "app-json-backslash-path",
+    );
+    expect(warnings).toHaveLength(1);
+    const [only] = warnings;
+    expect(only?.type === "warning" ? only.message : undefined).toBe(BACKSLASH_WARNING);
+    store.close();
+  });
+
+  test("an all-/ project raises no app-json-backslash-path warning (R-422)", async () => {
+    const dirs = await twoBatchProject();
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    await runSession({
+      backend: new PhaseBackend(),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    expect(
+      events.filter((e) => e.type === "warning" && e.code === "app-json-backslash-path"),
+    ).toHaveLength(0);
+    store.close();
+  });
+
+  test("the version-conflict re-stamp keeps / in the batch app.json (R-422)", async () => {
+    const dirs = await makeProject();
+    await withBackslashPaths(dirs);
+    let attempts = 0;
+    const backend = new PhaseBackend({
+      onPublish: () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error(
+            "Cannot install the extension X by Y 1.0.1.1 because a newer version 9.9.9.9 was already installed.",
+          );
+        }
+      },
+    });
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    expect(attempts).toBe(2);
+    const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+      e.match(/^run-\d+-batch-0$/),
+    );
+    const [batchDirName] = batchDirs;
+    if (batchDirName === undefined) throw new Error("no batch dir written");
+    const onDisk = JSON.parse(
+      await readFile(join(dirs.instrumentedDir, batchDirName, "app.json"), "utf8"),
+    ) as { version: string; logo: string; resourceFolders: string[] };
+    expect(onDisk.version).toBe("9.9.9.10");
+    expect(onDisk.logo).toBe("Images/Logo.png");
+    expect(onDisk.resourceFolders).toEqual(["Res/Sub"]);
+    store.close();
+  });
+
   test("fails loudly on a SECOND version conflict rather than retrying forever", async () => {
     const dirs = await makeProject();
     const backend = new PhaseBackend({
@@ -4730,10 +4835,11 @@ describe("runSession — Layer 5A deployment identity", () => {
     let prepared = 0;
     const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
       async (...args) => {
-        await real(...args);
+        const changes = await real(...args);
         prepared += 1;
         writeFileSync(noOp, NO_MUTANTS_AL);
         writeFileSync(appJson, APP_JSON);
+        return changes;
       },
     );
     const store = new ResultsStore(":memory:");
@@ -7372,6 +7478,146 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
     expect(rec?.detail).toContain("a9");
   });
 
+  // R403 phase B (plan §3(b), §7): on an env-tool session the test app that RUNS is the
+  // `publishApps` file the hook publishes under the lease, not the pre-lease R139 download, which
+  // can hold the OUTGOING package. Its compiled membership is checked after the hook.
+  describe("R403 phase B: the env-tool test app's compiled membership", () => {
+    const pkgOf = (name: string, tests: readonly string[]) =>
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${APP_ID}" Name="${name}" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+        "SymbolReference.json": JSON.stringify({
+          Codeunits: [
+            {
+              Id: 79100,
+              Name: "Sandbox Tests",
+              Properties: [{ Name: "Subtype", Value: "Test" }],
+              Methods: tests.map((m, i) => ({
+                Id: i + 1,
+                Name: m,
+                Attributes: [{ Name: "Test" }],
+              })),
+            },
+          ],
+        }),
+      });
+    const GOOD = pkgOf("Sandbox Tests", ["OverBudgetDetected"]);
+    /** The outgoing build the server holds before the lease: other tests entirely. */
+    const OUTGOING = pkgOf("Sandbox Tests", ["RetiredTest"]);
+
+    async function envToolRun(o: {
+      readonly preLease: Uint8Array;
+      readonly fileBefore: Uint8Array;
+      /** What the hook leaves in the file it publishes (a rebuild racing the publish, say). */
+      readonly fileAfterHook: Uint8Array;
+      readonly testAppInPublishApps?: boolean;
+      /** A further publishApps entry that cannot be read as an app package. */
+      readonly broken?: "missing" | "not-an-app";
+    }) {
+      const dirs = await makeProject();
+      await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), THREE_PROC_AL);
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      const testAppFile = join(dirs.testDir, "..", "Tests.app");
+      const otherFile = join(dirs.testDir, "..", "Other.app");
+      writeFileSync(testAppFile, o.fileBefore);
+      // Another app published by the same hook, with a test set that matches nothing: chosen by
+      // name and publisher, it must not be read as the test app.
+      writeFileSync(otherFile, pkgOf("Some Dependency", ["Unrelated"]));
+      const brokenFile = join(dirs.testDir, "..", "Broken.app");
+      if (o.broken === "not-an-app") writeFileSync(brokenFile, "not a zip, not an app package");
+      const publishApps = [
+        otherFile,
+        ...(o.broken !== undefined ? [brokenFile] : []),
+        ...(o.testAppInPublishApps === false ? [] : [testAppFile]),
+      ];
+      const log: string[] = [];
+      const client = new FakeLeaseClient(log);
+      const { lease } = leaseCfg(client);
+      const backend = leaseBackend({
+        fetchPublishedAppPackage: async () => o.preLease,
+        // The first deploy is the first batch, whose baseline follows it.
+        deploy: async () => {
+          log.push("deploy");
+          return null;
+        },
+      });
+      const store = new ResultsStore(":memory:");
+      const outcome = await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        resourceServer: "http://cronus281",
+        resourceServerInstance: "BC",
+        quarantineDir: freshTmpDir(),
+        lease,
+        afterLeaseAcquired: async () => {
+          log.push("hook");
+          writeFileSync(testAppFile, o.fileAfterHook);
+        },
+        afterLeaseAcquiredPublishes: publishApps,
+      }).catch((e: unknown) => e);
+      return { outcome, log, client, brokenFile };
+    }
+
+    test("a valid replacement published by the hook passes, although the pre-lease package differed", async () => {
+      const { outcome, log } = await envToolRun({
+        preLease: OUTGOING,
+        fileBefore: GOOD,
+        fileAfterHook: GOOD,
+      });
+      expect(outcome).not.toBeInstanceOf(Error);
+      expect(log.indexOf("hook")).toBeGreaterThan(-1);
+      expect(log.indexOf("deploy")).toBeGreaterThan(log.indexOf("hook"));
+    });
+
+    test("the file the hook leaves is the one checked: a differing build refuses before the baseline", async () => {
+      const { outcome, log, client } = await envToolRun({
+        preLease: GOOD,
+        fileBefore: GOOD,
+        fileAfterHook: pkgOf("Sandbox Tests", ["OverBudgetDetected", "Extra"]),
+      });
+      expect(outcome).toBeInstanceOf(TestAppDiffersError);
+      expect((outcome as TestAppDiffersError).publishedOnly).toEqual(["Sandbox Tests.Extra"]);
+      expect(log).toContain("hook");
+      expect(log).not.toContain("deploy");
+      expect(client.releaseCalls).toBe(1);
+    });
+
+    test("no publishApps file is the test app: the pre-lease package is the one that runs, checked before the lease", async () => {
+      const { outcome, log } = await envToolRun({
+        preLease: OUTGOING,
+        fileBefore: GOOD,
+        fileAfterHook: GOOD,
+        testAppInPublishApps: false,
+      });
+      expect(outcome).toBeInstanceOf(TestAppDiffersError);
+      expect((outcome as TestAppDiffersError).publishedOnly).toEqual(["Sandbox Tests.RetiredTest"]);
+      expect(log).not.toContain("acquire");
+      expect(log).not.toContain("hook");
+    });
+
+    // R403 review: a publishApps file that cannot be read as an app package is never skipped.
+    // Skipping it fell back to the pre-lease package, here the OUTGOING build, and refused on it
+    // as TestAppDiffersError, which plan §3(b) says the outgoing build must never cause.
+    for (const broken of ["missing", "not-an-app"] as const) {
+      test(`an unreadable publishApps file (${broken}) refuses by name before the lease, never checking the pre-lease package`, async () => {
+        const { outcome, log, brokenFile } = await envToolRun({
+          preLease: OUTGOING,
+          fileBefore: GOOD,
+          fileAfterHook: GOOD,
+          testAppInPublishApps: false,
+          broken,
+        });
+        expect(outcome).toBeInstanceOf(PublishAppUnreadableError);
+        expect((outcome as PublishAppUnreadableError).code).toBe("publish-app-unreadable");
+        expect((outcome as PublishAppUnreadableError).path).toBe(brokenFile);
+        expect((outcome as Error).message).toContain(brokenFile);
+        expect(log).not.toContain("acquire");
+        expect(log).not.toContain("hook");
+      });
+    }
+  });
+
   // R232: `afterLeaseAcquired` used to run BEFORE the try/finally that releases the lease, so a
   // throw from it (the R19 test-app publish) left the lease held for its full ttl. It must be the
   // first statement inside the try. The thrown value is BC's version-conflict rejection as the
@@ -7925,9 +8171,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
 describe("R238: withEnvTeardown keeps a created environment the session quarantined", () => {
   async function createdEnvSession(publishTestApp: () => Promise<void>) {
     const calls: string[][] = [];
+    // R403: every publishApps file is read as an app package before the lease, so it must be one.
+    // Not the test app by name, so no test-arm evidence comes from it.
+    const appFile = join(freshTmpDir(), "dependency.app");
+    writeFileSync(
+      appFile,
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="${APP_ID}" Name="Some Dependency" Publisher="LethAL" Version="1.0.0.2" /></Package>`,
+      }),
+    );
     const cfg: EnvToolConfigSection = {
       toolPath: "tool.exe",
-      publishApps: ["tests.app"],
+      publishApps: [appFile],
       resolve: [
         { command: ["env", "get", "{envId}", "--json"], reads: { baseUrl: "url" } },
         {
@@ -12167,7 +12422,7 @@ describe("GH-24: per-mutant reach", () => {
     let stripped = 0;
     const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
       async (projectDir, targetDir, projectManifest, appVersion) => {
-        await real(projectDir, targetDir, projectManifest, appVersion);
+        const changes = await real(projectDir, targetDir, projectManifest, appVersion);
         const path = join(targetDir, "mutant-manifest.json");
         const manifest = JSON.parse(await readFile(path, "utf8")) as {
           mutants: Array<Record<string, unknown>>;
@@ -12178,6 +12433,7 @@ describe("GH-24: per-mutant reach", () => {
           return rest;
         });
         await Bun.write(path, JSON.stringify(manifest));
+        return changes;
       },
     );
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);

@@ -97,7 +97,7 @@ import {
   readAppJsonInputs,
   targetOf,
 } from "./digest-inputs";
-import { discoverTests } from "./discovery";
+import { type ArmAwareDiscovery, discoverTests } from "./discovery";
 import { EnvToolError, EnvToolNotStartedError } from "./env-tool";
 import {
   type EquivalenceMark,
@@ -156,6 +156,7 @@ import {
   parsePublishedApp,
   publishedAlSources,
   publishedTestAppWarning,
+  readAppIdentity,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
 import { buildReport } from "./report";
@@ -200,6 +201,14 @@ import type { ResultsStore } from "./store";
 import type { MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
+import {
+  PublishAppUnreadableError,
+  type TestArmEvidence,
+  assertTestMembership,
+  chooseTestSuite,
+  compiledMembershipOf,
+  noTestArmEvidence,
+} from "./test-membership";
 import {
   type KillLedger,
   memberCountsByTest,
@@ -1360,6 +1369,14 @@ export interface SessionConfig {
    */
   readonly afterLeaseAcquired?: () => Promise<void>;
   /**
+   * R403 phase B: the local `.app` files `afterLeaseAcquired` publishes, in publish order
+   * (`envTool.publishApps`). The one whose manifest names the test app (name and publisher, against
+   * the test `app.json`) is the test app the session RUNS, so its compiled membership decides the
+   * suite and is checked after the hook, under the lease. Absent, or no file matching: the
+   * pre-lease R139 download is the package that runs. Set by `afterLeaseAcquiredFor` (cli.ts).
+   */
+  readonly afterLeaseAcquiredPublishes?: readonly string[];
+  /**
    * R48: opt out of the large-run pre-flight refusal — see `LARGE_RUN_MUTANT_THRESHOLD`.
    */
   readonly allowLargeRun?: boolean;
@@ -1724,7 +1741,7 @@ async function prepareArtifactDir(args: {
   readonly source: ReadonlyMap<string, Buffer> | undefined;
   /** R363: the run's own output files, never copied into the batch; see `prepareBatchProject`. */
   readonly excludeOutputs: readonly string[];
-}): Promise<void> {
+}): Promise<readonly AppJsonPathChange[]> {
   await rm(args.targetDir, { recursive: true, force: true });
   const files =
     args.subset === undefined ? args.files : narrowFilesToSubset(args.files, args.subset);
@@ -1737,7 +1754,7 @@ async function prepareArtifactDir(args: {
     operatorTiers,
     identityOrdinals: args.identityOrdinals,
   });
-  await prepareBatchProject(
+  return await prepareBatchProject(
     args.projectDir,
     args.targetDir,
     args.projectManifest,
@@ -4644,13 +4661,53 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // tests. Removed; isolation is a TestRunner-side concern verified out of
   // band, not something Layer 4 checks.
 
-  const tests = await discoverTests(
+  // R403: the parser first, on every path: arm-aware discovery parses each test file that holds a
+  // `[Test]`, and the scan and digests below parse them again.
+  await initParser();
+  // R403: the TEST app's derived symbol set: the config's symbols, the test `app.json`'s own, and
+  // on al-runner its measured predefined ones (`buildBackend`, decided above). Read from disk: the
+  // snapshot below is the TARGET's.
+  const testBuildSymbols = await effectiveBuildSymbols(
     cfg.testDir,
-    cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {},
+    cfg.preprocessorSymbols ?? [],
+    undefined,
+    buildBackend,
   );
+  const discovery = await discoverTests(cfg.testDir, {
+    ...(cfg.testsOnly !== undefined ? { only: cfg.testsOnly } : {}),
+    buildSymbols: testBuildSymbols,
+  });
+  // R403 phase B: R139's one read of the published test app, moved here from `testAppIdentity`
+  // (below) so its compiled membership is known before the suite is fixed. Its warnings are still
+  // emitted below, where they always were.
+  const publishedRead = await fetchPublishedTestApp(cfg);
+  // R403: which suite runs. al-runner compiles the tests itself from exactly `testBuildSymbols`, so
+  // its suite is the FILTERED list. bcdev runs whatever test app was published, and only a compiled
+  // package says which build that is (plan §3(b)): the env-tool `publishApps` file the lease hook
+  // will publish when one is the test app, else the R139 download. With one, the FILTERED list runs
+  // and must equal its compiled membership; without one, the UNFILTERED list runs, as before R403
+  // (a compiled-out test there still meets R31's refusal at baseline), and the evidence record says
+  // so. Phase C reports it: `tests-discovered` below carries `testBuildSymbols`, `excludedTests`
+  // and the `tests-compiled-out` / `test-symbols-unverified` caveats.
+  const { evidence: testArmEvidence, deferredCheck: deferredTestAppCheck } =
+    await resolveTestArmEvidence(cfg, buildBackend.kind, publishedRead, discovery);
+  const { tests, armPolicyApplied } = chooseTestSuite(discovery, testArmEvidence);
   // Discovery returns the whole list in one parse — 1,000+ per-item events at one instant would
   // be false granularity, not liveness (see events.ts's doc comment on `tests-discovered`).
-  emit({ type: "tests-discovered", tests });
+  // R403 phase C. With no compiled evidence the unfiltered suite runs, so a `compiled-out` record
+  // would claim a test was dropped that was in fact sent: only the undecided records are listed.
+  // Each field rides the event only when non-empty, so an ordinary session's stream is unchanged.
+  const excludedTests = discovery.excluded
+    .filter((x) => armPolicyApplied || x.reason === "preproc-undecided-kept")
+    .map((x) => ({ test: qualifiedTestName(x.test), file: x.file, reason: x.reason }));
+  const unverifiedTestFiles = testArmEvidence.kind === "none" ? [...testArmEvidence.files] : [];
+  emit({
+    type: "tests-discovered",
+    tests,
+    ...(testBuildSymbols.length > 0 ? { testBuildSymbols } : {}),
+    ...(excludedTests.length > 0 ? { excludedTests } : {}),
+    ...(unverifiedTestFiles.length > 0 ? { unverifiedTestFiles } : {}),
+  });
   if (cfg.testsOnly !== undefined && cfg.testsOnly.length > 0) {
     emit({
       type: "warning",
@@ -4665,7 +4722,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // source a test can reach cannot be read: an unread test is not sent.
   // R-278: one read of the test sources serves the scan and, where nothing is published (R-372),
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
-  await initParser();
+  // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
   const testModel = buildTestAppModel(await readTestAppSources(cfg.testDir));
   const testPageRefused: ReadonlyMap<string, string> = caps.authoritative
@@ -4689,9 +4746,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
     cfg,
+    publishedRead,
     tests,
     testModel,
     emit,
+    // R403 phase B: R139's source-to-source comparison filters both sides alike.
+    armPolicyApplied ? testBuildSymbols : undefined,
   );
 
   // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
@@ -4754,6 +4814,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
     // breaks a resume.
     ...(buildSymbols.length > 0 ? { preprocessorSymbols: buildSymbols } : {}),
+    // R403: the test app's derived set, which can change while the target's does not (plan §3(e)).
+    // Only when some test file in scope holds a directive line: without one no symbol set can
+    // change the suite, so the pre-R403 digest is kept (on al-runner too, whose set always holds
+    // its predefined symbols).
+    ...(testBuildSymbols.length > 0 && discovery.anyDirective ? { testBuildSymbols } : {}),
+    // R403: only when the arm policy changed the suite this session runs, or kept a file it could
+    // not decide. The policy is applied on al-runner and on bcdev with compiled evidence; on the
+    // no-evidence path the unfiltered suite runs, so the digest is unchanged there.
+    ...(armPolicyApplied && discovery.excluded.length > 0
+      ? { testDiscovery: "arms-v1" as const }
+      : {}),
   });
   const resolvedResume = resolveResume(
     cfg,
@@ -5071,6 +5142,13 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         });
       }
     }
+    // R403 phase B (plan §3(b)): on an env-tool session the test app that RUNS is the
+    // `publishApps` file the hook above just published, not the pre-lease R139 download, which can
+    // hold the outgoing package. Its compiled membership is checked here, under the lease and
+    // before the first baseline, so a valid replacement passes whatever the server held before.
+    if (deferredTestAppCheck !== undefined) {
+      await checkPublishedTestAppFile(deferredTestAppCheck, discovery);
+    }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the
     // platform test runner through the same `Test Suite Mgt.RunAllTests` path `RunMutant` uses,
@@ -5141,6 +5219,9 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       baselineTimeoutMs: cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT,
       testPageRefused,
     };
+    // R-422: the backslash-path warning fires once per session; every batch re-reads the same
+    // manifest snapshot, so every batch would report the same changes.
+    let appJsonPathsWarned = false;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts at session end — earlier batches stand, every RunMutant in them having been
@@ -5191,7 +5272,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       // spec in THIS artifact (see packages/schemata/src/project.ts), so alc
       // would fail to compile the batch dir without the rest of the
       // project's `.al` files.
-      await prepareArtifactDir({
+      const pathChanges = await prepareArtifactDir({
         targetDir: batchDir,
         files: batchFiles,
         identityOrdinals,
@@ -5203,6 +5284,14 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         source: sourceSnapshot,
         excludeOutputs: cfg.excludeOutputs ?? [],
       });
+      if (pathChanges.length > 0 && !appJsonPathsWarned) {
+        appJsonPathsWarned = true;
+        emit({
+          type: "warning",
+          code: "app-json-backslash-path",
+          message: appJsonPathWarning(pathChanges),
+        });
+      }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
         if (
@@ -6838,40 +6927,173 @@ async function readTestAppManifest(
  * this one is a cheap head start on the same diagnosis, and a proactive check built on a derived
  * signal must not be able to stop a run that would otherwise be fine.
  */
-async function reportPublishedTestApp(
-  cfg: SessionConfig,
-  tests: readonly TestMethodRef[],
-  emit: RunEmitter,
-): Promise<{ testAppHash: string | undefined; sources: PublishedTestSources }> {
-  const fetchPackage = cfg.backend.fetchPublishedAppPackage;
-  // R247: this session's test-app identity, from the ONE package read this function already makes
-  // (`testAppHashFor`'s rule: the package's hash when it was read, `undefined` when the read
-  // failed, else the test source tree's hash).
-  const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
-  const notRead = async () => ({
-    testAppHash: await sourceHash(),
-    sources: { kind: "unavailable", why: NO_PUBLISHED_READ } as const,
-  });
-  if (fetchPackage === undefined) {
-    return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
-  }
+/**
+ * R139's ONE read of the published test app, split from `reportPublishedTestApp` by R403 phase B:
+ * the package's compiled membership decides which suite a bcdev session runs, so it is read before
+ * the suite is fixed, while every warning about it is still emitted where it always was.
+ */
+type PublishedTestAppRead =
+  /** The backend publishes nothing (al-runner). */
+  | { readonly kind: "no-fetch" }
+  /** Nothing was requested: no readable test `app.json`, or the backend could not form it. */
+  | { readonly kind: "not-requested" }
+  /** The server could not answer (`null`). */
+  | { readonly kind: "failed"; readonly name: string }
+  | {
+      readonly kind: "bytes";
+      readonly bytes: Uint8Array;
+      readonly name: string;
+      readonly version: string;
+    };
 
+async function fetchPublishedTestApp(cfg: SessionConfig): Promise<PublishedTestAppRead> {
+  const fetchPackage = cfg.backend.fetchPublishedAppPackage;
+  if (fetchPackage === undefined) return { kind: "no-fetch" };
   let manifest: TestAppManifest;
   try {
     manifest = JSON.parse(await readFile(join(cfg.testDir, "app.json"), "utf8")) as TestAppManifest;
   } catch {
-    return notRead();
+    return { kind: "not-requested" };
   }
   const { name, publisher, version } = manifest;
   if (typeof name !== "string" || typeof publisher !== "string" || typeof version !== "string") {
-    return notRead();
+    return { kind: "not-requested" };
   }
-
   const bytes = await fetchPackage.call(cfg.backend, { publisher, name });
   // `undefined` means the backend could not form the request at all — nothing was tried, so there
   // is nothing to report. Only a genuine failed READ (`null`) is worth an operator's attention.
-  if (bytes === undefined) return notRead();
-  if (bytes === null) {
+  if (bytes === undefined) return { kind: "not-requested" };
+  if (bytes === null) return { kind: "failed", name };
+  return { kind: "bytes", bytes, name, version };
+}
+
+/**
+ * R403 phase B: the env-tool `publishApps` file that IS the test app (plan §7), with its bytes, or
+ * `undefined` when none is. Only on a session whose hook will run (`afterLeaseAcquired` under a
+ * lease). A file that cannot be read or is not an app package throws `PublishAppUnreadableError`
+ * here, before the lease: skipping it would fall back to the pre-lease package, possibly the
+ * outgoing build (plan §3(b)), and the publish would fail on it anyway (R232). Several matching
+ * files: the LAST is published last, so it is the one that runs.
+ */
+async function envToolTestAppFile(
+  cfg: SessionConfig,
+): Promise<{ readonly path: string; readonly bytes: Uint8Array } | undefined> {
+  const paths = cfg.afterLeaseAcquiredPublishes ?? [];
+  if (cfg.afterLeaseAcquired === undefined || cfg.lease === undefined || paths.length === 0) {
+    return undefined;
+  }
+  const want = await readTestAppManifest(cfg.testDir);
+  if (want === undefined) return undefined;
+  let match: { readonly path: string; readonly bytes: Uint8Array } | undefined;
+  for (const path of paths) {
+    let bytes: Buffer;
+    let identity: { readonly name: string; readonly publisher: string };
+    try {
+      bytes = await readFile(path);
+      identity = readAppIdentity(bytes);
+    } catch (err) {
+      throw new PublishAppUnreadableError(path, messageOf(err));
+    }
+    if (identity.name === want.name && identity.publisher === want.publisher) {
+      match = { path, bytes };
+    }
+  }
+  return match;
+}
+
+/**
+ * R403 phase B: where this session's test-arm decision comes from (plan §3(b), §3(c)). With a
+ * compiled package from the R139 download, the membership check runs HERE, before the lease and
+ * the baseline, and throws `TestAppDiffersError` on any difference. With an env-tool test app
+ * file, the check is DEFERRED (`deferredCheck`, its path) to after the hook publishes it.
+ */
+async function resolveTestArmEvidence(
+  cfg: SessionConfig,
+  backendKind: BuildBackend["kind"],
+  read: PublishedTestAppRead,
+  discovery: ArmAwareDiscovery,
+): Promise<{ evidence: TestArmEvidence; deferredCheck?: string }> {
+  if (backendKind === "al-runner") return { evidence: { kind: "derived" } };
+  const file = await envToolTestAppFile(cfg);
+  if (file !== undefined) {
+    const m = compiledMembershipOf(file.bytes);
+    if (m.kind === "none") {
+      return {
+        evidence: noTestArmEvidence(
+          `the env-tool publishApps file ${file.path}: ${m.why}`,
+          discovery,
+        ),
+      };
+    }
+    return {
+      evidence: { kind: "compiled", from: "env-tool-publish", path: file.path },
+      deferredCheck: file.path,
+    };
+  }
+  switch (read.kind) {
+    case "no-fetch":
+      return {
+        evidence: noTestArmEvidence("this backend cannot read the published test app", discovery),
+      };
+    case "not-requested":
+      return { evidence: noTestArmEvidence(NO_PUBLISHED_READ, discovery) };
+    case "failed":
+      return { evidence: noTestArmEvidence(UNREADABLE, discovery) };
+    case "bytes": {
+      const m = compiledMembershipOf(read.bytes);
+      if (m.kind === "none") {
+        return {
+          evidence: noTestArmEvidence(`the published test app "${read.name}": ${m.why}`, discovery),
+        };
+      }
+      assertTestMembership(m.tests, discovery);
+      return { evidence: { kind: "compiled", from: "published-package" } };
+    }
+  }
+}
+
+/**
+ * R403 phase B: the deferred env-tool check, after the hook published `path`. The file was read
+ * as compiled evidence before the lease, so evidence that has vanished since is not the
+ * no-evidence case: the suite was already chosen from it, and it throws rather than guess.
+ */
+async function checkPublishedTestAppFile(
+  path: string,
+  discovery: ArmAwareDiscovery,
+): Promise<void> {
+  const m = compiledMembershipOf(await readFile(path));
+  if (m.kind === "none") {
+    throw new Error(
+      `the env-tool test app ${path} had a readable SymbolReference.json before the lease and has none after its publish (${m.why}); the suite was chosen from it, so refusing rather than measuring a test app nobody read (R403).`,
+    );
+  }
+  assertTestMembership(m.tests, discovery);
+}
+
+async function reportPublishedTestApp(
+  cfg: SessionConfig,
+  read: PublishedTestAppRead,
+  tests: readonly TestMethodRef[],
+  emit: RunEmitter,
+  /** R403 phase B: the derived test set when the session runs the arm-FILTERED suite, so the
+   *  published source is filtered alike; absent when it runs the unfiltered one. */
+  armSymbols: readonly string[] | undefined,
+): Promise<{ testAppHash: string | undefined; sources: PublishedTestSources }> {
+  // R247: this session's test-app identity, from the ONE package read (`testAppHashFor`'s rule:
+  // the package's hash when it was read, `undefined` when the read failed, else the test source
+  // tree's hash).
+  const sourceHash = () => testAppHashFor(undefined, cfg.testDir);
+  if (read.kind === "no-fetch") {
+    return { testAppHash: await sourceHash(), sources: { kind: "not-published" } };
+  }
+  if (read.kind === "not-requested") {
+    return {
+      testAppHash: await sourceHash(),
+      sources: { kind: "unavailable", why: NO_PUBLISHED_READ },
+    };
+  }
+  const { name } = read;
+  if (read.kind === "failed") {
     emit({
       type: "warning",
       code: "published-test-app-unreadable",
@@ -6879,11 +7101,15 @@ async function reportPublishedTestApp(
     });
     return { testAppHash: undefined, sources: { kind: "unavailable", why: UNREADABLE } };
   }
+  const { bytes, version } = read;
   const testAppHash = `package:${hashPackage(bytes)}`;
 
   let published: PublishedApp;
   try {
-    published = parsePublishedApp(Buffer.from(bytes));
+    published = parsePublishedApp(
+      Buffer.from(bytes),
+      armSymbols !== undefined ? { buildSymbols: armSymbols } : {},
+    );
   } catch (err) {
     emit({
       type: "warning",
@@ -6938,15 +7164,17 @@ const UNREADABLE =
  */
 async function testAppIdentity(
   cfg: SessionConfig,
+  read: PublishedTestAppRead,
   tests: readonly TestMethodRef[],
   diskModel: TestAppModel,
   emit: RunEmitter,
+  armSymbols: readonly string[] | undefined,
 ): Promise<{
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
   testDigestParts?: TestDigestParts;
 }> {
-  const { testAppHash, sources } = await reportPublishedTestApp(cfg, tests, emit);
+  const { testAppHash, sources } = await reportPublishedTestApp(cfg, read, tests, emit, armSymbols);
   const none = (why: string) => {
     emit({
       type: "warning",
@@ -8111,9 +8339,66 @@ async function writeStampedAppJson(
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
   version: string,
-): Promise<void> {
-  const manifest = { ...projectManifest, version };
+): Promise<readonly AppJsonPathChange[]> {
+  const { manifest: normalised, changes } = normaliseAppJsonPaths(projectManifest);
+  const manifest = { ...normalised, version };
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return changes;
+}
+
+/** R-422: one `\` -> `/` replacement made in the batch app.json. `field` is `logo`, `screenshots[<i>]` or `resourceFolders[<i>]`. */
+export type AppJsonPathChange = {
+  readonly field: string;
+  readonly from: string;
+  readonly to: string;
+};
+
+/**
+ * R-422: the app.json array fields that name files or folders, from the alc schema (`logo` is the
+ * one string field). The Linux `alc` reads a `\` there as part of the name and stops with AL1001
+ * (a file) or AL0863 (a folder) before compiling a line. Everything else (URLs, names, text, ids)
+ * is left exactly as written.
+ */
+const APP_JSON_PATH_ARRAY_FIELDS = ["screenshots", "resourceFolders"] as const;
+
+/**
+ * R-422: returns a copy of the manifest with `/` in place of `\` in `logo`, each string element of
+ * `screenshots` and each string element of `resourceFolders`, plus what changed. Never mutates the
+ * input. A missing field, a non-string value and a non-string element are kept as they are.
+ */
+export function normaliseAppJsonPaths(manifest: Readonly<Record<string, unknown>>): {
+  readonly manifest: Record<string, unknown>;
+  readonly changes: readonly AppJsonPathChange[];
+} {
+  const changes: AppJsonPathChange[] = [];
+  const out: Record<string, unknown> = { ...manifest };
+  const fix = (field: string, value: string): string => {
+    const to = value.replaceAll("\\", "/");
+    if (to !== value) changes.push({ field, from: value, to });
+    return to;
+  };
+  const { logo } = manifest;
+  if (typeof logo === "string") out.logo = fix("logo", logo);
+  for (const key of APP_JSON_PATH_ARRAY_FIELDS) {
+    const value = manifest[key];
+    if (Array.isArray(value)) {
+      out[key] = value.map((el: unknown, i: number) =>
+        typeof el === "string" ? fix(`${key}[${i}]`, el) : el,
+      );
+    }
+  }
+  return { manifest: out, changes };
+}
+
+/** R-422: the once-per-session warning text for the changes `normaliseAppJsonPaths` made. */
+function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
+  const parts = changes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
+  return [
+    `app.json names a path with "\\": ${parts}. LethAL wrote "/" in the app.json it compiles `,
+    'for each batch, because the Linux alc reads "\\" as part of the name and fails with ',
+    'AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove ',
+    "this warning.",
+  ].join("");
 }
 
 /**
@@ -8161,8 +8446,8 @@ export async function prepareBatchProject(
   appVersion: string,
   source?: ReadonlyMap<string, Buffer>,
   excludeOutputs: readonly string[] = [],
-): Promise<void> {
-  await writeStampedAppJson(batchDir, projectManifest, appVersion);
+): Promise<readonly AppJsonPathChange[]> {
+  const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
   // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
   // is copied like any resource, and nothing is guessed from an extension.
@@ -8273,6 +8558,7 @@ export async function prepareBatchProject(
     await mkdir(dirname(rebasedDest), { recursive: true });
     await copyFile(join(projectDir, only), rebasedDest);
   }
+  return pathChanges;
 }
 
 /** R363: one comparable form of a path. Windows paths compare case-insensitively. */

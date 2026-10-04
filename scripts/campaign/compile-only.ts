@@ -83,6 +83,9 @@ export async function compileOnly(args: CompileOnlyArgs): Promise<void> {
     // WHOLE project — app.json plus every other source/resource file — so stamp and copy the
     // rest exactly as a real run's batch-prep step does (orchestrator.ts's `prepareBatchProject`;
     // it skips any basename `writeInstrumentedProject` already wrote, so the two never collide).
+    // R-422: it also writes `/` for `\` in app.json's logo, screenshots and resourceFolders and
+    // returns what it changed. That return value is ignored here on purpose: a compile-only
+    // campaign tool has no run to warn through, and the normalised app.json is what it needs.
     await prepareBatchProject(args.projectDir, target, appManifest, String(appManifest.version));
 
     // The delegating selector schemata/project.ts just wrote always references

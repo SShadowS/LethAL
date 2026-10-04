@@ -11,6 +11,7 @@ import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
   type DeclarativeSiteFile,
+  type ExcludedTestRecord,
   type NotInstrumentedFile,
   type SessionOutcome,
   mutantRef,
@@ -151,6 +152,10 @@ export interface FoldedReport {
    *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
   readonly testPageRefusedTests?: readonly string[];
   readonly runnerDisagreementTests?: readonly string[];
+  /** R403 phase C: from the `tests-discovered` event, each only when non-empty. */
+  readonly testBuildSymbols?: readonly string[];
+  readonly excludedTests?: readonly ExcludedTestRecord[];
+  readonly testSymbolsUnverifiedFiles?: readonly string[];
   readonly stopHungSessions?: boolean;
   readonly resumedFrom?: {
     readonly runId: number;
@@ -248,6 +253,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const testPageUnsupportedTests = new Set<string>();
   const testPageRefusedTests = new Set<string>();
   const runnerDisagreementTests = new Set<string>();
+  let testBuildSymbols: readonly string[] = [];
+  let excludedTests: readonly ExcludedTestRecord[] = [];
+  let unverifiedTestFiles: readonly string[] = [];
 
   let baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[] = [];
 
@@ -375,6 +383,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           codeunitName: t.codeunitName,
           ...(t.file !== undefined ? { file: t.file } : {}),
         }));
+        // R403 phase C: absent on a stream written before it, and on a session with nothing to say.
+        testBuildSymbols = e.testBuildSymbols ?? [];
+        excludedTests = e.excludedTests ?? [];
+        unverifiedTestFiles = e.unverifiedTestFiles ?? [];
         break;
       case "phase-entered":
         if (e.phase === "deploy") deployPhaseEntries += 1;
@@ -644,6 +656,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(runnerDisagreementTests.size > 0
       ? { runnerDisagreementTests: [...runnerDisagreementTests].sort() }
+      : {}),
+    ...(testBuildSymbols.length > 0 ? { testBuildSymbols: [...testBuildSymbols] } : {}),
+    ...(excludedTests.length > 0 ? { excludedTests } : {}),
+    ...(unverifiedTestFiles.length > 0
+      ? { testSymbolsUnverifiedFiles: [...unverifiedTestFiles] }
       : {}),
     ...(statics.stopHungSessions === true ? { stopHungSessions: true } : {}),
     // R47: `carriedMutants`/`skippedStranded` are counted 1:1 from `mutant-carried`/
