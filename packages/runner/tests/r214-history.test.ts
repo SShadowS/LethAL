@@ -1,5 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { afterAll, test as bunTest, describe, expect } from "bun:test";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -19,6 +19,13 @@ import { ResultsStore } from "../src/store";
 
 // R214 Task 8: history, resume and marks apply only between runs built under the IDENTICAL
 // effective symbol set (C1), and the scheme N-1 to N transition on the same-text key (I4).
+
+// R428: a STARVATION GUARD, local to this file (no suite-wide timeout changes). Measured
+// 2026-10-04: the whole file runs in 0.73 to 1.01 s and the slowest test takes 0.11 s, even beside
+// a concurrent full verify at load average up to 7.6. The 5 s default timeouts seen that day were
+// the whole process starved, not setup cost. 15 s is far above any measured cost, so a stall
+// past it is something we WANT to see fail.
+const test = (name: string, fn: () => Promise<void> | void) => bunTest(name, fn, 15_000);
 
 const HERE = import.meta.dir;
 const R214 = join(HERE, "fixtures", "r214");
@@ -69,19 +76,33 @@ class SurvivingBackend implements ExecutionBackend {
 }
 
 const roots: string[] = [];
+const inflight = new Set<Promise<unknown>>();
 afterAll(async () => {
+  // R428: bun does not cancel a test that timed out. Its mkdtemp/cp keeps running and can land
+  // AFTER this hook's rm, recreating the folder for R358's leak check to find. So wait for every
+  // setup still running first, then remove each root, then sweep by name for any folder whose
+  // path was never recorded. The sweep is safe: scripts/test-preload.ts points tmpdir() at a
+  // folder private to this bun process, so it cannot touch another session's files.
+  await Promise.allSettled(inflight);
   for (const r of roots) await rm(r, { recursive: true, force: true });
+  const tmp = tmpdir();
+  for (const e of await readdir(tmp))
+    if (e.startsWith("lethal-r214-hist-")) await rm(join(tmp, e), { recursive: true, force: true });
 });
 
 /** A private copy of the R321 fixture pair, so a run never writes next to the committed one. */
-async function makeSymbolsProject() {
-  const root = await mkdtemp(join(tmpdir(), "lethal-r214-hist-"));
-  roots.push(root);
-  const projectDir = join(root, "app");
-  const testDir = join(root, "tests");
-  await cp(join(REPO, "fixtures", "sandbox-symbols"), projectDir, { recursive: true });
-  await cp(join(REPO, "fixtures", "sandbox-symbols-tests"), testDir, { recursive: true });
-  return { projectDir, testDir, instrumentedDir: join(root, "instr") };
+function makeSymbolsProject() {
+  const work = (async () => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-r214-hist-"));
+    roots.push(root);
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await cp(join(REPO, "fixtures", "sandbox-symbols"), projectDir, { recursive: true });
+    await cp(join(REPO, "fixtures", "sandbox-symbols-tests"), testDir, { recursive: true });
+    return { projectDir, testDir, instrumentedDir: join(root, "instr") };
+  })();
+  inflight.add(work);
+  return work;
 }
 
 /** The pre-committed key text of the arm pair's `return-value` under `set`, read from the committed
