@@ -455,7 +455,8 @@ survivors its own coverage reaches. The coverage comes from the unmutated run ve
 of every test, so the filter costs no extra call. A test whose coverage cannot be used (it did not
 pass in a fresh session, or reported none) still runs against every survivor, and so does a
 survivor whose code coverage cannot place. One stderr line says whether the filter was on and how
-many runs it saved. The filter sees only code a new test runs itself, in its own session. A test
+many runs it saved, and the JSON records it (`reachFilter`, and `reachNarrowed` per survivor,
+since verify schema v5). The filter sees only code a new test runs itself, in its own session. A test
 that fails only because an EARLIER test in the same call left state behind (SingleInstance
 globals, committed data), or because of code run in another session (StartSession, a scheduled
 task, the job queue), is not sent to that survivor. A fresh `lethal run` has the same blind spot.
