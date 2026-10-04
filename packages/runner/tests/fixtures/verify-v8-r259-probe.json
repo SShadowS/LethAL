@@ -1,0 +1,76 @@
+{
+  "verifySchemaVersion": 8,
+  "reachFilter": { "state": "off", "reason": "coverage-mode-none" },
+  "source": {
+    "runId": 1,
+    "batchIndex": 0,
+    "artifactId": "164b7b5e457fe5c28a08c1874d5ed442",
+    "artifactSha256": "591a6a00ece85df0b7b94a92d5edad6b6852b5a78394f94bfbbd557ee1c4af5a",
+    "sourceSha256": "22ff7ad699636234f7155e0af6ebfb73ec95b06ffab2ac7a91877d105b039eac",
+    "projectPath": "/tmp/lethal-unit-run-aZYkRS/tmp/lethal-orch-t8wZp3/app"
+  },
+  "verifyRunId": 3,
+  "testApp": {
+    "name": "LethAL Sandbox Tests",
+    "version": "1.0.0.2",
+    "sha256": "aa856c5bbc23c65222f0a0e06c442045667f6ce3242d84933943a790aa8f0e07",
+    "compiledAgainst": {
+      "artifactId": "164b7b5e457fe5c28a08c1874d5ed442",
+      "sha256": "591a6a00ece85df0b7b94a92d5edad6b6852b5a78394f94bfbbd557ee1c4af5a"
+    }
+  },
+  "ok": true,
+  "exitCode": 0,
+  "newTests": [
+    {
+      "test": "New Tests.OverBudgetDetected",
+      "codeunitId": 79102,
+      "state": "stable",
+      "runs": [
+        { "outcome": "pass", "fresh": true, "sessionId": 4, "testRunsBefore": 0 },
+        { "outcome": "pass", "fresh": true, "sessionId": 10, "testRunsBefore": 0 }
+      ]
+    }
+  ],
+  "results": [
+    {
+      "id": "0/M0001",
+      "batchIndex": 0,
+      "mutantCode": "M0001",
+      "file": "SandboxLogic.Codeunit.al",
+      "line": 4,
+      "operatorName": "lethal.empty-block",
+      "procedureName": "IsOverBudget",
+      "gapId": "G72d9fc182da7",
+      "testsRun": [
+        "Sandbox Tests.OverBudgetDetected",
+        "Sandbox Tests.RedAtBaseline",
+        "Zulu Tests.OverBudgetDetected",
+        "New Tests.OverBudgetDetected"
+      ],
+      "verdict": "killed",
+      "killingTest": {
+        "codeunitId": 79102,
+        "codeunitName": "New Tests",
+        "method": "OverBudgetDetected"
+      },
+      "killedByNewTest": true,
+      "killedBy": "other",
+      "killingTestFailure": "killed by M0001",
+      "reachNarrowed": false,
+      "sameProcedure": {
+        "test": {
+          "codeunitId": 79102,
+          "codeunitName": "New Tests",
+          "method": "OverBudgetDetected"
+        },
+        "alsoKills": ["0/M0002"],
+        "notKilled": ["0/M0003"],
+        "unknown": [],
+        "overCap": 0
+      }
+    }
+  ],
+  "counts": { "killed": 1, "survived": 0, "error": 0, "skipped": 0 },
+  "timings": { "totalMs": 24, "compileMs": 0, "publishMs": 1 }
+}

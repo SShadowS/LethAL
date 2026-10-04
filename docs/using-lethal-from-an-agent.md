@@ -466,7 +466,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 7`. Schema: [../schemas/verify-v7.schema.json](../schemas/verify-v7.schema.json).
+`verifySchemaVersion: 8`. Schema: [../schemas/verify-v8.schema.json](../schemas/verify-v8.schema.json).
 
 | field | values |
 |---|---|
@@ -478,7 +478,7 @@ nothing.
 | `reachFilter.reason` | `no-reach-filter`, `coverage-mode-none`, `coverage-mode-procedure`, `coverage-mode-line`, `coverage-mode-al-runner` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
-`invalidBaseline` and `gapId`.
+`invalidBaseline`, `gapId` and `sameProcedure`.
 Every result names its `gapId`, whether the survivor was named directly or through a gap; only a
 run whose build predates gap ids leaves it out.
 
@@ -502,6 +502,23 @@ just it. Its stability is unknown: it is never `stable`, and a test that is flak
 survivor is not caught in this verify. It is caught when a later verify sends it to a survivor,
 because then it is rerun. It does not block exit `0`, because it gated no verdict: it is in no
 row's `testsRun` and killed nothing.
+
+`sameProcedure` (schema v8, R259) is on every row killed by a new test, and on no other row. It
+says what is known about that test (`sameProcedure.test`) against each OTHER survived or no-coverage
+mutant of the source run in the same procedure or trigger (the same line span in the manifest).
+Verify runs the test once more against each one it has no answer for yet, after the named survivors
+and inside the same lease. These extra runs count against `--max-new-tests` with the rest, two per
+mutant (the run, and the unmutated rerun a kill needs).
+`alsoKills`, the only claim about the test on its own: the test ran first, in a fresh session,
+against that mutant, failed, and passed when rerun unmutated. `notKilled`: that mutant survived a
+run that included the test, possibly with other tests. `unknown`: no answer
+(an error, a timeout, a session that latched or lost its lease, a carried or reader-marked
+equivalent mutant, a procedure written on one line, or over the cap; `overCap` counts the last
+kind). Read `unknown` as unknown, never as not killed. A long `alsoKills` list suggests the test is
+broad rather than aimed at the survivor you named. The field never changes `results` or `counts`.
+It does not change the exit code either, with one exception, by design: a probe that latches (a
+timeout, or an in-flight call whose outcome is unknown) quarantines the whole call, so verify
+exits `3`.
 
 ### Verify exit codes (checked)
 

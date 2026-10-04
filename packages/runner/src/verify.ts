@@ -44,7 +44,7 @@ import {
 } from "./orchestrator";
 import { effectiveBuildSymbols, sameBuildSymbols } from "./preprocessor-symbols";
 import { type SessionOutcome, mutantRef } from "./report";
-import { identityKeyOf, serializeKey, testKeyOf } from "./selection";
+import { identityKeyOf, memberGroupNameOf, serializeKey, testKeyOf } from "./selection";
 import { type CarryHidden, DuplicateArtifactRecordError, type ResultsStore } from "./store";
 import {
   type CompiledTestApp,
@@ -285,6 +285,13 @@ export interface VerifySource {
     readonly batchIndex: number;
     readonly mutantCode: string;
     readonly coveringTests: readonly string[];
+  }>;
+  /** R259: every row of the installed batch, the candidates for `sameProcedure`. `carried` is
+   *  null on a row recorded before that column existed. */
+  readonly rows: ReadonlyArray<{
+    readonly mutantCode: string;
+    readonly verdict: string;
+    readonly carried: boolean | null;
   }>;
 }
 
@@ -599,6 +606,11 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     coverageMode: run.coverageMode,
     carryHidden: run.carryHidden,
     targets,
+    rows: [...rows.values()].map((r) => ({
+      mutantCode: r.mutantCode,
+      verdict: r.verdict,
+      carried: r.carried,
+    })),
   };
 }
 
@@ -715,6 +727,8 @@ export interface VerifyPlan {
   /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
    *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
+  /** R259: the identity keys (`serializeKey`) of the marks applied, for any mutant of the batch. */
+  readonly markedKeys: ReadonlySet<string>;
   /** R-384: per requested mutant code, its source covering tests that run, in request order. The
    *  reach filter never removes one of these. */
   readonly covering: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -824,6 +838,7 @@ export async function planVerify(a: {
       notRun: new Map(),
       allRefused: new Set(),
       marksUnderOtherScheme: staleMarks,
+      markedKeys: new Set(markByKey.keys()),
       covering: new Map(),
       cap: {
         runId: source.runId,
@@ -1047,6 +1062,7 @@ export async function planVerify(a: {
     notRun,
     allRefused,
     marksUnderOtherScheme: staleMarks,
+    markedKeys: new Set(markByKey.keys()),
     covering,
     cap,
   };
@@ -1115,16 +1131,21 @@ function capCheckOneDetail(c: CapNumbers): string {
  * E = N + R + P, where R (`rerun`) counts the new tests sent to at least one survivor, the only
  * ones rerun. With R = N the text is R-384's, byte for byte (ruling 4).
  */
+/** R-384: E, the extra test runs with the reach filter on: N baseline, R rerun, the joins. */
+function filteredRunsOf(c: CapNumbers, joins: number, rerun: number): number {
+  if (rerun < 0 || rerun > c.n) {
+    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
+  }
+  return c.n + rerun + joins;
+}
+
 export function capCheckTwoDetail(
   c: CapNumbers,
   joins: number,
   failClosed: number,
   rerun: number,
 ): string | undefined {
-  if (rerun < 0 || rerun > c.n) {
-    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
-  }
-  const e = c.n + rerun + joins;
+  const e = filteredRunsOf(c, joins, rerun);
   if (e <= c.max * (c.s + 2)) return undefined;
   const { classes, helpers } = c.editClasses();
   const unmutated =
@@ -1171,8 +1192,10 @@ export async function verifyDependencyFingerprint(
  *  report it means the report predates the record; the version is the one thing that tells the
  *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
  *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. 7 since
- *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 7;
+ *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. 8 since
+ *  R259 added `results[].sameProcedure`: required on a row killed by a new test, so its absence
+ *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 8;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = [
@@ -1272,6 +1295,30 @@ export interface VerifyResult {
    *  for this row: skipped, every test TestPage-refused, or the session stopped before the filter
    *  ran. The tests left out are `newTests[].test` minus `testsRun`. */
   readonly reachNarrowed?: boolean;
+  /** R259: on every row killed by a new test, what is known about that test against each other
+   *  source survivor in the same declaration. Absent on every other row: not applicable. */
+  readonly sameProcedure?: SameProcedure;
+}
+
+/**
+ * R259. `alsoKills`: `test` ran first, in a fresh session, against that mutant, failed (verdict
+ * `killed`, never `timeout-killed`) and passed its unmutated confirmation; the only claim about
+ * `test` alone. `notKilled`: that mutant survived a run that included `test` (possibly with other
+ * tests). `unknown`: no accepted answer for the pair (an error, a
+ * timeout, a carried or equivalence-marked mutant, a declaration that cannot be told apart, or
+ * over the cap). Full `<batch>/<code>` ids; the three lists are disjoint.
+ */
+export interface SameProcedure {
+  readonly test: {
+    readonly codeunitId: number;
+    readonly codeunitName: string;
+    readonly method: string;
+  };
+  readonly alsoKills: readonly string[];
+  readonly notKilled: readonly string[];
+  readonly unknown: readonly string[];
+  /** How many of `unknown` were left out because the cap's budget ran out. */
+  readonly overCap: number;
 }
 
 /** R-425: R-384's reach-filter state, as the JSON records it. */
@@ -1618,6 +1665,8 @@ export async function runVerify(
     let res: Awaited<ReturnType<typeof runNamedMutants>> | undefined;
     const log = deps.log ?? ((line: string) => process.stderr.write(`${line}\n`));
     let reach: ReachResult | undefined;
+    // R259: the extra test runs R-384's cap already counts; set by `narrow` when the filter is on.
+    let usedRuns = reachState.on ? undefined : plan.cap.s * plan.cap.n + 2 * plan.cap.n;
     const planned = source;
     if (plan.requests.length > 0 && !reachState.on) {
       log(
@@ -1654,12 +1703,59 @@ export async function runVerify(
             plan.cap.n - r.unsent.size,
           );
           if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
+          usedRuns = filteredRunsOf(plan.cap, r.joins, plan.cap.n - r.unsent.size);
           reach = r;
           reportReach(r, plan, planned, log, deps.emit);
           // R-427: a new test sent to no survivor is not rerun.
           return { methods: r.methods, unreached: r.unreached, notRerun: r.unsent };
         }
       : undefined;
+    // R259: each requested target's siblings, decided from the trusted manifest before anything runs.
+    const manifestById = new Map(manifest.mutants.map((m) => [m.mutantId, m] as const));
+    const candidates = source.rows
+      .filter((r) => r.verdict === "survived" || r.verdict === "no-coverage")
+      .map((r) => {
+        const entry = manifestById.get(r.mutantCode);
+        if (entry === undefined) {
+          throw new Error(`verify.ts: the store records ${r.mutantCode}, which the manifest lacks`);
+        }
+        const marked = plan.markedKeys.has(serializeKey(identityKeyOf(entry)));
+        return { entry, measurable: r.carried === false && !marked };
+      });
+    const siblingsBy = new Map(
+      plan.requests.map((q) => {
+        const e = plan.entries.get(q.mutantId);
+        if (e === undefined) throw new Error(`verify.ts: ${q.mutantId} has no entry`);
+        return [q.mutantId, siblingsOf(e, candidates)] as const;
+      }),
+    );
+    const newKeys = new Set(plan.newTests.map(testKeyOf));
+    const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
+    // R-384: the methods actually sent, after the reach filter when it ran.
+    const sentOf = (code: string) => reach?.methods.get(code) ?? requestBy.get(code)?.methods;
+    const newKillerOf = (o: SessionOutcome) =>
+      o.verdict === "killed" &&
+      o.killingTestRef !== undefined &&
+      newKeys.has(testKeyOf(o.killingTestRef))
+        ? o.killingTestRef
+        : undefined;
+    let overCap: ReadonlySet<string> = new Set();
+    const probe: NamedMutantsConfig["probe"] = (outcomes) => {
+      const byCode = new Map(outcomes.map((o) => [o.mutant.mutantId, o] as const));
+      const rows = outcomes.flatMap((o) => {
+        const test = newKillerOf(o);
+        const s = siblingsBy.get(o.mutant.mutantId);
+        return test === undefined || s === undefined ? [] : [{ test, eligible: s.eligible }];
+      });
+      const budget = usedRuns === undefined ? 0 : plan.cap.max * (plan.cap.s + 2) - usedRuns;
+      const p = pairsToProbe({
+        rows,
+        answered: (code, t) => pairAnswerOf(byCode.get(code), sentOf(code), t),
+        budget,
+      });
+      overCap = p.overCap;
+      return p.probe;
+    };
     if (plan.requests.length > 0) {
       // Before any lease: a compile failure costs no lease, no run row and no server call.
       const tc = now();
@@ -1703,11 +1799,11 @@ export async function runVerify(
           publishMs = now() - tp;
         },
         ...(narrow !== undefined ? { narrow } : {}),
+        probe,
       });
     }
 
     // Decision 11: every new test's two unmutated runs, from this call's own answers.
-    const newKeys = new Set(plan.newTests.map(testKeyOf));
     const ran = res;
     // R-427: the tests runNamedMutants did not rerun must be exactly the ones the reach filter
     // sent to no survivor, as `unreached` is cross-checked below, so a backend that ignores
@@ -1759,7 +1855,20 @@ export async function runVerify(
           ? { reachNarrowed: reach.narrowed.has(id) }
           : {};
     const outcomeBy = new Map((ran?.outcomes ?? []).map((o) => [o.mutant.mutantId, o] as const));
-    const requestBy = new Map(plan.requests.map((r) => [r.mutantId, r] as const));
+    // R259: a probe's answer by pair, and none at all once the session latched (every pair unknown).
+    const probeAnswers = new Map(
+      (ran?.probes ?? []).flatMap((p) => {
+        const [test] = p.request.methods;
+        if (test === undefined) return [];
+        const t = testKeyOf(test);
+        return [[pairKeyOf(p.request.mutantId, t), pairAnswerOf(p.outcome, p.request.methods, t)]];
+      }),
+    );
+    const answer = (code: string, t: string): PairAnswer =>
+      ran?.quarantined !== undefined
+        ? undefined
+        : (pairAnswerOf(outcomeBy.get(code), sentOf(code), t) ??
+          probeAnswers.get(pairKeyOf(code, t)));
     const results = source.targets.map((t): VerifyResult => {
       const entry = plan.entries.get(t.mutantCode);
       if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} has no entry`);
@@ -1817,13 +1926,25 @@ export async function runVerify(
       if (o === undefined || request === undefined) {
         throw new Error(`verify.ts: ${t.mutantCode} was requested but got no outcome`);
       }
-      // R-384: the methods actually sent, after the reach filter when it ran.
-      const sent = reach?.methods.get(t.mutantCode) ?? request.methods;
+      const sent = sentOf(t.mutantCode) ?? request.methods;
+      const test = newKillerOf(o);
+      const siblings = siblingsBy.get(t.mutantCode);
       return {
         ...base,
         ...measuredResultOf(o, sent, newKeys, published),
         ...(notRun !== undefined ? { notRun } : {}),
         ...narrowedOf(t.mutantCode),
+        ...(test !== undefined && siblings !== undefined
+          ? {
+              sameProcedure: sameProcedureOf({
+                test,
+                batchIndex: t.batchIndex,
+                siblings,
+                answer,
+                overCap,
+              }),
+            }
+          : {}),
       };
     });
 
@@ -2008,4 +2129,138 @@ function measuredResultOf(
     killedBy: killedByOf(o.killingTestFailure, published.name),
     ...(o.killingTestFailure !== undefined ? { killingTestFailure: o.killingTestFailure } : {}),
   };
+}
+
+/**
+ * R259: the declaration a mutant sits in, from the trusted manifest: the line span of its enclosing
+ * `procedure`, else `trigger`. Members do not nest, so two declarations share both lines only when
+ * both sit on one line: a one-line member, or one with no lines, cannot be told apart (`undefined`).
+ */
+export function declarationKeyOf(e: MutantManifestEntry): string | undefined {
+  const { procedureStartLine: start, procedureEndLine: end } = e;
+  if (start === undefined || end === undefined || start === end) return undefined;
+  return `${e.objectType}|${e.codeunitId}|${e.file}|${start}|${end}`;
+}
+
+/**
+ * R259: a target's siblings among the batch's survivors. `eligible` can get an answer; `unknown`
+ * never does (carried, reader-marked equivalent, or a target whose declaration cannot be told
+ * apart, when every same-named member of its object is unknown, never "same procedure" by name).
+ */
+export function siblingsOf(
+  target: MutantManifestEntry,
+  candidates: ReadonlyArray<{ readonly entry: MutantManifestEntry; readonly measurable: boolean }>,
+): { readonly eligible: readonly string[]; readonly unknown: readonly string[] } {
+  const key = declarationKeyOf(target);
+  const others = candidates.filter((c) => c.entry.mutantId !== target.mutantId);
+  const codes = (cs: typeof others) => cs.map((c) => c.entry.mutantId);
+  if (key === undefined) {
+    const object = (e: MutantManifestEntry) => `${e.objectType}|${e.codeunitId}|${e.file}`;
+    const named = others.filter(
+      (c) =>
+        object(c.entry) === object(target) &&
+        memberGroupNameOf(c.entry) === memberGroupNameOf(target),
+    );
+    return { eligible: [], unknown: codes(named) };
+  }
+  const same = others.filter((c) => declarationKeyOf(c.entry) === key);
+  return {
+    eligible: codes(same.filter((c) => c.measurable)),
+    unknown: codes(same.filter((c) => !c.measurable)),
+  };
+}
+
+/** R259: what one execution says about the pair (mutant, test key `t`). */
+export type PairAnswer = "kills" | "not" | undefined;
+
+/**
+ * R259: `kills` only for a confirmed `killed` (never `timeout-killed`) whose killer is exactly `t`
+ * at position 1 of its call; `not` only for a survivor `t` was sent to; else no answer.
+ */
+export function pairAnswerOf(
+  o: SessionOutcome | undefined,
+  sent: readonly TestMethodRef[] | undefined,
+  t: string,
+): PairAnswer {
+  if (o === undefined || sent === undefined) return undefined;
+  const killer = o.killingTestRef;
+  if (
+    o.verdict === "killed" &&
+    o.killPosition === 1 &&
+    killer !== undefined &&
+    testKeyOf(killer) === t
+  ) {
+    return "kills";
+  }
+  if (o.verdict === "survived" && sent.some((m) => testKeyOf(m) === t)) return "not";
+  return undefined;
+}
+
+const pairKeyOf = (code: string, t: string) => `${code}|${t}`;
+
+/**
+ * R259: the (sibling, test) pairs to probe, in row then sibling order, each once: every eligible
+ * pair `answered` does not answer. Each probe reserves two of `budget`'s runs (the run, and the
+ * unmutated confirmation a kill needs), so probes never overrun the cap; the rest are over it.
+ */
+export function pairsToProbe(a: {
+  readonly rows: ReadonlyArray<{
+    readonly test: TestMethodRef;
+    readonly eligible: readonly string[];
+  }>;
+  readonly answered: (code: string, t: string) => PairAnswer;
+  readonly budget: number;
+}): { readonly probe: readonly NamedMutantRequest[]; readonly overCap: ReadonlySet<string> } {
+  const seen = new Set<string>();
+  const probe: NamedMutantRequest[] = [];
+  const overCap = new Set<string>();
+  for (const { test, eligible } of a.rows) {
+    const t = testKeyOf(test);
+    for (const code of eligible) {
+      const key = pairKeyOf(code, t);
+      if (seen.has(key) || a.answered(code, t) !== undefined) continue;
+      seen.add(key);
+      if (2 * (probe.length + 1) <= a.budget) probe.push({ mutantId: code, methods: [test] });
+      else overCap.add(key);
+    }
+  }
+  return { probe, overCap };
+}
+
+/** R259: one row's field from its siblings and each pair's answer. Throws unless the three lists
+ *  are disjoint and cover every sibling. */
+export function sameProcedureOf(a: {
+  readonly test: TestMethodRef;
+  readonly batchIndex: number;
+  readonly siblings: { readonly eligible: readonly string[]; readonly unknown: readonly string[] };
+  readonly answer: (code: string, t: string) => PairAnswer;
+  readonly overCap: ReadonlySet<string>;
+}): SameProcedure {
+  const t = testKeyOf(a.test);
+  const id = (code: string) => mutantRef(a.batchIndex, code);
+  const answers = a.siblings.eligible.map((code) => [code, a.answer(code, t)] as const);
+  const unanswered = answers.filter(([, x]) => x === undefined).map(([code]) => code);
+  const out: SameProcedure = {
+    test: {
+      codeunitId: a.test.codeunitId,
+      codeunitName: a.test.codeunitName,
+      method: a.test.method,
+    },
+    alsoKills: answers.filter(([, x]) => x === "kills").map(([code]) => id(code)),
+    notKilled: answers.filter(([, x]) => x === "not").map(([code]) => id(code)),
+    unknown: [...unanswered, ...a.siblings.unknown].map(id),
+    overCap: unanswered.filter((code) => a.overCap.has(pairKeyOf(code, t))).length,
+  };
+  const all = [...out.alsoKills, ...out.notKilled, ...out.unknown];
+  const want = [...a.siblings.eligible, ...a.siblings.unknown].map(id);
+  if (
+    new Set(all).size !== all.length ||
+    all.length !== want.length ||
+    want.some((w) => !all.includes(w))
+  ) {
+    throw new Error(
+      `verify.ts: sameProcedure for ${t} does not split its ${want.length} sibling(s) into three disjoint lists (a bug)`,
+    );
+  }
+  return out;
 }
