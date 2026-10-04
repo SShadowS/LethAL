@@ -912,7 +912,9 @@ export async function planVerify(a: {
   if (!reachState.on && cap.s * cap.n + 2 * cap.n > budget) {
     throw new VerifyError("too-many-new-tests", capOffDetail(cap, reachState.why));
   }
-  if (reachState.on && 2 * cap.n > budget) {
+  // R-427 (ruling 3): check 1 is N > B. A new test sent to no survivor is not rerun, so the
+  // baseline run is the one count no filter can lower.
+  if (reachState.on && cap.n > budget) {
     throw new VerifyError("too-many-new-tests", capCheckOneDetail(cap));
   }
 
@@ -1046,25 +1048,39 @@ function capOffDetail(c: CapNumbers, why: string): string {
   return `${c.n} tests are new or edited since run ${c.runId}. The coverage filter is off (${why}), so they need ${c.s * c.n + 2 * c.n} extra test runs (${2 * c.n} unmutated, ${c.s * c.n} against ${c.s} survivor(s)). ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
 }
 
-/** R-384 The cap, filter on, check 1 (before any lease): the filter cannot lower 2N. */
+/**
+ * R-384 The cap, filter on, check 1 (before any lease): the filter cannot lower N, each new
+ * test's one baseline run. R-427 (ruling 3): N, not 2N, since a test sent to no survivor is not
+ * rerun.
+ */
 function capCheckOneDetail(c: CapNumbers): string {
   const { classes, helpers } = c.editClasses();
-  return `${c.n} tests are new or edited since run ${c.runId}. Each runs twice unmutated, ${2 * c.n} extra test runs, and the coverage filter cannot lower that; without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
+  return `${c.n} tests are new or edited since run ${c.runId}. Each runs at least once unmutated, ${c.n} extra test runs, and the coverage filter cannot lower that; without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${c.n}; or run lethal run again so this source is the recorded one`;
 }
 
 /**
  * R-384 The cap, filter on, check 2 (inside `narrow`, after the baseline, before the first
- * mutant): E = 2N + P extra test runs against the same budget. `undefined` when E fits.
+ * mutant): E extra test runs against the same budget. `undefined` when E fits. R-427:
+ * E = N + R + P, where R (`rerun`) counts the new tests sent to at least one survivor, the only
+ * ones rerun. With R = N the text is R-384's, byte for byte (ruling 4).
  */
 export function capCheckTwoDetail(
   c: CapNumbers,
   joins: number,
   failClosed: number,
+  rerun: number,
 ): string | undefined {
-  const e = 2 * c.n + joins;
+  if (rerun < 0 || rerun > c.n) {
+    throw new Error(`verify.ts: ${rerun} rerun new test(s) of ${c.n} (a bug)`);
+  }
+  const e = c.n + rerun + joins;
   if (e <= c.max * (c.s + 2)) return undefined;
   const { classes, helpers } = c.editClasses();
-  return `${c.n} tests are new or edited since run ${c.runId}. After the coverage filter they need ${e} extra test runs (${2 * c.n} unmutated, ${joins} against ${c.s} survivor(s); ${failClosed} test(s) joined every survivor because their coverage could not be used); without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} The unmutated runs had already run when this was found. Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${Math.ceil(e / (c.s + 2))}; or run lethal run again so this source is the recorded one`;
+  const unmutated =
+    rerun === c.n
+      ? `${2 * c.n} unmutated,`
+      : `${c.n + rerun} unmutated: ${c.n} baseline, ${rerun} rerun, ${c.n - rerun} test(s) sent to no survivor are not rerun;`;
+  return `${c.n} tests are new or edited since run ${c.runId}. After the coverage filter they need ${e} extra test runs (${unmutated} ${joins} against ${c.s} survivor(s); ${failClosed} test(s) joined every survivor because their coverage could not be used); without the filter they would need ${c.s * c.n + 2 * c.n}. ${budgetSentence(c)} The unmutated runs had already run when this was found. Edit classes: ${classes}.${helpers} To run them all, pass --max-new-tests ${Math.ceil(e / (c.s + 2))}; or run lethal run again so this source is the recorded one`;
 }
 
 /**
@@ -1294,7 +1310,9 @@ export function verifyExitCode(o: {
   }
   if (
     measured.some((r) => r.verdict !== "killed") ||
-    o.newTests.some((t) => t.state !== "stable")
+    // R-427 (ruling 2): `not-rerun` gated no verdict (it was sent to no survivor), so it does
+    // not block exit 0; it never reads as `stable` either.
+    o.newTests.some((t) => t.state !== "stable" && t.state !== "not-rerun")
   ) {
     return VERIFY_EXIT.notAllKilled;
   }
@@ -1565,7 +1583,13 @@ export async function runVerify(
           });
           // The cap, check 2: no mutant is in flight yet, and runNamedMutants releases the lease
           // on the way out, so the refusal is safe here.
-          const over = capCheckTwoDetail(plan.cap, r.joins, r.failClosedTests.length);
+          // R-427: R, the new tests sent to at least one survivor, the only ones rerun.
+          const over = capCheckTwoDetail(
+            plan.cap,
+            r.joins,
+            r.failClosedTests.length,
+            plan.cap.n - r.unsent.size,
+          );
           if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
           reach = r;
           reportReach(r, plan, planned, log, deps.emit);
