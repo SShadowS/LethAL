@@ -16,7 +16,7 @@ import {
   type AlRunnerPredefinedProbe,
   effectiveBuildSymbols,
 } from "../src/preprocessor-symbols";
-import { type SessionReport, renderConsole } from "../src/report";
+import { type SessionReport, collapseNumberedRuns, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 
 /**
@@ -303,6 +303,54 @@ describe("R-381: the console banner", () => {
     expect(
       bannerOf({ ...r, buildSymbols: [...run, "CLEANSCHEMA", "CLEANSCHEMA30", "ZED"].sort() }),
     ).toBe("CLEANSCHEMA, CLEANSCHEMA1..25, CLEANSCHEMA30, ZED");
+  });
+
+  // R-381 review: digits with a leading zero are not the same name as their number. `A01` read as 1
+  // used to swallow `A2` and `A3` into a run keyed `A1`, which is not in the list, so both vanished.
+  test("a leading zero is not a number in a run: nothing is dropped", () => {
+    expect(collapseNumberedRuns(["A01", "A2", "A3"])).toEqual(["A01", "A2", "A3"]);
+    expect(collapseNumberedRuns(["A007", "A8", "A9"])).toEqual(["A007", "A8", "A9"]);
+    expect(collapseNumberedRuns(["A01", "A1", "A2", "A3"])).toEqual(["A01", "A1..3"]);
+    expect(collapseNumberedRuns(["A0", "A1", "A2"])).toEqual(["A0..2"]);
+  });
+
+  test("every input name survives in the banner list, collapsed or not (property)", () => {
+    // Deterministic pseudo-random lists over a few families and digit strings, leading zeros included.
+    let seed = 381;
+    const next = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const families = ["A", "CLEANSCHEMA", "X_", "B2B"];
+    const digits = ["", "0", "1", "2", "3", "4", "01", "02", "007", "10", "11", "12", "40"];
+    for (let round = 0; round < 500; round++) {
+      const names = new Set<string>();
+      const size = 1 + next(12);
+      for (let k = 0; k < size; k++) {
+        names.add(`${families[next(families.length)]}${digits[next(digits.length)]}`);
+      }
+      const input = [...names].sort();
+      const out = collapseNumberedRuns(input);
+      const covered = (name: string): boolean =>
+        out.some((o) => {
+          if (o === name) return true;
+          const range = /^(.*?[^0-9])([0-9]+)\.\.([0-9]+)$/.exec(o);
+          const own = /^(.*?[^0-9])([0-9]+)$/.exec(name);
+          if (range === null || own === null) return false;
+          const [, fam, lo, hi] = range;
+          const [, nameFam, n] = own;
+          return (
+            fam === nameFam &&
+            n === String(Number(n)) &&
+            Number(n) >= Number(lo) &&
+            Number(n) <= Number(hi)
+          );
+        });
+      for (const name of input) {
+        if (!covered(name))
+          throw new Error(`lost ${name}: ${JSON.stringify(input)} -> ${JSON.stringify(out)}`);
+      }
+    }
   });
 
   test("absent when the effective set equals the config set", async () => {

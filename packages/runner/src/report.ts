@@ -2886,13 +2886,15 @@ function errorBreakdown(r: SessionReport): string {
  * names of one family (`CLEANSCHEMA1`, `CLEANSCHEMA2`, ...) becomes `CLEANSCHEMA1..25`; any run of
  * numbers will do, since al-runner's probe may measure a different count (R392). A bare family
  * name, a gap, and a shorter run stay as they are. The collapsed text sits where the family's
- * first member was.
+ * first member was. Only CANONICAL digits count as a number: `A01` is not `A1`, so it is never
+ * part of a run (reading it as 1 used to key a run on a name not in the list and drop its members).
  */
 export function collapseNumberedRuns(symbols: readonly string[]): string[] {
   const numbered = new Map<string, number[]>();
   for (const s of symbols) {
     const m = /^(.*?[^0-9])([0-9]+)$/.exec(s);
     if (m?.[1] === undefined || m[2] === undefined) continue;
+    if (m[2] !== String(Number(m[2]))) continue;
     const list = numbered.get(m[1]) ?? [];
     list.push(Number(m[2]));
     numbered.set(m[1], list);
