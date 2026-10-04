@@ -21,15 +21,17 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir /opt/dotnet \
     && rm /tmp/dotnet-install.sh
 ENV DOTNET_ROOT=/opt/dotnet PATH=/opt/dotnet:$PATH DOTNET_CLI_TELEMETRY_OPTOUT=1
-# AL extension: the newest on the Marketplace, resolved through the gallery API at build time (universal
+# AL extension: the newest STABLE one on the Marketplace (pre-releases carry the property
+# Microsoft.VisualStudio.Code.PreRelease=true and are skipped; flags 49 = all versions + properties,
+# validated only), resolved through the gallery API at build time (universal
 # VSIX: .NET dlls, Windows launchers, no bin/linux) + Linux wrappers, under ~/.vscode/extensions where
 # LethAL's defaultAlToolPaths looks. The folder name carries the version, so a stable symlink
 # ms-dynamics-smb.al-current points at it (project.yaml's LETHAL_ALC_DIR uses that); defaultAlToolPaths
 # skips folders whose suffix is not a version.
 RUN ALV="$(curl -fsS -X POST -H 'Content-Type: application/json' -H 'Accept: application/json;api-version=7.1-preview.1' \
-         -d '{"filters":[{"criteria":[{"filterType":7,"value":"ms-dynamics-smb.al"}]}],"flags":512}' \
+         -d '{"filters":[{"criteria":[{"filterType":7,"value":"ms-dynamics-smb.al"}]}],"flags":49}' \
          https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery \
-         | jq -er '.results[0].extensions[0].versions[0].version')" \
+         | jq -er '[.results[0].extensions[0].versions[] | select(.targetPlatform == null) | select([.properties[]? | select(.key == "Microsoft.VisualStudio.Code.PreRelease" and .value == "true")] | length == 0)][0].version')" \
     && echo "AL extension $ALV" \
     && ALX=/home/dev/.vscode/extensions/ms-dynamics-smb.al-$ALV \
     && curl -fsSL --compressed -o /tmp/al.vsix "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ms-dynamics-smb/vsextensions/al/$ALV/vspackage" \

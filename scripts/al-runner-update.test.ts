@@ -44,14 +44,17 @@ esac`,
   // dotnet tool install ... --tool-path <dir>: writes <dir>/al-runner
   fake(
     "dotnet",
-    `if [ "$2" = install ]; then for ((i=1;i<=$#;i++)); do if [ "\${!i}" = --tool-path ]; then j=$((i+1)); mkdir -p "\${!j}"; echo x > "\${!j}/al-runner"; chmod +x "\${!j}/al-runner"; fi; done; fi`,
+    `if [ "$2" = install ]; then for ((i=1;i<=$#;i++)); do if [ "\${!i}" = --tool-path ]; then j=$((i+1)); mkdir -p "\${!j}"; echo fresh > "\${!j}/al-runner"; chmod +x "\${!j}/al-runner"; fi; done; fi`,
   );
   // the gate: `bun run itest:alrunner`, exit code from FAKE_GATE
   fake(
     "bun",
     `echo "gate path=$LETHAL_ALRUNNER_PATH flag=$LETHAL_ITEST_ALRUNNER" >> "${calls}"; echo "gate summary line"; exit "\${FAKE_GATE:-0}"`,
   );
-  fake("flock", "true");
+  // `flock -n` (the whole-run lock) fails when FAKE_FLOCK_BUSY is set; the fetch lock always succeeds
+  fake("flock", '[ "$1" = -n ] && [ -n "${FAKE_FLOCK_BUSY:-}" ] && exit 1; exit 0');
+  // pgrep exits 0 ("an al-runner is running") when FAKE_PGREP=0, else 1
+  fake("pgrep", 'exit "${FAKE_PGREP:-1}"');
   const run = (script: string, env: Record<string, string> = {}) =>
     Bun.spawnSync(["bash", script], {
       cwd: wt,
@@ -67,16 +70,96 @@ esac`,
   return { root, tools, old, run, log };
 }
 
-test("an already built and gated sha: nothing to do, current unchanged, no build, no gate", () => {
+function built(t: ReturnType<typeof setup>, gated: boolean) {
+  mkdirSync(join(t.tools, SHA));
+  writeFileSync(join(t.tools, SHA, "al-runner"), "x", { mode: 0o755 });
+  if (gated) writeFileSync(join(t.tools, SHA, ".gated"), "");
+}
+
+test("a gated build that is already current: nothing to do, no build, no gate", () => {
   const t = setup();
   try {
-    mkdirSync(join(t.tools, SHA));
-    writeFileSync(join(t.tools, SHA, "al-runner"), "x", { mode: 0o755 });
+    built(t, true);
+    rmSync(join(t.tools, "current"));
+    symlinkSync(join(t.tools, SHA), join(t.tools, "current"));
     const r = t.run(update);
     expect(r.exitCode).toBe(0);
-    expect(readlinkSync(join(t.tools, "current"))).toBe(t.old);
+    expect(readlinkSync(join(t.tools, "current"))).toBe(join(t.tools, SHA));
     expect(t.log()).not.toMatch(/^dotnet /m);
     expect(t.log()).not.toMatch(/^bun /m);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("a gated build that current does not name yet is moved to without a rebuild or a re-gate", () => {
+  const t = setup();
+  try {
+    built(t, true);
+    const r = t.run(update);
+    expect(r.exitCode).toBe(0);
+    expect(readlinkSync(join(t.tools, "current"))).toBe(join(t.tools, SHA));
+    expect(t.log()).not.toMatch(/^dotnet /m);
+    expect(t.log()).not.toMatch(/^bun /m);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("an ungated leftover (a run killed mid-gate) is rebuilt and re-gated, never trusted", () => {
+  const t = setup();
+  try {
+    built(t, false);
+    const r = t.run(update);
+    expect(r.exitCode).toBe(0);
+    expect(t.log()).toMatch(/^dotnet pack /m);
+    expect(t.log()).toMatch(/^gate path=/m);
+    expect(existsSync(join(t.tools, SHA, ".gated"))).toBe(true);
+    expect(readFileSync(join(t.tools, SHA, "al-runner"), "utf8")).not.toBe("x"); // the fresh build
+    expect(readlinkSync(join(t.tools, "current"))).toBe(join(t.tools, SHA));
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("a second update while one runs exits 0 and touches nothing", () => {
+  const t = setup();
+  try {
+    const r = t.run(update, { FAKE_FLOCK_BUSY: "1" });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain("already running");
+    expect(t.log()).not.toMatch(/^(git|dotnet|bun) /m);
+    expect(readlinkSync(join(t.tools, "current"))).toBe(t.old);
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("an al-runner process running defers the move: gated build kept, current unchanged, next run moves it", () => {
+  const t = setup();
+  try {
+    const r = t.run(update, { FAKE_PGREP: "0" });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain("deferred: al-runner in use");
+    expect(readlinkSync(join(t.tools, "current"))).toBe(t.old);
+    expect(existsSync(join(t.tools, SHA, ".gated"))).toBe(true);
+    const gates = t.log().match(/^gate path=/gm)?.length;
+    expect(t.run(update).exitCode).toBe(0);
+    expect(readlinkSync(join(t.tools, "current"))).toBe(join(t.tools, SHA));
+    expect(t.log().match(/^gate path=/gm)?.length).toBe(gates); // moved without a second gate
+  } finally {
+    rmSync(t.root, { recursive: true, force: true });
+  }
+});
+
+test("run from outside a LethAL checkout it refuses with exit 2", () => {
+  const t = setup();
+  try {
+    mkdirSync(join(t.root, "other", "scripts"), { recursive: true });
+    writeFileSync(join(t.root, "other", "package.json"), '{"name": "not-lethal"}');
+    writeFileSync(join(t.root, "other", "scripts", "u.sh"), readFileSync(update));
+    expect(t.run(join(t.root, "other", "scripts", "u.sh")).exitCode).toBe(2);
+    expect(t.log()).not.toMatch(/^(dotnet|bun) /m);
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }
@@ -89,7 +172,7 @@ test("a gate that fails leaves current alone, exits non-zero and names the failu
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toContain(`${SHA} FAILED the itest:alrunner gate`);
     expect(r.stderr.toString()).toContain("gate summary line"); // the failing output is printed
-    expect(readlinkSync(join(t.tools, "current"))).toBe(t.old);
+    expect(readlinkSync(join(t.tools, "current"))).toBe(t.old); // and never a path under failed/
     expect(existsSync(join(t.tools, SHA))).toBe(false); // not left where a rerun would call it good
     expect(existsSync(join(t.tools, "failed", SHA, "al-runner"))).toBe(true);
     expect(t.log()).toMatch(/^dotnet pack .*-p:AllowBcArtifactDownload=true/m);
@@ -102,15 +185,23 @@ test("a gate that fails leaves current alone, exits non-zero and names the failu
   }
 });
 
-test("a gate that passes moves current onto the new build, gated on that build's own path", () => {
+test("a gate that passes gates the TEMP build, then names it, marks it gated and moves current", () => {
   const t = setup();
   try {
-    const r = t.run(update);
+    const pk = join(t.root, "nuget", "msdyn365bc.al.runner");
+    for (const v of [`2.12.0-main.${SHA}`, "2.12.0-main.deadbeef", "2.12.0"]) mkdirSync(join(pk, v), { recursive: true });
+    const r = t.run(update, { NUGET_PACKAGES: join(t.root, "nuget") });
     expect(r.stderr.toString()).toBe("");
     expect(r.exitCode).toBe(0);
     expect(readlinkSync(join(t.tools, "current"))).toBe(join(t.tools, SHA));
     expect(existsSync(join(t.tools, "current", "al-runner"))).toBe(true);
-    expect(t.log()).toContain(`gate path=${join(t.tools, SHA)}/al-runner flag=1`);
+    expect(existsSync(join(t.tools, SHA, ".gated"))).toBe(true);
+    // the gate saw the build before it had its permanent name
+    expect(t.log()).toMatch(new RegExp(`gate path=${t.tools}/\\.build-[^/]+/out/al-runner flag=1`));
+    // the NuGet cache keeps this build's version and a release, drops a build that is gone
+    expect(existsSync(join(pk, `2.12.0-main.${SHA}`))).toBe(true);
+    expect(existsSync(join(pk, "2.12.0"))).toBe(true);
+    expect(existsSync(join(pk, "2.12.0-main.deadbeef"))).toBe(false);
   } finally {
     rmSync(t.root, { recursive: true, force: true });
   }

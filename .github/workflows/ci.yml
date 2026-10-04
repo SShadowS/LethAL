@@ -33,7 +33,7 @@ jobs:
       # test failure later. clang, not MSVC cl.exe: build.rs refuses a non-clang CC (S1.1), and
       # cc-rs's CC_<target>/TARGET_CC lookup order is stripped down to just CC by
       # scripts/build-native-parser.ts so no stray env var can swap the compiler silently.
-      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
+      - uses: dtolnay/rust-toolchain@stable
       # Pinned by URL and sha256, and refused unless clang-cl says exactly 23.1.2. Not
       # KyleMayes/install-llvm-action: its asset list ends at 21.1.8 (run 36443811955). The script
       # exports LLVM_BIN for the steps below; release.yml uses the same script on every target.
@@ -86,7 +86,7 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
+      - uses: dtolnay/rust-toolchain@stable
       - name: LLVM 23.1.2 (clang builds the grammar)
         run: bash scripts/install-llvm.sh linux-x64
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

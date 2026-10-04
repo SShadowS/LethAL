@@ -242,8 +242,9 @@ function makeDeployment(
 // (see node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js). A permissive
 // passthrough object schema lets the fake tools receive whatever shape the adapter sends
 // without the fake server needing to mirror the production request shape.
-// Cast to `never`: the SDK now carries its own zod 4 copy, and checking this zod 3 schema against its
-// generics overflows the compiler's instantiation depth (TS2589). The runtime schema is unchanged.
+// Cast to the SDK's `AnySchema`: the SDK now carries its own zod 4 copy, and checking this zod 3
+// schema against its generics overflows the compiler's instantiation depth (TS2589). The runtime
+// schema is unchanged.
 const anyArgs = z.object({}).passthrough() as unknown as AnySchema;
 
 function makeBackend(
