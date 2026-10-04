@@ -1,6 +1,13 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { maskAlNonCode } from "@lethal/engine";
+import {
+  evaluateArms,
+  hasDirectiveLine,
+  maskAlNonCode,
+  parseAL,
+  startsInInactiveArm,
+  wrapRoot,
+} from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
 import { discoveredRelPaths } from "./line-filter";
 
@@ -121,7 +128,16 @@ function admittedTestFiles(
  * test" is the wrong thing to say when the truth is "two regexes disagree".
  */
 export function testsInAlSource(rel: string, source: string): TestMethodRef[] {
-  const refs: TestMethodRef[] = [];
+  return testsWithOffsets(rel, source).map((t) => t.ref);
+}
+
+/** `testsInAlSource`, with each test's `[Test]` attribute offset in `source` (UTF-16 code units,
+ *  the unit the parser's offsets are in; the mask keeps every offset). */
+function testsWithOffsets(
+  rel: string,
+  source: string,
+): Array<{ readonly ref: TestMethodRef; readonly offset: number }> {
+  const refs: Array<{ readonly ref: TestMethodRef; readonly offset: number }> = [];
   // R79: section on CODE only. Prose of the shape `codeunit 50100 "Sales Post"` used to open a
   // bogus section and swallow every [Test] below it, without a word anywhere.
   const masked = maskNonCode(source);
@@ -150,7 +166,10 @@ export function testsInAlSource(rel: string, source: string): TestMethodRef[] {
 
     // Find test methods in this section only
     for (const m of section.matchAll(TEST_METHOD)) {
-      refs.push({ codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel });
+      refs.push({
+        ref: { codeunitId, codeunitName, method: m[2] ?? m[3] ?? "", file: rel },
+        offset: sectionStart + m.index,
+      });
     }
   }
 
@@ -158,11 +177,171 @@ export function testsInAlSource(rel: string, source: string): TestMethodRef[] {
   return refs;
 }
 
+/** R403 phase B: the id of every codeunit `source` declares (on code only, every arm read). The
+ *  `--tests-only` scope for the compiled-membership check maps a compiled codeunit to its file
+ *  through these, BEFORE arm filtering, so a codeunit whose tests are all compiled out of the
+ *  local build is still in scope. */
+function declaredCodeunitIds(source: string): number[] {
+  return Array.from(maskNonCode(source).matchAll(CODEUNIT_HEADER_GLOBAL), (m) => Number(m[1]));
+}
+
+/** An `#if` or `#endif` line (`#elif` / `#else` stay inside the same region). */
+const REGION_LINE = /^﻿?[ \t]*#[ \t]*(if|endif)\b/gim;
+
+/**
+ * R403 phase B: whether a `[Test]` at `offset` lies between an `#if` and its `#endif`, in ANY
+ * arm. That is the test whose membership depends on the build's symbols, which is what the
+ * `test-symbols-unverified` caveat names when no compiled package can say which build was
+ * published. Read on the masked source, so a directive inside a comment does not count; an
+ * unbalanced file counts every test as conditional (the caveat errs toward naming a file).
+ */
+function conditionalTestOffsets(source: string, offsets: readonly number[]): boolean[] {
+  const marks = Array.from(maskNonCode(source).matchAll(REGION_LINE), (m) => ({
+    at: m.index,
+    open: (m[1] ?? "").toLowerCase() === "if",
+  }));
+  let depth = 0;
+  for (const m of marks) {
+    depth += m.open ? 1 : -1;
+    if (depth < 0) return offsets.map(() => true);
+  }
+  if (depth !== 0) return offsets.map(() => true);
+  return offsets.map((offset) => {
+    let d = 0;
+    for (const m of marks) {
+      if (m.at >= offset) break;
+      d += m.open ? 1 : -1;
+    }
+    return d > 0;
+  });
+}
+
+/** R403: one file's arms under `buildSymbols`. `filtered` keeps undecided files' tests. */
+function armsOfFile(
+  rel: string,
+  source: string,
+  found: ReadonlyArray<{ readonly ref: TestMethodRef; readonly offset: number }>,
+  buildSymbols: readonly string[],
+): { filtered: TestMethodRef[]; excluded: TestExclusion[]; directive: boolean } {
+  const directive = hasDirectiveLine(source);
+  // A file with no directive line compiles every test it declares; skipping its parse keeps
+  // `lethal verify` at one parse per test file (R-371).
+  if (found.length === 0 || !directive) {
+    return { filtered: found.map((t) => t.ref), excluded: [], directive };
+  }
+  const filtered: TestMethodRef[] = [];
+  const excluded: TestExclusion[] = [];
+  // Offsets: `evaluateArms` returns offsets into the RAW source, in UTF-16 code units (the native
+  // parser's unit). `testsWithOffsets` matches on the masked source, which keeps every offset
+  // (R403 fixed `maskAlNonCode` for characters outside the BMP), so the two compare directly.
+  const arms = evaluateArms(wrapRoot(parseAL(source)), source, buildSymbols);
+  for (const { ref, offset } of found) {
+    if (arms.kind === "undecided") {
+      filtered.push(ref);
+      excluded.push({
+        test: ref,
+        file: rel,
+        reason: "preproc-undecided-kept",
+        detail: arms.reason,
+      });
+    } else if (startsInInactiveArm(arms.inactive, offset)) {
+      excluded.push({ test: ref, file: rel, reason: "compiled-out" });
+    } else {
+      filtered.push(ref);
+    }
+  }
+  return { filtered, excluded, directive };
+}
+
+/**
+ * R403 phase B: `testsInAlSource` with the arm filter applied under `buildSymbols`, exactly as
+ * arm-aware discovery applies it (undecided files keep every test). R139's source-to-source
+ * comparison runs this over the PUBLISHED package's source when the session runs the filtered
+ * suite, so both sides are filtered alike. The caller must have called `initParser()`.
+ */
+export function armFilteredTestsInAlSource(
+  rel: string,
+  source: string,
+  buildSymbols: readonly string[],
+): TestMethodRef[] {
+  return armsOfFile(rel, source, testsWithOffsets(rel, source), buildSymbols).filtered;
+}
+
+/** R403: options for arm-aware discovery. `buildSymbols` is the TEST app's derived symbol set
+ *  (`effectiveBuildSymbols(testDir, ...)`: the config's symbols, the test `app.json`'s, and on
+ *  al-runner its measured predefined ones). A file's own `#define` / `#undef` are applied per file
+ *  by `evaluateArms`. The caller must have called `initParser()`: each file with a `[Test]` is
+ *  parsed, and an uninitialised parser throws. */
+export interface ArmAwareDiscoverOptions extends DiscoverOptions {
+  readonly buildSymbols: readonly string[];
+}
+
+/** R403: why a discovered `[Test]` is recorded. `compiled-out`: its attribute starts in an arm the
+ *  build compiles out, so it is not in the filtered list. `preproc-undecided-kept`: its file's arms
+ *  could not be evaluated exactly as alc does (`evaluateArms` returned `undecided`), so it is KEPT
+ *  in the filtered list, as before R403, and recorded. */
+export type TestExclusionReason = "compiled-out" | "preproc-undecided-kept";
+
+export interface TestExclusion {
+  readonly test: TestMethodRef;
+  readonly file: string;
+  readonly reason: TestExclusionReason;
+  /** `preproc-undecided-kept` only: `evaluateArms`'s reason code (never source text). */
+  readonly detail?: string;
+}
+
+/**
+ * R403: both lists, because the choice between them depends on evidence not known at discovery
+ * time (plan §7): on al-runner the filtered list is the suite al-runner compiles; on bcdev only the
+ * published package's compiled membership can say which build is published (R-403 phase B).
+ */
+export interface ArmAwareDiscovery {
+  /** The symbol set the arms were evaluated under, as passed. */
+  readonly buildSymbols: readonly string[];
+  /** Every discovered test whose `[Test]` is not compiled out under `buildSymbols`. */
+  readonly filtered: TestMethodRef[];
+  /** Every discovered test, every arm read: exactly what `discoverTests` returned before R403. */
+  readonly unfiltered: TestMethodRef[];
+  /** Every `compiled-out` test and every `preproc-undecided-kept` one, in discovery order. */
+  readonly excluded: readonly TestExclusion[];
+  /** Whether any test file discovery read (within `only`) holds a directive line. When none
+   *  does, no symbol set can change the suite, so the resume fingerprint omits the test set. */
+  readonly anyDirective: boolean;
+  /**
+   * R403 phase B: with `--tests-only`, the id of every codeunit declared in an admitted file, every
+   * arm read (BEFORE arm filtering). The compiled-membership check compares only the compiled
+   * codeunits in this set. Absent when nothing narrowed the suite: every compiled codeunit is in
+   * scope.
+   */
+  readonly inScopeCodeunits?: ReadonlySet<number>;
+  /** R403 phase B: every file in scope with a `[Test]` between an `#if` and its `#endif` (any arm),
+   *  or in a file whose arms are undecided, sorted. What `test-symbols-unverified` names. */
+  readonly conditionalTestFiles: readonly string[];
+}
+
+/**
+ * Every `[Test]` in the test project. Without `buildSymbols` it reads every `#if` arm and returns
+ * the list (the pre-R403 shape, kept for every caller that has no symbol set). With `buildSymbols`
+ * it also evaluates each file's arms and returns both lists (`ArmAwareDiscovery`).
+ */
 export async function discoverTests(
   testDir: string,
-  options: DiscoverOptions = {},
-): Promise<TestMethodRef[]> {
-  const refs: TestMethodRef[] = [];
+  options?: DiscoverOptions,
+): Promise<TestMethodRef[]>;
+export async function discoverTests(
+  testDir: string,
+  options: ArmAwareDiscoverOptions,
+): Promise<ArmAwareDiscovery>;
+export async function discoverTests(
+  testDir: string,
+  options: DiscoverOptions | ArmAwareDiscoverOptions = {},
+): Promise<TestMethodRef[] | ArmAwareDiscovery> {
+  const buildSymbols = "buildSymbols" in options ? options.buildSymbols : undefined;
+  const unfiltered: TestMethodRef[] = [];
+  const filtered: TestMethodRef[] = [];
+  const excluded: TestExclusion[] = [];
+  let anyDirective = false;
+  const conditionalTestFiles: string[] = [];
   const entries = await readdir(testDir, { recursive: true });
   // R421: normalised to `/` once and sorted in that form; matched and labelled with `rel`, read
   // through the raw name.
@@ -174,10 +353,40 @@ export async function discoverTests(
     discovered.map((d) => d.rel),
     options.only ?? [],
   );
+  const inScopeCodeunits = admitted !== undefined ? new Set<number>() : undefined;
   for (const { rel, raw } of discovered) {
     if (admitted !== undefined && !admitted.has(rel)) continue;
     const source = await readFile(join(testDir, raw), "utf8");
-    refs.push(...testsInAlSource(rel, source));
+    const found = testsWithOffsets(rel, source);
+    unfiltered.push(...found.map((t) => t.ref));
+    if (buildSymbols === undefined) continue;
+    if (inScopeCodeunits !== undefined) {
+      for (const id of declaredCodeunitIds(source)) inScopeCodeunits.add(id);
+    }
+    const arms = armsOfFile(rel, source, found, buildSymbols);
+    anyDirective ||= arms.directive;
+    filtered.push(...arms.filtered);
+    excluded.push(...arms.excluded);
+    if (
+      arms.directive &&
+      found.length > 0 &&
+      (arms.excluded.length > 0 ||
+        conditionalTestOffsets(
+          source,
+          found.map((t) => t.offset),
+        ).some((c) => c))
+    ) {
+      conditionalTestFiles.push(rel);
+    }
   }
-  return refs;
+  if (buildSymbols === undefined) return unfiltered;
+  return {
+    buildSymbols,
+    filtered,
+    unfiltered,
+    excluded,
+    anyDirective,
+    ...(inScopeCodeunits !== undefined ? { inScopeCodeunits } : {}),
+    conditionalTestFiles,
+  };
 }

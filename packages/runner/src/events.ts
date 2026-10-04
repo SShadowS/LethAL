@@ -25,7 +25,13 @@ import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend"
 import type { PreprocExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
-import type { Caveat, DeclarativeSiteFile, MutantErrorCause, NotInstrumentedFile } from "./report";
+import type {
+  Caveat,
+  DeclarativeSiteFile,
+  ExcludedTestRecord,
+  MutantErrorCause,
+  NotInstrumentedFile,
+} from "./report";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict, RunnerKind } from "./store";
 
@@ -173,6 +179,17 @@ export type RunEventInput =
        *  would be false granularity, not liveness. */
       readonly type: "tests-discovered";
       readonly tests: readonly TestMethodRef[];
+      /**
+       * R403 phase C: what the test-arm filter decided. Each field is present only when non-empty.
+       * `testBuildSymbols` is the DERIVED test-app symbol set (not observed). `excludedTests` lists
+       * the tests the applied filter dropped (`compiled-out`) and the ones kept as undecided; with
+       * no compiled evidence the unfiltered suite runs, so only the undecided ones are listed.
+       * `unverifiedTestFiles` names, on bcdev with no compiled evidence, the test files with a `#if`
+       * around a `[Test]`. Optional on the wire, so a stream written before R403 still folds.
+       */
+      readonly testBuildSymbols?: readonly string[];
+      readonly excludedTests?: readonly ExcludedTestRecord[];
+      readonly unverifiedTestFiles?: readonly string[];
     }
   | {
       /**

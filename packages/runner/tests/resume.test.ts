@@ -479,6 +479,36 @@ describe("sessionFingerprint (R47)", () => {
     expect(sessionFingerprint({ ...base, preprocessorSymbols: [] })).toBe(PINNED);
   });
 
+  // R403: the test app's derived set and the arm-policy marker are conditional keys, so a session
+  // with no test symbols and nothing the policy changed keeps PINNED byte for byte.
+  test("R403: no test symbols and no arm-policy marker keep PINNED", () => {
+    expect(sessionFingerprint({ ...base, testBuildSymbols: [] })).toBe(PINNED);
+  });
+
+  test("R403: the test build set changes it, order does not, and it is apart from the target's", () => {
+    const x = sessionFingerprint({ ...base, testBuildSymbols: ["X", "A"] });
+    expect(x).not.toBe(PINNED);
+    expect(x).toBe(sessionFingerprint({ ...base, testBuildSymbols: ["A", "X"] }));
+    expect(x).not.toBe(sessionFingerprint({ ...base, testBuildSymbols: ["A"] }));
+    expect(x).not.toBe(sessionFingerprint({ ...base, preprocessorSymbols: ["A", "X"] }));
+  });
+
+  // Plan §3(e)'s counterexample at the function: the target set is {X} both times, the test set
+  // moves {} -> {X}.
+  test("R403: the counterexample, a target set held at {X} while the test set moves {} -> {X}", () => {
+    const before = sessionFingerprint({ ...base, preprocessorSymbols: ["X"] });
+    const after = sessionFingerprint({
+      ...base,
+      preprocessorSymbols: ["X"],
+      testBuildSymbols: ["X"],
+    });
+    expect(after).not.toBe(before);
+  });
+
+  test("R403: the arm-policy marker changes it", () => {
+    expect(sessionFingerprint({ ...base, testDiscovery: "arms-v1" })).not.toBe(PINNED);
+  });
+
   // R354: the coverage mode is a conditional key, so an input without it keeps PINNED (the
   // function is unchanged for it), while every mode, and each mode against none, digests apart.
   test("the coverage mode changes it, and its absence keeps PINNED", () => {
@@ -2668,6 +2698,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       // R354: what runSession computes: it always passes the mode, here the backend's.
       coverageMode: "procedure",
       preprocessorSymbols: ["R318A"],
+      // R403: no `testBuildSymbols`: no test file here holds a directive line, so runSession omits it.
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,

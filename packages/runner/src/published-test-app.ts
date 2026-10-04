@@ -1,5 +1,5 @@
 import { listPackageEntries, readPackageEntry } from "./app-package";
-import { testsInAlSource } from "./discovery";
+import { armFilteredTestsInAlSource, testsInAlSource } from "./discovery";
 import { STALE_TEST_APP_REMEDY } from "./stale-test-app";
 
 /**
@@ -74,7 +74,15 @@ function isAlSourceEntry(name: string): boolean {
  * plausible default. The CALLER decides whether an unreadable package should stop anything — for
  * check 2 it never does.
  */
-export function parsePublishedApp(pkg: Buffer): PublishedApp {
+export function parsePublishedApp(
+  pkg: Buffer,
+  options: {
+    /** R403 phase B: when the session runs the arm-FILTERED suite, the test app's derived symbol
+     *  set, so the published source is filtered exactly as the local source was (both sides of the
+     *  comparison alike). Absent: every arm is read, as the unfiltered suite is. */
+    readonly buildSymbols?: readonly string[];
+  } = {},
+): PublishedApp {
   const manifest = readPackageEntry(pkg, MANIFEST_ENTRY);
   if (manifest === null) {
     throw new Error(
@@ -94,7 +102,12 @@ export function parsePublishedApp(pkg: Buffer): PublishedApp {
   for (const entry of sourceEntries) {
     const source = readPackageEntry(pkg, entry);
     if (source === null) continue;
-    for (const ref of testsInAlSource(entry, source.toString("utf8"))) {
+    const text = source.toString("utf8");
+    const refs =
+      options.buildSymbols === undefined
+        ? testsInAlSource(entry, text)
+        : armFilteredTestsInAlSource(entry, text, options.buildSymbols);
+    for (const ref of refs) {
       tests.push(`${ref.codeunitName}.${ref.method}`);
     }
   }

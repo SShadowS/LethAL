@@ -195,8 +195,11 @@ import type { MutantVerdict } from "./store";
  * whose `coverageMode` is `"none"`. A new value, so it bumps (R233); v7 is frozen.
  *
  * 9: R214 added the caveat value `preproc-files-refused`. A new value, so it bumps (R233).
+ *
+ * 10: R403 added the caveat values `tests-compiled-out` and `test-symbols-unverified`. New values,
+ * so it bumps (R233).
  */
-export const EXPLAIN_SCHEMA_VERSION = 9;
+export const EXPLAIN_SCHEMA_VERSION = 10;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
