@@ -2697,6 +2697,8 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
+    // R-260: the test project must exist beside the target, or verify refuses it first.
+    await mkdir(join(root, "t"));
     await writeFile(
       join(project, "lethal.config.json"),
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),
@@ -2793,6 +2795,63 @@ describe("C02-06: lethal verify (Task 7)", () => {
     expect(out.results).toEqual([]);
     expect(built).toBe(0);
     // Windows refuses to delete a file an open handle holds: this passes only if the store closed.
+    rmSync(dbPath);
+  });
+
+  // R-260: a test project inside the target is refused by name before the config or the backend.
+  test("verify refuses a test project nested in the target before building the backend", async () => {
+    const root = scratch("lethal-verify-cli-");
+    const project = join(root, "proj");
+    await mkdir(join(project, "test"), { recursive: true });
+    await writeFile(
+      join(project, "lethal.config.json"),
+      JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" } }),
+    );
+    await writeFile(join(project, "app.json"), "{}");
+    const dbPath = join(root, "r.sqlite");
+    const store = new ResultsStore(dbPath);
+    const runId = store.createRun({
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: project,
+      backend: "bcdev",
+      appVersion: "0.0.0.0",
+    });
+    store.recordArtifact(runId, {
+      bundle: tinyBundle(),
+      batchIndex: 0,
+      appVersion: "1.0.0.0",
+      appId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      artifactId: A,
+      sha256: "1".repeat(64),
+    });
+    store.close();
+    let printed = "";
+    let built = 0;
+    const code = await verifyFromCli(
+      {
+        mode: "verify",
+        dbPath,
+        artifact: A,
+        testDir: join(project, "test"),
+        survivors: ["0/M0001"],
+      },
+      {
+        write: (s) => {
+          printed += s;
+        },
+        buildBackend: async () => {
+          built++;
+          throw new Error("must not build a backend for a nested test project");
+        },
+      },
+    );
+    expect(code).toBe(VERIFY_REFUSED_EXIT_CODE);
+    const out = JSON.parse(printed);
+    expect(out.refused.reason).toBe("test-project-nested");
+    expect(out.refused.detail).toContain("--tests");
+    expect(built).toBe(0);
     rmSync(dbPath);
   });
 
