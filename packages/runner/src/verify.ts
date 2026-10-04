@@ -53,8 +53,10 @@ import {
   type TestAppRefusal,
 } from "./test-app-publish";
 import {
+  DIGEST_SCHEME_WORDS,
   type NewTestCause,
   TEST_DIGEST_SCHEME,
+  digestSchemeOf,
   explainNewTests,
   isCurrentDigest,
   parseDigestParts,
@@ -833,10 +835,13 @@ export async function planVerify(a: {
 
   // R-371: a digest of another scheme covers other things, so no comparison with it means
   // anything. The test is on the values, not a column: every digest of one run has one scheme.
-  if (Object.values(sourceTestDigests).some((d) => !isCurrentDigest(d))) {
+  const stale = Object.values(sourceTestDigests).find((d) => !isCurrentDigest(d));
+  if (stale !== undefined) {
+    const recorded = digestSchemeOf(stale);
+    const words = (s: string): string => DIGEST_SCHEME_WORDS[s] ?? "an unknown scheme";
     throw new VerifyError(
       "source-predates-verify",
-      `run ${source.runId} recorded its test digests under R-278's scheme, which covers each test's own method only. This build's digests (scheme ${TEST_DIGEST_SCHEME}, R-371) also cover every helper, handler, subscriber and dependency a test reaches, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
+      `run ${source.runId} recorded its test digests under scheme ${recorded}, this build ${TEST_DIGEST_SCHEME}. Scheme ${recorded} is ${words(recorded)}; scheme ${TEST_DIGEST_SCHEME} is ${words(TEST_DIGEST_SCHEME)}, so an unchanged test would not compare equal. This refusal happens once per source run; run lethal run again, then verify`,
     );
   }
 

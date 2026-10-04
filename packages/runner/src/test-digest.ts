@@ -27,8 +27,10 @@
  * inside a procedure is a real edit, and over-normalising is the unsafe direction (an edited test
  * read as unchanged skips verify's new-test checks).
  *
- * The digest is `v2:` + SHA-256. A v1 digest (R-278's, the method span only) has no prefix, and
- * verify refuses a source run that recorded one (`source-predates-verify`).
+ * The digest is `v3:` + SHA-256 (R-385; the tag is outside the hash). A v1 digest (R-278's, the
+ * method span only) has no prefix, a v2 one (R-371's) fingerprints Microsoft dependencies by
+ * declared version, and verify refuses a source run that recorded either, once
+ * (`source-predates-verify`).
  *
  * Memory: the source is parsed ONCE into `TestAppModel` (every span hashed while its file's tree
  * is alive), and a test's reached set is hashed and dropped before the next test is walked.
@@ -47,12 +49,27 @@ import {
   sha256,
 } from "./testpage-scan";
 
-/** The scheme tag every digest this build records starts with. */
-export const TEST_DIGEST_SCHEME = "v2";
+/**
+ * The scheme tag every digest this build records starts with. v1 (R-278, no tag): the test's own
+ * method only. v2 (R-371): everything the test reaches, Microsoft dependencies by DECLARED version.
+ * v3 (R-385): Microsoft dependencies, `System` and the control app's dependencies by the bytes the
+ * server holds. A digest of another scheme never compares equal, so verify refuses it once.
+ */
+export const TEST_DIGEST_SCHEME = "v3";
 const PREFIX = `${TEST_DIGEST_SCHEME}:`;
 
 /** Whether a recorded digest was made under this build's scheme. */
 export const isCurrentDigest = (d: string): boolean => d.startsWith(PREFIX);
+
+/** The scheme a recorded digest was made under: its tag, or `v1` for R-278's untagged ones. */
+export const digestSchemeOf = (d: string): string => /^(v\d+):/.exec(d)?.[1] ?? "v1";
+
+/** What each scheme covers, for verify's once-per-source-run refusal. */
+export const DIGEST_SCHEME_WORDS: Readonly<Record<string, string>> = {
+  v1: "R-278's scheme, each test's own method only",
+  v2: "R-371's scheme, Microsoft dependencies by declared version only",
+  v3: "R-385's scheme, every helper, handler, subscriber and dependency a test reaches, with Microsoft dependencies, System and the control app's dependencies by the bytes the server holds",
+};
 
 /** The digest key: codeunit id plus method, the method compared case-insensitively as AL does. */
 export const testDigestKey = (ref: { codeunitId: number; method: string }): string =>

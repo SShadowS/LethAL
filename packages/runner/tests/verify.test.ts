@@ -34,7 +34,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
 import { TestAppError } from "../src/test-app-publish";
-import { testDigests, testDigestsOfModel } from "../src/test-digest";
+import { TEST_DIGEST_SCHEME, testDigests, testDigestsOfModel } from "../src/test-digest";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
@@ -615,7 +615,8 @@ describe("planVerify", () => {
     // A source run records a digest for every test it ran (or none): a baseline test that is gone
     // from the project now still had one then.
     for (const r of a.sourceBaseline)
-      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??= `v2:${"0".repeat(64)}`;
+      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??=
+        `${TEST_DIGEST_SCHEME}:${"0".repeat(64)}`;
     return planVerify({
       coverage: "procedure",
       ...a,
@@ -913,12 +914,40 @@ describe("planVerify", () => {
     expect(e.detail).toContain("test digests");
   });
 
+  // R-385: a v2 digest (R-371's) fingerprints Microsoft dependencies by declared version only, so
+  // it never equals a v3 one: verify refuses once per source run, naming both schemes.
+  test("R-385: a source run that recorded v2 digests is source-predates-verify, naming both schemes", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const current = await recordedOver(codeunits);
+    const v2 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "v2:")]),
+    );
+    expect(Object.values(v2).every((d) => d.startsWith("v2:"))).toBe(true);
+    const e = await planRefusal(
+      planVerify({
+        coverage: "procedure",
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v2,
+        dependencies: DEPS,
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain("scheme v2, this build v3");
+    expect(e.detail).toContain("once per source run");
+  });
+
   // R-371: a v1 digest (R-278's, no scheme tag) covers the method only; no comparison with it
   // means anything, so verify refuses once instead of reading every test as edited.
   test("R-371: a source run that recorded v1 digests is source-predates-verify, naming the scheme", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
-    const v2 = await recordedOver(codeunits);
-    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const current = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "")]),
+    );
     const e = await planRefusal(
       planVerify({
         coverage: "procedure",
@@ -964,8 +993,10 @@ describe("planVerify", () => {
   // with an unreadable dependency is source-predates-verify, and no package is read at all.
   test("R-371: a v1 source with an unreadable dependency refuses source-predates-verify, reading no package", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
-    const v2 = await recordedOver(codeunits);
-    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const current = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "")]),
+    );
     let reads = 0;
     const e = await planRefusal(
       planVerify({
