@@ -61,6 +61,8 @@ import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 import {
+  DependencyUnreadableError,
+  type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
   readAppJsonInputs,
@@ -108,9 +110,9 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
-import { testDigestsOfSources } from "../src/test-digest";
+import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
 import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
-import { TestPageScanError } from "../src/testpage-scan";
+import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
   type VerifyDeps,
@@ -118,11 +120,13 @@ import {
   planVerify,
   runVerify,
   verifyDependencyFingerprint,
+  verifyRefusalOf,
 } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -564,7 +568,8 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
-    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json. */
+    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json.
+     *  R-385: the published path reads Microsoft apps by bytes, al-runner's by declared version. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
       const app =
         from !== undefined ? appInputsOfPackage(from) : await readAppJsonInputs(dirs.testDir);
@@ -572,7 +577,7 @@ describe("runSession", () => {
         dependencies: await dependencyFingerprint(
           app,
           async () => null,
-          { kind: "declared" },
+          from !== undefined ? fakeMicrosoftMode() : { kind: "declared" },
           await targetOf(dirs.projectDir),
         ),
         buildInputs: app.buildInputs,
@@ -587,6 +592,8 @@ describe("runSession", () => {
         | ((app: { readonly name: string }) => Promise<Uint8Array | null | undefined>),
       extra: Partial<SessionConfig> = {},
       fetch = true,
+      /** `null`: a backend with no microsoftMode. */
+      microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
     ) {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
@@ -596,6 +603,7 @@ describe("runSession", () => {
       const backend = fetch
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
+            ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
           })
         : stub;
       const store = new ResultsStore(":memory:");
@@ -732,36 +740,58 @@ describe("runSession", () => {
     });
 
     // R-371: a non-Microsoft dependency is fingerprinted by the bytes of the package the server
-    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify.
-    describe("R-371: a non-Microsoft dependency of the published test app", () => {
-      const DEP_ID = "55555555-5555-5555-5555-555555555555";
-      const DEP = { id: DEP_ID, name: "Dep Lib", publisher: "Partner", version: "1.0.0.0" };
+    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify. R-385: so is a
+    // Microsoft one (Library Assert), on the published path, through the backend's microsoftMode.
+    describe.each([
+      [
+        "R-371: a non-Microsoft dependency",
+        "55555555-5555-5555-5555-555555555555",
+        "Dep Lib",
+        "Partner",
+      ],
+      [
+        "R-385: a Microsoft dependency",
+        "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+        "Library Assert",
+        "Microsoft",
+      ],
+    ])("%s of the published test app", (_label, DEP_ID, DEP_NAME, DEP_PUBLISHER) => {
+      const DEP = { id: DEP_ID, name: DEP_NAME, publisher: DEP_PUBLISHER, version: "1.0.0.0" };
       const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
       // Published body = disk body, so only the dependency can make K new.
       const TESTS_PKG = new Uint8Array(
         buildFakeAppWithEntries({
-          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="${DEP_NAME}" Publisher="${DEP_PUBLISHER}" MinVersion="1.0.0.0" /></Dependencies></Package>`,
           "src/SandboxTests.Codeunit.al": NEW_AL,
         }),
       );
       const depPkg = (build: string) =>
         new Uint8Array(
           buildFakeAppWithEntries({
-            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" Version="1.0.0.0" /></Package>`,
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="${DEP_NAME}" Publisher="${DEP_PUBLISHER}" Version="1.0.0.0" /></Package>`,
             "src/Dep.al": `// build ${build}`,
           }),
         );
       const serverWith = (dep: Uint8Array | null) => async (app: { readonly name: string }) =>
         app.name === DEP.name ? dep : TESTS_PKG;
 
-      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
-      async function newAtVerify(
+      /** Verify's plan against a server holding `dep` for the dependency; `microsoft` undefined
+       *  is a backend with no microsoftMode. */
+      async function verifyAgainst(
         r: Awaited<ReturnType<typeof r372Run>>,
         dep: Uint8Array,
-      ): Promise<string[]> {
+        over: {
+          readonly maxNewTests?: number;
+          readonly microsoft?: MicrosoftMode | null;
+          readonly server?: (app: { readonly name: string }) => Promise<Uint8Array | null>;
+        } = {},
+      ) {
         const { dirs, store, runId } = r;
         const recorded = store.testDigests(runId);
-        const plan = await planVerify({
+        const microsoft = over.microsoft === undefined ? fakeMicrosoftMode() : over.microsoft;
+        return planVerify({
+          ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+          sourceTestDigestParts: store.testDigestParts(runId),
           coverage: "procedure",
           source: {
             runId,
@@ -806,13 +836,18 @@ describe("runSession", () => {
           sourceTestDigests: recorded,
           testDir: dirs.testDir,
           dependencies: await verifyDependencyFingerprint(
-            { fetchPublishedAppPackage: serverWith(dep) },
+            {
+              fetchPublishedAppPackage: over.server ?? serverWith(dep),
+              ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            },
             dirs.testDir,
             dirs.projectDir,
           ),
         });
-        return plan.newTests.map((t) => t.method);
       }
+      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
+      const newAtVerify = async (r: Awaited<ReturnType<typeof r372Run>>, dep: Uint8Array) =>
+        (await verifyAgainst(r, dep)).newTests.map((t) => t.method);
 
       test("the same package at verify reads K as unchanged; a rebuild at the same version reads it as new", async () => {
         const r = await r372Run(serverWith(depPkg("one")));
@@ -833,8 +868,77 @@ describe("runSession", () => {
         expect(store.testDigests(runId)).toBeNull();
         expect(digestWarning).toHaveLength(1);
         expect(digestWarning[0]).toContain("dependencies could not be fingerprinted");
-        expect(digestWarning[0]).toContain("Dep Lib");
+        expect(digestWarning[0]).toContain(DEP_NAME);
         store.close();
+      });
+
+      // R-385 T4 (down): nothing changed but every buffer is a fresh copy per read, and verify's
+      // app.json lists the two dependencies in the other order from the published manifest.
+      test("unchanged packages read as fresh buffers, dependencies in another order: K stays old", async () => {
+        const DEP2 = { ...DEP, id: "66666666-6666-6666-6666-666666666666", name: `${DEP_NAME} 2` };
+        const pkgOf = (d: typeof DEP) =>
+          new Uint8Array(
+            buildFakeAppWithEntries({
+              "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${d.id}" Name="${d.name}" Publisher="${d.publisher}" Version="1.0.0.0" /></Package>`,
+              "src/Dep.al": "// build one",
+            }),
+          );
+        const tag = (d: typeof DEP) =>
+          `<Dependency Id="${d.id}" Name="${d.name}" Publisher="${d.publisher}" MinVersion="1.0.0.0" />`;
+        const testsPkg = () =>
+          new Uint8Array(
+            buildFakeAppWithEntries({
+              "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies>${tag(DEP)}${tag(DEP2)}</Dependencies></Package>`,
+              "src/SandboxTests.Codeunit.al": NEW_AL,
+            }),
+          );
+        const fresh = async (app: { readonly name: string }) =>
+          app.name === DEP.name ? pkgOf(DEP) : app.name === DEP2.name ? pkgOf(DEP2) : testsPkg();
+        const r = await r372Run(fresh);
+        expect(r.digestWarning).toEqual([]);
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP2, DEP] }),
+        );
+        const plan = await verifyAgainst(r, pkgOf(DEP), { server: fresh });
+        expect(plan.newTests.map((t) => t.method)).toEqual([]);
+        r.store.close();
+      });
+
+      test("the rebuilt dependency is named as the cause (dependency)", async () => {
+        const r = await r372Run(serverWith(depPkg("one")));
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP] }),
+        );
+        const e = await verifyAgainst(r, depPkg("two"), { maxNewTests: 0 }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        const refusal = verifyRefusalOf(e);
+        expect(refusal).toMatchObject({ kind: "refused", reason: "too-many-new-tests" });
+        expect(refusal?.kind === "refused" ? refusal.detail : "").toContain(
+          "dependency: 1 test(s)",
+        );
+        r.store.close();
+      });
+
+      // R-385 D4: a published path with no microsoftMode never falls back to declared versions.
+      test("a published-path backend with no microsoftMode: the run records NULL, verify refuses dependency-unreadable", async () => {
+        const r = await r372Run(serverWith(depPkg("one")), {}, true, null);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain("dependencies could not be fingerprinted");
+        const e = await verifyAgainst(r, depPkg("one"), { microsoft: null }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        expect(e).toBeInstanceOf(DependencyUnreadableError);
+        expect(verifyRefusalOf(e)).toMatchObject({
+          kind: "refused",
+          reason: "dependency-unreadable",
+        });
+        r.store.close();
       });
     });
   });
@@ -13981,12 +14085,40 @@ describe("C02-06 Task 5.4: runVerify", () => {
     } = {},
   ) {
     const fx = await installedFixture({ unmutated: ALL_GREEN, session: freshSessions(), ...o });
+    // R-385: the setup run's PhaseBackend reads no published package, so it records al-runner's
+    // declared-mode digests (tagged `K declared`, never equal to a bytes one). A bcdev source run,
+    // the only kind verify reads, records bytes-mode digests: record those, over the same tests.
+    {
+      const { testDir, projectDir } = fx.dirs;
+      const { digests, parts } = testDigestsOfModel(
+        buildTestAppModel(await readTestAppSources(testDir)),
+        await discoverTests(testDir),
+        {
+          dependencies: await verifyDependencyFingerprint(
+            { microsoftMode: () => fakeMicrosoftMode() },
+            testDir,
+            projectDir,
+          ),
+          buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+        },
+      );
+      const recorded = fx.store.testDigests(fx.installed.fromRunId);
+      if (recorded === null) throw new Error("verifyFixture: the setup run recorded no digests");
+      expect(Object.keys(digests).sort()).toEqual(Object.keys(recorded).sort());
+      fx.store.db.run("UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ?", [
+        JSON.stringify(digests),
+        JSON.stringify(parts),
+        fx.installed.fromRunId,
+      ]);
+    }
     if (o.withNewTest === true) {
       await Bun.write(join(fx.dirs.testDir, "NewTests.Codeunit.al"), NEW_TESTS_AL);
     }
     const log: string[] = [];
     const tlog: string[] = [];
     const backend = Object.assign(fx.cfg.backend, {
+      // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+      microsoftMode: () => fakeMicrosoftMode(),
       compileTestApp:
         o.compile ??
         (async (_dir: string, target: BoundArtifact): Promise<CompiledTestApp> => {

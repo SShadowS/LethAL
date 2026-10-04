@@ -1085,20 +1085,29 @@ export function capCheckTwoDetail(
 
 /**
  * R-371: this verify's dependency fingerprint, over the test project's app.json (the test app
- * verify compiles and publishes) and the packages the server holds for its non-Microsoft
- * dependencies, read one at a time through the same /packages read as R-372. Throws
- * `DependencyUnreadableError` (refused as `dependency-unreadable`) when one cannot be read.
+ * verify compiles and publishes) and the packages the server holds for its dependencies, read one
+ * at a time through the same /packages read as R-372. R-385: Microsoft ones too, plus `System` and
+ * the control app's dependencies, each checked against its installed version (the backend's
+ * `microsoftMode`; verify is the published path, so a backend without one is refused, never read
+ * by declared versions). Throws `DependencyUnreadableError` (refused as `dependency-unreadable`)
+ * when one cannot be read.
  */
 export async function verifyDependencyFingerprint(
-  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage">,
+  backend: Pick<ExecutionBackend, "fetchPublishedAppPackage" | "microsoftMode">,
   testDir: string,
   projectPath: string,
 ): Promise<string> {
   const fetchPackage = backend.fetchPublishedAppPackage?.bind(backend);
+  if (backend.microsoftMode === undefined) {
+    throw new DependencyUnreadableError(
+      "this backend cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+    );
+  }
+  const microsoft = backend.microsoftMode();
   return dependencyFingerprint(
     await readAppJsonInputs(testDir),
     fetchPackage === undefined ? async () => null : publishedPackageReader(fetchPackage),
-    { kind: "declared" },
+    microsoft,
     await targetOf(projectPath),
   );
 }

@@ -64,9 +64,21 @@ const timer = setInterval(sample, 5);
 const t0 = performance.now();
 let code = 0;
 try {
-  const fp = await bcdevDependencyFingerprint(fetchCounted, testDir, projectDir, {
-    kind: "declared",
-  });
+  // R-385: Microsoft packages, System and the control app's dependencies by bytes, as run and
+  // verify read them; System and the control package are counted too.
+  const mode = backend.microsoftMode();
+  const fp = await bcdevDependencyFingerprint(
+    fetchCounted,
+    testDir,
+    projectDir,
+    mode.kind === "bytes"
+      ? {
+          ...mode,
+          readSystem: () => fetchCounted({ publisher: "Microsoft", name: "System" }),
+          readControl: () => fetchCounted({ publisher: "LethAL", name: "LethAL Control" }),
+        }
+      : mode,
+  );
   sample();
   console.log(
     JSON.stringify({

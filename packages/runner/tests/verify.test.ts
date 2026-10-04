@@ -60,6 +60,7 @@ import {
 import type { ReachFilterOffReason } from "../src/verify-reach";
 import { droppedNewTestsOf } from "../src/verify-read";
 import { tinyBundle } from "./helpers/bundle";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -1870,7 +1871,11 @@ describe("C02-09: gap ids", () => {
         ? null
         : JSON.stringify(
             await testDigests(testDir, await discoverTests(testDir), {
-              dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
+              dependencies: await verifyDependencyFingerprint(
+                { microsoftMode: () => fakeMicrosoftMode() },
+                testDir,
+                projectDir,
+              ),
               buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
             }),
           ),
@@ -1897,6 +1902,8 @@ describe("C02-09: gap ids", () => {
         compileCheck: async () => boom(),
         activate: async () => boom(),
         run: async () => boom(),
+        // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+        microsoftMode: () => fakeMicrosoftMode(),
         compileTestApp: async (_dir, target) => ({
           appPath: "t.app",
           sha256: "e".repeat(64),
