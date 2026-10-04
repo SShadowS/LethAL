@@ -4712,10 +4712,11 @@ describe("runSession — Layer 5A deployment identity", () => {
     let prepared = 0;
     const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
       async (...args) => {
-        await real(...args);
+        const changes = await real(...args);
         prepared += 1;
         writeFileSync(noOp, NO_MUTANTS_AL);
         writeFileSync(appJson, APP_JSON);
+        return changes;
       },
     );
     const store = new ResultsStore(":memory:");
@@ -12122,7 +12123,7 @@ describe("GH-24: per-mutant reach", () => {
     let stripped = 0;
     const spy = spyOn(orchestratorModule, "prepareBatchProject").mockImplementation(
       async (projectDir, targetDir, projectManifest, appVersion) => {
-        await real(projectDir, targetDir, projectManifest, appVersion);
+        const changes = await real(projectDir, targetDir, projectManifest, appVersion);
         const path = join(targetDir, "mutant-manifest.json");
         const manifest = JSON.parse(await readFile(path, "utf8")) as {
           mutants: Array<Record<string, unknown>>;
@@ -12133,6 +12134,7 @@ describe("GH-24: per-mutant reach", () => {
           return rest;
         });
         await Bun.write(path, JSON.stringify(manifest));
+        return changes;
       },
     );
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
