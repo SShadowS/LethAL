@@ -100,7 +100,10 @@ afterAll(async () => {
   const tmp = tmpdir();
   for (const e of await readdir(tmp))
     if (e.startsWith("lethal-r214-hist-")) await rm(join(tmp, e), { recursive: true, force: true });
-});
+  // 30 s: must outlast the 15 s per-test guard. Bun gives a hook only 5 s by default, and the wait
+  // above can last as long as a starved test body still has to run; if the hook timed out, the rm
+  // and the sweep would never run and the folders would leak.
+}, 30_000);
 
 /** A private copy of the R321 fixture pair, so a run never writes next to the committed one. */
 // Every caller is a test body, so the wrapper's whole-test promise already covers this setup; it
