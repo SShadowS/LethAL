@@ -1097,8 +1097,15 @@ export async function generateMutationSet(
   }
   // R307 section 5: refusing only when nothing is left to measure. A plain Error (exit 1).
   if (refusedFiles.length > 0 && files.length === 0) {
+    // R399: files left out for an undecided `#if` (R214) are named too, so the message covers
+    // everything that left nothing to measure. An undecided-ONLY project does not reach here.
+    const undecided = preprocExcluded.filter((f) => f.reason === "preproc-undecided");
     throw new Error(
-      `nothing is left to measure: no file with mutation sites could be instrumented, and ${refusedFiles.length} file(s) were refused whole at instrumentation (R307): ${refusedFiles.map(formatRefusal).join(" | ")}`,
+      `nothing is left to measure: no file with mutation sites could be instrumented, and ${refusedFiles.length} file(s) were refused whole at instrumentation (R307): ${refusedFiles.map(formatRefusal).join(" | ")}${
+        undecided.length > 0
+          ? `; ${undecided.length} more file(s) were left out for an undecided #if (R214): ${undecided.map((f) => f.file).join(", ")}`
+          : ""
+      }`,
     );
   }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
