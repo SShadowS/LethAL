@@ -1913,3 +1913,30 @@ The same R289 change added the watchdog's story to every `RunMutantMany` message
 detail (the abort, the unconfirmed 408, the non-2xx, and now also the connection-failure and
 body-read-failure messages): ` watchdog: polls ok <n>, polls failed <n>[, last poll ok at +<ms>][; stop
 sent at +<ms>, answered at +<ms> | unanswered][; failed at +<ms>];`, relative to the call's start.
+
+## Never list all extensions; read by id (R433, 2026-10-04)
+
+BC's automation API lists a company's installed apps (the `extensions` list). On Cronus28, BC
+28.4.53241.53758, asked for every row it never answered, and the service tier stopped answering
+afterwards until a host restart:
+
+| request | result |
+|---|---|
+| no `$filter`, 3 runs | the server closed the socket after about 166 s each time |
+| `$filter=publisher eq 'Microsoft'` | the same, about 166 s |
+| `$top=5` | 200, 1,863 bytes, 52 ms |
+| `$filter=id eq <Library Assert id>` (`HarnessVerifier.fetchExtensionInstalled`), 3 runs | 49, 40, 39 ms |
+
+A filter on publisher is NOT a safe narrowing: BC appears to build the whole list before it filters.
+So the list is read only by one app id. `HarnessVerifier`'s private sender refuses anything else
+before a request is sent (`UnfilteredExtensionsQueryError`), and
+`scripts/automation-api-guard.test.ts` refuses the API text outside `harness.ts`. The per-id read
+cost 40-70 ms per app on Cronus284 (after a first, cold read of 4.4 s that also looks up the company).
+
+R-385 uses that per-id read for its installed check. Measured on Cronus284 (BC 28.4.53241.53758) for
+the sandbox fixtures' closure plus `System` and Test Runner: 14 Microsoft packages, 68.9 MB,
+downloaded through `dev/packages` in 3.2 s; 13 per-id reads in 0.6 s, each one installed row equal to
+the served manifest's version; the control app read in 0.4 s. About 4.3 s added per run and per
+verify. Packages with no `.al` entries (symbols only): `Application` (expected: a wrapper app whose
+dependencies carry the source) and the `LethAL Control` package. Plan and limits:
+`docs/superpowers/plans/2026-10-04-R-385-resident-microsoft-dependencies.md`.

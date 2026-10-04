@@ -74,6 +74,7 @@ import {
 } from "../src/verify";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -2385,6 +2386,8 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         onReach(target.artifactId);
         throw new Error("R358 fake: verify reached compileTestApp");
       },
+      // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+      microsoftMode: () => fakeMicrosoftMode(),
       close: async () => {},
     }) as BcDevMcpBackend;
   }

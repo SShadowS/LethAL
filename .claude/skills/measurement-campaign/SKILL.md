@@ -42,6 +42,12 @@ item that exercises `validateSelectorIdsForProject` — `--dry-run` dispatches t
 returns before the run path that calls it, so a selector id colliding with the target app's own
 objects survives a clean dry run and fails later, live.
 
+**Never list all extensions; read by id.** To learn what a server has installed, read one app at a
+time (`HarnessVerifier.fetchExtensionInstalled` or `fetchInstalledVersions`, by app id). BC's full
+list of installed apps, unfiltered or filtered by publisher, hung BC 28.4 for about 166 s and took
+the service tier down until a host restart (R433). A measurement that needs "every installed app"
+has no safe source today (R434).
+
 ## Rule 1 — pre-commit expectations to a committed file, before the run
 
 This is what made the campaign's two errors visible *as* errors. Half of it is now machine-checked:

@@ -26,7 +26,7 @@ describe("R-278: testDigestsOfSources", () => {
   test("a digest is recorded for every discovered test, keyed by codeunit id and lowercased method", () => {
     const d = digests(unit(A + B));
     expect(Object.keys(d).sort()).toEqual(["50100::a", "50100::b"]);
-    expect(d["50100::a"]).toMatch(/^v2:[0-9a-f]{64}$/);
+    expect(d["50100::a"]).toMatch(/^v3:[0-9a-f]{64}$/);
     expect(testDigestKey({ codeunitId: 50100, method: "MyTest" })).toBe(
       testDigestKey({ codeunitId: 50100, method: "mytest" }),
     );
@@ -163,7 +163,7 @@ ${procs}}
   /** The edit turns A new, and an unreached edit does not (A is not on the fallback). */
   function expectReached(files: Files, path: string, from: string, to: string): void {
     const was = digestA(files);
-    expect(was).toMatch(/^v2:/);
+    expect(was).toMatch(/^v3:/);
     expect(digestA(edit(files, path, from, to))).not.toBe(was);
     expect(digestA(unrelated(files))).toBe(was);
   }

@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
@@ -339,4 +340,13 @@ export interface ExecutionBackend {
    * RAN. Absent: none, and such a dependency cannot be read (the run records no test digests).
    */
   dependencyPackageDirs?(): readonly string[];
+
+  /**
+   * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
+   * fingerprint: the bytes the server holds (`System`, every Microsoft app in the closure, the
+   * control app's dependencies) and each one's installed version. A run or verify on the
+   * published path without it records no digests or refuses; it never falls back to declared
+   * versions. Throws `DependencyUnreadableError` when it cannot be built.
+   */
+  microsoftMode?(): MicrosoftMode;
 }

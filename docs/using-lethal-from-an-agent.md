@@ -553,7 +553,7 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
 | `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the one unmutated run per new test alone exceeds the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do (a second unmutated run per new test sent to a survivor, plus one run per survivor a new test joins); the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
-| `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
+| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or a Microsoft app has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
@@ -612,10 +612,28 @@ than a stronger assertion. The test must pass twice on the unmutated build, or v
 an existing test whose own source (its attributes and its procedure) changed since the run
 (R-278, R258). A test is also new when anything it runs changed (R371): a test-app procedure or
 handler it reaches, the header, globals or triggers of an object it reaches, ANY event-subscriber
-codeunit in the test app (every test is then new), or a dependency (a non-Microsoft one by the
-package the server holds; a Microsoft one by its version only, so a rebuild at an unchanged version
-is not seen). A test with a call the walk cannot follow (an interface, a `RecordRef` insert, a run by
-id) is new after ANY test-app edit. So one shared-helper edit can make many tests new.
+codeunit in the test app (every test is then new), or a dependency, by the bytes of the package the
+server holds (R385: Microsoft ones too, so a rebuild or an upgrade at an unchanged declared version is
+seen). Every test also covers `System`, `Application` when the test app declares one, and Test
+Runner, which the `LethAL Control` app runs every test through, so a platform or Base App update
+makes every test new. A Microsoft app must have exactly one installed version, the one the server
+serves, or verify refuses `dependency-unreadable` naming it. This adds about 4.3 s per run and per
+verify (14 packages, 68.9 MB, on BC 28.4). A test with a call the walk cannot follow (an interface,
+a `RecordRef` insert, a run by id) is new after ANY test-app edit. So one shared-helper edit can make
+many tests new.
+
+What verify still does NOT see, so it reports the affected tests as OLD (not re-run, no cause) with
+no warning:
+- an installed app no test-app dependency reaches (for example one with a global event
+  subscriber), and a non-Microsoft dependency that is published but not the installed version
+  (R434);
+- a body-only rebuild of a symbols-only package (no `.al` source inside): measured, that is
+  `Application`, which is expected because it is a wrapper app whose dependencies carry the source,
+  and the `LethAL Control` package, whose bytes are not hashed anyway;
+- a service-tier binary update with no new `System` package (unmeasured);
+- the control app's own changes: its bytes are not hashed, or every control-app upgrade would make
+  every test new;
+- on al-runner, Microsoft apps are still read by declared version (R435; verify is bcdev only).
 
 Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
 coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
@@ -652,8 +670,9 @@ The cap counts extra test runs: two unmutated runs per new test, plus one per su
 joins, against `--max-new-tests` (default 50) x (survivors + 2). With the reach filter on, a new
 test sent to no survivor is not rerun, so it counts one unmutated run, not two (R-427); before the
 lease only the one run per new test is checked. Above it verify refuses
-`too-many-new-tests` and names the value that would run them. A run recorded before R371 is
-refused once as `source-predates-verify`. An edited test
+`too-many-new-tests` and names the value that would run them. A run recorded before R385 (digest
+scheme v1 or v2) is refused once as `source-predates-verify`, and the detail names both schemes
+(`scheme v2, this build v3`). An edited test
 gets the same unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
