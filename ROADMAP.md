@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**108 of 426 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**109 of 427 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -164,6 +164,7 @@ that ordering is the priority.
 - **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
 - **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
 - **R431** · lethal verify cannot see a test-app codeunit that another app runs by its integer id (Codeunit.Run(<id>)), when the test hands that id over as a plain Integer · [R431.md](docs/roadmap/R431.md) · open, filed 2026-10-04
+- **R433** · The unfiltered automation extensions query hangs BC 28.4 (and took Cronus28 down) and must never be issued · [R433.md](docs/roadmap/R433.md) · open, filed 2026-10-04
 
 ## Product gaps a real project hits
 
