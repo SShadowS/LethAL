@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**109 of 416 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 422 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -161,7 +161,8 @@ that ordering is the priority.
 - **R417** · A quarantine store path that exists but is not a directory read as 'no record', so clear() said 'cleared' and the quarantine check reported clean · [R417.md](docs/roadmap/R417.md) · done (eca61946)
 - **R418** · maskAlNonCode indexes a code-point array by UTF-16 offsets, so a non-BMP character (emoji) before a comment or string shifts the blanking and can erase an object header · [R418.md](docs/roadmap/R418.md) · done (cd6e14e2)
 - **R419** · R-307's per-file trial checks the latch refusals (C1-C4) only on the FULL mutant set, but the writer re-instruments BATCH SUBSETS, where a member's reach grain can change and a latch refusal can first appear at write time · [R419.md](docs/roadmap/R419.md) · open
-- **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · open
+- **R421** · Discovered file paths keep the OS separator, so the manifest's `file` (and every report) says `src\X.al` on Windows and `src/X.al` on Linux, and mutant numbering can differ between the two in a project with subfolders · [R421.md](docs/roadmap/R421.md) · done (dda76e88)
+- **R426** · verify's reach filter cannot see a kill that depends on state left by an earlier test in the same call, or on code run in another session; filtered verify keeps fresh `lethal run`'s blind spot · [R426.md](docs/roadmap/R426.md) · open, filed 2026-10-04
 
 ## Product gaps a real project hits
 
@@ -266,7 +267,7 @@ that ordering is the priority.
 - **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · open, filed 2026-10-01
 - **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
-- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · open, filed 2026-10-01
+- **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
 - **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
 - **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
 - **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30
@@ -275,15 +276,18 @@ that ordering is the priority.
 - **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · open, filed 2026-09-30
 - **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · done (ecf0f1d1, 4ee63129)
 - **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · open
-- **R384** · lethal verify sends every new test to every survivor, so a shared-helper edit on a large suite trips too-many-new-tests; a per-survivor reachability filter would bend that curve · [R384.md](docs/roadmap/R384.md) · open, filed 2026-10-01
+- **R384** · lethal verify sends every new test to every survivor, so a shared-helper edit on a large suite trips too-many-new-tests; a per-survivor reachability filter would bend that curve · [R384.md](docs/roadmap/R384.md) · done (1ec0dcab)
 - **R386** · A test-app object passed as an argument to external code puts that test on the whole-source digest; narrowing it would keep verify's new-test count down · [R386.md](docs/roadmap/R386.md) · open, filed 2026-10-01
 - **R387** · `lethal run --backend al-runner` defaults to its slowest path (one-shot, recompile per mutant, no coverage), and two of the three fast switches have no CLI or config surface · [R387.md](docs/roadmap/R387.md) · done (b3928cb9, 7a84c70e); coverage default is R394
 - **R388** · No way to run Microsoft's own tests against the code an app customizes (the base objects it extends and the events it subscribes to) · [R388.md](docs/roadmap/R388.md) · closed 2026-10-01: out of scope (owner ruling). Selecting and running Microsoft's tests belongs to al-runner…
 - **R394** · Turn al-runner coverage on by default in `lethal run` (R387 left it off): needs R383 re-measured on 2.12.0 and a pre-commitment · [R394.md](docs/roadmap/R394.md) · open, filed 2026-10-01
 - **R405** · The symbol table, receiver checks and structural readers read #if declarations without arms, so they refuse sites the build has · [R405.md](docs/roadmap/R405.md) · open, filed 2026-10-02
 - **R408** · tree-sitter-al misparses a #if tail on a repeat-until condition as a separate statement; LethAL refuses the file (directive-continues-statement) until the grammar owns the tail · [R408.md](docs/roadmap/R408.md) · open, filed 2026-10-02
-- **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · open, filed 2026-10-03
-- **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · open
+- **R420** · Test discovery silently drops a [Test] whose attributes are split by a #if line (e.g. around [HandlerFunctions]); the R79 net does not fire · [R420.md](docs/roadmap/R420.md) · done (aba9278b)
+- **R422** · A Windows-made project whose app.json names a path with `\` (e.g. `"logo": "Images\\Logo.png"`) fails the Linux `alc` with AL1001, so LethAL in a Linux container cannot compile it · [R422.md](docs/roadmap/R422.md) · done (d69655b3)
+- **R424** · A test whose procedure HEADER is split by #if/#else (one name per arm, one body) is not discovered; the TestPage-scan and digest models have no split member · [R424.md](docs/roadmap/R424.md) · done (82a730f3)
+- **R425** · The verify report does not record whether R-384's reachability filter was on, so a reader of the JSON cannot tell which mode produced a survivor's verdict · [R425.md](docs/roadmap/R425.md) · done (31f5de45)
+- **R427** · verify still runs a new test's stability rerun when the reach filter sends that test to no survivor, so an edit whose new tests reach nothing still costs 2N runs · [R427.md](docs/roadmap/R427.md) · open, filed 2026-10-04
 
 ## Backends and tooling
 
@@ -461,6 +465,8 @@ that ordering is the priority.
 - **R414** · R393's 'CI unset' control fails on every GitHub runner: Bun also reads GITHUB_ACTIONS as CI, and the control removed only CI · [R414.md](docs/roadmap/R414.md) · done (443e2ec6)
 - **R415** · kraken-secrets' CLI test splits a tar listing on \n only; Windows' bsdtar ends lines with \r\n · [R415.md](docs/roadmap/R415.md) · done (5a8b8f3c)
 - **R416** · kraken-setup.sh's unit test cannot put its fakes first on PATH under a Windows bash started from PowerShell; the script only runs in the Linux image · [R416.md](docs/roadmap/R416.md) · done (27d17c7b)
+- **R423** · The biome auto-format hook runs on a .ts file that still holds merge-conflict markers and damages the code around them · [R423.md](docs/roadmap/R423.md) · open
+- **R428** · r214-history.test.ts times out a hook at the 5 s default under machine load and then leaks its `lethal-r214-hist-*` temp folders, failing R358's leak check too · [R428.md](docs/roadmap/R428.md) · done (772632ef)
 
 ---
 

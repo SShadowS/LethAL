@@ -272,6 +272,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "tag": "primary",
     },
     {
+      "call": "fetchPublishedAppPackage",
+      "tag": "primary",
+    },
+    {
       "event": {
         "seq": 3,
         "tests": [
@@ -284,10 +288,6 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         ],
         "type": "tests-discovered",
       },
-    },
-    {
-      "call": "fetchPublishedAppPackage",
-      "tag": "primary",
     },
     {
       "event": {

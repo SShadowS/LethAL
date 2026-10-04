@@ -1,5 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { afterAll, test as bunTest, describe, expect } from "bun:test";
+import { cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -19,6 +19,26 @@ import { ResultsStore } from "../src/store";
 
 // R214 Task 8: history, resume and marks apply only between runs built under the IDENTICAL
 // effective symbol set (C1), and the scheme N-1 to N transition on the same-text key (I4).
+
+// R428: a STARVATION GUARD, local to this file (no suite-wide timeout changes). Measured
+// 2026-10-04: the whole file runs in 0.73 to 1.01 s and the slowest test takes 0.11 s, even beside
+// a concurrent full verify at load average up to 7.6. The 5 s default timeouts seen that day were
+// the whole process starved, not setup cost. 15 s is far above any measured cost, so a stall
+// past it is something we WANT to see fail.
+//
+// R428: the wrapper also tracks each WHOLE test (setup + body) in `inflight`. Bun does not cancel a
+// test that timed out, so its body keeps running; afterAll waits for all of them before cleaning.
+const inflight = new Set<Promise<unknown>>();
+const test = (name: string, fn: () => Promise<void> | void) =>
+  bunTest(
+    name,
+    () => {
+      const whole = Promise.resolve(fn());
+      inflight.add(whole);
+      return whole;
+    },
+    15_000,
+  );
 
 const HERE = import.meta.dir;
 const R214 = join(HERE, "fixtures", "r214");
@@ -70,10 +90,24 @@ class SurvivingBackend implements ExecutionBackend {
 
 const roots: string[] = [];
 afterAll(async () => {
+  // R428: bun does not cancel a test that timed out. Its body (mkdtemp, cp, any later write) keeps
+  // running and can land AFTER this hook's rm, recreating the folder for R358's leak check to find.
+  // So wait for every whole test still running first, then remove each root, then sweep by name for any folder whose
+  // path was never recorded. The sweep is safe: scripts/test-preload.ts points tmpdir() at a
+  // folder private to this bun process, so it cannot touch another session's files.
+  await Promise.allSettled(inflight);
   for (const r of roots) await rm(r, { recursive: true, force: true });
-});
+  const tmp = tmpdir();
+  for (const e of await readdir(tmp))
+    if (e.startsWith("lethal-r214-hist-")) await rm(join(tmp, e), { recursive: true, force: true });
+  // 30 s: must outlast the 15 s per-test guard. Bun gives a hook only 5 s by default, and the wait
+  // above can last as long as a starved test body still has to run; if the hook timed out, the rm
+  // and the sweep would never run and the folders would leak.
+}, 30_000);
 
 /** A private copy of the R321 fixture pair, so a run never writes next to the committed one. */
+// Every caller is a test body, so the wrapper's whole-test promise already covers this setup; it
+// needs no tracking of its own.
 async function makeSymbolsProject() {
   const root = await mkdtemp(join(tmpdir(), "lethal-r214-hist-"));
   roots.push(root);

@@ -5,6 +5,7 @@ import type { CoverageMode, TestMethodRef, TestOutcome } from "./backend";
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import type { PublishOutcome } from "./deployment-verifier";
 import type { InstalledBundleRows, InstalledBundleWrite } from "./installed-bundle";
+import { normalizeRelPath } from "./line-filter";
 import { sameBuildSymbols } from "./preprocessor-symbols";
 import type { CoverageAttribution } from "./selection";
 import { type IdentityKey, serializeKey } from "./selection";
@@ -1738,7 +1739,12 @@ export class ResultsStore {
     if (file === undefined) {
       this.db.query("DELETE FROM publish_outcomes WHERE tier = ?").run(tier);
     } else {
-      this.db.query("DELETE FROM publish_outcomes WHERE tier = ? AND file = ?").run(tier, file);
+      // R421: either separator on either side. A Windows run before R421 recorded `src\X.al`, and
+      // the refusal now names `src/X.al`. Must match `clearPublishCeiling`'s filter exactly, which
+      // checks the deleted count against the rows it identified.
+      this.db
+        .query("DELETE FROM publish_outcomes WHERE tier = ? AND REPLACE(file, '\\', '/') = ?")
+        .run(tier, normalizeRelPath(file));
     }
     const r = this.db.query("SELECT changes() AS n").get() as { n: number };
     return r.n;

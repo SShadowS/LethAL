@@ -284,3 +284,89 @@ describe("prepareBatchProject: the run's own outputs are not copied (R363)", () 
     },
   );
 });
+
+// R-422. The Linux `alc` reads `\` in app.json's `logo`, `screenshots` and `resourceFolders` as
+// part of the file name (AL1001 / AL0863), so the batch app.json LethAL WRITES carries `/` there.
+// The user's own app.json is never touched.
+describe("prepareBatchProject — backslash paths in app.json (R-422)", () => {
+  it("writes / for logo, screenshots and resourceFolders and leaves the project's app.json alone", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      const own = {
+        ...manifest,
+        logo: "Images\\Logo.png",
+        screenshots: ["Shots\\a.png", 7],
+        resourceFolders: ["Res\\Sub", ".\\Other\\"],
+      };
+      await write(projectDir, "app.json", JSON.stringify(own));
+      const hashBefore = Bun.SHA256.hash(await readFile(join(projectDir, "app.json")), "hex");
+
+      await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0");
+
+      const batch = JSON.parse(await readFile(join(batchDir, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(batch.logo).toBe("Images/Logo.png");
+      expect(batch.screenshots).toEqual(["Shots/a.png", 7]);
+      expect(batch.resourceFolders).toEqual(["Res/Sub", "./Other/"]);
+      const hashAfter = Bun.SHA256.hash(await readFile(join(projectDir, "app.json")), "hex");
+      expect(hashAfter).toBe(hashBefore);
+    });
+  });
+
+  it("leaves a backslash in any other field exactly as written", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      const own = {
+        ...manifest,
+        description: "a\\b",
+        brief: "c\\d",
+        url: "http://x\\y",
+        logo: "Images\\Logo.png",
+      };
+      await write(projectDir, "app.json", JSON.stringify(own));
+      await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0");
+      const batch = JSON.parse(await readFile(join(batchDir, "app.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(batch.description).toBe("a\\b");
+      expect(batch.brief).toBe("c\\d");
+      expect(batch.url).toBe("http://x\\y");
+      expect(batch.logo).toBe("Images/Logo.png");
+    });
+  });
+
+  it("returns each change, in field order, and none for an all-/ project", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      const own = {
+        ...manifest,
+        logo: "Images\\Logo.png",
+        screenshots: ["Shots\\a.png"],
+        resourceFolders: ["Res\\Sub"],
+      };
+      await write(projectDir, "app.json", JSON.stringify(own));
+      const changes = await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0");
+      expect(changes).toEqual([
+        { field: "logo", from: "Images\\Logo.png", to: "Images/Logo.png" },
+        { field: "screenshots[0]", from: "Shots\\a.png", to: "Shots/a.png" },
+        { field: "resourceFolders[0]", from: "Res\\Sub", to: "Res/Sub" },
+      ]);
+    });
+    await withDirs(async (projectDir, batchDir) => {
+      const own = { ...manifest, logo: "Images/Logo.png", resourceFolders: ["Res"] };
+      await write(projectDir, "app.json", JSON.stringify(own));
+      expect(await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0")).toEqual([]);
+    });
+  });
+
+  it("control: a manifest with no backslash paths is written byte for byte as before", async () => {
+    await withDirs(async (projectDir, batchDir) => {
+      const own = { ...manifest, logo: "Images/Logo.png", resourceFolders: ["Res"] };
+      await write(projectDir, "app.json", JSON.stringify(own));
+      await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0");
+      expect(await readFile(join(batchDir, "app.json"), "utf8")).toBe(
+        `${JSON.stringify({ ...own, version: "1.0.2.0" }, null, 2)}\n`,
+      );
+    });
+  });
+});

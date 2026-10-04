@@ -30,6 +30,7 @@ import {
   VERIFY_FLAGS,
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
+  verifyFlagRefusal,
   verifyFromCli,
 } from "../src/cli";
 import {
@@ -64,7 +65,13 @@ import { generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
-import { VERIFY_EXIT } from "../src/verify";
+import {
+  VERIFY_EXIT,
+  VerifyError,
+  type VerifyOutput,
+  refusalOutput,
+  type runVerify,
+} from "../src/verify";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
@@ -2485,6 +2492,36 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     expect(out.exitCode).toBe(VERIFY_REFUSED_EXIT_CODE);
   });
 
+  test("R-384: verifyFromCli hands --no-reach-filter and its stderr writer to runVerify", async () => {
+    const ctx = await runThenArtifact();
+    const seen: Array<Parameters<typeof runVerify>> = [];
+    for (const noReachFilter of [true, undefined]) {
+      await verifyFromCli(
+        {
+          mode: "verify",
+          dbPath: ctx.dbPath,
+          artifact: ctx.artifactId,
+          testDir: ctx.testDir,
+          survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+          configPath: ctx.configPath,
+          ...(noReachFilter !== undefined ? { noReachFilter } : {}),
+        },
+        {
+          write: () => {},
+          buildBackend: async () => verifyBackendFake(() => {}),
+          runVerify: async (...a) => {
+            seen.push(a);
+            return refusalOutput(new VerifyError("no-tests-to-run", "fake"), {
+              totalMs: 0,
+            }) as VerifyOutput;
+          },
+        },
+      );
+    }
+    expect(seen.map(([args]) => args.noReachFilter)).toEqual([true, undefined]);
+    expect(seen.every(([, deps]) => typeof deps.log === "function")).toBe(true);
+  });
+
   test("verify removes its scratch directory when the backend build fails (R358)", async () => {
     const ctx = await runThenArtifact();
     let scratchRoot: string | undefined;
@@ -2591,6 +2628,38 @@ describe("C02-06: lethal verify (Task 7)", () => {
         /--max-new-tests must be a non-negative integer/,
       );
     }
+  });
+
+  test("R-384: --no-reach-filter sets noReachFilter on verify, and is absent unless given", () => {
+    expect(parseCliConfig([...VERIFY_ARGS, "--no-reach-filter"])).toMatchObject({
+      noReachFilter: true,
+    });
+    expect("noReachFilter" in parseCliConfig(VERIFY_ARGS)).toBe(false);
+  });
+
+  test("R-384: run and campaign refuse --no-reach-filter by name", () => {
+    const messageOf = (argv: readonly string[]): string => {
+      try {
+        parseCliConfig([...argv]);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+      throw new Error(`${argv.join(" ")} was accepted`);
+    };
+    const run = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
+    expect(messageOf([...run, "--no-reach-filter"])).toBe(
+      "--no-reach-filter is only accepted by `lethal verify`, not `lethal run`. It turns off lethal verify's coverage reach filter.",
+    );
+    expect(messageOf(["campaign", "compare", "--no-reach-filter"])).toBe(
+      "--no-reach-filter is only accepted by `lethal verify`, not `lethal campaign`. It turns off lethal verify's coverage reach filter.",
+    );
+  });
+
+  test("R-384: verify's flag-list refusal names --no-reach-filter", () => {
+    expect(VERIFY_FLAGS.has("no-reach-filter")).toBe(true);
+    expect(verifyFlagRefusal("x")).toBe(
+      "--x is not accepted by `lethal verify`, which reads only --db, --artifact, --tests, --survivors, --config, --max-new-tests and --no-reach-filter. Its JSON goes to stdout.",
+    );
   });
 
   test("verify refuses every shared flag outside its allowlist, --out and --report included", () => {

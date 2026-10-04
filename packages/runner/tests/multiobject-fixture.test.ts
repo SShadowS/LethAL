@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   EXPECTED_MULTIOBJECT,
@@ -35,18 +35,18 @@ const PAIR = "MultiPair.Codeunit.al";
 
 /** `<code> <file> <line> <operator> <type:id> <procedure>`, the dry run's twelve rows. */
 const EXPECTED_MUTANTS = [
-  "M0001 src\\MultiControl.Codeunit.al 4 lethal.empty-block codeunit:79802 Double",
-  "M0002 src\\MultiControl.Codeunit.al 5 lethal.return-value codeunit:79802 Double",
-  "M0003 src\\MultiPair.Codeunit.al 4 lethal.empty-block codeunit:79800 Never",
-  "M0004 src\\MultiPair.Codeunit.al 5 lethal.return-value codeunit:79800 Never",
-  "M0005 src\\MultiPair.Codeunit.al 5 lethal.swap-additive codeunit:79800 Never",
-  "M0006 src\\MultiPair.Codeunit.al 12 lethal.empty-block codeunit:79801 Reached",
-  "M0007 src\\MultiPair.Codeunit.al 13 lethal.conditional-boundary codeunit:79801 Reached",
-  "M0008 src\\MultiPair.Codeunit.al 14 lethal.return-value codeunit:79801 Reached",
-  "M0009 src\\MultiPair.Codeunit.al 14 lethal.swap-additive codeunit:79801 Reached",
-  "M0010 src\\MultiPair.Codeunit.al 15 lethal.return-value codeunit:79801 Reached",
-  "M0011 src\\MultiPair.Codeunit.al 17 lethal.empty-block codeunit:79801 Unreached",
-  "M0012 src\\MultiPair.Codeunit.al 18 lethal.return-value codeunit:79801 Unreached",
+  "M0001 src/MultiControl.Codeunit.al 4 lethal.empty-block codeunit:79802 Double",
+  "M0002 src/MultiControl.Codeunit.al 5 lethal.return-value codeunit:79802 Double",
+  "M0003 src/MultiPair.Codeunit.al 4 lethal.empty-block codeunit:79800 Never",
+  "M0004 src/MultiPair.Codeunit.al 5 lethal.return-value codeunit:79800 Never",
+  "M0005 src/MultiPair.Codeunit.al 5 lethal.swap-additive codeunit:79800 Never",
+  "M0006 src/MultiPair.Codeunit.al 12 lethal.empty-block codeunit:79801 Reached",
+  "M0007 src/MultiPair.Codeunit.al 13 lethal.conditional-boundary codeunit:79801 Reached",
+  "M0008 src/MultiPair.Codeunit.al 14 lethal.return-value codeunit:79801 Reached",
+  "M0009 src/MultiPair.Codeunit.al 14 lethal.swap-additive codeunit:79801 Reached",
+  "M0010 src/MultiPair.Codeunit.al 15 lethal.return-value codeunit:79801 Reached",
+  "M0011 src/MultiPair.Codeunit.al 17 lethal.empty-block codeunit:79801 Unreached",
+  "M0012 src/MultiPair.Codeunit.al 18 lethal.return-value codeunit:79801 Unreached",
 ];
 
 interface Built {
@@ -109,18 +109,17 @@ describe("R383: sandbox-multiobject", () => {
   };
 
   it("gives the pre-committed twelve mutants in one batch", () => {
-    // R411: the pre-commitment is written in the Windows form; the product writes the host's.
-    const host = (s: string) => s.split("\\").join(sep);
+    // R411/R421: discovered paths are written in one form, `/`, on every platform, so these pins
+    // hold everywhere.
     expect(get().batchPaths).toEqual([
-      [host("src\\MultiControl.Codeunit.al"), host("src\\MultiPair.Codeunit.al")],
+      ["src/MultiControl.Codeunit.al", "src/MultiPair.Codeunit.al"],
     ]);
-    expect(get().rows).toEqual(EXPECTED_MUTANTS.map(host));
+    expect(get().rows).toEqual(EXPECTED_MUTANTS);
   });
 
   it("the itest leg's pre-committed table names exactly these mutants", () => {
     const sites = EXPECTED_MULTIOBJECT.map(
-      (r) =>
-        `${r.code} ${r.file.replace(/\//g, "\\")} ${r.line} ${r.operatorName} ${r.procedureName}`,
+      (r) => `${r.code} ${r.file} ${r.line} ${r.operatorName} ${r.procedureName}`,
     );
     expect(sites).toEqual(EXPECTED_MUTANTS.map((m) => m.replace(/ codeunit:\d+/, "")));
   });

@@ -1,11 +1,15 @@
-import { beforeAll, describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { initParser, liveParseResults, parsesSinceStart } from "@lethal/engine";
 import type { TestMethodRef } from "../src/backend";
 import { discoverTests } from "../src/discovery";
+import { DiscoveredPathError } from "../src/line-filter";
 import {
   TestPageScanError,
   analyzeTestPageSources,
+  readTestAppSources,
   scanTestPageSources,
   scanTestPageTests,
 } from "../src/testpage-scan";
@@ -1847,5 +1851,66 @@ ${helperCu(!opensFirst)}
       expect(got.errors).toEqual([]);
       expect(got.refused.get("50100::T") ?? "").toContain("OpenView");
     }
+  });
+});
+
+// R421: each test-app source's `path` is written with `/` on every platform, by the same
+// `discoveredRelPaths` that target discovery uses. On a POSIX host a file literally named
+// `Sub\T.Codeunit.al` plays the part of a Windows readdir result under `"win32"`.
+describe("readTestAppSources — discovered paths use `/` (R421)", () => {
+  const ONE_TEST = `codeunit 79410 "Sub Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T()
+    begin
+    end;
+}
+`;
+  const roots: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots.map((r) => rm(r, { recursive: true, force: true })));
+  });
+  const testDirWith = async (rel: string): Promise<string> => {
+    const root = await mkdtemp(join(tmpdir(), "lethal-testpage-r421-"));
+    roots.push(root);
+    await mkdir(dirname(join(root, rel)), { recursive: true });
+    await writeFile(join(root, rel), ONE_TEST, "utf8");
+    return root;
+  };
+
+  test.skipIf(process.platform === "win32")(
+    "10. a `\\` name read under win32 rules becomes `Sub/T.Codeunit.al`",
+    async () => {
+      const dir = await testDirWith("Sub\\T.Codeunit.al");
+      expect(await readTestAppSources(dir, "win32")).toEqual([
+        { path: "Sub/T.Codeunit.al", text: ONE_TEST },
+      ]);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "11. under the host's own POSIX rules a `\\` in a test file name is refused by name",
+    async () => {
+      const dir = await testDirWith("Sub\\T.Codeunit.al");
+      let err: unknown;
+      try {
+        await readTestAppSources(dir);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(DiscoveredPathError);
+      if (!(err instanceof DiscoveredPathError)) return;
+      expect(err.paths).toEqual(["Sub\\T.Codeunit.al"]);
+      expect(err.message).toBe(
+        `cannot use the file "Sub\\T.Codeunit.al": its name contains a backslash. On ${process.platform} a backslash is an ordinary file-name character, but LethAL writes every path with "/", so this file would be recorded as "Sub/T.Codeunit.al", which does not exist, and its batch would not compile. Rename the file.`,
+      );
+    },
+  );
+
+  test("12. CONTROL on POSIX (green before and after; the red case on Windows): a real subfolder gives `Sub/T.Codeunit.al`", async () => {
+    const dir = await testDirWith("Sub/T.Codeunit.al");
+    expect(await readTestAppSources(dir)).toEqual([{ path: "Sub/T.Codeunit.al", text: ONE_TEST }]);
   });
 });

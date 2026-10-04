@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
@@ -27,16 +27,16 @@ const BETA = "LayoutBeta.Codeunit.al";
 
 /** `<batch>/<code>` with the dry run's line, operator and procedure, the spec's ten rows. */
 const EXPECTED_MUTANTS = [
-  "0/M0001 src\\LayoutAlpha.Codeunit.al 4 lethal.empty-block IsBig",
-  "0/M0002 src\\LayoutAlpha.Codeunit.al 5 lethal.return-value IsBig",
-  "0/M0003 src\\LayoutAlpha.Codeunit.al 5 lethal.conditional-boundary IsBig",
-  "1/M0001 src\\LayoutBeta.Codeunit.al 4 lethal.empty-block Grow",
-  "1/M0002 src\\LayoutBeta.Codeunit.al 5 lethal.conditional-boundary Grow",
-  "1/M0003 src\\LayoutBeta.Codeunit.al 6 lethal.return-value Grow",
-  "1/M0004 src\\LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
-  "1/M0005 src\\LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
-  "1/M0006 src\\LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
-  "1/M0007 src\\LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
+  "0/M0001 src/LayoutAlpha.Codeunit.al 4 lethal.empty-block IsBig",
+  "0/M0002 src/LayoutAlpha.Codeunit.al 5 lethal.return-value IsBig",
+  "0/M0003 src/LayoutAlpha.Codeunit.al 5 lethal.conditional-boundary IsBig",
+  "1/M0001 src/LayoutBeta.Codeunit.al 4 lethal.empty-block Grow",
+  "1/M0002 src/LayoutBeta.Codeunit.al 5 lethal.conditional-boundary Grow",
+  "1/M0003 src/LayoutBeta.Codeunit.al 6 lethal.return-value Grow",
+  "1/M0004 src/LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
+  "1/M0005 src/LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
+  "1/M0006 src/LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
+  "1/M0007 src/LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
 ];
 
 /**
@@ -117,13 +117,13 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
   };
 
   it("gives the pre-committed ten mutants in two batches", () => {
-    // R411: the pre-commitment is written in the Windows form; the product writes the host's.
-    const host = (s: string) => s.split("\\").join(sep);
+    // R411/R421: discovered paths are written in one form, `/`, on every platform, so these pins
+    // hold everywhere.
     expect(get().batchPaths).toEqual([
-      [host("src\\LayoutAlpha.Codeunit.al")],
-      [host("src\\LayoutBeta.Codeunit.al")],
+      ["src/LayoutAlpha.Codeunit.al"],
+      ["src/LayoutBeta.Codeunit.al"],
     ]);
-    expect(get().rows).toEqual(EXPECTED_MUTANTS.map(host));
+    expect(get().rows).toEqual(EXPECTED_MUTANTS);
   });
 
   it("batch 0's layout misplaces batch 1's covered lines, and batch 1's own does not", async () => {
