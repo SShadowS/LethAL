@@ -12,7 +12,8 @@ import {
  * WHY THIS EXISTS (R196). Four operators can turn a terminating loop into a non-terminating one by
  * mutating a variable the loop's condition reads. Measured on the Document Output Templates slice:
  * eight of 741 mutants never terminate, costing about 40 of the run's 148 minutes in strands,
- * quarantines and resumes.
+ * quarantines and resumes. Those four operators now REFUSE every site this names (owner ruling
+ * 2026-10-05) rather than tagging it; the `hangCapable` channel stays for plug-in operators.
  *
  * WHAT A CLAIM MEANS, EXACTLY. That the assignment's target is a CONDITION-RELEVANT VARIABLE of an
  * enclosing loop. It does NOT establish that the mutation prevents progress, that the assignment

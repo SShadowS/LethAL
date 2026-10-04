@@ -1,5 +1,10 @@
 # Design: hang-capable sites are tagged and stopped, not refused (R196)
 
+**Superseded in part (2026-10-05, owner ruling):** the built-in operators now REFUSE every
+`loop-condition-target` site instead of tagging it (plan
+`docs/superpowers/plans/2026-10-05-R-196-refuse-hang-capable-sites.md`). The forced stop (B2,
+sections 5 to 8) was never built. The tag channel remains for plug-in operators.
+
 Status: DRAFT revision 2, 2026-09-06, for review before any code. Revision 1 was reviewed
 adversarially by gpt-5.6-sol and refused on four blockers; all four and the fifteen smaller findings
 are applied here and listed in §11. Sol also corrected three things in the pre-spec design, credited

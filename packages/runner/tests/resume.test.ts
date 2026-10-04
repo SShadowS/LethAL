@@ -459,8 +459,9 @@ describe("sessionFingerprint (R47)", () => {
   // ef3bb9d1...daf5 under scheme 5. It moved again for R421 (scheme 7); it was b3f6072b...0c0e
   // under scheme 6. It moved again for R405 (scheme 8); it was 5c8357ec...0c4b under scheme 7.
   // It moved again for R307 (scheme 9, R374's run-wide ordinals); it was cf9df227...28d7 under
-  // scheme 8.
-  const PINNED = "eab8b0ef7dc062164e275acd1b38e9361088569164232c90a48053cdae985539";
+  // scheme 8. It moved again for R196 (scheme 10, refused loop-exit sites); it was
+  // eab8b0ef...5539 under scheme 9.
+  const PINNED = "647690733effcaf16ba710539735037b0ee821b4d9fa2894230b23c4d86c984e";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1946,8 +1947,8 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 9 since R307 (R374, run-wide identity ordinals).
-    expect(IDENTITY_SCHEME).toBe(9);
+    // Pinned by value so a bump is deliberate: 10 since R196 (refused loop-exit sites move twins).
+    expect(IDENTITY_SCHEME).toBe(10);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

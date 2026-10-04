@@ -59,21 +59,23 @@ export const removeAssignment: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.assignment_statement],
   producesNodeKinds: [ALNodeKind.assignment_statement],
-  // R196: the tag resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  // R196: the hang refusal resolves symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
   requiresSemantic: ["symbol-table"],
   // R172: 16 survivors on `itest:tables` in one wave, and its own doc comment names an assignment whose target is never read again as the shape it cannot see.
   equivalenceRisk: "value-rewrite",
 
-  targets(node: ALSyntaxNode, _ctx: SemanticContext): boolean {
+  targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.rawKind !== ALNodeKind.assignment_statement) return false;
     // Only in a statement SLOT, the same test `void-method-call` uses. An assignment that is not in
     // one is not a statement this compiler can remove.
-    return isStatementSlot(node);
+    if (!isStatementSlot(node)) return false;
+    // R196: REFUSED where an enclosing loop's condition reads the target, since deleting the write
+    // can make the loop never end. Silent, like every other operator refusal.
+    return hangCapableForMutatedNode(node, ctx) === null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     if (!removeAssignment.targets(node, ctx)) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -82,7 +84,6 @@ export const removeAssignment: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, ""),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -121,7 +122,7 @@ export const removeAssignment: MutationOperator = {
       ],
     },
     {
-      name: "tags an in-loop assignment that advances the condition (R196), and does NOT tag the preheader one",
+      name: "REFUSES an in-loop assignment that advances the condition (R196), and keeps the preheader one",
       sourceAL: `codeunit 51804 "A" { procedure P() var Remaining: Integer; begin Remaining := 3; while Remaining > 0 do Remaining := Remaining - 1; end; }`,
       expectedSpecs: [
         {
@@ -129,12 +130,6 @@ export const removeAssignment: MutationOperator = {
           beforeText: "Remaining := 3",
           afterText: "",
           hangCapable: null,
-        },
-        {
-          parentContext: "statement-position",
-          beforeText: "Remaining := Remaining - 1",
-          afterText: "",
-          hangCapable: "loop-condition-target",
         },
       ],
     },

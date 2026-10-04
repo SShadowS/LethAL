@@ -14,7 +14,8 @@ describe("swapAdditive", () => {
     await initParser();
   });
 
-  it("tags an in-loop additive expression that advances the condition (R196), and does NOT tag the preheader one", () => {
+  // Same-loop controls and the targets()/generate() agreement check: loop-exit-refusal.test.ts.
+  it("REFUSES an in-loop additive expression that advances the condition (R196), and claims the preheader one", () => {
     const src = `codeunit 50000 P
 {
     procedure Go()
@@ -33,12 +34,7 @@ describe("swapAdditive", () => {
       .filter((n) => swapAdditive.targets(n, ctx))
       .flatMap((n) => swapAdditive.generate(n, ctx));
 
-    const inLoop = specs.filter((s) => s.before.text === "Remaining - 1");
-    expect(inLoop.length).toBeGreaterThan(0);
-    for (const s of inLoop) expect(s.hangCapable).toBe("loop-condition-target");
-
-    const preheader = specs.filter((s) => s.before.text === "Remaining + 1");
-    expect(preheader.length).toBeGreaterThan(0);
-    for (const s of preheader) expect(s.hangCapable).toBeUndefined();
+    expect(specs.map((s) => s.before.text)).toEqual(["Remaining + 1"]);
+    for (const s of specs) expect(s.hangCapable).toBeUndefined();
   });
 });
