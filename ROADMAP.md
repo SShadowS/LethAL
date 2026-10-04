@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**110 of 416 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**109 of 416 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -448,7 +448,7 @@ that ordering is the priority.
 - **R360** · lethal run never removes its temp scratch folder (a full instrumented copy of the project per run), because lethal verify reads the installed batch from it · [R360.md](docs/roadmap/R360.md) · done (6b7b6b56)
 - **R363** · Every batch dir copies the results database, the run's report and its progress file into the build, because prepareBatchProject copies every non-AL file in the project · [R363.md](docs/roadmap/R363.md) · done (fd418949)
 - **R383** · Upstream closed al-runner #3713 (coverage lost after a file's first object) on 2026-09-10, but LethAL still disables coverage for every multi-object file; re-measure on 2.12.0 · [R383.md](docs/roadmap/R383.md) · closed 2026-10-02: ruling (option A), the whole-run multi-object refusal stays. Upstream #3713's object loss…
-- **R396** · Measure the R-387 al-runner speed-up on a real app: one timed run with the old defaults and one with the new, verdicts identical per mutant · [R396.md](docs/roadmap/R396.md) · open, filed 2026-10-01
+- **R396** · Measure the R-387 al-runner speed-up on a real app: one timed run with the old defaults and one with the new, verdicts identical per mutant · [R396.md](docs/roadmap/R396.md) · done (d3fd29b8)
 - **R395** · al-runner's `--server` path runs the whole suite under ONE long deadline, so a hung test becomes an error after at least 10 minutes rather than a per-test timeout, and no live gate checks an al-runner hang · [R395.md](docs/roadmap/R395.md) · open, filed 2026-10-01 (a stated limit)
 - **R397** · A hard-killed lethal run can leave its al-runner --server daemon running: no signal handler closes the backend, and Windows does not kill a child with its parent · [R397.md](docs/roadmap/R397.md) · closed 2026-10-02: measured, does not reproduce. al-runner v2.12.0's --server daemon exits within 5 s when…
 - **R406** · R393's control test (b), CI unset, fails under load: the late call lands while bun runs another test concurrently and toMatchSnapshot throws · [R406.md](docs/roadmap/R406.md) · done (63677f0a)
