@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { Component } from "../src/components";
-import { emitDispatch } from "../src/dispatch";
+import { REACH_LATCH, emitDispatch, planComponent } from "../src/dispatch";
 
-/** `emitDispatch` reads the root's text from the file source: a source holding the stand-in root
- *  at its own offset. */
+/** PLAN reads the splice decisions from the file source: a source holding the stand-in root at
+ *  its own offset. R-307 O5: EMIT then writes the chain from the frozen plan and the root's text. */
 function emit(component: Component): string {
   const { root } = component;
-  return emitDispatch(component, " ".repeat(root.startIndex) + root.text);
+  const source = " ".repeat(root.startIndex) + root.text;
+  return emitDispatch(root.text, planComponent(component, source), REACH_LATCH);
 }
 
 /**

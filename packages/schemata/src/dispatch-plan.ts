@@ -5,14 +5,15 @@ import {
   isStatementPosition,
   isStatementSlot,
 } from "@lethal/engine";
-import { type ComponentMember, buildComponents } from "./components";
+import { type Component, type ComponentMember, buildComponents } from "./components";
 import type { IdedSpec } from "./ids";
 
 /**
  * R-307 (plan amendment O3). The PLAN half of `dispatch.ts`: every decision the dispatch chain
  * depends on (the member splice, reach grain and placement, the reach-latch refusals), made over
- * spans and the file's source, with no chain text built. The text is built in `dispatch.ts` from
- * what these functions return, so there is one code path for each decision.
+ * spans and the file's source, with no chain text built. The text is built in `dispatch-emit.ts`
+ * from what these functions return (`PlannedComponent`), so there is one code path for each
+ * decision.
  */
 
 /**
@@ -84,9 +85,11 @@ export function describeSplice(
         `is not contained in component root ${root.startIndex}..${root.endIndex}`,
     );
   }
+  // The replacement's own `;` first: when it has one, the source is not read at all
+  // (manifest-row-cost charges every source read, and EMIT now slices each root once).
   const needsTerminator =
-    endsInSemicolon(source, m.spec.before.startIndex, m.spec.before.endIndex) &&
-    !m.afterText.trimEnd().endsWith(";");
+    !m.afterText.trimEnd().endsWith(";") &&
+    endsInSemicolon(source, m.spec.before.startIndex, m.spec.before.endIndex);
   const filler = emptiedSlotFiller(source, m.spec.before.endIndex, root.endIndex, m);
   return { relStart, relEnd, insert: m.afterText + filler + (needsTerminator ? ";" : "") };
 }
@@ -146,7 +149,50 @@ export function planPlacement(
   return none("unplaced");
 }
 
-/** The grain `emitDispatch` places (or omits) the marker by. Pure; one source for every caller. */
+/**
+ * R-307 O5. One member's frozen plan: everything EMIT needs to write its branch, as plain data.
+ * `statementStart`/`statementEnd` are its resolved statement's span relative to the root's start,
+ * which the `block`, `list` and `slot` placements put the marker by.
+ */
+export interface PlannedMember {
+  readonly mutantId: string;
+  readonly grain: ReachGrain;
+  readonly place: Placement;
+  readonly splice: SpliceParts;
+  readonly statementStart: number;
+  readonly statementEnd: number;
+}
+
+/** R-307 O5. One component's frozen plan: the root's span (never the node) and its members. */
+export interface PlannedComponent {
+  readonly rootStart: number;
+  readonly rootEnd: number;
+  readonly members: readonly PlannedMember[];
+}
+
+/** R-307 O5. `planPlacement`, frozen: the node is read here and never again. */
+export function planMember(root: ALSyntaxNode, m: ComponentMember, source: string): PlannedMember {
+  const { grain, place, splice } = planPlacement(root, m, source);
+  return {
+    mutantId: m.mutantId,
+    grain,
+    place,
+    splice,
+    statementStart: m.statement.startIndex - root.startIndex,
+    statementEnd: m.statement.endIndex - root.startIndex,
+  };
+}
+
+/** R-307 O5. Every member of one component, planned in member order. */
+export function planComponent(c: Component, source: string): PlannedComponent {
+  return {
+    rootStart: c.root.startIndex,
+    rootEnd: c.root.endIndex,
+    members: c.members.map((m) => planMember(c.root, m, source)),
+  };
+}
+
+/** The grain EMIT places (or omits) the marker by. Pure; one source for every caller. */
 export function reachGrainOf(
   member: ComponentMember,
   root: ALSyntaxNode,
