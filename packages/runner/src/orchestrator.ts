@@ -6573,8 +6573,9 @@ function selectNamed(
   };
 }
 
-/** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is. */
-function invalidBaselineReason(v: TestVerdict | undefined): string | undefined {
+/** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is.
+ *  Exported for R-384's reach filter, which must judge freshness by exactly this rule. */
+export function invalidBaselineReason(v: TestVerdict | undefined): string | undefined {
   if (v === undefined) return "no baseline run";
   if (v.outcome !== "pass") {
     return v.failureMessage !== undefined ? `${v.outcome}: ${v.failureMessage}` : v.outcome;
