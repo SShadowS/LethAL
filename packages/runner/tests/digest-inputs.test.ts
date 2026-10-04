@@ -247,6 +247,61 @@ describe("R-385: Microsoft dependencies by the bytes the server holds", () => {
     expect(a).toBe(b);
   });
 
+  // Review r1 #1: the "nothing changed" direction on the Application and Test Runner paths. Every
+  // read hands back FRESH buffers, so only equal content can make two fingerprints equal.
+  test("stability: an `application` root (Application -> Base App) gives the same fingerprint twice", async () => {
+    const read: PackageReader = async (d) =>
+      d.id === APPLICATION_APP_ID
+        ? [
+            pkg(
+              APPLICATION_APP_ID,
+              "Application",
+              "Microsoft",
+              "same",
+              depTag(MS, "Base", "Microsoft"),
+            ),
+          ]
+        : d.id === MS
+          ? [pkg(MS, "Base", "Microsoft", "same")]
+          : null;
+    const app = appInputsOfAppJson({ application: "28.0.0.0" });
+    const a = await dependencyFingerprint(app, read, bytes());
+    const b = await dependencyFingerprint(app, read, bytes());
+    expect(a).toBe(b);
+  });
+
+  test("stability: a control app depending on Test Runner gives the same fingerprint twice", async () => {
+    const tr = depTag(TEST_RUNNER, "Test Runner", "Microsoft");
+    const read: PackageReader = async (d) =>
+      d.id === TEST_RUNNER ? [pkg(TEST_RUNNER, "Test Runner", "Microsoft", "same")] : null;
+    const at = () =>
+      dependencyFingerprint(appInputsOfAppJson({}), read, bytes({ control: controlWith(tr) }));
+    expect(await at()).toBe(await at());
+  });
+
+  test("Base Application reached through Application (a Microsoft app) is hashed: its bytes move it", async () => {
+    const at = (build: string) =>
+      dependencyFingerprint(
+        appInputsOfAppJson({ application: "28.0.0.0" }),
+        async (d) =>
+          d.id === APPLICATION_APP_ID
+            ? [
+                pkg(
+                  APPLICATION_APP_ID,
+                  "Application",
+                  "Microsoft",
+                  "same",
+                  depTag(MS, "Base", "Microsoft"),
+                ),
+              ]
+            : d.id === MS
+              ? [pkg(MS, "Base", "Microsoft", build)]
+              : null,
+        bytes(),
+      );
+    expect(await at("one")).not.toBe(await at("two"));
+  });
+
   test("declared mode never equals bytes mode on the same inputs, and reads no Microsoft package", async () => {
     let reads = 0;
     const read: PackageReader = async (d) => {
