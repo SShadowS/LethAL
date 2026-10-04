@@ -2885,6 +2885,37 @@ describe("C02-09: gap ids", () => {
         w.store.close();
       });
 
+      // R-427 moved expectation: this is R-384's ORIGINAL C3/C4 fixture, kept as a POSITIVE test.
+      // Before R-427 it REFUSED (2N + P = 9 > B = 8). Now N = 4, S = 2, max 2, B = 8: only N1
+      // reaches a survivor (Post), so R = 1, P = 1 and E = N + R + P = 6 <= B. Check 2 passes
+      // and the run proceeds; N2..N4 reach no survivor and run their baseline only.
+      test("R-427: R-384's old C3/C4 fixture (3 of 4 new tests reach no survivor) no longer refuses; E = 6 <= B = 8", async () => {
+        const w = await verifyWorld(twoSurvivors(), [], {
+          ...fenced,
+          testDir: reachTestDir(fourNew),
+          baseline: [T_M],
+          maxNewTests: 2,
+          runNamed: reachRunNamed({
+            M: POST,
+            N1: POST,
+            N2: at("Third"),
+            N3: at("Third"),
+            N4: at("Third"),
+          }),
+        });
+        const out = await w.verify(["0/M0001,0/M0002"]);
+        expect(out.refused).toBeUndefined();
+        expect(out.exitCode).not.toBe(VERIFY_EXIT.refused);
+        expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1"], ["T.M"]]);
+        expect(out.newTests.map((t) => [t.test, t.state, t.runs.length])).toEqual([
+          ["New.N1", "stable", 2],
+          ["New.N2", "not-rerun", 1],
+          ["New.N3", "not-rerun", 1],
+          ["New.N4", "not-rerun", 1],
+        ]);
+        w.store.close();
+      });
+
       // R-427: E = N + R + P, where R is the new tests sent to at least one survivor; a test sent
       // to none runs its baseline only. N = 3, S = 2, max 2, B = 8.
       test("R-427: E = N + R + P = B passes where R-384's 2N + P = B + 1 refused", async () => {
