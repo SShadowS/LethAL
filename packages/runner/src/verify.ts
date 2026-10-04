@@ -1096,7 +1096,14 @@ export async function verifyDependencyFingerprint(
 export const VERIFY_SCHEMA_VERSION = 5;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
-export const NEW_TEST_STATES = ["stable", "flaky", "red", "flaky-unknown", "infra-error"] as const;
+export const NEW_TEST_STATES = [
+  "stable",
+  "flaky",
+  "red",
+  "flaky-unknown",
+  "infra-error",
+  "not-rerun",
+] as const;
 /** R262: an unmutated run's outcome exactly as the backend answered it, plus `not-run`. */
 export const UNMUTATED_OUTCOMES = [
   "pass",
@@ -1140,7 +1147,8 @@ export interface NewTestResult {
   readonly test: string;
   readonly codeunitId: number;
   readonly state: NewTestState;
-  /** `[baseline, rerun]`. */
+  /** `[baseline, rerun]`; `[baseline]` alone when `state` is `not-rerun` (R-427: the reach
+   *  filter sent the test to no survivor, so its stability is unknown, never `stable`). */
   readonly runs: readonly UnmutatedRun[];
   /** The first failing run's text. */
   readonly failure?: string;
@@ -1344,6 +1352,25 @@ function newTestResultOf(
   };
 }
 
+/**
+ * R-427: a new test the reach filter sent to no survivor ran its baseline only. Only a filterable
+ * test can be unsent, and that needs a fresh green baseline, so anything else is a bug.
+ */
+function notRerunResultOf(ref: TestMethodRef, baseline: NamedUnmutatedRun): NewTestResult {
+  const b = unmutatedRunOf(baseline);
+  if (!(b.fresh && b.outcome === "pass")) {
+    throw new Error(
+      `verify.ts: new test ${testKeyOf(ref)} was not rerun, but its baseline was not a fresh pass (${b.outcome}, fresh ${b.fresh}); only a test with a fresh green baseline can be sent to no survivor (a bug)`,
+    );
+  }
+  return {
+    test: qualifiedTestName(ref),
+    codeunitId: ref.codeunitId,
+    state: "not-rerun",
+    runs: [b],
+  };
+}
+
 export interface VerifyDeps {
   readonly store: ResultsStore;
   readonly backend: ExecutionBackend & Pick<BcDevMcpBackend, "compileTestApp" | "publishTestApp">;
@@ -1542,7 +1569,8 @@ export async function runVerify(
           if (over !== undefined) throw new VerifyError("too-many-new-tests", over);
           reach = r;
           reportReach(r, plan, planned, log, deps.emit);
-          return { methods: r.methods, unreached: r.unreached };
+          // R-427: a new test sent to no survivor is not rerun.
+          return { methods: r.methods, unreached: r.unreached, notRerun: r.unsent };
         }
       : undefined;
     if (plan.requests.length > 0) {
@@ -1592,6 +1620,27 @@ export async function runVerify(
     // Decision 11: every new test's two unmutated runs, from this call's own answers.
     const newKeys = new Set(plan.newTests.map(testKeyOf));
     const ran = res;
+    // R-427: the tests runNamedMutants did not rerun must be exactly the ones the reach filter
+    // sent to no survivor, as `unreached` is cross-checked below, so a backend that ignores
+    // `notRerun` cannot report a test it never skipped, nor skip one the filter sent.
+    if (ran !== undefined) {
+      const skipped = new Set(ran.notRerun ?? []);
+      const unsent = reach?.unsent ?? new Set<string>();
+      for (const k of unsent) {
+        if (!skipped.has(k)) {
+          throw new Error(
+            `verify.ts: the reach filter sent ${k} to no survivor, but runNamedMutants did not skip its rerun`,
+          );
+        }
+      }
+      for (const k of skipped) {
+        if (!unsent.has(k)) {
+          throw new Error(
+            `verify.ts: runNamedMutants skipped the rerun of ${k}, but the reach filter did not leave it unsent`,
+          );
+        }
+      }
+    }
     const newTests =
       ran === undefined
         ? []
@@ -1599,6 +1648,13 @@ export async function runVerify(
             const key = testKeyOf(ref);
             const b = ran.baseline.find((x) => testKeyOf(x.ref) === key);
             const r = ran.rerun.find((x) => testKeyOf(x.ref) === key);
+            const notRerun = (ran.notRerun ?? []).includes(key);
+            if (b !== undefined && r !== undefined && notRerun) {
+              throw new Error(
+                `verify.ts: runNamedMutants answered new test ${key} both rerun and not rerun`,
+              );
+            }
+            if (b !== undefined && notRerun) return notRerunResultOf(ref, b);
             if (b === undefined || r === undefined) {
               throw new Error(`verify.ts: runNamedMutants did not answer new test ${key}`);
             }

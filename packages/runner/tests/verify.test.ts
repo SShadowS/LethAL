@@ -2196,6 +2196,12 @@ describe("C02-09: gap ids", () => {
         readonly seen?: NamedMutantsConfig[];
         readonly alSources?: readonly { path: string; text: string }[];
         readonly outcome?: Readonly<Record<string, TestOutcome>>;
+        /** R-427: a backend that ignores `notRerun`: reruns every method, reports no notRerun. */
+        readonly ignoreNotRerun?: boolean;
+        /** R-427: a broken backend that answers a notRerun method in `rerun` as well. */
+        readonly rerunAll?: boolean;
+        /** R-427: these methods' baseline answers are reported not fresh (narrow saw them fresh). */
+        readonly staleBaseline?: readonly string[];
       } = {},
     ): NonNullable<VerifyDeps["runNamed"]> {
       return async (cfg) => {
@@ -2232,18 +2238,30 @@ describe("C02-09: gap ids", () => {
               batchIndex: 0,
             };
           });
-        const unmutated = (ref: TestMethodRef, outcome: TestOutcome) => ({
+        const unmutated = (ref: TestMethodRef, outcome: TestOutcome, fresh = true) => ({
           ref,
           outcome,
-          fresh: true,
+          fresh,
           sessionId: 90,
           testRunsBefore: 0,
         });
+        // R-427: as runNamedMutants does, a notRerun method runs its baseline only.
+        const skip = o.ignoreNotRerun === true ? new Set<string>() : (n?.notRerun ?? new Set());
+        const rerunRefs = cfg.rerunOnUnmutated ?? [];
+        const notRerun =
+          n === undefined || o.ignoreNotRerun === true
+            ? undefined
+            : rerunRefs.map(testKeyOf).filter((k) => skip.has(k));
         return {
           outcomes,
           ...(unreached !== undefined ? { unreached } : {}),
-          baseline: rows.map((r) => unmutated(r.ref, r.verdict.outcome)),
-          rerun: (cfg.rerunOnUnmutated ?? []).map((ref) => unmutated(ref, "pass")),
+          baseline: rows.map((r) =>
+            unmutated(r.ref, r.verdict.outcome, !(o.staleBaseline ?? []).includes(r.ref.method)),
+          ),
+          rerun: rerunRefs
+            .filter((ref) => o.rerunAll === true || !skip.has(testKeyOf(ref)))
+            .map((ref) => unmutated(ref, "pass")),
+          ...(notRerun !== undefined ? { notRerun } : {}),
         };
       };
     }
@@ -2269,7 +2287,8 @@ describe("C02-09: gap ids", () => {
       expect(out.reachFilter).toEqual({ state: "on" });
       // R-425: New.N2 was left out of this survivor's request.
       expect(out.results.map((r) => r.reachNarrowed)).toEqual([true]);
-      // Both new tests still run twice unmutated (decision 11).
+      // Both new tests are still reported (decision 11); since R-427 New.N2, sent to no
+      // survivor, runs once (see the R-427 describe below).
       expect(out.newTests.map((t) => t.test)).toEqual(["New.N1", "New.N2"]);
       expect(lines).toEqual([
         "[lethal] verify: reach filter on (fenced coverage): 2 new test(s), 0 joined every survivor because their coverage could not be used; 1 mutant run(s) instead of 2 without the filter; 0 survivor(s) no new test reaches.",
@@ -2682,6 +2701,104 @@ describe("C02-09: gap ids", () => {
         w.store.close();
       });
     }
+
+    // R-427: a filterable new test sent to no survivor is not rerun. N1 reaches M0001 (Post); N2
+    // reaches only `Other`, which no survivor is in.
+    describe("R-427: a new test sent to no survivor is not rerun", () => {
+      const world = (over: Partial<Parameters<typeof verifyWorld>[2]> = {}) =>
+        verifyWorld([seed("M0001", undefined, "survived")], [], {
+          ...fenced,
+          testDir: reachTestDir(),
+          baseline: [T_M],
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }),
+          log: () => {},
+          ...over,
+        });
+      const shapeOf = (out: Awaited<ReturnType<Awaited<ReturnType<typeof world>>["verify"]>>) =>
+        out.newTests.map((t) => [t.test, t.state, t.runs.length, "failure" in t]);
+
+      test("acceptance 1: N1 is stable with two runs; N2 is not-rerun with its one fresh baseline run", async () => {
+        const seen: NamedMutantsConfig[] = [];
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { seen }),
+        });
+        const out = await w.verify(["0/M0001"]);
+        expect(out.refused).toBeUndefined();
+        expect(shapeOf(out)).toEqual([
+          ["New.N1", "stable", 2, false],
+          ["New.N2", "not-rerun", 1, false],
+        ]);
+        expect(out.newTests[1]?.runs).toEqual([
+          { outcome: "pass", fresh: true, sessionId: 90, testRunsBefore: 0 },
+        ]);
+        // Both are still asked for a rerun; runNamedMutants is told, through narrow, to skip N2.
+        expect(seen[0]?.rerunOnUnmutated?.map(testKeyOf)).toEqual(["50101::N1", "50101::N2"]);
+        w.store.close();
+      });
+
+      const failClosed: Array<[string, Partial<Parameters<typeof verifyWorld>[2]>, string]> = [
+        ["--no-reach-filter", { noReachFilter: true }, "stable"],
+        [
+          "hub mode procedure",
+          { sourceCoverage: "procedure", backendCoverage: "procedure" },
+          "stable",
+        ],
+        [
+          "N2 red",
+          {
+            runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { outcome: { N2: "fail" } }),
+          },
+          "red",
+        ],
+        [
+          "N2 with empty coverage",
+          { runNamed: reachRunNamed({ M: POST, N1: POST, N2: [] }) },
+          "stable",
+        ],
+      ];
+      for (const [name, over, state] of failClosed) {
+        test(`fail-closed (${name}): N2 is rerun, never not-rerun`, async () => {
+          const w = await world(over);
+          const out = await w.verify(["0/M0001"]);
+          expect(out.refused).toBeUndefined();
+          expect(shapeOf(out).map(([t, s, n]) => [t, s, n])).toEqual([
+            ["New.N1", "stable", 2],
+            ["New.N2", state, 2],
+          ]);
+          w.store.close();
+        });
+      }
+
+      test("REQUIRED: a backend that ignores notRerun is refused, never read as stable", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { ignoreNotRerun: true }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "the reach filter sent 50101::N2 to no survivor, but runNamedMutants did not skip its rerun",
+        );
+        w.store.close();
+      });
+
+      test("a backend answering a test in both rerun and notRerun is refused", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { rerunAll: true }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "runNamedMutants answered new test 50101::N2 both rerun and not rerun",
+        );
+        w.store.close();
+      });
+
+      test("a notRerun test whose baseline answer is not a fresh pass is refused", async () => {
+        const w = await world({
+          runNamed: reachRunNamed({ M: POST, N1: POST, N2: OTHER }, { staleBaseline: ["N2"] }),
+        });
+        await expect(w.verify(["0/M0001"])).rejects.toThrow(
+          "new test 50101::N2 was not rerun, but its baseline was not a fresh pass",
+        );
+        w.store.close();
+      });
+    });
 
     // R-384 The cap (R4): check 2 counts EXECUTIONS after the filter, E = 2N + P, against
     // B = max x (S + 2), with S fixed in planVerify before any filtering.
