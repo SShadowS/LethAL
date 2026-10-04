@@ -252,8 +252,15 @@ export function hangCapableForMutatedNode(
     if (cur.kind === ALNodeKind.assignment_statement) {
       const right = cur.childForFieldName("right");
       if (right === null) return null;
-      const insideValueSide =
-        node.startIndex >= right.startIndex && node.endIndex <= right.endIndex;
+      // A `#if` tail of the value (`Done := Go` `#if X and true #endif` `;`) sits BESIDE `right`,
+      // the shape `conditionIdentifiers` reads for a loop condition, so it is value side too.
+      const valueParts = [
+        right,
+        ...cur.namedChildren.filter((c) => c.rawKind === "preproc_conditional_expression_tail"),
+      ];
+      const insideValueSide = valueParts.some(
+        (v) => node.startIndex >= v.startIndex && node.endIndex <= v.endIndex,
+      );
       return insideValueSide ? classifyHangCapable(cur, ctx) : null;
     }
     // Early exit, not a guard that changes any answer: this walk climbs `.parent` pointers only,

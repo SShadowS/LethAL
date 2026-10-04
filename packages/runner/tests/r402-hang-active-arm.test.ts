@@ -213,8 +213,14 @@ describe("R402: the hang refusal reads operands in ACTIVE #if arms of a loop con
 
   test("R239: a boolean `#if` tail of a loop condition is never flipped; outside a loop it is, when active", () => {
     // t1's tail literal sits beside a while condition: refused when active, absent when not.
-    for (const b of Object.keys(BUILDS) as Build[])
+    // The file is admitted and keeps its other sites, so the empty flips are the refusal, not a
+    // refused file.
+    for (const b of Object.keys(BUILDS) as Build[]) {
       expect(get("t1", b).flips, `t1/${b}`).toEqual([]);
+      expect(get("t1", b).undecided, `t1/${b}`).toEqual([]);
+      expect(get("t1", b).texts, `t1/${b}`).toContain("A < 10");
+      expect([refused("t1", b, "B"), refused("t1", b, "C")], `t1/${b}`).toEqual([false, false]);
+    }
     // t2 is the same tail beside an `if` outside any loop: flipped exactly in the builds with X.
     expect(get("t2", "none").flips).toEqual([]);
     expect(get("t2", "Y").flips).toEqual([]);

@@ -3,6 +3,7 @@ import {
   type ALSyntaxNode,
   type MutationOperator,
   buildSemanticContext,
+  evaluateArms,
   initParser,
   parseAL,
   visit,
@@ -22,9 +23,12 @@ import { swapAdditive } from "../src/swap-additive";
  * `claimedSites` calls `targets()` AND `generate()` on every node and fails if they disagree, so a
  * refusal made in `generate()` alone (the prototype's shape) is caught, not only an emitted mutant.
  */
-function claimedSites(op: MutationOperator, src: string): string[] {
+function claimedSites(op: MutationOperator, src: string, symbols?: string[]): string[] {
   const root = wrapRoot(parseAL(src));
-  const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+  const ctx = buildSemanticContext(
+    [{ path: "fixture.al", root }],
+    symbols === undefined ? undefined : new Map([[root, evaluateArms(root, src, symbols)]]),
+  );
   const out: string[] = [];
   visit(root, (n: ALSyntaxNode) => {
     const claimed = op.targets(n, ctx);
@@ -95,6 +99,56 @@ describe("R196: a value written to a loop's condition variable is refused", () =
     );
     expect(claimedSites(flipBooleanLiteral, src)).toEqual(["7|true", "10|false"]);
   });
+
+  // A `#if` tail of the assigned VALUE sits beside the assignment's `right` field, so the refusal
+  // must read it too: with LETHALX, flipping the tail `true` makes `Done` permanently false.
+  const tailed = (target: string, value: string, tail: string, until: string) =>
+    unit(
+      [
+        "        repeat", // 7
+        `            ${target} := ${value}`, // 8
+        "#if LETHALX",
+        `                ${tail}`, // 10
+        "#endif",
+        "            ;",
+        `        until ${until};`,
+      ].join("\n"),
+    );
+  const BUILDS = [["LETHALX"], []];
+  // [operator, refused source, control source (the target governs no exit), control's claim].
+  // remove-assignment claims the whole statement, tail included, so only these three operators,
+  // which mutate a node INSIDE the value, can reach a tail.
+  const TAIL_CASES = [
+    [
+      flipBooleanLiteral,
+      tailed("Done", "Go", "and true", "Done"),
+      tailed("Go", "Done", "and true", "Done"),
+      "10|true",
+    ],
+    [
+      shiftInteger,
+      tailed("Done", "Go", "and (I = 5)", "Done"),
+      tailed("Go", "Done", "and (I = 5)", "Done"),
+      "10|5",
+    ],
+    [
+      swapAdditive,
+      tailed("I", "Total", "+ (Total + 2)", "I > 5"),
+      tailed("Total", "I", "+ (I + 2)", "I > 5"),
+      "10|I + 2",
+    ],
+  ] as const;
+
+  for (const [op, refusedSrc, controlSrc, controlClaim] of TAIL_CASES) {
+    it(`${op.name}: a \`#if\` tail of an exit variable's value is refused, tail active or inactive`, () => {
+      for (const b of BUILDS) expect(claimedSites(op, refusedSrc, b), `[${b}]`).toEqual([]);
+    });
+
+    it(`${op.name} CONTROL: the same tail on a variable no loop exit reads is still claimed`, () => {
+      for (const b of BUILDS)
+        expect(claimedSites(op, controlSrc, b), `[${b}]`).toEqual([controlClaim]);
+    });
+  }
 });
 
 describe("R239: flip-boolean-literal refuses a literal that reaches a loop's exit", () => {
@@ -146,6 +200,16 @@ describe("R239: flip-boolean-literal refuses a literal that reaches a loop's exi
     expect(
       flips("        if false\n#if LETHALX\n            or true\n#endif\n        then exit;"),
     ).toEqual(["7|false", "9|true"]);
+  });
+
+  it("ACCEPTED OVER-REFUSAL: an in-loop `if` literal is refused even when it guards no exit", () => {
+    // The plan accepts this: zero such sites on the fixtures and the four reference corpora. A
+    // future narrowing to exit-guarding `if`s must change this expectation deliberately.
+    expect(
+      flips(
+        "        while I < 3 do begin\n            I += 1;\n            if true then Total += 1;\n        end;",
+      ),
+    ).toEqual([]);
   });
 
   it("CONTROL: a call ARGUMENT inside an in-loop `if` condition is still claimed", () => {
