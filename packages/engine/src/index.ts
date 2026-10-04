@@ -15,8 +15,13 @@ export { wrapRoot, findFirst, findAll, visit, withText } from "./ast/syntax-node
 export { maskAlNonCode } from "./ast/mask";
 export type { AlMaskOptions } from "./ast/mask";
 export { print, printWithRewrites } from "./ast/printer";
-export { FileRefusedError, formatRefusal } from "./file-refused";
-export type { FileRefusalFields, FileRefusalShape, RefusedObject } from "./file-refused";
+export { FILE_REFUSAL_SITES, FileRefusedError, formatRefusal } from "./file-refused";
+export type {
+  FileRefusalFields,
+  FileRefusalShape,
+  FileRefusalSite,
+  RefusedObject,
+} from "./file-refused";
 export { astSubtreeHash } from "./ast/hash";
 export { canonicalize } from "./ast/canonicalization";
 export type { CanonicalForm } from "./ast/canonicalization";

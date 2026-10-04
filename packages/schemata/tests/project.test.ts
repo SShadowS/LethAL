@@ -1236,6 +1236,7 @@ page 51053 "Not Injectable"
         if (!(thrown instanceof FileRefusedError)) return;
         expect(thrown.file).toBe("Mixed.Kind.al");
         expect(thrown.shape).toBe("object-mix");
+        expect(thrown.site).toBe("project.object-mix");
         expect(thrown.objects).toEqual([
           { type: "codeunit", id: 51052, name: "Injectable" },
           { type: "page", id: 51053, name: "Not Injectable" },
@@ -1510,6 +1511,7 @@ page 51053 "Not Injectable"
       expect(thrown.message).toContain("sits before this file's first AL object header");
       expect(thrown.file).toBe("src/Early.al");
       expect(thrown.shape).toBe("site-before-header");
+      expect(thrown.site).toBe("project.site-before-header");
       expect(thrown.objects).toBeUndefined();
       expect(thrown.lines).toEqual([1, 2]);
     });
@@ -1529,6 +1531,7 @@ page 51053 "Not Injectable"
       expect(thrown.message).toContain("file has no AL object header");
       expect(thrown.file).toBe("src/NoHeader.al");
       expect(thrown.shape).toBe("no-header");
+      expect(thrown.site).toBe("project.no-header");
       expect(thrown.objects).toBeUndefined();
       expect(thrown.lines).toBeUndefined();
     });

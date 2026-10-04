@@ -383,9 +383,10 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  */
 /**
  * R307: one file refused whole by `generateMutationSet`'s per-file trial. It deploys no mutant and
- * is published uninstrumented. The fields are the `FileRefusedError`'s own (no source text).
+ * is published uninstrumented. The fields are the `FileRefusedError`'s own (no source text),
+ * except its `site` (R-307 O2), which names LethAL code and stays out of the report.
  */
-export interface RefusedFile extends FileRefusalFields {
+export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
   /** Object kind(s) the file declares, from `describeObjectKinds` (the same text `skipped` rows carry). */
   readonly kinds: string;
   /** Its post-filter, deduped site count: the mutants it would have deployed. */

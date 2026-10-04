@@ -85,6 +85,7 @@ describe("printer", () => {
     expect(thrown).toBeInstanceOf(FileRefusedError);
     if (!(thrown instanceof FileRefusedError)) return;
     expect(thrown.shape).toBe("overlap");
+    expect(thrown.site).toBe("rewrite.overlap");
     expect(thrown.file).toBe("src/X.Codeunit.al");
     expect(thrown.lines).toEqual([3, 6]);
     expect(thrown.objects).toBeUndefined();

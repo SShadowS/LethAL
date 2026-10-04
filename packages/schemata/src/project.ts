@@ -544,6 +544,7 @@ function objectHeadersOf(source: string, filePath: string): readonly ObjectHeade
     throw new FileRefusedError(`${filePath}: file has no AL object header`, {
       file: filePath,
       shape: "no-header",
+      site: "project.no-header",
     });
   return matches.map((m) => {
     const type = m[1];
@@ -592,6 +593,7 @@ function assertNoUnsupportedObjectMix(headers: readonly ObjectHeader[], filePath
     {
       file: filePath,
       shape: "object-mix",
+      site: "project.object-mix",
       objects: headers.map(({ type, id, name }) => ({ type, id, name })),
     },
   );
@@ -629,6 +631,7 @@ export function attributeHeader(
       {
         file: filePath,
         shape: "site-before-header",
+        site: "project.site-before-header",
         lines: [spec.before.startPosition.row + 1, spec.before.endPosition.row + 1],
       },
     );

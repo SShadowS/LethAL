@@ -65,6 +65,7 @@ function assertNoOverlap(
         {
           file: where ?? "<file>",
           shape: "overlap",
+          site: "rewrite.overlap",
           // `end` is exclusive: the last line is the one holding the last covered character.
           lines: [lineAt(prev.start), lineAt(Math.max(prev.end, curr.end, prev.start + 1) - 1)],
         },

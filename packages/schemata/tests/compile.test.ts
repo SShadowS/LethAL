@@ -809,6 +809,7 @@ describe("compileSchemataForFile — selector var injection into table objects",
     if (!(thrown instanceof FileRefusedError)) return;
     expect(thrown.file).toBe("MyPort.XmlPort.al");
     expect(thrown.shape).toBe("unsupported-kind");
+    expect(thrown.site).toBe("compile.unsupported-kind");
     expect(thrown.objects).toEqual([{ type: "xmlport", id: 50100, name: "My Port" }]);
     expect(thrown.lines).toEqual([11, 11]);
   });
@@ -3290,6 +3291,7 @@ describe("The injector's guard: a statement marker with no owning member still t
     if (!(thrown instanceof FileRefusedError)) return;
     expect(thrown.file).toBe("src/Detached.al");
     expect(thrown.shape).toBe("latch-owner");
+    expect(thrown.site).toBe("compile.latch-owner");
     expect(thrown.objects).toBeUndefined();
     expect(thrown.lines).toEqual([1, 1]);
   });
@@ -3352,6 +3354,7 @@ describe("R307 T4b: refusals no real AL reaches, driven through instrumentOneFil
       instrumentOneFile({ path: "src/P.al", source: SRC, root }, [s], ided),
     );
     expect(err.shape).toBe("latch-owner");
+    expect(err.site).toBe("compile.latch-owner");
     expect(err.file).toBe("src/P.al");
     expect(err.objects).toBeUndefined();
     expect(err.lines).toEqual([1, 1]);
@@ -3383,6 +3386,7 @@ describe("R307 T4b: refusals no real AL reaches, driven through instrumentOneFil
       instrumentOneFile({ path: "src/P.al", source: SRC, root }, [sa, sb], ided),
     );
     expect(err.shape).toBe("overlap");
+    expect(err.site).toBe("rewrite.overlap");
     expect(err.file).toBe("src/P.al");
     expect(err.objects).toBeUndefined();
     expect(err.lines).toEqual([6, 8]);

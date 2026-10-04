@@ -15,6 +15,28 @@ export type FileRefusalShape =
   | "object-mix"
   | "site-before-header";
 
+/**
+ * R-307 O2: the twelve places a `FileRefusedError` is built, one id each. A refusal names its
+ * site, so the PLAN/EMIT split can show every refusal still comes from the same code. The id is
+ * for tests and the thrown error only: no report row or `detail` carries it.
+ */
+export const FILE_REFUSAL_SITES = [
+  "project.no-header",
+  "project.object-mix",
+  "project.site-before-header",
+  "compile.latch-owner",
+  "compile.latch-preamble-anchor",
+  "compile.latch-split-var-anchor",
+  "compile.latch-var-anchor",
+  "compile.selector-var-keyword",
+  "compile.selector-no-members",
+  "compile.selector-no-last-member",
+  "compile.unsupported-kind",
+  "rewrite.overlap",
+] as const;
+
+export type FileRefusalSite = (typeof FILE_REFUSAL_SITES)[number];
+
 export interface RefusedObject {
   readonly type: string;
   readonly id: number;
@@ -24,6 +46,8 @@ export interface RefusedObject {
 export interface FileRefusalFields {
   readonly file: string;
   readonly shape: FileRefusalShape;
+  /** R-307 O2: which construction site raised it (`FILE_REFUSAL_SITES`). */
+  readonly site: FileRefusalSite;
   readonly objects?: readonly RefusedObject[];
   /** 1-based first and last line. */
   readonly lines?: readonly [number, number];
@@ -32,6 +56,7 @@ export interface FileRefusalFields {
 export class FileRefusedError extends Error {
   readonly file: string;
   readonly shape: FileRefusalShape;
+  readonly site: FileRefusalSite;
   readonly objects?: readonly RefusedObject[];
   readonly lines?: readonly [number, number];
   constructor(message: string, fields: FileRefusalFields) {
@@ -39,6 +64,7 @@ export class FileRefusedError extends Error {
     this.name = "FileRefusedError";
     this.file = fields.file;
     this.shape = fields.shape;
+    this.site = fields.site;
     if (fields.objects !== undefined) this.objects = fields.objects;
     if (fields.lines !== undefined) this.lines = fields.lines;
   }
@@ -56,7 +82,7 @@ const SENTENCE: Record<FileRefusalShape, string> = {
 
 /** R307: the refused row's `detail`, from the structured fields only. `type:id` never occurs in
  *  AL, so no header line of the refused file is copied. */
-export function formatRefusal(err: FileRefusalFields): string {
+export function formatRefusal(err: Omit<FileRefusalFields, "site">): string {
   let out = `${err.shape} in ${err.file}: ${SENTENCE[err.shape]}`;
   if (err.objects !== undefined && err.objects.length > 0) {
     out += `; objects ${err.objects.map((o) => `${o.type}:${o.id} ${JSON.stringify(o.name)}`).join(", ")}`;

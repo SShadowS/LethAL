@@ -102,7 +102,7 @@ function injectReachLatches(
     if (owner === null || begin === undefined) {
       throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits outside any procedure or trigger body, so its latch \`${REACH_LATCH}\` has nowhere to be declared. No known shape reaches here: every procedure, both split-header procedure shapes and every trigger own their body (R301, R316).`,
-        refusal(filePath, "latch-owner", c.root),
+        { site: "compile.latch-owner", ...refusal(filePath, "latch-owner", c.root) },
       );
     }
     const known = byOwner.get(owner.startIndex);
@@ -123,7 +123,7 @@ function injectReachLatches(
         // `placeReach` refuses these members, so no statement-grain marker can reach here.
         throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a split-header procedure whose #if arms each have their own var section, and not every arm's header end was found (R316).`,
-          refusal(filePath, "no-anchor", owner),
+          { site: "compile.latch-preamble-anchor", ...refusal(filePath, "no-anchor", owner) },
         );
       }
       for (const end of ends)
@@ -149,7 +149,7 @@ function injectReachLatches(
         // `placeReach` refuses these members, so no statement-grain marker can reach here.
         throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a reach marker sits in a member whose var section is split by #if in a shape with no latch placement (R303).`,
-          refusal(filePath, "no-anchor", owner),
+          { site: "compile.latch-split-var-anchor", ...refusal(filePath, "no-anchor", owner) },
         );
       }
       rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` var ${latch}: Boolean;`);
@@ -169,7 +169,7 @@ function injectReachLatches(
       if (anchor === undefined) {
         throw new FileRefusedError(
           `compileSchemataForFile: cannot instrument ${filePath}: a var section that does not end in a declaration has no var keyword to anchor the latch \`${latch}\` after.`,
-          refusal(filePath, "no-anchor", owner),
+          { site: "compile.latch-var-anchor", ...refusal(filePath, "no-anchor", owner) },
         );
       }
       rewrites.set(insertionNodeAt(anchor, anchor.endIndex), ` ${latch}: Boolean;`);
@@ -477,7 +477,10 @@ function injectSelectorVarIntoObject(
     if (anchor === undefined) {
       throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath}: its var section has no \`var\` keyword to anchor the selector var after.`,
-        refusal(filePath, "no-anchor", existingVar, object),
+        {
+          site: "compile.selector-var-keyword",
+          ...refusal(filePath, "no-anchor", existingVar, object),
+        },
       );
     }
     rewrites.set(
@@ -494,7 +497,7 @@ function injectSelectorVarIntoObject(
   if (members.length === 0) {
     throw new FileRefusedError(
       `compileSchemataForFile: cannot instrument ${filePath} — its object declaration has no members to anchor the selector var against, yet mutation guards were emitted for it.`,
-      refusal(filePath, "no-anchor", object, object),
+      { site: "compile.selector-no-members", ...refusal(filePath, "no-anchor", object, object) },
     );
   }
 
@@ -526,7 +529,10 @@ function injectSelectorVarIntoObject(
     // branches above. Same failure, same answer.
     throw new FileRefusedError(
       `compileSchemataForFile: cannot instrument ${filePath} — no member to anchor the selector var after, yet mutation guards were emitted for it.`,
-      refusal(filePath, "no-anchor", object, object),
+      {
+        site: "compile.selector-no-last-member",
+        ...refusal(filePath, "no-anchor", object, object),
+      },
     );
   }
   rewrites.set(
@@ -571,7 +577,7 @@ function refusal(
   shape: FileRefusalShape,
   at: ALSyntaxNode,
   object: ALSyntaxNode | null = enclosingObjectDeclaration(at),
-): FileRefusalFields {
+): Omit<FileRefusalFields, "site"> {
   const lines: [number, number] = [at.startPosition.row + 1, at.endPosition.row + 1];
   const id = Number.parseInt(object?.childForFieldName("object_id")?.text ?? "", 10);
   if (object === null || Number.isNaN(id)) return { file, shape, lines };
@@ -630,7 +636,10 @@ function injectMutationSelectorVar(
       const kindText = object === null ? "no enclosing AL object declaration" : object.rawKind;
       throw new FileRefusedError(
         `compileSchemataForFile: cannot instrument ${filePath} — a mutation guard sits inside ${kindText}, and ${why}`,
-        refusal(filePath, "unsupported-kind", spec.before, object),
+        {
+          site: "compile.unsupported-kind",
+          ...refusal(filePath, "unsupported-kind", spec.before, object),
+        },
       );
     }
     objects.set(object.startIndex, object);
