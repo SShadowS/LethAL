@@ -532,6 +532,8 @@ function verifySchemaFixtureEntry(): MutantManifestEntry {
 async function buildVerifyHappyPathOutput() {
   const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-proj-"));
   const instrumentedDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-instr-"));
+  // R-260: the test project sits beside the target; a nested one is refused.
+  const testsDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-tests-"));
   try {
     writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
     mkdirSync(join(projectDir, "src"));
@@ -597,7 +599,7 @@ async function buildVerifyHappyPathOutput() {
     });
 
     const out = await runVerify(
-      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: join(projectDir, "tests") },
+      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: testsDir },
       {
         store,
         backend: neverCalledBackend(),
@@ -612,6 +614,7 @@ async function buildVerifyHappyPathOutput() {
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(instrumentedDir, { recursive: true, force: true });
+    rmSync(testsDir, { recursive: true, force: true });
   }
 }
 
@@ -690,6 +693,14 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
       "flaky-unknown",
       "infra-error",
     ]);
+  });
+
+  // R-260: v7 added the refusal reason `test-project-nested`. v6 stays as it was published.
+  test("verify-v6.schema.json is kept as published", () => {
+    const v6 = loadSchema("verify-v6.schema.json");
+    expect((v6.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(6);
+    expect(enumAt(v6, "$.newTests[].state")).toContain("not-rerun");
+    expect(enumAt(v6, "$.refused.reason")).not.toContain("test-project-nested");
   });
 
   test("results[].gapId is a declared leaf of the current verify schema", () => {
@@ -1231,6 +1242,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R-427: the same seven; v6 only grew newTests[].state.
       "verify-v6.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R-260: the same seven; v7 only grew refused.reason.
+      "verify-v7.schema.json": [
         "counts",
         "exitCode",
         "newTests",

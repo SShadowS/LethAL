@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import nodePath, { join, resolve } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
 import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
@@ -88,6 +88,8 @@ export const VERIFY_REFUSALS = [
   "carried",
   "source-predates-verify",
   "source-changed",
+  // R-260: the test project lies inside the target (so the target build compiles it), or contains it.
+  "test-project-nested",
   "covering-test-unmatched",
   "no-tests-to-run",
   "unsupported-config",
@@ -621,33 +623,73 @@ export async function assertProjectReadable(projectPath: string): Promise<void> 
 }
 
 /**
+ * R-260: is `inner` the same folder as `outer`, or inside it? A `..`-prefixed child name such as
+ * `..tests` is inside; a sibling such as `target-tests` is not. `path.win32.relative` already
+ * ignores case (drive letters, UNC names), so there is no fold here; a test pins it. Takes the
+ * `path` module so tests can drive `path.win32` anywhere.
+ */
+export function isSameOrInside(
+  outer: string,
+  inner: string,
+  p: typeof nodePath = nodePath,
+): boolean {
+  const rel = p.relative(outer, inner);
+  return rel === "" || (!p.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${p.sep}`));
+}
+
+/**
+ * R-260: the target build compiles every .al under its folder, so a test project inside it is part
+ * of the installed target app, and verify cannot measure it. Refused by name, both ways round, on
+ * real paths (symlinks and junctions resolved). A root that cannot be resolved is refused too:
+ * without its real path, verify cannot show the two are apart.
+ */
+export async function assertTestProjectSeparate(
+  projectPath: string,
+  testDir: string,
+): Promise<void> {
+  const fix =
+    "Move the test project out of the target folder so it sits beside the target, update the --tests you pass to both lethal run and lethal verify to that folder, run lethal run again, then verify with its artifact id.";
+  let target: string;
+  let tests: string;
+  try {
+    [target, tests] = await Promise.all([realpath(projectPath), realpath(testDir)]);
+  } catch (e) {
+    throw new VerifyError(
+      "test-project-nested",
+      `cannot resolve the real path of the target ${projectPath} or the test project ${testDir} (${e instanceof Error ? e.message : String(e)}), so verify cannot show the test project lies outside the target. Check that --tests names an existing folder. ${fix}`,
+    );
+  }
+  if (isSameOrInside(target, tests)) {
+    throw new VerifyError(
+      "test-project-nested",
+      `the test project ${tests} ${tests === target ? "is" : "lies inside"} the target project ${target}: the target build compiles every .al under its folder, so these tests are part of the installed target app. ${fix}`,
+    );
+  }
+  if (isSameOrInside(tests, target)) {
+    throw new VerifyError(
+      "test-project-nested",
+      `the test project ${tests} contains the target project ${target}, so the target's code is part of the test build. ${fix}`,
+    );
+  }
+}
+
+/**
  * Decision 8. Recomputes the target's source hash with the SAME function and preprocessor symbols
- * the source run recorded it with. Reads the project's files; never a server.
+ * the source run recorded it with. Reads the project's files; never a server. R-260: a nested test
+ * project is refused first, by name, so a test edit there never reads as `source-changed`.
  */
 export async function assertSourceUnchanged(
   source: VerifySource,
   preprocessorSymbols: readonly string[],
-  /** The test project, only to say so when it lies inside the target (carried item 3). */
-  testDir?: string,
+  testDir: string,
 ): Promise<void> {
   await assertProjectReadable(source.projectPath);
+  await assertTestProjectSeparate(source.projectPath, testDir);
   const now = await hashTargetSource(source.projectPath, preprocessorSymbols);
   if (now !== source.sourceSha256) {
-    // Carried item 3: one whole-source hash cannot say WHICH file changed, so this says the one
-    // thing it can: a nested test project is part of the hash, and a test edit alone refuses.
-    const tests = testDir === undefined ? undefined : resolve(testDir);
-    const rel = tests === undefined ? undefined : relative(source.projectPath, tests);
-    const nested =
-      tests !== undefined &&
-      rel !== undefined &&
-      rel !== "" &&
-      !rel.startsWith("..") &&
-      !isAbsolute(rel)
-        ? ` The test project ${tests} lies inside the target project, so its .al files are part of the target's source hash: editing or adding a test there refuses too, even when no target file changed. Move the test project beside the target, or run lethal run again after editing tests.`
-        : "";
     throw new VerifyError(
       "source-changed",
-      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.${nested}`,
+      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.`,
     );
   }
 }
@@ -1128,8 +1170,9 @@ export async function verifyDependencyFingerprint(
  *  not usually bump, but their ABSENCE means "not decided" only from v5 on, while in an older
  *  report it means the report predates the record; the version is the one thing that tells the
  *  two apart, so it bumps. v4 is frozen. 6 since R-427 added the `newTests[].state` value
- *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. */
-export const VERIFY_SCHEMA_VERSION = 6;
+ *  `not-rerun` (a value domain grew, so it bumps; a v5 reader never sees it). v5 is frozen. 7 since
+ *  R-260 added the refusal reason `test-project-nested` (a value domain grew). v6 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 7;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = [

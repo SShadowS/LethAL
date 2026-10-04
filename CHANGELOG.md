@@ -68,6 +68,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`lethal verify` refuses a test project nested in the target, by name** (R260, verify schema
+  v7). The target build compiles every `.al` under its folder, so a test project inside it is part
+  of the installed target app, and a test edit there used to read as `source-changed`. Verify now
+  refuses `test-project-nested` before it builds anything when `--tests` lies inside the target,
+  contains it, or cannot be resolved to a real path (symlinks and junctions are resolved). The fix
+  is to move the test project beside the target, point `--tests` at it, run `lethal run` again,
+  then verify. v6 is kept as published.
 - **`lethal verify` sees a Microsoft dependency rebuilt or upgraded on the server** (R385). On
   bcdev, the dependency fingerprint in every test digest now hashes Microsoft packages by the bytes
   the server holds, as it already did for the others, over the whole closure (so a Microsoft app

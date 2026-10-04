@@ -120,6 +120,7 @@ import {
   type VerifyOutput,
   artifactRecordOf,
   assertProjectReadable,
+  assertTestProjectSeparate,
   installedSelectorIds,
   parseVerifyRequest,
   refusalOutput,
@@ -5257,6 +5258,8 @@ export async function verifyFromCli(
     const projectDir = resolve(artifactRecordOf(store, parsed.artifact).projectPath);
     // Before the config and the backend: buildBackend reads app.json and would throw a plain error.
     await assertProjectReadable(projectDir);
+    // R-260: a nested test project is refused by name before anything reads the target.
+    await assertTestProjectSeparate(projectDir, parsed.testDir);
     const configFile = await loadLethalConfigFile(
       parsed.configPath ?? join(projectDir, "lethal.config.json"),
     );

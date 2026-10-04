@@ -2495,6 +2495,48 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     expect(out.exitCode).toBe(VERIFY_REFUSED_EXIT_CODE);
   });
 
+  // R-260: on a fully valid source run (recorded source hash, installed bundle, selector ids), a
+  // nested --tests is refused by name before the config is read and before any backend is built.
+  // Without the CLI guard the valid-config call reaches buildBackend, and the tripwire call reads
+  // its (missing) config file.
+  test("R-260: verify refuses a nested test project before the config read and the backend build", async () => {
+    const ctx = await runThenArtifact();
+    const nested = join(ctx.projectDir, "test");
+    await mkdir(nested);
+    let built = 0;
+    const attempt = async (configPath: string) => {
+      let printed = "";
+      const outcome = await verifyFromCli(
+        {
+          mode: "verify",
+          dbPath: ctx.dbPath,
+          artifact: ctx.artifactId,
+          testDir: nested,
+          survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+          configPath,
+        },
+        {
+          write: (s) => {
+            printed += s;
+          },
+          buildBackend: async () => {
+            built++;
+            throw new Error("R-260 tripwire: verify reached buildBackend");
+          },
+        },
+      ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+      return { outcome, printed };
+    };
+    for (const configPath of [ctx.configPath, join(ctx.root, "tripwire-no-such-config.json")]) {
+      const { outcome, printed } = await attempt(configPath);
+      expect(outcome).toBe(VERIFY_REFUSED_EXIT_CODE);
+      const out = JSON.parse(printed);
+      expect(out.refused.reason).toBe("test-project-nested");
+      expect(out.refused.detail).toContain("--tests");
+    }
+    expect(built).toBe(0);
+  });
+
   test("R-384: verifyFromCli hands --no-reach-filter and its stderr writer to runVerify", async () => {
     const ctx = await runThenArtifact();
     const seen: Array<Parameters<typeof runVerify>> = [];
@@ -2697,6 +2739,8 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
+    // R-260: the test project must exist beside the target, or verify refuses it first.
+    await mkdir(join(root, "t"));
     await writeFile(
       join(project, "lethal.config.json"),
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),

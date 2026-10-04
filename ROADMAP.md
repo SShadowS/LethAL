@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**107 of 441 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**107 of 442 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -241,7 +241,7 @@ that ordering is the priority.
 - **R254** · A `reportextension` is never mutated: it is skipped as a non-carrier, though alc accepts the selector variable in one, and the index would not declare it either · [R254.md](docs/roadmap/R254.md) · open
 - **R258** · lethal verify cannot see an edited test that did not cover the mutant, because a test is new only by identity against the source run's baseline · [R258.md](docs/roadmap/R258.md) · done (42f66228, 66146b08)
 - **R259** · lethal verify does not say whether a new test also kills other survivors in the same procedure (the overfitting signal, #16 requirement 4) · [R259.md](docs/roadmap/R259.md) · open
-- **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · open
+- **R260** · A test project nested inside the target project makes any edit to it refuse lethal verify with source-changed, blocking the write-a-test-then-verify loop for that layout · [R260.md](docs/roadmap/R260.md) · closed 2026-10-05 — nested test project refused by name (test-project-nested); move the tests beside the…
 - **R261** · The store does not record a run's --selector-id overrides, so lethal verify fails when it re-validates the config's defaults against app.json instead · [R261.md](docs/roadmap/R261.md) · done (dc5d2e4f)
 - **R262** · `lethal verify` labels a new test's infrastructure failure on the unmutated build as `red` or `flaky` instead of `flaky-unknown` · [R262.md](docs/roadmap/R262.md) · done (d24e766)
 - **R265** · No command prints a mutant's identity key, so a reader writes `lethal.equivalent.json` keys by hand · [R265.md](docs/roadmap/R265.md) · done (75be4c23)
@@ -302,6 +302,7 @@ that ordering is the priority.
 - **R429** · TypeTable (buildTypeTable) may read member-level #if declarations without arms; UNMEASURED · [R429.md](docs/roadmap/R429.md) · closed 2026-10-04 — no defect: buildTypeTable types through the symbol table R-405a made arm-aware; 0 wrong…
 - **R430** · a test that hands a test-app mock codeunit to another app sits on verify's whole-source fallback · [R430.md](docs/roadmap/R430.md) · open, filed 2026-10-04
 - **R432** · Typed operators lose sites at #if positions the type table never types (global var body, locals/parameters, fields, disagreeing split headers); refused safely, and no item records the loss · [R432.md](docs/roadmap/R432.md) · closed 2026-10-04 — stated limit: never-typed #if positions lose 1 of 55 typed mutants on fixtures and 0 of…
+- **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 
 ## Backends and tooling
 

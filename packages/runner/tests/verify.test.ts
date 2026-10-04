@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep, win32 } from "node:path";
 import * as engineModule from "@lethal/engine";
 import { initParser, parsesSinceStart } from "@lethal/engine";
 import {
@@ -17,6 +17,7 @@ import type {
   TestOutcome,
   TestVerdict,
 } from "../src/backend";
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import {
   DependencyUnreadableError,
@@ -47,7 +48,9 @@ import {
   type VerifyPlan,
   type VerifySource,
   assertSourceUnchanged,
+  assertTestProjectSeparate,
   expandGapIds,
+  isSameOrInside,
   killedByOf,
   parseVerifyRequest,
   planVerify,
@@ -442,9 +445,13 @@ describe("resolveVerifySource", () => {
 describe("assertSourceUnchanged", () => {
   const SYMBOLS = ["CLEAN24"];
 
-  async function project(): Promise<{ dir: string; source: VerifySource }> {
-    const dir = scratch("lethal-verify-src-");
-    mkdirSync(join(dir, "src"));
+  /** The target at `<root>/app`, its test project beside it at `<root>/tests`. */
+  async function project(): Promise<{ dir: string; tests: string; source: VerifySource }> {
+    const root = scratch("lethal-verify-src-");
+    const dir = join(root, "app");
+    const tests = join(root, "tests");
+    mkdirSync(tests);
+    mkdirSync(join(dir, "src"), { recursive: true });
     writeFileSync(join(dir, "app.json"), '{"id":"x"}');
     writeFileSync(join(dir, "src", "Logic.Codeunit.al"), "codeunit 50100 Logic { }");
     writeFileSync(join(dir, "src", "Helper.Codeunit.al"), "codeunit 50101 Helper { }");
@@ -460,16 +467,16 @@ describe("assertSourceUnchanged", () => {
       carryHidden: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
     };
-    return { dir, source };
+    return { dir, tests, source };
   }
 
   test("an edit to a helper outside every mutated procedure is refused as source-changed", async () => {
-    const { dir, source } = await project();
+    const { dir, tests, source } = await project();
     writeFileSync(
       join(dir, "src", "Helper.Codeunit.al"),
       "codeunit 50101 Helper { var x: Integer; }",
     );
-    const e = await assertSourceUnchanged(source, SYMBOLS).then(
+    const e = await assertSourceUnchanged(source, SYMBOLS, tests).then(
       () => undefined,
       (err: unknown) => err,
     );
@@ -484,47 +491,168 @@ describe("assertSourceUnchanged", () => {
     const src = resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"]));
     expect(src.projectPath).toBe(resolve("some/rel/app"));
     store.close();
-    const missing = await assertSourceUnchanged(src, SYMBOLS).catch((e: unknown) => e);
+    const missing = await assertSourceUnchanged(src, SYMBOLS, "some/rel/tests").catch(
+      (e: unknown) => e,
+    );
     expect(missing).toBeInstanceOf(VerifyError);
     expect((missing as VerifyError).reason).toBe("project-unreadable");
     expect((missing as VerifyError).detail).toContain(resolve("some/rel/app"));
 
-    const { dir, source } = await project();
+    const { dir, tests, source } = await project();
     rmSync(join(dir, "app.json"));
-    const noAppJson = await assertSourceUnchanged(source, SYMBOLS).catch((e: unknown) => e);
+    const noAppJson = await assertSourceUnchanged(source, SYMBOLS, tests).catch((e: unknown) => e);
     expect(noAppJson).toBeInstanceOf(VerifyError);
     expect((noAppJson as VerifyError).reason).toBe("project-unreadable");
     expect((noAppJson as VerifyError).detail).toContain("app.json");
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("a source change says so in plain words when the test project is nested in the target", async () => {
+  // R-260: a nested test project is compiled into the target build, so verify refuses the layout
+  // by name. A test edit or add there is refused as `test-project-nested`, never `source-changed`.
+  /** A target with a nested `test/T.Codeunit.al`, its hash recorded with the test inside. */
+  async function nestedProject(): Promise<{ nestedTests: string; recorded: VerifySource }> {
     const { dir, source } = await project();
-    mkdirSync(join(dir, "test"));
-    const nestedSource = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
-    // Only a TEST file changes, inside the nested test project.
-    writeFileSync(join(dir, "test", "T.Codeunit.al"), "codeunit 50200 T { }");
-    const nested = await assertSourceUnchanged(nestedSource, SYMBOLS, join(dir, "test")).catch(
-      (e: unknown) => e,
-    );
-    expect((nested as VerifyError).reason).toBe("source-changed");
-    expect((nested as VerifyError).detail).toContain("lies inside the target project");
-    expect((nested as VerifyError).detail).toContain("editing or adding a test there refuses too");
-    // A sibling test project: the same refusal, without the nested-project sentence.
-    const sibling = await assertSourceUnchanged(
-      nestedSource,
-      SYMBOLS,
-      join(dir, "..", "sibling-tests"),
-    ).catch((e: unknown) => e);
-    expect((sibling as VerifyError).reason).toBe("source-changed");
-    expect((sibling as VerifyError).detail).not.toContain("lies inside the target project");
-    rmSync(dir, { recursive: true, force: true });
+    const nestedTests = join(dir, "test");
+    mkdirSync(nestedTests);
+    writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { }");
+    return {
+      nestedTests,
+      recorded: { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) },
+    };
+  }
+
+  /** Runs the source check with the target hash spied on: the refusal must come before any hash. */
+  async function refusalWithoutHashing(recorded: VerifySource, testDir: string): Promise<unknown> {
+    const hash = spyOn(baselineSnapshotModule, "hashTargetSource");
+    try {
+      const e = await assertSourceUnchanged(recorded, SYMBOLS, testDir).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(hash).toHaveBeenCalledTimes(0);
+      return e;
+    } finally {
+      hash.mockRestore();
+    }
+  }
+
+  test("a nested test EDIT is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
+    writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { var x: Integer; }");
+    const edited = await refusalWithoutHashing(recorded, nestedTests);
+    expect(edited).toBeInstanceOf(VerifyError);
+    expect((edited as VerifyError).reason).toBe("test-project-nested");
+    expect((edited as VerifyError).detail).toContain("lies inside the target project");
+    expect((edited as VerifyError).detail).toContain("beside the target");
+    expect((edited as VerifyError).detail).toContain("--tests");
   });
 
-  test("an unchanged project passes the source check", async () => {
-    const { dir, source } = await project();
-    await assertSourceUnchanged(source, SYMBOLS);
-    rmSync(dir, { recursive: true, force: true });
+  test("a nested test ADD is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
+    // The original test file is untouched; only a new one appears.
+    writeFileSync(join(nestedTests, "U.Codeunit.al"), "codeunit 50201 U { }");
+    const added = await refusalWithoutHashing(recorded, nestedTests);
+    expect(added).toBeInstanceOf(VerifyError);
+    expect((added as VerifyError).reason).toBe("test-project-nested");
+  });
+
+  // R-260: the hash comparison is kept whole. A target edit in a folder whose NAME looks like a test
+  // folder, and an app.json edit, are both still source-changed in the sibling layout.
+  test("a target .al edit under a test-named folder is source-changed", async () => {
+    const { dir, tests, source } = await project();
+    mkdirSync(join(dir, "test"));
+    writeFileSync(join(dir, "test", "Probe.Codeunit.al"), "codeunit 50102 Probe { }");
+    const recorded = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
+    writeFileSync(
+      join(dir, "test", "Probe.Codeunit.al"),
+      "codeunit 50102 Probe { var x: Integer; }",
+    );
+    const al = await assertSourceUnchanged(recorded, SYMBOLS, tests).catch((e: unknown) => e);
+    expect((al as VerifyError).reason).toBe("source-changed");
+  });
+
+  test("a target app.json edit is source-changed", async () => {
+    const { dir, tests, source } = await project();
+    writeFileSync(join(dir, "app.json"), '{"id":"y"}');
+    const manifest = await assertSourceUnchanged(source, SYMBOLS, tests).catch((e: unknown) => e);
+    expect((manifest as VerifyError).reason).toBe("source-changed");
+  });
+
+  test("an unchanged project with its tests beside it passes the source check", async () => {
+    const { tests, source } = await project();
+    await assertSourceUnchanged(source, SYMBOLS, tests);
+  });
+});
+
+describe("assertTestProjectSeparate (R-260)", () => {
+  async function reasonOf(projectPath: string, testDir: string): Promise<string | undefined> {
+    return assertTestProjectSeparate(projectPath, testDir).then(
+      () => undefined,
+      (e: unknown) => (e instanceof VerifyError ? e.reason : `not a VerifyError: ${String(e)}`),
+    );
+  }
+
+  function layout(): { root: string; target: string } {
+    const root = scratch("lethal-verify-layout-");
+    const target = join(root, "target");
+    mkdirSync(target);
+    return { root, target };
+  }
+
+  test("a test project inside the target is refused however the path is spelled", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "test"));
+    expect(await reasonOf(target, join(target, "test"))).toBe("test-project-nested");
+    expect(await reasonOf(`${target}${sep}`, `${join(target, "test")}${sep}`)).toBe(
+      "test-project-nested",
+    );
+    expect(await reasonOf(target, relative(process.cwd(), join(target, "test")))).toBe(
+      "test-project-nested",
+    );
+    // Unnormalised on purpose: `join` would fold the `..` away before the guard saw it.
+    const dotted = `${root}${sep}target${sep}..${sep}target${sep}test`;
+    expect(dotted).toContain(`${sep}..${sep}`);
+    expect(await reasonOf(target, dotted)).toBe("test-project-nested");
+    // The same folder.
+    expect(await reasonOf(target, target)).toBe("test-project-nested");
+  });
+
+  test("a symlinked alias of the target does not hide a nested test project", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "test"));
+    const alias = join(root, "alias");
+    symlinkSync(target, alias, "junction");
+    expect(await reasonOf(target, join(alias, "test"))).toBe("test-project-nested");
+  });
+
+  test("a child folder named ..tests is inside; a sibling target-tests is not", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "..tests"));
+    expect(await reasonOf(target, join(target, "..tests"))).toBe("test-project-nested");
+    mkdirSync(join(root, "target-tests"));
+    expect(await reasonOf(target, join(root, "target-tests"))).toBeUndefined();
+  });
+
+  test("a test project that contains the target is refused, and says so", async () => {
+    const { root, target } = layout();
+    const e = await assertTestProjectSeparate(target, root).catch((err: unknown) => err);
+    expect((e as VerifyError).reason).toBe("test-project-nested");
+    expect((e as VerifyError).detail).toContain("contains the target project");
+  });
+
+  test("a root that cannot be resolved is refused, never guessed", async () => {
+    const { root, target } = layout();
+    expect(await reasonOf(target, join(root, "missing"))).toBe("test-project-nested");
+  });
+
+  test("isSameOrInside on win32 folds drive-letter and UNC case and stops at a separator", () => {
+    expect(isSameOrInside("C:\\Proj", "c:\\proj\\tests", win32)).toBe(true);
+    expect(isSameOrInside("\\\\Server\\Share\\proj", "\\\\server\\share\\PROJ\\tests", win32)).toBe(
+      true,
+    );
+    expect(isSameOrInside("C:\\proj", "C:\\proj-tests", win32)).toBe(false);
+    expect(isSameOrInside("C:\\proj", "D:\\proj\\tests", win32)).toBe(false);
+    expect(isSameOrInside("C:\\proj", "C:\\proj\\..tests", win32)).toBe(true);
   });
 });
 /** R-236c: `Old.A` (green, only when asked), `Old.P` and `New.NP`, both with a reachable call that
