@@ -56,9 +56,10 @@ RUN git clone --filter=blob:none https://github.com/StefanMaron/BusinessCentral.
     && /opt/al-runner/c39ad5de/al-runner --version
 # PowerShell from Microsoft's apt repo (the .deb installs its signing key and list). The base is Ubuntu 26.04
 # and Microsoft's 26.04 repo has no powershell package yet (measured 2026-10-03), so this uses the 24.04 repo;
-# switch to ${VERSION_ID} once the repo carries it.
+# switch to ${VERSION_ID} once the repo carries it. Pinned: powershell is the only package taken from it.
 RUN curl -fsSL -o /tmp/ms.deb "https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb" \
     && dpkg -i /tmp/ms.deb && rm /tmp/ms.deb \
+    && printf 'Package: *\nPin: origin packages.microsoft.com\nPin-Priority: -1\n\nPackage: powershell\nPin: origin packages.microsoft.com\nPin-Priority: 500\n' > /etc/apt/preferences.d/microsoft-powershell-only \
     && apt-get update && apt-get install -y --no-install-recommends powershell && rm -rf /var/lib/apt/lists/*
 # Login shells (bash -l: kraken's setup, ssh sessions) rebuild PATH from /etc/profile, so ENV alone is not enough
 RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:$PATH' 'export DOTNET_ROOT=/opt/dotnet' 'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' > /etc/profile.d/lethal-tools.sh \
