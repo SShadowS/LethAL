@@ -649,6 +649,7 @@ describe("runSession", () => {
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           coverageMode: "procedure",
+          carryHidden: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
         },
         manifest: {
@@ -803,6 +804,7 @@ describe("runSession", () => {
             identityScheme: IDENTITY_SCHEME,
             buildSymbols: [],
             coverageMode: "procedure",
+            carryHidden: null,
             targets: [
               {
                 batchIndex: 0,
@@ -5537,6 +5539,8 @@ async function seedPriorSurvivor(
     buildSymbols: [],
     backend: "bcdev",
     appVersion: "0.0.0.1",
+    // R442: a run that hid nothing from numbering; a NULL list is untrusted and skips nothing.
+    carryHidden: { tuples: [], files: [] },
   });
   store.recordMutant(runId, {
     mutantCode: "SEED",
@@ -7079,6 +7083,7 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       dirs.projectDir,
       backend.capabilities().coverage,
       await testAppHashFor(undefined, dirs.testDir),
+      [],
       [],
     );
     expect(keys.size).toBe(0);

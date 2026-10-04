@@ -152,7 +152,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
   "packages/schemata/src/project.ts": [
     "gapIdOf",
     "identityTupleOf",
-    "looseIdentityTupleOf",
+    "coarseIdentityTupleOf",
     "assignIdentityOrdinals",
     "identityOrdinalsOf",
     "identitySiteKey",

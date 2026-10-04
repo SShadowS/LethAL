@@ -1,4 +1,4 @@
-import { type MutantManifestEntry, identityTupleOf, looseIdentityTupleOf } from "@lethal/schemata";
+import { type MutantManifestEntry, coarseIdentityTupleOf, identityTupleOf } from "@lethal/schemata";
 import type { CoverageMap, TestMethodRef } from "./backend";
 import type { Interpretation } from "./interpretation";
 
@@ -83,19 +83,16 @@ export interface HistorySplit {
 }
 
 /**
- * R307 section 3 (fail closed): whether `m` shares a loose tuple with a file this run refused under
- * the header rule. Such a mutant's key may be one a prior run gave a site of the refused file, so
- * history, resume and equivalence marks all treat it as unknown this run. `carryDisabled` holds
- * `looseIdentityTupleOf` strings; absent means nothing is disabled.
+ * R307 section 3 (fail closed): whether `m` shares a coarse tuple (R442) with a site this run (or,
+ * on resume, the resumed run) numbered no ordinal for. Such a mutant's key may be one a prior run
+ * gave that site, so history, resume and equivalence marks all treat it as unknown this run.
+ * `carryDisabled` holds `coarseIdentityTupleOf` strings; absent means nothing is disabled.
  */
 export function isCarryDisabled(
-  m: Pick<
-    MutantManifestEntry,
-    "astHash" | "procedureName" | "triggerName" | "operatorName" | "operatorVersion"
-  >,
+  m: Pick<MutantManifestEntry, "astHash" | "operatorName" | "operatorVersion">,
   carryDisabled: ReadonlySet<string> | undefined,
 ): boolean {
-  return carryDisabled?.has(looseIdentityTupleOf(m)) === true;
+  return carryDisabled?.has(coarseIdentityTupleOf(m)) === true;
 }
 
 export function filterHistory(

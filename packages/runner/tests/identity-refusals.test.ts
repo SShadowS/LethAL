@@ -7,7 +7,7 @@ import {
   IDENTITY_SCHEME,
   type MutantManifest,
   type MutantManifestEntry,
-  looseIdentityTupleOf,
+  coarseIdentityTupleOf,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
@@ -191,7 +191,7 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
     // Run 2: an enum added to Bad's file. It is refused whole; its sites are reserved.
     await Bun.write(join(projectDir, TABLE_FILE), TABLE_WITH_ENUM_AL);
     const set2 = await generateMutationSet(projectDir, { emit: () => {} });
-    expect(set2.refusedFiles.map((r) => [r.file, r.shape, r.looseTuples])).toEqual([
+    expect(set2.refusedFiles.map((r) => [r.file, r.shape, r.coarseTuples])).toEqual([
       [TABLE_FILE, "object-mix", undefined],
     ]);
     expect(set2.files.map((f) => f.path)).toEqual([CODEUNIT_FILE]);
@@ -216,7 +216,7 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
 });
 
 describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
-  test("wasStranded stays true for a mutant whose loose tuple is disabled (R53: never re-run a hang)", async () => {
+  test("wasStranded stays true for a mutant whose coarse tuple is disabled (R53: never re-run a hang)", async () => {
     const { root, projectDir } = await twinProject(TABLE_AL);
     const set = await generateMutationSet(projectDir, { emit: () => {} });
     const m = (await manifestRows(root, set)).find((x) => x.operatorName === OP);
@@ -228,7 +228,7 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
       strandedKeys: new Set([keyOfEntry(m)]),
     };
     expect(wasStranded(index, m)).toBe(true);
-    expect(wasStranded({ ...index, carryDisabled: new Set([looseIdentityTupleOf(m)]) }, m)).toBe(
+    expect(wasStranded({ ...index, carryDisabled: new Set([coarseIdentityTupleOf(m)]) }, m)).toBe(
       true,
     );
     // ...while the same disabled set does stop the verdict carrying.
@@ -238,7 +238,7 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
     };
     expect(carriedVerdictFor(carrying, m)?.verdict).toBe("survived");
     expect(
-      carriedVerdictFor({ ...carrying, carryDisabled: new Set([looseIdentityTupleOf(m)]) }, m),
+      carriedVerdictFor({ ...carrying, carryDisabled: new Set([coarseIdentityTupleOf(m)]) }, m),
     ).toBeUndefined();
   });
 });
@@ -472,8 +472,11 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
     expect(
       events.filter((e) => e.type === "warning" && e.code === "identity-carry-disabled"),
     ).toHaveLength(1);
-    // Its key is still written: the next run without the refusal skips all three again.
+    // R442 (an intended change): the refused run recorded Bad's site shapes, so the first run
+    // without the refusal re-measures the three once more (a key that run wrote may name another
+    // mutant), and only the run after that skips them again.
     await rm(join(dirs.projectDir, BAD_FILE));
+    expect(goodRows((await run()).report)).toEqual(SURVIVED);
     expect(goodRows((await run()).report)).toEqual([
       "lethal.empty-block known-survivor",
       "lethal.remove-assignment known-survivor",
@@ -520,5 +523,350 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
     expect(off?.matched).toEqual([]);
     expect(off?.contradicted).toEqual([]);
     expect(off?.stale).toEqual([key]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R442: what a run numbered no ordinal for is stored on its run row (`runs.carry_hidden`), so a
+// later run distrusts every key that may have moved. The oracle for "not carried" is always
+// `carried !== true` AND the mutant's id in the backend's activate log ("executed"), never the
+// verdict alone: an all-surviving backend says `survived` either way.
+
+type Covered = { objectType: "Codeunit" | "Table"; objectId: number; procedure: string };
+
+/** Every test passes and covers `covered`, so every mutant survives. Logs each activation. */
+class LogBackend implements ExecutionBackend {
+  readonly activated: string[] = [];
+  deploys = 0;
+  private active: string | null = null;
+  constructor(private readonly covered: readonly Covered[]) {}
+  capabilities(): BackendCapabilities {
+    return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
+  }
+  async status(): Promise<BackendStatus> {
+    return { ok: true, details: "stub" };
+  }
+  async deploy(): Promise<CompiledArtifact | null> {
+    this.deploys++;
+    return null;
+  }
+  async compileCheck(): Promise<void> {}
+  async activate(id: string | null): Promise<void> {
+    this.active = id;
+    if (id !== null) this.activated.push(id);
+  }
+  async run(ref: TestMethodRef): Promise<TestVerdict> {
+    if (this.active === null) {
+      return {
+        ref,
+        outcome: "pass",
+        durationMs: 5,
+        coverage: { granularity: "procedure", entries: [...this.covered] },
+      };
+    }
+    return {
+      ref,
+      outcome: "pass",
+      durationMs: 5,
+      attestation: { observedAny: true, identityMismatch: false },
+    };
+  }
+}
+
+const proc = (name: string, stmt: string): string =>
+  `    procedure ${name}()\n    var\n        Counter: Integer;\n    begin\n        ${stmt}\n    end;\n`;
+const obj = (header: string, ...procs: string[]): string => `${header}\n{\n${procs.join("\n")}}\n`;
+/** Three bodies with three different subtree hashes: X twins X, never Y or Z. */
+const X = (name = "Compute"): string => proc(name, "Counter := 1;");
+const Y = (name = "Other"): string => proc(name, "Counter := Counter + 7;");
+const Z = (name = "Third"): string => proc(name, "Counter := Counter * 3;");
+/** T4's no-header shape (refused, no object name) and the same header repaired by a newline. */
+const REFUSED_TABLE = 'namespace X; table 50100 "Twin"';
+const REPAIRED_TABLE = 'namespace X;\ntable 50100 "Twin"';
+const GOOD_CU = 'codeunit 79301 "Twin"';
+const COVERED: readonly Covered[] = [
+  { objectType: "Table", objectId: 50100, procedure: "Compute" },
+  { objectType: "Codeunit", objectId: 79301, procedure: "Compute" },
+  { objectType: "Codeunit", objectId: 79301, procedure: "Other" },
+  { objectType: "Codeunit", objectId: 79301, procedure: "Third" },
+  { objectType: "Codeunit", objectId: 79302, procedure: "C" },
+  { objectType: "Codeunit", objectId: 79301, procedure: "B|C" },
+];
+
+type R442Over = Partial<
+  Pick<Parameters<typeof runSession>[0], "skipKnownSurvivors" | "resume" | "only" | "lines">
+>;
+
+async function r442World(files: Readonly<Record<string, string>>) {
+  const root = await tempRoot("r442");
+  const projectDir = join(root, "app");
+  const testDir = join(root, "tests");
+  const instrumentedDir = join(root, "instr");
+  await Bun.write(join(projectDir, "app.json"), SKIP_APP_JSON);
+  for (const [p, text] of Object.entries(files)) await Bun.write(join(projectDir, p), text);
+  await Bun.write(join(testDir, "GoodTests.Codeunit.al"), TEST_AL);
+  const store = new ResultsStore(":memory:");
+  const run = async (over: R442Over = {}) => {
+    const backend = new LogBackend(COVERED);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      projectDir,
+      testDir,
+      instrumentedDir,
+      selectorIds: skipSelectorIds,
+      emit: [(e) => events.push(e)],
+      ...over,
+    });
+    /** `<operator> <verdict>[ carried][ executed]` per mutant of `file` (and `procedure`). */
+    const rows = (file: string, procedure?: string): string[] =>
+      report.mutants
+        .filter(
+          (m) => m.file === file && (procedure === undefined || m.procedureName === procedure),
+        )
+        .map(
+          (m) =>
+            `${m.operatorName} ${m.verdict}${m.carried === true ? " carried" : ""}${backend.activated.includes(m.mutantCode) ? " executed" : ""}`,
+        )
+        .sort();
+    const warnings = (code: string): string[] =>
+      events.flatMap((e) => (e.type === "warning" && e.code === code ? [e.message] : []));
+    const runId = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    return { report, rows, warnings, backend, runId };
+  };
+  const write = (p: string, text: string) => Bun.write(join(projectDir, p), text);
+  return { store, run, write, projectDir };
+}
+
+/** `rows` of a run where every mutant was executed, re-read with another verdict suffix. */
+const as = (executed: readonly string[], suffix: string): string[] =>
+  executed.map((r) => r.replace(/ survived executed$/, ` ${suffix}`)).sort();
+
+describe("R442: a site hidden from numbering in one run poisons no key in the next", () => {
+  test("history: a repaired header refusal's twins are executed; a non-twin in the same file still skips", async () => {
+    const w = await r442World({
+      "src/Bad.al": obj(REFUSED_TABLE, X()),
+      "src/Good.al": obj(GOOD_CU, X(), Y()),
+    });
+    const first = await w.run();
+    const compute = first.rows("src/Good.al", "Compute");
+    const other = first.rows("src/Good.al", "Other");
+    expect(compute).toHaveLength(3);
+    expect(other.length).toBeGreaterThan(0);
+    for (const r of [...compute, ...other]) expect(r).toEndWith(" survived executed");
+    // The stored list: Bad's three sites, by coarse tuple; nothing hidden whole.
+    expect(w.store.getRun(first.runId)?.carryHidden).toEqual({
+      tuples: expect.arrayContaining([expect.stringMatching(/^[0-9a-f]{64}\|lethal\.[a-z-]+\|1$/)]),
+      files: [],
+    });
+    expect(w.store.getRun(first.runId)?.carryHidden?.tuples).toHaveLength(3);
+
+    await w.write("src/Bad.al", obj(REPAIRED_TABLE, X()));
+    const second = await w.run({ skipKnownSurvivors: true });
+    // Bad now takes ordinal 0, the key Good's twins held in run 1: executed, not skipped.
+    expect(second.rows("src/Bad.al")).toEqual(compute);
+    expect(second.rows("src/Good.al", "Compute")).toEqual(compute);
+    // The control in the same files: Other's keys never moved, so history still skips them.
+    expect(second.rows("src/Good.al", "Other")).toEqual(as(other, "known-survivor"));
+  });
+
+  test('history: object "A|B" with C against object A with "B|C" (one key string): executed', async () => {
+    const w = await r442World({
+      "src/Bad.al": obj('namespace X; codeunit 79302 "A|B"', X("C")),
+      "src/Good.al": obj('codeunit 79301 "A"', X('"B|C"'), Y()),
+    });
+    const first = await w.run();
+    const twins = first.rows("src/Good.al", "B|C");
+    const other = first.rows("src/Good.al", "Other");
+    expect(twins).toHaveLength(3);
+    await w.write("src/Bad.al", obj('namespace X;\ncodeunit 79302 "A|B"', X("C")));
+    const second = await w.run({ skipKnownSurvivors: true });
+    // The collision is real: Bad's run-2 keys are exactly Good's run-1 keys.
+    const keysOf = (r: SessionReport, file: string) =>
+      r.mutants
+        .filter((m) => m.file === file)
+        .map(keyOf)
+        .sort();
+    expect(keysOf(second.report, "src/Bad.al")).toEqual(
+      first.report.mutants
+        .filter((m) => m.procedureName === "B|C")
+        .map(keyOf)
+        .sort(),
+    );
+    expect(second.rows("src/Bad.al")).toEqual(twins);
+    expect(second.rows("src/Good.al", "Other")).toEqual(as(other, "known-survivor"));
+  });
+
+  test("history: a commented #if (preproc-undecided) removed: no key carries and the warning names the file; kept: Good carries", async () => {
+    const COMMENTED = `table 50100 "Twin"\n{\n    /*\n    #if true\n    */\n${X()}}\n`;
+    const files = { "src/A.al": COMMENTED, "src/Good.al": obj(GOOD_CU, X(), Y()) };
+    const w = await r442World(files);
+    const first = await w.run();
+    const compute = first.rows("src/Good.al", "Compute");
+    expect(compute).toHaveLength(3);
+    expect(w.store.getRun(first.runId)?.carryHidden).toEqual({ tuples: [], files: ["src/A.al"] });
+    await w.write("src/A.al", obj('table 50100 "Twin"', X()));
+    const second = await w.run({ skipKnownSurvivors: true });
+    // A now takes ordinal 0, Good's run-1 key: executed, never skipped.
+    expect(second.rows("src/A.al")).toEqual(compute);
+    const warned = second.warnings("history-hidden-files-changed");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("hid src/A.al whole");
+    expect(warned[0]).toContain("this run hides no file");
+
+    // Control: the comment kept, so A is hidden in both runs and moves no ordinal.
+    const c = await r442World(files);
+    const cFirst = await c.run();
+    const cSecond = await c.run({ skipKnownSurvivors: true });
+    expect(cSecond.rows("src/Good.al")).toEqual(as(cFirst.rows("src/Good.al"), "known-survivor"));
+    expect(cSecond.warnings("history-hidden-files-changed")).toEqual([]);
+  });
+
+  test("history: --only Good, then a full run: A is executed; the same --only again carries (no edit at all)", async () => {
+    const files = { "src/A.al": obj('table 50100 "Twin"', X()), "src/Good.al": obj(GOOD_CU, X()) };
+    const w = await r442World(files);
+    const first = await w.run({ only: ["src/Good.al"] });
+    expect(w.store.getRun(first.runId)?.carryHidden).toEqual({ tuples: [], files: ["src/A.al"] });
+    const second = await w.run({ skipKnownSurvivors: true });
+    expect(second.rows("src/A.al")).toEqual(first.rows("src/Good.al"));
+    expect(second.warnings("history-hidden-files-changed")).toHaveLength(1);
+
+    const c = await r442World(files);
+    const cFirst = await c.run({ only: ["src/Good.al"] });
+    const cSecond = await c.run({ only: ["src/Good.al"], skipKnownSurvivors: true });
+    expect(cSecond.rows("src/Good.al")).toEqual(as(cFirst.rows("src/Good.al"), "known-survivor"));
+  });
+
+  test("history, the other direction: a full run, then --only Good: Good (now ordinal 0, A's key) is executed", async () => {
+    const w = await r442World({
+      "src/A.al": obj('table 50100 "Twin"', X()),
+      "src/Good.al": obj(GOOD_CU, X()),
+    });
+    const first = await w.run();
+    const second = await w.run({ only: ["src/Good.al"], skipKnownSurvivors: true });
+    expect(second.rows("src/Good.al")).toEqual(first.rows("src/Good.al"));
+    expect(second.warnings("history-hidden-files-changed")).toHaveLength(1);
+  });
+
+  test("history: a full run, then --lines on Good only: Good's twins of A are executed, Good's other procedure skips", async () => {
+    const w = await r442World({
+      "src/A.al": obj('table 50100 "Twin"', X()),
+      "src/Good.al": obj(GOOD_CU, X(), Y()),
+    });
+    const first = await w.run();
+    const compute = first.rows("src/Good.al", "Compute");
+    const other = first.rows("src/Good.al", "Other");
+    const second = await w.run({
+      skipKnownSurvivors: true,
+      lines: [{ file: "src/Good.al", start: 1, end: 100 }],
+    });
+    expect(second.rows("src/A.al")).toEqual([]);
+    // Good's Compute twins now hold ordinal 0, A's run-1 key: executed.
+    expect(second.rows("src/Good.al", "Compute")).toEqual(compute);
+    expect(second.rows("src/Good.al", "Other")).toEqual(as(other, "known-survivor"));
+    expect(w.store.getRun(second.runId)?.carryHidden?.tuples).toHaveLength(3);
+  });
+
+  test("resume: Bad-X repaired and a new Bad-Y refused: both twin sets are executed, the batch deploys, Third carries", async () => {
+    const w = await r442World({
+      "src/BadX.al": obj(REFUSED_TABLE, X()),
+      "src/Good.al": obj(GOOD_CU, X(), Y(), Z()),
+    });
+    const p = await w.run();
+    const compute = p.rows("src/Good.al", "Compute");
+    const other = p.rows("src/Good.al", "Other");
+    const third = p.rows("src/Good.al", "Third");
+    await w.write("src/BadX.al", obj(REPAIRED_TABLE, X()));
+    await w.write("src/BadY.al", obj('namespace X; table 50101 "Other Twin"', Y()));
+    const resumed = await w.run({ resume: p.runId });
+    expect(resumed.report.resumedFrom?.runId).toBe(p.runId);
+    expect(resumed.rows("src/BadX.al")).toEqual(compute);
+    expect(resumed.rows("src/Good.al", "Other")).toEqual(other);
+    expect(resumed.rows("src/Good.al", "Third")).toEqual(as(third, "survived carried"));
+    expect(resumed.backend.deploys).toBe(1);
+  });
+
+  test("resume: a preproc-undecided file since fixed is refused by name", async () => {
+    const COMMENTED = `table 50100 "Twin"\n{\n    /*\n    #if true\n    */\n${X()}}\n`;
+    const w = await r442World({ "src/A.al": COMMENTED, "src/Good.al": obj(GOOD_CU, X()) });
+    const p = await w.run();
+    await w.write("src/A.al", obj('table 50100 "Twin"', X()));
+    await expect(w.run({ resume: p.runId })).rejects.toThrow(
+      `--resume: run ${p.runId} hid src/A.al whole from identity numbering, and this run hides no file`,
+    );
+  });
+
+  test("legacy NULL: history skips nothing and warns; --resume and --resume-run refuse by name; a fresh run records empty lists", async () => {
+    const w = await r442World({ "src/Good.al": obj(GOOD_CU, X(), Y()) });
+    const first = await w.run();
+    const all = first.rows("src/Good.al");
+    // A fresh store's first run records empty lists, not NULL.
+    expect(w.store.getRun(first.runId)?.carryHidden).toEqual({ tuples: [], files: [] });
+    // Control: every other trust gate matches, so history skips everything.
+    const control = await w.run({ skipKnownSurvivors: true });
+    expect(control.rows("src/Good.al")).toEqual(as(all, "known-survivor"));
+    // The latest finished run made legacy: same scheme, symbols, coverage mode and test app.
+    w.store.db.run("UPDATE runs SET carry_hidden = NULL WHERE id = ?", [control.runId]);
+    const legacy = w.store.getRun(control.runId);
+    expect([legacy?.identityScheme, legacy?.coverageMode, legacy?.buildSymbols]).toEqual([
+      IDENTITY_SCHEME,
+      "procedure",
+      [],
+    ]);
+    expect(legacy?.testAppHash).toBe(w.store.getRun(first.runId)?.testAppHash ?? "missing");
+    const after = await w.run({ skipKnownSurvivors: true });
+    expect(after.rows("src/Good.al")).toEqual(all);
+    const warned = after.warnings("history-carry-untrusted");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(`run ${control.runId}, recorded no list`);
+
+    // Both resume flags refuse a NULL run by name (run 1, made unfinished and NULL).
+    w.store.db.run("UPDATE runs SET carry_hidden = NULL, finished_at = NULL WHERE id = ?", [
+      first.runId,
+    ]);
+    await expect(w.run({ resume: first.runId })).rejects.toThrow(
+      `--resume-run ${first.runId} recorded no list`,
+    );
+    await expect(w.run({ resume: "last" })).rejects.toThrow(
+      `--resume found run ${first.runId}, but it recorded no list`,
+    );
+    // Control: the same run with its list back resumes and carries.
+    w.store.db.run(`UPDATE runs SET carry_hidden = '{"tuples":[],"files":[]}' WHERE id = ?`, [
+      first.runId,
+    ]);
+    const resumed = await w.run({ resume: "last" });
+    expect(resumed.rows("src/Good.al")).toEqual(as(all, "survived carried"));
+  });
+
+  test("crash window: a seeded NULL run holding verdict rows carries nothing", async () => {
+    const w = await r442World({ "src/Good.al": obj(GOOD_CU, X()) });
+    const first = await w.run();
+    const all = first.rows("src/Good.al");
+    // A run row written before generation, then verdict rows, and no list: what a run that died
+    // between `createRun` and the setter would look like if a row had slipped in.
+    w.store.db.run(
+      "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash) SELECT project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, test_app_hash FROM runs WHERE id = ?",
+      [first.runId],
+    );
+    const seeded = (w.store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    w.store.db.run(
+      "INSERT INTO mutants (run_id, mutant_code, ast_hash, codeunit_name, procedure_name, operator_name, operator_major, file, line, verdict, duration_ms, batch_index, identity_ordinal) SELECT ?, mutant_code, ast_hash, codeunit_name, procedure_name, operator_name, operator_major, file, line, verdict, duration_ms, batch_index, identity_ordinal FROM mutants WHERE run_id = ?",
+      [seeded, first.runId],
+    );
+    expect(w.store.getRun(seeded)?.carryHidden).toBeNull();
+    await expect(w.run({ resume: "last" })).rejects.toThrow(
+      `--resume found run ${seeded}, but it recorded no list`,
+    );
+    w.store.db.run("UPDATE runs SET finished_at = datetime('now') WHERE id = ?", [seeded]);
+    const after = await w.run({ skipKnownSurvivors: true });
+    expect(after.rows("src/Good.al")).toEqual(all);
+    expect(after.warnings("history-carry-untrusted")).toHaveLength(1);
+  });
+
+  test("premise of the coarse tuple: no registered operator name holds | or is all digits", () => {
+    const names = [...operatorTiers.keys()];
+    expect(names.length).toBeGreaterThan(10);
+    expect(names.filter((n) => n.includes("|") || /^\d+$/.test(n))).toEqual([]);
   });
 });
