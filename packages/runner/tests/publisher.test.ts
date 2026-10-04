@@ -73,6 +73,19 @@ describe("defaultAlToolPaths", () => {
       );
     });
 
+    test("a non-version folder (the kraken image's `-current` symlink) is never chosen as an extension", async () => {
+      const tmpDir = scratch("al-current-");
+      try {
+        const bin = join(tmpDir, "ms-dynamics-smb.al-current", "bin", "linux");
+        await mkdir(bin, { recursive: true });
+        await Bun.write(join(bin, "alc"), "");
+        await Bun.write(join(bin, "altool"), "");
+        expect(await defaultAlToolPaths(tmpDir, "linux")).toBeUndefined();
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("darwin uses bin/darwin and no .exe suffix", async () => {
       const result = await pathsFor("darwin");
       expect(result?.alcPath).toEndWith(

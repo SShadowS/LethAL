@@ -31,7 +31,7 @@ Inside the kraken container, run it from the repo checkout instead of `U:/Git/Le
 LETHAL_ITEST_ALRUNNER=1 LETHAL_ALRUNNER_PATH="H:/al-runner-builds/c39ad5de/al-runner.exe" bun run itest:alrunner
 ```
 
-In the kraken container `LETHAL_ALRUNNER_PATH` is already set (`/opt/al-runner/c39ad5de/al-runner`), so drop it from the command.
+In the kraken container `LETHAL_ALRUNNER_PATH` is already set (`/work/tools/al-runner/current/al-runner`, the daily local build), so drop it from the command.
 
 **Check the al-runner version before trusting a verdict from this leg.** al-runner publishes several times a day, and it is a globally-installed dotnet tool that `dotnet tool update` can move between one gate run and the next. Measured 2026-08-07: 2.0.0.0 reported a runner-enforced timeout as `TIMEOUT after <n>s`, and 2.0.1.0 — released the same day — changed it back to `Test exceeded <n>s timeout.`. The gate prints `al-runner build under test: <version>` as its first line; read it. If it is not what the freeze below names, that is a TOOL change, not a code regression — re-measure the contract (`docs/measurements/README.md` §"al-runner v2") before touching anything. `dotnet package search MSDyn365BC.AL.Runner --exact-match` lists what is published.
 Connection details come from the gitignored `fixtures/sandbox-app/.vscode/launch.local.json` + `fixtures/sandbox-app/lethal.config.local.json` (Cronus28, sshadows/1234, company `CRONUS Danmark A/S`, tenant default).
