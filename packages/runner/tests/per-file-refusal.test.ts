@@ -218,7 +218,7 @@ describe("R307: the per-file trial", () => {
  * value valid on Windows and Linux alike. It was the Windows capture before (manifest b03f52f2...,
  * all files e889a463...), which no Linux run ever matched; the values below are the ones Linux
  * gave all along, re-recorded deliberately. The identity scheme is not written into these files,
- * so the scheme 16 bump does not move them. R281 re-pinned both (manifest was b754095f...588e, all
+ * so the scheme 18 bump does not move them. R281 re-pinned both (manifest was b754095f...588e, all
  * files 9abd8f06...73c6): `DeleteWithTrigger`'s mutant gained `run-trigger-skipped-delete`.
  * R-457 re-pinned both (manifest was 5e997a85...5e4e, all files da7243c9...bd74): seven mutants
  * gained `run-trigger-forced`, the manifest's only change.

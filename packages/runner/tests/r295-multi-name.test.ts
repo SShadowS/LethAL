@@ -164,6 +164,6 @@ describe("R295: a #if between two names of one declaration", () => {
   });
 });
 
-test("R295/R294: the identity scheme is 16 (11 for R295/R294, 13 R455, 14 R454, 16 R-364)", () => {
-  expect(IDENTITY_SCHEME).toBe(16);
+test("R295/R294: the identity scheme is 18 (11 for R295/R294, 13 R455, 14 R454, 16 R-364, 18 R-458)", () => {
+  expect(IDENTITY_SCHEME).toBe(18);
 });
