@@ -366,6 +366,22 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
+  environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
+  compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops
+  with `UnmutatedBuildFailedError` and alc's output, records no `error` rows for the batch, and
+  stays resumable. If it compiles, bisection runs as before. Compile-failure text now carries
+  BOTH alc streams, labelled `stdout:` and `stderr:`, so a stderr warning no longer hides a stdout
+  error; bisection notes and `TestAppError.detail` get longer accordingly.
+- **A stale-test-app refusal says what the test app's identity shows, not that the app is older**
+  (R462). At the refusal the published test app (the same publisher and name as the first read) is
+  hashed again and compared with the hash taken at the start of the baseline. A changed package
+  throws the new `TestAppChangedError`. An unchanged one throws `StaleTestAppError`
+  (`cause: "unchanged-endpoints"`), which notes that a replace-and-restore between the two reads
+  cannot be ruled out. A read that cannot be compared throws `StaleTestAppError`
+  (`cause: "identity-unverified"`): the app may be older or may have been replaced. Both give the
+  republish remedy only "if no other session publishes to this server". A replacement restored
+  before the second read is still reported as unchanged.
 - **The loop-hang refusal now works inside an object wrapped whole in `#if`** (R-364, R343).
   The symbol table does not index such an object, so no variable there resolved and the four value
   operators deployed hang-capable mutants. Now, when a write's target does not resolve and its own
