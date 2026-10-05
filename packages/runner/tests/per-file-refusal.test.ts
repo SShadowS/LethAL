@@ -249,7 +249,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
-      "b1d589cdd9df4161cb5d2b92bf4155e6cb84de50fcb8e1885d59183e066a5e21",
+      // R459: flip-boolean-literal's operatorVersion 1.1.0 is the only change (was b1d589cd...5e21).
+      "105d129b220be6bded8f8ccdc97bf0b65d4ba8ae8442ff189a6961fa4d67b83f",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -257,7 +258,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(await readFile(join(dir, f)));
     }
     expect(all.digest("hex")).toBe(
-      "dec4321304eab25663f4aee1db5c8c815d83a90576f1457c5140055350d6a617",
+      // R459: moves with the manifest alone (was dec43213...a617); every .al file is unchanged.
+      "db5b5565d14e21f65b18a186a35a03e1d20db59b67cfe44a0a348e6f9c7f5328",
     );
   }, 60_000);
 });

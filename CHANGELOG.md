@@ -115,6 +115,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
   selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
   index is no longer read for content, so such a file's edits are seen.
+- **A two-argument `Insert(RunTrigger, InsertWithSystemId)` is mutated; identity scheme 21**
+  (R459; 20 is held by R-464). `flip-boolean-literal` (now 1.1.0) used to cede every `true` of a
+  claimed `Insert` to `swap-modify-flag`, which claims a sole `true` only, so both literals of
+  `Insert(true, X)` and `Insert(X, true)` were mutated by nobody. Both operators now ask one engine
+  answer for the sole-argument skip site, so the seam cannot orphan or duplicate a literal. The
+  first literal is tagged `run-trigger-skipped-insert` / `run-trigger-forced` by the same rules as
+  `Insert(true)` / `Insert(false)`; the second gets no RunTrigger tag (a SystemId mechanism for it
+  is R472). Measured: BC.History +30 mutants, 7 gain `run-trigger-forced`, 9 keys move ordinal;
+  CDO and the fixtures unchanged apart from the operator version in manifests. Re-check
+  equivalence marks.
 - **Identity scheme 19** (R468; 18 was R-458). Every object-level `var` section is now read
   (below), so call deletions move between operators, flips cede, hang-capable writes are removed,
   and 26 BaseApp swaps choose a different pair under an unchanged key: re-check equivalence marks.

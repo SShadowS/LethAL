@@ -32,6 +32,8 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * R254: sandbox-data's `DataBandExt.ReportExt.al` (a reportextension) is instrumented, 15 mutants
  * as M0005..M0019, so every file after `DataAssertOps` and the manifest re-pinned (ids +15; the
  * manifest was 245847db...a603).
+ * R459: sandbox-data's manifest re-pinned for provenance only: its 13 `flip-boolean-literal`
+ * entries carry operatorVersion 1.1.0 (it was eda8a324...7379). No site, tag or id moved.
  */
 const PINNED: Record<
   string,
@@ -109,7 +111,7 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "eda8a3244f0b83b5ba85123b052c154bc104da676530206aca0860bf125e7379",
+      "mutant-manifest.json": "257d5dde5b30d401b8fee4fd5c361bb156dbc4b90b8605eeb7e1166ff0d2752e",
     },
   },
   "sandbox-hang": {

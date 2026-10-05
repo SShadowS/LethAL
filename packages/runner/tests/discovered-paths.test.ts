@@ -210,7 +210,9 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R281 re-pinned (was b754095f...588e): one mutant gained `run-trigger-skipped-delete`.
   // R-457 re-pinned (was 5e997a85...5e4e): seven mutants gained `run-trigger-forced`.
   // R254 re-pinned (was db3667dd...a82f): the reportextension arm is instrumented, ids move +15.
-  const pinned = "b1d589cdd9df4161cb5d2b92bf4155e6cb84de50fcb8e1885d59183e066a5e21";
+  // R459 re-pinned (was b1d589cd...5e21): provenance only, every `flip-boolean-literal` entry's
+  // operatorVersion 1.0.0 -> 1.1.0; sites, tags and ids unchanged.
+  const pinned = "105d129b220be6bded8f8ccdc97bf0b65d4ba8ae8442ff189a6961fa4d67b83f";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

@@ -625,11 +625,152 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       const files = { "P.al": every, "O.al": caller("Par.Modify((false));") };
       expect(tagged(files)).toEqual([PLAIN]);
     });
+  });
 
-    // Filed separately (two-argument Insert). Revert: Insert's exact count 1 -> 2.
-    it("does NOT tag the first argument of a two-argument Insert(false, true)", () => {
-      const files = { "P.al": every, "O.al": caller("Par.Insert(false, true);") };
-      expect(tagged(files)).toEqual([PLAIN]);
+  // R459. `Insert(RunTrigger, InsertWithSystemId)`: `swap-modify-flag` claims a SOLE `true` only
+  // (`claimedRunTriggerSkip`), so both literals of a two-argument Insert are this operator's. The
+  // first is RunTrigger and is tagged both ways; the second gets NO RunTrigger tag (it runs no
+  // trigger; a SystemId mechanism is R472, not this). Each test names its revert.
+  describe("two-argument Insert (R459)", () => {
+    const FORCED = "false->true run-trigger-forced";
+    const SKIPPED = "true->false run-trigger-skipped-insert";
+    const T_PLAIN = "true->false -";
+    const F_PLAIN = "false->true -";
+    const trig = (name: string, body = ""): string =>
+      `    trigger ${name}()\n    begin\n${body}\n    end;\n`;
+    const keyInsert = par(trig("OnInsert", `        "No." := 'X';`));
+    const flagInsert = par(trig("OnInsert", "        Flag := true;"));
+
+    /** `<offset in O.al>:<tagged()'s line>`, so a test pins WHICH literal carries the tag. */
+    function at(files: Readonly<Record<string, string>>): string[] {
+      const parsed = Object.entries(files).map(([path, text]) => ({
+        path,
+        root: wrapRoot(parseAL(text)),
+      }));
+      const ctx = buildSemanticContext(parsed);
+      const ops = parsed.find((p) => p.path === "O.al");
+      if (ops === undefined) throw new Error("no O.al");
+      return findAll(ops.root, ALNodeKind.boolean_literal)
+        .filter((n) => flipBooleanLiteral.targets(n, ctx))
+        .flatMap((n) => flipBooleanLiteral.generate(n, ctx))
+        .map(
+          (s) =>
+            `${s.before.startIndex}:${s.before.text}->${s.after.text} ${s.platformKillMechanism ?? "-"}`,
+        );
+    }
+    /** Offset of the `n`th (0-based) literal inside `call` in `src`. */
+    const lit = (src: string, call: string, n: number): number => {
+      const start = src.indexOf(call);
+      if (start < 0) throw new Error(`no ${call}`);
+      const open = start + call.indexOf("(") + 1;
+      const parts = call.slice(call.indexOf("(") + 1, call.lastIndexOf(")")).split(",");
+      let off = open;
+      for (let i = 0; i < n; i++) off += (parts[i] ?? "").length + 1;
+      return off + ((parts[n] ?? "").length - (parts[n] ?? "").trimStart().length);
+    };
+
+    // T1. Reverts: drop the count-2 Insert row (arg 0 loses the tag); cede every `true` of a claimed
+    // Insert, as before R459 (arg 1 disappears).
+    it("Insert(false, true) on a table with OnInsert: arg 0 forced, arg 1 an untagged flip", () => {
+      const src = caller("Par.Insert(false, true);");
+      const call = "Par.Insert(false, true)";
+      expect(at({ "P.al": flagInsert, "O.al": src })).toEqual([
+        `${lit(src, call, 0)}:${FORCED}`,
+        `${lit(src, call, 1)}:${T_PLAIN}`,
+      ]);
+    });
+
+    // T2. Revert: the count-2 row returns `run-trigger-forced` without asking `forceCanRaise`.
+    it("Insert(false, true) on a table with no trigger and no observer: both untagged", () => {
+      expect(tagged({ "P.al": par(""), "O.al": caller("Par.Insert(false, true);") })).toEqual([
+        F_PLAIN,
+        T_PLAIN,
+      ]);
+    });
+
+    // T3. Reverts: the count-2 row's `skip: null` (tag lost); cede every `true` (arg 0 disappears).
+    it("Insert(true, false) where OnInsert assigns the key: arg 0 skip-tagged", () => {
+      const src = caller("Par.Insert(true, false);");
+      const call = "Par.Insert(true, false)";
+      expect(at({ "P.al": keyInsert, "O.al": src })).toEqual([
+        `${lit(src, call, 0)}:${SKIPPED}`,
+        `${lit(src, call, 1)}:${F_PLAIN}`,
+      ]);
+    });
+
+    // T4. Revert: the count-2 row's skip judged by `canRaise: () => true`.
+    it("Insert(true, false) where OnInsert sets a non-key field: arg 0 untagged", () => {
+      expect(tagged({ "P.al": flagInsert, "O.al": caller("Par.Insert(true, false);") })).toEqual([
+        T_PLAIN,
+        F_PLAIN,
+      ]);
+    });
+
+    // T5. Revert: the count-2 row at index 1 (or an extra index-1 row) moves or adds the tag.
+    it("Insert(true, true) where OnInsert assigns the key: only arg 0 tagged, spans pinned", () => {
+      const src = caller("Par.Insert(true, true);");
+      const call = "Par.Insert(true, true)";
+      expect(at({ "P.al": keyInsert, "O.al": src })).toEqual([
+        `${lit(src, call, 0)}:${SKIPPED}`,
+        `${lit(src, call, 1)}:${T_PLAIN}`,
+      ]);
+    });
+
+    // T6 (as F10). Revert: drop the count-2 row (the unresolved branch then tags neither).
+    it("unresolved receiver (wrapped caller): arg 0 tagged both ways, arg 1 never", () => {
+      const body = "Par.Insert(true, true); Par.Insert(false, true);";
+      const files = { "P.al": par(""), "O.al": `#if not CLEANX\n${caller(body)}\n#endif\n` };
+      expect(tagged(files)).toEqual([SKIPPED, T_PLAIN, FORCED, T_PLAIN]);
+    });
+
+    // T7. The sole-argument cession stays. Reverts: drop the cession (both reappear); read the sole
+    // argument by raw `namedChildren[0]` in `claimedRunTriggerSkip` (the commented one reappears).
+    it("still cedes a sole Insert(true), comment or not", () => {
+      const files = {
+        "P.al": keyInsert,
+        "O.al": caller("Par.Insert(true); Par.Insert(/* c */ true);"),
+      };
+      expect(tagged(files)).toEqual([]);
+    });
+
+    // sol 2: InsertWithSystemId runs no trigger, so it carries NO RunTrigger tag even with every
+    // insert observer present. This pins the ABSENCE of a RunTrigger tag, not harmlessness (R472).
+    // Revert: add an index-1 Insert row.
+    it("arg 1 (InsertWithSystemId) carries no RunTrigger tag with every observer present", () => {
+      const ext = `tableextension 50305 "Par Ext" extends "Par" { trigger OnBeforeInsert() begin end; trigger OnAfterInsert() begin end; }`;
+      const sub = `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Par", 'OnBeforeInsertEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+      const files = {
+        "P.al": keyInsert,
+        "X.al": ext,
+        "S.al": sub,
+        "O.al": caller("Par.Insert(false, false); Par.Insert(true, true);"),
+      };
+      expect(tagged(files)).toEqual([FORCED, F_PLAIN, SKIPPED, T_PLAIN]);
+    });
+
+    // Count-2 forcing controls: an extension trigger alone, a subscriber alone, and the wrong kind.
+    // Revert (all three red): judge the count-2 row by the modify kind. The last one is also red
+    // when the count-2 row forces without asking `forceCanRaise`.
+    it("Insert(false, true): an extension OnAfterInsert alone keeps the forced tag", () => {
+      const ext = `tableextension 50305 "Par Ext" extends "Par" { trigger OnAfterInsert() begin end; }`;
+      const files = { "P.al": par(""), "X.al": ext, "O.al": caller("Par.Insert(false, true);") };
+      expect(tagged(files)).toEqual([FORCED, T_PLAIN]);
+    });
+    it("Insert(false, true): a subscriber to OnAfterInsertEvent alone keeps the forced tag", () => {
+      const sub = `codeunit 50304 "Sub" {\n  [EventSubscriber(ObjectType::Table, Database::"Par", 'OnAfterInsertEvent', '', false, false)]\n  local procedure X(var Rec: Record "Par"; RunTrigger: Boolean) begin end;\n}`;
+      const files = { "P.al": par(""), "S.al": sub, "O.al": caller("Par.Insert(false, true);") };
+      expect(tagged(files)).toEqual([FORCED, T_PLAIN]);
+    });
+    it("Insert(false, true): only OnModify on the table drops the forced tag", () => {
+      const files = { "P.al": par(trig("OnModify")), "O.al": caller("Par.Insert(false, true);") };
+      expect(tagged(files)).toEqual([F_PLAIN, T_PLAIN]);
+    });
+
+    // Three arguments is no Insert overload: neither ceded nor RunTrigger-tagged. Revert: give the
+    // count-2 row count 3 (or cede every `true`).
+    it("Insert(true, true, true): three untagged flips", () => {
+      const files = { "P.al": keyInsert, "O.al": caller("Par.Insert(true, true, true);") };
+      expect(tagged(files)).toEqual([T_PLAIN, T_PLAIN, T_PLAIN]);
     });
   });
 });
