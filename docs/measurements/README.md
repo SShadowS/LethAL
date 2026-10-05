@@ -90,6 +90,21 @@ Two findings:
 `procedure` came back `undefined` for all three objects, i.e. object-level attribution only, so an
 extension mutant would additionally depend on `coverageFilter`'s object-level fallback.
 
+### `reportextension` — object type **22** (R254, 2026-10-05)
+
+Probe: `scripts/r254-probe/` (README inside holds the raw strings). Measured on Cronus28 (BC 28):
+
+- **Fenced (`Code Coverage`):** the extension's rows are Object Type **22**, Object ID = the
+  extension's own id, at the extension's own source lines; the base report keeps `3:<report id>`.
+- **Hub (`coverage: "procedure"`):** `22:<extension id>` with the extension's own method ids, which
+  `SymbolReference.json`'s `ReportExtensions` array names (alc writes the same
+  `{Id, Name, Methods, Target}` shape as the other extension arrays).
+- **Fenced session:** a processing-only report runs with `RunModal` (`UseRequestPage(false)`), also
+  after an uncommitted write. A fixture test must never call `Code Coverage Mgt.` (nested-coverage
+  refusal).
+- **al-runner (c39ad5de):** the extension is its own Cobertura `<class>`, keyed by its file, source
+  line frame, no type integer, so the line map's kind entry is the whole requirement there.
+
 ## `session-capability` — why two runners disagree (R57)
 
 `fixtures/sandbox-probes/src/SessionCapabilityProbe.Codeunit.al` reports `GuiAllowed`,

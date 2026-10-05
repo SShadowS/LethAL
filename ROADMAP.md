@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**101 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**102 of 457 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -315,6 +315,7 @@ that ordering is the priority.
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 - **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
 - **R451** · Forward direction `ModifyAll(Field, Value)` to `ModifyAll(Field, Value, true)` is a genuinely new edit; sites exist in BaseApp, none in CDO (low priority, measure before building) · [R451.md](docs/roadmap/R451.md) · open, filed 2026-10-05
+- **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
 
 ## Backends and tooling
 
