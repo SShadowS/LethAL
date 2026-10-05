@@ -13,9 +13,11 @@ import {
 } from "./assertion-screen";
 import type { BackendCapabilities, CoverageMode, TestMethodRef } from "./backend";
 import {
+  EQUIVALENCE_MARKS_FILENAME,
   type EquivalenceMarkReport,
   SURVIVING_VERDICTS,
   applyEquivalenceMarks,
+  refusedMarkLine,
 } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import { type ExcludedSites, declarativeSitesView, notInstrumentedView } from "./excluded-sites";
@@ -1383,6 +1385,31 @@ export interface SessionReport {
    */
   readonly identityScheme?: number;
   /**
+   * R443: sha256 of this run's identity numbering OUTPUT (`numberingDigestOf`, selection.ts): every
+   * numbered site with its ordinal. Two runs with equal digests give every key to the same mutant.
+   * An equivalence mark copies it (`lethal explain` prints the mark), and a later run matches the
+   * mark by key only when its own digest is equal. Written together with `twinSites` and
+   * `carryHidden`; absent on a report from before R443.
+   */
+  readonly numberingDigest?: string;
+  /**
+   * R443: R-391's twin sites (`twinSitesOf`, the value `runs.twin_tuples` records): each
+   * `<file>\u0000<tuple>` pair whose tuple occurs more than once in that file, over every numbered
+   * site, reserved ones included. Recorded at generation, never recounted from `mutants`, which a
+   * line filter or an interrupted run leaves short.
+   */
+  readonly twinSites?: readonly string[];
+  /**
+   * R443: R442's record of what this run numbered no ordinal for (`runs.carry_hidden`): coarse
+   * tuples of sites it generated but did not number (a line filter, a header refusal) and files it
+   * hid whole (`--only`, `--exclude`, a refusal). A mutant matching either may have a twin the
+   * numbering never saw, so `lethal explain` does not call it a singleton.
+   */
+  readonly carryHidden?: {
+    readonly tuples: readonly string[];
+    readonly files: readonly string[];
+  };
+  /**
    * R403 phase C: the TEST app's preprocessor symbols as LethAL DERIVED them (the config's, the
    * test `app.json`'s, and on al-runner its predefined ones). DERIVED, NOT OBSERVED: on bcdev only
    * a compiled package check (`tests-compiled-out` present, no refusal) says the built app agrees.
@@ -1521,13 +1548,25 @@ export interface SessionReport {
        *  `(batchIndex, mutantCode)`. */
       readonly batchIndex: number;
       readonly mutantCode: string;
+      /** R443: the matched row's CURRENT key. A mark matched on its file (rule 2) may hold an
+       *  older one. */
       readonly key: string;
       readonly reason: string;
     }>;
-    /** Marks that matched NO mutant here. Editing the mutated code changes its `astHash`, so a mark
-     *  retires itself rather than drifting onto a different mutant — safe, but the ruling is lost
-     *  and saying so is the point. */
+    /** Marks that matched NO mutant here: editing the marked code changes its identity, so the
+     *  mark names nothing any more. Safe, but the ruling is lost and saying so is the point. */
     readonly stale: readonly string[];
+    /**
+     * R443: marks that could not prove their key still names the mutant they were written for, by
+     * the mark's key, with why. A key holds no file, and an edit, `--only`, `--lines` or a repaired
+     * header can hand it to another twin, so such a mark is never applied. Optional only because a
+     * report from before R443 has none.
+     */
+    readonly refused?: ReadonlyArray<{
+      readonly key: string;
+      readonly reason: "no-proof" | "no-run-facts" | "renumbered" | "twin-in-file";
+      readonly file?: string;
+    }>;
     /** Marks this run REFUTED: the mutant did not survive. */
     readonly contradicted: ReadonlyArray<{
       /** R231: as in `matched`. */
@@ -2227,6 +2266,11 @@ export function markIdentityOf(m: MutantOutcome): string {
   });
 }
 
+/** R443: a row's identity tuple (`identityTupleOf`): `markIdentityOf` without the twin ordinal. */
+export function markTupleOfRow(m: MutantOutcome): string {
+  return markIdentityOf({ ...m, identityOrdinal: 0 });
+}
+
 /**
  * R265: what `lethal explain`'s `markKeysStale` means. Emitted exactly when the report's identity
  * scheme differs from this build's `IDENTITY_SCHEME`. It is R325's rule applied one step early:
@@ -2381,7 +2425,18 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const marks = statics.equivalenceMarks;
   let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
   if (marks !== undefined && marks.length > 0) {
-    const carryOff = input.outcomes.map((o) => isCarryDisabled(o.mutant, statics.carryDisabled));
+    // sol's final review (P1): the stream's OWN recorded `carryHidden` withholds a mutant too, not
+    // only the caller's optional `carryDisabled`. A replay that omits `carryDisabled` must not let
+    // rule 2 land a singleton's mark on a twin a line filter or a refusal hid from the numbering.
+    const recordedHidden = input.numbering?.carryHidden;
+    const hiddenTuples = new Set(recordedHidden?.tuples ?? []);
+    const hiddenFiles = new Set((recordedHidden?.files ?? []).map((f) => f.replaceAll("\\", "/")));
+    const carryOff = input.outcomes.map(
+      (o) =>
+        isCarryDisabled(o.mutant, statics.carryDisabled) ||
+        isCarryDisabled(o.mutant, hiddenTuples) ||
+        hiddenFiles.has(o.mutant.file.replaceAll("\\", "/")),
+    );
     const marked: EquivalenceMarkReport = applyEquivalenceMarks(
       marks,
       // R307 section 3: a mutant whose carry is disabled is not offered to any mark, so a mark on
@@ -2392,12 +2447,21 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           batchIndex: m.batchIndex,
           mutantCode: m.mutantCode,
           identity: markIdentityOf(m),
+          file: m.file,
+          tuple: markTupleOfRow(m),
           verdict: m.verdict,
         })),
       // R325: this report's keys are made by this build.
       IDENTITY_SCHEME,
       // R214: and under this build's effective symbols.
       statics.buildSymbols,
+      // R443: this run's RECORDED numbering facts. Absent (an older stream): every mark refused.
+      input.numbering !== undefined
+        ? {
+            numberingDigest: input.numbering.numberingDigest,
+            twinSites: new Set(input.numbering.twinSites),
+          }
+        : undefined,
     );
     readerMarkedEquivalent = {
       matched: [...marked.matched].sort(byBatchThenCode).map((m) => ({
@@ -2414,16 +2478,27 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         reason: c.reason,
         verdict: c.verdict,
       })),
+      refused: [...marked.refused]
+        .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+        .map((r) => ({
+          key: r.key,
+          reason: r.reason,
+          ...(r.file !== undefined ? { file: r.file } : {}),
+        })),
     };
   }
   // C02-01: ONE source of truth for a row's `readerMark`: the run-level classification above. A row
   // carries the mark only when that mark is `matched`, and only on a surviving verdict. A per-row
   // lookup disagreed with the list when two rows share one identity (the matcher keeps the last
-  // row, so a survivor could carry a mark the list calls `contradicted`).
-  const matchedMarks = new Map((readerMarkedEquivalent?.matched ?? []).map((m) => [m.key, m]));
+  // row, so a survivor could carry a mark the list calls `contradicted`). R443: joined by the
+  // matched ROW (batchIndex, mutantCode), never by key: under rule 2 a mark's own key may now
+  // belong to another row.
+  const matchedMarks = new Map(
+    (readerMarkedEquivalent?.matched ?? []).map((m) => [mutantRef(m.batchIndex, m.mutantCode), m]),
+  );
   for (const [i, m] of mutants.entries()) {
     const mark = SURVIVING_VERDICTS.has(m.verdict)
-      ? matchedMarks.get(markIdentityOf(m))
+      ? matchedMarks.get(mutantRef(m.batchIndex, m.mutantCode))
       : undefined;
     if (mark !== undefined) {
       mutants[i] = { ...m, readerMark: { key: mark.key, reason: mark.reason } };
@@ -2846,6 +2921,17 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // `runSession` made this value and asserted generation used the same one.
     buildSymbols: [...statics.buildSymbols],
     identityScheme: IDENTITY_SCHEME,
+    // R443: the recorded numbering facts a mark's proof is made from (`lethal explain`).
+    ...(input.numbering !== undefined
+      ? {
+          numberingDigest: input.numbering.numberingDigest,
+          twinSites: [...input.numbering.twinSites],
+          carryHidden: {
+            tuples: [...input.numbering.carryHidden.tuples],
+            files: [...input.numbering.carryHidden.files],
+          },
+        }
+      : {}),
     ...(testBuildSymbols.length > 0 ? { testBuildSymbols: [...testBuildSymbols] } : {}),
     ...(excludedTests.length > 0 ? { excludedTests: [...excludedTests] } : {}),
     ...(testSymbolsUnverifiedFiles.length > 0
@@ -3171,9 +3257,16 @@ export function renderConsole(r: SessionReport): string {
         );
       }
     }
+    const refused = e.refused ?? [];
+    if (refused.length > 0) {
+      lines.push(
+        `EQUIVALENCE MARKS REFUSED: ${refused.length} mark(s) cannot show that their key still names the mutant they were written for, so each mutant stays a plain survivor (R443). A key holds no file, and an edit, --only, --lines or a repaired header can hand it to another twin. Re-mark each: \`lethal explain <this report>\` prints every survivor's mark, with its proof fields, ready to paste into ${EQUIVALENCE_MARKS_FILENAME}:`,
+      );
+      for (const x of refused) lines.push(`  ${refusedMarkLine(x)}`);
+    }
     if (e.stale.length > 0) {
       lines.push(
-        `EQUIVALENCE MARKS STALE: ${e.stale.length} mark(s) matched no mutant here. The identity includes the mutated subtree's hash, so editing that code retires its mark rather than letting it drift onto a different mutant. Safe, but the ruling is gone unless someone makes it again (R172):`,
+        `EQUIVALENCE MARKS STALE: ${e.stale.length} mark(s) matched no mutant here. Editing the marked code changes its identity, so its mark names nothing any more. Safe, but the ruling is gone unless someone makes it again (R172):`,
       );
       for (const k of e.stale) lines.push(`  ${k}`);
     }

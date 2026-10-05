@@ -153,33 +153,89 @@ describe("R454: a MEMBER loop-condition write, through all four operators", () =
   ];
 
   for (const c of MEMBER) {
-    it(`${c.op.name}: refused AND counted at the member the condition reads, emitted at its sibling`, () => {
-      const { root, ctx } = load(c.src);
-      const refused = nodeAt(root, c.kind, c.refused, c.refusedWithin);
-      const claimed = nodeAt(root, c.kind, c.claimed, c.claimedWithin);
-      expect(c.op.targets(refused, ctx)).toBe(false);
-      expect(c.op.refusesHangCapable?.(refused, ctx)).toBe(true);
-      expect(c.op.targets(claimed, ctx)).toBe(true);
-      expect(c.op.refusesHangCapable?.(claimed, ctx)).toBe(false);
-      // Direct generate(): no spec at the refused node, a spec at the claimed control.
-      expect(c.op.generate(refused, ctx)).toEqual([]);
-      expect(c.op.generate(claimed, ctx).length).toBeGreaterThan(0);
-      // No generated spec inside the refused node, over the whole file as the orchestrator walks it.
-      const spans: { start: number; end: number }[] = [];
-      const walk = (n: ALSyntaxNode): void => {
-        if (c.op.targets(n, ctx)) {
-          for (const s of c.op.generate(n, ctx)) {
-            spans.push({ start: s.before.startIndex, end: s.before.endIndex });
-          }
-        }
-        for (const ch of n.children) walk(ch);
-      };
-      walk(root);
-      const inside = (p: ALSyntaxNode) =>
-        spans.filter((s) => s.start >= p.startIndex && s.end <= p.endIndex).length;
-      expect(inside(refused)).toBe(0);
-      expect(inside(claimed)).toBeGreaterThan(0);
-    });
+    it(`${c.op.name}: refused AND counted at the member the condition reads, emitted at its sibling`, () =>
+      assertCounted(c));
+  }
+});
+
+/** Refused, counted, no spec at or inside the refused node; the sibling claimed and emitted. */
+function assertCounted(c: Case): void {
+  const { root, ctx } = load(c.src);
+  const refused = nodeAt(root, c.kind, c.refused, c.refusedWithin);
+  const claimed = nodeAt(root, c.kind, c.claimed, c.claimedWithin);
+  expect(c.op.targets(refused, ctx)).toBe(false);
+  expect(c.op.refusesHangCapable?.(refused, ctx)).toBe(true);
+  expect(c.op.targets(claimed, ctx)).toBe(true);
+  expect(c.op.refusesHangCapable?.(claimed, ctx)).toBe(false);
+  // Direct generate(): no spec at the refused node, a spec at the claimed control.
+  expect(c.op.generate(refused, ctx)).toEqual([]);
+  expect(c.op.generate(claimed, ctx).length).toBeGreaterThan(0);
+  // No generated spec inside the refused node, over the whole file as the orchestrator walks it.
+  const spans: { start: number; end: number }[] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    if (c.op.targets(n, ctx)) {
+      for (const s of c.op.generate(n, ctx)) {
+        spans.push({ start: s.before.startIndex, end: s.before.endIndex });
+      }
+    }
+    for (const ch of n.children) walk(ch);
+  };
+  walk(root);
+  const inside = (p: ALSyntaxNode) =>
+    spans.filter((s) => s.start >= p.startIndex && s.end <= p.endIndex).length;
+  expect(inside(refused)).toBe(0);
+  expect(inside(claimed)).toBeGreaterThan(0);
+}
+
+/** R446: a write a body-exit guard reads, in a `while true`/`until false` loop, through all four
+ *  operators. Revert: `loopExitParts` returns `loopConditionParts(loop)`. */
+describe("R446: a body-exit guard's write is refused AND counted, its sibling emitted", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const COUNTER = `codeunit 50485 "R" { procedure P() var Pending: Integer; Total: Integer; begin
+      while true do begin Pending += 1; Total += 1; if Pending > 3 then exit; end; end; }`;
+  const BODY_GUARD: Case[] = [
+    {
+      op: removeAssignment,
+      src: COUNTER,
+      kind: "assignment_statement",
+      refused: "Pending += 1",
+      claimed: "Total += 1",
+    },
+    {
+      op: shiftInteger,
+      src: COUNTER,
+      kind: "integer",
+      refused: "1",
+      refusedWithin: "Pending += 1",
+      claimed: "1",
+      claimedWithin: "Total += 1",
+    },
+    {
+      op: swapAdditive,
+      src: `codeunit 50486 "R" { procedure P() var Remaining: Integer; Total: Integer; begin
+      repeat Remaining := Remaining + 1; Total := Total + 1; if Remaining >= 5 then break; until false; end; }`,
+      kind: "additive_expression",
+      refused: "Remaining + 1",
+      claimed: "Total + 1",
+    },
+    {
+      op: flipBooleanLiteral,
+      src: `codeunit 50487 "R" { procedure P() var Done: Boolean; Flag: Boolean; begin
+      while true do begin Done := true; Flag := true; if Done then CurrReport.Quit(); end; end; }`,
+      kind: "boolean",
+      refused: "true",
+      refusedWithin: "Done := true",
+      claimed: "true",
+      claimedWithin: "Flag := true",
+    },
+  ];
+
+  for (const c of BODY_GUARD) {
+    it(`${c.op.name}: refused AND counted where a body-exit guard reads the write`, () =>
+      assertCounted(c));
   }
 });
 

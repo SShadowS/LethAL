@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
-import { IDENTITY_SCHEME, type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
+import {
+  IDENTITY_SCHEME,
+  type MutantManifest,
+  identityTupleOf,
+  numberIdentityOrdinals,
+  runIdentityEntries,
+  writeInstrumentedProject,
+} from "@lethal/schemata";
 import { applyEquivalenceMarks, parseEquivalenceMarks } from "../src/equivalence-marks";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
-import { identityKeyOf, serializeKey } from "../src/selection";
+import { identityKeyOf, numberingDigestOf, serializeKey, twinSitesOf } from "../src/selection";
 import { BaselineRecordedError, RECORD_BASELINE_ENV } from "./baseline-guard";
 import {
   ANSWER_KILLERS,
@@ -141,21 +148,39 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
     expect(hit.identityOrdinal ?? 0).toBe(0);
     expect(hit.triggerName).toBeUndefined();
     expect(hit.procedureName).toBe(s5.scope);
+    // R443: the mark carries its proof, as `lethal explain` printed it for S5.
+    expect(mark.file).toBe(hit.file.replaceAll("\\", "/"));
+    expect(mark.fileSingleton).toBe(true);
+    expect(mark.numberingDigest).toMatch(/^[0-9a-f]{64}$/);
+    // This run's numbering facts, computed the way `runSession` computes them.
+    const set = await generateMutationSet(PROJECT_DIR);
+    const entries = runIdentityEntries(set.files, operatorTiers, set.reservedIdentityEntries);
+    const facts = {
+      numberingDigest: numberingDigestOf(entries, numberIdentityOrdinals(entries)),
+      twinSites: new Set(twinSitesOf(entries)),
+    };
+    const rows = m.mutants.map((e) => ({
+      batchIndex: 0,
+      mutantCode: e.mutantId,
+      identity: serializeKey(identityKeyOf(e)),
+      file: e.file,
+      tuple: identityTupleOf(e),
+      verdict: "survived",
+    }));
     // R214: the mark still applies under the new scheme to the build the harden gate runs, which
     // has no preprocessor symbols. A mark that went stale here would lose the planted equivalent.
-    const applied = applyEquivalenceMarks(
-      marks,
-      m.mutants.map((e) => ({
-        batchIndex: 0,
-        mutantCode: e.mutantId,
-        identity: serializeKey(identityKeyOf(e)),
-        verdict: "survived",
-      })),
-      IDENTITY_SCHEME,
-      [],
-    );
+    const applied = applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, [], facts);
     expect(applied.matched.map((x) => x.key)).toEqual([mark.key]);
     expect(applied.stale).toEqual([]);
+    expect(applied.refused).toEqual([]);
+    // R443 N6: and through rule 2 alone, so the fixture never depends on its digest matching this
+    // checkout's numbering (line endings, an operator change): S5 is a singleton in its file.
+    const byFile = applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, [], {
+      ...facts,
+      numberingDigest: "0".repeat(64),
+    });
+    expect(byFile.matched.map((x) => x.mutantCode)).toEqual([hit.mutantId]);
+    expect(byFile.refused).toEqual([]);
   });
 
   test("C02-03: only the planted equivalent's operator declares an equivalence risk", () => {

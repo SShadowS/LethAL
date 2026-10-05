@@ -288,3 +288,300 @@ describe("R454: literals in a loop's exit test the older walks missed", () => {
     expect(seen.sort()).toEqual(["0", "true"]);
   });
 });
+
+/**
+ * R446: a loop whose condition reads no name and calls nothing (`while true`, `until false`) ends
+ * only through its body exits, so the guards of those exits count as its condition. Every case keeps
+ * a same-loop sibling write that must still be claimed. Each `it` names the revert that turns it red.
+ */
+describe("R446: a write a body-exit guard reads, in a loop whose condition is name- and call-free", () => {
+  const V = "Done: Boolean; Go: Boolean; I: Integer; J: Integer; K: Integer; Total: Integer;";
+  const claims = (op: MutationOperator, lines: string[], vars = V, symbols?: string[]) =>
+    claimedSites(op, unit(lines.join("\n"), vars), symbols);
+  const COUNTER = [
+    "        while true do begin", // 7
+    "            I += 1;", // 8 refused
+    "            Total += 1;", // 9 claimed
+    "            if I > 3 then exit;", // 10
+    "        end;",
+  ];
+
+  // Revert for every `it` in this block unless named: `loopExitParts` returns `loopConditionParts(loop)`.
+  it("remove-assignment and shift-integer: `if I > 3 then exit` refuses `I += 1`, claims `Total += 1`", () => {
+    expect(claims(removeAssignment, COUNTER)).toEqual(["9|Total += 1"]);
+    expect(claims(shiftInteger, COUNTER)).toEqual(["9|1"]);
+  });
+
+  it("flip and remove-assignment: `if Done then exit` refuses `Done := true`, claims `Go := true`", () => {
+    const src = [
+      "        while true do begin",
+      "            Done := true;", // 8 refused
+      "            Go := true;", // 9 claimed
+      "            if Done then exit;",
+      "        end;",
+    ];
+    expect(claims(flipBooleanLiteral, src)).toEqual(["9|true"]);
+    expect(claims(removeAssignment, src)).toEqual(["9|Go := true"]);
+  });
+
+  it("swap-additive: `repeat ... if I >= 5 then break; until false` refuses `I := I + 1`", () => {
+    const src = [
+      "        repeat",
+      "            I := I + 1;", // 8 refused
+      "            Total := Total + 1;", // 9 claimed
+      "            if I >= 5 then break;",
+      "        until false;",
+    ];
+    expect(claims(swapAdditive, src)).toEqual(["9|Total + 1"]);
+  });
+
+  it("an `Error` guard, a `case` guard and an `else exit` each refuse the write their guard reads", () => {
+    const shape = (guard: string) => [
+      "        while true do begin",
+      "            I += 1;",
+      "            Total += 1;",
+      `            ${guard}`,
+      "        end;",
+    ];
+    for (const g of [
+      "if I > 3 then Error('x');",
+      "case I of 5: exit; end;",
+      "if I < 3 then Total += 0 else exit;",
+    ]) {
+      expect(claims(removeAssignment, shape(g)), g).toContain("9|Total += 1");
+      expect(claims(removeAssignment, shape(g)), g).not.toContain("8|I += 1");
+    }
+  });
+
+  it("an `Error` exit alone refuses (revert: drop `exitsLoop`'s `Error` branch)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;",
+      "            Total += 1;",
+      "            if I > 3 then Error('x');",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|Total += 1"]);
+  });
+
+  it("ANY, not ALL: two exits reading different variables refuse BOTH writes (revert: only the first exit's guards)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8 refused
+      "            J += 1;", // 9 refused
+      "            Total += 1;", // 10 claimed
+      "            if I > 3 then exit;",
+      "            if J > 3 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["10|Total += 1"]);
+  });
+
+  it("NOT over-refused: a loop whose condition reads a name keeps body guards out (revert: always add guards)", () => {
+    const src = [
+      "        while I < 10 do begin",
+      "            I += 1;", // 8 refused by the condition itself
+      "            J += 1;", // 9 claimed: only a body guard reads J
+      "            if J > 3 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|J += 1"]);
+  });
+
+  it("an inner loop's `break` ends only the inner loop (revert: `exitsLoop` accepts any `break`)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8 refused: the outer exit guard reads I
+      "            K := 0;", // 9 claimed: only the inner break's guard reads K
+      "            repeat",
+      "                K += 1;", // 11 refused by the inner loop's own break guard
+      "                if K > 2 then break;",
+      "            until false;",
+      "            if I > 3 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|K := 0"]);
+  });
+
+  it("an inner `while` condition guards the exit (revert: drop the `while`/`repeat` guard case)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;",
+      "            Total += 1;",
+      "            while I > 3 do exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|Total += 1"]);
+  });
+
+  it("a `for` bound guards the exit (revert: drop the `for_statement` guard case)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;",
+      "            Total += 1;",
+      "            for J := 3 to I do exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src)).toEqual(["9|Total += 1"]);
+  });
+
+  it("a `foreach` iterable guards the exit (revert: drop the `foreach_statement` guard case)", () => {
+    const src = [
+      "        while true do begin",
+      "            L := L2;", // 8 refused
+      "            L3 := L2;", // 9 claimed
+      "            foreach J in L do exit;",
+      "        end;",
+    ];
+    const vars = "J: Integer; L: List of [Integer]; L2: List of [Integer]; L3: List of [Integer];";
+    expect(claims(removeAssignment, src, vars)).toEqual(["9|L3 := L2"]);
+  });
+
+  it("a loop condition's `#if` tail: active and reading a name, guards stay out; inactive, they count (reverts: read inactive arms; skip tails)", () => {
+    const src = [
+      "        while true",
+      "#if LETHALX",
+      "            and Go",
+      "#endif",
+      "        do begin",
+      "            I += 1;", // 12
+      "            Total += 1;", // 13
+      "            if I > 3 then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src, V, ["LETHALX"])).toEqual(["12|I += 1", "13|Total += 1"]);
+    expect(claims(removeAssignment, src, V, [])).toEqual(["13|Total += 1"]);
+  });
+
+  it("a guard's `#if` tail: active, its read counts; inactive, it does not (revert: drop the guard-tail loop)", () => {
+    const src = [
+      "        while true do begin",
+      "            I += 1;", // 8
+      "            Total += 1;", // 9
+      "            if false",
+      "#if LETHALX",
+      "                or (I > 3)",
+      "#endif",
+      "            then exit;",
+      "        end;",
+    ];
+    expect(claims(removeAssignment, src, V, ["LETHALX"])).toEqual(["9|Total += 1"]);
+    expect(claims(removeAssignment, src, V, [])).toEqual(["8|I += 1", "9|Total += 1"]);
+  });
+
+  it("report exits: `CurrReport.Quit()` and a bare `CurrReport.Break` (revert: drop the `member_expression` branch)", () => {
+    for (const exit of ["CurrReport.Quit()", "CurrReport.Break", "CurrXMLport.Quit()"]) {
+      const src = [
+        "        while true do begin",
+        "            Done := true;",
+        "            Go := true;",
+        `            if Done then ${exit};`,
+        "        end;",
+      ];
+      expect(claims(removeAssignment, src), exit).toEqual(["9|Go := true"]);
+    }
+  });
+
+  it("the resolved-member reader: `if R.Qty > 3 then exit` refuses `R.Qty += 1` (revert: `conditionReadsMember` reads `loopConditionParts`)", () => {
+    const src = `table 50490 T { fields { field(1; Qty; Integer) { } field(2; Other; Integer) { } } }
+codeunit 50491 C { procedure P() var R: Record T; begin
+  while true do begin
+    R.Qty += 1;
+    R.Other += 1;
+    if R.Qty > 3 then exit;
+  end;
+end; }`;
+    expect(claimedSites(removeAssignment, src)).toEqual(["5|R.Other += 1"]);
+  });
+
+  it("the by-name reader: `if Rec.Qty > 3 then exit` refuses an implicit `Qty += 1` (revert: `loopConditionReadsByName` reads `loopConditionParts`)", () => {
+    const src = `table 50492 T { fields { field(1; Qty; Integer) { } field(2; Other; Integer) { } } }
+page 50493 Pg { SourceTable = T; procedure P() begin
+  while true do begin
+    Qty += 1;
+    Other += 1;
+    if Rec.Qty > 3 then exit;
+  end;
+end; }`;
+    expect(claimedSites(removeAssignment, src)).toEqual(["5|Other += 1"]);
+  });
+});
+
+/**
+ * R446's EXCLUSIONS (R480, measure-first): shapes that can hang but that this rule does not refuse
+ * today. Each pins the write as CLAIMED; a change that starts refusing one must change it here.
+ */
+describe("R446 exclusions: hang-capable writes still claimed (R480)", () => {
+  const V = "Done: Boolean; Go: Boolean; I: Integer; J: Integer; N: Integer; Total: Integer;";
+  const claims = (lines: string[], vars = V) =>
+    claimedSites(removeAssignment, unit(lines.join("\n"), vars));
+
+  it("a body-exit flag under a condition that reads a name", () => {
+    expect(
+      claims([
+        "        while Go do begin",
+        "            Done := true;",
+        "            if Done then exit;",
+        "        end;",
+      ]),
+    ).toEqual(["8|Done := true"]);
+  });
+
+  it("an indirect guard: the write feeds the guard's variable", () => {
+    expect(
+      claims([
+        "        while true do begin",
+        "            I += 1;",
+        "            Done := I >= 3;",
+        "            if Done then exit;",
+        "        end;",
+      ]),
+    ).toEqual(["8|I += 1"]);
+  });
+
+  it("a condition that calls something", () => {
+    expect(
+      claims(
+        [
+          "        while not Cust.IsEmpty() do begin",
+          "            Done := true;",
+          "            if Done then exit;",
+          "        end;",
+        ],
+        `${V} Cust: Record Customer;`,
+      ),
+    ).toEqual(["8|Done := true"]);
+  });
+
+  it("an outer `for` whose bound the body moves, and an outer `foreach`", () => {
+    expect(claims(["        for I := 1 to N do", "            N += 1;"])).toEqual(["8|N += 1"]);
+    expect(
+      claims(
+        ["        foreach J in L do", "            L := L2;"],
+        "J: Integer; L: List of [Integer]; L2: List of [Integer];",
+      ),
+    ).toEqual(["8|L := L2"]);
+  });
+
+  it("`asserterror` as the only exit (revert to red: let `Error` inside `asserterror` count)", () => {
+    expect(
+      claims([
+        "        while true do begin",
+        "            Done := true;",
+        "            asserterror if not Done then Error('x');",
+        "        end;",
+      ]),
+    ).toEqual(["8|Done := true"]);
+  });
+
+  it("`CurrReport.Skip()`, whose docs do not say it ends an AL loop (revert to red: add `skip`)", () => {
+    expect(
+      claims([
+        "        while true do begin",
+        "            Done := true;",
+        "            if Done then CurrReport.Skip();",
+        "        end;",
+      ]),
+    ).toEqual(["8|Done := true"]);
+  });
+});

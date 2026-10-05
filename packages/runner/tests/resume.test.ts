@@ -485,8 +485,9 @@ describe("sessionFingerprint (R47)", () => {
   // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19. It
   // moved again for R-464 (scheme 22, one implicit-record resolver); it was 6aab8fc7...be41 under
   // scheme 21. It moved again for R475 (scheme 24, code-unit twin order); it was
-  // 06081a49...f571 under scheme 22.
-  const PINNED = "e2706d8fe58cfa562abc767020247fd882076c4e42ba6873fafaed29684d97bd";
+  // 06081a49...f571 under scheme 22. It moved again for R446 (scheme 25, body-exit guards of a
+  // `while true` loop); it was e2706d8f...97bd under scheme 24.
+  const PINNED = "98154689e1c9f4192a8dd0d29793ee93d418b9764e71a0dcb5d3ced6313f145c";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1975,9 +1976,10 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 24 since R475 (twins numbered in code-unit file
-    // order, not the host's collation; 23 is held by R-446); 22 was R-464 (one implicit-record
-    // resolver: page and TableNo `Rec`, dataitems and `with` subjects resolve); 21 was R459 (a two-argument
+    // Pinned by value so a bump is deliberate: 25 since R446 (body-exit guards of a `while true`
+    // loop); 24 was R475 (twins numbered in code-unit file order, not the host's collation; 23 is
+    // unused); 22 was R-464 (one implicit-record resolver: page and TableNo `Rec`, dataitems and
+    // `with` subjects resolve); 21 was R459 (a two-argument
     // Insert's Booleans are flipped; 20 is unused); 19 was R468 (every object-level var section is
     // globals); 18 was R-458 (hang refusal by name through `with` subjects and implicit records);
     // 17 was R254 (reportextensions instrumented); 16
@@ -1986,7 +1988,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(24);
+    expect(IDENTITY_SCHEME).toBe(25);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -2103,6 +2105,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       operatorMajor: survivor.operatorMajor,
       ordinal: survivor.identityOrdinal ?? 0,
     });
+    // R443: the mark carries the numbering digest of the run it was made from (rule 1).
+    const numberingDigest = first.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
     const run = async (identityScheme: number) => {
       const events: RunEvent[] = [];
       const report = await runSession({
@@ -2110,7 +2115,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
         store: new ResultsStore(":memory:"),
         ...dirs,
         selectorIds,
-        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+        equivalenceMarks: [{ key, reason: "same either way", identityScheme, numberingDigest }],
         emit: [(e) => events.push(e)],
       });
       return { report, events };
@@ -2871,9 +2876,18 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
         ...dirs,
         selectorIds,
         preprocessorSymbols: ["R318A"],
-        // R214: the mark names the build's symbols, so only its scheme can make it stale.
+        // R214: the mark names the build's symbols, so only its scheme can make it stale. R443:
+        // and the numbering digest of the run it was made from, so it matches by key.
         equivalenceMarks: [
-          { key, reason: "same either way", identityScheme, preprocessorSymbols: ["R318A"] },
+          {
+            key,
+            reason: "same either way",
+            identityScheme,
+            preprocessorSymbols: ["R318A"],
+            ...(first.numberingDigest !== undefined
+              ? { numberingDigest: first.numberingDigest }
+              : {}),
+          },
         ],
       });
       return { key, marked: report.readerMarkedEquivalent };

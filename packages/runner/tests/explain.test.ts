@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tier1Operators } from "@lethal/builtin-tier1";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { explainFromCli, helpText, parseCliConfig } from "../src/cli";
+import { MARK_REASON_PLACEHOLDER } from "../src/equivalence-marks";
 import {
   ADMISSIBLE_INTERPRETATIONS,
   ARTIFACT_ID_ABSENCES,
@@ -33,10 +34,11 @@ import {
   REPORT_SCHEMA_VERSION,
   STRANDED_SKIP_INTERPRETATION,
   markIdentityOf,
+  markTupleOfRow,
   mutantRef,
 } from "../src/report";
 import type { Caveat, MutantErrorCause, MutantOutcome, SessionReport } from "../src/report";
-import { ATTRIBUTION_INTERPRETATIONS, serializeKey } from "../src/selection";
+import { ATTRIBUTION_INTERPRETATIONS, serializeKey, twinSiteOf } from "../src/selection";
 import type { CoverageAttribution } from "../src/selection";
 import type { MutantVerdict } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
@@ -322,6 +324,9 @@ const PROJECTION_AUTHORED_STRINGS: readonly string[] = [
   // ArtifactIdAbsence, C02-01. Authored tokens, like TOOL_CONDITIONS: why a survivor has no
   // artifactId, which the report states only by the absence of a field.
   ...ARTIFACT_ID_ABSENCES,
+  // R443: a mark's `reason`, a fixed placeholder the marks parser refuses unchanged, so it can
+  // never ride into a marks file as a ruling.
+  MARK_REASON_PLACEHOLDER,
 ];
 
 // ————————————————————————————————————————————————————————————————————————————————————————
@@ -515,6 +520,13 @@ function fullCoverageReport(): SessionReport {
     // R265: a report from the previous identity scheme, which an older build writes, so
     // `markKeysStale` is reached.
     identityScheme: IDENTITY_SCHEME - 1,
+    // R443: the numbering facts each survivor's `mark` is made from. M0002's (file, tuple) is a
+    // recorded twin site, so its `fileSingleton` is false and the others' true. `buildSymbols`
+    // reaches `mark.preprocessorSymbols[]`.
+    numberingDigest: "9".repeat(64),
+    twinSites: [twinSiteOf(survivorWithRisk.file, markTupleOfRow(survivorWithRisk))],
+    carryHidden: { tuples: [], files: [] },
+    buildSymbols: ["LETHALA"],
     quarantined: { reason: "test in-flight-unknown running Foo Tests.PostsBatch (mutant M0004)" },
     resumedFrom: { runId: 7, carriedMutants: 1, skippedStranded: 2 },
     // C02-01: batch 1 published (M0001's); batch 4 (M0002) did not, and batch 6's survivor is
@@ -650,6 +662,12 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].artifactIdAbsent", // [enum] ArtifactIdAbsence
   "$.survivors[].gapId", // [verbatim] (C02-09)
   "$.survivors[].markKey", // [derived] report.ts's markIdentityOf(row), R265
+  "$.survivors[].mark.key", // [derived] markKey, restated (R443)
+  "$.survivors[].mark.reason", // [enum] MARK_REASON_PLACEHOLDER, the one value the parser refuses
+  "$.survivors[].mark.file", // [verbatim] the row's file, `/` separators
+  "$.survivors[].mark.numberingDigest", // [verbatim] report.numberingDigest
+  "$.survivors[].mark.fileSingleton", // [derived] report.twinSites and report.carryHidden
+  "$.survivors[].mark.preprocessorSymbols[]", // [verbatim] report.buildSymbols
   "$.markIdentityScheme", // [verbatim] report.identityScheme, or 1 when absent (R325), R265
   "$.markKeysStale.reportScheme", // [derived] markIdentityScheme, restated
   "$.markKeysStale.buildScheme", // [enum] this build's IDENTITY_SCHEME
@@ -986,6 +1004,18 @@ describe("explain — the admissibility rule, made executable", () => {
       gapId: m.gapId,
     });
     expect(out.survivors.map(survivorVerbatim)).toEqual(survivorSources.map(survivorVerbatim));
+    // R443: each survivor's mark, from the report's RECORDED numbering facts. M0002 is the fixture's
+    // one recorded twin site, so only its mark is not a singleton.
+    expect(out.survivors.map((s) => s.mark)).toEqual(
+      survivorSources.map((m) => ({
+        key: markIdentityOf(m),
+        reason: MARK_REASON_PLACEHOLDER,
+        file: m.file,
+        numberingDigest: report.numberingDigest ?? "",
+        fileSingleton: m.mutantCode !== "M0002",
+        preprocessorSymbols: report.buildSymbols ?? [],
+      })),
+    );
     const errorSources = report.mutants.filter((m) => m.verdict === "error");
     const notMeasuredVerbatim = (m: {
       mutantCode: string;

@@ -33,7 +33,7 @@ import type {
   NotInstrumentedFile,
 } from "./report";
 import type { CoverageAttribution } from "./selection";
-import type { MutantVerdict, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunnerKind } from "./store";
 
 /** Bumped independently of `REPORT_SCHEMA_VERSION`. Consumers ignore unknown event types. */
 export const STREAM_SCHEMA_VERSION = 1;
@@ -179,6 +179,13 @@ export type RunEventInput =
       /** R447: files where R196's hang check refused sites. Present only when non-empty, so a
        *  stream from before R447 stays valid and folds to the same report bytes. */
       readonly hangRefusedFiles?: readonly HangRefusedFile[];
+      /** R443: `numberingDigestOf` over this run's numbered entries. Optional on the wire so a
+       *  stream from before R443 still folds; the producer always writes it, with the next two. */
+      readonly numberingDigest?: string;
+      /** R443: this run's `twinSitesOf` pairs, the ones `runs.twin_tuples` records. */
+      readonly twinSites?: readonly string[];
+      /** R443: what this run numbered no ordinal for, as `runs.carry_hidden` records it. */
+      readonly carryHidden?: CarryHidden;
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

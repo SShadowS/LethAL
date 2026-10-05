@@ -447,7 +447,17 @@ describe("R374: the scheme bump retires per-batch keys", () => {
         ...dirs,
         selectorIds,
         maxGuardsPerBatch,
-        equivalenceMarks: [{ key, reason: "a twin", identityScheme }],
+        // R443: the numbering digest of the run the key was read from, so it matches by key.
+        equivalenceMarks: [
+          {
+            key,
+            reason: "a twin",
+            identityScheme,
+            ...(first.numberingDigest !== undefined
+              ? { numberingDigest: first.numberingDigest }
+              : {}),
+          },
+        ],
       });
       return { key, marked: report.readerMarkedEquivalent };
     };

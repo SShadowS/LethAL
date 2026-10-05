@@ -556,7 +556,14 @@ async function buildVerifyHappyPathOutput() {
       join(projectDir, "lethal.equivalent.json"),
       JSON.stringify({
         identityScheme: IDENTITY_SCHEME,
-        marks: [{ key: serializeKey(identityKeyOf(entry)), reason: "same either way" }],
+        // R443: proved by the source run's numbering digest (rule 1).
+        marks: [
+          {
+            key: serializeKey(identityKeyOf(entry)),
+            reason: "same either way",
+            numberingDigest: "d".repeat(64),
+          },
+        ],
       }),
     );
 
@@ -569,6 +576,9 @@ async function buildVerifyHappyPathOutput() {
       projectPath: projectDir,
       backend: "bcdev",
       appVersion: "0.0.0.0",
+      carryHidden: { tuples: [], files: [] },
+      twinTuples: [],
+      numberingDigest: "d".repeat(64),
     });
     store.recordArtifact(runId, {
       batchIndex: 0,
@@ -1185,6 +1195,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "toolConditions",
       ],
       "explain-v11.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
+      "explain-v12.schema.json": [
         "caveats",
         "contract",
         "derivedFromReportSchemaVersion",

@@ -3,6 +3,7 @@ import { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "../src/cli";
 import {
   type EquivalenceMark,
   EquivalenceMarksError,
+  MARK_REASON_PLACEHOLDER,
   applyEquivalenceMarks,
   equivalenceMarkWarnings,
   parseEquivalenceMarks,
@@ -19,6 +20,15 @@ const KEY_B = "bbbb|Hang Logic|CountUpTo|lethal.shift-integer|1";
 
 function file(marks: unknown): string {
   return JSON.stringify({ marks });
+}
+
+/** R443: this run's numbering facts, and a mark proof that matches them under rule 1. */
+const DIGEST = "d".repeat(64);
+const OTHER_DIGEST = "e".repeat(64);
+const FACTS = { numberingDigest: DIGEST, twinSites: new Set<string>() };
+/** A markable mutant whose key is its own tuple (ordinal 0), in file `F.al`. */
+function mut(mutantCode: string, identity: string, verdict: string, file = "F.al") {
+  return { batchIndex: 0, mutantCode, identity, file, tuple: identity, verdict };
 }
 
 describe("parseEquivalenceMarks refuses rather than loading partially", () => {
@@ -113,19 +123,17 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
       "78d263bdf45458172865b270cf8c37ce220abae7feec90e4dd915b0eabc69b89|Symbol Logic|Rate|lethal.swap-additive|1";
     const parsed = parseEquivalenceMarks(
       file([
-        { key: KEY_SA, reason: "L13", preprocessorSymbols: ["LETHALA"] },
-        { key: KEY_SA, reason: "L15", preprocessorSymbols: ["LETHALB"] },
+        { key: KEY_SA, reason: "L13", preprocessorSymbols: ["LETHALA"], numberingDigest: DIGEST },
+        { key: KEY_SA, reason: "L15", preprocessorSymbols: ["LETHALB"], numberingDigest: DIGEST },
       ]),
       "m.json",
     );
     expect(parsed).toHaveLength(2);
-    const mutant = (verdict: string) => [
-      { batchIndex: 0, mutantCode: "M0001", identity: KEY_SA, verdict },
-    ];
-    const a = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALA"]);
+    const mutant = (verdict: string) => [mut("M0001", KEY_SA, verdict)];
+    const a = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALA"], FACTS);
     expect(a.matched.map((m) => m.reason)).toEqual(["L13"]);
     expect(a.stale.map((m) => m.reason)).toEqual(["L15"]);
-    const b = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALB"]);
+    const b = applyEquivalenceMarks(parsed, mutant("survived"), 1, ["LETHALB"], FACTS);
     expect(b.matched.map((m) => m.reason)).toEqual(["L15"]);
     expect(b.stale.map((m) => m.reason)).toEqual(["L13"]);
   });
@@ -158,25 +166,33 @@ describe("parseEquivalenceMarks refuses rather than loading partially", () => {
 
 describe("applyEquivalenceMarks separates matched, stale and contradicted", () => {
   const marks: EquivalenceMark[] = [
-    { key: KEY_A, reason: "self-assignment", identityScheme: 2 },
-    { key: KEY_B, reason: "returns 3 from either start", identityScheme: 2 },
+    { key: KEY_A, reason: "self-assignment", identityScheme: 2, numberingDigest: DIGEST },
+    {
+      key: KEY_B,
+      reason: "returns 3 from either start",
+      identityScheme: 2,
+      numberingDigest: DIGEST,
+    },
   ];
 
   // R325: a mark made under another scheme may name another mutant, so it is stale even when its
   // key equals a mutant's identity, and it is never matched or contradicted.
   test("a mark made under another identity scheme is stale, even on a matching key", () => {
     const old: EquivalenceMark[] = [
-      { key: KEY_A, reason: "self-assignment", identityScheme: 1 },
-      { key: KEY_B, reason: "returns 3 from either start", identityScheme: 1 },
+      { key: KEY_A, reason: "self-assignment", identityScheme: 1, numberingDigest: DIGEST },
+      {
+        key: KEY_B,
+        reason: "returns 3 from either start",
+        identityScheme: 1,
+        numberingDigest: DIGEST,
+      },
     ];
     const r = applyEquivalenceMarks(
       old,
-      [
-        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "killed" },
-      ],
+      [mut("M0001", KEY_A, "survived"), mut("M0002", KEY_B, "killed")],
       2,
       [],
+      FACTS,
     );
     expect(r.matched).toEqual([]);
     expect(r.contradicted).toEqual([]);
@@ -186,12 +202,10 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
   test("a mark on a survivor matches", () => {
     const r = applyEquivalenceMarks(
       marks,
-      [
-        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" },
-        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
-      ],
+      [mut("M0001", KEY_A, "survived"), mut("M0002", KEY_B, "survived")],
       2,
       [],
+      FACTS,
     );
     expect(r.matched.map((m) => m.mutantCode)).toEqual(["M0001", "M0002"]);
     expect(r.stale).toEqual([]);
@@ -201,12 +215,7 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
   test("a mark matching nothing is STALE, not silently dropped", () => {
     // The identity carries the mutated subtree's hash, so editing the code retires the mark. That
     // is safe, but a ruling nobody is told they lost is not.
-    const r = applyEquivalenceMarks(
-      marks,
-      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "survived" }],
-      2,
-      [],
-    );
+    const r = applyEquivalenceMarks(marks, [mut("M0001", KEY_A, "survived")], 2, [], FACTS);
     expect(r.stale.map((s) => s.key)).toEqual([KEY_B]);
   });
 
@@ -215,12 +224,10 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // mutant, and a test did.
     const r = applyEquivalenceMarks(
       marks,
-      [
-        { batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "killed" },
-        { batchIndex: 0, mutantCode: "M0002", identity: KEY_B, verdict: "survived" },
-      ],
+      [mut("M0001", KEY_A, "killed"), mut("M0002", KEY_B, "survived")],
       2,
       [],
+      FACTS,
     );
     expect(r.contradicted).toEqual([
       {
@@ -238,9 +245,10 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // It is a survivor carried from a prior run, so it does not refute the mark.
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
-      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "known-survivor" }],
+      [mut("M0001", KEY_A, "known-survivor")],
       2,
       [],
+      FACTS,
     );
     expect(r.matched).toHaveLength(1);
     expect(r.contradicted).toEqual([]);
@@ -251,9 +259,10 @@ describe("applyEquivalenceMarks separates matched, stale and contradicted", () =
     // confusion R175 exists to prevent.
     const r = applyEquivalenceMarks(
       [marks[0] as EquivalenceMark],
-      [{ batchIndex: 0, mutantCode: "M0001", identity: KEY_A, verdict: "no-coverage" }],
+      [mut("M0001", KEY_A, "no-coverage")],
       2,
       [],
+      FACTS,
     );
     expect(r.contradicted.map((c) => c.verdict)).toEqual(["no-coverage"]);
   });
@@ -265,6 +274,7 @@ describe("equivalenceMarkWarnings", () => {
       matched: [{ key: KEY_A, reason: "r", batchIndex: 0, mutantCode: "M0001" }],
       stale: [],
       contradicted: [],
+      refused: [],
     }).join(" ");
     expect(lines).toMatch(/STILL counted as survivors/);
     expect(lines).toMatch(/still in the mutation score/);
@@ -283,13 +293,193 @@ describe("equivalenceMarkWarnings", () => {
           verdict: "killed",
         },
       ],
+      refused: [],
     }).join(" ");
     expect(lines).toMatch(/CONTRADICTED/);
     expect(lines).toMatch(/0\/M0001 is killed/);
   });
 
   test("nothing to say produces no lines", () => {
-    expect(equivalenceMarkWarnings({ matched: [], stale: [], contradicted: [] })).toEqual([]);
+    expect(
+      equivalenceMarkWarnings({ matched: [], stale: [], contradicted: [], refused: [] }),
+    ).toEqual([]);
+  });
+
+  test("R443: one line per refused mark, naming it, plus the command that prints its replacement", () => {
+    const lines = equivalenceMarkWarnings({
+      matched: [],
+      stale: [],
+      contradicted: [],
+      refused: [
+        { key: KEY_A, reason: "no-proof" },
+        { key: KEY_B, reason: "twin-in-file", file: "src/B.al" },
+      ],
+    });
+    expect(lines[0]).toMatch(/REFUSED: 2 mark/);
+    expect(lines[0]).toMatch(/lethal explain/);
+    expect(lines.slice(1)).toEqual([
+      `  ${KEY_A}: no-proof, no proof fields (written before R443)`,
+      `  ${KEY_B} (src/B.al): twin-in-file, this run has a twin of it in that file`,
+    ]);
+    // The old STALE text claimed editing retires a mark "rather than letting it drift onto a
+    // different mutant", which R443 showed false.
+    const stale = equivalenceMarkWarnings({
+      matched: [],
+      stale: [{ key: KEY_A, reason: "r", identityScheme: 1 }],
+      contradicted: [],
+      refused: [],
+    }).join(" ");
+    expect(stale).not.toMatch(/drift/);
+  });
+});
+
+describe("R443: a mark is applied only under rule 1 (same numbering) or rule 2 (a proven singleton)", () => {
+  const TUPLE = "h|Twin|Bump|lethal.remove-assignment|1";
+  const base = { reason: "equivalent", identityScheme: 1 } as const;
+  // Two twins of TUPLE in two files: A holds ordinal 0, B ordinal 1.
+  const rows = [
+    {
+      batchIndex: 0,
+      mutantCode: "M1",
+      identity: TUPLE,
+      file: "A.al",
+      tuple: TUPLE,
+      verdict: "survived",
+    },
+    {
+      batchIndex: 0,
+      mutantCode: "M2",
+      identity: `${TUPLE}|1`,
+      file: "B.al",
+      tuple: TUPLE,
+      verdict: "survived",
+    },
+  ];
+  const apply = (marks: EquivalenceMark[], facts = FACTS, mutants = rows) =>
+    applyEquivalenceMarks(marks, mutants, 1, [], facts);
+
+  test("rule 1: an equal digest matches by key", () => {
+    const r = apply([
+      { ...base, key: `${TUPLE}|1`, numberingDigest: DIGEST, fileSingleton: false, file: "B.al" },
+    ]);
+    expect(r.matched.map((m) => m.mutantCode)).toEqual(["M2"]);
+  });
+
+  test("rule 2: another digest, a proven singleton, matches on (tuple, file) and reports the CURRENT key", () => {
+    // Marked when B's twin was ordinal 0 (A hidden); now it is ordinal 1.
+    const r = apply([
+      { ...base, key: TUPLE, numberingDigest: OTHER_DIGEST, fileSingleton: true, file: "B.al" },
+    ]);
+    expect(r.matched).toEqual([
+      { key: `${TUPLE}|1`, reason: "equivalent", batchIndex: 0, mutantCode: "M2" },
+    ]);
+  });
+
+  test("rule 2 refuses when this run has a twin in the mark's file", () => {
+    const facts = { numberingDigest: DIGEST, twinSites: new Set([`B.al\0${TUPLE}`]) };
+    const r = apply(
+      [{ ...base, key: TUPLE, numberingDigest: OTHER_DIGEST, fileSingleton: true, file: "B.al" }],
+      facts,
+    );
+    expect(r.matched).toEqual([]);
+    expect(r.refused).toEqual([{ key: TUPLE, reason: "twin-in-file", file: "B.al" }]);
+  });
+
+  test("another digest and no singleton proof: refused `renumbered`", () => {
+    const r = apply([
+      { ...base, key: TUPLE, numberingDigest: OTHER_DIGEST, fileSingleton: false, file: "A.al" },
+    ]);
+    expect(r.refused.map((x) => x.reason)).toEqual(["renumbered"]);
+    expect(r.matched).toEqual([]);
+  });
+
+  test("a key-only (legacy) mark is refused `no-proof`, even on an exact key", () => {
+    const r = apply([{ ...base, key: TUPLE }]);
+    expect(r.refused).toEqual([{ key: TUPLE, reason: "no-proof" }]);
+    expect(r.matched).toEqual([]);
+    expect(r.stale).toEqual([]);
+  });
+
+  test("(d) N1: with this run's facts absent, every proof-carrying mark is refused", () => {
+    const r = applyEquivalenceMarks(
+      [
+        { ...base, key: TUPLE, numberingDigest: DIGEST, fileSingleton: true, file: "A.al" },
+        { ...base, key: `${TUPLE}|1`, numberingDigest: DIGEST },
+      ],
+      rows,
+      1,
+      [],
+      undefined,
+    );
+    expect(r.matched).toEqual([]);
+    expect(r.contradicted).toEqual([]);
+    expect(r.refused.map((x) => x.reason)).toEqual(["no-run-facts", "no-run-facts"]);
+  });
+
+  test("rule 2 never matches another file's twin: the mark's file is gone, so it is stale", () => {
+    const r = apply(
+      [{ ...base, key: TUPLE, numberingDigest: OTHER_DIGEST, fileSingleton: true, file: "A.al" }],
+      FACTS,
+      rows.filter((m) => m.file !== "A.al"),
+    );
+    expect(r.matched).toEqual([]);
+    expect(r.stale.map((m) => m.key)).toEqual([TUPLE]);
+  });
+});
+
+describe("R443: the marks file's proof fields", () => {
+  test("they load, `\\` normalised to `/`", () => {
+    const [m] = parseEquivalenceMarks(
+      file([
+        {
+          key: KEY_A,
+          reason: "r",
+          file: "src\\A.al",
+          numberingDigest: DIGEST,
+          fileSingleton: true,
+        },
+      ]),
+      "m.json",
+    );
+    expect(m).toEqual({
+      key: KEY_A,
+      reason: "r",
+      identityScheme: 1,
+      file: "src/A.al",
+      numberingDigest: DIGEST,
+      fileSingleton: true,
+    });
+  });
+
+  test("bad values are refused", () => {
+    const one = (extra: Record<string, unknown>) => () =>
+      parseEquivalenceMarks(file([{ key: KEY_A, reason: "r", ...extra }]), "m.json");
+    expect(one({ numberingDigest: "abc" })).toThrow(/numberingDigest/);
+    expect(one({ fileSingleton: "yes" })).toThrow(/fileSingleton/);
+    expect(one({ file: "" })).toThrow(/"file"/);
+    expect(one({ fileSingleton: true })).toThrow(/names no "file"/);
+  });
+
+  test("`lethal explain`'s reason placeholder is refused unchanged", () => {
+    expect(() =>
+      parseEquivalenceMarks(file([{ key: KEY_A, reason: MARK_REASON_PLACEHOLDER }]), "m.json"),
+    ).toThrow(/"reason" is required/);
+  });
+
+  test("N4: the duplicate check keys on (key, file, digest)", () => {
+    const two = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+      parseEquivalenceMarks(
+        file([
+          { key: KEY_A, reason: "x", ...a },
+          { key: KEY_A, reason: "y", ...b },
+        ]),
+        "m.json",
+      );
+    expect(two({ file: "A.al" }, { file: "B.al" })).toHaveLength(2);
+    expect(two({ numberingDigest: DIGEST }, { numberingDigest: OTHER_DIGEST })).toHaveLength(2);
+    expect(() =>
+      two({ file: "A.al", numberingDigest: DIGEST }, { file: "A.al", numberingDigest: DIGEST }),
+    ).toThrow(/duplicate key/);
   });
 });
 

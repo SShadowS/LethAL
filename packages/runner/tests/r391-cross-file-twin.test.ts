@@ -336,6 +336,35 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     expect(rowsB(second)).toEqual([`${B} @8 error`, `${B} @9 survived`]);
   });
 
+  test("resume, insertion: a killed singleton gains a same-file twin; neither twin inherits `killed`", async () => {
+    // Sol's post-merge review of R-391: the recorded run says A's tuple is a singleton in A, so only
+    // THIS run's twin facts (`!current.twins.has(site)` in `carryRecord`) can refuse the carry.
+    const p = await project([TWIN], ["Y := 5;"]);
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new SiteBackend({ [`${A}:13`]: "fail", [`${B}:8`]: "abort" }),
+      store,
+      ...p.dirs,
+      selectorIds,
+    });
+    expect(rows(first)).toEqual([`${A} @13 killed`, `${B} @8 error`]);
+
+    await p.writeA([TWIN, TWIN]);
+    // Everything would SURVIVE if executed, so a `killed` on either twin can only be carried.
+    const second = await runSession({
+      backend: new SiteBackend({}),
+      store,
+      ...p.dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(second.resumedFrom?.runId).toBeDefined();
+    expect(rows(second).filter((x) => x.startsWith(A))).toEqual([
+      `${A} @13 survived`,
+      `${A} @14 survived`,
+    ]);
+  });
+
   test("history, undercount: a killed twin beside a survived twin is still a twin", async () => {
     // Counted from the SURVIVOR rows (all history reads) B's tuple has one row: a singleton.
     const p = await project(["X := 2;"], [TWIN, TWIN]);

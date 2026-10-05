@@ -333,6 +333,10 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 6,
         "excludedByExclude": 0,
@@ -341,10 +345,12 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "hangCapableCount": 0,
         "instrumentableFiles": 2,
         "notInstrumentedFiles": [],
+        "numberingDigest": "1bf6f9a3d88fb359016fca3a054b3ddddc8f3df5b849b5826d8de7fcc4dd6745",
         "preprocExcludedFiles": [],
         "seq": 9,
         "siteCount": 6,
         "totalFiles": 2,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },

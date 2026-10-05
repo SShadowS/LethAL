@@ -1051,6 +1051,37 @@
     "identityScheme": {
       "type": "number"
     },
+    "numberingDigest": {
+      "type": "string"
+    },
+    "twinSites": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "carryHidden": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tuples",
+        "files"
+      ],
+      "properties": {
+        "tuples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "testBuildSymbols": {
       "type": "array",
       "items": {
@@ -1214,6 +1245,34 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "refused": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "reason"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "no-proof",
+                  "no-run-facts",
+                  "renumbered",
+                  "twin-in-file"
+                ]
+              },
+              "file": {
+                "type": "string"
+              }
+            }
           }
         },
         "contradicted": {

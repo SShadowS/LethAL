@@ -83,6 +83,8 @@ const INPUTS = { dependencies: DEPS, buildInputs: appInputsOfAppJson({}).buildIn
 
 const A1 = "a".repeat(32);
 const A2 = "b".repeat(32);
+/** R443: the source run's numbering digest in these fixtures; a mark carrying it matches by key. */
+const SOURCE_DIGEST = "d".repeat(64);
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
 
 function artifact(batchIndex: number, artifactId: string, over: Record<string, unknown> = {}) {
@@ -472,6 +474,7 @@ describe("assertSourceUnchanged", () => {
       carryHidden: null,
       generationSourceSha256: null,
       twinTuples: null,
+      numberingDigest: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
       rows: [],
     };
@@ -728,9 +731,12 @@ describe("planVerify", () => {
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       coverageMode: "procedure",
-      carryHidden: null,
+      // R443: the source run's numbering facts, measured: no twins, nothing hidden. A mark whose
+      // `numberingDigest` is `SOURCE_DIGEST` matches by key (rule 1).
+      carryHidden: { tuples: [], files: [] },
       generationSourceSha256: null,
-      twinTuples: null,
+      twinTuples: [],
+      numberingDigest: SOURCE_DIGEST,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
       rows: [],
     };
@@ -1358,7 +1364,11 @@ describe("planVerify", () => {
     const marks = {
       identityScheme: IDENTITY_SCHEME,
       marks: [
-        { key: "hash-M0001|Logic|Post|lethal.negate-conditional|1", reason: "same either way" },
+        {
+          key: "hash-M0001|Logic|Post|lethal.negate-conditional|1",
+          reason: "same either way",
+          numberingDigest: SOURCE_DIGEST,
+        },
       ],
     };
     const plan = await markedPlan(marks, [entry("M0001"), entry("M0002")]);
@@ -1375,9 +1385,10 @@ describe("planVerify", () => {
   // another may name a different mutant, so it is not applied: the survivor runs.
   test("a mark made under another identity scheme is not applied", async () => {
     const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
-    const plan = await markedPlan({ marks: [{ key, reason: "same either way" }] }, [
-      entry("M0001"),
-    ]);
+    const plan = await markedPlan(
+      { marks: [{ key, reason: "same either way", numberingDigest: SOURCE_DIGEST }] },
+      [entry("M0001")],
+    );
     expect(plan.skipped).toEqual([]);
     expect(plan.requests.map((r) => r.mutantId)).toEqual(["M0001"]);
     expect(plan.marksUnderOtherScheme.map((m) => [m.key, m.identityScheme])).toEqual([[key, 1]]);
@@ -1389,7 +1400,9 @@ describe("planVerify", () => {
     const key = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
     const marks = (preprocessorSymbols: readonly string[]) => ({
       identityScheme: IDENTITY_SCHEME,
-      marks: [{ key, reason: "same either way", preprocessorSymbols }],
+      marks: [
+        { key, reason: "same either way", preprocessorSymbols, numberingDigest: SOURCE_DIGEST },
+      ],
     });
     const other = await markedPlan(marks(["LETHALA"]), [entry("M0001")], ["LETHALB"]);
     expect(other.skipped).toEqual([]);
@@ -1430,12 +1443,66 @@ describe("planVerify", () => {
     const plan = await markedPlan(
       {
         identityScheme: IDENTITY_SCHEME,
-        marks: [{ key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1", reason: "r" }],
+        marks: [
+          {
+            key: "hash-M0001|Logic|OnInsert|lethal.negate-conditional|1",
+            reason: "r",
+            numberingDigest: SOURCE_DIGEST,
+          },
+        ],
       },
       [entry("M0001", { procedureName: "", triggerName: "OnInsert" })],
     );
     expect(plan.skipped.map((s) => s.entry.mutantId)).toEqual(["M0001"]);
     expect(plan.requests).toEqual([]);
+  });
+
+  describe("R443: verify skips a survivor only for a mark that proves it names that survivor", () => {
+    const KEY = "hash-M0001|Logic|Post|lethal.negate-conditional|1";
+    const SITE = `Logic.Codeunit.al\0${KEY}`;
+    const plan = (
+      mark: Record<string, unknown>,
+      over: { numberingDigest?: string | null; twinTuples?: readonly string[] } = {},
+    ) =>
+      planUnchanged({
+        source: {
+          ...source(
+            project({
+              identityScheme: IDENTITY_SCHEME,
+              marks: [{ key: KEY, reason: "r", ...mark }],
+            }),
+            [{ mutantCode: "M0001", coveringTests: ["T.M"] }],
+          ),
+          ...(over.numberingDigest !== undefined ? { numberingDigest: over.numberingDigest } : {}),
+          ...(over.twinTuples !== undefined ? { twinTuples: over.twinTuples } : {}),
+        },
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        testDir: testDir([{ id: 50100, name: "T", methods: ["M"] }]),
+      });
+    const skippedOf = async (p: ReturnType<typeof plan>) =>
+      (await p).skipped.map((s) => s.entry.mutantId);
+
+    test("a key-only (legacy) mark skips nothing: the survivor runs", async () => {
+      expect(await skippedOf(plan({}))).toEqual([]);
+    });
+
+    test("a source run without numbering facts applies no mark", async () => {
+      expect(
+        await skippedOf(plan({ numberingDigest: SOURCE_DIGEST }, { numberingDigest: null })),
+      ).toEqual([]);
+    });
+
+    test("rule 2: another digest, a proven singleton in its file, is skipped", async () => {
+      const other = {
+        numberingDigest: "e".repeat(64),
+        file: "Logic.Codeunit.al",
+        fileSingleton: true,
+      };
+      expect(await skippedOf(plan(other))).toEqual(["M0001"]);
+      // And refused when the source run recorded a twin of it in that file.
+      expect(await skippedOf(plan(other, { twinTuples: [SITE] }))).toEqual([]);
+    });
   });
 
   test("a malformed marks file is thrown, never read as no marks", async () => {
@@ -1702,6 +1769,10 @@ function installedRun(
     projectPath,
     backend: "bcdev",
     appVersion: "0.0.0.0",
+    // R443: the run's numbering facts, as `runSession` records them: no twins, nothing hidden.
+    carryHidden: { tuples: [], files: [] },
+    twinTuples: [],
+    numberingDigest: SOURCE_DIGEST,
   });
   store.recordArtifact(
     runId,
@@ -2012,7 +2083,11 @@ describe("C02-09: gap ids", () => {
     writeFileSync(join(projectDir, "src", "Logic.Codeunit.al"), 'codeunit 50000 "Logic" { }');
     const marks = seeds
       .filter((s) => markCodes.includes(s.entry.mutantId))
-      .map((s) => ({ key: serializeKey(identityKeyOf(s.entry)), reason: "same either way" }));
+      .map((s) => ({
+        key: serializeKey(identityKeyOf(s.entry)),
+        reason: "same either way",
+        numberingDigest: SOURCE_DIGEST,
+      }));
     if (marks.length > 0) {
       writeFileSync(
         join(projectDir, "lethal.equivalent.json"),
