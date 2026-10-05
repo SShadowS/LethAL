@@ -1713,6 +1713,10 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     expect(calls).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("al-runner is NOT authoritative");
+    // R255: the reason given is the CURRENT one. The asserterror defect (R7) is fixed in v2 and the
+    // canary reports it `defect-not-reproduced`, so the fallback must not name it.
+    expect(warnings[0]).not.toContain("asserterror");
+    expect(warnings[0]).toContain("coverage");
     expect(result).toBeUndefined();
   });
 });

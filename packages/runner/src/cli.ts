@@ -2677,11 +2677,13 @@ export function odataCfgFor(c: BcDevConfigSection): ActivationConfig {
  * paragraph five times under `--workers 4` and trained the reader to scroll past it.
  */
 function warnAlRunnerNotAuthoritative(): void {
+  // R255: this used to name the asserterror defect (R7), which v2 fixed; the canary reports it
+  // `defect-not-reproduced`. The reasons below are `AlRunnerBackend.capabilities`'s.
   console.warn(
-    "[lethal] al-runner is NOT authoritative: it reports `pass` for an `asserterror` that " +
-      "raised no error, so any mutant killable only by an asserterror assertion is reported " +
-      "as SURVIVED. Treat survivors from this backend as unconfirmed — re-run them under " +
-      "--backend bcdev before acting on them.",
+    "[lethal] al-runner is NOT authoritative: its coverage depends on the project's file " +
+      "layout (a file whose later objects carry code turns it off for the whole run), and its " +
+      "transaction semantics are not verified against BC. Treat survivors from this backend as " +
+      "unconfirmed — re-run them under --backend bcdev before acting on them.",
   );
 }
 

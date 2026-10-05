@@ -548,10 +548,14 @@ the startup canary below runs `asserterror I := 1;` through the installed binary
 expected inside an ASSERTERROR statement.`, as BC does). What still separates the two backends is
 coverage (since R220 `itest:alrunner` runs with al-runner's `--coverage` and matches bcdev at
 3 / 12 / 4 per mutant; `lethal run` still defaults to `coverage: "none"`, under which bcdev's 4
-no-coverage mutants are run and survive, 3 / 16 / 0, R387) and, on `sandbox-data`,
-`Codeunit.Run` not scoping a write transaction (R183; the canary's third probe,
-`transactionRollback`, still reports `defect-confirmed`). The measurement above is kept as the
-record of why the canary exists, not as a description of the current binary.
+no-coverage mutants are run and survive, 3 / 16 / 0, R387). The other measured difference was, on
+`sandbox-data`, `Codeunit.Run` not scoping a write transaction (R183): the canary's third probe,
+`transactionRollback`, reported `defect-confirmed` up to 2.10.0.0. Re-measured 2026-10-05 against
+the pinned build `v2.12.0-main.c39ad5de`, all three canary probes report `defect-not-reproduced`
+(`asserterror`, `tableGlobalVar`, `transactionRollback`). That is the canary's reading only: the
+`Codeunit.Run` difference has not been re-measured against bcdev on `sandbox-data`, so
+`authoritative` stays false (see `AlRunnerBackend.capabilities`). The measurement above is kept as
+the record of why the canary exists, not as a description of the current binary.
 
 **R7 update, 2026-07-26 — a startup canary, not just a warning.** A static warning printed on
 every al-runner session names a defect frozen at the moment someone measured it by hand; it
