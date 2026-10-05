@@ -212,7 +212,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R254 re-pinned (was db3667dd...a82f): the reportextension arm is instrumented, ids move +15.
   // R459 re-pinned (was b1d589cd...5e21): provenance only, every `flip-boolean-literal` entry's
   // operatorVersion 1.0.0 -> 1.1.0; sites, tags and ids unchanged.
-  const pinned = "105d129b220be6bded8f8ccdc97bf0b65d4ba8ae8442ff189a6961fa4d67b83f";
+  // R474 re-pinned (was 105d129b...b83f): every entry gains `memberHash`, the only change.
+  const pinned = "db5aef548546072c265799037b2c9800e3636cf3812277394831a26d77c8b4e7";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

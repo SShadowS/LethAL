@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**87 of 480 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**86 of 480 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -192,7 +192,7 @@ that ordering is the priority.
 - **R479** · A bare (receiverless) `Insert(true)`/`Modify(true)`/`Delete(true)` on a pageextension's implicit record is flipped untagged, while its `Rec.`-qualified form keeps the skip tag · [R479.md](docs/roadmap/R479.md) · open
 - **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · closed 2026-10-05 — measured: BC collides on a preserved SystemId, but the colliding false->true flip has 0…
 - **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · done (3fffd472)
-- **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
+- **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · done (52dbf33d)
 - **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · done (9a05a40e)
 - **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · open
 - **R480** · Loop shapes R446's body-exit-guard hang refusal does not see: measure each, then refuse or rule · [R480.md](docs/roadmap/R480.md) · open

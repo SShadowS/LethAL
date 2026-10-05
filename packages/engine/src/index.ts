@@ -26,6 +26,8 @@ export type {
   RefusedObject,
 } from "./file-refused";
 export { astSubtreeHash } from "./ast/hash";
+export { attributeRun, memberSpanText, spanText } from "./ast/attribute-run";
+export type { AttributeRun } from "./ast/attribute-run";
 export { canonicalize } from "./ast/canonicalization";
 export type { CanonicalForm } from "./ast/canonicalization";
 export {

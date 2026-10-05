@@ -12,8 +12,10 @@ for history (a `survived` skipped after the `exit(1);` is removed).
 ## Measured (mutant-site pairs; a structural proxy, see survey §5)
 Rule-2 site pairs whose member changed: 0.03-0.74% across one CDO PR, 0.24-3.45% across one BC
 minor release, up to 6.6% across a month of CDO. The text hash refuses 128 more site pairs than
-the AST hash, out of about 3.3 million. The proxy's sites contain production's on all six apps
-reconciled (production is 96.5-99.6% of them); BaseApp was not reconciled.
+the AST hash, out of 1,973,516 (the 22 pairs' total; corrected at build from "about 3.3
+million"). Production is NOT a strict subset of the proxy: on the six apps reconciled, 12
+production sites (8 Subscription Billing, 4 E-Document Core) are missing from it, and the proxy
+holds 0.4-3.5% extra sites; BaseApp was not reconciled.
 
 ## The cut
 1. Rule 2 also requires an equal `memberHash` on both sides. Rule 1 is unchanged.
