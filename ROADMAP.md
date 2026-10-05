@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -152,7 +152,7 @@ that ordering is the priority.
 - **R362** · A refused `BeginPublish` inside a lease hook warns `after-lease-acquired-uncertain`, which says there is no proof the server stopped · [R362.md](docs/roadmap/R362.md) · done (6e5eef0a)
 - **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · closed 2026-10-05 — ruling with R369: wrong-tier rows compile and are misattributed; 96 lost sites, 0.013% of…
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
-- **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
+- **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · done (eab7e089)
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
