@@ -1,4 +1,4 @@
-import { calleeNameNode, claimsRecordMethod } from "@lethal/engine";
+import { bareReceiverText, calleeNameNode, claimsRecordMethod } from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -124,17 +124,21 @@ export const validateToAssign: MutationOperator = {
     if (!claimsRecordMethod(node, ctx, METHOD_NAME)) return false;
     const args = validateArguments(node);
     if (args === null) return false;
-    return isFieldIdentifier(args.fieldArg);
+    if (!isFieldIdentifier(args.fieldArg)) return false;
+    // R-464: the bare form claims only where its receiver prefix is PROVEN, so a refused site is
+    // never a claimed site with no spec.
+    const nameNode = calleeNameNode(node);
+    return nameNode === null || receiverPrefix(node, nameNode, ctx) !== null;
   },
 
-  generate(node: ALSyntaxNode, _ctx: SemanticContext): readonly MutationSpec[] {
+  generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const args = validateArguments(node);
     if (args === null) return [];
     if (!isFieldIdentifier(args.fieldArg)) return [];
 
     const nameNode = calleeNameNode(node);
     if (nameNode === null) return [];
-    const prefix = receiverPrefix(node, nameNode);
+    const prefix = receiverPrefix(node, nameNode, ctx);
     if (prefix === null) return [];
 
     const mutatedText = `${prefix}${args.fieldArg.text} := ${args.valueArg.text}`;
@@ -231,18 +235,28 @@ function isFieldIdentifier(node: ALSyntaxNode): boolean {
  * as written, whatever casing or spelling it used.
  *
  * For the implicit-receiver form, `nameNode` IS the callee itself, so its start coincides with the
- * call node's own start. There is no receiver text to slice out, and per amendment 1 above, none is
- * substituted: the literal `Rec.` is SYNTHESISED instead of leaving the assignment bare, because
- * `Validate`'s first argument resolves in the record's field scope while a bare assignment target
- * does not, and the qualification is correct under either binding rule for a hypothetically shadowed
- * name.
+ * call node's own start. There is no receiver text to slice out, and per amendment 1 above, the
+ * receiver is SYNTHESISED instead of leaving the assignment bare, because `Validate`'s first argument
+ * resolves in the record's field scope while a bare assignment target does not.
+ *
+ * R-464: the synthesized receiver is the record the bare call BINDS to (`bareReceiverText`): `Rec`,
+ * a report dataitem's name, or a `with` subject. It was a literal `Rec.`, which inside
+ * `with R do begin Validate(Amount, 1) end` wrote `Rec.Amount := 1`, a mutant of a different record.
+ * `null` (refuse) where that spelling cannot be proven to bind that record.
  *
  * `null` when `nameNode`'s span does not fall inside `node`'s own text, which should be impossible
  * for a genuine descendant; guarded rather than assumed, mirroring `swap-find-direction.ts`'s
  * `replaceNameSpan`.
  */
-function receiverPrefix(node: ALSyntaxNode, nameNode: ALSyntaxNode): string | null {
-  if (nameNode.startIndex === node.startIndex) return "Rec.";
+function receiverPrefix(
+  node: ALSyntaxNode,
+  nameNode: ALSyntaxNode,
+  ctx: SemanticContext,
+): string | null {
+  if (nameNode.startIndex === node.startIndex) {
+    const receiver = bareReceiverText(node, ctx);
+    return receiver === null ? null : `${receiver}.`;
+  }
   const offset = nameNode.startIndex - node.startIndex;
   if (offset < 0 || offset > node.text.length) return null;
   return node.text.slice(0, offset);
