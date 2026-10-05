@@ -167,11 +167,16 @@ export function coarseIdentityTupleOf(
  * R468, every direct object-level var section is the object's globals (only the first was), so a
  * later section's record receivers move call deletions from `void-method-call` to Tier 2, `true`
  * RunTrigger flips cede to `swap-modify-flag`, new hang refusals remove writes, and swaps choose a
- * different typed pair under an unchanged key. 20 is held by R-464. 21: R459, a two-argument
- * `Insert`'s Booleans are flipped (no longer ceded to `swap-modify-flag`, which never claimed
- * them), so a later same-tuple `true` twin in the procedure moves ordinal (BC.History: 9 keys).
+ * different typed pair under an unchanged key. 20 was held for R-464 and is unused. 21: R459, a
+ * two-argument `Insert`'s Booleans are flipped (no longer ceded to `swap-modify-flag`, which never
+ * claimed them), so a later same-tuple `true` twin in the procedure moves ordinal (BC.History: 9
+ * keys). 22: R-464, one implicit-record resolver: a qualified `Rec` in a page or a TableNo `OnRun`,
+ * a report dataitem and a `with` subject now resolve, so Tier 2 claims sites there (and the `true`
+ * RunTrigger flips they held cede to `swap-modify-flag`), `validate-to-assign`'s bare form writes
+ * the record the call binds to or is refused, and a later same-tuple twin of a removed mutant takes
+ * its ordinal.
  */
-export const IDENTITY_SCHEME = 21;
+export const IDENTITY_SCHEME = 22;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 475 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 476 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -183,7 +183,7 @@ that ordering is the priority.
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
 - **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · done (0a8dd701)
 - **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · done (c7d06747)
-- **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · open
+- **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · done (98be663a)
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · closed 2026-10-05 — latent: query is not a carrier kind, so no query mutant is ever deployed; the fix is…
 - **R466** · The runner's TestPage scan (R-371) gives a TableNo codeunit's `Rec` to every procedure; `alc` binds it in `OnRun` only · [R466.md](docs/roadmap/R466.md) · done (e47d0b85)
 - **R468** · Only an object's FIRST direct `var` section is indexed as globals, so every global in a second section (`protected var` then `var`) resolves to nothing; `SuggestVendorPayments` is not hang-refused · [R468.md](docs/roadmap/R468.md) · done (25989d42)
@@ -333,6 +333,7 @@ that ordering is the priority.
 - **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · done (65e20ee8)
 - **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
 - **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · open
+- **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · open
 
 ## Backends and tooling
 

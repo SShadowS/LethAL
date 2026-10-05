@@ -482,8 +482,10 @@ describe("sessionFingerprint (R47)", () => {
   // R-458 (scheme 18, hang refusal by name through `with` subjects and implicit records); it was
   // f6e4a1c6...c971 under scheme 17. It moved again for R468 (scheme 19, every object-level var
   // section is globals); it was 44f5ea54...3e7a under scheme 18. It moved again for R459 (scheme
-  // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19.
-  const PINNED = "6aab8fc7f6a384d2538f66d57141140221a6351014c8f6b0f1a20055f43fbe41";
+  // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19. It
+  // moved again for R-464 (scheme 22, one implicit-record resolver); it was 6aab8fc7...be41 under
+  // scheme 21.
+  const PINNED = "06081a494e516555c2a16ff9120ec8955c0b59b7ff5e79c28b7c1adb7aa8f571";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1972,8 +1974,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 21 since R459 (a two-argument Insert's Booleans are
-    // flipped; 20 is held by R-464); 19 was R468 (every object-level var section is
+    // Pinned by value so a bump is deliberate: 22 since R-464 (one implicit-record resolver: page
+    // and TableNo `Rec`, dataitems and `with` subjects resolve); 21 was R459 (a two-argument
+    // Insert's Booleans are flipped; 20 is unused); 19 was R468 (every object-level var section is
     // globals); 18 was R-458 (hang refusal by name through `with` subjects and implicit records);
     // 17 was R254 (reportextensions instrumented); 16
     // was R-364 (hang refusal by name inside an unindexed object; 15 was reserved for R-254 and is
@@ -1981,7 +1984,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(21);
+    expect(IDENTITY_SCHEME).toBe(22);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
