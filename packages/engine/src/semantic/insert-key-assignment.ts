@@ -11,8 +11,11 @@
  * and the mutant is scored `killed` without the suite earning it.
  *
  * Where `OnInsert` does something else — sets a Boolean, stamps a timestamp — or does not exist at
- * all, `Insert(false)` writes strictly LESS than the unmutated program and can raise nothing new.
- * A kill there is assertion-earned, and screening it as a platform artifact is noise.
+ * all, `Insert(false)` writes strictly LESS than the unmutated program. A kill there comes from a
+ * changed value of the record's own non-key fields, which R138 and R452 rule an ordinary
+ * changed-value kill even when a later statement raises on that value (`Get(Rec.LookupCode)`), not
+ * a platform artifact; screening it would be noise. That is a ruling, not a proof that nothing can
+ * raise.
  *
  * R138 shipped the tag on EVERY `Insert` mutant because this question is not visible at the call
  * site. It is visible one step away, through the receiver's table, which is what this module reads.
@@ -29,10 +32,14 @@
  *
  * So this module tags unless it can PROVE the mechanism is unavailable:
  *
- *   - table resolved, `OnInsert` assigns a primary-key field  -> tag (the measured mechanism)
- *   - table resolved, `OnInsert` exists and does not          -> NO tag (proven unavailable)
- *   - table resolved, no `OnInsert` at all                    -> NO tag (nothing to skip)
- *   - receiver or table NOT resolvable                        -> tag (cannot prove otherwise)
+ *   - receiver or table NOT resolvable, or its file's arm undecided -> tag (cannot prove otherwise)
+ *   - a project insert-event subscriber or tableextension insert trigger -> tag (R-476)
+ *   - `OnInsert` holds a call not proven harmless (R-452's list)  -> tag (R-476)
+ *   - `OnInsert` assigns a primary-key field, or all of `Rec`  -> tag (the measured mechanism)
+ *   - no readable primary key                                 -> tag (R378)
+ *   - otherwise, or no `OnInsert` at all                      -> NO tag
+ * Read with the build's arm map, as the orchestrator always builds it. Without one, a member-level
+ * `#if` trigger is not seen (`liveMembers`), the same as for `Modify` and `Delete`.
  *
  * That is a strict narrowing of R138: every mutant that loses the tag lost it to a proof, never to
  * an unknown.
@@ -54,7 +61,9 @@
  *    hand, and none reaches a key through its helper. Zero No. Series calls appear inside any
  *    `OnInsert` in that corpus. So on the one real corpus this repo has, the direct-assignment
  *    predicate misses nothing. That is a 15-table population and no rate should be read off it.
- * 2. **`OnBeforeInsertEvent` subscribers** also run only when `RunTrigger` is true, and one could
+ * 2. **`OnBeforeInsertEvent` subscribers** (R-476 correction: table events fire with `RunTrigger`
+ *    false too, but a subscriber can branch on it; R143 wrote that they run only when it is true),
+ *    and one could
  *    assign the key of a table whose own `OnInsert` does not. Censused in the same snapshot: ONE
  *    subscriber in 554 files, and it targets a base-app table (`Integration Table Mapping`), which
  *    this predicate cannot resolve and therefore tags anyway. The blind spot is real and its
@@ -185,8 +194,9 @@ function referencesOwnField(node: ALSyntaxNode, field: string): boolean {
  *
  * Two shapes count, and both were measured in the Document Output census: a direct
  * `assignment_statement` whose target is the field, and a `Validate("<field>", …)` call, which
- * assigns it through the field's own `OnValidate`. Any other route (a helper procedure, a No.
- * Series call) is out of scope — see this module's limit 1.
+ * assigns it through the field's own `OnValidate`. R-476 adds a whole-record assignment to the
+ * implicit record (`Rec := Seed`). Any other route (a helper procedure, a No. Series call) is left
+ * to `insertSkipCanRaise`'s call check.
  */
 export function onInsertAssignsPrimaryKey(
   tableNode: ALSyntaxNode,
@@ -204,6 +214,12 @@ export function onInsertAssignsPrimaryKey(
     const target = assignment.namedChildren[0];
     if (target === undefined) continue;
     if (key.some((f) => referencesOwnField(target, f))) return true;
+    // R-476 (sol final r1): `Rec := Seed` copies a whole record, key included.
+    if (
+      IDENTIFIER_KINDS.has(target.rawKind) &&
+      IMPLICIT_RECORD_NAMES.has(stripQuotes(target.text).toLowerCase())
+    )
+      return true;
   }
 
   for (const call of descendantsOfRawKind(trigger, CALL_EXPRESSION)) {

@@ -314,6 +314,21 @@ describe("R-476: an Insert keeps its tag unless skipping OnInsert is proven harm
     );
   });
 
+  it("TAGS an OnInsert that copies a whole record over Rec (the key comes with it)", () => {
+    const table = `table 50220 "Whole Copy"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+    var
+        Seed: Record "Whole Copy";
+    trigger OnInsert()
+    begin
+        Rec := Seed;
+    end;
+}`;
+    expect(tagOf([inserter(50221, "Whole Copy"), table])).toBe("run-trigger-skipped-insert");
+  });
+
   it("does NOT tag an OnInsert whose only calls are proven harmless (TestField)", () => {
     const table = `table 50218 "Harmless Calls"
 {

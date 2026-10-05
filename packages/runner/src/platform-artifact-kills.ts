@@ -86,9 +86,11 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "it is kept wherever LethAL cannot prove skipping `OnInsert` harmless, which includes an " +
     "`OnInsert` that calls a procedure (one may fill the key), an insert-event subscriber or " +
     "`tableextension` insert trigger in this project, and every table it cannot read, such as a " +
-    "base-app record. It is dropped only where `OnInsert` is absent, or makes no call that could " +
-    "write and does not assign the key itself. It cannot see a subscriber in another app. Treat " +
-    "it as a prompt to read the kill, not as a verdict on it.",
+    "base-app record. It is dropped only where nothing in this project observes the table's " +
+    "inserts and `OnInsert` is absent, or has a readable primary key, assigns neither a key field " +
+    "nor the whole record, and makes no call outside a short list of non-writing ones. A changed " +
+    "value of a non-key field is not screened: that kill is the test's. It cannot see a " +
+    "subscriber in another app. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-delete":
     "rewriting `Delete(true)` to `Delete(false)`, or `DeleteAll(true)` to `DeleteAll(false)`, " +
     "skips `OnDelete`. The table's delete events still fire, with `RunTrigger` false, so a " +
