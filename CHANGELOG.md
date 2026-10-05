@@ -394,6 +394,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **The test-app scan reads a TableNo codeunit's `Rec` in its `OnRun` only** (R466), as AL does,
+  instead of in every procedure of the codeunit. Measured: no test digest or TestPage result
+  changes on CDO or on 178 BC.History test apps, because none of them uses `Rec` outside `OnRun`.
+- **The al-runner warning printed when no al-runner path is configured gives the current reason**
+  (R255, R267): conditional coverage and unverified transaction semantics, not the v1 `asserterror`
+  defect that al-runner v2 fixed.
 - **A report and its reportextension can both be mutated in one project** (R470). A report's
   globals and its reportextensions' share one namespace, so the `MutationSelector` variable LethAL
   declares in each instrumented object was declared twice, and BC's compiler refused the project

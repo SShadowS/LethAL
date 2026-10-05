@@ -1197,6 +1197,20 @@ const RUN_BY_ID: Readonly<Record<string, readonly number[]>> = {
 const COLLECTION_OF = /^\s*(?:list|dictionary)\s+of\s*\[([\s\S]*)\]\s*$/i;
 const NO_RUN: ReadonlySet<number> = new Set();
 
+/**
+ * R466: the implicit variable `key` as `p` sees it. A TableNo codeunit's `Rec` exists in its
+ * `OnRun` trigger only (alc 18.0.43: AL0118 in any other procedure, measured under R-458; the
+ * engine's `implicitRecordShadowsGlobals` agrees). The trigger is checked by NAME as well as by
+ * membership: a codeunit's `triggers` holds every trigger it declares (an install codeunit's
+ * `OnInstallAppPerCompany`, for one), not only `OnRun`. Other kinds are unchanged.
+ */
+function implicitAt(p: Proc, key: string): readonly string[] | undefined {
+  if (p.unit.kind === "codeunit" && !(p.name === "onrun" && p.unit.triggers.includes(p))) {
+    return undefined;
+  }
+  return p.unit.implicit.get(key);
+}
+
 export class Scanner {
   /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
    *  349 of BaseApp's 415 s (CPU profile, R-236c round 2). */
@@ -1603,7 +1617,7 @@ export class Scanner {
         this.passesTestApp(p, site.argFacts, false, `this.${member}`, st);
       return;
     }
-    const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
+    const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
     if (types === undefined) {
       // An undeclared root is a type or system name (the scan's rule). The only call edges from
       // one are object runs (cases 5, 9 and 11).
@@ -1718,7 +1732,7 @@ export class Scanner {
       case "name": {
         const key = this.norm(r.name);
         if (key === "this") return "this";
-        const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key);
+        const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
         // A Variant or RecordRef may hold a record of any test-app table: every test-app table,
         // with its triggers and what they reach, is folded in (an unfollowed edge there falls
         // back). Stated limit: a Variant holding a test-app codeunit or interface, run by the
@@ -1734,7 +1748,7 @@ export class Scanner {
           base.k === "name" && this.norm(base.name) !== "this"
             ? (p.scope.get(this.norm(base.name)) ??
               p.unit.globals.get(this.norm(base.name)) ??
-              p.unit.implicit.get(this.norm(base.name)) ??
+              implicitAt(p, this.norm(base.name)) ??
               [])
             : this.typesOf(p, base);
         if (typeof baseTypes === "string") return `an argument of unknown type (${baseTypes})`;
@@ -2016,7 +2030,7 @@ export class Scanner {
           if (p.unit.kind.startsWith("table")) return [...(p.unit.implicit.get("rec") ?? [])];
           return `this in a ${p.unit.kind}`;
         }
-        return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? p.unit.implicit.get(key) ?? [])];
+        return [...(p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key) ?? [])];
       }
       case "either": {
         const out: string[] = [];
