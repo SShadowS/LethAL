@@ -7,11 +7,17 @@ using System.Reflection;
 // in the global namespace.
 using System.Tooling;
 using System.TestTools.CodeCoverage;
+// R389: "Application Dependency" (table 2000000209), read by DependentCount.
+using System.Apps;
 
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
 codeunit 91003 "LC Control API"
 {
+    // R389: DependentCount reads the system table "Application Dependency". Declared so a gate
+    // user without SUPER is not refused; the probe measured SUPER only.
+    Permissions = tabledata "Application Dependency" = R;
+
     /// <summary>Identity + capabilities the client verifies before any execution. PROTOCOL V2 (design
     /// §7, R4 sol#8): ClientProtocol is a REQUIRED argument, not an optional one with a default — a v1
     /// client that calls with no argument at all (an OData body of `{}`) must fail to reach a valid v2
@@ -242,6 +248,25 @@ codeunit 91003 "LC Control API"
         State: Codeunit "LC Control State";
     begin
         exit(State.RegisteredArtifact(TargetAppId));
+    end;
+
+    /// <summary>R389 (1.0.0.21): how many PUBLISHED packages (any version, installed or not) declare
+    /// AppId as a dependency. Counting published rather than installed is a superset, the safe
+    /// direction for the client, which treats any count above 0 as "another app may call this app's
+    /// public procedures". Measured on Cronus284 (2026-10-05): exact counts, under 1 ms per call.
+    /// A bad GUID raises an error: never a plausible 0. JSON: {appId, publishedDependents}.</summary>
+    procedure DependentCount(AppId: Text) ResultJson: Text
+    var
+        Dep: Record "Application Dependency";
+        Id: Guid;
+        Obj: JsonObject;
+    begin
+        if not Evaluate(Id, AppId) then
+            Error('DependentCount: %1 is not a GUID', AppId);
+        Dep.SetRange("Dependency App ID", Id);
+        Obj.Add('appId', AppId);
+        Obj.Add('publishedDependents', Dep.Count());
+        Obj.WriteTo(ResultJson);
     end;
 
     /// <summary>OData action: attempt to acquire the machine-global lease (design §4, R4-hardened).

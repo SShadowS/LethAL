@@ -72,8 +72,10 @@ const MIN_PROTOCOL_VERSION = 2;
  * "clientProtocol is not a valid parameter" 400 for a build older still. Each of those is a
  * different-looking failure for one cause, which is exactly what R28 was filed for.
  *
- * Kept in LOCKSTEP with `extensions/lethal-control/app.json`'s `version`: raising this constant
- * without bumping that file makes a freshly built control app fail its own gate. Pinned by a test.
+ * Never AHEAD of `extensions/lethal-control/app.json`'s `version`: raising this constant without
+ * bumping that file makes a freshly built control app fail its own gate. Pinned by a test. It may
+ * lag behind for an action the client treats as optional: 1.0.0.21 adds R389's `DependentCount`,
+ * which an older control app answers with 404, read as "unknown" (the guard falls back).
  */
 export const MIN_CONTROL_VERSION = "1.0.0.20";
 
@@ -103,6 +105,18 @@ export class HarnessVerificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "HarnessVerificationError";
+  }
+}
+
+/**
+ * R389: the deployed control app has no `DependentCount` action (it predates 1.0.0.21; BC answers
+ * 404). Not a failure: `MIN_CONTROL_VERSION` stays below 1.0.0.21 on purpose, and the closed-world
+ * guard reads this as "unknown" and falls back. Extends `Error` directly (CLAUDE.md).
+ */
+export class DependentCountUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DependentCountUnavailableError";
   }
 }
 
@@ -402,6 +416,64 @@ export class HarnessVerifier {
    */
   async fetchLease(): Promise<LeaseSnapshot> {
     return parseLeaseSnapshot(await this.fetchHarnessInfo());
+  }
+
+  /**
+   * R389: how many PUBLISHED apps declare `appId` as a dependency (control app 1.0.0.21,
+   * `DependentCount`). Refuses a non-GUID before any request. Throws on every answer it cannot
+   * read as that app's count, never a plausible 0; `DependentCountUnavailableError` for a control
+   * app without the action (404).
+   */
+  async fetchDependentCount(appId: string): Promise<number> {
+    if (!GUID_RE.test(appId)) {
+      throw new Error(`DependentCount: app id ${JSON.stringify(appId)} is not a bare GUID`);
+    }
+    const params = new URLSearchParams({ company: this.cfg.company });
+    if (this.cfg.tenant !== undefined) params.set("tenant", this.cfg.tenant);
+    const url = `${this.cfg.baseUrl}/ODataV4/LethALControl_DependentCount?${params.toString()}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.cfg.timeoutMs ?? 30_000);
+    let res: Response;
+    try {
+      res = await this.fetchFn(url, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${this.cfg.username}:${this.cfg.password}`)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ appId }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      const what = `DependentCount failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}`;
+      if (res.status === 401 || res.status === 403) throw new HarnessAuthError(what);
+      if (res.status === 404) throw new DependentCountUnavailableError(what);
+      throw new HarnessVerificationError(what);
+    }
+    const value = ((await res.json().catch(() => ({}))) as { value?: unknown }).value;
+    let parsed: { appId?: unknown; publishedDependents?: unknown };
+    try {
+      parsed = JSON.parse(String(value)) as typeof parsed;
+    } catch {
+      throw new HarnessVerificationError(`DependentCount value is not JSON: ${String(value)}`);
+    }
+    const n = parsed?.publishedDependents;
+    if (
+      typeof parsed?.appId !== "string" ||
+      parsed.appId.toLowerCase() !== appId.toLowerCase() ||
+      typeof n !== "number" ||
+      !Number.isInteger(n) ||
+      n < 0
+    ) {
+      throw new HarnessVerificationError(
+        `DependentCount answered ${String(value)}, not a count for app ${appId}`,
+      );
+    }
+    return n;
   }
 
   /**

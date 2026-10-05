@@ -609,9 +609,12 @@ describe("runSession", () => {
       fetch = true,
       /** `null`: a backend with no microsoftMode. */
       microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
+      /** R389: the test app.json written, and the backend's `dependentCount`, if any. */
+      testApp: Record<string, unknown> = TESTS_APP,
+      dependentCount?: (appId: string) => Promise<number>,
     ) {
       const dirs = await makeProject(NEW_AL);
-      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
+      await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(testApp));
       const stub = new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), [
         "IsOverBudget",
       ]);
@@ -619,6 +622,7 @@ describe("runSession", () => {
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
             ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            ...(dependentCount !== undefined ? { dependentCount } : {}),
           })
         : stub;
       const store = new ResultsStore(":memory:");
@@ -635,8 +639,62 @@ describe("runSession", () => {
       const digestWarning = events.flatMap((e) =>
         e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
       );
-      return { dirs, store, runId, digestWarning };
+      const guardWarning = events.flatMap((e) =>
+        e.type === "warning" && e.code === "closed-world-unmeasured" ? [e.message] : [],
+      );
+      return { dirs, store, runId, digestWarning, guardWarning };
     }
+
+    // R389 guard: the run asks the backend once, by the test app's id, and records the answer in
+    // every digest and in the parts; a failing ask falls back with a warning.
+    test("R389: the run records the closed-world guard; an erroring ask falls back with a warning", async () => {
+      const TEST_ID = "22222222-2222-2222-2222-222222222222";
+      const asked: string[] = [];
+      const closed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: TEST_ID },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([TEST_ID]);
+      const inputs = await inputsFor(closed.dirs, OLD_PKG);
+      expect(closed.store.testDigests(closed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
+          ...inputs,
+          closedWorld: { public: true, internal: true },
+        }),
+      );
+      expect(
+        (closed.store.testDigestParts(closed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("public+internal");
+      expect(closed.guardWarning).toEqual([]);
+      closed.store.close();
+
+      const failed = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: TEST_ID },
+        async () => {
+          throw new Error("boom");
+        },
+      );
+      expect(failed.store.testDigests(failed.runId)).toEqual(
+        testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs),
+      );
+      expect(
+        (failed.store.testDigestParts(failed.runId) as { closedWorld?: unknown }).closedWorld,
+      ).toBe("none");
+      expect(failed.guardWarning).toHaveLength(1);
+      expect(failed.guardWarning[0]).toContain("boom");
+      failed.store.close();
+    });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {
       const { dirs, store, runId, digestWarning } = await r372Run(OLD_PKG);

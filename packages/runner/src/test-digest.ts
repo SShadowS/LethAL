@@ -38,6 +38,8 @@
 import { initParser, normalizeAlName } from "@lethal/engine";
 import type { TestMethodRef } from "./backend";
 import {
+  type ClosedWorld,
+  OPEN_WORLD,
   type Proc,
   type ReachState,
   Scanner,
@@ -90,6 +92,18 @@ export interface DigestInputs {
   readonly dependencies: string;
   /** `AppInputs.buildInputs`. */
   readonly buildInputs: string;
+  /** R389: the closed-world guard's answer (`closed-world.ts`). Absent is `OPEN_WORLD`. */
+  readonly closedWorld?: ClosedWorld;
+}
+
+/**
+ * R389: the guard's answer as recorded. A digest made under any answer but `none` carries a `W`
+ * line, so a guard flip between a run and its verify moves every digest and nothing carries;
+ * under `none` a digest is byte-identical to one made before the guard existed.
+ */
+export function closedWorldTag(cw: ClosedWorld = OPEN_WORLD): string {
+  const on = [cw.public ? "public" : "", cw.internal ? "internal" : ""].filter((s) => s !== "");
+  return on.length === 0 ? "none" : on.join("+");
 }
 
 /**
@@ -105,6 +119,8 @@ export interface TestDigestParts {
   readonly app: string;
   readonly dependencies: string;
   readonly buildInputs: string;
+  /** R389: `closedWorldTag`. Absent on a run recorded before the guard, which read as `none`. */
+  readonly closedWorld?: string;
 }
 
 const short = (h: string): string => h.slice(0, 16);
@@ -192,8 +208,8 @@ interface DigestContext {
   readonly app: string;
 }
 
-function contextOf(model: TestAppModel): DigestContext {
-  const scanner = new Scanner(model);
+function contextOf(model: TestAppModel, closedWorld?: ClosedWorld): DigestContext {
+  const scanner = new Scanner(model, closedWorld);
   const keys = unitKeys(model);
   return {
     scanner,
@@ -254,8 +270,9 @@ export function testDigestsOfModel(
   tests: readonly TestMethodRef[],
   inputs: DigestInputs,
 ): { digests: Record<string, string>; parts: TestDigestParts } {
-  const ctx = contextOf(model);
+  const ctx = contextOf(model, inputs.closedWorld);
   const build = sha256(inputs.buildInputs);
+  const tag = closedWorldTag(inputs.closedWorld);
   const digests: Record<string, string> = {};
   let n = 0;
   for (const t of tests) {
@@ -263,6 +280,7 @@ export function testDigestsOfModel(
     const st = walkTest(ctx.scanner, model, t);
     const lines = reachLines(st, ctx.keys);
     lines.push(`S ${ctx.subscribers.hash}`, `D ${inputs.dependencies}`, `B ${build}`);
+    if (tag !== "none") lines.push(`W ${tag}`);
     if (onFallback(ctx, st)) lines.push(`A ${ctx.app}`);
     digests[testDigestKey(t)] = `${PREFIX}${sha256(lines.sort().join("\n"))}`;
   }
@@ -281,6 +299,7 @@ export function testDigestsOfModel(
       app: short(ctx.app),
       dependencies: short(inputs.dependencies),
       buildInputs: short(build),
+      closedWorld: tag,
     },
   };
 }
@@ -313,6 +332,7 @@ export type NewTestCause =
   | "fallback"
   | "dependency"
   | "build"
+  | "closed-world"
   | "reach"
   | "unknown";
 
@@ -329,8 +349,9 @@ export function explainNewTests(
   was: TestDigestParts | null,
 ): { causes: Map<NewTestCause, number>; changedProcs: string[] } {
   const causes = new Map<NewTestCause, number>();
-  const ctx = contextOf(model);
+  const ctx = contextOf(model, inputs.closedWorld);
   const { keys } = ctx;
+  const tag = closedWorldTag(inputs.closedWorld);
   const build = short(sha256(inputs.buildInputs));
   const testKeys = new Set<string>();
   for (const { ref, recorded } of tests) {
@@ -349,6 +370,7 @@ export function explainNewTests(
       if (was.subscribers !== short(ctx.subscribers.hash)) mine.add("subscriber");
       if (was.dependencies !== short(inputs.dependencies)) mine.add("dependency");
       if (was.buildInputs !== build) mine.add("build");
+      if ((was.closedWorld ?? "none") !== tag) mine.add("closed-world");
       if (onFallback(ctx, st) && was.app !== short(ctx.app)) mine.add("fallback");
       if (mine.size === 0) mine.add("reach");
     }
@@ -380,7 +402,8 @@ export function parseDigestParts(v: unknown): TestDigestParts | null {
     typeof v !== "object" ||
     !isMap(o.procs) ||
     !isMap(o.objects) ||
-    ["subscribers", "app", "dependencies", "buildInputs"].some((k) => typeof o[k] !== "string")
+    ["subscribers", "app", "dependencies", "buildInputs"].some((k) => typeof o[k] !== "string") ||
+    (o.closedWorld !== undefined && typeof o.closedWorld !== "string")
   ) {
     throw new Error("test-digest.ts: a recorded test_digest_parts value is not TestDigestParts");
   }

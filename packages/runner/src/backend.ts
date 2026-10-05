@@ -355,4 +355,11 @@ export interface ExecutionBackend {
    * versions. Throws `DependencyUnreadableError` when it cannot be built.
    */
   microsoftMode?(): MicrosoftMode;
+
+  /**
+   * R389, OPTIONAL: how many published apps on the server declare `appId` as a dependency (the
+   * control app's `DependentCount`). Present on bcdev only; absent means the closed-world guard
+   * is never asked and falls back (`closed-world.ts`).
+   */
+  dependentCount?(appId: string): Promise<number>;
 }

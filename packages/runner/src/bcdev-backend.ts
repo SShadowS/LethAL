@@ -435,6 +435,15 @@ export class BcDevMcpBackend implements ExecutionBackend {
     };
   }
 
+  /** R389: `ExecutionBackend.dependentCount`, through the deployment's harness verifier. */
+  async dependentCount(appId: string): Promise<number> {
+    const verifier = this.deployment?.harnessVerifier;
+    if (verifier === undefined) {
+      throw new Error("this bcdev backend has no harness verifier (no BcDevDeployment)");
+    }
+    return verifier.fetchDependentCount(appId);
+  }
+
   private async connect(): Promise<Client> {
     if (this.client) return this.client;
     // StdioClientTransport defaults to a fixed OS-level allowlist (getDefaultEnvironment())

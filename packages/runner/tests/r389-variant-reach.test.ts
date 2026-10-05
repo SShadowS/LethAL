@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { initParser } from "@lethal/engine";
 import { testsInAlSource } from "../src/discovery";
 import { subscriberFold, testDigestsOfSources, walkTest } from "../src/test-digest";
-import { Scanner, buildTestAppModel } from "../src/testpage-scan";
+import { type ClosedWorld, Scanner, buildTestAppModel } from "../src/testpage-scan";
 
 /**
  * R-389 (plan docs/superpowers/plans/2026-10-04-R-389-variant-interface-reach.md, r2): a Variant
@@ -68,13 +68,17 @@ const V = "        V: Variant;\n";
 /** A test that hands out nothing: what a subscriber-closure change reaches only through the fold. */
 const TRIVIAL = proc("Trivial()", "", "        Message('x');\n");
 
-function run(files: Record<string, string>) {
+function run(files: Record<string, string>, closedWorld?: ClosedWorld) {
   const list = Object.entries(files).map(([path, text]) => ({ path, text }));
   const tests = list.flatMap((f) => testsInAlSource(f.path, f.text));
-  const digests = testDigestsOfSources(list, tests, I);
+  const digests = testDigestsOfSources(
+    list,
+    tests,
+    closedWorld === undefined ? I : { ...I, closedWorld },
+  );
   const model = buildTestAppModel(list);
   expect(model.damaged).toEqual([]);
-  const scanner = new Scanner(model);
+  const scanner = new Scanner(model, closedWorld);
   const closure = subscriberFold(scanner, model).fallback;
   const why: Record<string, string | undefined> = {};
   for (const t of tests) why[t.method.toLowerCase()] = walkTest(scanner, model, t).fallback;
@@ -674,6 +678,81 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
   test("N1k. an internal helper keeps the fallback while the test app's internalsVisibleTo is unknown", () => {
     const r = run(s((e) => LIB(e, "", "", "", "internal "))({}));
     expect(r.why("A")).toContain("can be called from outside the test app");
+  });
+
+  // R389 guard (guard-build-plan.md): the server says no published app depends on the test app,
+  // so only the test app can call a public procedure (and an internal one when no
+  // internalsVisibleTo names another app). The walk then reads callers closed-world.
+  const ALL: ClosedWorld = { public: true, internal: true };
+  const PUBLIC_ONLY: ClosedWorld = { public: true, internal: false };
+  const OPEN: ClosedWorld = { public: false, internal: false };
+  const movesUnder = (sc: Scenario, part: Part, m: string, cw: ClosedWorld): boolean => {
+    const before = run(sc({}), cw).digest(m);
+    expect(before).toBeDefined();
+    return before !== run(sc({ [part]: "edited" }), cw).digest(m);
+  };
+  test("G1. count 0: a public helper (DC's assert shape) is traced closed-world; open, it falls back", () => {
+    const sc = s((e) => LIB(e, "", "", "", ""));
+    expect(run(sc({}), ALL).why("A")).toBeUndefined();
+    expect(run(sc({}), OPEN).why("A")).toContain("can be called from outside the test app");
+  });
+  test("G2. internalsVisibleTo present: an internal helper falls back while a public one is closed-world", () => {
+    const internal = s((e) => LIB(e, "", "", "", "internal "));
+    const pub = s((e) => LIB(e, "", "", "", ""));
+    expect(run(internal({}), PUBLIC_ONLY).why("A")).toContain(
+      "can be called from outside the test app",
+    );
+    expect(run(pub({}), PUBLIC_ONLY).why("A")).toBeUndefined();
+    // The reverse: no internalsVisibleTo, so the internal helper is closed-world too.
+    expect(run(internal({}), ALL).why("A")).toBeUndefined();
+  });
+  test("G3. hole 1 kept under the guard: a caller handing a public helper a Mock-holding Variant folds Mock", () => {
+    const sc = s((e) =>
+      LIB(e, "", "", runB(V + MOCK, "        V := Mock;\n        Check(V);\n"), ""),
+    );
+    expect(movesUnder(sc, "mock", "A", ALL)).toBe(true);
+    expect(movesUnder(sc, "mock", "B", ALL)).toBe(true);
+    expect(movesUnder(sc, "unrelated", "A", ALL)).toBe(false);
+    expect(run(sc({}), ALL).why("A")).toBeUndefined();
+  });
+  test("G4. the guard reopens nothing else: interface dispatch, a subscriber, a handler keep the fallback", () => {
+    const viaIface = run(s((e) => LIB(e, "", ` implements "IFace"`, "", ""))({}), ALL);
+    expect(viaIface.why("A")).toContain("can be called from outside the test app");
+    const sub = run(
+      s((e) =>
+        LIB(
+          e,
+          `    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Ext Pub", 'OnX', '', false, false)]\n`,
+          "",
+          "",
+          "",
+        ),
+      )({}),
+      ALL,
+    );
+    expect(sub.closure ?? sub.why("A")).toContain("can be called from outside the test app");
+    const handler = run(
+      {
+        ...s((e) => LIB(e, "", "", "", ""))({}),
+        "T2.al": `codeunit 50190 "T2"\n{\n    Subtype = Test;\n\n${proc("B()", "", "        Message('x');\n", "    [Test]\n    [HandlerFunctions('Check')]\n")}}\n`,
+      },
+      ALL,
+    );
+    expect(handler.why("A")).toContain("can be called from outside the test app");
+  });
+  test("G5. a guard flip moves every digest, a test that hands out nothing included; open is byte-identical to no guard", () => {
+    const files = { ...s((e) => LIB(e, "", "", "", ""))({}) };
+    files["T.al"] = testUnit(proc("A()", LIBV, "        Lib.RunA();\n") + TRIVIAL);
+    const none = run(files);
+    const open = run(files, OPEN);
+    const all = run(files, ALL);
+    const pub = run(files, PUBLIC_ONLY);
+    for (const m of ["A", "Trivial"]) {
+      expect(open.digest(m)).toBe(none.digest(m));
+      expect(all.digest(m)).not.toBe(open.digest(m));
+      expect(pub.digest(m)).not.toBe(open.digest(m));
+      expect(pub.digest(m)).not.toBe(all.digest(m));
+    }
   });
 });
 

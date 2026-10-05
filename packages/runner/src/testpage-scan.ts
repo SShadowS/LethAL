@@ -460,6 +460,8 @@ export interface Proc {
   readonly platformCalled: boolean;
   /** R-389: declared `local`, so only its own object can call it. */
   readonly local: boolean;
+  /** R389 guard: declared `internal`, so only the test app and an `internalsVisibleTo` app can. */
+  readonly internal: boolean;
   /** R-389: the parameters' names as written, in order. */
   readonly paramNames: readonly string[];
   /** R-389: the positions of its `var` parameters. */
@@ -941,6 +943,7 @@ function procFrom(
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
     platformCalled: attributes.some((t) => PLATFORM_CALLED.test(t)),
     local: h.modifier !== undefined && /^\s*local\s*$/i.test(h.modifier),
+    internal: h.modifier !== undefined && /^\s*internal\s*$/i.test(h.modifier),
     paramNames,
     varParams: varParams ?? NO_POSITIONS,
     variantSources: facts === undefined || facts.sources.size === 0 ? NO_SOURCES : facts.sources,
@@ -1385,6 +1388,19 @@ function implicitAt(p: Proc, key: string): readonly string[] | undefined {
   return p.unit.implicit.get(key);
 }
 
+/**
+ * R389 guard (`closed-world.ts`): whether only the test app can call its `public` (and
+ * `protected`) procedures, and its `internal` ones. True only when the server measured that no
+ * published app depends on the test app; `internal` also needs no `internalsVisibleTo`.
+ */
+export interface ClosedWorld {
+  readonly public: boolean;
+  readonly internal: boolean;
+}
+
+/** The guard's fall-back answer: every non-`local` procedure can be called from outside. */
+export const OPEN_WORLD: ClosedWorld = { public: false, internal: false };
+
 export class Scanner {
   /** Every unit by `String(id)` and by name, in `units` order: a linear filter per call site was
    *  349 of BaseApp's 415 s (CPU profile, R-236c round 2). */
@@ -1428,7 +1444,10 @@ export class Scanner {
     return v;
   }
 
-  constructor(model: TestAppModel) {
+  constructor(
+    model: TestAppModel,
+    private readonly closedWorld: ClosedWorld = OPEN_WORLD,
+  ) {
     const add = (map: Map<string, Unit[]>, k: string, u: Unit): void => {
       const list = map.get(k);
       if (list === undefined) map.set(k, [u]);
@@ -2301,8 +2320,8 @@ export class Scanner {
    * Re-review #1: so does any procedure that is not `local`. An app that DEPENDS on the test app
    * can call a public procedure (and an `internal` one when the test app names it in
    * `internalsVisibleTo`), for example from a subscriber to a test-app event, handing in a
-   * test-app codeunit; that app's code is in no digest. `internal` is read as public here: the
-   * walk does not read app.json.
+   * test-app codeunit; that app's code is in no digest. The R389 guard lifts this, and only
+   * this, when the server says no published app depends on the test app (`ClosedWorld`).
    */
   private traceParam(
     p: Proc,
@@ -2312,8 +2331,10 @@ export class Scanner {
     st: ReachState,
     path: readonly string[],
   ): void {
+    const callableOutside =
+      !p.local && !(p.internal ? this.closedWorld.internal : this.closedWorld.public);
     const external =
-      !p.local ||
+      callableOutside ||
       p.platformCalled ||
       p.subscriber ||
       p.unit.triggers.includes(p) ||

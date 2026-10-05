@@ -891,6 +891,31 @@ describe("planVerify", () => {
     expect(keys(plan.requests[0]?.methods ?? [])).toEqual(["50100::A", "50101::OnlyUnderX"]);
   });
 
+  // R389 guard: the source run recorded its digests with the closed-world guard on. A verify whose
+  // guard answers otherwise computes other digests, so nothing carries; the same answer carries.
+  test("R389: a closed-world guard flip since the source run makes every test new; the same guard carries", async () => {
+    const dir = testDir([{ id: 50100, name: "Old", methods: ["A"] }]);
+    const closed = { public: true, internal: true };
+    const recorded = await testDigests(dir, await discoverTests(dir), {
+      ...INPUTS,
+      closedWorld: closed,
+    });
+    const plan = (closedWorld: { public: boolean; internal: boolean } | undefined) =>
+      planVerify({
+        coverage: "procedure",
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["Old.A"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "Old", "A")],
+        sourceTestDigests: recorded,
+        dependencies: DEPS,
+        testDir: dir,
+        ...(closedWorld !== undefined ? { closedWorld: async () => closedWorld } : {}),
+      });
+    expect(keys((await plan(undefined)).newTests)).toEqual(["50100::A"]);
+    expect(keys((await plan({ public: false, internal: false })).newTests)).toEqual(["50100::A"]);
+    expect(keys((await plan(closed)).newTests)).toEqual([]);
+  });
+
   /** One survivor covered by `T.M`, planned against the given baseline and test codeunits. */
   function coveringPlan(baseline: ReturnType<typeof row>[], codeunits: readonly Codeunit[]) {
     return planUnchanged({

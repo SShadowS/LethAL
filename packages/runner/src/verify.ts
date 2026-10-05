@@ -13,6 +13,7 @@ import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
+import { closedWorldGuard } from "./closed-world";
 import {
   DependencyUnreadableError,
   dependencyFingerprint,
@@ -70,7 +71,12 @@ import {
   testDigestKey,
   testDigestsOfModel,
 } from "./test-digest";
-import { buildTestAppModel, readTestAppSources, scanTestPageModel } from "./testpage-scan";
+import {
+  type ClosedWorld,
+  buildTestAppModel,
+  readTestAppSources,
+  scanTestPageModel,
+} from "./testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 import {
   type ReachFilterOffReason,
@@ -793,6 +799,9 @@ export async function planVerify(a: {
    *  digest-scheme check included), so `source-predates-verify` wins over `dependency-unreadable`
    *  and costs no download. */
   readonly dependencies: string | (() => Promise<string>);
+  /** R389: the closed-world guard (`closedWorldGuard`), asked once with the digest inputs. Absent
+   *  is `OPEN_WORLD`. A source run recorded under another answer has other digests: none carries. */
+  readonly closedWorld?: () => Promise<ClosedWorld>;
   /** R-371: the cap: refuse above `maxNewTests x (S + 2)` extra test runs (R-384 counts runs, not
    *  tests). Default `DEFAULT_MAX_NEW_TESTS`. */
   readonly maxNewTests?: number;
@@ -971,6 +980,7 @@ export async function planVerify(a: {
   const inputs = {
     dependencies: typeof a.dependencies === "string" ? a.dependencies : await a.dependencies(),
     buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+    ...(a.closedWorld !== undefined ? { closedWorld: await a.closedWorld() } : {}),
   };
   const digestsNow = testDigestsOfModel(model, discovered, inputs).digests;
   const recorded = new Map(Object.entries(sourceTestDigests));
@@ -1125,6 +1135,8 @@ const CAUSE_WORDS: Readonly<Record<NewTestCause, string>> = {
     "a test-app edit, for a test whose reach has an edge the walk cannot follow (it covers the whole test-app source)",
   dependency: "a dependency changed",
   build: "an app.json build input changed",
+  "closed-world":
+    "the closed-world guard answered differently (R389: whether another published app depends on the test app)",
   reach: "which procedures it reaches changed",
   unknown: "the source run recorded no parts to compare against",
 };
@@ -1667,6 +1679,7 @@ export async function runVerify(
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
+      closedWorld: async () => (await closedWorldGuard(backend, args.testDir)).closedWorld,
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
       // R-384: the filter state decides which cap check runs before the lease.
       coverage: coverageMode,

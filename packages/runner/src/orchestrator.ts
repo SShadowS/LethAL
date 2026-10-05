@@ -90,6 +90,7 @@ import {
 import type { BaselineObservation, BaselineSnapshot } from "./baseline-snapshot";
 import { PublishFailedError } from "./bcdev-backend";
 import { bisectFailingMutant } from "./bisect";
+import { closedWorldGuard } from "./closed-world";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
@@ -7833,10 +7834,19 @@ async function testAppIdentity(
       microsoft,
       await targetOf(cfg.projectDir, source),
     );
+    // R389: the closed-world guard, recorded in every digest and in the parts (`closedWorld`).
+    const guard = await closedWorldGuard(cfg.backend, cfg.testDir);
+    if (guard.warn) {
+      emit({
+        type: "warning",
+        code: "closed-world-unmeasured",
+        message: `[lethal] public and internal test-app procedures are digested open-world (the safe direction): ${guard.why}`,
+      });
+    }
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,
-      { dependencies, buildInputs: inputs.buildInputs },
+      { dependencies, buildInputs: inputs.buildInputs, closedWorld: guard.closedWorld },
     );
     return { testAppHash, testDigests: digests, testDigestParts: parts };
   } catch (err) {
