@@ -41,8 +41,33 @@ export type HarmlessTriggerKind = "delete" | "modify";
 const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message", "confirm"]);
 
 const OWN_RECORD_NAMES: ReadonlySet<string> = new Set(["rec", "xrec"]);
-const DELETE_EVENTS: ReadonlySet<string> = new Set(["onbeforedeleteevent", "onafterdeleteevent"]);
-const EXTENSION_DELETE_TRIGGERS = ["OnBeforeDelete", "OnAfterDelete"] as const;
+
+/** Per trigger kind: the table trigger, its table events, the tableextension triggers that observe
+ *  it, and the text an unindexed object is matched by. */
+const SKIP_KINDS: Readonly<
+  Record<
+    HarmlessTriggerKind,
+    {
+      readonly trigger: string;
+      readonly events: ReadonlySet<string>;
+      readonly extensionTriggers: readonly string[];
+      readonly unindexedText: RegExp;
+    }
+  >
+> = {
+  delete: {
+    trigger: "OnDelete",
+    events: new Set(["onbeforedeleteevent", "onafterdeleteevent"]),
+    extensionTriggers: ["OnBeforeDelete", "OnAfterDelete"],
+    unindexedText: /on(before|after)delete/i,
+  },
+  modify: {
+    trigger: "OnModify",
+    events: new Set(["onbeforemodifyevent", "onaftermodifyevent"]),
+    extensionTriggers: ["OnBeforeModify", "OnAfterModify"],
+    unindexedText: /on(before|after)modify/i,
+  },
+};
 const EVENT_NAME_KINDS: ReadonlySet<string> = new Set([
   "string_literal",
   "identifier",
@@ -83,21 +108,27 @@ export function isHarmlessTriggerCall(call: ALSyntaxNode, ctx: SemanticContext):
 }
 
 /**
- * R281's decision for one `Delete(true)` site: does this mutant keep `run-trigger-skipped-delete`?
+ * R281 (`Delete`), R-452 (`Modify`): for a call that SKIPS the receiver table's `kind` trigger
+ * (`Delete(false)` from `Delete(true)`, `ModifyAll(F, V, false)` from `..., true)`), does the
+ * mutant keep its `run-trigger-skipped-<kind>` tag?
  *
  * The same refusal detector as R143's `insertSkipCanRaise`: TRUE (keep the tag) unless skipping the
- * table's delete code is PROVEN harmless. In order:
+ * table's `kind` code is PROVEN harmless. In order:
  *   - receiver or table not resolved, or the table's file arm undecided (R378)        -> keep
- *   - the project subscribes to the table's delete events, or a tableextension of it
- *     declares `OnBeforeDelete`/`OnAfterDelete`                                     -> keep
- *   - no `OnDelete` in this build                                                      -> drop
- *   - `OnDelete` holds a live call not proven harmless (`isHarmlessTriggerCall`), or a
- *     call written without parentheses that is not a project field read              -> keep
+ *   - the project subscribes to the table's `kind` events, or a tableextension of it
+ *     declares `OnBefore<Kind>`/`OnAfter<Kind>`                                     -> keep
+ *   - no `On<Kind>` trigger in this build                                              -> drop
+ *   - the trigger holds a live call not proven harmless (`isHarmlessTriggerCall`), or a
+ *     call written without parentheses that is not an own field read                 -> keep
  *   - otherwise                                                                         -> drop
  * A subscriber or tableextension in ANOTHER app is not visible here (stated in the explanation).
  * Subscribers are matched in every `#if` arm, which can only over-tag.
  */
-export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+export function skipCanRaise(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  kind: HarmlessTriggerKind,
+): boolean {
   const tableRef = resolveReceiverTable(node, ctx);
   if (tableRef === null) return true;
   const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
@@ -105,10 +136,20 @@ export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
   if (table === null) return true;
   if (armOfNode(ctx, table.node) === "undecided") return true;
-  if (projectObservesDelete(table, symbols, ctx)) return true;
-  const trigger = findTableTrigger(table.node, "OnDelete", rawArmOf(ctx));
+  if (projectObserves(table, symbols, ctx, kind)) return true;
+  const trigger = findTableTrigger(table.node, SKIP_KINDS[kind].trigger, rawArmOf(ctx));
   if (trigger === null) return false;
   return !onlyHarmlessCalls(trigger, ctx, table, symbols, procedureNamesOn(table, symbols));
+}
+
+/** R281: `skipCanRaise` for `Delete(true)` and `DeleteAll(true)`. */
+export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return skipCanRaise(node, ctx, "delete");
+}
+
+/** R-452: `skipCanRaise` for `Modify(true)` and `ModifyAll(F, V, true)`. */
+export function modifySkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  return skipCanRaise(node, ctx, "modify");
 }
 
 /** Every procedure name declared on the table or a project tableextension of it, in every `#if`
@@ -143,47 +184,51 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   return names;
 }
 
-/** Does the project subscribe to this table's delete events, or extend its delete triggers? */
-function projectObservesDelete(
+/** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers? */
+function projectObserves(
   table: ObjectSymbol,
   symbols: SymbolTable,
   ctx: SemanticContext,
+  kind: HarmlessTriggerKind,
 ): boolean {
+  const { events, extensionTriggers, unindexedText } = SKIP_KINDS[kind];
   const tableName = table.name.toLowerCase();
   for (const ext of symbols.tableExtensions) {
     if (ext.baseObject.toLowerCase() !== tableName) continue;
     if (armOfNode(ctx, ext.node) === "undecided") return true;
-    for (const t of EXTENSION_DELETE_TRIGGERS) {
+    for (const t of extensionTriggers) {
       if (findTableTrigger(ext.node, t, rawArmOf(ctx)) !== null) return true;
     }
   }
   // Objects the symbol table does not index (wrapped whole in `#if`, or unparsable) are read by
   // their text, for any table: over-tagging is the safe direction.
   for (const n of [...symbols.unindexedObjects, ...symbols.unparsedObjects]) {
-    if (/on(before|after)delete/i.test(n.text)) return true;
+    if (unindexedText.test(n.text)) return true;
   }
   const names = new Set([tableName, String(table.id)]);
   let found = false;
   for (const cu of symbols.objects) {
     if (cu.kind !== "codeunit") continue;
     visit(cu.node, (n) => {
-      if (!found && n.rawKind === "attribute_argument_list") found = subscribesToDelete(n, names);
+      if (!found && n.rawKind === "attribute_argument_list") found = subscribesTo(n, names, events);
     });
     if (found) return true;
   }
   return false;
 }
 
-/** An `[EventSubscriber(...)]` argument list naming a delete event of one of `tableNames`. An
+/** An `[EventSubscriber(...)]` argument list naming one of `events` of one of `tableNames`. An
  *  unreadable `Database::` target counts as a match. The event name may be quoted (`'On...'`) or
  *  not (`OnAfterDeleteEvent`, which alc 18.0.43 compiles; an unknown unquoted name is AL0280). */
-function subscribesToDelete(args: ALSyntaxNode, tableNames: ReadonlySet<string>): boolean {
-  const isDeleteEvent = args.namedChildren.some(
-    (c) =>
-      EVENT_NAME_KINDS.has(c.rawKind) &&
-      DELETE_EVENTS.has(c.text.replace(/['"]/g, "").toLowerCase()),
+function subscribesTo(
+  args: ALSyntaxNode,
+  tableNames: ReadonlySet<string>,
+  events: ReadonlySet<string>,
+): boolean {
+  const isEvent = args.namedChildren.some(
+    (c) => EVENT_NAME_KINDS.has(c.rawKind) && events.has(c.text.replace(/['"]/g, "").toLowerCase()),
   );
-  if (!isDeleteEvent) return false;
+  if (!isEvent) return false;
   const ref = args.namedChildren.find((c) => c.rawKind === "database_reference");
   const target = ref?.namedChildren.at(-1);
   if (target === undefined) return true;

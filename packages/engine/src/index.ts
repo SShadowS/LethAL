@@ -90,6 +90,8 @@ export {
   deleteSkipCanRaise,
   findTableTrigger,
   isHarmlessTriggerCall,
+  modifySkipCanRaise,
+  skipCanRaise,
 } from "./semantic/trigger-skip";
 
 // Operator contract
