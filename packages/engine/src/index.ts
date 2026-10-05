@@ -78,6 +78,7 @@ export {
   claimsRecordMethod,
   claimsSystemCall,
   calleeNameNode,
+  receiverUnresolved,
   resolveReceiverTable,
 } from "./semantic/receiver";
 export type { CallerIndex, CallSite } from "./semantic/callers";

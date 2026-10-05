@@ -4,6 +4,7 @@ import {
   exactArguments,
   inMemberBody,
   modifySkipCanRaise,
+  receiverUnresolved,
 } from "@lethal/engine";
 import {
   ALNodeKind,
@@ -274,7 +275,12 @@ function runTriggerSkipTag(
     if (arg === undefined || arg.startIndex !== node.startIndex || arg.endIndex !== node.endIndex) {
       continue;
     }
-    if (!claimsRecordMethod(call, ctx, method)) continue;
+    // R-364: an UNRESOLVED receiver keeps the tag (R143's rule; screen tagging is conservative).
+    // `claimsRecordMethod` refuses it, which is right for claiming and is left unchanged.
+    if (!claimsRecordMethod(call, ctx, method)) {
+      if (receiverUnresolved(call, ctx, method)) return tag;
+      continue;
+    }
     return canRaise(call, ctx) ? tag : undefined;
   }
   return undefined;
