@@ -9,6 +9,11 @@ import alGrammarWasmPath from "../../vendor/tree-sitter-al.wasm" with { type: "f
 import { type ALNodeKind, isALNodeKind } from "./node-kinds";
 import type { ALSyntaxNode } from "./syntax-node";
 
+// R280: `scripts/probe-grammar-crosscheck.ts` loads a second grammar with these, and must use the
+// SAME web-tree-sitter instance `initWasmParser` initialised. Re-exporting them here keeps its
+// import typed without `scripts/` taking a direct dependency.
+export { Language, Parser };
+
 let parser: Parser | null = null;
 let language: Language | null = null;
 let initPromise: Promise<void> | null = null;
