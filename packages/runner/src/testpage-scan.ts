@@ -1906,7 +1906,10 @@ export class Scanner {
         const shapes = new Set(types?.map(variantShape));
         const why = `${label} is handed ${r.name} by ${p.display}`;
         if (shapes.has("container"))
-          fallBack(st, `${why}: an array or collection of Variant, whose elements the walk cannot see`);
+          fallBack(
+            st,
+            `${why}: an array or collection of Variant, whose elements the walk cannot see`,
+          );
         else if (shapes.has("plain")) this.traceVariant(p, r.name, why, st, false, []);
         const held = types?.find((t) => this.holdsTestApp(t));
         return held === undefined ? undefined : `${r.name} (${held.trim()})`;
@@ -2048,8 +2051,7 @@ export class Scanner {
     }
     const elems = COLLECTION_OF.exec(t)?.[1];
     if (elems !== undefined) {
-      for (const e of elementTypes(elems))
-        this.handOutType(p, e, undefined, why, st, false, true);
+      for (const e of elementTypes(elems)) this.handOutType(p, e, undefined, why, st, false, true);
       return;
     }
     const iface = INTERFACE_TYPE.exec(t)?.[1];
@@ -2117,13 +2119,7 @@ export class Scanner {
   }
 
   /** R-389: what a value assigned to a traced Variant can be, folded (part 1's table). */
-  private traceValue(
-    p: Proc,
-    r: Recv,
-    why: string,
-    st: ReachState,
-    path: readonly string[],
-  ): void {
+  private traceValue(p: Proc, r: Recv, why: string, st: ReachState, path: readonly string[]): void {
     switch (r.k) {
       case "value":
         return;
@@ -2153,9 +2149,7 @@ export class Scanner {
       case "member": {
         const base = this.typesOf(p, r.k === "index" ? r.base : r.recv);
         const vcoll =
-          typeof base === "string"
-            ? undefined
-            : base.find((t) => variantShape(t) === "container");
+          typeof base === "string" ? undefined : base.find((t) => variantShape(t) === "container");
         if (vcoll !== undefined) {
           fallBack(st, `${why}: assigned from an element of ${vcoll.trim()}`);
           return;

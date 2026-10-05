@@ -413,6 +413,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
+  (R389). Code in another app can run a test-app codeunit it receives in a Variant (measured live),
+  and a test's digest did not cover it, so an edit there left the test read as unchanged. The digest
+  now traces what a handed-out Variant is assigned from and folds that codeunit, or every test-app
+  implementation of an interface; a subscriber or folded codeunit handing a value back through a
+  `var` parameter or its return value is read the same way. Where the walk cannot see the value (a
+  parameter, a global, a collection element) the test takes the whole-source digest. An interface
+  with no test-app implementation adds nothing. No scheme change: an unchanged test keeps its
+  digest; a test that newly covers more reads as new once. Measured: 29 of 1,854 DC tests and 29 of
+  1,986 DO tests move to the whole-source digest, CDO none.
+
 - **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 is held
   by R-446). The run-wide twin numbering sorted files with `localeCompare`, the host's default
   collation, while file discovery and the generation hash sort by code unit. A resume on a host

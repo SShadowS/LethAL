@@ -64,7 +64,7 @@ const base = (e: Edits, mockExtra = "", mockGlobals = ""): Record<string, string
 
 const EXT = `        Ext: Codeunit "Ext Runner";\n`;
 const MOCK = `        Mock: Codeunit "Mock";\n`;
-const V = `        V: Variant;\n`;
+const V = "        V: Variant;\n";
 /** A test that hands out nothing: what a subscriber-closure change reaches only through the fold. */
 const TRIVIAL = proc("Trivial()", "", "        Message('x');\n");
 
@@ -157,15 +157,27 @@ describe("R-389 part 1: a Variant handed out as an argument", () => {
           `        Arr: array[2] of Variant;\n${EXT}`,
           "        Ext.Go(Arr[1]);\n",
         ) +
-        proc("Foreach()", `${V}        L: List of [Variant];\n${EXT}`, "        foreach V in L do\n            Ext.Go(V);\n") +
-        proc("FromListGet()", `${V}        L: List of [Variant];\n${EXT}`, "        L.Get(1, V);\n        Ext.Go(V);\n") +
+        proc(
+          "Foreach()",
+          `${V}        L: List of [Variant];\n${EXT}`,
+          "        foreach V in L do\n            Ext.Go(V);\n",
+        ) +
+        proc(
+          "FromListGet()",
+          `${V}        L: List of [Variant];\n${EXT}`,
+          "        L.Get(1, V);\n        Ext.Go(V);\n",
+        ) +
         proc("WholeList()", `        L: List of [Variant];\n${EXT}`, "        Ext.Go(L);\n") +
         proc("CallReturn()", EXT, "        Ext.Go(MakeVariant());\n") +
-        proc("Cycle()", `${V}        W: Variant;\n${EXT}`, "        W := V;\n        V := W;\n        Ext.Go(V);\n") +
+        proc(
+          "Cycle()",
+          `${V}        W: Variant;\n${EXT}`,
+          "        W := V;\n        V := W;\n        Ext.Go(V);\n",
+        ) +
         proc("PassOn(P: Variant)", EXT, "        Ext.Go(P);\n", "    local") +
         proc("Fill(var X: Variant)", MOCK, "        X := Mock;\n", "    local") +
         proc("MakeVariant(): Variant", MOCK, "        exit(Mock);\n", "    local"),
-      `        GlobalV: Variant;\n`,
+      "        GlobalV: Variant;\n",
     ).replaceAll("    local    procedure", "    local procedure"),
   });
   let cached: ReturnType<typeof run> | undefined;
@@ -192,10 +204,7 @@ describe("R-389 part 1: a Variant handed out as an argument", () => {
 
   // Added with the build (proved by red-check, not seen red before the code): `this`, a page.
   const handsSelf: Scenario = (e) => ({
-    ...base(
-      e,
-      proc("HandSelf()", V + EXT, "        V := this;\n        Ext.Go(V);\n", ""),
-    ),
+    ...base(e, proc("HandSelf()", V + EXT, "        V := this;\n        Ext.Go(V);\n", "")),
     "T.al": testUnit(proc("A()", MOCK, "        Mock.HandSelf();\n")),
   });
   test("14. V := this in a codeunit folds that codeunit whole", () => {
@@ -210,7 +219,9 @@ describe("R-389 part 1: a Variant handed out as an argument", () => {
         "\n    trigger OnModify()",
         `\n${proc("HandSelf()", V + EXT, "        V := this;\n        Ext.Go(V);\n", "")}    trigger OnModify()`,
       ),
-      "T.al": testUnit(proc("A()", `        TestRec: Record "TT";\n`, "        TestRec.HandSelf();\n")),
+      "T.al": testUnit(
+        proc("A()", `        TestRec: Record "TT";\n`, "        TestRec.HandSelf();\n"),
+      ),
     });
     expect(r.why("A")).toContain("assigned from this in a table");
   });
@@ -235,7 +246,11 @@ describe("R-389 part 1: a Variant handed out as an argument", () => {
     const r = run({
       ...base({}),
       "T.al": testUnit(
-        proc("A()", `${V}        Cust: Record Customer;\n${EXT}`, "        V := Cust;\n        Ext.Go(V);\n"),
+        proc(
+          "A()",
+          `${V}        Cust: Record Customer;\n${EXT}`,
+          "        V := Cust;\n        Ext.Go(V);\n",
+        ),
       ),
     });
     expect(r.digest("A")).toBe(PIN_RECORD);
@@ -280,24 +295,36 @@ describe("R-389 part 2: hand-outs from entry procedures", () => {
 
   // 10
   const INNER = (e: Edits) => plain(50103, "InnerMock", "inner", e, ` implements "IFace"`);
-  const handsOutMock = (mockExtra: string): Scenario => (e) => ({
-    ...base(e, mockExtra),
-    "Inner.al": INNER(e),
-    "Inner2.al": plain(50104, "Inner2", "inner2", e),
-    "T.al": testUnit(
-      proc("A()", V + MOCK + EXT, "        V := Mock;\n        Ext.Go(V);\n") + TRIVIAL,
-    ),
-  });
+  const handsOutMock =
+    (mockExtra: string): Scenario =>
+    (e) => ({
+      ...base(e, mockExtra),
+      "Inner.al": INNER(e),
+      "Inner2.al": plain(50104, "Inner2", "inner2", e),
+      "T.al": testUnit(
+        proc("A()", V + MOCK + EXT, "        V := Mock;\n        Ext.Go(V);\n") + TRIVIAL,
+      ),
+    });
   test("10a. an Interface return of a handed-out codeunit folds the interface's implementations", () => {
     const s = handsOutMock(
-      proc("GetInner(): Interface \"IFace\"", `        Inner: Codeunit "InnerMock";\n`, "        exit(Inner);\n", ""),
+      proc(
+        'GetInner(): Interface "IFace"',
+        `        Inner: Codeunit "InnerMock";\n`,
+        "        exit(Inner);\n",
+        "",
+      ),
     );
     expect(moves(s, "inner", "A")).toBe(true);
     expect(moves(s, "inner", "Trivial")).toBe(false);
   });
   test("10b. a Variant return by exit, of a handed-out codeunit, folds what it returns", () => {
     const s = handsOutMock(
-      proc("GetAny(): Variant", `        Inner: Codeunit "Inner2";\n`, "        exit(Inner);\n", ""),
+      proc(
+        "GetAny(): Variant",
+        `        Inner: Codeunit "Inner2";\n`,
+        "        exit(Inner);\n",
+        "",
+      ),
     );
     expect(moves(s, "inner2", "A")).toBe(true);
     expect(moves(s, "inner2", "Trivial")).toBe(false);
@@ -343,7 +370,12 @@ describe("R-389 part 2: hand-outs from entry procedures", () => {
   // 12
   const subRecRef: Scenario = (e) =>
     withSubs(
-      sub("OnX", "var RecRef: RecordRef", `        TestRec: Record "TT";\n`, "        RecRef.GetTable(TestRec);\n"),
+      sub(
+        "OnX",
+        "var RecRef: RecordRef",
+        `        TestRec: Record "TT";\n`,
+        "        RecRef.GetTable(TestRec);\n",
+      ),
       e,
     );
   test("12. a subscriber's var RecordRef: an edit to a test-app table's trigger moves every digest", () => {
@@ -353,7 +385,12 @@ describe("R-389 part 2: hand-outs from entry procedures", () => {
 
   const subRecord: Scenario = (e) =>
     withSubs(
-      sub("OnGetRec", "var Handler: Variant", `        TestRec: Record "TT";\n`, "        Handler := TestRec;\n"),
+      sub(
+        "OnGetRec",
+        "var Handler: Variant",
+        `        TestRec: Record "TT";\n`,
+        "        Handler := TestRec;\n",
+      ),
       e,
     );
   test("12b. a subscriber's var Variant set to a test-app record folds every test-app table", () => {
@@ -377,18 +414,22 @@ describe("R-389 part 2: hand-outs from entry procedures", () => {
 describe("R-389 bi:none: an interface with no test-app implementation folds nothing", () => {
   // The shape that read "1,854 tests newly wider" in the probe's first DO run: an interface
   // handed out (in a test, and in the subscriber closure) that no test-app codeunit implements.
-  const shape = (withImpl: boolean): Scenario => (e) => ({
-    ...base(e),
-    ...(withImpl ? { "Impl.al": plain(50150, "Ext Impl", "impl", e, ` implements "Ext Iface"`) } : {}),
-    "Subs.al": subscribers(sub("OnGetSender", `var Sender: Interface "Ext Iface"`, "", "")),
-    "T.al": testUnit(
-      proc(
-        "A()",
-        `${V}        Sender: Interface "Ext Iface";\n${EXT}`,
-        "        V := Sender;\n        Ext.Go(V);\n",
-      ) + TRIVIAL,
-    ),
-  });
+  const shape =
+    (withImpl: boolean): Scenario =>
+    (e) => ({
+      ...base(e),
+      ...(withImpl
+        ? { "Impl.al": plain(50150, "Ext Impl", "impl", e, ` implements "Ext Iface"`) }
+        : {}),
+      "Subs.al": subscribers(sub("OnGetSender", `var Sender: Interface "Ext Iface"`, "", "")),
+      "T.al": testUnit(
+        proc(
+          "A()",
+          `${V}        Sender: Interface "Ext Iface";\n${EXT}`,
+          "        V := Sender;\n        Ext.Go(V);\n",
+        ) + TRIVIAL,
+      ),
+    });
   test("no implementation: every digest byte-identical to HEAD's, and no fallback", () => {
     const r = run(shape(false)({}));
     expect([r.digest("A"), r.digest("Trivial")]).toEqual(PIN_BI_NONE);
