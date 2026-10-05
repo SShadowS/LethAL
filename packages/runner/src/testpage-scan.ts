@@ -441,6 +441,8 @@ export interface Proc {
   readonly idRefs: readonly string[];
   /** R-389: an attribute says the platform or another app calls it (`PLATFORM_CALLED`). */
   readonly platformCalled: boolean;
+  /** R-389: declared `local`, so only its own object can call it. */
+  readonly local: boolean;
   /** R-389: the parameters' names as written, in order. */
   readonly paramNames: readonly string[];
   /** R-389: the positions of its `var` parameters. */
@@ -712,6 +714,8 @@ interface Header {
   readonly params: readonly ALSyntaxNode[];
   readonly returnType: string | undefined;
   readonly returnValue: ALSyntaxNode | undefined;
+  /** R-389: the access modifier as written (`local`, `internal`, `protected`), or undefined. */
+  readonly modifier: string | undefined;
   /** Every `var` section of the declaration: a plain procedure's one; a split arm's own (a
    *  preamble's) and the shared one. */
   readonly vars: readonly ALSyntaxNode[];
@@ -741,6 +745,7 @@ function procOf(
       params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
       returnType: p.childForFieldName("return_type")?.text,
       returnValue: p.childForFieldName("return_value") ?? undefined,
+      modifier: p.childForFieldName("modifier")?.text,
       vars: vars === undefined ? [] : [vars],
       block,
       run: memberRun(p),
@@ -794,6 +799,7 @@ function splitProcsOf(
         params: plist?.namedChildren.filter((c) => c.rawKind === "parameter") ?? [],
         returnType: arm.find((c) => c.fieldName === "return_type")?.text,
         returnValue: arm.find((c) => c.fieldName === "return_value"),
+        modifier: arm.find((c) => c.fieldName === "modifier")?.text,
         vars: [...arm.filter((c) => c.rawKind === "var_section"), ...shared],
         block,
         run,
@@ -917,6 +923,7 @@ function procFrom(
     key: "",
     subscriber: attributes.some((t) => SUBSCRIBER_ATTRIBUTE.test(t)),
     platformCalled: attributes.some((t) => PLATFORM_CALLED.test(t)),
+    local: h.modifier !== undefined && /^\s*local\s*$/i.test(h.modifier),
     paramNames,
     varParams: varParams ?? NO_POSITIONS,
     variantSources: facts === undefined || facts.sources.size === 0 ? NO_SOURCES : facts.sources,
@@ -2182,7 +2189,11 @@ export class Scanner {
     let recv = r;
     if (r.k === "name") {
       const key = this.norm(r.name);
-      if (key === "this") return;
+      if (key === "this") {
+        // Re-review #3: `Format(this)` gives the codeunit's id, as `V := this` hands it out.
+        this.traceValue(p, r, why, st, []);
+        return;
+      }
       const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
       if (types === undefined) {
         const call = this.parenless(p, r.name);
@@ -2233,10 +2244,11 @@ export class Scanner {
    * platform or another app calling `p` (a subscriber, a test, a handler, a trigger, a web
    * service), interface dispatch (any procedure of a codeunit that implements an interface), or
    * a chain of callers deeper than `MAX_CALLER_DEPTH` (a cycle falls back in `traceVariant`).
-   * Access level does not count: `local`, `internal` and public procedures are all read the
-   * same. Only the test app and an app that DEPENDS on it can call a test-app procedure by name;
-   * a dependency cannot name it, and a dependent app's code is outside every digest already
-   * (R-371 walks the test app only).
+   * Re-review #1: so does any procedure that is not `local`. An app that DEPENDS on the test app
+   * can call a public procedure (and an `internal` one when the test app names it in
+   * `internalsVisibleTo`), for example from a subscriber to a test-app event, handing in a
+   * test-app codeunit; that app's code is in no digest. `internal` is read as public here: the
+   * walk does not read app.json.
    */
   private traceParam(
     p: Proc,
@@ -2247,6 +2259,7 @@ export class Scanner {
     path: readonly string[],
   ): void {
     const external =
+      !p.local ||
       p.platformCalled ||
       p.subscriber ||
       p.unit.triggers.includes(p) ||

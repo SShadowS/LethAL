@@ -544,28 +544,43 @@ describe("R-389 final review (sol): three holes, each closed fail-closed", () =>
 });
 
 describe("R-389 option (a), narrowing 1: a Variant parameter traced through its callers", () => {
-  // DC's shape: a test-app assert helper formats its Variant parameter.
-  const LIB = (e: Edits, attrs = "", impl = "", extra = ""): string =>
-    `codeunit 50180 "Lib"${impl}\n{\n${attrs}    procedure Check(Result: Variant)\n    var\n${EXT}    begin\n        Ext.RunFormatted(Format(Result));\n    end;\n${impl === "" ? "" : "\n    procedure Go()\n    begin\n    end;\n"}${extra}}\n`;
-  const LIBV = `        Lib: Codeunit "Lib";\n        Cust: Record Customer;\n`;
-  const callers = (more = ""): string =>
-    proc("A()", LIBV, "        Lib.Check(5);\n        Lib.Check(Cust);\n") + more;
+  // DC's shape: a test-app helper formats its Variant parameter. Closed-world tracing holds only
+  // for a `local` procedure (re-review #1), so `Check` is local and every caller sits in `Lib`:
+  // RunA passes a value and a record; a test's `extra` procedure RunB adds a caller; the tests
+  // call `Lib.RunA()` and `Lib.RunB()`.
+  const LIB = (
+    e: Edits,
+    attrs = "",
+    impl = "",
+    extra = "",
+    access = "local ",
+    globals = "",
+  ): string =>
+    `codeunit 50180 "Lib"${impl}\n{\n${globals === "" ? "" : `    var\n${globals}\n`}${attrs}    ${access}procedure Check(Result: Variant)\n    var\n${EXT}    begin\n${at(e, "inner")}        Ext.RunFormatted(Format(Result));\n    end;\n\n    procedure RunA()\n    var\n        Cust: Record Customer;\n    begin\n        Check(5);\n        Check(Cust);\n    end;\n${impl === "" ? "" : "\n    procedure Go()\n    begin\n    end;\n"}${extra}}\n`;
+  const LIBV = `        Lib: Codeunit "Lib";\n`;
+  const runB = (vars: string, body: string): string =>
+    `\n    procedure RunB()\n${vars === "" ? "" : `    var\n${vars}`}    begin\n${body}    end;\n`;
   const s =
-    (lib: (e: Edits) => string, more = "", globals = ""): Scenario =>
-    (e) => ({
-      ...base(e),
-      "Lib.al": lib(e),
-      "T.al": testUnit(callers(more), globals),
-    });
+    (lib: (e: Edits) => string): Scenario =>
+    (e) => {
+      const text = lib(e);
+      return {
+        ...base(e),
+        "Lib.al": text,
+        "T.al": testUnit(
+          proc("A()", LIBV, "        Lib.RunA();\n") +
+            (text.includes("procedure RunB()") ? proc("B()", LIBV, "        Lib.RunB();\n") : ""),
+        ),
+      };
+    };
   test("N1a. every caller passes a value or a record: no fallback (it fell back before)", () => {
     const r = run(s((e) => LIB(e))({}));
     expect(r.why("A")).toBeUndefined();
     expect(r.closure).toBeUndefined();
   });
   test("N1b. hole 1 through a parameter: a caller passing a Mock-holding Variant folds Mock", () => {
-    const sc = s(
-      (e) => LIB(e),
-      proc("B()", LIBV + V + MOCK, "        V := Mock;\n        Lib.Check(V);\n"),
+    const sc = s((e) =>
+      LIB(e, "", "", runB(V + MOCK, "        V := Mock;\n        Check(V);\n")),
     );
     expect(moves(sc, "mock", "B")).toBe(true);
     expect(moves(sc, "mock", "A")).toBe(true); // the union over every caller
@@ -574,10 +589,8 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
   });
   test("N1c. a caller the walk cannot trace (a global) keeps the fallback", () => {
     const r = run(
-      s(
-        (e) => LIB(e),
-        proc("B()", LIBV, "        Lib.Check(GlobalV);\n"),
-        "        GlobalV: Variant;\n",
+      s((e) =>
+        LIB(e, "", "", runB("", "        Check(GlobalV);\n"), "local ", "        GlobalV: Variant;\n"),
       )({}),
     );
     expect(r.why("A")).toContain("the global GlobalV");
@@ -602,7 +615,7 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
           e,
           "",
           "",
-          "\n    procedure Again(R: Variant)\n    begin\n        Check(R);\n        Again(R);\n    end;\n",
+          "\n    local procedure Again(R: Variant)\n    begin\n        Check(R);\n        Again(R);\n    end;\n",
         ).replace(
           "        Ext.RunFormatted(Format(Result));\n",
           "        Ext.RunFormatted(Format(Result));\n        Again(Result);\n",
@@ -615,33 +628,39 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     let chain = "";
     for (let i = 0; i < 40; i += 1)
       chain += `\n    procedure H${i}(R: Variant)\n    begin\n        ${i === 0 ? "Check" : `H${i - 1}`}(R);\n    end;\n`;
-    const r = run(s((e) => LIB(e, "", "", chain), proc("B()", LIBV, "        Lib.H39(5);\n"))({}));
+    const r = run(
+      s((e) => LIB(e, "", "", chain.replaceAll("    procedure H", "    local procedure H") + runB("", "        H39(5);\n")))({}),
+    );
     expect(r.why("A")).toContain("deeper than");
   });
   test("N1g. a bare call of ANOTHER object's own same-named procedure is not a caller", () => {
-    const other = `codeunit 50181 "Other"\n{\n    var\n        GlobalW: Variant;\n\n    procedure Check(R: Variant)\n    begin\n    end;\n\n    procedure Use()\n    begin\n        Check(GlobalW);\n    end;\n}\n`;
+    const other = `codeunit 50181 "Other"\n{\n    var\n        GlobalW: Variant;\n\n    local procedure Check(R: Variant)\n    begin\n    end;\n\n    procedure Use()\n    begin\n        Check(GlobalW);\n    end;\n}\n`;
     const r = run({ ...s((e) => LIB(e))({}), "Other.al": other });
     expect(r.why("A")).toBeUndefined();
   });
   test("N1i. a procedure a [HandlerFunctions] list names (the platform calls it) keeps the fallback", () => {
-    const r = run(
-      s(
-        (e) => LIB(e),
-        proc(
-          "B()",
-          LIBV,
-          "        Lib.Check(5);\n",
-          "    [Test]\n    [HandlerFunctions('Check')]\n",
-        ),
-      )({}),
-    );
+    const r = run({
+      ...s((e) => LIB(e))({}),
+      "T2.al": `codeunit 50190 "T2"\n{\n    Subtype = Test;\n\n${proc("B()", "", "        Message('x');\n", "    [Test]\n    [HandlerFunctions('Check')]\n")}}\n`,
+    });
     expect(r.why("A")).toContain("can be called from outside the test app");
   });
   test("N1h. a caller passing a test-app codeunit's id or reference keeps the fallback", () => {
     for (const arg of ["50101", 'Codeunit::"Mock"']) {
-      const r = run(s((e) => LIB(e), proc("B()", LIBV, `        Lib.Check(${arg});\n`))({}));
+      const r = run(s((e) => LIB(e, "", "", runB("", `        Check(${arg});\n`)))({}));
       expect(r.why("A")).toContain("passes");
     }
+  });
+  // Re-review #1: a procedure another app can call by name keeps the fallback. Only the test app
+  // and an app that DEPENDS on it can; such an app can hand a test-app codeunit in (for example
+  // from a subscriber to a test-app event), and its code is in no digest.
+  test("N1j. a public helper keeps the fallback (a dependent app may call it)", () => {
+    const r = run(s((e) => LIB(e, "", "", "", ""))({}));
+    expect(r.why("A")).toContain("can be called from outside the test app");
+  });
+  test("N1k. an internal helper keeps the fallback while the test app's internalsVisibleTo is unknown", () => {
+    const r = run(s((e) => LIB(e, "", "", "", "internal "))({}));
+    expect(r.why("A")).toContain("can be called from outside the test app");
   });
 });
 
@@ -675,6 +694,53 @@ describe("R-389 option (a), narrowing 2: namespace-qualified names", () => {
     });
     expect(moves(sc, "impl", "Trivial")).toBe(true);
     expect(run(sc({})).closure).toBeUndefined();
+  });
+});
+
+describe("R-389 re-review (sol): namespaces and this", () => {
+  // #3: `Format(this)` gives the codeunit's id like `Format(V)` does, so the codeunit is handed out.
+  const bridge =
+    (forward: string): Scenario =>
+    (e) => ({
+      ...base(e),
+      "Inner2.al": plain(50104, "Inner2", "inner2", e),
+      "Bridge.al": `codeunit 50185 "Bridge"\n{\n    trigger OnRun()\n    var\n        Inner: Codeunit "Inner2";\n    begin\n        Inner.Go();\n    end;\n\n    procedure Forward()\n    var\n${EXT}    begin\n        ${forward}\n    end;\n}\n`,
+      "T.al": testUnit(proc("A()", `        B: Codeunit "Bridge";\n`, "        B.Forward();\n")),
+    });
+  test("R3. Ext.RunFormatted(Format(this)) folds the codeunit: its OnRun's callee moves the digest", () => {
+    const sc = bridge("Ext.RunFormatted(Format(this));");
+    expect(moves(sc, "inner2", "A")).toBe(true);
+    expect(moves(sc, "unrelated", "A")).toBe(false);
+  });
+  test("R3 control: a codeunit that formats a value only: its OnRun is not walked", () => {
+    expect(moves(bridge("Ext.RunFormatted(Format(5));"), "inner2", "A")).toBe(false);
+  });
+
+  // #2: interface ownership by namespace, not by the last name segment.
+  const ns =
+    (handed: string, testNs: string): Scenario =>
+    (e) => ({
+      ...base(e),
+      "TIBase.al": `namespace Tests;\n\ninterface "IBase"\n{\n}\n`,
+      // tree-sitter-al does not parse a qualified name in `implements` (parse damage, so every
+      // digest falls back), so the dependency's IDerived is reached through `using`.
+      "Dep.al": `namespace Tests;\n\nusing Dep;\n\ncodeunit 50170 "DepMock" implements "IDerived"\n{\n    procedure Go()\n    begin\n${at(e, "impl")}    end;\n}\n`,
+      "T.al": `${testNs}${testUnit(
+        proc("A()", `${V}        I: Interface ${handed};\n${EXT}`, "        V := I;\n        Ext.Go(V);\n"),
+      )}`,
+    });
+  test("R2a. Dep.IBase handed out while the test app declares Tests.IBase: unknown-ancestry Mock folds", () => {
+    const sc = ns(`Dep."IBase"`, "namespace Tests;\n\n");
+    expect(moves(sc, "impl", "A")).toBe(true);
+    expect(moves(sc, "unrelated", "A")).toBe(false);
+  });
+  test("R2b. an unqualified IBase in a file of ANOTHER namespace, no using: unresolved, folds", () => {
+    expect(moves(ns(`"IBase"`, "namespace Other;\n\n"), "impl", "A")).toBe(true);
+  });
+  test("R2 control: Tests.IBase, or IBase from namespace Tests or through using Tests, is the test app's: no fold", () => {
+    expect(moves(ns(`Tests."IBase"`, "namespace Other;\n\n"), "impl", "A")).toBe(false);
+    expect(moves(ns(`"IBase"`, "namespace Tests;\n\n"), "impl", "A")).toBe(false);
+    expect(moves(ns(`"IBase"`, "namespace Other;\n\nusing Tests;\n\n"), "impl", "A")).toBe(false);
   });
 });
 
