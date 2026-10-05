@@ -83,9 +83,12 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "(blank is a legal `Code[20]`) and a second raises a duplicate primary key, or a later " +
     "`Get`/`Modify` on the expected key raises that the record does not exist. The test then dies " +
     "on the platform before evaluating any assertion. WEAKER THAN THE ABOVE, and deliberately so: " +
-    "every `Insert` mutant carries this tag, because whether the target table's `OnInsert` touches " +
-    "the primary key is not visible at the call site, and for a base-app record it is not visible " +
-    "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
+    "it is kept wherever LethAL cannot prove skipping `OnInsert` harmless, which includes an " +
+    "`OnInsert` that calls a procedure (one may fill the key), an insert-event subscriber or " +
+    "`tableextension` insert trigger in this project, and every table it cannot read, such as a " +
+    "base-app record. It is dropped only where `OnInsert` is absent, or makes no call that could " +
+    "write and does not assign the key itself. It cannot see a subscriber in another app. Treat " +
+    "it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-delete":
     "rewriting `Delete(true)` to `Delete(false)`, or `DeleteAll(true)` to `DeleteAll(false)`, " +
     "skips `OnDelete`. The table's delete events still fire, with `RunTrigger` false, so a " +

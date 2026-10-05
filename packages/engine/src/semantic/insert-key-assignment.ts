@@ -37,7 +37,14 @@
  * That is a strict narrowing of R138: every mutant that loses the tag lost it to a proof, never to
  * an unknown.
  *
- * ## Measured limits, all three stated rather than hidden
+ * R-476 closed all three limits below with R-452's conservative cut (`skipCanRaise(.., "insert")`,
+ * checked FIRST): the tag also stays when `OnInsert` holds any call not proven harmless (a helper,
+ * a No. Series call, any write), when a project codeunit subscribes to the table's insert events,
+ * or when a project tableextension declares `OnBeforeInsert`/`OnAfterInsert`. Measured: BaseApp's
+ * `Sales Header` (`OnInsert` -> `InitInsert`) had lost the tag. A subscriber or tableextension in
+ * ANOTHER app is still not seen.
+ *
+ * ## Limits as R143 measured them (historical; closed by R-476)
  *
  * 1. **Indirect key assignment.** An `OnInsert` may reach the key through a helper or a No. Series
  *    call, which this predicate does not follow and would therefore mis-classify as "proven
@@ -53,8 +60,8 @@
  *    this predicate cannot resolve and therefore tags anyway. The blind spot is real and its
  *    measured population is zero project tables.
  * 3. **`tableextension`** members are not consulted: AL declares table-level triggers on the table
- *    itself, so an extension has no `OnInsert` to contribute. If that ever changes, this predicate
- *    would under-tag, and the fix belongs here rather than at the call site.
+ *    itself, so an extension has no `OnInsert` to contribute. (R-476: it can declare
+ *    `OnBeforeInsert`/`OnAfterInsert`, which also run only with `RunTrigger` true.)
  */
 import { ALNodeKind } from "../ast/node-kinds";
 import { type ALSyntaxNode, findAll, visit } from "../ast/syntax-node";
