@@ -364,11 +364,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
 - **A forcing RunTrigger flip carries `run-trigger-forced` when the receiver does not resolve**
   (R460). The `false` -> `true` flip at `ModifyAll`, `DeleteAll`, `Modify`, `Delete` or `Insert`
-  forces the table's trigger to run, and was tagged only on a receiver the project resolves. An
+  can force a table trigger to run, and was tagged only on a receiver the project resolves. An
   unresolved receiver now gets the tag too, the same conservative rule R-364 applied to the skip
-  direction (`true`). Measured, tags only (no mutant added, removed or re-keyed): 45 mutants gain
-  the tag, 40 on BaseApp (BC.History w1-28, 203 projects), 2 on CDO and 1 on `sandbox-probes`.
-  `sandbox-data` is unchanged.
+  direction (`true`); where the receiver is not really a record this over-tags, the accepted
+  direction (R143). Measured, tags only (no mutant added, removed or re-keyed): 45 rows gain the
+  tag: 40 BaseApp rows (BC.History w1-28, 203 projects), 4 CDO rows covering 2 sites across two
+  symbol sets, and 1 `sandbox-probes` row. `sandbox-data` is unchanged.
 - **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
   not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
   screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged. The tag is
