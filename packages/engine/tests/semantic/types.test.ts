@@ -946,6 +946,9 @@ codeunit 50110 "R455 Cu"
     expect(typeAt(cu("with R do I := F();"), "F", true)).toBeNull();
   });
 
+  // NOT load-bearing: `callType` already answers null for a quoted callee (it is neither an
+  // identifier nor a field access), so this passes with or without the guard on the quoted kind.
+  // It pins the answer, not the guard.
   it("inside `with R do`, a quoted callee has no type", () => {
     expect(typeAt(cu('with R do I := "Q F"();'), '"Q F"', true)).toBeNull();
   });

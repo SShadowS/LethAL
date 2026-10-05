@@ -227,10 +227,32 @@ describe("swapCallArguments: field-designator arguments (R455)", () => {
     ).toEqual(["R.SetFilter(F, StrSubstNo(Fmt, A, B), D, C)", "StrSubstNo(Fmt, B, A)"]);
   });
 
-  it("CopyFilter names a field at positions 1 AND 3", () => {
+  // Each local shares a type with another argument, so unprotecting THAT position makes a swap
+  // appear: F pairs with Dest (both Integer) when position 1 is open, Dest pairs with G (both
+  // Record) when position 3 is open. These pin the generator, not valid AL.
+  it("CopyFilter names a field at position 1", () => {
+    expect(swaps("F: Integer; Dest: Integer; G: Text;", "R.CopyFilter(F, Dest, G);")).toEqual([]);
+  });
+
+  it("CopyFilter names a field at position 3", () => {
     expect(
-      swaps('F: Integer; Dest: Record "R455 T"; G: Integer;', "R.CopyFilter(F, Dest, G);"),
+      swaps('F: Integer; Dest: Record "R455 T"; G: Record "R455 T";', "R.CopyFilter(F, Dest, G);"),
     ).toEqual([]);
+  });
+
+  // alc 18.0.43: `SetAscending(Flag, Ascend)` compiles with Boolean field Flag; the swap is AL0166
+  // (argument 1 must be a member).
+  it("SetAscending names a field at position 1 only", () => {
+    expect(swaps("Flag: Boolean; Ascend: Boolean;", "R.SetAscending(Flag, Ascend);")).toEqual([]);
+  });
+
+  // alc 18.0.43: LoadFields and AreFieldsLoaded take fields at every position (AL0166 otherwise).
+  it("LoadFields names a field at every position", () => {
+    expect(swaps("A: Integer; B: Integer;", "R.LoadFields(A, B);")).toEqual([]);
+  });
+
+  it("AreFieldsLoaded names a field at every position", () => {
+    expect(swaps("A: Integer; B: Integer;", "if R.AreFieldsLoaded(A, B) then;")).toEqual([]);
   });
 
   // Every listed method, called with three same-typed locals. A position-1 method keeps the

@@ -236,7 +236,7 @@ const ARGUMENT_LIST = "argument_list";
  * BaseApp had 28 of them. Matched by METHOD NAME, on a member call and on an unqualified call (an
  * implicit record), without resolving the receiver. That is conservative: a custom procedure or a
  * value-taking overload with one of these names loses swap sites at those positions; it never
- * gains a wrong one. RecordRef's `Field`/`FieldIndex` take numbers, so they are not listed.
+ * gains a wrong one. The list is the measured set of builtins, not all of them. RecordRef's `Field`/`FieldIndex` take numbers, so they are not listed.
  */
 const FIELD_POSITIONS: ReadonlyMap<string, "every" | readonly number[]> = new Map<
   string,
@@ -249,6 +249,8 @@ const FIELD_POSITIONS: ReadonlyMap<string, "every" | readonly number[]> = new Ma
     "addloadfields",
     "setcurrentkey",
     "setautocalcfields",
+    "loadfields",
+    "arefieldsloaded",
   ].map((m) => [m, "every"] as const),
   ...[
     "setrange",
@@ -264,6 +266,7 @@ const FIELD_POSITIONS: ReadonlyMap<string, "every" | readonly number[]> = new Ma
     "getrangemin",
     "getrangemax",
     "modifyall",
+    "setascending",
   ].map((m) => [m, [1]] as const),
   // `R.CopyFilter(SourceField, DestRecord, DestField)`.
   ["copyfilter", [1, 3]],
