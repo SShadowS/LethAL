@@ -17,11 +17,13 @@ backend not ready: The deployed LethAL Control app reports version 1.0.0.9, olde
 1.0.0.10 this client requires — your control app predates this client.
 ```
 
-## Before building: the lockstep
+## Before building: the version rule
 
-`MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts` must **equal** `app.json`'s `version`. A
-test pins it (R28). If you bumped one, bump the other before compiling — a control app built ahead
-of the minimum passes; a minimum ahead of the app makes a freshly built app fail its own gate.
+`MIN_CONTROL_VERSION` in `packages/runner/src/harness.ts` must **never be ahead of** `app.json`'s
+`version`. A test pins that (R28): a minimum ahead of the app makes a freshly built app fail its own
+gate. It may lag behind only for an action the client treats as optional (R389's `DependentCount`:
+an older control app answers 404 and the client falls back). **Raise the minimum to app.json's
+version whenever a client path requires the new action and has no fallback.**
 
 Bump the version at all only when the wire surface changed in a way a client can depend on (a new
 action, a new field on the marker). It is `MIN_CONTROL_VERSION` that gates, deliberately, rather

@@ -13,7 +13,12 @@ import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
-import { closedWorldGuard } from "./closed-world";
+import {
+  ClosedWorldChangedError,
+  type ClosedWorldResult,
+  closedWorldGuard,
+  sameClosedWorld,
+} from "./closed-world";
 import {
   DependencyUnreadableError,
   dependencyFingerprint,
@@ -1602,6 +1607,8 @@ export async function runVerify(
   let published: PublishedTestApp | undefined;
   // R-425: set once, right after the coverage-mode-changed check; undefined means "not decided".
   let decided: ReachState | undefined;
+  // R389: the guard's closed answer the plan used, rechecked after execution.
+  let firstGuard: ClosedWorldResult | undefined;
   const header = () => ({
     verifySchemaVersion: VERIFY_SCHEMA_VERSION,
     ...(decided !== undefined ? { reachFilter: verifyReachFilterOf(decided) } : {}),
@@ -1679,7 +1686,11 @@ export async function runVerify(
       sourceTestDigestParts: store.testDigestParts(source.runId),
       testDir: args.testDir,
       dependencies: () => verifyDependencyFingerprint(backend, args.testDir, projectPath),
-      closedWorld: async () => (await closedWorldGuard(backend, args.testDir)).closedWorld,
+      closedWorld: async () => {
+        const g = await closedWorldGuard(backend, args.testDir);
+        if (g.closedWorld.public || g.closedWorld.internal) firstGuard = g;
+        return g.closedWorld;
+      },
       ...(args.maxNewTests !== undefined ? { maxNewTests: args.maxNewTests } : {}),
       // R-384: the filter state decides which cap check runs before the lease.
       coverage: coverageMode,
@@ -1859,6 +1870,16 @@ export async function runVerify(
         ...(narrow !== undefined ? { narrow } : {}),
         probe,
       });
+    }
+    // R389 (sol's review): the plan read tests as unchanged under a point-in-time answer. Asked
+    // again after execution; any other answer voids the plan, loudly.
+    if (firstGuard !== undefined) {
+      const again = await closedWorldGuard(backend, args.testDir);
+      if (!sameClosedWorld(firstGuard, again)) {
+        throw new ClosedWorldChangedError(
+          `verify planned with the closed-world guard answering "${firstGuard.why}", but after execution it answered "${again.why}"; tests it read as unchanged may not be. Run lethal verify again.`,
+        );
+      }
     }
 
     // Decision 11: every new test's two unmutated runs, from this call's own answers.

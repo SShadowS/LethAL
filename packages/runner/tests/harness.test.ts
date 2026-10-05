@@ -381,7 +381,8 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
    *
    * R389: app.json MAY be ahead of the minimum. 1.0.0.21 adds `DependentCount`, an action the
    * client treats as optional (an older control app means "fall back"), so the minimum stays at
-   * 1.0.0.20 and no gate waits for the republish. The hazard is only the other direction.
+   * 1.0.0.20 and no gate waits for the republish. The hazard is only the other direction. The
+   * minimum MUST be raised when a client path requires a new control action and has no fallback.
    */
   test("MIN_CONTROL_VERSION is not ahead of extensions/lethal-control/app.json's version", async () => {
     const appJsonPath = fileURLToPath(

@@ -640,39 +640,59 @@ describe("runSession", () => {
         e.type === "warning" && e.code === "test-digests-unavailable" ? [e.message] : [],
       );
       const guardWarning = events.flatMap((e) =>
-        e.type === "warning" && e.code === "closed-world-unmeasured" ? [e.message] : [],
+        e.type === "warning" &&
+        (e.code === "closed-world-unmeasured" || e.code === "closed-world-changed")
+          ? [`${e.code}: ${e.message}`]
+          : [],
       );
-      return { dirs, store, runId, digestWarning, guardWarning };
+      const recordedHash = (
+        store.db.query("SELECT test_app_hash AS h FROM runs WHERE id = ?").get(runId) as {
+          h: string | null;
+        }
+      ).h;
+      const snapshotHashes = (
+        store.db
+          .query("SELECT test_app_hash AS h FROM baseline_snapshots WHERE run_id = ?")
+          .all(runId) as { h: string }[]
+      ).map((r) => r.h);
+      return { dirs, store, runId, digestWarning, guardWarning, recordedHash, snapshotHashes };
     }
 
-    // R389 guard: the run asks the backend once, by the test app's id, and records the answer in
-    // every digest and in the parts; a failing ask falls back with a warning.
+    // R389 guard: the run asks the backend by the PUBLISHED package's id (APP_ID in OLD_PKG's
+    // manifest), before execution and again after it, and records the answer in every digest, in
+    // the parts and in the run's test-app identity; a failing ask falls back with a warning.
     test("R389: the run records the closed-world guard; an erroring ask falls back with a warning", async () => {
-      const TEST_ID = "22222222-2222-2222-2222-222222222222";
       const asked: string[] = [];
       const closed = await r372Run(
         OLD_PKG,
         {},
         true,
         fakeMicrosoftMode(),
-        { ...TESTS_APP, id: TEST_ID },
+        { ...TESTS_APP, id: APP_ID },
         async (id) => {
           asked.push(id);
           return 0;
         },
       );
-      expect(asked).toEqual([TEST_ID]);
+      expect(asked).toEqual([APP_ID, APP_ID]); // before and after execution
       const inputs = await inputsFor(closed.dirs, OLD_PKG);
+      // OLD_PKG's manifest carries no InternalsVisibleTo element at all: unknown, so internal
+      // procedures stay open and only public ones are closed-world.
       expect(closed.store.testDigests(closed.runId)).toEqual(
         testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], {
           ...inputs,
-          closedWorld: { public: true, internal: true },
+          closedWorld: { public: true, internal: false },
         }),
       );
       expect(
         (closed.store.testDigestParts(closed.runId) as { closedWorld?: unknown }).closedWorld,
-      ).toBe("public+internal");
+      ).toBe("public");
       expect(closed.guardWarning).toEqual([]);
+      // Sol's review, critical 2: the answer is bound into the identity resume, survivor skips and
+      // baseline reuse compare.
+      expect(closed.recordedHash).toMatch(/\|closed-world:public$/);
+      expect(closed.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of closed.snapshotHashes) expect(h).toMatch(/\|closed-world:public$/);
       closed.store.close();
 
       const failed = await r372Run(
@@ -680,11 +700,12 @@ describe("runSession", () => {
         {},
         true,
         fakeMicrosoftMode(),
-        { ...TESTS_APP, id: TEST_ID },
+        { ...TESTS_APP, id: APP_ID },
         async () => {
           throw new Error("boom");
         },
       );
+      expect(failed.recordedHash).not.toContain("closed-world");
       expect(failed.store.testDigests(failed.runId)).toEqual(
         testDigestsOfSources([{ path: "old.al", text: TEST_AL }], [K], inputs),
       );
@@ -694,6 +715,93 @@ describe("runSession", () => {
       expect(failed.guardWarning).toHaveLength(1);
       expect(failed.guardWarning[0]).toContain("boom");
       failed.store.close();
+    });
+
+    // Sol's review, critical 1: the server runs (and the run digests) the published package, whose
+    // manifest names APP_ID; the disk app.json names another app with no dependents.
+    test("R389: a disk app.json naming another app than the published package stays open-world and asks nothing", async () => {
+      const asked: string[] = [];
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: "22222222-2222-2222-2222-222222222222" },
+        async (id) => {
+          asked.push(id);
+          return 0;
+        },
+      );
+      expect(asked).toEqual([]);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).not.toContain("closed-world");
+      expect(r.guardWarning.join()).toContain("22222222-2222-2222-2222-222222222222");
+      r.store.close();
+    });
+
+    // Sol's review, critical 3: 0 before execution, 1 after (a dependent published mid-run).
+    test("R389: a guard answer that changes during the run keeps open-world digests and revokes the run's identity", async () => {
+      let n = 0;
+      const r = await r372Run(
+        OLD_PKG,
+        {},
+        true,
+        fakeMicrosoftMode(),
+        { ...TESTS_APP, id: APP_ID },
+        async () => (n++ === 0 ? 0 : 1),
+      );
+      expect(n).toBe(2);
+      expect(r.store.testDigests(r.runId)).toEqual(
+        testDigestsOfSources(
+          [{ path: "old.al", text: TEST_AL }],
+          [K],
+          await inputsFor(r.dirs, OLD_PKG),
+        ),
+      );
+      expect(r.recordedHash).toMatch(/\|closed-world:revoked$/);
+      expect(r.snapshotHashes.length).toBeGreaterThan(0);
+      for (const h of r.snapshotHashes) expect(h).toMatch(/\|closed-world:revoked$/);
+      expect(r.guardWarning.some((w) => w.startsWith("closed-world-changed"))).toBe(true);
+      r.store.close();
+    });
+
+    // Sol's review, critical 2: a dependent published between a run and its resume. The package
+    // bytes are unchanged, so only the guard's answer differs; the resume must carry nothing.
+    test("R389: --resume-run across a guard flip is refused (R247's refusal); the same answer resumes", async () => {
+      for (const later of [1, 0]) {
+        const first = await r372Run(
+          OLD_PKG,
+          {},
+          true,
+          fakeMicrosoftMode(),
+          { ...TESTS_APP, id: APP_ID },
+          async () => 0,
+        );
+        const backend = Object.assign(
+          new StubBackend(CAPS_NST, (m) => (m === null ? "pass" : "fail"), ["IsOverBudget"]),
+          {
+            fetchPublishedAppPackage: async () => OLD_PKG,
+            microsoftMode: () => fakeMicrosoftMode(),
+            dependentCount: async () => later,
+          },
+        );
+        const resumed = runSession({
+          backend,
+          store: first.store,
+          ...first.dirs,
+          selectorIds,
+          resume: first.runId,
+        });
+        if (later === 1) await expect(resumed).rejects.toThrow(/closed-world:public.*R247/s);
+        else expect((await resumed).resumedFrom?.runId).toBe(first.runId);
+        first.store.close();
+      }
     });
 
     test("the recorded digest is the published OLD body's, and verify then reads K as new", async () => {

@@ -734,6 +734,30 @@ export class ResultsStore {
     return r.id;
   }
 
+  /** R389: replaces the run's open-world test digests with the closed-world ones, once the guard
+   *  gave the same closed answer after execution as before it. */
+  setTestDigests(runId: number, digests: Readonly<Record<string, string>>, parts: unknown): void {
+    const changed = this.db
+      .query("UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ?")
+      .run(JSON.stringify(digests), JSON.stringify(parts), runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setTestDigests: no run ${runId}`);
+  }
+
+  /** R389: the guard's answer changed during the run. Its test-app identity, and that of every
+   *  baseline snapshot it recorded, gets `suffix`, so no later session carries or reuses from it. */
+  revokeTestAppHash(runId: number, suffix: string): void {
+    const changed = this.db
+      .query(
+        "UPDATE runs SET test_app_hash = test_app_hash || ? WHERE id = ? AND test_app_hash IS NOT NULL",
+      )
+      .run(suffix, runId).changes;
+    if (changed !== 1)
+      throw new Error(`store.ts: revokeTestAppHash: run ${runId} has no test app hash`);
+    this.db
+      .query("UPDATE baseline_snapshots SET test_app_hash = test_app_hash || ? WHERE run_id = ?")
+      .run(suffix, runId);
+  }
+
   /** R391: records the run's `twin_tuples` once generation has numbered its sites. Called before
    *  any mutant row is written, so a run that dies before it holds no verdict and stays NULL. */
   setTwinTuples(runId: number, twinTuples: readonly string[]): void {

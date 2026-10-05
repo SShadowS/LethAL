@@ -457,7 +457,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   the whole-source digest: on DC that is every test. The answer is part of every digest, so a run
   and a verify that got different answers share no digest. `MIN_CONTROL_VERSION` stays 1.0.0.20.
   After the upgrade, the first run whose guard answers closed-world gives every test a new digest
-  (the answer is a line in each one), so the next verify re-runs every test once.
+  (the answer is a line in each one), so the next verify re-runs every test once. The guard asks
+  about the package actually digested (the published test app), asks again after execution and
+  keeps open-world digests unless the answer held, and is part of the run's test-app identity, so
+  `--resume`, `--skip-known-survivors` and baseline reuse carry nothing across a changed answer.
+  Verify fails with `ClosedWorldChangedError` when the answer changed while it ran.
 - **A carried verdict no longer lands on a statement whose procedure changed around it** (R474).
   When the source changed since the recorded run, `--resume` and `--skip-known-survivors` matched a
   mutant on its file and statement alone, so inserting `exit;` before an unchanged statement carried
