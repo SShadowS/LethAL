@@ -104,8 +104,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
-- **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 23**
-  (R446; 22 was R464). When a loop's condition reads no name and calls nothing
+- **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 25**
+  (R446; 24 was R475, 23 is unused, 22 was R464). When a loop's condition reads no name and calls nothing
   (`while true`, `until false`), the four value operators now also refuse a write that the guard
   of any of its body exits reads: `exit`, `Error(...)` outside `asserterror`,
   `CurrReport.Quit`/`Break`, or a `break` of that loop. Such a write could leave the loop with no
@@ -423,6 +423,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
+
+- **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 was held
+  for R-446, which landed as 25, and is unused). The run-wide twin numbering sorted files with `localeCompare`, the host's default
+  collation, while file discovery and the generation hash sort by code unit. A resume on a host
+  with another collation (Danish puts `Aa_…` after `Z_…`) could give a cross-file twin the other
+  twin's key under an equal source hash, so a recorded `killed` landed on a mutant that was never
+  measured: a false kill, reproduced in a unit test. Every identity comparator (twin numbering,
+  mutant codes, guard nesting order) now compares by code unit. Measured over 1.76M sites
+  (every fixture, CDO, BaseApp and its tests) under en, da, sv and upper-first collations: 0 keys
+  and 0 codes move. Marks files need `"identityScheme": 24`; no key changes on those corpora.
 
 - **`validate-to-assign` writes the record the call binds to** (R464). Its bare form synthesized a
   literal `Rec.`: inside `with R do begin Validate(Amount, 1); end;` in a table trigger or a page,

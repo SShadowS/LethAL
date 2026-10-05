@@ -30,7 +30,8 @@ Today it reads only the loop's CONDITION. Extend it:
   `conditionReadsMember`, `loopConditionReadsByName`. `shift-integer` keeps `loopConditionParts`
   for its own literal refusal. The header names the exclusions.
 - Refusals flow through the existing `refusesHangCapable`, so they are counted as hang-refused (R447).
-- `IDENTITY_SCHEME` 21 -> 23 (R-464 holds 22) in `packages/schemata/src/project.ts`.
+- `IDENTITY_SCHEME` 21 -> 23 (R-464 holds 22) in `packages/schemata/src/project.ts`. Landed as 25:
+  the merge of R475 (scheme 24) renumbered it, and 23 is unused.
 
 ## Measured diff (all operators, identity-keyed, complete dumps; re-measured on the build)
 - fixtures 17 (incl. `sandbox-hang`), examples 4, CDO 6 projects: identical.

@@ -484,9 +484,10 @@ describe("sessionFingerprint (R47)", () => {
   // section is globals); it was 44f5ea54...3e7a under scheme 18. It moved again for R459 (scheme
   // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19. It
   // moved again for R-464 (scheme 22, one implicit-record resolver); it was 6aab8fc7...be41 under
-  // scheme 21. It moved again for R446 (scheme 23, body-exit guards of a `while true` loop); it
-  // was 06081a49...f571 under scheme 22.
-  const PINNED = "385633143b4a3c73eff224c70ed8830810b849396953d8884b6e2cca035c5e19";
+  // scheme 21. It moved again for R475 (scheme 24, code-unit twin order); it was
+  // 06081a49...f571 under scheme 22. It moved again for R446 (scheme 25, body-exit guards of a
+  // `while true` loop); it was e2706d8f...97bd under scheme 24.
+  const PINNED = "98154689e1c9f4192a8dd0d29793ee93d418b9764e71a0dcb5d3ced6313f145c";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -1975,9 +1976,10 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
-    // Pinned by value so a bump is deliberate: 23 since R446 (body-exit guards of a `while true`
-    // loop); 22 was R-464 (one implicit-record resolver: page
-    // and TableNo `Rec`, dataitems and `with` subjects resolve); 21 was R459 (a two-argument
+    // Pinned by value so a bump is deliberate: 25 since R446 (body-exit guards of a `while true`
+    // loop); 24 was R475 (twins numbered in code-unit file order, not the host's collation; 23 is
+    // unused); 22 was R-464 (one implicit-record resolver: page and TableNo `Rec`, dataitems and
+    // `with` subjects resolve); 21 was R459 (a two-argument
     // Insert's Booleans are flipped; 20 is unused); 19 was R468 (every object-level var section is
     // globals); 18 was R-458 (hang refusal by name through `with` subjects and implicit records);
     // 17 was R254 (reportextensions instrumented); 16
@@ -1986,7 +1988,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
     // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
     // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
     // sites move twins).
-    expect(IDENTITY_SCHEME).toBe(23);
+    expect(IDENTITY_SCHEME).toBe(25);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 

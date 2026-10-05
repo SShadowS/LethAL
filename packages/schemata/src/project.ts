@@ -13,7 +13,7 @@ import {
 } from "@lethal/engine";
 import { type TierResolver, dedupeSpecs } from "./dedup";
 import type { ReachGrain } from "./dispatch-plan";
-import { type IdedSpec, assignMutantIds } from "./ids";
+import { type IdedSpec, assignMutantIds, compareCodeUnits } from "./ids";
 import { emitOneFile } from "./project-emit";
 import { type PlannedMutant, attributeHeader, objectHeadersOf, planOneFile } from "./project-plan";
 import {
@@ -174,11 +174,14 @@ export function coarseIdentityTupleOf(
  * a report dataitem and a `with` subject now resolve, so Tier 2 claims sites there (and the `true`
  * RunTrigger flips they held cede to `swap-modify-flag`), `validate-to-assign`'s bare form writes
  * the record the call binds to or is refused, and a later same-tuple twin of a removed mutant takes
- * its ordinal. 23: R446, in a loop whose condition reads no name and calls nothing (`while true`),
- * a write a body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant
- * takes its ordinal (BC.History: 16 keys).
+ * its ordinal. 23 was held for R-446 and is unused. 24: R475, twins are numbered in code-unit file
+ * order (was the host's default collation), so a cross-file twin pair whose paths order
+ * differently under the two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
+ * 25: R446, in a loop whose condition reads no name and calls nothing (`while true`), a write a
+ * body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant takes its
+ * ordinal (BC.History: 16 keys).
  */
-export const IDENTITY_SCHEME = 23;
+export const IDENTITY_SCHEME = 25;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
@@ -198,9 +201,9 @@ function identityOrdinalsOf(
 ): Map<MutantManifestEntry, number> {
   const order = [...entries].sort(
     (a, b) =>
-      a.file.localeCompare(b.file) ||
+      compareCodeUnits(a.file, b.file) ||
       a.startIndex - b.startIndex ||
-      a.mutantId.localeCompare(b.mutantId),
+      compareCodeUnits(a.mutantId, b.mutantId),
   );
   const next = new Map<string, number>();
   const ordinalOf = new Map<MutantManifestEntry, number>();
@@ -280,16 +283,19 @@ export function identityEntriesOf(
 
 /**
  * R374: number identity twins ONCE over every entry of the run, in source order: file, start,
- * then operator name, the order `assignMutantIds` gives the same specs (the sort is stable, so
- * two entries equal on all three keep their input order, as `assignMutantIds` keeps them).
+ * then operator name, the order `assignMutantIds` gives the same specs. Strings compare by code
+ * unit (R475), the order discovery and the generation hash use, never by the host's collation:
+ * otherwise a resume on another host could swap two twins' ordinals under an equal hash. The sort
+ * is stable, so two entries equal on all three keep their input order, as `assignMutantIds` keeps
+ * them.
  * Reserved entries (R-307) take a number like any other. Two entries on one key are refused.
  */
 export function numberIdentityOrdinals(entries: readonly IdentityEntry[]): Map<string, number> {
   const order = [...entries].sort(
     (a, b) =>
-      a.file.localeCompare(b.file) ||
+      compareCodeUnits(a.file, b.file) ||
       a.startIndex - b.startIndex ||
-      a.operatorName.localeCompare(b.operatorName),
+      compareCodeUnits(a.operatorName, b.operatorName),
   );
   const next = new Map<string, number>();
   const out = new Map<string, number>();

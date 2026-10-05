@@ -65,7 +65,7 @@ describe("R254: admitting a reportextension moves a same-named twin's key", () =
   test("the codeunit's return-value mutant takes ordinal 1 (it was 0 while the extension was skipped)", () => {
     expect(ordinal).toBe(1);
   });
-  test("so the identity scheme is 23 (17 for R254, 18 R-458, 19 R468, 20 unused, 21 R459, 22 R-464, 23 R446)", () => {
-    expect(IDENTITY_SCHEME).toBe(23);
+  test("so the identity scheme is 25 (17 for R254, 18 R-458, 19 R468, 20 and 23 unused, 21 R459, 22 R-464, 24 R475, 25 R446)", () => {
+    expect(IDENTITY_SCHEME).toBe(25);
   });
 });
