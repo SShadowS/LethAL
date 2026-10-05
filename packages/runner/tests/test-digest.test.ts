@@ -336,15 +336,19 @@ codeunit 50120 "Sub"
     expect(digestA(unrelated(files))).not.toBe(digestA(files));
   });
 
-  test("EXTERNAL needs one plain name: a codeunit by id or namespace-qualified takes the fallback", () => {
-    for (const type of ["Codeunit 50999", 'Codeunit My.Ns."Dep Lib"']) {
-      const files = base(
+  // R-389 option (a): a namespace-qualified name is read (its last segment is checked against the
+  // test app's objects, as every resolver does); an id still is not.
+  test("EXTERNAL needs a name: a codeunit by id takes the fallback, a namespace-qualified one does not", () => {
+    const files = (type: string) =>
+      base(
         T(
           `    procedure A()\n    var\n        L: ${type};\n    begin\n        L.Foo();\n    end;\n`,
         ),
       );
-      expect(digestA(unrelated(files))).not.toBe(digestA(files));
-    }
+    const byId = files("Codeunit 50999");
+    expect(digestA(unrelated(byId))).not.toBe(digestA(byId));
+    const qualified = files('Codeunit My.Ns."Dep Lib"');
+    expect(digestA(unrelated(qualified))).toBe(digestA(qualified));
   });
 
   test("negative: a classified EXTERNAL edge (a plain name the test app does not declare) takes no fallback", () => {
@@ -478,12 +482,14 @@ codeunit 50120 "Sub"
       const was = digestA(files);
       expect(digestA(mockEdit(files))).not.toBe(was);
       expect(digestA(unrelated(files))).toBe(was);
-      // An implementation the test app does not declare, by one plain name, is EXTERNAL; by a
-      // namespace-qualified name it cannot be checked, so every test falls back.
+      // An implementation the test app does not declare, by one plain name or (R-389 option a) a
+      // namespace-qualified one, is EXTERNAL; by an id it cannot be checked, so every test falls back.
       const dep = edit(files, "X.al", '= "Mock";', '= "Dep Impl";');
       expect(onFallback(dep)).toBe(false);
       const qualified = edit(files, "X.al", '= "Mock";', '= My.Ns."Dep Impl";');
-      expect(onFallback(qualified)).toBe(true);
+      expect(onFallback(qualified)).toBe(false);
+      const byId = edit(files, "X.al", '= "Mock";', "= 50999;");
+      expect(onFallback(byId)).toBe(true);
     });
 
     test("item 4: a page part a pageextension adds to a dependency's page is in every digest", () => {
