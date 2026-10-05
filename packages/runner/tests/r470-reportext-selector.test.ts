@@ -152,6 +152,14 @@ describe("R470: a reportextension's selector is named after its own object id", 
       expect(receivers(out[name] ?? "").length).toBeGreaterThan(0);
   });
 
+  // The receivers checks below cover only calls that ARE present; this one requires the
+  // statement-grain reach markers in an extension, so a fix that dropped them could not pass.
+  test("an extension's reach markers call its own selector", () => {
+    const text = out["ExtA.ReportExt.al"] ?? "";
+    expect(text).toMatch(/MutationSelector50471\.Reached\('M\d+'\);/);
+    expect(text).not.toMatch(/\bMutationSelector\.Reached\(/);
+  });
+
   // Over-broad fix (rename every kind): the report and the codeunit go red.
   test("the report and the codeunit keep the bare MutationSelector", () => {
     for (const name of ["Base.Report.al", "Cu.Codeunit.al"]) {

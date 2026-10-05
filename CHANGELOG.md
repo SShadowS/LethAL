@@ -392,7 +392,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   Microsoft's Base Application (13 reportextensions, about 2,700 mutants in those files), none in
   CDO. A reportextension's selector is now named after its own object id
   (`MutationSelector<id>`, with a suffix if that name is already used in the file); every other
-  object kind is unchanged. No mutant, key or verdict moves. The instrumented text of
+  object kind is unchanged. No mutant or key moves, and the gates' verdicts are unchanged; a batch
+  that collided before stops ending as `error`. The instrumented text of
   reportextensions changes, so a project that has them re-measures its baseline once
   (the baseline key hashes the instrumented AL). al-runner had accepted the colliding project
   (R471).
