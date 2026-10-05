@@ -366,6 +366,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
+  environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
+  compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops
+  with `UnmutatedBuildFailedError` and alc's output, records no `error` rows for the batch, and
+  stays resumable. If it compiles, bisection runs as before. Compile-failure text now carries
+  BOTH alc streams, labelled `stdout:` and `stderr:`, so a stderr warning no longer hides a stdout
+  error; bisection notes and `TestAppError.detail` get longer accordingly.
+- **A test app replaced during the baseline is no longer reported as an older one** (R462). At a
+  stale-test-app refusal the published test app is hashed again and compared with the hash taken
+  before the baseline: a changed package throws the new `TestAppChangedError`; an unchanged one
+  throws `StaleTestAppError` (`cause: "unchanged-endpoints"`); a read that cannot be compared
+  throws `StaleTestAppError` (`cause: "identity-unverified"`), which says the app may be older or
+  may have been replaced.
 - **The loop-hang refusal now works inside an object wrapped whole in `#if`** (R-364, R343).
   The symbol table does not index such an object, so no variable there resolved and the four value
   operators deployed hang-capable mutants. Now, when a write's target does not resolve and its own
