@@ -435,6 +435,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A mutant's covering tests run in the same order on every host** (R481). The last tie between
+  two covering tests was broken by name with the host's default collation, which decides
+  `killingTest`, the kill position and, through a warm prefix, possibly the verdict. It now compares
+  names by code unit. Measured: no gate fixture's order changes.
 - **An equivalence mark no longer lands on a mutant nobody marked** (R443). A mark named its mutant
   by identity key alone, and a key holds no file: twins (the same statement in the same member and
   operator) are told apart by a run-wide number. So an edit that removed a twin, `--only`,

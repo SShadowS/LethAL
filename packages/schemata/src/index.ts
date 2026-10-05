@@ -1,4 +1,4 @@
-export { assignMutantIds } from "./ids";
+export { assignMutantIds, compareCodeUnits } from "./ids";
 export type { IdedSpec } from "./ids";
 export {
   emitMutationSelector,

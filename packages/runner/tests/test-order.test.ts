@@ -124,3 +124,43 @@ describe("orderCoveringTests (R197)", () => {
     expect(out[0]?.codeunitId).toBe(79200);
   });
 });
+
+// R481: the last tie is broken by CODE UNIT, never by the host's default collation, so two hosts
+// order one mutant's covering tests the same way (the order decides killingTest, killPosition and,
+// through a warm prefix, possibly the verdict).
+describe("orderCoveringTests: the name tie-break ignores the host collation (R481)", () => {
+  // The one pair on any gate fixture that collations order differently (sandbox-data-tests).
+  const weak = { ...t("NoTriggerValidateRunsWeak"), codeunitName: "Data Tests" };
+  const notBlank = { ...t("NotBlankFilterCountsOnlyTaggedRows"), codeunitName: "Data Tests" };
+  // A Danish-style pair: `Aa…` sorts after `Z…` under da-DK, before it by code unit.
+  const aa = t("Aa_First");
+  const z = t("Z_Last");
+
+  // The tie-break reads the QUALIFIED name, `codeunit.method`, so "Data Tests.…" sorts before
+  // "Sandbox Tests.…".
+  const CODE_UNIT_ORDER = [
+    "NoTriggerValidateRunsWeak",
+    "NotBlankFilterCountsOnlyTaggedRows",
+    "Aa_First",
+    "Z_Last",
+  ];
+
+  test("code-unit order: `NoT…` before `Not…`, `Aa…` before `Z…`", () => {
+    const out = orderCoveringTests([notBlank, weak, z, aa], mutant(), newKillLedger(), new Map());
+    expect(out.map((r) => r.method)).toEqual(CODE_UNIT_ORDER);
+  });
+
+  test("an injected host collation that reverses every comparison does not change the order", () => {
+    const original = String.prototype.localeCompare;
+    const reversed = function (this: string, that: string): number {
+      return -original.call(this, that);
+    };
+    String.prototype.localeCompare = reversed as typeof String.prototype.localeCompare;
+    try {
+      const out = orderCoveringTests([z, weak, aa, notBlank], mutant(), newKillLedger(), new Map());
+      expect(out.map((r) => r.method)).toEqual(CODE_UNIT_ORDER);
+    } finally {
+      String.prototype.localeCompare = original;
+    }
+  });
+});
