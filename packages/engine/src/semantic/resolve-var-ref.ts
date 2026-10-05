@@ -80,6 +80,10 @@ function isMemberName(node: ALSyntaxNode): boolean {
  * is the walk-up that already derives this key for either an object or an extension in one place
  * (used the same way by `types.ts`), so this reuses it rather than re-deriving the object/extension
  * branch a second time.
+ *
+ * IDENTITY CONTRACT (R209): never compare two results with `===` to ask "same declaration?". A
+ * trigger-local variable is rebuilt on every lookup, so two lookups of one declaration are `!==`.
+ * Use `sameDeclaration` (loop-hazard.ts: position plus name), which is correct for every scope.
  */
 export function resolveVarRef(node: ALSyntaxNode, ctx: SemanticContext): VarSymbol | null {
   if (isMemberName(node)) return null;

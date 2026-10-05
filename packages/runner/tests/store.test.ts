@@ -54,7 +54,7 @@ describe("ResultsStore", () => {
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], [])).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -86,7 +86,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys.size).toBe(0);
     store.close();
   });
 
@@ -110,7 +110,7 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
@@ -138,7 +138,7 @@ describe("ResultsStore", () => {
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
     store.close();
   });
 
@@ -489,7 +489,7 @@ describe("ResultsStore", () => {
     expect(
       store.priorSurvivorKeys("P", "procedure", "T", [], [], {
         coverageModeChanged: (i) => seen.push(i),
-      }).size,
+      }).keys.size,
     ).toBe(0);
     expect(seen).toEqual([{ runId: 1, coverageMode: null }]);
     const runId = store.createRun({
@@ -547,7 +547,7 @@ describe("ResultsStore", () => {
       const seen: unknown[] = [];
       const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], {
         testAppChanged: (i) => seen.push(i),
-      });
+      }).keys;
       expect(keys.size).toBe(0);
       expect(seen).toEqual([{ runId: 1, testAppHash: null }]);
     }
@@ -628,11 +628,11 @@ describe("ResultsStore", () => {
     });
     store.recordMutant(runId, mutantRow("survived"));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", [], []).size).toBe(1);
+    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", [], []).keys.size).toBe(1);
     const seen: unknown[] = [];
     const keys = store.priorSurvivorKeys("/p", "procedure", "package:b", [], [], {
       testAppChanged: (i) => seen.push(i),
-    });
+    }).keys;
     expect(keys.size).toBe(0);
     expect(seen).toEqual([{ runId, testAppHash: "package:a" }]);
     store.close();
@@ -761,7 +761,7 @@ CREATE TABLE IF NOT EXISTS mutants (
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p", "procedure", "T", [], [])).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -1215,7 +1215,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
     const aKeys = store.priorSurvivorKeys("P", "procedure", "T", [], []);
-    expect(aKeys.size).toBe(1);
+    expect(aKeys.keys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
       coverageMode: "procedure",

@@ -281,6 +281,10 @@ export interface VerifySource {
   /** R442: the source run's `carry_hidden`, copied verbatim onto verify's run row (NULL stays
    *  NULL): that row carries the source's keys, so it carries their trust too. */
   readonly carryHidden: CarryHidden | null;
+  /** R391: the source run's generation hash and `twin_tuples`, copied verbatim for the same
+   *  reason: verify's rows carry the source's keys and files. */
+  readonly generationSourceSha256: string | null;
+  readonly twinTuples: readonly string[] | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -605,6 +609,8 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     buildSymbols: run.buildSymbols,
     coverageMode: run.coverageMode,
     carryHidden: run.carryHidden,
+    generationSourceSha256: run.generationSourceSha256,
+    twinTuples: run.twinTuples,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -1768,6 +1774,9 @@ export async function runVerify(
         buildSymbols: source.buildSymbols,
         // R442: the rows carry the SOURCE run's keys, so they carry what it hid too.
         carryHidden: source.carryHidden,
+        // R391: and the source's generation facts, which say what those keys name.
+        generationSourceSha256: source.generationSourceSha256,
+        twinTuples: source.twinTuples,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The

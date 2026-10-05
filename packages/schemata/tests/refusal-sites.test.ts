@@ -162,6 +162,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
     "identityEntriesOf",
     "numberIdentityOrdinals",
     "runIdentityOrdinals",
+    "runIdentityEntries",
     "clipMutationText",
     "lineStartsOf",
     "lineOfIndex",

@@ -470,6 +470,8 @@ describe("assertSourceUnchanged", () => {
       buildSymbols: [],
       coverageMode: "procedure",
       carryHidden: null,
+      generationSourceSha256: null,
+      twinTuples: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
       rows: [],
     };
@@ -727,6 +729,8 @@ describe("planVerify", () => {
       buildSymbols: [],
       coverageMode: "procedure",
       carryHidden: null,
+      generationSourceSha256: null,
+      twinTuples: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
       rows: [],
     };
@@ -3480,7 +3484,7 @@ describe("C02-09: gap ids", () => {
           info.testAppHash,
           info.buildSymbols ?? [],
           info.carryHidden.files,
-        ).size,
+        ).keys.size,
       ).toBe(0);
       w.store.close();
     });

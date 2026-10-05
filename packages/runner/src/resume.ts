@@ -4,9 +4,13 @@ import type { CoverageMode } from "./backend";
 import type { LineRange } from "./line-filter";
 import {
   type CoverageAttribution,
+  type CurrentCarrySide,
+  type RecordedCarrySide,
+  carryRecord,
   identityKeyOf,
   isCarryDisabled,
   serializeKey,
+  twinSiteOf,
 } from "./selection";
 import type { MutantVerdict, MutantVerdictRow, RunnerKind } from "./store";
 
@@ -128,6 +132,15 @@ export interface CarriedVerdict {
 export interface ResumeIndex {
   /** Identity key (`serializeKey`) to the verdict that may be carried for it. */
   readonly carryable: ReadonlyMap<string, CarriedVerdict>;
+  /** R391: `twinSiteOf(file, tuple)` to the verdict that may be carried for it under rule 2. A
+   *  site with more than one row is left out, like a colliding key. */
+  readonly carryableBySite: ReadonlyMap<string, CarriedVerdict>;
+  /**
+   * R391: the two sides `carryRecord` decides on: the resumed run's generation hash and
+   * `twin_tuples`, and this session's. Set by `runSession` after generation; `carriedVerdictFor`
+   * throws without it, since no carry is safe before this session's twins are known.
+   */
+  readonly carryRule?: { readonly recorded: RecordedCarrySide; readonly current: CurrentCarrySide };
   /** Keys seen more than once in the prior run, and therefore NOT carryable — see below. */
   readonly ambiguousKeys: number;
   /** Rows whose verdict is not carryable (today: `error`), and which will be re-executed. */
@@ -175,24 +188,37 @@ export function buildResumeIndex(
   stopHungSessions = false,
 ): ResumeIndex {
   const seen = new Map<string, MutantVerdictRow[]>();
+  // R391: the same rows grouped by (file, tuple), for rule 2.
+  const bySite = new Map<string, MutantVerdictRow[]>();
   for (const r of rows) {
     // R166: a row recorded before `procedure_name` existed reads back null. Skip it rather than
     // keying it as `""`, which is a REAL value for an object-level mutant: coercing would carry a
     // pre-R166 verdict onto a genuine object-level mutant of the same subtree. The mutant is simply
     // re-run, which is the cheap direction.
     if (r.procedureName === null) continue;
-    const key = serializeKey({
+    const identity = {
       astHash: r.astHash,
       codeunitName: r.codeunitName,
       procedureName: r.procedureName,
       operatorName: r.operatorName,
       operatorMajor: r.operatorMajor,
       ordinal: r.identityOrdinal,
-    });
+    };
+    const key = serializeKey(identity);
     const bucket = seen.get(key);
     if (bucket === undefined) seen.set(key, [r]);
     else bucket.push(r);
+    // The tuple is the key without its ordinal (`serializeKey` adds it only above 0).
+    const site = twinSiteOf(r.file, serializeKey({ ...identity, ordinal: 0 }));
+    const siteBucket = bySite.get(site);
+    if (siteBucket === undefined) bySite.set(site, [r]);
+    else siteBucket.push(r);
   }
+
+  // R53: a `timeout-killed` is only obtainable by stopping a session. A run forbidden to do that
+  // must re-measure rather than inherit one — counted, never silent, like every other drop here.
+  const carryableRow = (row: MutantVerdictRow): boolean =>
+    CARRYABLE_VERDICTS.has(row.verdict) && (row.verdict !== "timeout-killed" || stopHungSessions);
 
   const carryable = new Map<string, CarriedVerdict>();
   const strandedKeys = new Set<string>();
@@ -210,34 +236,38 @@ export function buildResumeIndex(
     }
     const [row] = bucket;
     if (row === undefined) continue; // unreachable: bucket.length === 1
-    if (!CARRYABLE_VERDICTS.has(row.verdict)) {
+    if (!carryableRow(row)) {
       nonCarryableRows += 1;
       continue;
     }
-    // R53: a `timeout-killed` is only obtainable by stopping a session. A run forbidden to do that
-    // must re-measure rather than inherit one — counted, never silent, like every other drop here.
-    if (row.verdict === "timeout-killed" && !stopHungSessions) {
-      nonCarryableRows += 1;
-      continue;
-    }
-    carryable.set(key, {
-      verdict: row.verdict,
-      durationMs: row.durationMs,
-      ...(row.killingTest !== undefined ? { killingTest: row.killingTest } : {}),
-      ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
-      ...(row.killingTestFailure !== undefined
-        ? { killingTestFailure: row.killingTestFailure }
-        : {}),
-      ...(row.killPosition !== undefined ? { killPosition: row.killPosition } : {}),
-      ...(row.runner !== undefined ? { runner: row.runner } : {}),
-      ...(row.coveringTests !== undefined ? { coveringTests: row.coveringTests } : {}),
-      ...(row.coverageAttribution !== undefined
-        ? { coverageAttribution: row.coverageAttribution }
-        : {}),
-      ...(row.unplaceable !== undefined ? { unplaceable: row.unplaceable } : {}),
-    });
+    carryable.set(key, carriedOf(row));
   }
-  return { carryable, ambiguousKeys, nonCarryableRows, strandedKeys };
+  const carryableBySite = new Map<string, CarriedVerdict>();
+  for (const [site, bucket] of bySite) {
+    const [row] = bucket;
+    if (bucket.length === 1 && row !== undefined && carryableRow(row)) {
+      carryableBySite.set(site, carriedOf(row));
+    }
+  }
+  return { carryable, carryableBySite, ambiguousKeys, nonCarryableRows, strandedKeys };
+}
+
+/** The verdict and facts a carry records for `row`. */
+function carriedOf(row: MutantVerdictRow): CarriedVerdict {
+  return {
+    verdict: row.verdict,
+    durationMs: row.durationMs,
+    ...(row.killingTest !== undefined ? { killingTest: row.killingTest } : {}),
+    ...(row.failureNote !== undefined ? { failureNote: row.failureNote } : {}),
+    ...(row.killingTestFailure !== undefined ? { killingTestFailure: row.killingTestFailure } : {}),
+    ...(row.killPosition !== undefined ? { killPosition: row.killPosition } : {}),
+    ...(row.runner !== undefined ? { runner: row.runner } : {}),
+    ...(row.coveringTests !== undefined ? { coveringTests: row.coveringTests } : {}),
+    ...(row.coverageAttribution !== undefined
+      ? { coverageAttribution: row.coverageAttribution }
+      : {}),
+    ...(row.unplaceable !== undefined ? { unplaceable: row.unplaceable } : {}),
+  };
 }
 
 /**
@@ -285,6 +315,8 @@ export function wasStranded(index: ResumeIndex, m: MutantManifestEntry): boolean
  * A mutant whose source changed since the prior run has a different `astHash` and therefore a
  * different key, so it simply misses — a stale verdict can never attach to edited code. That is
  * the property that makes resume safe against a working tree that moved underneath it.
+ * R391: an edit elsewhere can still renumber a twin onto another mutant's key, so the record is
+ * found through `carryRecord` (rule 1 by key, rule 2 by (file, tuple), else none).
  * One exception (R318): a `no-coverage` never carries onto a mutant with `coverageArmNames`.
  */
 export function carriedVerdictFor(
@@ -292,7 +324,19 @@ export function carriedVerdictFor(
   m: MutantManifestEntry,
 ): CarriedVerdict | undefined {
   if (isCarryDisabled(m, index.carryDisabled)) return undefined;
-  const carried = index.carryable.get(serializeKey(identityKeyOf(m)));
+  const rule = index.carryRule;
+  if (rule === undefined) {
+    throw new Error(
+      `carriedVerdictFor: ${m.mutantId}: the resume index has no carry rule (R391), so it cannot tell whether a recorded key still names this mutant — caller-contract violation`,
+    );
+  }
+  const carried = carryRecord(
+    m,
+    rule.recorded,
+    rule.current,
+    (key) => index.carryable.get(key),
+    (site) => index.carryableBySite.get(site),
+  );
   // R318: a renamed split member's key did not move when R318 gave it coverage, so a
   // `no-coverage` recorded before R318 (when nothing could attribute coverage to it) would carry.
   // Re-scoring it costs one execution; carrying it keeps a verdict that was never a measurement.
@@ -462,16 +506,16 @@ export function withoutRefusedTests(
   if (refused.length === 0) return { index, dropped: 0 };
   const names = new Set(refused.map((r) => r.qualifiedName));
   const methods = new Set(refused.map((r) => r.method));
-  const carryable = new Map<string, CarriedVerdict>();
-  for (const [key, v] of index.carryable) {
-    const tookPart =
-      v.coveringTests !== undefined
-        ? v.coveringTests.some((t) => names.has(t))
-        : v.killingTest !== undefined && methods.has(v.killingTest);
-    if (!tookPart) carryable.set(key, v);
-  }
+  const tookPart = (v: CarriedVerdict) =>
+    v.coveringTests !== undefined
+      ? v.coveringTests.some((t) => names.has(t))
+      : v.killingTest !== undefined && methods.has(v.killingTest);
+  const kept = (m: ReadonlyMap<string, CarriedVerdict>) =>
+    new Map([...m].filter(([, v]) => !tookPart(v)));
+  const carryable = kept(index.carryable);
   return {
-    index: { ...index, carryable },
+    // R391: the rule-2 lookup holds the same verdicts and drops them alike.
+    index: { ...index, carryable, carryableBySite: kept(index.carryableBySite) },
     dropped: index.carryable.size - carryable.size,
   };
 }

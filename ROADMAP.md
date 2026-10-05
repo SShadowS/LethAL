@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 473 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 474 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -80,7 +80,7 @@ that ordering is the priority.
 - **R191** · A test that stalls AFTER BC has sent the RunMutant response headers is outside every LethAL timer: the budget, the R53 stop hook and the hard cap all end when `fetch` resolves, and the body read runs until the runtime gives up, then quarantines · [R191.md](docs/roadmap/R191.md) · done (`run-mutant-transport.ts`, `settleTimers` / `abortedVerdict`) — 2026-09-02, same day. One abort…
 - **R193** · The identity key still collides INSIDE a procedure, and every collision costs twice: a colliding key is re-executed on every `--resume`, and a stranded mutant's key excludes every twin it has · [R193.md](docs/roadmap/R193.md) · done (`MutantManifestEntry.identityOrdinal`, `assignIdentityOrdinals`, `IdentityKey.ordinal`) — 2026-09-02…
 - **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · done (88de04e4)
-- **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · open, filed 2026-09-06 while building [[R196]]'s `classifyHangCapable`, which needed to compare two resolved…
+- **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · closed 2026-10-05 — no caller compares a VarSymbol by reference (audited); option (b): the identity caveat is…
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
@@ -94,7 +94,7 @@ that ordering is the priority.
 - **R230** · A TWIN mutant after the first cannot be reader-marked: `parseEquivalenceMarks` requires 5 key fields, and `serializeKey` writes 6 for an ordinal above 0 · [R230.md](docs/roadmap/R230.md) · done (d00ce37f)
 - **R231** · Report lists that name mutants by `mutantCode` alone are ambiguous on a multi-batch run: ids restart at M0001 in every batch · [R231.md](docs/roadmap/R231.md) · done (4688a987..eab34a51)
 - **R232** · `afterLeaseAcquired` runs BEFORE the lease's `try`, so a test-app publish that throws leaves the lease held for its full ttl · [R232.md](docs/roadmap/R232.md) · done (e431fdb)
-- **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · open
+- **R234** · An operator that STOPS emitting a twin shifts later twins' identity ordinals, so `--resume` across that build change can carry one mutant's verdict onto another · [R234.md](docs/roadmap/R234.md) · closed 2026-10-05 — ruling: covered by R325's IDENTITY_SCHEME bump discipline; reopen on a measured carry
 - **R240** · A target publish that latched the session while `publish()` returned normally is still recorded as an ACCEPTED publish in the publish-size history, and with `--resume` one unguarded package read can run first · [R240.md](docs/roadmap/R240.md) · done (8599054b)
 - **R238** · A session that THROWS after recording a recycle still deletes its created environment, because teardown reads `quarantined` from a report that does not exist · [R238.md](docs/roadmap/R238.md) · done (273358c4)
 - **R247** · `--resume` carries verdicts measured against a test app that has since been republished: the resume fingerprint names the test directory, not the test app's content · [R247.md](docs/roadmap/R247.md) · done (bc9d4cbc, ba6a346a)
@@ -156,7 +156,7 @@ that ordering is the priority.
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
 - **R389** · lethal verify cannot see an edit to a test-app codeunit that external code runs through a Variant or interface the test passed it · [R389.md](docs/roadmap/R389.md) · open, filed 2026-10-01
 - **R390** · R-371's reachable-set walk misses a test-app codeunit whose id the test reads from the platform (an AllObj loop); one item for shapes found after the build · [R390.md](docs/roadmap/R390.md) · open, filed 2026-10-01
-- **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · open, filed 2026-10-01
+- **R391** · An identity key carries no file or namespace, so removing a site in one file can renumber a twin in another, and --skip-known-survivors then reads the wrong verdict · [R391.md](docs/roadmap/R391.md) · done (baaf290b)
 - **R402** · The hang tag misses a loop-condition operand that sits inside an ACTIVE #if · [R402.md](docs/roadmap/R402.md) · done (65e5cad2)
 - **R403** · Test-app readers (testpage-scan, discovery, test-digest) read every #if arm: the test app's own build symbols are not modelled · [R403.md](docs/roadmap/R403.md) · open, filed 2026-10-02
 - **R404** · line-map member spans: two whole-member #if arms that declare the same name in one object are both spanned · [R404.md](docs/roadmap/R404.md) · closed 2026-10-02: measured on al-runner and bcdev, all 36 pre-committed verdicts matched; same-name…
@@ -192,6 +192,7 @@ that ordering is the priority.
 - **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · closed 2026-10-05 — measured: BC collides on a preserved SystemId, but the colliding false->true flip has 0…
 - **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · done (3fffd472)
 - **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
+- **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · open
 - **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · open
 
 ## Product gaps a real project hits
