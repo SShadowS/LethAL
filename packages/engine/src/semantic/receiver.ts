@@ -759,8 +759,12 @@ function declaresName(text: string, name: string): boolean {
     " ".repeat(m.length),
   );
   const esc = escapeRegExp(name);
-  const id = `(?:"[^"\\n]*"|[A-Za-z_]\\w*)`;
-  return new RegExp(`(^|[^\\w".])("${esc}"|${esc})(\\s*,\\s*${id})*\\s*:(?![=:])`, "i").test(code);
+  // Unicode letters (`u`): an ASCII-only class stopped a list at a name like `Beløb`.
+  const id = `(?:"[^"\\n]*"|[\\p{L}_][\\p{L}\\p{N}_]*)`;
+  return new RegExp(
+    `(^|[^\\p{L}\\p{N}_".])("${esc}"|${esc})(\\s*,\\s*${id})*\\s*:(?![=:])`,
+    "iu",
+  ).test(code);
 }
 
 /**
@@ -1084,7 +1088,7 @@ function identifierTokens(text: string): ReadonlySet<string> {
   // R-464: the engine's lexer, so a `//` inside a string no longer hides the rest of the line.
   const code = maskAlNonCode(text, { blankStringContents: false });
   const out = new Set<string>();
-  for (const m of code.matchAll(/"([^"\n]*)"|[A-Za-z_][A-Za-z0-9_]*/g))
+  for (const m of code.matchAll(/"([^"\n]*)"|[\p{L}_][\p{L}\p{N}_]*/gu))
     out.add((m[1] ?? m[0]).toLowerCase());
   return out;
 }

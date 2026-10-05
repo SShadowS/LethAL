@@ -565,6 +565,31 @@ describe("R-464 prefix proof: the spelled receiver must BIND the call's record",
     ]);
   });
 
+  it("10e. a declaration list whose later name is non-ASCII still names Rec: no spec", () => {
+    // Final review minor 1: an ASCII-only identifier class stopped the list at `Beløb`.
+    const t9 = `table 50157 T9
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Amount; Integer) { }
+    }
+    procedure P()
+    begin
+        Validate(Amount, 7);
+    end;
+#if CLEAN
+    var
+        Rec, Beløb: Record U;
+#endif
+}`;
+    const control = t9.replace("Rec, Beløb", "Beløb");
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": t9 }, false)).toEqual([]);
+    expect(emitted(validateToAssign, { "U.al": U, "O.al": control }, false)).toEqual([
+      "Validate(Amount, 7) => Rec.Amount := 7 [-]",
+    ]);
+  });
+
   it("10d. a table procedure named like the with subject: no spec", () => {
     const w5 = `table 50152 W5
 {
