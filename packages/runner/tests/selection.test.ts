@@ -57,14 +57,24 @@ describe("identityKeyOf", () => {
 
 describe("filterHistory", () => {
   const survivorKey = serializeKey(identityKeyOf(entry()));
+  // R391: rule 1 (the recorded run had this session's source), so a key match carries.
+  const prior = {
+    keys: new Set([survivorKey]),
+    sites: new Set<string>(),
+    recorded: { hash: "same", twins: null },
+  };
+  const current = () => ({ hash: "same", twins: new Set<string>(), refused: new Set<string>() });
   test("default: everything executes", () => {
-    const s = filterHistory([entry()], new Set([survivorKey]), { skipKnownSurvivors: false });
+    const s = filterHistory([entry()], prior, { skipKnownSurvivors: false, current: current() });
     expect(s.execute.length).toBe(1);
     expect(s.knownSurvivors.length).toBe(0);
   });
   test("skipKnownSurvivors demotes matching keys", () => {
     const fresh = entry({ mutantId: "M0002", astHash: "zzz999" });
-    const s = filterHistory([entry(), fresh], new Set([survivorKey]), { skipKnownSurvivors: true });
+    const s = filterHistory([entry(), fresh], prior, {
+      skipKnownSurvivors: true,
+      current: current(),
+    });
     expect(s.execute).toEqual([fresh]);
     expect(s.knownSurvivors.length).toBe(1);
   });

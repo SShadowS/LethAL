@@ -8,6 +8,7 @@ import {
   type MutantManifest,
   type MutantManifestEntry,
   coarseIdentityTupleOf,
+  identityTupleOf,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
@@ -28,8 +29,8 @@ import {
   runSession,
 } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
-import { buildResumeIndex, carriedVerdictFor, wasStranded } from "../src/resume";
-import { identityKeyOf, serializeKey } from "../src/selection";
+import { type ResumeIndex, buildResumeIndex, carriedVerdictFor, wasStranded } from "../src/resume";
+import { identityKeyOf, serializeKey, twinSiteOf } from "../src/selection";
 import type { MutantVerdict, MutantVerdictRow } from "../src/store";
 import { ResultsStore } from "../src/store";
 
@@ -163,9 +164,18 @@ function verdictRow(m: MutantManifestEntry, verdict: MutantVerdict): MutantVerdi
     procedureName: k.procedureName,
     operatorName: k.operatorName,
     operatorMajor: k.operatorMajor,
+    file: m.file,
     identityOrdinal: k.ordinal,
     verdict,
     durationMs: 1,
+  };
+}
+
+/** R391: a carry rule under which the recorded run had the same source (rule 1: by key). */
+function sameSourceRule(): NonNullable<ResumeIndex["carryRule"]> {
+  return {
+    recorded: { hash: "same", twins: null },
+    current: { hash: "same", twins: new Set(), refused: new Set() },
   };
 }
 
@@ -207,11 +217,23 @@ describe("R307 T6 (a): an exact refusal reserves its sites, so the twins keep th
       `${CODEUNIT_FILE} @7 ordinal 1 has run-1 key of ${CODEUNIT_FILE} @7`,
       `${CODEUNIT_FILE} @8 ordinal 2 has run-1 key of ${CODEUNIT_FILE} @8`,
     ]);
-    // And the resume index carries only each one's own run-1 verdict.
-    expect(run2.map((m) => `${label(m)} ${carriedVerdictFor(index, m)?.verdict}`)).toEqual([
+    // And a key lookup (rule 1) finds only each one's own run-1 verdict.
+    const byKey = { ...index, carryRule: sameSourceRule() };
+    expect(run2.map((m) => `${label(m)} ${carriedVerdictFor(byKey, m)?.verdict}`)).toEqual([
       `${CODEUNIT_FILE} @7 killed`,
       `${CODEUNIT_FILE} @8 no-coverage`,
     ]);
+    // R391: the source DID change, and the two are twins in their file on both sides, so the real
+    // rule carries neither: they run.
+    const twins = new Set(run2.map((m) => twinSiteOf(m.file, identityTupleOf(m))));
+    const edited = {
+      ...index,
+      carryRule: {
+        recorded: { hash: "run1", twins },
+        current: { hash: "run2", twins, refused: new Set<string>() },
+      },
+    };
+    expect(run2.map((m) => carriedVerdictFor(edited, m))).toEqual([undefined, undefined]);
   });
 });
 
@@ -223,6 +245,8 @@ describe("R307 T6 (b), unit: a disabled carry keeps the stranded skip", () => {
     if (m === undefined) throw new Error("expected a remove-assignment mutant");
     const index = {
       carryable: new Map(),
+      carryableBySite: new Map(),
+      carryRule: sameSourceRule(),
       ambiguousKeys: 0,
       nonCarryableRows: 0,
       strandedKeys: new Set([keyOfEntry(m)]),

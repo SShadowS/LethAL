@@ -308,11 +308,21 @@ export function runIdentityOrdinals(
   operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
   reserved: readonly IdentityEntry[] = [],
 ): Map<string, number> {
+  return numberIdentityOrdinals(runIdentityEntries(files, operatorTiers, reserved));
+}
+
+/** R391: the entries `runIdentityOrdinals` numbers, so a run can also record which tuples are
+ *  twins within one file from exactly the set its ordinals were numbered over. */
+export function runIdentityEntries(
+  files: readonly InstrumentedFile[],
+  operatorTiers: ReadonlyMap<string, 1 | 2 | 3 | "custom">,
+  reserved: readonly IdentityEntry[] = [],
+): IdentityEntry[] {
   const tierOf: TierResolver = (name) => operatorTiers.get(name);
-  return numberIdentityOrdinals([
+  return [
     ...files.flatMap((f) => identityEntriesOf(f.path, f.source, dedupeSpecs(f.specs, tierOf))),
     ...reserved,
-  ]);
+  ];
 }
 
 export interface MutantManifestEntry {
