@@ -463,6 +463,11 @@ least one **survived** mutant sit at a site whose manifest entry carries a `trig
 `fixtures/sandbox-data/lethal.config.local.json` — **not** sandbox-app's; the two fixtures target
 different containers.
 
+**Cronus28 state (2026-10-05):** Cronus28 carries `sandbox-data` 1.0.0.11 / `sandbox-data-tests`
+1.0.0.19, which include R-254's reportextension arm. They were published ahead of R-254's merge
+(orchestrator ruling). Anyone who needs `itest:tables` or `itest:chunked` on Cronus28 before then
+must ask lethal-bugs.
+
 > **`tables.baseline.json` is absent right now, deliberately.** The recorded file could never
 > match itself: `diffMutants` treated a repeated semantic identity as a difference, and this
 > fixture legitimately has 75 records over 67 distinct keys (one group six deep — six textually
