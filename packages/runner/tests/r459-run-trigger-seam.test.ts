@@ -148,9 +148,12 @@ describe("R459: one owner per RunTrigger literal (Tier 1 and Tier 2 together)", 
     });
   }
 
-  // Unresolved receiver: not claimed, so not ceded. Its missing skip tag is R473, not R459.
-  it("Par.Modify(true) on an unresolved receiver: flip owns it", async () => {
-    expect(await ownersOf("W.Codeunit.al", "Par.Modify(true);")).toEqual([["flip false -"]]);
+  // Unresolved receiver: not claimed, so not ceded. R473: the flip keeps the skip tag, since
+  // nothing proves skipping `OnModify` harmless (R-364's rule).
+  it("Par.Modify(true) on an unresolved receiver: flip owns it, tagged", async () => {
+    expect(await ownersOf("W.Codeunit.al", "Par.Modify(true);")).toEqual([
+      ["flip false run-trigger-skipped-modify"],
+    ]);
   });
 });
 

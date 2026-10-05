@@ -355,6 +355,35 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(resolvedNonRecord)).toEqual([UNTAGGED, UNTAGGED]);
   });
 
+  // F12 (R473). The skip direction of F10 at the three sole-argument methods: a `true` RunTrigger
+  // on a receiver that does not resolve is not claimed by `swap-modify-flag`, so this operator
+  // flips it, and nothing proves the skipped trigger harmless, so it keeps the skip tag of its
+  // kind. Controls: from an indexed caller the same `true`s are ceded (no flip; Tier 2's mutants
+  // and their tags are pinned in `r459-run-trigger-seam.test.ts`), and a codeunit receiver that
+  // RESOLVES to a non-record stays flipped and untagged. Reverts: put `skip: null` back on any one
+  // of the three count-1 rows (that kind goes untagged); tag every unclaimed `true` without the
+  // `receiverUnresolved` check (the codeunit control goes red); stop ceding (the indexed control
+  // goes red).
+  it("tags a sole true RunTrigger by kind when the receiver does not resolve (wrapped caller)", () => {
+    const body = "Par.Modify(true); Par.Delete(true); Par.Insert(true);";
+    const wrappedCaller = { "P.al": par(""), "O.al": `#if not CLEANX\n${caller(body)}\n#endif\n` };
+    expect(tagged(wrappedCaller)).toEqual([
+      "true->false run-trigger-skipped-modify",
+      "true->false run-trigger-skipped-delete",
+      "true->false run-trigger-skipped-insert",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual([]);
+    const mgt = `codeunit 50303 "Mgt" { procedure Modify(Run: Boolean) begin end; procedure Delete(Run: Boolean) begin end; procedure Insert(Run: Boolean) begin end; }`;
+    const resolvedNonRecord = {
+      "M.al": mgt,
+      "O.al": caller(
+        "Mgt.Modify(true); Mgt.Delete(true); Mgt.Insert(true);",
+        `Mgt: Codeunit "Mgt";`,
+      ),
+    };
+    expect(tagged(resolvedNonRecord)).toEqual(["true->false -", "true->false -", "true->false -"]);
+  });
+
   // F8. Revert: drop `claimsRecordMethod` (tag by method name alone).
   it("does NOT tag a codeunit's or a table procedure's ModifyAll/DeleteAll", () => {
     const mgt = `codeunit 50303 "Mgt" { procedure ModifyAll(A: Integer; B: Integer; Run: Boolean) begin end; procedure DeleteAll(Run: Boolean) begin end; }`;
