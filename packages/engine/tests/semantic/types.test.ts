@@ -843,6 +843,31 @@ table 50100 "Repro N9 Tab"
     expect(typeAt(src, "Found")).toBeNull();
   });
 
+  // R455 point 4: n9's page has a SourceTable, so R294's implicit-record refusal makes it null
+  // even if named-return blocking breaks. Without a SourceTable only the named return blocks it.
+  it("n9b: the same named return Found is null on a page WITHOUT a SourceTable", () => {
+    const src = `page 50101 "Repro N9b"
+{
+    trigger OnFindRecord(Which: Text) Found: Boolean
+    begin
+        Show(Glob, Found);
+    end;
+
+    procedure Show(A: Integer; B: Integer)
+    begin
+        Glob := A;
+    end;
+
+    var
+        Glob: Integer;
+        Found: Integer;
+}
+`;
+    expect(typeAt(src, "Found")).toBeNull();
+    // Control: the global types where no named return hides it.
+    expect(typeAt(src, "Glob")).toBe("Integer");
+  });
+
   it("n13: R.Amt types Integer through a named record return", () => {
     const src = `codeunit 50100 "Repro N13"
 {
@@ -873,5 +898,66 @@ table 50100 "Repro N13 Tab"
     });
     if (hit === null) throw new Error("no R.Amt");
     expect(types.typeOf(hit)).toBe("Integer");
+  });
+});
+
+// R455 item 2: against a record scope an unqualified call binds to the TABLE's method first (alc
+// 18.0.43, AL0122), so `callType` gives it no type there, by R294's own context predicate.
+describe("buildTypeTable: unqualified calls in a record scope (R455)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const TAB = `table 50110 "R455 Tab"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { Clustered = true; } }
+    procedure F(): Text
+    begin
+        exit('t');
+    end;
+}
+`;
+  const cu = (body: string, header = ""): string => `${TAB}
+codeunit 50110 "R455 Cu"
+{
+    ${header}
+    procedure F(): Integer
+    begin
+        exit(1);
+    end;
+
+    procedure "Q F"(): Integer
+    begin
+        exit(1);
+    end;
+
+    trigger OnRun()
+    var
+        R: Record "R455 Tab";
+        I: Integer;
+    begin
+        ${body}
+    end;
+}
+`;
+
+  it("inside `with R do`, F() has no type", () => {
+    expect(typeAt(cu("with R do I := F();"), "F", true)).toBeNull();
+  });
+
+  // NOT load-bearing: `callType` already answers null for a quoted callee (it is neither an
+  // identifier nor a field access), so this passes with or without the guard on the quoted kind.
+  // It pins the answer, not the guard.
+  it("inside `with R do`, a quoted callee has no type", () => {
+    expect(typeAt(cu('with R do I := "Q F"();'), '"Q F"', true)).toBeNull();
+  });
+
+  it("in a TableNo codeunit's OnRun, F() has no type", () => {
+    expect(typeAt(cu("I := F();", 'TableNo = "R455 Tab";'), "F", true)).toBeNull();
+  });
+
+  it("control: outside any record scope, F() types by the codeunit", () => {
+    expect(typeAt(cu("I := F();"), "F", true)).toBe("Integer");
   });
 });

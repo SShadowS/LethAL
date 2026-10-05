@@ -45,7 +45,9 @@ import { synthesizeAfter } from "./mutate-helpers";
  *      precondition, not a nicety.
  *   3. Texts that DIFFER after whitespace normalisation. `Foo(X, X)` swapped is `Foo(X, X)` — an
  *      equivalent mutant by construction, and the one class of equivalence that can be refused
- *      statically rather than measured.
+ *      statically rather than measured. Compared without case (R455): AL names ignore it.
+ *   4. Not a FIELD-DESIGNATOR position of a record builtin (R455, `FIELD_POSITIONS`): there the
+ *      receiver's field wins over a same-named local, so the swap does not compile (AL0166).
  *
  * WHAT THE PREDICATE PROVES, AND WHAT IT DOES NOT. It proves COMPILE safety. It does NOT prove the
  * swap is harmless at runtime: two `Code[20]` variables passed to a callee whose second parameter
@@ -174,10 +176,15 @@ function swappablePair(
   // `quoted_identifier` and `symbol-table.ts` for `tableextension_declaration`.
   const argList = node.namedChildren.find((c) => c.rawKind === ARGUMENT_LIST);
   if (argList === undefined) return null;
-  // A comment inside the parentheses is a NAMED child of the argument list, so arguments are
-  // filtered by kind rather than counted — the same grammar fact `soleArgument` exists for in
-  // @lethal/builtin-tier2, where missing it once produced an inverted mutation.
-  const args = argList.namedChildren.filter((c) => c.kind === ALNodeKind.identifier);
+  // A comment inside the parentheses is a NAMED child of the argument list, so comments are
+  // dropped before arguments are numbered — the same grammar fact `soleArgument` exists for in
+  // @lethal/builtin-tier2, where missing it once produced an inverted mutation. R455: positions
+  // count over EVERY argument expression (a literal or a nested call is one), and a field-designator
+  // position is never swapped.
+  const fieldPositions = fieldDesignatorPositions(node);
+  const args = argList.namedChildren
+    .filter((c) => !c.rawKind.endsWith("comment"))
+    .filter((c, i) => c.kind === ALNodeKind.identifier && !fieldPositions(i + 1));
   if (args.length < 2) return null;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -185,7 +192,8 @@ function swappablePair(
       const left = args[i];
       const right = args[j];
       if (left === undefined || right === undefined) continue;
-      if (normalize(left.text) === normalize(right.text)) continue;
+      // R455: AL names ignore case, so `ID` and `Id` are one variable and the swap is the same call.
+      if (normalize(left.text).toLowerCase() === normalize(right.text).toLowerCase()) continue;
       const leftType = ctx.types.typeOf(left);
       if (leftType === null) continue;
       if (leftType !== ctx.types.typeOf(right)) continue;
@@ -220,5 +228,60 @@ function swapSpans(node: ALSyntaxNode, left: ALSyntaxNode, right: ALSyntaxNode):
 }
 
 const ARGUMENT_LIST = "argument_list";
+
+/**
+ * R455: record and query builtins whose arguments NAME a field, by 1-based position ("every" means
+ * all of them). In such an argument the receiver's field wins over a local of the same name (alc
+ * 18.0.43), so the swap `R.SetRange(Value, Amount)` of `R.SetRange(Amount, Value)` is AL0166;
+ * BaseApp had 28 of them. Matched by METHOD NAME, on a member call and on an unqualified call (an
+ * implicit record), without resolving the receiver. That is conservative: a custom procedure or a
+ * value-taking overload with one of these names loses swap sites at those positions; it never
+ * gains a wrong one. The list is the measured set of builtins, not all of them. RecordRef's `Field`/`FieldIndex` take numbers, so they are not listed.
+ */
+const FIELD_POSITIONS: ReadonlyMap<string, "every" | readonly number[]> = new Map<
+  string,
+  "every" | readonly number[]
+>([
+  ...[
+    "calcfields",
+    "calcsums",
+    "setloadfields",
+    "addloadfields",
+    "setcurrentkey",
+    "setautocalcfields",
+    "loadfields",
+    "arefieldsloaded",
+  ].map((m) => [m, "every"] as const),
+  ...[
+    "setrange",
+    "setfilter",
+    "validate",
+    "testfield",
+    "fielderror",
+    "fieldno",
+    "fieldcaption",
+    "fieldname",
+    "fieldactive",
+    "getfilter",
+    "getrangemin",
+    "getrangemax",
+    "modifyall",
+    "setascending",
+  ].map((m) => [m, [1]] as const),
+  // `R.CopyFilter(SourceField, DestRecord, DestField)`.
+  ["copyfilter", [1, 3]],
+]);
+
+/** Whether a 1-based argument position of this call names a field. The method name comes from the
+ *  call's `function` field, or its `member` field for a member call, as `callType` reads it. */
+function fieldDesignatorPositions(call: ALSyntaxNode): (position: number) => boolean {
+  const fn = call.childForFieldName("function");
+  const nameNode = fn?.kind === ALNodeKind.field_access ? fn.childForFieldName("member") : fn;
+  const name = nameNode?.text.replace(/^"(.*)"$/, "$1").toLowerCase();
+  const positions = name === undefined ? undefined : FIELD_POSITIONS.get(name);
+  if (positions === undefined) return () => false;
+  if (positions === "every") return () => true;
+  return (p) => positions.includes(p);
+}
 
 const normalize = (s: string): string => s.replace(/\s+/g, " ").trim();
