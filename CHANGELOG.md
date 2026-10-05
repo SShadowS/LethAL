@@ -117,8 +117,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   index is no longer read for content, so such a file's edits are seen.
 - **A two-argument `Insert(RunTrigger, InsertWithSystemId)` is mutated; identity scheme 21**
   (R459; 20 is held by R-464). `flip-boolean-literal` (now 1.1.0) used to cede every `true` of a
-  claimed `Insert` to `swap-modify-flag`, which claims a sole `true` only, so both literals of
-  `Insert(true, X)` and `Insert(X, true)` were mutated by nobody. Both operators now ask one engine
+  claimed `Insert` to `swap-modify-flag`, which claims a sole `true` only, so the `true` literals of
+  `Insert(true, X)` and `Insert(X, true)` were mutated by nobody (a `false` there already had a flip). Both operators now ask one engine
   answer for the sole-argument skip site, so the seam cannot orphan or duplicate a literal. The
   first literal is tagged `run-trigger-skipped-insert` / `run-trigger-forced` by the same rules as
   `Insert(true)` / `Insert(false)`; the second gets no RunTrigger tag (a SystemId mechanism for it
