@@ -82,7 +82,9 @@ const CASE_LABEL_PARENTS: ReadonlySet<string> = new Set(["case_branch", "case_st
  * as `ModifyAll`/`DeleteAll`, and carries `run-trigger-forced` unless `forceCanRaise` proves the
  * table has no such trigger and no observer of it in this project. R459: a two-argument
  * `Insert(RunTrigger, InsertWithSystemId)` is wholly this operator's (Tier 2 claims a sole `true`
- * only); its first literal is tagged both ways, its second gets no RunTrigger tag.
+ * only); its first literal is tagged both ways, its second gets no RunTrigger tag. R473: a sole
+ * `true` on an UNRESOLVED receiver is not ceded (Tier 2 does not claim it), so its flip is this
+ * operator's and keeps the skip tag of its kind, as R-364 rules for `ModifyAll`/`DeleteAll`.
  *
  * **Documented limits:**
  *   - Equivalence is not detected. A flipped boolean that no path reads is an equivalent mutant this
@@ -225,7 +227,9 @@ export const flipBooleanLiteral: MutationOperator = {
  * EXACT argument count, the trigger kind it runs, and the skip detector that judges a `true` ->
  * `false` flip. AL has no named arguments (alc 18: AL0104 on `RunTrigger := true`), so the position
  * is the whole answer. R-457 adds `Modify`/`Delete`/`Insert`: their `true` is ceded to
- * `swap-modify-flag`, so only the forcing `false` reaches this operator, and they have no `skip`.
+ * `swap-modify-flag` wherever it claims the call, so a claimed `true` never reaches this operator.
+ * R473: their `skip` is reached only on an UNRESOLVED receiver, which Tier 2 does not claim, and
+ * there `runTriggerTag` keeps the tag (R-364's rule) without calling `canRaise`.
  */
 const RUN_TRIGGER_ARGUMENTS = [
   {
@@ -242,9 +246,27 @@ const RUN_TRIGGER_ARGUMENTS = [
     kind: "delete",
     skip: { canRaise: deleteSkipCanRaise, tag: "run-trigger-skipped-delete" },
   },
-  { method: "Modify", count: 1, index: 0, kind: "modify", skip: null },
-  { method: "Delete", count: 1, index: 0, kind: "delete", skip: null },
-  { method: "Insert", count: 1, index: 0, kind: "insert", skip: null },
+  {
+    method: "Modify",
+    count: 1,
+    index: 0,
+    kind: "modify",
+    skip: { canRaise: modifySkipCanRaise, tag: "run-trigger-skipped-modify" },
+  },
+  {
+    method: "Delete",
+    count: 1,
+    index: 0,
+    kind: "delete",
+    skip: { canRaise: deleteSkipCanRaise, tag: "run-trigger-skipped-delete" },
+  },
+  {
+    method: "Insert",
+    count: 1,
+    index: 0,
+    kind: "insert",
+    skip: { canRaise: insertSkipCanRaise, tag: "run-trigger-skipped-insert" },
+  },
   // R459: `Insert(RunTrigger, InsertWithSystemId)`. Index 1 runs no trigger and has no row.
   {
     method: "Insert",

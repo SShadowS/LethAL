@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**89 of 472 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 472 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -189,8 +189,8 @@ that ordering is the priority.
 - **R468** · Only an object's FIRST direct `var` section is indexed as globals, so every global in a second section (`protected var` then `var`) resolves to nothing; `SuggestVendorPayments` is not hang-refused · [R468.md](docs/roadmap/R468.md) · done (25989d42)
 - **R469** · Schemata inserts the `MutationSelector` variable into an object's FIRST var section, which may be `protected var`, so the instrumented object exposes it to extensions · [R469.md](docs/roadmap/R469.md) · closed 2026-10-05 — ruling: the exposure is harmless for tables and pages…
 - **R470** · A report and its reportextension in one project both get a `MutationSelector` global, which alc rejects (AL0155), so on bcdev every mutant of that batch is scored `error` · [R470.md](docs/roadmap/R470.md) · done (cad4420d)
-- **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · open
-- **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · open
+- **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · closed 2026-10-05 — measured: BC collides on a preserved SystemId, but the colliding false->true flip has 0…
+- **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · done (3fffd472)
 - **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
 - **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · open
 
