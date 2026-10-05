@@ -1,0 +1,24 @@
+{
+  "id": "a2f5493c-3c9b-4b4f-ad4b-81f5a1884efa",
+  "name": "LethAL R472 SystemId Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "R472: does Insert(false, true) with a SystemId copied from an existing row collide?",
+  "description": "Throwaway probe, not for production use. See docs/roadmap/R472.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "platform": "28.0.0.0",
+  "idRanges": [{ "from": 91720, "to": 91729 }],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "13.0",
+  "features": ["NoImplicitWith"]
+}
