@@ -186,7 +186,7 @@ codeunit 91003 "LC Control API"
     ///
     /// `Object Type` is an Option (measured — it has no `AsInteger()`), and its integer values are BC's
     /// own object-type numbering, the same one `app-package.ts` maps: Table=1, Report=3, Codeunit=5,
-    /// XmlPort=6, Page=8, Query=9, PageExtension=14, TableExtension=15.
+    /// XmlPort=6, Page=8, Query=9, PageExtension=14, TableExtension=15, ReportExtension=22 (R254).
     ///
     /// Line-level, which is FINER than the `procedure` granularity LethAL keys coverage on — mapping
     /// lines back to procedures is the client's job, and it has the instrumented source to do it with.

@@ -12,11 +12,11 @@
  * a TEMP copy carrying the selector ids, R261) and needs `fixtures/sandbox-data-tests/.alpackages`.
  * `tables.baseline.json` is read only. The steps:
  *   1. setup: config, control and BC versions, the temp config;
- *   2. the scratch suite: the committed 68 tests plus five no-op tests, app.json unchanged;
+ *   2. the scratch suite: the committed 70 tests plus five no-op tests, app.json unchanged;
  *   3. source run A, committed suite, fresh store, per verdict equal to tables.baseline.json;
- *   4. V1, V2, V3: `verifyFromCli` over all 68 survivors of A with the scratch suite;
+ *   4. V1, V2, V3: `verifyFromCli` over all 70 survivors of A with the scratch suite;
  *   5. scaling points: the first k survivors, k in SCALING_K (never gated);
- *   6. one library `runVerify` over the 68, with its event timeline (not lethal verify's time);
+ *   6. one library `runVerify` over the 70, with its event timeline (not lethal verify's time);
  *   7. B1, B2: fresh full runs with the scratch suite, the denominators;
  *   8. print and write every number;
  *   9. in a finally once 3 began: restore the committed tests app, checked by a fresh read-back;
@@ -88,10 +88,12 @@ const BASELINE_PATH = join(HERE, "tables.baseline.json");
 const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 
-const SURVIVORS = 68;
-/** 68, not the plan's 69: one of the 69 `[Test]` strings in DataTests.Codeunit.al is inside R79's
- *  comment, and discovery (correctly) does not count it. So the scratch suite has 73. */
-const COMMITTED_TESTS = 68;
+/** R254 moved this from 68 to 70 (the reportextension arm's two equivalent survivors). */
+const SURVIVORS = 70;
+/** One `[Test]` string in DataTests.Codeunit.al is inside R79's comment, and discovery (correctly)
+ *  does not count it. R254 added two tests (68 -> 70, measured offline), so the scratch suite
+ *  has 75. */
+const COMMITTED_TESTS = 70;
 const NOOP_TESTS = 5;
 const NOOP_CODEUNIT_ID = 79396;
 const NOOP_CODEUNIT_NAME = "Data Verify Scale NoOp";

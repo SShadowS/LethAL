@@ -960,6 +960,7 @@ const OBJECT_KIND_TO_TYPE_NAME: Readonly<Record<string, string>> = {
   query_declaration: "Query",
   [ALNodeKind.pageextension]: "PageExtension",
   [ALNodeKind.tableextension]: "TableExtension",
+  [ALNodeKind.reportextension]: "ReportExtension",
 };
 
 /** The `(objectType, objectId)` of an object declaration node, or null for anything else. */
