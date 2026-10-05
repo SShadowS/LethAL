@@ -17,7 +17,14 @@ import {
   type SessionOutcome,
   mutantRef,
 } from "./report";
-import type { BatchArtifact } from "./store";
+import type { BatchArtifact, CarryHidden } from "./store";
+
+/** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
+export interface FoldedNumbering {
+  readonly numberingDigest: string;
+  readonly twinSites: readonly string[];
+  readonly carryHidden: CarryHidden;
+}
 
 /**
  * Folds the run's events into the facts `buildReport` (report.ts) renders (spec 2026-08-05 §A,
@@ -173,6 +180,8 @@ export interface FoldedReport {
   readonly untargetedTriggerCount: number;
   /** R198 — see `SessionReport.groupedCalls`. */
   readonly groupedCalls: number;
+  /** R443: absent for a stream written before R443. */
+  readonly numbering?: FoldedNumbering;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -245,6 +254,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByExclude = 0;
   let excludedByOperator = 0;
   let excludedByLines = 0;
+  let numbering: FoldedNumbering | undefined;
 
   // AND across every baseline verdict across every `baseline-batch-finished` event — mirrors
   // `orchestrator.ts`'s `baselineGreenOverall`, which starts true and is never reset once false.
@@ -337,6 +347,25 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
+        {
+          // R443: written together by the producer, so a stream with only some is corrupt.
+          const { numberingDigest, twinSites, carryHidden } = e;
+          if (
+            numberingDigest !== undefined &&
+            twinSites !== undefined &&
+            carryHidden !== undefined
+          ) {
+            numbering = { numberingDigest, twinSites, carryHidden };
+          } else if (
+            numberingDigest !== undefined ||
+            twinSites !== undefined ||
+            carryHidden !== undefined
+          ) {
+            throw new Error(
+              "foldEvents: mutation-set-generated carries only some of numberingDigest, twinSites and carryHidden (R443). The producer writes all three or none.",
+            );
+          }
+        }
         break;
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
@@ -694,6 +723,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(alRunnerBcBuild !== undefined ? { alRunnerBcBuild } : {}),
     ...(alRunnerPlatformAppsDir !== undefined ? { alRunnerPlatformAppsDir } : {}),
+    ...(numbering !== undefined ? { numbering } : {}),
   };
 }
 

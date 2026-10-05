@@ -2105,6 +2105,9 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       operatorMajor: survivor.operatorMajor,
       ordinal: survivor.identityOrdinal ?? 0,
     });
+    // R443: the mark carries the numbering digest of the run it was made from (rule 1).
+    const numberingDigest = first.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
     const run = async (identityScheme: number) => {
       const events: RunEvent[] = [];
       const report = await runSession({
@@ -2112,7 +2115,7 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
         store: new ResultsStore(":memory:"),
         ...dirs,
         selectorIds,
-        equivalenceMarks: [{ key, reason: "same either way", identityScheme }],
+        equivalenceMarks: [{ key, reason: "same either way", identityScheme, numberingDigest }],
         emit: [(e) => events.push(e)],
       });
       return { report, events };
@@ -2873,9 +2876,18 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
         ...dirs,
         selectorIds,
         preprocessorSymbols: ["R318A"],
-        // R214: the mark names the build's symbols, so only its scheme can make it stale.
+        // R214: the mark names the build's symbols, so only its scheme can make it stale. R443:
+        // and the numbering digest of the run it was made from, so it matches by key.
         equivalenceMarks: [
-          { key, reason: "same either way", identityScheme, preprocessorSymbols: ["R318A"] },
+          {
+            key,
+            reason: "same either way",
+            identityScheme,
+            preprocessorSymbols: ["R318A"],
+            ...(first.numberingDigest !== undefined
+              ? { numberingDigest: first.numberingDigest }
+              : {}),
+          },
         ],
       });
       return { key, marked: report.readerMarkedEquivalent };

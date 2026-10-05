@@ -7,6 +7,8 @@ import {
   IDENTITY_SCHEME,
   type MutantManifest,
   type MutantManifestEntry,
+  numberIdentityOrdinals,
+  runIdentityEntries,
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import {
@@ -20,7 +22,7 @@ import { explain } from "../src/explain";
 import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { buildReport } from "../src/report";
 import type { SessionReport } from "../src/report";
-import { identityKeyOf, serializeKey } from "../src/selection";
+import { identityKeyOf, numberingDigestOf, serializeKey, twinSitesOf } from "../src/selection";
 
 /**
  * A reader mark round-trips through the REAL path: a small AL project is mutated by the real
@@ -47,10 +49,20 @@ afterAll(async () => {
   for (const r of roots) await rm(r, { recursive: true, force: true });
 });
 
-/** Mutates `files` as one project; returns the project dir and the manifest's entries. */
-async function mutate(
-  files: Record<string, string>,
-): Promise<{ projectDir: string; entries: readonly MutantManifestEntry[] }> {
+/** R443: the numbering facts `runSession` puts on `mutation-set-generated`. */
+interface Numbering {
+  readonly numberingDigest: string;
+  readonly twinSites: readonly string[];
+  readonly carryHidden: { readonly tuples: readonly string[]; readonly files: readonly string[] };
+}
+
+/** Mutates `files` as one project; returns the project dir, the manifest's entries, and the
+ *  run's numbering facts computed the way `runSession` computes them. */
+async function mutate(files: Record<string, string>): Promise<{
+  projectDir: string;
+  entries: readonly MutantManifestEntry[];
+  numbering: Numbering;
+}> {
   const root = await mkdtemp(join(tmpdir(), "lethal-marks-report-"));
   roots.push(root);
   const projectDir = join(root, "app");
@@ -58,6 +70,12 @@ async function mutate(
   await Bun.write(join(projectDir, "app.json"), JSON.stringify(APP_JSON));
   for (const [name, text] of Object.entries(files)) await Bun.write(join(projectDir, name), text);
   const set = await generateMutationSet(projectDir);
+  const identity = runIdentityEntries(set.files, operatorTiers, set.reservedIdentityEntries);
+  const numbering: Numbering = {
+    numberingDigest: numberingDigestOf(identity, numberIdentityOrdinals(identity)),
+    twinSites: twinSitesOf(identity),
+    carryHidden: set.carryHidden,
+  };
   await writeInstrumentedProject({
     targetDir: out,
     files: set.files,
@@ -70,27 +88,33 @@ async function mutate(
   const manifest = JSON.parse(
     await readFile(join(out, "mutant-manifest.json"), "utf8"),
   ) as MutantManifest;
-  return { projectDir, entries: manifest.mutants };
+  return { projectDir, entries: manifest.mutants, numbering };
 }
 
-/** Writes one mark for `key`, loads it from disk, and builds the report with every entry survived. */
+/** Writes one mark for `key` (proved by the run's digest, rule 1), loads it from disk, and builds
+ *  the report with every entry survived. */
 async function reportWithMark(
   projectDir: string,
   entries: readonly MutantManifestEntry[],
+  numbering: Numbering,
   key: string,
 ): Promise<SessionReport> {
   await writeFile(
     join(projectDir, EQUIVALENCE_MARKS_FILENAME),
-    JSON.stringify({ identityScheme: IDENTITY_SCHEME, marks: [{ key, reason: "reader ruling" }] }),
+    JSON.stringify({
+      identityScheme: IDENTITY_SCHEME,
+      marks: [{ key, reason: "reader ruling", numberingDigest: numbering.numberingDigest }],
+    }),
   );
   const marks = await loadEquivalenceMarks(projectDir);
   if (marks === undefined) throw new Error("the marks file was not found");
-  return survivedReport(entries, marks);
+  return survivedReport(entries, numbering, marks);
 }
 
 /** Builds the report with every entry survived, through the real `buildReport`. */
 function survivedReport(
   entries: readonly MutantManifestEntry[],
+  numbering: Numbering,
   marks?: readonly EquivalenceMark[],
 ): SessionReport {
   const events: RunEventInput[] = [
@@ -107,6 +131,7 @@ function survivedReport(
       excludedByOnly: 0,
       excludedByExclude: 0,
       excludedByOperator: 0,
+      ...numbering,
     },
     { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
     ...entries.map(
@@ -145,7 +170,7 @@ describe("R230: a twin after the first can be reader-marked, through the real re
 `;
 
   test("the ordinal-1 twin's six-field key loads, matches that twin, and not the first", async () => {
-    const { projectDir, entries } = await mutate({ "TwinOps.Codeunit.al": TWINS });
+    const { projectDir, entries, numbering } = await mutate({ "TwinOps.Codeunit.al": TWINS });
     const twins = entries.filter((m) => m.operatorName === "lethal.remove-assignment");
     expect(twins.map((m) => m.identityOrdinal ?? 0)).toEqual([0, 1]);
     const [first, second] = twins;
@@ -159,11 +184,12 @@ describe("R230: a twin after the first can be reader-marked, through the real re
     expect(key.split("|")).toHaveLength(6);
     expect(key.endsWith("|1")).toBe(true);
 
-    const report = await reportWithMark(projectDir, entries, key);
+    const report = await reportWithMark(projectDir, entries, numbering, key);
     expect(report.readerMarkedEquivalent).toEqual({
       matched: [{ batchIndex: 0, mutantCode: second.mutantId, key, reason: "reader ruling" }],
       stale: [],
       contradicted: [],
+      refused: [],
     });
     const marked = report.mutants.filter((m) => m.readerMark !== undefined);
     expect(marked.map((m) => m.mutantCode)).toEqual([second.mutantId]);
@@ -188,7 +214,7 @@ describe("R229: a trigger mutant can be reader-marked, through the real report p
 `;
 
   test("a mark on an OnInsert mutant matches it and is not stale", async () => {
-    const { projectDir, entries } = await mutate({ "TrigTab.Table.al": TABLE });
+    const { projectDir, entries, numbering } = await mutate({ "TrigTab.Table.al": TABLE });
     const target = entries.find(
       (m) => m.triggerName === "OnInsert" && m.operatorName === "lethal.remove-assignment",
     );
@@ -198,7 +224,7 @@ describe("R229: a trigger mutant can be reader-marked, through the real report p
 
     const key = serializeKey(identityKeyOf(target));
     expect(key.split("|")[2]).toBe("OnInsert");
-    const report = await reportWithMark(projectDir, entries, key);
+    const report = await reportWithMark(projectDir, entries, numbering, key);
     // The agent reference builds the key from the report row, taking `triggerName` when
     // `procedureName` is empty; that spelling is the same key.
     const row = report.mutants.find((m) => m.mutantCode === target.mutantId);
@@ -217,6 +243,7 @@ describe("R229: a trigger mutant can be reader-marked, through the real report p
       matched: [{ batchIndex: 0, mutantCode: target.mutantId, key, reason: "reader ruling" }],
       stale: [],
       contradicted: [],
+      refused: [],
     });
     expect(row.readerMark).toEqual({ key, reason: "reader ruling" });
   });
@@ -231,30 +258,33 @@ describe("R265: explain's markKey, written as a mark, marks that mutant and only
   async function roundTrip(
     projectDir: string,
     entries: readonly MutantManifestEntry[],
+    numbering: Numbering,
     target: MutantManifestEntry,
   ): Promise<string> {
-    const out = explain(survivedReport(entries));
+    const out = explain(survivedReport(entries, numbering));
     // A report this build wrote is under this build's scheme, so the keys are not stale.
     expect(out.markIdentityScheme).toBe(IDENTITY_SCHEME);
     expect(out.markKeysStale).toBeUndefined();
     const survivor = out.survivors.find((s) => s.mutantCode === target.mutantId);
     if (survivor === undefined) throw new Error(`explain has no survivor ${target.mutantId}`);
     const key = survivor.markKey;
-    const file = JSON.stringify({
-      identityScheme: out.markIdentityScheme,
-      marks: [{ key, reason: "reader ruling" }],
-    });
+    // R443: the reader pastes explain's whole `mark`, replacing its placeholder reason.
+    if (survivor.mark === undefined) throw new Error("explain printed no mark");
+    expect(survivor.mark.key).toBe(key);
+    const pasted = { ...survivor.mark, reason: "reader ruling" };
+    const file = JSON.stringify({ identityScheme: out.markIdentityScheme, marks: [pasted] });
     expect(parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME)).toEqual([
-      { key, reason: "reader ruling", identityScheme: out.markIdentityScheme },
+      { ...pasted, identityScheme: out.markIdentityScheme },
     ]);
     await writeFile(join(projectDir, EQUIVALENCE_MARKS_FILENAME), file);
     const marks = await loadEquivalenceMarks(projectDir);
     if (marks === undefined) throw new Error("the marks file was not found");
-    const report = survivedReport(entries, marks);
+    const report = survivedReport(entries, numbering, marks);
     expect(report.readerMarkedEquivalent).toEqual({
       matched: [{ batchIndex: 0, mutantCode: target.mutantId, key, reason: "reader ruling" }],
       stale: [],
       contradicted: [],
+      refused: [],
     });
     expect(
       report.mutants.filter((m) => m.readerMark !== undefined).map((m) => m.mutantCode),
@@ -263,7 +293,7 @@ describe("R265: explain's markKey, written as a mark, marks that mutant and only
   }
 
   test("(a) a plain procedure mutant", async () => {
-    const { projectDir, entries } = await mutate({
+    const { projectDir, entries, numbering } = await mutate({
       "PlainOps.Codeunit.al": `codeunit 50102 "Plain Ops"
 {
     procedure Double(var X: Integer)
@@ -279,12 +309,12 @@ describe("R265: explain's markKey, written as a mark, marks that mutant and only
     if (target === undefined) throw new Error("the fixture must produce a Double mutant");
     expect(target.identityOrdinal ?? 0).toBe(0);
     expect(entries.length).toBeGreaterThan(1);
-    const key = await roundTrip(projectDir, entries, target);
+    const key = await roundTrip(projectDir, entries, numbering, target);
     expect(key.split("|")).toHaveLength(5);
   });
 
   test("(b) the ordinal-1 twin, whose key carries the ordinal", async () => {
-    const { projectDir, entries } = await mutate({
+    const { projectDir, entries, numbering } = await mutate({
       "TwinOps.Codeunit.al": `codeunit 50100 "Twin Ops"
 {
     procedure Bump(var X: Integer)
@@ -299,12 +329,12 @@ describe("R265: explain's markKey, written as a mark, marks that mutant and only
     expect(twins.map((m) => m.identityOrdinal ?? 0)).toEqual([0, 1]);
     const [, second] = twins;
     if (second === undefined) throw new Error("unreachable");
-    const key = await roundTrip(projectDir, entries, second);
+    const key = await roundTrip(projectDir, entries, numbering, second);
     expect(key.endsWith("|1")).toBe(true);
   });
 
   test("(c) a table-trigger mutant, whose key names the trigger", async () => {
-    const { projectDir, entries } = await mutate({
+    const { projectDir, entries, numbering } = await mutate({
       "TrigTab.Table.al": `table 50101 "Trig Tab"
 {
     fields
@@ -325,7 +355,7 @@ describe("R265: explain's markKey, written as a mark, marks that mutant and only
     );
     if (target === undefined) throw new Error("the fixture must produce an OnInsert mutant");
     expect(target.procedureName).toBe("");
-    const key = await roundTrip(projectDir, entries, target);
+    const key = await roundTrip(projectDir, entries, numbering, target);
     expect(key.split("|")[2]).toBe("OnInsert");
   });
 });

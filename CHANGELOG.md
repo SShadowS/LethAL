@@ -104,6 +104,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **EXISTING EQUIVALENCE MARKS STOP APPLYING UNTIL YOU RE-MARK THEM** (R443). A mark in
+  `lethal.equivalent.json` that holds only a `key` (every mark written before this release) is now
+  refused (`no-proof`), because a key alone cannot show which mutant it was written for. Each such
+  mutant is reported as a plain survivor again, so **a project's survivor list grows, and verify
+  runs those survivors, once, until the marks are rewritten.** The score does not change (marks
+  never moved it). To re-mark: run the project once with this release, run
+  `lethal explain report.json`, and paste each survivor's `mark` object (key, `file`,
+  `numberingDigest`, `fileSingleton`) over the old entry, keeping your reason. Every refused mark is
+  named, with its reason, in the run's `EQUIVALENCE MARKS REFUSED` console lines and in
+  `readerMarkedEquivalent.refused`. A report from an older
+  release records no numbering facts, so explain prints no `mark` for it; re-run first.
 - **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 25**
   (R446; 24 was R475, 23 is unused, 22 was R464). When a loop's condition reads no name and calls nothing
   (`while true`, `until false`), the four value operators now also refuse a write that the guard
@@ -424,6 +435,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **An equivalence mark no longer lands on a mutant nobody marked** (R443). A mark named its mutant
+  by identity key alone, and a key holds no file: twins (the same statement in the same member and
+  operator) are told apart by a run-wide number. So an edit that removed a twin, `--only`,
+  `--lines`, or a file header that became readable again could hand a mark's key to another twin,
+  and the report then listed that twin as "reader-marked equivalent" although nobody had looked at
+  it: a survivor hidden from the one list a reader acts on. `lethal verify` skipped such a
+  survivor the same way. A mark now carries its proof and applies only when that proof holds: by
+  key when this run's numbering digest equals the mark's, or by its file when the mark proved its
+  mutant the only one of its kind in that file and this run agrees. Any other mark is refused by
+  name in `readerMarkedEquivalent.refused` and its mutant stays a survivor. The report records
+  `numberingDigest`, `twinSites` and `carryHidden` for this; `lethal explain` (now
+  `explainSchemaVersion` 12) prints each survivor's ready-to-paste `mark`; the store records
+  `runs.numbering_digest`. Remaining limits are listed in `docs/roadmap/R443.md`.
 - **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 was held
   for R-446, which landed as 25, and is unused). The run-wide twin numbering sorted files with `localeCompare`, the host's default
   collation, while file discovery and the generation hash sort by code unit. A resume on a host

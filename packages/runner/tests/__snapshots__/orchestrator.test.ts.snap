@@ -182,6 +182,10 @@ exports[`C02-04 characterization 1: one batch, sequential 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 3,
         "excludedByExclude": 0,
@@ -190,10 +194,12 @@ exports[`C02-04 characterization 1: one batch, sequential 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "80d93f4819f3188c67af6d5664de9d710569692e354c66123991f34e7b0f1444",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 3,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -870,6 +876,10 @@ exports[`C02-04 characterization 2: two batches 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -878,10 +888,12 @@ exports[`C02-04 characterization 2: two batches 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 2,
         "notInstrumentedFiles": [],
+        "numberingDigest": "37484366d33103065208e1762cd6807963a94b00311e99824c52c3e8fb511ea2",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 9,
         "totalFiles": 2,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -1959,6 +1971,10 @@ exports[`C02-04 characterization 3: grouped, chunked 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 3,
         "excludedByExclude": 0,
@@ -1967,10 +1983,12 @@ exports[`C02-04 characterization 3: grouped, chunked 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "80d93f4819f3188c67af6d5664de9d710569692e354c66123991f34e7b0f1444",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 3,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -2876,6 +2894,10 @@ exports[`C02-04 characterization 4: warm kills 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 3,
         "excludedByExclude": 0,
@@ -2884,10 +2906,12 @@ exports[`C02-04 characterization 4: warm kills 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "80d93f4819f3188c67af6d5664de9d710569692e354c66123991f34e7b0f1444",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 3,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -3685,6 +3709,10 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -3693,10 +3721,12 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -4545,6 +4575,10 @@ exports[`C02-04 characterization 6: section G unattested 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -4553,10 +4587,12 @@ exports[`C02-04 characterization 6: section G unattested 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -5576,6 +5612,10 @@ exports[`C02-04 characterization 6b: section G unattested, two batches whose dep
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 12,
         "excludedByExclude": 0,
@@ -5584,10 +5624,12 @@ exports[`C02-04 characterization 6b: section G unattested, two batches whose dep
         "hangCapableCount": 0,
         "instrumentableFiles": 2,
         "notInstrumentedFiles": [],
+        "numberingDigest": "c199954330ca501d94bbb0d20b67fd5f92ed0b36afec2d124e763a5365b99223",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 12,
         "totalFiles": 2,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -6613,6 +6655,10 @@ exports[`C02-04 characterization 7: lease lost mid-batch 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -6621,10 +6667,12 @@ exports[`C02-04 characterization 7: lease lost mid-batch 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -7192,6 +7240,10 @@ exports[`C02-04 characterization 8: R194 rule 2b 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -7200,10 +7252,12 @@ exports[`C02-04 characterization 8: R194 rule 2b 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -8043,6 +8097,10 @@ exports[`C02-04 characterization 9: no green baseline 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 3,
         "excludedByExclude": 0,
@@ -8051,10 +8109,12 @@ exports[`C02-04 characterization 9: no green baseline 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "80d93f4819f3188c67af6d5664de9d710569692e354c66123991f34e7b0f1444",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 3,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -8390,6 +8450,10 @@ Refusing to measure: every mutant covered only by these would be recorded no-cov
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 6,
         "excludedByExclude": 0,
@@ -8398,10 +8462,12 @@ Refusing to measure: every mutant covered only by these would be recorded no-cov
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "c635fe6a6f0fc3783ad1dee26a24be3aef9d9160a60eb2d760c02ba73a3e89f0",
         "preprocExcludedFiles": [],
         "seq": 6,
         "siteCount": 6,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -8720,6 +8786,10 @@ exports[`C02-04 characterization 11: parallel workers 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 3,
         "excludedByExclude": 0,
@@ -8728,10 +8798,12 @@ exports[`C02-04 characterization 11: parallel workers 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "80d93f4819f3188c67af6d5664de9d710569692e354c66123991f34e7b0f1444",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 3,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -9179,6 +9251,10 @@ exports[`C02-04 characterization 12: baseline in-flight 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -9187,10 +9263,12 @@ exports[`C02-04 characterization 12: baseline in-flight 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },
@@ -9583,6 +9661,10 @@ exports[`C02-04 characterization 13: baseline pre-dispatch retry 1`] = `
     },
     {
       "event": {
+        "carryHidden": {
+          "files": [],
+          "tuples": [],
+        },
         "declarativeSiteFiles": [],
         "deployedCount": 9,
         "excludedByExclude": 0,
@@ -9591,10 +9673,12 @@ exports[`C02-04 characterization 13: baseline pre-dispatch retry 1`] = `
         "hangCapableCount": 0,
         "instrumentableFiles": 1,
         "notInstrumentedFiles": [],
+        "numberingDigest": "a73435435ce263df5e41459ad0091afd1d415c2069c59e407a97e5ef8d2f1ea4",
         "preprocExcludedFiles": [],
         "seq": 5,
         "siteCount": 9,
         "totalFiles": 1,
+        "twinSites": [],
         "type": "mutation-set-generated",
       },
     },

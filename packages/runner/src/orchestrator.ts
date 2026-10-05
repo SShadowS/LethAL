@@ -193,6 +193,7 @@ import {
   coverageFilter,
   filterHistory,
   identityKeyOf,
+  numberingDigestOf,
   testKeyOf,
   twinSitesOf,
 } from "./selection";
@@ -5140,6 +5141,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // interrupted run's rows undercount it. `carryCurrent` is this session's side of every carry.
   const twinTuples = twinSitesOf(identityEntries);
   cfg.store.setTwinTuples(runId, twinTuples);
+  // R443: the numbering OUTPUT's digest. With `twinTuples` and `carryHidden` it is what an
+  // equivalence mark's proof is checked against, and what `lethal explain` prints into one.
+  const numberingDigest = numberingDigestOf(identityEntries, identityOrdinals);
+  cfg.store.setNumberingDigest(runId, numberingDigest);
   const carryCurrent: CurrentCarrySide = {
     hash: sourceHashAtGeneration,
     twins: new Set(twinTuples),
@@ -5231,6 +5236,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       : {}),
     // R447: present only when non-empty, like `refusedFiles`.
     ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
+    // R443: the run's numbering facts, for equivalence marks and `lethal explain`.
+    numberingDigest,
+    twinSites: twinTuples,
+    carryHidden: { tuples: [...carryHidden.tuples], files: [...carryHidden.files] },
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Built-in operators now

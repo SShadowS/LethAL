@@ -678,12 +678,24 @@ describe("R323: a scheme-2 record never reaches a current-scheme mutant with the
     // current scheme.
     expect(IDENTITY_SCHEME).toBeGreaterThanOrEqual(3);
     const dirs = await makeN14Project();
+    // R443: the mark carries this project's numbering digest, read from a real run, so only its
+    // scheme decides.
+    const plain = await runSession({
+      backend: new SurvivingBackend(),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    const numberingDigest = plain.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
     return runSession({
       backend: new SurvivingBackend(),
       store: new ResultsStore(":memory:"),
       ...dirs,
       selectorIds,
-      equivalenceMarks: [{ key: N14_KEY, reason: "same either way", identityScheme }],
+      equivalenceMarks: [
+        { key: N14_KEY, reason: "same either way", identityScheme, numberingDigest },
+      ],
     });
   }
 

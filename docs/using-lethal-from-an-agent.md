@@ -255,7 +255,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v11.schema.json](../schemas/explain-v11.schema.json)
+- `lethal explain`: [../schemas/explain-v12.schema.json](../schemas/explain-v12.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -301,9 +301,10 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 11`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 12`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
-`reach` and `markKey`. The top level can also carry `markKeysStale`.
+`reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
+also carry `mark`. Explain writes it for a report that records its numbering facts.
 
 A report whose schema version is anything other than 2 or 3, or that holds a value this build
 cannot interpret, is REFUSED rather than explained with the unrecognised value dropped.
@@ -581,33 +582,56 @@ The set of reasons is checked; the advice is guidance.
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 25, "marks": [ { "key": "...", "reason": "..." } ] }
+{
+  "identityScheme": 25,
+  "marks": [
+    {
+      "key": "...",
+      "reason": "...",
+      "file": "src/Foo.Codeunit.al",
+      "numberingDigest": "3b4c1e0f9a8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b",
+      "fileSingleton": true
+    }
+  ]
+}
 ```
 
 `reason` is required. To mark a survivor:
 
 1. Run `lethal explain report.json` and find the survivor.
-2. Copy its `markKey` into `key`.
+2. Copy its whole `mark` object into `marks`, and replace its `reason` with why no test can kill
+   the mutant. LethAL refuses the placeholder reason explain prints.
 3. Set `identityScheme` to explain's `markIdentityScheme`.
 4. If explain printed `markKeysStale`, the report was keyed under another identity scheme than this
    build's, and a mark written from it would be stale on the next run. Re-run under this build
-   first, then take the key from the new report's explain.
-5. Set the mark's `"preprocessorSymbols"` to the report's `buildSymbols`, the build's effective
-   set (for example `"preprocessorSymbols": ["CLEAN27"]`). A report from before R381 has no
-   `buildSymbols`; for that, build the set by hand: the config's symbols plus the target
-   `app.json`'s, and on al-runner the predefined ones below. Do not use the report's
-   `preprocessorSymbols`: it is the config set alone. A mark without the field means `[]`: it applies only to
-   a build with no symbols. A key names a site within one build, so a mark made under other
-   symbols is reported stale and never applied (R214). A mark for an AL-RUNNER run must list the
-   run's whole effective set, which includes `CLEANSCHEMA1` to `CLEANSCHEMA25` even when the
-   project defines no symbols. Such a mark applies only to an al-runner build; a mark without them
-   applies only to a build with no symbols (for example bcdev), so one mark cannot cover both
-   backends. LethAL warns by name (`equivalence-marks-build-symbols`) when a mark's set differs.
+   first, then take the mark from the new report's explain.
+5. Keep the mark's `"preprocessorSymbols"` as explain printed it: the report's `buildSymbols`, the
+   build's effective set (for example `"preprocessorSymbols": ["CLEAN27"]`). A mark without the
+   field means `[]`: it applies only to a build with no symbols. A key names a site within one
+   build, so a mark made under other symbols is reported stale and never applied (R214). A mark
+   for an AL-RUNNER run lists the run's whole effective set, which includes `CLEANSCHEMA1` to
+   `CLEANSCHEMA25` even when the project defines no symbols. Such a mark applies only to an
+   al-runner build; a mark without them applies only to a build with no symbols (for example
+   bcdev), so one mark cannot cover both backends. LethAL warns by name
+   (`equivalence-marks-build-symbols`) when a mark's set differs.
+
+A mark proves which mutant it names (R443). A key holds no file, and twins (mutants with the same
+key apart from the ordinal) are told apart by a run-wide number, so an edit elsewhere, `--only`,
+`--lines` or a repaired file header can hand a key to another twin. A later run therefore applies a
+mark only:
+- by its key, when the run's `numberingDigest` equals the mark's (the same numbering); or
+- by its `file`, when the mark says `fileSingleton: true` and this run has no twin of it in that
+  file.
+
+Any other mark is listed in the report's `readerMarkedEquivalent.refused` with its reason, and its
+mutant stays a plain survivor. A mark with the key alone (written before R443) is refused
+(`no-proof`): re-mark it from a fresh report's explain. Explain prints no `mark` for a report from
+before R443, because such a report records no numbering facts.
 
 A marks file without `identityScheme` was written before the field existed and reads as scheme 1,
 and a mark made under a scheme other than the one the run keys under is reported stale and never
 applied, because a key can name a different mutant after an engine change renumbers its twins
-(R325). `markKey` is this key, built from the survivor's row in `report.json`:
+(R325). `markKey` (and a mark's `key`) is this key, built from the survivor's row in `report.json`:
 
 ```text
 key = <astHash>|<codeunitName>|<procedureName>|<operatorName>|<operatorMajor>
@@ -619,7 +643,7 @@ the first), append `|<identityOrdinal>` as a sixth field; a row without it takes
 #### Marking notes (guidance)
 
 Some survivors cannot be killed by any test, because the change does not change behaviour. Copy
-the key from `explain` rather than building it by hand. A marked survivor is `skipped`: verify never runs it, and it
+the mark from `explain` rather than building it by hand. A marked survivor is `skipped`: verify never runs it, and it
 is not a measured kill or survival. `equivalenceRisk` alone never skips a survivor. A mark never
 changes the score.
 

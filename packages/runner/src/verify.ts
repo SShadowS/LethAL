@@ -1,7 +1,13 @@
 import { realpath, stat } from "node:fs/promises";
 import nodePath, { join, resolve } from "node:path";
 import { initParser, parseAL, wrapRoot } from "@lethal/engine";
-import type { MutantManifest, MutantManifestEntry, SelectorConfig } from "@lethal/schemata";
+import {
+  type MutantManifest,
+  type MutantManifestEntry,
+  type SelectorConfig,
+  coarseIdentityTupleOf,
+  identityTupleOf,
+} from "@lethal/schemata";
 import { InstalledArtifactError } from "./artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
@@ -18,6 +24,7 @@ import { discoverTests } from "./discovery";
 import {
   type EquivalenceMark,
   EquivalenceMarksError,
+  applyEquivalenceMarks,
   loadEquivalenceMarks,
   marksSchemeWarning,
   marksSymbolsWarning,
@@ -285,6 +292,9 @@ export interface VerifySource {
    *  reason: verify's rows carry the source's keys and files. */
   readonly generationSourceSha256: string | null;
   readonly twinTuples: readonly string[] | null;
+  /** R443: the source run's numbering digest, which a mark's proof is checked against, and
+   *  copied onto verify's run row with `twin_tuples`. `null` (before R443): no mark applies. */
+  readonly numberingDigest: string | null;
   readonly targets: ReadonlyArray<{
     readonly batchIndex: number;
     readonly mutantCode: string;
@@ -611,6 +621,7 @@ export function resolveVerifySource(store: ResultsStore, req: VerifyRequest): Ve
     carryHidden: run.carryHidden,
     generationSourceSha256: run.generationSourceSha256,
     twinTuples: run.twinTuples,
+    numberingDigest: run.numberingDigest,
     targets,
     rows: [...rows.values()].map((r) => ({
       mutantCode: r.mutantCode,
@@ -719,7 +730,8 @@ export interface VerifyPlan {
   readonly newTests: readonly TestMethodRef[];
   readonly skipped: ReadonlyArray<{
     readonly entry: MutantManifestEntry;
-    readonly mark: EquivalenceMark;
+    /** R443: the matched mark, under the entry's CURRENT key. */
+    readonly mark: { readonly key: string; readonly reason: string };
   }>;
   /** Every target's trusted manifest entry, skipped or not, by mutant code. */
   readonly entries: ReadonlyMap<string, MutantManifestEntry>;
@@ -733,7 +745,8 @@ export interface VerifyPlan {
   /** R325: marks made under an identity scheme other than the source run's, and (R214) under other
    *  build symbols than its build. None is applied. */
   readonly marksUnderOtherScheme: readonly EquivalenceMark[];
-  /** R259: the identity keys (`serializeKey`) of the marks applied, for any mutant of the batch. */
+  /** R259: the identity keys (`serializeKey`) of the mutants of the batch a mark applied to
+   *  (R443: the mutants' current keys, under the source run's numbering facts). */
   readonly markedKeys: ReadonlySet<string>;
   /** R-384: per requested mutant code, its source covering tests that run, in request order. The
    *  reach filter never removes one of these. */
@@ -822,16 +835,38 @@ export async function planVerify(a: {
       source.buildSymbols === null ||
       !sameBuildSymbols(m.preprocessorSymbols ?? [], source.buildSymbols),
   );
-  const markByKey = new Map(
-    marks.filter((m) => !staleMarks.includes(m)).map((m) => [m.key, m] as const),
+  // R443: R-391's rule, as the report applies it (`applyEquivalenceMarks`), against the SOURCE
+  // run's recorded numbering facts: a key alone can name another twin. A source run without them
+  // (before R443) gets no mark applied, and a mutant whose coarse tuple the source run hid from
+  // numbering takes none (R307 section 3), so such survivors run rather than being skipped.
+  const hidden = new Set(source.carryHidden?.tuples ?? []);
+  const applied = applyEquivalenceMarks(
+    marks.filter((m) => !staleMarks.includes(m)),
+    manifest.mutants
+      .filter((e) => source.carryHidden !== null && !hidden.has(coarseIdentityTupleOf(e)))
+      .map((e) => ({
+        batchIndex: 0,
+        mutantCode: e.mutantId,
+        identity: serializeKey(identityKeyOf(e)),
+        file: e.file,
+        tuple: identityTupleOf(e),
+        verdict: "survived",
+      })),
+    source.identityScheme,
+    source.buildSymbols ?? [],
+    source.numberingDigest !== null && source.twinTuples !== null
+      ? { numberingDigest: source.numberingDigest, twinSites: new Set(source.twinTuples) }
+      : undefined,
   );
+  const markByCode = new Map(applied.matched.map((x) => [x.mutantCode, x] as const));
+  const markedKeys = new Set(applied.matched.map((x) => x.key));
   const skipped: Array<VerifyPlan["skipped"][number]> = [];
   const running: Array<VerifySource["targets"][number]> = [];
   for (const t of source.targets) {
     const entry = entries.get(t.mutantCode);
     if (entry === undefined) throw new Error(`verify.ts: ${t.mutantCode} lost its entry`);
-    const mark = markByKey.get(serializeKey(identityKeyOf(entry)));
-    if (mark !== undefined) skipped.push({ entry, mark });
+    const mark = markByCode.get(t.mutantCode);
+    if (mark !== undefined) skipped.push({ entry, mark: { key: mark.key, reason: mark.reason } });
     else running.push(t);
   }
   if (running.length === 0) {
@@ -844,7 +879,7 @@ export async function planVerify(a: {
       notRun: new Map(),
       allRefused: new Set(),
       marksUnderOtherScheme: staleMarks,
-      markedKeys: new Set(markByKey.keys()),
+      markedKeys,
       covering: new Map(),
       cap: {
         runId: source.runId,
@@ -1068,7 +1103,7 @@ export async function planVerify(a: {
     notRun,
     allRefused,
     marksUnderOtherScheme: staleMarks,
-    markedKeys: new Set(markByKey.keys()),
+    markedKeys,
     covering,
     cap,
   };
@@ -1777,6 +1812,7 @@ export async function runVerify(
         // R391: and the source's generation facts, which say what those keys name.
         generationSourceSha256: source.generationSourceSha256,
         twinTuples: source.twinTuples,
+        numberingDigest: source.numberingDigest,
         // R354: verify's OWN mode, the one this run measures under; equal to the source's here.
         coverageMode,
         // R247: the test app this run measures against, the one it is about to publish. The

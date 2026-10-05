@@ -244,6 +244,9 @@ export interface RunRow {
   /** R391: sorted `twinSiteOf` pairs with a twin in their file. `null` is "not measured" (before
    *  R391, or the run died before generation): no rule-2 carry. `[]` is "measured, no twins". */
   readonly twinTuples: readonly string[] | null;
+  /** R443: the run's `numberingDigestOf` (selection.ts), written beside `twin_tuples`. `null` when
+   *  not recorded (before R443, or the run died before generation). */
+  readonly numberingDigest: string | null;
 }
 
 /** R391: a stored `twin_tuples`, checked. NULL stays `null`; anything but a JSON string array
@@ -635,6 +638,8 @@ export class ResultsStore {
       ["runs", "generation_source_sha256 TEXT", runCols],
       // R391: NULL on an older row, read as "not measured": no rule-2 carry from it.
       ["runs", "twin_tuples TEXT", runCols],
+      // R443: NULL on an older row, read as "not recorded".
+      ["runs", "numbering_digest TEXT", runCols],
     ] as const) {
       const name = col.split(" ")[0] ?? "";
       if (!known.some((c) => c.name === name)) {
@@ -684,13 +689,16 @@ export class ResultsStore {
     /** R391: the run's `twin_tuples`. Absent or `null` writes NULL ("not measured"). `runSession`
      *  writes it after generation (`setTwinTuples`); verify copies its source's here. */
     twinTuples?: readonly string[] | null;
+    /** R443: the run's numbering digest. Absent or `null` writes NULL. `runSession` writes it
+     *  after generation (`setNumberingDigest`); verify copies its source's here. */
+    numberingDigest?: string | null;
   }): number {
     // R325: every run records the identity scheme its keys are made under, so no later session
     // can read them as keys of another scheme.
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, test_app_hash, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -707,6 +715,7 @@ export class ResultsStore {
         info.carryHidden != null ? JSON.stringify(info.carryHidden) : null,
         info.generationSourceSha256 ?? null,
         info.twinTuples != null ? JSON.stringify(info.twinTuples) : null,
+        info.numberingDigest ?? null,
       ) as {
       id: number;
     };
@@ -720,6 +729,14 @@ export class ResultsStore {
       .query("UPDATE runs SET twin_tuples = ? WHERE id = ?")
       .run(JSON.stringify(twinTuples), runId).changes;
     if (changed !== 1) throw new Error(`store.ts: setTwinTuples: no run ${runId}`);
+  }
+
+  /** R443: records the run's numbering digest, beside `setTwinTuples` and at the same moment. */
+  setNumberingDigest(runId: number, digest: string): void {
+    const changed = this.db
+      .query("UPDATE runs SET numbering_digest = ? WHERE id = ?")
+      .run(digest, runId).changes;
+    if (changed !== 1) throw new Error(`store.ts: setNumberingDigest: no run ${runId}`);
   }
 
   /** R442: records what the run numbered no ordinal for, once generation knows it. Called before
@@ -885,12 +902,13 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest FROM runs WHERE id = ?",
       )
       .get(runId) as {
       carry_hidden: string | null;
       generation_source_sha256: string | null;
       twin_tuples: string | null;
+      numbering_digest: string | null;
       id: number;
       project_path: string;
       backend: string;
@@ -915,6 +933,7 @@ export class ResultsStore {
       carryHidden: parseCarryHidden(row.carry_hidden, row.id),
       generationSourceSha256: row.generation_source_sha256,
       twinTuples: parseTwinTuples(row.twin_tuples, row.id),
+      numberingDigest: row.numbering_digest,
     };
   }
 

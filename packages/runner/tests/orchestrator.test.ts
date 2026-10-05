@@ -666,6 +666,7 @@ describe("runSession", () => {
           carryHidden: null,
           generationSourceSha256: null,
           twinTuples: null,
+          numberingDigest: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
           rows: [],
         },
@@ -824,6 +825,7 @@ describe("runSession", () => {
             carryHidden: null,
             generationSourceSha256: null,
             twinTuples: null,
+            numberingDigest: null,
             targets: [
               {
                 batchIndex: 0,
@@ -14936,13 +14938,16 @@ describe("C02-06 Task 5.4: runVerify", () => {
       if (e === undefined) throw new Error(`no ${code}`);
       return serializeKey(identityKeyOf(e));
     };
+    // R443: a mark proves its mutant by the source run's numbering digest (rule 1).
+    const numberingDigest = fx.store.getRun(fx.installed.fromRunId)?.numberingDigest;
+    if (numberingDigest == null) throw new Error("the source run recorded no numbering digest");
     await Bun.write(
       join(fx.dirs.projectDir, "lethal.equivalent.json"),
       JSON.stringify({
         identityScheme: IDENTITY_SCHEME,
         marks: [
-          { key: keyOf("M0001"), reason: "same either way" },
-          { key: keyOf("M0002"), reason: "also equivalent" },
+          { key: keyOf("M0001"), reason: "same either way", numberingDigest },
+          { key: keyOf("M0002"), reason: "also equivalent", numberingDigest },
         ],
       }),
     );

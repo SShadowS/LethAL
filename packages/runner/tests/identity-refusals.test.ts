@@ -21,6 +21,7 @@ import type {
 } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { buildExcludedSites } from "../src/excluded-sites";
+import { explain } from "../src/explain";
 import {
   generateMutationSet,
   identityOrdinalsOf,
@@ -531,6 +532,13 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
     const twin = first.mutants.find((m) => m.operatorName === "lethal.remove-assignment");
     if (twin === undefined) throw new Error("expected the remove-assignment twin");
     const key = keyOf(twin);
+    // R443: the mark `lethal explain` prints for it, proof included. Good holds one such twin, so
+    // it is a proven singleton in its file and still names it after Bad renumbers (rule 2).
+    const printed = explain(first).survivors.find(
+      (s) => s.batchIndex === twin.batchIndex && s.mutantCode === twin.mutantCode,
+    )?.mark;
+    if (printed === undefined) throw new Error("explain printed no mark for the twin");
+    expect(printed.fileSingleton).toBe(true);
     const marked = async () =>
       (
         await runSession({
@@ -538,7 +546,7 @@ describe("R307 T6 (b): a header-rule refusal fails its loose twins closed", () =
           store: new ResultsStore(":memory:"),
           ...dirs,
           selectorIds: skipSelectorIds,
-          equivalenceMarks: [{ key, reason: "a twin", identityScheme: IDENTITY_SCHEME }],
+          equivalenceMarks: [{ ...printed, reason: "a twin", identityScheme: IDENTITY_SCHEME }],
         })
       ).readerMarkedEquivalent;
     const control = await marked();
