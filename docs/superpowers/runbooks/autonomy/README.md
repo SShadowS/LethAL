@@ -38,6 +38,9 @@ next free id right before writing).
   Windows check.
 - **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
   last command's. Use `set -o pipefail;` if the output must be trimmed.
+- **A lone timeout in a full `verify` while another full `verify` overlaps is starvation, not a
+  result** (R482): keep the log, re-run once, and investigate only if it fails again or fails with
+  no overlap. Never raise a timeout to make it pass.
 - **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
   process gets OOM-killed (R-458 planner, 2026-10-05).
 - **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
