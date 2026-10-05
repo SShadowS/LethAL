@@ -128,6 +128,14 @@ function callType(node: ALSyntaxNode, symbols: SymbolTable): string | null {
   const callee = node.childForFieldName("function");
   if (callee === null) return null;
 
+  // R455: against a record scope an unqualified call binds to the TABLE's method before the
+  // object's own procedure (alc 18.0.43: AL0122 in `with R do I := F()`, the same on a page with a
+  // `SourceTable` and in a `TableNo` OnRun). This layer does not read table methods, so such a call
+  // types as nothing, by the same context tests R294 uses for names. A quoted callee too.
+  if (callee.kind === ALNodeKind.identifier || callee.rawKind === "quoted_identifier") {
+    if (insideWithBody(node) || implicitRecordShadowsGlobals(node)) return null;
+  }
+
   if (callee.kind === ALNodeKind.identifier) {
     // Unqualified: a procedure of the object the call sits in.
     const owner = enclosingObjectScopeKey(node);
