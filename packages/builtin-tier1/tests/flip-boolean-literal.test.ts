@@ -473,6 +473,30 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
       expect(tagged({ "P.al": armed, "O.al": caller("Par.Modify(false);") }, [])).toEqual([PLAIN]);
     });
 
+    // sol final r1 finding 2: `anyArm` as passed to `projectObserves`. A tableextension trigger
+    // inside a member-level `#if`, no trigger on the table. Revert: pass `rawArmOf(ctx)` there.
+    const condExt = (t: string): string =>
+      `tableextension 50305 "Par Ext" extends "Par"\n{\n#if X\n    trigger ${t}()\n    begin\n    end;\n#endif\n}\n`;
+    for (const [t, call] of [
+      ["OnBeforeModify", "Par.Modify(false);"],
+      ["OnAfterModify", "Par.Modify(false);"],
+      ["OnAfterInsert", "Par.Insert(false);"],
+    ] as const) {
+      it(`keeps the tag on a conditional tableextension ${t} when no arm map is given`, () => {
+        const files = { "P.al": par(""), "X.al": condExt(t), "O.al": caller(call) };
+        expect(tagged(files)).toEqual([FORCED]);
+      });
+    }
+    // Revert: pass `projectObserves` a reader that answers "active" for every node.
+    it("drops the tag on a tableextension OnAfterModify in an evaluated INACTIVE arm", () => {
+      const files = {
+        "P.al": par(""),
+        "X.al": condExt("OnAfterModify"),
+        "O.al": caller("Par.Modify(false);"),
+      };
+      expect(tagged(files, [])).toEqual([PLAIN]);
+    });
+
     // Revert: drop the unindexed-object check in `projectObserves`.
     it("keeps the tag when an #if-wrapped project tableextension of the table exists", () => {
       const wrapped = `#if X\ntableextension 50305 "Par Ext" extends "Par"\n{\n}\n#endif\n`;
