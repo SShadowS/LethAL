@@ -468,44 +468,54 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
 
   test("NULL columns: a run with no generation hash and no twin_tuples carries nothing", async () => {
     const p = await project(["X := 2;"], [TWIN]);
+    // A file-backed store must be closed before afterAll deletes its folder: on Windows an open
+    // SQLite file cannot be removed (EBUSY), which leaks the temp folder (R358).
     const store = new ResultsStore(p.dbPath);
-    const first = await runSession({
-      backend: new SiteBackend({}),
-      store,
-      ...p.dirs,
-      selectorIds,
-    });
-    expect(rows(first)).toEqual([`${A} @13 survived`, `${B} @8 survived`]);
-    const db = new Database(p.dbPath);
-    db.run("UPDATE runs SET generation_source_sha256 = NULL, twin_tuples = NULL");
-    db.close();
+    try {
+      const first = await runSession({
+        backend: new SiteBackend({}),
+        store,
+        ...p.dirs,
+        selectorIds,
+      });
+      expect(rows(first)).toEqual([`${A} @13 survived`, `${B} @8 survived`]);
+      const db = new Database(p.dbPath);
+      db.run("UPDATE runs SET generation_source_sha256 = NULL, twin_tuples = NULL");
+      db.close();
 
-    const second = await runSession({
-      backend: new SiteBackend({ [`${A}:13`]: "fail", [`${B}:8`]: "fail" }),
-      store,
-      ...p.dirs,
-      selectorIds,
-      skipKnownSurvivors: true,
-    });
-    expect(rows(second)).toEqual([`${A} @13 killed`, `${B} @8 killed`]);
+      const second = await runSession({
+        backend: new SiteBackend({ [`${A}:13`]: "fail", [`${B}:8`]: "fail" }),
+        store,
+        ...p.dirs,
+        selectorIds,
+        skipKnownSurvivors: true,
+      });
+      expect(rows(second)).toEqual([`${A} @13 killed`, `${B} @8 killed`]);
+    } finally {
+      store.close();
+    }
   });
 
   test("NULL vs []: a NULL hash with `[]` twin_tuples still carries a singleton under rule 2", async () => {
     const p = await project(["X := 2;"], [TWIN]);
     const store = new ResultsStore(p.dbPath);
-    await runSession({ backend: new SiteBackend({}), store, ...p.dirs, selectorIds });
-    const db = new Database(p.dbPath);
-    db.run("UPDATE runs SET generation_source_sha256 = NULL");
-    db.close();
+    try {
+      await runSession({ backend: new SiteBackend({}), store, ...p.dirs, selectorIds });
+      const db = new Database(p.dbPath);
+      db.run("UPDATE runs SET generation_source_sha256 = NULL");
+      db.close();
 
-    const second = await runSession({
-      backend: new SiteBackend({ [`${A}:13`]: "fail", [`${B}:8`]: "fail" }),
-      store,
-      ...p.dirs,
-      selectorIds,
-      skipKnownSurvivors: true,
-    });
-    expect(rows(second)).toEqual([`${A} @13 known-survivor`, `${B} @8 known-survivor`]);
+      const second = await runSession({
+        backend: new SiteBackend({ [`${A}:13`]: "fail", [`${B}:8`]: "fail" }),
+        store,
+        ...p.dirs,
+        selectorIds,
+        skipKnownSurvivors: true,
+      });
+      expect(rows(second)).toEqual([`${A} @13 known-survivor`, `${B} @8 known-survivor`]);
+    } finally {
+      store.close();
+    }
   });
 
   test("store: createRun leaves twin_tuples NULL; setTwinTuples([]) records `[]`, distinct from NULL", () => {
