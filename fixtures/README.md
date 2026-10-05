@@ -273,7 +273,10 @@ Four different operators plant S1 to S4, three of them AL-specific (Tier 2). The
 `remove-assignment`, is the one operator here that declares an `equivalenceRisk`, and it plants the
 equivalent. The equivalent is recorded in the target's own committed `lethal.equivalent.json`, a
 reader mark whose key is the row's serialized identity (`identityKeyOf` / `serializeKey`,
-`packages/runner/src/selection.ts`), matched live against `readerMarkedEquivalent`.
+`packages/runner/src/selection.ts`), matched live against `readerMarkedEquivalent`. Since R443 the
+mark also carries the proof `lethal explain` printed for S5 (`file`, `numberingDigest`,
+`fileSingleton`); S5 is the only such site in its file, so the mark still applies if the digest
+moves.
 
 ### Why S5 is equivalent, not just untested
 

@@ -21,7 +21,13 @@ import type { RunEvent } from "../src/events";
 import { explain } from "../src/explain";
 import type { LineRange } from "../src/line-filter";
 import { runSession } from "../src/orchestrator";
-import { type SessionReport, buildReport, markIdentityOf, markTupleOfRow } from "../src/report";
+import {
+  type SessionReport,
+  buildReport,
+  markIdentityOf,
+  markTupleOfRow,
+  renderConsole,
+} from "../src/report";
 import { numberingDigestOf, serializeKey, twinSiteOf } from "../src/selection";
 import { ResultsStore } from "../src/store";
 
@@ -239,6 +245,10 @@ describe("R443: a mark never names a twin it was not written for", () => {
     const second = await w.run({ marks: [mark] });
     expect(matchedSites(second)).toEqual([]);
     expect(second.readerMarkedEquivalent?.stale).toEqual([mark.key]);
+    // The STALE banner no longer claims an edit keeps a mark from drifting onto another mutant.
+    const banner = renderConsole(second);
+    expect(banner).toContain("EQUIVALENCE MARKS STALE: 1 mark(s)");
+    expect(banner).not.toContain("drift");
   });
 
   test("same-file: the marked first twin is deleted; the second twin is not marked", async () => {
@@ -257,6 +267,11 @@ describe("R443: a mark never names a twin it was not written for", () => {
     const second = await w.run({ marks: [mark] });
     expect(matchedSites(second)).toEqual([]);
     expect(refusedReasons(second)).toEqual(["renumbered"]);
+    // The console names the refused mark, why, and the command that prints its replacement.
+    const banner = renderConsole(second);
+    expect(banner).toContain("EQUIVALENCE MARKS REFUSED: 1 mark(s)");
+    expect(banner).toContain("lethal explain");
+    expect(banner).toContain(`  ${mark.key} (B_Twin.Codeunit.al): renumbered, `);
   });
 
   test("header refusal (R443): a repaired file's twin does not inherit a mark made while it was refused", async () => {
@@ -388,11 +403,13 @@ describe("R443 (b) B2: a twin --lines dropped is not a singleton", () => {
     // The run's twin sites cannot see the dropped twin; its carryHidden can.
     expect(narrowed.twinSites).toEqual([]);
     const mark = markFor(narrowed, first);
-    expect(mark.fileSingleton).toBe(false);
 
     await w.write("B_Twin.Codeunit.al", codeunit('codeunit 50101 "Pair"', ["X := X * 2;", TWIN]));
     const full = await w.run({ marks: [mark] });
+    // The sequence first, then why: the mark never proved a singleton.
     expect(matchedSites(full)).toEqual([]);
+    expect(mark.fileSingleton).toBe(false);
+    expect(refusedReasons(full)).toEqual(["renumbered"]);
   });
 });
 
@@ -415,9 +432,10 @@ describe("R443 (c) B3: the per-row readerMark joins on the matched row, not the 
     // The mark's own key now names C's twin.
     expect(keyOf(c2)).toBe(mark.key);
     expect(matchedSites(second)).toEqual([`B_Twin.Codeunit.al @${b2.line}`]);
-    expect(second.readerMarkedEquivalent?.matched.map((m) => m.key)).toEqual([keyOf(b2)]);
-    expect(b2.readerMark).toEqual({ key: keyOf(b2), reason: "reviewed: equivalent" });
+    // The per-row join first: C's row holds the mark's old key and must not carry it.
     expect(c2.readerMark).toBeUndefined();
+    expect(b2.readerMark).toEqual({ key: keyOf(b2), reason: "reviewed: equivalent" });
+    expect(second.readerMarkedEquivalent?.matched.map((m) => m.key)).toEqual([keyOf(b2)]);
   });
 });
 
