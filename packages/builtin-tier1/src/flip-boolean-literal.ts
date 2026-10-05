@@ -6,6 +6,7 @@ import {
   forceCanRaise,
   inMemberBody,
   modifySkipCanRaise,
+  receiverUnresolved,
 } from "@lethal/engine";
 import {
   ALNodeKind,
@@ -289,7 +290,15 @@ function runTriggerTag(
     if (arg === undefined || arg.startIndex !== node.startIndex || arg.endIndex !== node.endIndex) {
       continue;
     }
-    if (!claimsRecordMethod(call, ctx, method)) continue;
+    // R-364: an UNRESOLVED receiver keeps the SKIP tag (R143's rule; screen tagging is
+    // conservative). `claimsRecordMethod` refuses it, which is right for claiming and is left
+    // unchanged. The forcing `false` (R-457) is untouched here: it is tagged only when claimed.
+    if (!claimsRecordMethod(call, ctx, method)) {
+      if (value === "true" && skip !== null && receiverUnresolved(call, ctx, method)) {
+        return skip.tag;
+      }
+      continue;
+    }
     if (value === "false") return forceCanRaise(call, ctx, kind) ? "run-trigger-forced" : undefined;
     return skip?.canRaise(call, ctx) ? skip.tag : undefined;
   }

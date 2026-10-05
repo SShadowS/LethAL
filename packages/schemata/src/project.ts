@@ -157,9 +157,11 @@ export function coarseIdentityTupleOf(
  * literal in a loop condition's `#if` tail (`shift-integer`), a literal inside a comparison in a
  * loop's exit test (`flip-boolean-literal`) and a write to `R.Field` that an enclosing loop's
  * condition reads, so a later same-tuple twin of a refused mutant takes its ordinal and its old
- * key.
+ * key. 15 is reserved for R-254. 16: R-364, inside an object wrapped whole in `#if` (not indexed)
+ * the same refusal matches an unresolved target by name, so hang-capable writes there are removed
+ * and a later same-tuple twin takes the removed one's ordinal.
  */
-export const IDENTITY_SCHEME = 14;
+export const IDENTITY_SCHEME = 16;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

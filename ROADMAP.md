@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**103 of 458 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 459 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -150,7 +150,7 @@ that ordering is the priority.
 - **R355** · campaign compare is coverage-mode-blind: a stage frozen under one coverage mode can be reported identical to a run under another · [R355.md](docs/roadmap/R355.md) · done (838d7379)
 - **R361** · A RecoverOp that THROWS while reconciling a lost EndPublish ack escapes publish() with no latch and no recycle recorded · [R361.md](docs/roadmap/R361.md) · done (7d6fc37b)
 - **R362** · A refused `BeginPublish` inside a lease hook warns `after-lease-acquired-uncertain`, which says there is no proof the server stopped · [R362.md](docs/roadmap/R362.md) · done (6e5eef0a)
-- **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · open, filed 2026-09-30
+- **R364** · A typed or Tier-2 site next to a declaration in an inactive `#if` arm is typed differently from the compiled build: master loses the typed mutant, or keeps a Tier-1 one the compiled build would give to Tier 2 · [R364.md](docs/roadmap/R364.md) · closed 2026-10-05 — ruling with R369: wrong-tier rows compile and are misattributed; 96 lost sites, 0.013% of…
 - **R372** · A test edited on disk but not republished runs its OLD body in lethal run, yet the run records the NEW body's digest, so verify reads the edit as already measured · [R372.md](docs/roadmap/R372.md) · done (ad8e544f)
 - **R374** · Identity ordinals are numbered per batch, so twins in two batches share one identity key and --skip-known-survivors can skip a mutant on its twin's verdict · [R374.md](docs/roadmap/R374.md) · open, filed 2026-09-30
 - **R385** · lethal verify cannot see a Microsoft dependency rebuilt or upgraded on the server while the test app's declared minimum version stays the same · [R385.md](docs/roadmap/R385.md) · done (e64bc53e)
@@ -182,6 +182,7 @@ that ordering is the priority.
 - **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · open
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
 - **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · open
+- **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · open
 - **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · open
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · open
 - **R466** · The runner's TestPage scan (R-371) gives a TableNo codeunit's `Rec` to every procedure; `alc` binds it in `OnRun` only · [R466.md](docs/roadmap/R466.md) · open
@@ -288,16 +289,16 @@ that ordering is the priority.
 - **R333** · Low priority: the trigger-local rule drops four valid BaseApp mutants where the trigger local and the global it shadows have the same type · [R333.md](docs/roadmap/R333.md) · open, filed 2026-09-29
 - **R334** · Low priority: index `#if`-wrapped members under the every-arm rule, to recover the typed sites the R-302 fail-safe refuses · [R334.md](docs/roadmap/R334.md) · open, filed 2026-09-29
 - **R340** · Resolve trigger header names: a trigger's parameters, `var` locals and named return are unknown since R330 and R323, so no typed operator reaches them · [R340.md](docs/roadmap/R340.md) · open, filed 2026-09-29, priority low
-- **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · open, filed 2026-10-01
+- **R376** · A `#if` in a single-statement slot is not lifted by R214, so its arm statements are still not sites (exclusion `slot`) · [R376.md](docs/roadmap/R376.md) · closed 2026-10-05 — 0 lost sites in every corpus; unit repro only (R-364 census)
 - **R380** · Upstream: tree-sitter-al scopes `not` over a following `and` or `or` in a `#if` condition · [R380.md](docs/roadmap/R380.md) · open, filed 2026-10-01
 - **R357** · campaign compare --json has no published JSON Schema · [R357.md](docs/roadmap/R357.md) · done (861f4cfd)
 - **R381** · `SessionReport` records the config symbols but not the effective build symbols; `excludedSites` carries them only when a site was compiled out · [R381.md](docs/roadmap/R381.md) · done (68a72cd3)
-- **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · open, filed 2026-09-30
-- **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · open, filed 2026-09-30
-- **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · open, filed 2026-09-30
-- **R368** · `split-call-statement`: a call statement whose first line is inside `#if` gets no `void-method-call` · [R368.md](docs/roadmap/R368.md) · open, filed 2026-09-30
-- **R369** · `cond-var-typing`: declarations inside a `var`-section `#if` are invisible to the semantic layer, and the tree can stretch that `#if` over whole members · [R369.md](docs/roadmap/R369.md) · open, filed 2026-09-30
-- **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · open, filed 2026-09-30
+- **R365** · `dup-arm-typing`: a semantic operator in a member declared in more than one `#if` arm emits nothing there · [R365.md](docs/roadmap/R365.md) · closed 2026-10-05 — its own shape is fixed by R-405a liveMembers; the residue is R369, R305 and R343 shapes…
+- **R366** · `split-case-body`: the `begin..end` body of a case branch whose label is split by `#if` gets no `empty-block` · [R366.md](docs/roadmap/R366.md) · closed 2026-10-05 — negligible: 1 lost site in CDO, 0 in BaseApp and fixtures (R-364 census)
+- **R367** · `split-if-operators`: an `if ... then begin ... end else begin` split by `#if` gets no `empty-block` or `negate-guard` · [R367.md](docs/roadmap/R367.md) · closed 2026-10-05 — negligible: 2 lost sites in BaseApp, 0 in CDO and fixtures (R-364 census)
+- **R368** · `split-call-statement`: a call statement whose first line is inside `#if` gets no `void-method-call` · [R368.md](docs/roadmap/R368.md) · closed 2026-10-05 — 0 lost sites in BaseApp, CDO and fixtures; DC-only (R-364 census)
+- **R369** · `cond-var-typing`: declarations inside a `var`-section `#if` are invisible to the semantic layer, and the tree can stretch that `#if` over whole members · [R369.md](docs/roadmap/R369.md) · closed 2026-10-05 — ruling with R364: wrong-tier rows compile and are misattributed; 0.013% of BaseApp's…
+- **R370** · `unbuildable-under-set`: a file whose text under the effective symbols is not a program (a member's only header, a case label or a call's head compiled out) still gets mutants · [R370.md](docs/roadmap/R370.md) · closed 2026-10-05 — 0 unbuildable files in BaseApp, CDO and fixtures; DC-only (R-364 census)
 - **R371** · lethal verify cannot see an edit to a helper, handler or library procedure a test calls, because the per-test digest covers the test method only · [R371.md](docs/roadmap/R371.md) · done (ecf0f1d1, 4ee63129)
 - **R373** · An env-tool run, or a bcdev run that cannot ask the dev endpoint for the test app, records no test digests, so lethal verify refuses it · [R373.md](docs/roadmap/R373.md) · open
 - **R384** · lethal verify sends every new test to every survivor, so a shared-helper edit on a large suite trips too-many-new-tests; a per-survivor reachability filter would bend that curve · [R384.md](docs/roadmap/R384.md) · done (1ec0dcab)

@@ -92,6 +92,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
+  mutants inside wrapped objects, and a later same-tuple twin of a removed mutant can take its key:
+  re-check equivalence marks.
+
 - **A skipped `OnModify` is now screened, and so are `ModifyAll`/`DeleteAll` RunTrigger flips**
   (R452). `swap-modify-flag`'s `Modify(true)` -> `Modify(false)` mutants carry the new
   `platformKillMechanism` value `run-trigger-skipped-modify` unless LethAL can prove that skipping
@@ -350,6 +354,38 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   On al-runner nothing changes: the scan runs on bcdev only.
 
 ### Fixed
+
+- **The loop-hang refusal now works inside an object wrapped whole in `#if`** (R-364, R343).
+  The symbol table does not index such an object, so no variable there resolved and the four value
+  operators deployed hang-capable mutants. Now, when a write's target does not resolve and its own
+  object is unindexed, an enclosing loop condition that reads the same NAME refuses the site (a
+  plain name against a plain read, `R.Field` against the same receiver and field), and it is
+  counted in `hang-refused`. Indexed objects are unchanged: there an unresolved target is still not
+  matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
+- **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
+  not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
+  screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged. The tag is
+  conservative over-tagging: inside a wrapped object a codeunit variable calling a project
+  procedure named `DeleteAll` or `ModifyAll` with `true` also gets the tag (its receiver does not
+  resolve), which is the accepted direction.
+  - Measured on BaseApp (BC.History w1-28, 203 projects, under `[]`): 11 `flip-boolean-literal`
+    mutants gain a tag, and none loses one.
+  - **1 restored**, in a wrapped object: `CalculateSubcontracts.Report.al`'s
+    `RequisitionLine.DeleteAll(true)` (`run-trigger-skipped-delete`).
+  - **10 newly added**, in indexed objects. The line numbers are in the R-364 site diff.
+    - 8 are a qualified `Rec.` call in a page or a `TableNo` codeunit, where an implicit `Rec` does
+      not resolve (R458's territory):
+      - Base Application: `Rec.ModifyAll` in `DimensionCorrectionChanges.Page.al`,
+        `ReminderAutErrorOverview.Page.al` and `MonitoredFieldsWorksheet.page.al`, and
+        `Rec.DeleteAll` in `ArchivedWFStepInstances.Page.al`;
+      - Sustainability: `Rec.DeleteAll` in `SustExciseJnlPost.Codeunit.al` and
+        `SustainabilityJnlPost.Codeunit.al`;
+      - AI Test Toolkit: `Rec.DeleteAll` in `AITLogEntries.Page.al`;
+      - Test Runner: `Rec.ModifyAll` in `CommandLineTestTool.Page.al`.
+    - 2 are a global the symbol table does not read because a `#if` sits in the global var section
+      (R369's class): `PurchReqLine.DeleteAll` in `CalculatePlanReqWksh.Report.al` and
+      `SalesLine.DeleteAll` in `SalesHeader.Table.al`'s `RecreateSalesLines`.
+  - CDO and every fixture are unchanged.
 
 - **Three more loop-hang shapes are refused; identity scheme 14** (R454). `shift-integer` now
   refuses a literal in a loop condition's `#if` tail; `flip-boolean-literal` refuses a literal
