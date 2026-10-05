@@ -86,6 +86,13 @@ export const swapAdditive: MutationOperator = {
     return flipFor(node, ctx) !== null;
   },
 
+  // R447: asks `flipFor`'s checks only, not `replaceOperatorToken`, so a hang-refused node whose
+  // token replacement would ALSO have failed is still counted. A possible small over-count, bounded
+  // by such nodes (none known); not worth a second token replacement on the refusal path.
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return flipBeforeHang(node, ctx) !== null && hangCapableForMutatedNode(node, ctx) !== null;
+  },
+
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const flip = flipFor(node, ctx);
     if (flip === null) return [];
@@ -163,6 +170,14 @@ interface AdditiveFlip {
  * about which sites are claimed.
  */
 function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null {
+  const flip = flipBeforeHang(node, ctx);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return flip !== null && hangCapableForMutatedNode(node, ctx) === null ? flip : null;
+}
+
+/** `flipFor` without R196's hang check: every other guard, in the same order (R447). */
+function flipBeforeHang(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null {
   if (node.kind !== ALNodeKind.additive_expression) return null;
 
   const token = findOperatorToken(node);
@@ -183,8 +198,5 @@ function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null 
   // failing the whole project's compile.
   if (leftType === null || rightType === null) return null;
   if (!NUMERIC_TYPES.has(leftType) || !NUMERIC_TYPES.has(rightType)) return null;
-  // R196: a value written to a variable an enclosing loop's condition reads is refused, silently.
-  if (hangCapableForMutatedNode(node, ctx) !== null) return null;
-
   return { token: token.text, replacement };
 }

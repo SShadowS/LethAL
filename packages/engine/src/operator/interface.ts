@@ -146,6 +146,16 @@ export interface MutationOperator {
   readonly requiresSemantic: readonly SemanticCapability[];
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean;
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[];
+  /**
+   * R447: true where every check of this operator admits `node` EXCEPT R196's hang check, which
+   * refused it (the mutation could make an enclosing loop never end). The generator counts these
+   * per file as an `excludedSites` row with reason `hang-refused`, which narrows `reliability`.
+   *
+   * An operator that does not implement this is never counted. A plug-in that refuses hang-capable
+   * sites without it makes those refusals invisible in `excludedSites`, and the run's
+   * `reliability` does not narrow for them.
+   */
+  refusesHangCapable?(node: ALSyntaxNode, ctx: SemanticContext): boolean;
   isEquivalent?(spec: MutationSpec, ctx: SemanticContext): boolean;
   /** R172 — see `EquivalenceRisk`. Absent means no elevated risk is claimed. */
   readonly equivalenceRisk?: EquivalenceRisk;

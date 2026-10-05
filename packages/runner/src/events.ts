@@ -22,7 +22,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef, TestOutcome } from "./backend";
-import type { PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
+import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type {
@@ -176,6 +176,9 @@ export type RunEventInput =
       /** R307: files the instrumentation trial refused whole. Present only when non-empty, so a
        *  stream from before R307 stays valid and folds to the same report bytes. */
       readonly refusedFiles?: readonly RefusedExcludedFile[];
+      /** R447: files where R196's hang check refused sites. Present only when non-empty, so a
+       *  stream from before R447 stays valid and folds to the same report bytes. */
+      readonly hangRefusedFiles?: readonly HangRefusedFile[];
     }
   | {
       /** Discovery returns the whole list in one parse — 1,000+ per-item events at one instant

@@ -409,9 +409,40 @@ function dump(label: string, report: SessionReport): void {
   }
 }
 
+/**
+ * R447: R196 refuses both mutations of `Pending -= 1` (line 104, `DrainQueue`), so the report names
+ * them as ONE `hang-refused` row and reads `narrowed`. Pre-committed in
+ * `docs/superpowers/specs/2026-10-05-r447-hang-row-precommitment.md`; built at generation, so both
+ * legs carry it, the quarantined OFF leg included.
+ */
+function assertHangRefusedRow(label: string, report: SessionReport): void {
+  assert.deepEqual(
+    (report.excludedSites?.files ?? []).filter((f) => f.reason === "hang-refused"),
+    [
+      {
+        file: "src/HangLogic.Codeunit.al",
+        reason: "hang-refused",
+        kinds: "codeunit_declaration",
+        sites: 2,
+      },
+    ],
+    `[${label}] R447: expected exactly one hang-refused row with 2 sites`,
+  );
+  assert.ok(
+    report.validity.scoreDescribes.includes("; 2 hang-refused site(s) in 1 file(s) not mutated"),
+    `[${label}] R447: scoreDescribes must name the hang-refused sites; got ${JSON.stringify(report.validity.scoreDescribes)}`,
+  );
+  assert.equal(
+    report.validity.reliability,
+    "narrowed",
+    `[${label}] R447: the hang-refused row narrows reliability (and nothing degrades it)`,
+  );
+}
+
 function assertOnLeg(leg: LegResult): void {
   const { report, testRows } = leg;
   dump("stop-hung-sessions ON", report);
+  assertHangRefusedRow("ON", report);
 
   assert.equal(report.baselineGreen, true, "baseline must be green (the fixture test passes)");
   assert.equal(report.mutants.length, EXPECTED_ON.length, "every mutant must be scored");
@@ -572,6 +603,14 @@ function assertOnLeg(leg: LegResult): void {
 function assertOffLeg(leg: LegResult): void {
   const { report, testRows } = leg;
   dump("stop-hung-sessions OFF", report);
+  assertHangRefusedRow("OFF", report);
+  // R447 pre-commitment: the M0004 quarantine leaves the baseline green and is not all-errors,
+  // so the OFF leg is `narrowed`, never `narrowed-degraded`.
+  assert.equal(report.baselineGreen, true, "the OFF leg's baseline must be green");
+  assert.ok(
+    !report.validity.caveats.includes("all-errors"),
+    `the OFF leg must not be all-errors; got ${JSON.stringify(report.validity.caveats)}`,
+  );
 
   // The failure R53 was filed for: the hang quarantines AND blocks everything behind it.
   assert.ok(

@@ -115,7 +115,7 @@ import {
   STREAM_SCHEMA_VERSION,
   createEmitter,
 } from "./events";
-import type { PreprocExcludedFile } from "./excluded-sites";
+import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { homeDir } from "./home";
 import {
@@ -461,6 +461,9 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
+  /** R447: per file, the sites R196's hang check refused (`MutationOperator.refusesHangCapable`),
+   *  after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
+  readonly hangRefused: readonly HangRefusedFile[];
   /**
    * R307: the exact identity entries of every file the trial refused (empty for a header-rule
    * refusal, which has `looseTuples` instead). They take a run-wide ordinal and get no row.
@@ -914,6 +917,9 @@ export async function generateMutationSet(
   // bare total cannot tell a reader whether the refusal touched anything they care about.
   let nonExecutableSites = 0;
   const declarativeSites: DeclarativeSiteFile[] = [];
+  // R447: hang-refused sites per file, and per admitted operator per file for the barren message.
+  const hangRefused: HangRefusedFile[] = [];
+  const hangRefusedByOperator = new Map<string, Map<string, number>>();
   // R307: the exact entries of refused files only. A deployed file's entries are built when the
   // ordinals are numbered (`identityOrdinalsOf`), not held across this loop (R400).
   const reservedIdentityEntries: IdentityEntry[] = [];
@@ -948,9 +954,22 @@ export async function generateMutationSet(
     let compiledOutHere = 0;
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
+    const hangRefusedHere = new Map<string, number>();
     visit(root, (node) => {
       for (const op of allOperators) {
-        if (op.targets(node, ctx)) {
+        if (!op.targets(node, ctx)) {
+          // R447: a site R196's hang check refused, counted only where this run would have
+          // mutated it: not compiled out, and admitted by `--operator` and `--lines`.
+          if (
+            op.refusesHangCapable?.(node, ctx) === true &&
+            !startsInInactiveArm(inactive, node.startIndex) &&
+            (admittedOperators === undefined || admittedOperators.has(op.name)) &&
+            (lineRanges === undefined ||
+              spanTouches(lineRanges, rel, node.startPosition.row + 1, node.endPosition.row + 1))
+          ) {
+            hangRefusedHere.set(op.name, (hangRefusedHere.get(op.name) ?? 0) + 1);
+          }
+        } else {
           for (const spec of op.generate(node, ctx)) {
             if (startsInInactiveArm(inactive, spec.before.startIndex)) {
               compiledOutHere++;
@@ -991,6 +1010,19 @@ export async function generateMutationSet(
         kinds: describeObjectKinds(root),
         sites: declarativeInThisFile,
       });
+    }
+    // R447: like R144's row, BEFORE every bail below, so a file whose only sites were refused is
+    // still named. Not for an undecided file: its `preproc-undecided` row stands for every site in
+    // it, and with its arms unknown a count would be a guess.
+    if (hangRefusedHere.size > 0 && arms.kind !== "undecided") {
+      let sites = 0;
+      for (const [name, n] of hangRefusedHere) {
+        sites += n;
+        const perFile = hangRefusedByOperator.get(name) ?? new Map<string, number>();
+        perFile.set(rel, n);
+        hangRefusedByOperator.set(name, perFile);
+      }
+      hangRefused.push({ file: rel, kinds: describeObjectKinds(root), sites });
     }
     // R214: after the declarative row (so a refused file's declarative sites stay in that row,
     // counted once) and BEFORE the bail below (so a file whose only sites were compiled out or
@@ -1156,8 +1188,19 @@ export async function generateMutationSet(
         uninstrumentableOnly.length > 0
           ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
+      // R447: an operator whose sites R196 refused DID find sites; say where, as R307 does.
+      const hangNuance = barren
+        .flatMap((n) => {
+          const perFile = hangRefusedByOperator.get(n);
+          if (perFile === undefined) return [];
+          const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
+          return [
+            ` "${n}" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${where}.`,
+          ];
+        })
+        .join("");
       throw new Error(
-        `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
+        `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance}${hangNuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
       );
     }
   }
@@ -1257,6 +1300,7 @@ export async function generateMutationSet(
     excludedByOperator,
     excludedByLines,
     declarativeSites,
+    hangRefused,
     reservedIdentityEntries,
     refusedFiles,
     preprocExcluded,
@@ -4953,6 +4997,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
+    hangRefused,
     reservedIdentityEntries,
     refusedFiles,
     preprocExcluded,
@@ -5055,6 +5100,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           })),
         }
       : {}),
+    // R447: present only when non-empty, like `refusedFiles`.
+    ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
   // satisfy a presence check while being useless to the person it is for. Built-in operators now

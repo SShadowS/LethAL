@@ -2527,6 +2527,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     (f) => f.reason === "not-instrumentable" && f.sites > 0,
   );
   const leftOutRows = [...undecidedRows, ...notInstrumentableRows];
+  // R447: sites R196's hang check refused. Only rows WITH sites narrow, like R399's.
+  const hangRows = input.excludedSites.files.filter(
+    (f) => f.reason === "hang-refused" && f.sites > 0,
+  );
   // R144 — see CAVEAT_INTERPRETATIONS["declarative-sites-dropped"]. Pushed on the SITE count, not
   // the file count, for the same reason the caveat exists at all: a run that declined one site and
   // a run that declined 154 must not read alike.
@@ -2686,7 +2690,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // object kind cannot carry the selector var. Only rows WITH sites: an undecided file can hold
     // none, and then nothing is missing from the score. Compiled-out and declarative rows are not
     // measurable sites, so they stay out of this.
-    leftOutRows.length > 0;
+    leftOutRows.length > 0 ||
+    // R447: a loop step R196 refused was never mutated either.
+    hangRows.length > 0;
   // R190: a run that measured nothing is degraded whatever its baseline said.
   const degraded = !input.baselineGreen || allErrors;
   const reliability =
@@ -2738,6 +2744,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : "") +
     (notInstrumentableRows.length > 0
       ? `; ${notInstrumentableRows.length} file(s) not instrumentable, ${sitesOf(notInstrumentableRows)} site(s) not mutated`
+      : "") +
+    (hangRows.length > 0
+      ? `; ${sitesOf(hangRows)} hang-refused site(s) in ${hangRows.length} file(s) not mutated`
       : "");
   const refusedText =
     testPageRefusedTests.length > 0
@@ -3062,6 +3071,12 @@ export function renderConsole(r: SessionReport): string {
       `PREPROCESSOR DIRECTIVES REFUSED: ${undecided.length} file(s) hold a directive LethAL cannot evaluate exactly as alc does, so none of their ${undecided.reduce((n, f) => n + f.sites, 0)} site(s) was mutated (R214):`,
     );
     for (const f of undecided) lines.push(`  ${f.file} (${f.detail})`);
+  }
+  const hangRefused = byReason("hang-refused").filter((f) => f.sites > 0);
+  if (hangRefused.length > 0) {
+    lines.push(
+      `HANG-REFUSED SITES: ${hangRefused.reduce((n, f) => n + f.sites, 0)} site(s) in ${hangRefused.length} file(s) write a variable an enclosing loop's condition reads; no mutant was made there (R196). They are absent from every count above.`,
+    );
   }
   // R381: the build's symbols beyond the config's (app.json's, on al-runner its predefined ones).
   // The report cannot tell those two sources apart, so none is named. Not printed where they agree.
