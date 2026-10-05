@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**101 of 451 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**101 of 452 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -176,8 +176,9 @@ that ordering is the priority.
 - **R448** · GitHub CI's Windows job has been red on master since the R-307 merge: 13 R307 refusal tests and the 1 GB measure-peak probe fail on Windows only · [R448.md](docs/roadmap/R448.md) · done (18dd5957)
 - **R450** · A `SourceTable` or `TableNo` property inside a member-level `#if` is not seen, so R-294's implicit-with refusal does not engage and a field-shadowed global is still typed · [R450.md](docs/roadmap/R450.md) · closed 2026-10-05 — 0 objects have SourceTable/TableNo under a member-level #if…
 - **R452** · A skipped `OnModify` (`Modify(true)` to `Modify(false)`, `ModifyAll(..., true)`) is untagged, the same class R281 fixes for `Delete` · [R452.md](docs/roadmap/R452.md) · blocked (R281)
-- **R454** · Hang-capable mutants that R-196's refusal still lets through untagged: a literal in an active `#if` loop-condition tail, a literal inside a comparison in a loop condition, and member-target loop writes · [R454.md](docs/roadmap/R454.md) · open
+- **R454** · Hang-capable mutants that R-196's refusal still lets through untagged: a literal in an active `#if` loop-condition tail, a literal inside a comparison in a loop condition, and member-target loop writes · [R454.md](docs/roadmap/R454.md) · done (f023b8a2)
 - **R455** · Typed operators can still mistype a name after R-294: a field-designator argument of a record builtin (`R.SetRange(Amount, Value)`), and an unqualified call inside `with` · [R455.md](docs/roadmap/R455.md) · open
+- **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · open
 
 ## Product gaps a real project hits
 
