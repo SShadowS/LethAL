@@ -413,6 +413,16 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 is held
+  by R-446). The run-wide twin numbering sorted files with `localeCompare`, the host's default
+  collation, while file discovery and the generation hash sort by code unit. A resume on a host
+  with another collation (Danish puts `Aa_…` after `Z_…`) could give a cross-file twin the other
+  twin's key under an equal source hash, so a recorded `killed` landed on a mutant that was never
+  measured: a false kill, reproduced in a unit test. Every identity comparator (twin numbering,
+  mutant codes, guard nesting order) now compares by code unit. Measured over 1.76M sites
+  (every fixture, CDO, BaseApp and its tests) under en, da, sv and upper-first collations: 0 keys
+  and 0 codes move. Marks files need `"identityScheme": 24`; no key changes on those corpora.
+
 - **`validate-to-assign` writes the record the call binds to** (R464). Its bare form synthesized a
   literal `Rec.`: inside `with R do begin Validate(Amount, 1); end;` in a table trigger or a page,
   that was `Rec.Amount := 1`, a mutant of a different record (no real site in the measured
