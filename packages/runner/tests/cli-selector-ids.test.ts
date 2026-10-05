@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import { buildBackend, validateSelectorIdsForProject } from "../src/cli";
 import { scratchDirs } from "./helpers/scratch";
@@ -73,6 +74,28 @@ describe("validateSelectorIdsForProject", () => {
     );
   });
 
+  // R205: the check reads the session's snapshot, so an edit after it can neither reject the
+  // pinned project nor hide a collision the build still holds.
+  it("R205: idRanges changed on disk after the snapshot do not reject the pinned project", async () => {
+    const dir = await writeTempProject(DEFAULT_RANGE);
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "app.json"), JSON.stringify({ idRanges: [{ from: 1, to: 2 }] }));
+    await expect(
+      validateSelectorIdsForProject(dir, IN_RANGE_IDS, snapshot),
+    ).resolves.toBeUndefined();
+  });
+
+  it("R205: a collision removed from disk after the snapshot is still refused", async () => {
+    const dir = await writeTempProject(DEFAULT_RANGE, {
+      "Existing.Codeunit.al": 'codeunit 79197 "Existing Thing"\n{\n}\n',
+    });
+    const snapshot = await readTargetSource(dir);
+    await rm(join(dir, "Existing.Codeunit.al"));
+    await expect(validateSelectorIdsForProject(dir, IN_RANGE_IDS, snapshot)).rejects.toThrow(
+      /tableId.*= 79197 is already declared as codeunit 79197 "Existing Thing"/s,
+    );
+  });
+
   it("never collides with a table at the same id (BC ids are unique only within a type)", async () => {
     const dir = await writeTempProject(DEFAULT_RANGE, {
       "Existing.Table.al": 'table 79197 "Existing Table"\n{\n}\n',
@@ -119,6 +142,23 @@ describe("buildBackend — R3/R4 selector id validation wiring", () => {
       undefined,
       {},
       IN_RANGE_IDS,
+    );
+    expect(backend).toBeInstanceOf(AlRunnerBackend);
+  });
+
+  it("R205 al-runner: the id check inside buildBackend reads the snapshot it is handed", async () => {
+    const dir = await writeTempProject(DEFAULT_RANGE);
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "app.json"), JSON.stringify({ idRanges: [{ from: 1, to: 2 }] }));
+    const configFile: LethalConfigFile = { alRunner: { alRunnerPath: "al-runner.exe" } };
+    const backend = await buildBackend(
+      runConfig(dir, "al-runner"),
+      configFile,
+      dir,
+      undefined,
+      {},
+      IN_RANGE_IDS,
+      snapshot,
     );
     expect(backend).toBeInstanceOf(AlRunnerBackend);
   });

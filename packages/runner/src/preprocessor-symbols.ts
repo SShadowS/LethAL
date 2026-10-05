@@ -39,8 +39,8 @@ export function validateSymbolList(raw: unknown, source: string): readonly strin
 }
 
 /**
- * `app.json`'s `preprocessorSymbols`, from the source snapshot when it holds `app.json` (so the
- * symbols are read from the bytes the build compiles), else from disk. Only a MISSING `app.json`
+ * `app.json`'s `preprocessorSymbols`, from the source snapshot when one is given (so the symbols
+ * are read from the bytes the build compiles), else from disk. Only a MISSING `app.json`
  * reads as none, because several callers pass a `src` directory. Any other read error, bad JSON,
  * or a list the config would refuse throws, naming the file: alc would read a list we did not.
  */
@@ -50,9 +50,11 @@ export async function appJsonSymbols(
   readFileFn: (path: string) => Promise<string> = (p) => readFile(p, "utf8"),
 ): Promise<readonly string[]> {
   const path = join(projectDir, "app.json");
-  const bytes = snapshot?.get("app.json");
   let text: string;
-  if (bytes !== undefined) {
+  if (snapshot !== undefined) {
+    // R205: a snapshot without `app.json` means the project has none; the disk is never read.
+    const bytes = snapshot.get("app.json");
+    if (bytes === undefined) return [];
     text = bytes.toString("utf8");
   } else {
     try {

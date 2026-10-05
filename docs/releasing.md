@@ -296,14 +296,14 @@ Expected — and byte-identical to `bun packages/runner/src/cli.ts run --project
 --dry-run`:
 
 ```
-dry run: 2 file(s), 16 mutant site(s), 1 batch(es)
-
-batch 0 (16 mutant site(s)):
-  src\SandboxLogic.Codeunit.al:4  lethal.empty-block
+dry run: 2 file(s), 19 mutant site(s), 19 deployed mutant(s), 1 batch(es)
+...
+batch 0 (19 mutant site(s), 19 deployed):
+  src\SandboxLogic.Codeunit.al:6  lethal.empty-block
   ...
 ```
 
-16 sites and exit 0. Anything less means the grammar did not make it into the binary.
+19 sites (the count `itest:bcdev` freezes) and exit 0. Anything less means the grammar did not make it into the binary.
 
 ## What a user downloads and runs
 

@@ -92,6 +92,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **One source snapshot per run, and `--changed-since` diffs against it** (R205). `lethal run`
+  reads the target's `.al` files and `app.json` once, before anything else, and every reader of
+  them uses that copy: the `--changed-since` lines, the al-runner coverage guard, the selector-id
+  check, `--dry-run`, the build and the app version an al-runner run records. Still read from the
+  disk: the test project, the target's resources (`.xlf`, layouts) and `lethal verify`.
+  An edit made during the run is not built; the run warns `source-changed-during-run`, naming each
+  added, removed and changed file, and records no source hash. A source file that cannot be read
+  stops the run, naming the file. Under `--changed-since`, a git-ignored `.al` file now gets
+  mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
+  selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
+  index is no longer read for content, so such a file's edits are seen.
 - **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
   mutants inside wrapped objects, and a later same-tuple twin of a removed mutant can take its key:
   re-check equivalence marks.
@@ -362,6 +373,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   plain name against a plain read, `R.Field` against the same receiver and field), and it is
   counted in `hang-refused`. Indexed objects are unchanged: there an unresolved target is still not
   matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
+- **A forcing RunTrigger flip carries `run-trigger-forced` when the receiver does not resolve**
+  (R460). The `false` -> `true` flip at `ModifyAll`, `DeleteAll`, `Modify`, `Delete` or `Insert`
+  can force a table trigger to run, and was tagged only on a receiver the project resolves. An
+  unresolved receiver now gets the tag too, the same conservative rule R-364 applied to the skip
+  direction (`true`); where the receiver is not really a record this over-tags, the accepted
+  direction (R143). Measured, tags only (no mutant added, removed or re-keyed): 45 rows gain the
+  tag: 40 BaseApp rows (BC.History w1-28, 203 projects), 4 CDO rows covering 2 sites across two
+  symbol sets, and 1 `sandbox-probes` row. `sandbox-data` is unchanged.
 - **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
   not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
   screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged. The tag is
