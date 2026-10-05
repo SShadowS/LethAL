@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 463 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**96 of 464 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -323,6 +323,7 @@ that ordering is the priority.
 - **R461** · A target that does not compile UNMUTATED is reported as a deploy failure "not attributable to any single mutant", not as "your project does not compile" · [R461.md](docs/roadmap/R461.md) · open
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
 - **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · open
+- **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
 
 ## Backends and tooling
 
