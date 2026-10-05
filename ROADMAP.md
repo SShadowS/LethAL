@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**85 of 472 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**88 of 476 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -183,16 +183,18 @@ that ordering is the priority.
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
 - **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · done (0a8dd701)
 - **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · done (c7d06747)
-- **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · open
+- **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · done (98be663a)
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · closed 2026-10-05 — latent: query is not a carrier kind, so no query mutant is ever deployed; the fix is…
 - **R466** · The runner's TestPage scan (R-371) gives a TableNo codeunit's `Rec` to every procedure; `alc` binds it in `OnRun` only · [R466.md](docs/roadmap/R466.md) · done (e47d0b85)
 - **R468** · Only an object's FIRST direct `var` section is indexed as globals, so every global in a second section (`protected var` then `var`) resolves to nothing; `SuggestVendorPayments` is not hang-refused · [R468.md](docs/roadmap/R468.md) · done (25989d42)
 - **R469** · Schemata inserts the `MutationSelector` variable into an object's FIRST var section, which may be `protected var`, so the instrumented object exposes it to extensions · [R469.md](docs/roadmap/R469.md) · closed 2026-10-05 — ruling: the exposure is harmless for tables and pages…
 - **R470** · A report and its reportextension in one project both get a `MutationSelector` global, which alc rejects (AL0155), so on bcdev every mutant of that batch is scored `error` · [R470.md](docs/roadmap/R470.md) · done (cad4420d)
+- **R479** · A bare (receiverless) `Insert(true)`/`Modify(true)`/`Delete(true)` on a pageextension's implicit record is flipped untagged, while its `Rec.`-qualified form keeps the skip tag · [R479.md](docs/roadmap/R479.md) · open
 - **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · closed 2026-10-05 — measured: BC collides on a preserved SystemId, but the colliding false->true flip has 0…
 - **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · done (3fffd472)
 - **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
 - **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · open
+- **R476** · `insertSkipCanRaise` misses an `OnInsert` that assigns the primary key through a procedure, so `Insert(true)` -> `Insert(false)` loses its duplicate-key tag (4 rows R464 newly untags, plus master's resolved receivers) · [R476.md](docs/roadmap/R476.md) · open
 
 ## Product gaps a real project hits
 
@@ -330,6 +332,8 @@ that ordering is the priority.
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
 - **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · done (65e20ee8)
 - **R463** · Tier 2 never claims a record call inside a `reportextension`: `receiver.ts` knows table and page extensions only · [R463.md](docs/roadmap/R463.md) · open
+- **R477** · Guarded bare fallback for the validate-to-assign sites R464 refuses (35: 29 previously mutated, 6 new) · [R477.md](docs/roadmap/R477.md) · open
+- **R478** · R464's resolver misses two record scopes: a reportextension `add(X)` base dataitem, and a namespace-qualified tableextension base · [R478.md](docs/roadmap/R478.md) · open
 
 ## Backends and tooling
 
