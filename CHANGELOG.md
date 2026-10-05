@@ -28,6 +28,15 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   not say so. Operators opt in through the optional `MutationOperator.refusesHangCapable`; a
   plug-in without it is not counted. The report schema gains one enum value and the stream schema
   one optional property, in place: no version bump, and older reports still validate.
+- **`lethal verify` says what a killing new test does to the rest of its procedure** (R259, verify
+  schema v8). Every row killed by a new test carries `sameProcedure`: for each other survived or
+  no-coverage mutant of the source run in the same procedure or trigger (by the manifest's line
+  span, never by name), whether that test alone `alsoKills` it, it survived a run that included
+  the test (`notKilled`), or the answer is `unknown`. Answers come from the named survivors' own
+  runs when they prove the pair, else from one extra run of that test against that mutant in the
+  same lease, counted against `--max-new-tests` as two runs (`overCap` counts the pairs left out). Reported only: never in `counts` or the exit code.
+  `verify-v7.schema.json` is kept as published.
+
 - **`SessionReport.buildSymbols`: the target's effective build symbols** (R381). The set the build
   used (config, the target `app.json`, and on al-runner its predefined symbols), sorted. Written on
   every new report, `[]` included, so `[]` means "built with no symbols" and absent means a report

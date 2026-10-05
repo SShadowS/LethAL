@@ -29,12 +29,12 @@ import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
 import { bundleOfParts } from "../src/installed-bundle";
-import { NamedMutantError } from "../src/named-mutants";
+import { NamedMutantError, type NamedMutantRequest } from "../src/named-mutants";
 import type { NamedMutantsConfig } from "../src/orchestrator";
-import type { MutantOutcome, SessionReport } from "../src/report";
+import type { MutantOutcome, SessionOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
-import { TestAppError } from "../src/test-app-publish";
+import { type PublishedTestApp, TestAppError } from "../src/test-app-publish";
 import { TEST_DIGEST_SCHEME, testDigests, testDigestsOfModel } from "../src/test-digest";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
@@ -49,13 +49,18 @@ import {
   type VerifySource,
   assertSourceUnchanged,
   assertTestProjectSeparate,
+  declarationKeyOf,
   expandGapIds,
   isSameOrInside,
   killedByOf,
+  pairAnswerOf,
+  pairsToProbe,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
   runVerify,
+  sameProcedureOf,
+  siblingsOf,
   verifyDependencyFingerprint,
   verifyExitCode,
   verifyRefusalOf,
@@ -466,6 +471,7 @@ describe("assertSourceUnchanged", () => {
       coverageMode: "procedure",
       carryHidden: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+      rows: [],
     };
     return { dir, tests, source };
   }
@@ -722,6 +728,7 @@ describe("planVerify", () => {
       coverageMode: "procedure",
       carryHidden: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
+      rows: [],
     };
   }
 
@@ -1991,6 +1998,8 @@ describe("C02-09: gap ids", () => {
       readonly emit?: VerifyDeps["emit"];
       readonly noReachFilter?: boolean;
       readonly maxNewTests?: number;
+      /** R259: what the test-app publish answers; without it a publish throws. */
+      readonly published?: PublishedTestApp;
     } = {},
   ) {
     const projectDir = scratch("lethal-verify-gap-proj-");
@@ -2074,7 +2083,7 @@ describe("C02-09: gap ids", () => {
           version: "1.0.0.0",
           compiledAgainst: { artifactId: target.artifactId, sha256: target.sha256 },
         }),
-        publishTestApp: async () => boom(),
+        publishTestApp: async () => over.published ?? boom(),
       },
       lease: {
         client: {
@@ -3225,6 +3234,496 @@ describe("C02-09: gap ids", () => {
         expect(out.refused).toBeUndefined();
         expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
         w.store.close();
+      });
+    });
+  });
+
+  // R259: `sameProcedure`, through runVerify with a scripted `runNamed`. `T.M` is the source run's
+  // covering test; `New.N1` and `New.N2` are new. Every `inPost` seed sits in one declaration.
+  describe("R259: sameProcedure", () => {
+    const N1 = { codeunitId: 50101, codeunitName: "New", method: "N1" };
+    const N2 = { codeunitId: 50101, codeunitName: "New", method: "N2" };
+    const T_M = { codeunitId: 50100, codeunitName: "T", method: "M" };
+    const K1 = testKeyOf(N1);
+    const PUBLISHED: PublishedTestApp = {
+      appId: APP,
+      name: "Tests",
+      publisher: "P",
+      version: "1.0.0.0",
+      sha256: "e".repeat(64),
+      compiledAgainst: { artifactId: A1, sha256: "b".repeat(64) },
+    };
+    type Script = Pick<SessionOutcome, "verdict"> &
+      Partial<Pick<SessionOutcome, "killingTestRef" | "killPosition">>;
+    const killedBy = (ref: TestMethodRef, killPosition = 1): Script => ({
+      verdict: "killed",
+      killingTestRef: ref,
+      killPosition,
+    });
+    const SURVIVED: Script = { verdict: "survived" };
+
+    const inPost = (code: string, verdict: MutantVerdict, over: { carried?: boolean } = {}) =>
+      seed(code, undefined, verdict, { procedureStartLine: 3, procedureEndLine: 9, ...over });
+
+    function newTestDir(): string {
+      const dir = scratch("lethal-verify-same-");
+      writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
+      const proc = (m: string) => `    [Test]\n    procedure ${m}()\n    begin\n    end;\n`;
+      writeFileSync(
+        join(dir, "50100.Codeunit.al"),
+        `codeunit 50100 "T"\n{\n    Subtype = Test;\n\n${proc("M")}}\n`,
+      );
+      writeFileSync(
+        join(dir, "50101.Codeunit.al"),
+        `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n${["N1", "N2"].map(proc).join("\n")}}\n`,
+      );
+      return dir;
+    }
+
+    /** Stands in for runNamedMutants: publishes, answers each target from `target`, calls
+     *  `probe` where runNamedMutants does and answers each probe from `probe` (default survived),
+     *  and answers every unmutated run as a fresh pass. `seen` collects the probe requests. */
+    function scripted(
+      seeds: readonly Seed[],
+      o: {
+        readonly target: Readonly<Record<string, Script>>;
+        readonly probe?: (code: string, t: string) => Script | undefined;
+        readonly seen?: NamedMutantRequest[];
+      },
+    ): NonNullable<VerifyDeps["runNamed"]> {
+      const byId = new Map(seeds.map((s) => [s.entry.mutantId, s.entry] as const));
+      const outcomeOf = (code: string, s: Script | undefined): SessionOutcome => {
+        const mutant = byId.get(code);
+        if (mutant === undefined) throw new Error(`no seed ${code}`);
+        return { mutant, batchIndex: 0, ...(s ?? SURVIVED) };
+      };
+      return async (cfg) => {
+        await cfg.inLease?.({ publish: (run) => run() });
+        const outcomes = cfg.requests.map((r) => outcomeOf(r.mutantId, o.target[r.mutantId]));
+        const requests = cfg.probe?.(outcomes) ?? [];
+        o.seen?.push(...requests);
+        const probes = requests.map((request) => {
+          const [t] = request.methods;
+          if (t === undefined) throw new Error("a probe with no method");
+          return {
+            request,
+            outcome: outcomeOf(request.mutantId, o.probe?.(request.mutantId, testKeyOf(t))),
+          };
+        });
+        const pass = (ref: TestMethodRef) => ({
+          ref,
+          outcome: "pass" as const,
+          fresh: true,
+          sessionId: 1,
+          testRunsBefore: 0,
+        });
+        const keys = new Set<string>();
+        const sent = cfg.requests
+          .flatMap((r) => r.methods)
+          .filter((m) => !keys.has(testKeyOf(m)) && keys.add(testKeyOf(m)) !== undefined);
+        return {
+          outcomes,
+          baseline: sent.map(pass),
+          rerun: (cfg.rerunOnUnmutated ?? []).map(pass),
+          probes,
+        };
+      };
+    }
+
+    async function sameWorld(
+      seeds: readonly Seed[],
+      run: Parameters<typeof scripted>[1],
+      over: { readonly markCodes?: readonly string[]; readonly maxNewTests?: number } = {},
+    ) {
+      return verifyWorld(seeds, over.markCodes ?? [], {
+        testDir: newTestDir(),
+        baseline: [T_M],
+        published: PUBLISHED,
+        runNamed: scripted(seeds, run),
+        ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+      });
+    }
+    const probed = (seen: readonly NamedMutantRequest[]) =>
+      seen.map((r) => `${r.mutantId}|${r.methods.map(testKeyOf).join(",")}`);
+    const sameOf = (out: Awaited<ReturnType<typeof runVerify>>, id: string) =>
+      out.results.find((r) => r.id === id)?.sameProcedure;
+
+    test("a probe that fails is alsoKills, one that passes is notKilled; probes stay out of results, counts and exit", async () => {
+      const seeds = [
+        inPost("M0001", "survived"),
+        inPost("M0002", "survived"),
+        inPost("M0003", "no-coverage"),
+        // Another declaration: never a sibling.
+        seed("M0004", undefined, "survived", { procedureStartLine: 11, procedureEndLine: 20 }),
+      ];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1) },
+        probe: (code) => (code === "M0002" ? killedBy(N1) : SURVIVED),
+        seen,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0002"],
+        notKilled: ["0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      expect(out.results.map((r) => r.id)).toEqual(["0/M0001"]);
+      expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
+      expect(out.exitCode).toBe(VERIFY_EXIT.ok);
+      w.store.close();
+    });
+
+    test("a survivor counts as notKilled only when the exact test was sent to it", () => {
+      const o: SessionOutcome = { mutant: entry("M0002"), batchIndex: 0, verdict: "survived" };
+      expect(pairAnswerOf(o, [N1, N2], K1)).toBe("not");
+      expect(pairAnswerOf(o, [N2, T_M], K1)).toBeUndefined();
+      // Same method name in another codeunit is another test.
+      expect(pairAnswerOf(o, [{ ...N1, codeunitId: 50199 }], K1)).toBeUndefined();
+    });
+
+    /** `scripted`, plus the store writes the real run makes: one row per target and per probe. */
+    const recordingWorld = (
+      seeds: readonly Seed[],
+      o: Parameters<typeof scripted>[1],
+    ): ReturnType<typeof verifyWorld> => {
+      const inner = scripted(seeds, o);
+      return verifyWorld(seeds, [], {
+        testDir: newTestDir(),
+        baseline: [T_M],
+        published: PUBLISHED,
+        runNamed: async (cfg) => {
+          const res = await inner(cfg);
+          for (const r of [...cfg.requests, ...(res.probes ?? []).map((p) => p.request)]) {
+            cfg.store.recordMutant(
+              cfg.runId,
+              mutantRow(r.mutantId, "survived", { astHash: `h-${r.mutantId}` }),
+            );
+          }
+          return res;
+        },
+      });
+    };
+
+    test("a target sibling is probed too: two rows in the verify run, the target's own result unchanged", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const seen: NamedMutantRequest[] = [];
+      const w = await recordingWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: killedBy(N2) },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen).sort()).toEqual([`M0001|${testKeyOf(N2)}`, `M0002|${K1}`]);
+      expect(out.results.map((r) => [r.id, r.verdict, r.killingTest?.method])).toEqual([
+        ["0/M0001", "killed", "N1"],
+        ["0/M0002", "killed", "N2"],
+      ]);
+      const rows = w.store.db
+        .query(
+          "SELECT mutant_code, COUNT(*) AS n FROM mutants WHERE run_id = (SELECT id FROM runs WHERE backend = 'lethal-verify') GROUP BY mutant_code ORDER BY mutant_code",
+        )
+        .all();
+      expect(rows).toEqual([
+        { mutant_code: "M0001", n: 2 },
+        { mutant_code: "M0002", n: 2 },
+      ]);
+      w.store.close();
+    });
+
+    test("verify's target and probe rows never reach priorSurvivorKeys (verify never finishes its run)", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const w = await recordingWorld(seeds, { target: { M0001: killedBy(N1) } });
+      // The verify run copies its source's hidden files; a NULL there would make the history
+      // refuse the run for a reason that has nothing to do with `finished_at`.
+      w.store.db.run("UPDATE runs SET carry_hidden = ?", [
+        JSON.stringify({ tuples: [], files: [] }),
+      ]);
+      await w.verify(["0/M0001"]);
+      const run = w.store.db
+        .query("SELECT id, project_path FROM runs WHERE backend = 'lethal-verify'")
+        .get() as { id: number; project_path: string };
+      const rows = w.store.db
+        .query("SELECT mutant_code FROM mutants WHERE run_id = ? ORDER BY mutant_code")
+        .all(run.id) as Array<{ mutant_code: string }>;
+      // M0001 is the target, M0002 its probe sibling.
+      expect(rows.map((r) => r.mutant_code)).toEqual(["M0001", "M0002"]);
+      const info = w.store.getRun(run.id);
+      if (info?.coverageMode == null || info.testAppHash === null || info.carryHidden === null) {
+        throw new Error("the verify run did not record what priorSurvivorKeys checks");
+      }
+      // Exactly the arguments the next `lethal run` of this project would pass.
+      expect(
+        w.store.priorSurvivorKeys(
+          run.project_path,
+          info.coverageMode,
+          info.testAppHash,
+          info.buildSymbols ?? [],
+          info.carryHidden.files,
+        ).size,
+      ).toBe(0);
+      w.store.close();
+    });
+
+    test("a target killed by another test is probed with the new test, never read as killed by it", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: killedBy(N2) },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen).sort()).toEqual([`M0001|${testKeyOf(N2)}`, `M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")?.notKilled).toEqual(["0/M0002"]);
+      expect(sameOf(out, "0/M0002")?.notKilled).toEqual(["0/M0001"]);
+      expect(sameOf(out, "0/M0001")?.alsoKills).toEqual([]);
+      w.store.close();
+    });
+
+    test("a target killed by the new test at position 2 or 3 is probed; at position 1 it is reused", async () => {
+      const seeds = ["M0001", "M0002", "M0003", "M0004"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: {
+          M0001: killedBy(N1),
+          M0002: killedBy(N1, 2),
+          M0003: killedBy(N1, 3),
+          M0004: killedBy(N1),
+        },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002,0/M0003,0/M0004"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0004"],
+        notKilled: ["0/M0002", "0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    const TIMEOUT: Script = { verdict: "timeout-killed", killingTestRef: N1, killPosition: 1 };
+
+    test("a target timeout-killed by the new test is probed, never reused as alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: TIMEOUT },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: ["0/M0002"],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("a probe answering timeout-killed is unknown, never alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1) },
+        probe: () => TIMEOUT,
+        seen,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: [],
+        unknown: ["0/M0002"],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("a carried or reader-marked-equivalent sibling is unknown and never probed", async () => {
+      const seeds = [
+        inPost("M0001", "survived"),
+        inPost("M0002", "survived", { carried: true }),
+        inPost("M0003", "survived"),
+        inPost("M0004", "survived"),
+      ];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(
+        seeds,
+        { target: { M0001: killedBy(N1) }, probe: () => killedBy(N1), seen },
+        { markCodes: ["M0003"] },
+      );
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0004|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0004"],
+        notKilled: [],
+        unknown: ["0/M0002", "0/M0003"],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("pairs past R-384's budget are unknown and counted in overCap; nothing past it is sent", async () => {
+      // S = 1, N = 2: the cap counts S*N + 2N = 6 runs, so --max-new-tests 4 leaves 4 x 3 - 6 = 6,
+      // and each probe reserves 2 (its run and a kill's unmutated confirmation): 3 probes.
+      const seeds = ["M0001", "M0002", "M0003", "M0004", "M0005", "M0006"].map((c) =>
+        inPost(c, "survived"),
+      );
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(
+        seeds,
+        { target: { M0001: killedBy(N1) }, probe: () => killedBy(N1), seen },
+        { maxNewTests: 4 },
+      );
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`, `M0004|${K1}`]);
+      // An odd budget: 5 runs pay for floor(5 / 2) = 2 probes.
+      const odd = pairsToProbe({
+        rows: [{ test: N1, eligible: ["M0002", "M0003", "M0004"] }],
+        answered: () => undefined,
+        budget: 5,
+      });
+      expect(odd.probe.map((r) => r.mutantId)).toEqual(["M0002", "M0003"]);
+      expect([...odd.overCap]).toEqual([`M0004|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0002", "0/M0003", "0/M0004"],
+        notKilled: [],
+        unknown: ["0/M0005", "0/M0006"],
+        overCap: 2,
+      });
+      w.store.close();
+    });
+
+    test("only a row killed by a new test carries the field, with empty lists at zero siblings", async () => {
+      const own = (code: string, start: number, verdict: MutantVerdict = "survived") =>
+        seed(code, undefined, verdict, { procedureStartLine: start, procedureEndLine: start + 5 });
+      const seeds = [
+        own("M0001", 10),
+        own("M0002", 20),
+        own("M0003", 30),
+        own("M0004", 40),
+        own("M0005", 50),
+      ];
+      const w = await sameWorld(
+        seeds,
+        {
+          target: {
+            M0001: killedBy(N1),
+            M0002: SURVIVED,
+            M0003: { verdict: "error" },
+            M0004: killedBy(T_M),
+          },
+        },
+        { markCodes: ["M0005"] },
+      );
+      const out = await w.verify(["0/M0001,0/M0002,0/M0003,0/M0004,0/M0005"]);
+      expect(out.results.map((r) => [r.id, r.verdict, r.sameProcedure !== undefined])).toEqual([
+        ["0/M0001", "killed", true],
+        ["0/M0002", "survived", false],
+        ["0/M0003", "error", false],
+        ["0/M0004", "killed", false],
+        ["0/M0005", "skipped", false],
+      ]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: [],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    describe("which mutants are siblings", () => {
+      const at = (code: string, over: Partial<MutantManifestEntry>) =>
+        entry(code, { procedureStartLine: 3, procedureEndLine: 9, ...over });
+      const measurable = (...es: MutantManifestEntry[]) =>
+        es.map((e) => ({ entry: e, measurable: true }));
+
+      test("two overloads are not siblings", () => {
+        const a = at("M0001", { procedureName: "Post" });
+        const b = at("M0002", {
+          procedureName: "Post",
+          procedureStartLine: 11,
+          procedureEndLine: 15,
+        });
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("two fields' OnValidate triggers are not siblings", () => {
+        const t1 = at("M0003", { procedureName: "", triggerName: "OnValidate" });
+        const t2 = at("M0004", {
+          procedureName: "",
+          triggerName: "OnValidate",
+          procedureStartLine: 11,
+          procedureEndLine: 15,
+        });
+        expect(siblingsOf(t1, measurable(t1, t2))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("a one-line member cannot be told apart: its same-named members are unknown", () => {
+        const a = at("M0001", { procedureStartLine: 5, procedureEndLine: 5 });
+        const b = at("M0002", { procedureStartLine: 5, procedureEndLine: 5 });
+        expect(declarationKeyOf(a)).toBeUndefined();
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: ["M0002"] });
+      });
+
+      test("a member with no lines cannot be told apart: its same-named members are unknown", () => {
+        const a = entry("M0001");
+        const b = entry("M0002");
+        expect(declarationKeyOf(a)).toBeUndefined();
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: ["M0002"] });
+      });
+
+      test("a table and a page sharing a name and lines are not siblings", () => {
+        const t = at("M0001", { objectType: "table", codeunitName: "Foo", file: "Foo.Table.al" });
+        const p = at("M0002", {
+          objectType: "page",
+          codeunitId: 50001,
+          codeunitName: "Foo",
+          file: "Foo.Page.al",
+        });
+        expect(siblingsOf(t, measurable(t, p))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("two members whose qualified names collide are not siblings", () => {
+        // "A.B" + "C" and "A" + "B.C" both qualify as A.B.C.
+        const a = at("M0001", { codeunitName: "A.B", procedureName: "C", file: "AB.al" });
+        const b = at("M0002", {
+          codeunitName: "A",
+          codeunitId: 50001,
+          procedureName: "B.C",
+          file: "A.al",
+        });
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("ids carry the installed batch, so codes that restart per batch never collide", () => {
+        const same = sameProcedureOf({
+          test: N1,
+          batchIndex: 1,
+          siblings: { eligible: ["M0002", "M0003"], unknown: ["M0004"] },
+          answer: (code) => (code === "M0002" ? "kills" : code === "M0003" ? "not" : undefined),
+          overCap: new Set(),
+        });
+        expect(same).toEqual({
+          test: N1,
+          alsoKills: ["1/M0002"],
+          notKilled: ["1/M0003"],
+          unknown: ["1/M0004"],
+          overCap: 0,
+        });
       });
     });
   });

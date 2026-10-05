@@ -15,7 +15,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`explain-v4.schema.json`](explain-v4.schema.json) | the same, from builds before GH-24; kept so a stored v4 document stays checkable (its value sets drifted, see `docs/roadmap/R233.md`) | `EXPLAIN_SCHEMA_VERSION` = 4 |
 | [`campaign-compare-v1.schema.json`](campaign-compare-v1.schema.json) | `lethal campaign compare --json` on stdout (R357); a coverage-mode mismatch is a refusal and prints none | `CAMPAIGN_COMPARE_SCHEMA_VERSION` = 1 |
 | [`doctor-v1.schema.json`](doctor-v1.schema.json) | `lethal doctor --json` on stdout | `DOCTOR_SCHEMA_VERSION` = 1 |
-| [`verify-v7.schema.json`](verify-v7.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 7 |
+| [`verify-v8.schema.json`](verify-v8.schema.json) | `lethal verify` on stdout | `VERIFY_SCHEMA_VERSION` = 8 |
+| [`verify-v7.schema.json`](verify-v7.schema.json) | the same, from builds before R259; kept so a stored v7 document stays checkable (v8 added `results[].sameProcedure`) | `VERIFY_SCHEMA_VERSION` = 7 |
 | [`verify-v6.schema.json`](verify-v6.schema.json) | the same, from builds before R-260; kept so a stored v6 document stays checkable (v7 added the refusal reason `test-project-nested`) | `VERIFY_SCHEMA_VERSION` = 6 |
 | [`verify-v5.schema.json`](verify-v5.schema.json) | the same, from builds before R-427; kept so a stored v5 document stays checkable (v6 added the `newTests[].state` value `not-rerun`) | `VERIFY_SCHEMA_VERSION` = 5 |
 | [`verify-v4.schema.json`](verify-v4.schema.json) | the same, from builds before R-425; kept so a stored v4 document stays checkable (v5 added `reachFilter` and `results[].reachNarrowed`) | `VERIFY_SCHEMA_VERSION` = 4 |
@@ -26,15 +27,17 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the twenty files, sixteen are hand-written and four were generated, and the split is about SIZE
+**Of the twenty-one files, seventeen are hand-written and four were generated, and the split is about SIZE
 rather than principle.** `explain` (a few dozen leaves; v11 and the kept v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v7 and the kept v6, v5, v4, v3, v2 and v1) are hand-written; explain v11, `doctor` and
-verify v7 are pinned against their declarations, and explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
-verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
+`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v11, `doctor` and
+verify v8 are pinned against their declarations, and explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the
 record, so a reader needs the version to tell an older report (unknown) from a v5 refusal that
-stopped before deciding (not decided). `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
+stopped before deciding (not decided). Verify v8 bumped for an added field by the same rule:
+`results[].sameProcedure` is present on every row killed by a new test, so its absence there means
+"not measured" only from v8 on. `report`, `stream` and `campaign-compare` are generated; report v2 is frozen as the
 generator last wrote it.
 `SessionReport` walks out to 130 leaves and the stream is a union of 22 event shapes; at that size a
 hand-written file stops being a guarantee and becomes a second copy of the type that someone

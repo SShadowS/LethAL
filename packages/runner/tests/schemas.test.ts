@@ -703,6 +703,26 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     expect(enumAt(v6, "$.refused.reason")).not.toContain("test-project-nested");
   });
 
+  // R259: v8 added `results[].sameProcedure`. v7 stays as it was published.
+  test("verify-v7.schema.json is kept as published", () => {
+    const v7 = loadSchema("verify-v7.schema.json");
+    expect((v7.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(7);
+    expect(enumAt(v7, "$.refused.reason")).toContain("test-project-nested");
+    expect([...schemaLeafPaths(v7)].some((p) => p.startsWith("$.results[].sameProcedure"))).toBe(
+      false,
+    );
+  });
+
+  // R259: a real v8 output, printed by orchestrator.test.ts's "a probe that fails is alsoKills"
+  // (runVerify through runNamedMutants and the covering loop), validates against v8 and not v7.
+  test("a real v8 output with sameProcedure validates", () => {
+    const real = JSON.parse(
+      readFileSync(join(import.meta.dir, "fixtures", "verify-v8-r259-probe.json"), "utf8"),
+    ) as unknown;
+    expect(conformsTo(verifySchema, real)).toEqual([]);
+    expect(conformsTo(loadSchema("verify-v7.schema.json"), real)).not.toEqual([]);
+  });
+
   test("results[].gapId is a declared leaf of the current verify schema", () => {
     expect([...schemaLeafPaths(verifySchema)]).toContain("$.results[].gapId");
   });
@@ -859,8 +879,34 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
           verdict: "survived",
           testsRun: ["Sandbox Tests.OverBudgetDetected"],
         },
+        // R259: a row killed by a new test, with what that test alone does to its siblings.
+        {
+          id: "0/M0003",
+          batchIndex: 0,
+          mutantCode: "M0003",
+          file: "Logic.Codeunit.al",
+          line: 10,
+          operatorName: "lethal.negate-conditional",
+          procedureName: "Post",
+          verdict: "killed",
+          testsRun: ["New Tests.OverBudgetDetected"],
+          killingTest: {
+            codeunitId: 79102,
+            codeunitName: "New Tests",
+            method: "OverBudgetDetected",
+          },
+          killedByNewTest: true,
+          killedBy: "other",
+          sameProcedure: {
+            test: { codeunitId: 79102, codeunitName: "New Tests", method: "OverBudgetDetected" },
+            alsoKills: ["0/M0004"],
+            notKilled: ["0/M0002"],
+            unknown: ["0/M0005"],
+            overCap: 1,
+          },
+        },
       ],
-      counts: { killed: 1, survived: 1, error: 0, skipped: 0 },
+      counts: { killed: 2, survived: 1, error: 0, skipped: 0 },
       timings: { totalMs: 1234, compileMs: 200, publishMs: 50 },
     };
     expect(conformsTo(verifySchema, measured)).toEqual([]);
@@ -1253,6 +1299,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R-260: the same seven; v7 only grew refused.reason.
       "verify-v7.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R259: the same seven; v8 only grew results[].sameProcedure.
+      "verify-v8.schema.json": [
         "counts",
         "exitCode",
         "newTests",
