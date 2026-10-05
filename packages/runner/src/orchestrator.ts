@@ -6527,6 +6527,21 @@ export interface NamedMutantsConfig {
     readonly unreached: ReadonlySet<string>;
     readonly notRerun?: ReadonlySet<string>;
   };
+  /**
+   * R259: called once, after the covering loop and before the decision-11 reruns, unless the
+   * session latched, with the target outcomes. Each returned request names exactly ONE method,
+   * which must be in the baseline. Requests are grouped by that method; each group is its own
+   * covering pass over this call's baseline (no second baseline) with a fresh kill ledger, so every
+   * probe runs its method alone, first in its own call. Answered in `NamedMutantsResult.probes`,
+   * never in `outcomes`.
+   */
+  readonly probe?: (outcomes: readonly SessionOutcome[]) => readonly NamedMutantRequest[];
+}
+
+/** R259: one `probe` request and its outcome. */
+export interface NamedProbe {
+  readonly request: NamedMutantRequest;
+  readonly outcome: SessionOutcome;
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -6562,6 +6577,9 @@ export interface NamedMutantsResult {
    *  `rerunOnUnmutated` order. Each ran its baseline only. Absent when `narrow` was not given or
    *  not called. */
   readonly notRerun?: readonly string[];
+  /** R259: one per `probe` request, in request order; `error` when the session stopped before it
+   *  ran, and invalidated with the batch like `outcomes`. Absent when `probe` was not called. */
+  readonly probes?: readonly NamedProbe[];
 }
 
 /** R206 section 2.1: the server reported that tests had already run in this call's session. */
@@ -6711,6 +6729,9 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const rerunRefs = cfg.rerunOnUnmutated ?? [];
   const baselineRan = new Map<string, TestVerdict>();
   const rerunRan = new Map<string, UnmutatedRun>();
+  // R259: the rows `select` was handed, reused by the probes; and the probes, once `probe` ran.
+  let baselineRows: readonly BaselineRow[] | undefined;
+  let probeRuns: ProbeRun[] | undefined;
   try {
     // Before the first op: a lease lost from here on invalidates THIS batch's verdicts.
     if (leaseSession !== undefined) leaseSession.currentBatchIndex = installed.batchIndex;
@@ -6758,6 +6779,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       artifactId: artifact.artifactId,
       tests: baselineTests,
       select: (baseline) => {
+        baselineRows = baseline;
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
         const narrow = cfg.narrow;
         if (narrow !== undefined) {
@@ -6770,6 +6792,21 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
         return selectNamed(baseline, named, scope, installed.batchIndex, strict);
       },
     });
+    // R259: before the reruns, so decision 11 still reruns each new test after every mutant run.
+    const probe = cfg.probe;
+    if (probe !== undefined && baselineRows !== undefined && !safety.isUnsafe) {
+      probeRuns = [];
+      const requests = probe(outcomes);
+      await runProbes(
+        scope,
+        manifest,
+        requests,
+        baselineRows,
+        installed.batchIndex,
+        strict,
+        probeRuns,
+      );
+    }
     // Decision 11: after the covering loop on purpose, so a test that passes clean but fails
     // once mutant runs have touched the server is caught. Freshness for a rerun also needs a
     // session no earlier call of this run used: the ids recorded so far, grown as the loop goes.
@@ -6800,10 +6837,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   emitLeaseLostInvalidation(leaseSession, safety, emit);
   applyBatchInvalidations(outcomes, invalidations);
 
-  const byId = new Map(outcomes.map((o) => [o.mutant.mutantId, o]));
-  const answered = named.map(({ mutant }): SessionOutcome => {
-    const o = byId.get(mutant.mutantId);
-    if (o !== undefined) return o;
+  const notRunOf = (mutant: MutantManifestEntry): SessionOutcome => {
     if (!safety.isUnsafe) {
       throw new Error(
         `${who}: ${mutant.mutantId} got no outcome although the session did not latch (a bug, not a verdict)`,
@@ -6815,9 +6849,23 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       batchIndex: installed.batchIndex,
       failureNote: `not run: the session latched unsafe before this mutant (${safety.reason ?? "unknown"})`,
     };
-  });
+  };
+  const byId = new Map(outcomes.map((o) => [o.mutant.mutantId, o]));
+  const answered = named.map(({ mutant }) => byId.get(mutant.mutantId) ?? notRunOf(mutant));
+  // R259: a lost lease or an unattested batch discards the probes' verdicts too.
+  const probeOutcomes = probeRuns?.map((p) => p.outcome ?? notRunOf(p.mutant));
+  if (probeOutcomes !== undefined) applyBatchInvalidations(probeOutcomes, invalidations);
   return {
     outcomes: answered,
+    ...(probeRuns !== undefined && probeOutcomes !== undefined
+      ? {
+          probes: probeRuns.map((p, i) => {
+            const outcome = probeOutcomes[i];
+            if (outcome === undefined) throw new Error(`${who}: probe ${i} lost its outcome`);
+            return { request: p.request, outcome };
+          }),
+        }
+      : {}),
     ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
     ...(unreached !== undefined ? { unreached } : {}),
     baseline: baselineTests.map((ref) => {
@@ -6916,6 +6964,118 @@ function applyNarrow(
     unreached,
     notRerun: rerun.rerunRefs.map(testKeyOf).filter((k) => skip.has(k)),
   };
+}
+
+/** R259: one probe request, its manifest entry, and its outcome once scored. */
+interface ProbeRun {
+  readonly request: NamedMutantRequest;
+  readonly mutant: MutantManifestEntry;
+  outcome?: SessionOutcome;
+}
+
+/**
+ * R259: `NamedMutantsConfig.probe`'s requests. Every request is checked and pushed to `into` in
+ * request order before anything runs; then each one-method group is a covering pass of its own
+ * through `selectNamed` (the same green-baseline rule) and `runMutantsOnBackend` (the same
+ * kill confirmation and session checks), with section G's attestation gate as in `scoreBatch`.
+ *
+ * A sibling that is also a requested target, and was not answered for the new test, is probed, so
+ * the run holds TWO `mutants` rows for it (no unique index). Safe today: a verify run records no
+ * artifact, so verify.ts's `installedOf` refuses its id as `unknown-artifact` and it is never a
+ * source; `resolveVerifySource`'s "a mutant twice" guard would fire if one ever were.
+ */
+async function runProbes(
+  scope: BatchScope,
+  manifest: MutantManifest,
+  requests: readonly NamedMutantRequest[],
+  baseline: readonly BaselineRow[],
+  batchIndex: number,
+  strict: boolean,
+  into: ProbeRun[],
+): Promise<void> {
+  const groups = new Map<string, NamedMutantRequest[]>();
+  for (const r of requests) {
+    const [method, ...more] = r.methods;
+    if (method === undefined || more.length > 0) {
+      throw new NamedMutantError(
+        `runNamedMutants: probe ${r.mutantId} names ${r.methods.length} methods; a probe names exactly one`,
+      );
+    }
+    groups.set(testKeyOf(method), [...(groups.get(testKeyOf(method)) ?? []), r]);
+  }
+  const resolved = [...groups].map(([key, g]) => ({
+    key,
+    named: resolveNamedMutants(manifest, g),
+  }));
+  for (const r of requests) {
+    const mutant = manifest.mutants.find((m) => m.mutantId === r.mutantId);
+    if (mutant === undefined) throw new Error(`runNamedMutants: probe ${r.mutantId} was resolved`);
+    into.push({ request: r, mutant });
+  }
+  // A probe is not a requested mutant: its `mutant-scored` would be counted as one by a progress
+  // reader. Its rows stay in the store, under this never-finished run, where `sessionIdsOf` must
+  // see its sessions so a rerun in one is not fresh. Every other event (warnings) goes through.
+  const probeEmit: RunEmitter = (e) => {
+    if (e.type !== "mutant-scored") scope.emit(e);
+  };
+  for (const { key, named } of resolved) {
+    if (scope.safety.isUnsafe) return;
+    // A throw from here (a latch) loses this group's outcomes: they are answered "not run".
+    const outcomes: SessionOutcome[] = [];
+    const probeScope: BatchScope = {
+      ...scope,
+      outcomes,
+      killLedger: newKillLedger(),
+      emit: probeEmit,
+    };
+    const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
+    if (plan !== undefined) {
+      const attestation = { clean: false };
+      await runMutantsOnBackend({
+        backend: scope.backend,
+        safety: scope.safety,
+        ...(scope.leaseSession !== undefined ? { leaseSession: scope.leaseSession } : {}),
+        mutants: plan.mutants,
+        perMutantTests: plan.perMutantTests,
+        coverageAttribution: plan.coverageAttribution,
+        baselineDuration: plan.baselineDuration,
+        fallbackTimeoutMs: scope.baselineTimeoutMs,
+        minMutantBudgetMs: scope.minMutantBudgetMs,
+        store: scope.store,
+        runId: scope.runId,
+        batchIndex,
+        outcomes,
+        quarantineStore: scope.quarantineStore,
+        resourceKey: scope.resourceKey,
+        nowIso: scope.nowIso,
+        attestation,
+        emit: probeEmit,
+        killLedger: probeScope.killLedger,
+        memberCountsByTest: plan.memberCountsByTest,
+        groupRuns: scope.groupRuns,
+        sessionReuse: scope.sessionReuse,
+      });
+      if (scope.caps.authoritative && !attestation.clean) {
+        for (const [i, o] of outcomes.entries()) {
+          outcomes[i] = {
+            mutant: o.mutant,
+            verdict: "error",
+            batchIndex,
+            failureNote: "unattested probe: no run observed the deployed binary's selector",
+          };
+        }
+      }
+    }
+    for (const o of outcomes) {
+      const run = into.find(
+        (p) =>
+          p.mutant.mutantId === o.mutant.mutantId &&
+          p.request.methods.some((m) => testKeyOf(m) === key),
+      );
+      if (run === undefined) throw new Error(`runNamedMutants: no probe for ${o.mutant.mutantId}`);
+      run.outcome = o;
+    }
+  }
 }
 
 /**

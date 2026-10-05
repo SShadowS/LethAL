@@ -652,6 +652,7 @@ describe("runSession", () => {
           coverageMode: "procedure",
           carryHidden: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+          rows: [],
         },
         manifest: {
           selectorIds,
@@ -813,6 +814,7 @@ describe("runSession", () => {
                 coveringTests: [`${K.codeunitName}.${K.method}`],
               },
             ],
+            rows: [],
           },
           manifest: {
             selectorIds,
@@ -12644,6 +12646,15 @@ class NamedFake implements ExecutionBackend {
         readonly ref: TestMethodRef;
         readonly nth: number;
       }) => TestVerdict | undefined;
+      /** R259: a mutated run's answer for (mutant, method), ahead of `killer`: an outcome for that
+       *  method, or a whole group-call answer when the method opens the call. */
+      readonly answer?: (c: {
+        readonly mutant: string;
+        readonly ref: TestMethodRef;
+      }) =>
+        | { readonly outcome: "pass" | "fail"; readonly reachedActive?: boolean }
+        | RunManyResult
+        | undefined;
     },
   ) {}
   private readonly kindSeq = new Map<string, number>();
@@ -12702,6 +12713,17 @@ class NamedFake implements ExecutionBackend {
       return { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
     }
     const attestation = { observedAny: this.o.observedAny ?? true, identityMismatch: false };
+    const scripted = this.o.answer?.({ mutant: m, ref });
+    if (scripted !== undefined && !("kind" in scripted)) {
+      return {
+        ref,
+        outcome: scripted.outcome,
+        durationMs: 5,
+        attestation,
+        ...(scripted.outcome === "fail" ? { failureMessage: `killed by ${m}` } : {}),
+        ...(scripted.reachedActive !== undefined ? { reachedActive: scripted.reachedActive } : {}),
+      };
+    }
     const killerRef = this.o.killerRef;
     const isKillingRun =
       m === (this.o.killer ?? "M0001") &&
@@ -12716,6 +12738,11 @@ class NamedFake implements ExecutionBackend {
     const fencedOp = { attemptId: `n${this.manySeq}`, opSeq: 100 + this.manySeq };
     const verdicts: TestVerdict[] = [];
     const [first] = opts.methods;
+    const whole =
+      first !== undefined && this.active !== null
+        ? this.o.answer?.({ mutant: this.active, ref: first.ref })
+        : undefined;
+    if (whole !== undefined && "kind" in whole) return whole;
     const keys =
       first === undefined
         ? {}
@@ -12776,6 +12803,7 @@ async function installedFixture(
     readonly observedAny?: boolean;
     readonly session?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["session"]>;
     readonly unmutated?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["unmutated"]>;
+    readonly answer?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["answer"]>;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
@@ -13773,6 +13801,138 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
     expect(JSON.stringify(report)).not.toContain("killingTestRef");
     const row = report.mutants.find((m) => m.mutantCode === "M1");
     expect(row?.killingTest).toBe("OverBudgetDetected");
+  });
+});
+
+// R259: M0001, M0002 and M0003 are IsOverBudget's three mutants.
+describe("R259: runNamedMutants' probes", () => {
+  test("probes run after the targets, one method each, and never enter outcomes", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0002" && ref.codeunitId === OVER2.codeunitId ? { outcome: "fail" } : undefined,
+    });
+    const handed: string[][] = [];
+    const scored: string[] = [];
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      emit: [
+        ...(fx.cfg.emit ?? []),
+        (e) => {
+          if (e.type === "mutant-scored") scored.push(e.mutant.mutantId);
+        },
+      ],
+      // A probe's method must have run at the baseline: OVER2 does through M0001's request.
+      requests: [
+        { mutantId: "M0001", methods: [OVER, OVER2] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+      probe: (outcomes) => {
+        handed.push(outcomes.map((o) => `${o.mutant.mutantId} ${o.verdict}`));
+        return [
+          { mutantId: "M0002", methods: [OVER2] },
+          { mutantId: "M0003", methods: [OVER2] },
+        ];
+      },
+    });
+    expect(handed).toEqual([["M0001 killed", "M0002 survived"]]);
+    expect(res.outcomes.map((o) => [o.mutant.mutantId, o.verdict])).toEqual([
+      ["M0001", "killed"],
+      ["M0002", "survived"],
+    ]);
+    expect(
+      res.probes?.map((p) => [p.request.mutantId, p.outcome.verdict, p.outcome.killPosition]),
+    ).toEqual([
+      ["M0002", "killed", 1],
+      ["M0003", "survived", undefined],
+    ]);
+    expect(res.probes?.[0]?.outcome.killingTestRef).toEqual(OVER2);
+    // A progress reader counts mutant-scored events: only the two requested mutants emit one.
+    expect(scored).toEqual(["M0001", "M0002"]);
+  });
+
+  test("a rerun in a session a probe used is not fresh: probe rows stay in the run's store", async () => {
+    // Every group call gets a new session id; OVER2's rerun (its 2nd unmutated run) is handed the
+    // session of the last group call, which is the probe's.
+    let lastMany = 0;
+    let over2Unmutated = 0;
+    const fx = await installedFixture({
+      session: ({ kind, n, ref }) => {
+        if (kind === "many" || kind === "replay") {
+          lastMany = 1000 + n + (kind === "replay" ? 500 : 0);
+          return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        if (kind === "unmutated" && ref.codeunitId === OVER2.codeunitId) {
+          over2Unmutated += 1;
+          if (over2Unmutated === 2) return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        return { sessionId: 100 + n, testRunsBefore: 0 };
+      },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.probes?.map((p) => p.outcome.verdict)).toEqual(["survived"]);
+    expect(res.rerun.map((r) => [r.outcome, r.sessionId, r.fresh])).toEqual([
+      ["pass", lastMany, false],
+    ]);
+  });
+
+  test("a probe that no run attested is error, never a verdict", async () => {
+    let op = 0;
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0003"
+          ? {
+              kind: "verdicts",
+              endedBy: "complete",
+              ranCount: 1,
+              verdicts: [{ ref, outcome: "pass", durationMs: 5 }],
+              durationMs: 5,
+              fencedOp: { attemptId: `unattested-${++op}`, opSeq: 800 + op },
+            }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      probe: () => [{ mutantId: "M0003", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 18)]),
+    ).toEqual([["error", "unattested probe: "]]);
+  });
+
+  test("a lease lost during the reruns discards the probes' verdicts too", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === OVER2.codeunitId && nth === 2
+          ? { ref, outcome: "error", durationMs: 1, operation: "lease-lost" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      // OVER2's unmutated runs: its baseline (1), then its rerun (2), which loses the lease.
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.quarantined).toMatch(/lease/);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 11)]),
+    ).toEqual([["error", "lease-lost:"]]);
   });
 });
 
@@ -14901,6 +15061,148 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.refused?.reason).toBe("batch-not-installed");
     expect(fx.trace).toEqual([]);
     expect(fx.log).toEqual([]);
+  });
+
+  // R259: M0001 is killed by the new test; M0002 and M0003, IsOverBudget's other two source
+  // survivors, are probed with it through the real covering loop.
+  describe("R259: sameProcedure probes through the covering loop", () => {
+    const isNew = (ref: TestMethodRef) => ref.codeunitId === NEWT.codeunitId;
+    let op = 0;
+    const fencedOp = () => {
+      op += 1;
+      return { attemptId: `r259-${op}`, opSeq: 900 + op };
+    };
+    /** M0002's probe answers `m0002`; M0003's passes without reaching the active statement. */
+    const probing = async (
+      m0002: NonNullable<Parameters<typeof installedFixture>[0]>["answer"],
+      o: Parameters<typeof verifyFixture>[0] = {},
+    ) => {
+      const fx = await verifyFixture({
+        withNewTest: true,
+        killerRef: NEWT,
+        answer: (c) =>
+          !isNew(c.ref)
+            ? undefined
+            : c.mutant === "M0002"
+              ? m0002?.(c)
+              : c.mutant === "M0003"
+                ? { outcome: "pass", reachedActive: false }
+                : undefined,
+        ...o,
+      });
+      return fx.verify(["0/M0001"]);
+    };
+
+    test("a probe that fails is alsoKills; one that passes without reaching the statement is notKilled", async () => {
+      const out = await probing(() => ({ outcome: "fail" }));
+      expect(out.results.map((r) => [r.verdict, r.killedByNewTest])).toEqual([["killed", true]]);
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: ["0/M0002"],
+        notKilled: ["0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
+      expect(out.exitCode).toBe(0);
+    });
+
+    const unknownM0002 = {
+      test: NEWT,
+      alsoKills: [],
+      notKilled: ["0/M0003"],
+      unknown: ["0/M0002"],
+      overCap: 0,
+    };
+    const endings: ReadonlyArray<readonly [string, (ref: TestMethodRef) => RunManyResult]> = [
+      [
+        "a skip",
+        (ref) => ({
+          kind: "verdicts",
+          endedBy: "failure",
+          ranCount: 1,
+          verdicts: [{ ref, outcome: "skip", durationMs: 1 }],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a suite-unresolved group error",
+        (ref) => ({
+          kind: "call",
+          verdict: { ref, outcome: "error", durationMs: 1, failureMessage: "suite-unresolved" },
+          methodIndex: 1,
+          cause: "group-run-error",
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a complete answer with no entry",
+        () => ({
+          kind: "verdicts",
+          endedBy: "complete",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a cap whose count outran its entries",
+        () => ({
+          kind: "verdicts",
+          endedBy: "cap",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+    ];
+    for (const [what, answer] of endings) {
+      test(`a probe that ends in ${what} is unknown, never notKilled`, async () => {
+        const out = await probing(({ ref }) => answer(ref));
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+        expect(out.exitCode).toBe(0);
+      });
+    }
+
+    for (const confirmation of ["fail", "error"] as const) {
+      test(`a probe kill whose unmutated confirmation ends in ${confirmation} is unknown`, async () => {
+        let probed = false;
+        let failed = false;
+        const out = await probing(
+          () => {
+            probed = true;
+            return { outcome: "fail" };
+          },
+          {
+            unmutated: ({ ref }) => {
+              if (isNew(ref) && probed && !failed) {
+                failed = true;
+                return { ref, outcome: confirmation, durationMs: 5, failureMessage: "unmutated" };
+              }
+              return { ref, outcome: "pass", durationMs: 5 };
+            },
+          },
+        );
+        expect(failed).toBe(true);
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+      });
+    }
+
+    test("a session that latches mid-probe leaves every sibling unknown", async () => {
+      const out = await probing(() => ({ outcome: "fail" }), { strand: "M0003" });
+      expect(out.quarantined).toBeDefined();
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: [],
+        notKilled: [],
+        unknown: ["0/M0002", "0/M0003"],
+        overCap: 0,
+      });
+      expect(out.exitCode).toBe(3);
+    });
   });
 });
 
