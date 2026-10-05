@@ -574,7 +574,11 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
   });
   test("N1c. a caller the walk cannot trace (a global) keeps the fallback", () => {
     const r = run(
-      s((e) => LIB(e), proc("B()", LIBV, "        Lib.Check(GlobalV);\n"), "        GlobalV: Variant;\n")({}),
+      s(
+        (e) => LIB(e),
+        proc("B()", LIBV, "        Lib.Check(GlobalV);\n"),
+        "        GlobalV: Variant;\n",
+      )({}),
     );
     expect(r.why("A")).toContain("the global GlobalV");
   });
@@ -598,8 +602,11 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
           e,
           "",
           "",
-          `\n    procedure Again(R: Variant)\n    begin\n        Check(R);\n        Again(R);\n    end;\n`,
-        ).replace("        Ext.RunFormatted(Format(Result));\n", "        Ext.RunFormatted(Format(Result));\n        Again(Result);\n"),
+          "\n    procedure Again(R: Variant)\n    begin\n        Check(R);\n        Again(R);\n    end;\n",
+        ).replace(
+          "        Ext.RunFormatted(Format(Result));\n",
+          "        Ext.RunFormatted(Format(Result));\n        Again(Result);\n",
+        ),
       )({}),
     );
     expect(r.why("A")).toContain("cycle");
@@ -608,12 +615,7 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     let chain = "";
     for (let i = 0; i < 40; i += 1)
       chain += `\n    procedure H${i}(R: Variant)\n    begin\n        ${i === 0 ? "Check" : `H${i - 1}`}(R);\n    end;\n`;
-    const r = run(
-      s(
-        (e) => LIB(e, "", "", chain),
-        proc("B()", LIBV, "        Lib.H39(5);\n"),
-      )({}),
-    );
+    const r = run(s((e) => LIB(e, "", "", chain), proc("B()", LIBV, "        Lib.H39(5);\n"))({}));
     expect(r.why("A")).toContain("deeper than");
   });
   test("N1g. a bare call of ANOTHER object's own same-named procedure is not a caller", () => {
@@ -625,7 +627,12 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     const r = run(
       s(
         (e) => LIB(e),
-        proc("B()", LIBV, "        Lib.Check(5);\n", "    [Test]\n    [HandlerFunctions('Check')]\n"),
+        proc(
+          "B()",
+          LIBV,
+          "        Lib.Check(5);\n",
+          "    [Test]\n    [HandlerFunctions('Check')]\n",
+        ),
       )({}),
     );
     expect(r.why("A")).toContain("can be called from outside the test app");
@@ -646,7 +653,9 @@ describe("R-389 option (a), narrowing 2: namespace-qualified names", () => {
       "T.al": testUnit(proc("A()", `        Resp: Codeunit ${type};\n`, `        Resp.${call};\n`)),
     });
   test("N2a. a qualified name the test app does not declare is a dependency's: no fallback", () => {
-    expect(run(qualified(`System.RestClient."Http Response Message"`)({})).why("A")).toBeUndefined();
+    expect(
+      run(qualified(`System.RestClient."Http Response Message"`)({})).why("A"),
+    ).toBeUndefined();
   });
   test("N2b. a qualified name whose object IS in the test app is walked into", () => {
     const sc = qualified(`My.Ns."Mock"`, "Go()");

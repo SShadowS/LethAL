@@ -416,15 +416,18 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **`lethal verify` sees an edit to a test-app codeunit handed out in a Variant or interface**
   (R389). Code in another app can run a test-app codeunit it receives in a Variant (measured live),
   and a test's digest did not cover it, so an edit there left the test read as unchanged. The digest
-  now traces what a handed-out Variant is assigned from and folds that codeunit, or every test-app
-  implementation of an interface; a subscriber or folded codeunit handing a value back through a
-  `var` parameter or its return value is read the same way. Where the walk cannot see the value (a
-  parameter, a global, a collection element) the test takes the whole-source digest. An interface
-  with no test-app implementation adds nothing. No scheme change, because the change only adds
-  coverage: a test whose digest now covers more (one newly on the whole-source digest, or with a
-  new fold) gets a new digest and reads as new once, and every other test keeps its digest.
-  Measured at 41ff941d: 29 of 1,854 DC tests and 29 of 1,986 DO tests move to the whole-source
-  digest, CDO none.
+  now traces what a handed-out Variant is assigned from, a Variant parameter through every test-app
+  caller, and folds that codeunit, or every test-app implementation of an interface; a subscriber
+  or folded codeunit handing a value back through a `var` parameter or its return value is read the
+  same way, and so is a Variant handed to a built-in such as `Format` (whose text can carry the
+  codeunit's id). Where the walk cannot see the value (a global, a collection element, a procedure
+  the platform calls) the test takes the whole-source digest. A namespace-qualified name the test
+  app does not declare now reads as a dependency's object instead of falling back. No scheme
+  change, because the change only adds coverage: a test whose digest now covers more gets a new
+  digest and reads as new once, and every other test keeps its digest. Measured: 5 of 1,854 DC
+  tests and 2 of 1,986 DO tests newly take the whole-source digest, CDO none; every DO test's
+  digest moves once, because test-app codeunits implementing dependency interfaces now fold into
+  every digest.
 
 - **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 is held
   by R-446). The run-wide twin numbering sorted files with `localeCompare`, the host's default

@@ -2260,7 +2260,10 @@ export class Scanner {
       return;
     }
     if (path.length > MAX_CALLER_DEPTH) {
-      fallBack(st, `${why}: ${raw} is passed down a chain of callers deeper than ${MAX_CALLER_DEPTH}`);
+      fallBack(
+        st,
+        `${why}: ${raw} is passed down a chain of callers deeper than ${MAX_CALLER_DEPTH}`,
+      );
       return;
     }
     const kin = p.unit.baseKey === undefined ? [] : (this.otherByBase.get(p.unit.baseKey) ?? []);
