@@ -107,6 +107,8 @@ type Outcome = "pass" | "fail" | "abort";
 class SiteBackend implements ExecutionBackend {
   private active: MutantManifestEntry | null = null;
   private byId = new Map<string, MutantManifestEntry>();
+  /** `<file basename>:<line>` of every mutant activated, so a test can tell "ran" from "carried". */
+  readonly activated: string[] = [];
   constructor(private readonly outcomes: Readonly<Record<string, Outcome>>) {}
   capabilities(): BackendCapabilities {
     return { coverage: "procedure", deploy: "publish", isolation: "session", authoritative: true };
@@ -130,6 +132,7 @@ class SiteBackend implements ExecutionBackend {
     const m = this.byId.get(id);
     if (m === undefined) throw new Error(`SiteBackend: ${id} is not in the deployed manifest`);
     this.active = m;
+    this.activated.push(`${basename(m.file)}:${m.startLine}`);
   }
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     if (this.active === null) {
@@ -545,6 +548,86 @@ describe("R391: a recorded verdict carries only under rule 1 or rule 2", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("R475: resuming unchanged source under another host collation carries no `killed` onto an unmeasured twin", async () => {
+    // Twins in `Aa_…` and `Z_…`: "en" and code unit put `Aa` first, Danish puts it after `Z`
+    // (`aa` is `å`). Discovery and batching are code-unit ordered, so Aa EXECUTES first. Run 1
+    // kills Aa's twin and aborts on an unrelated sentinel (`Y := 5;`, its own tuple) in the same
+    // file, so Z's twin (batch 1) is never prepared: it is not stranded, just unmeasured.
+    const AA = "Aa_Twin.Table.al";
+    const Z = "Z_Twin.Codeunit.al";
+    const root = await mkdtemp(join(tmpdir(), "lethal-r475-"));
+    roots.push(root);
+    const dirs = {
+      projectDir: join(root, "app"),
+      testDir: join(root, "tests"),
+      instrumentedDir: join(root, "instr"),
+    };
+    await Bun.write(join(dirs.projectDir, AA), TABLE_AL([TWIN, "Y := 5;"]));
+    await Bun.write(join(dirs.projectDir, Z), CODEUNIT_AL([TWIN]));
+    await Bun.write(join(dirs.projectDir, "app.json"), APP_JSON);
+    await Bun.write(join(dirs.testDir, "TwinTests.Codeunit.al"), TEST_AL);
+    const set = await generateMutationSet(dirs.projectDir, { emit: () => {} });
+    const maxGuardsPerBatch = set.files.find((f) => f.path.endsWith(AA))?.specs.length;
+    if (maxGuardsPerBatch === undefined) throw new Error("Aa produced no specs");
+    const store = new ResultsStore(":memory:");
+    const twinRows = (r: SessionReport) =>
+      rows(r).filter((x) => x.startsWith(`${AA} @13`) || x.startsWith(Z));
+
+    // Pin the host collation per run: every `localeCompare` without a locale collates as `host`.
+    // Run 1 is an "en" host and run 2 a Danish one, whatever this machine's default is.
+    const original = String.prototype.localeCompare;
+    const onHost = async <T>(host: string, run: () => Promise<T>): Promise<T> => {
+      String.prototype.localeCompare = function (
+        this: string,
+        that: string,
+        locales?: string | string[],
+        options?: Intl.CollatorOptions,
+      ): number {
+        return original.call(this, that, locales ?? host, options);
+      };
+      try {
+        return await run();
+      } finally {
+        String.prototype.localeCompare = original;
+      }
+    };
+
+    const first = await onHost("en", async () => {
+      expect(["Aa", "Z"].sort((a, b) => a.localeCompare(b))).toEqual(["Aa", "Z"]);
+      return runSession({
+        backend: new SiteBackend({ [`${AA}:13`]: "fail", [`${AA}:14`]: "abort" }),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch,
+      });
+    });
+    expect(twinRows(first)).toEqual([`${AA} @13 killed`]);
+
+    const backend = new SiteBackend({});
+    const second = await onHost("da", async () => {
+      expect(["Aa", "Z"].sort((a, b) => a.localeCompare(b))).toEqual(["Z", "Aa"]);
+      return runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch,
+        resume: "last",
+      });
+    });
+    const hashes = store.db
+      .query("SELECT generation_source_sha256 AS h FROM runs ORDER BY id")
+      .all() as { h: string }[];
+    expect(hashes).toHaveLength(2);
+    expect(hashes[0]?.h).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashes[1]?.h).toBe(hashes[0]?.h ?? "");
+    // Aa's kill carries (rule 1: same source); Z's twin is MEASURED, and survives.
+    expect(twinRows(second)).toEqual([`${AA} @13 killed`, `${Z} @8 survived`]);
+    expect(backend.activated).toContain(`${Z}:8`);
+    expect(backend.activated).not.toContain(`${AA}:13`);
   });
 
   test("store: createRun leaves twin_tuples NULL; setTwinTuples([]) records `[]`, distinct from NULL", () => {
