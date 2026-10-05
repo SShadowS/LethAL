@@ -229,6 +229,9 @@ export function claimsRecordMethod(
  * claiming: a platform-kill tag must stay where nothing proves the skip harmless, and an
  * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
  * (R343) every receiver outside a trigger's own `var` section is unresolved.
+ *
+ * R-254: inside a `reportextension` (not in `OBJECT_KINDS`, so never claimed: R463) every
+ * qualified receiver counts as unresolved, so Tier-1 RunTrigger flips there keep their tag.
  */
 export function receiverUnresolved(
   node: ALSyntaxNode,
@@ -242,7 +245,12 @@ export function receiverUnresolved(
   if (target === null || target.receiver === null) return false;
   if (!equalsIgnoreCase(target.name, methodName)) return false;
   const objectNode = enclosingObject(node);
-  if (objectNode === null) return false;
+  if (objectNode === null) {
+    for (let p = node.parent; p !== null; p = p.parent) {
+      if (p.kind === ALNodeKind.reportextension) return true;
+    }
+    return false;
+  }
   const objectName = objectNameOf(objectNode);
   if (objectName === null) return false;
   return (

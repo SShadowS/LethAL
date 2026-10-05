@@ -371,6 +371,25 @@ describe("flipBooleanLiteral RunTrigger tags (R-452)", () => {
     expect(tagged(files)).toEqual(["true->false -", "true->false -", "true->false -"]);
   });
 
+  // F11 (R-254, review R-254-001). Inside a `reportextension` (admitted by R-254) the receiver is
+  // treated as UNRESOLVED for tagging, so every RunTrigger flip keeps its tag even on a `Par` with
+  // no triggers. Controls: the same calls from a codeunit keep today's behaviour (resolved receiver,
+  // no trigger, untagged). Revert: `receiverUnresolved` returns false outside `OBJECT_KINDS`.
+  it("KEEPS the RunTrigger tags inside a reportextension (receiver unresolved for tagging)", () => {
+    const body = "Par.Insert(false); Par.ModifyAll(Amount, 1, true); Par.DeleteAll(true);";
+    const repExt = `reportextension 50304 "RX" extends "Base"\n{\n    procedure P()\n    var\n        Par: Record "Par";\n    begin\n        ${body}\n    end;\n}\n`;
+    expect(tagged({ "P.al": par(""), "O.al": repExt })).toEqual([
+      "false->true run-trigger-forced",
+      "true->false run-trigger-skipped-modify",
+      "true->false run-trigger-skipped-delete",
+    ]);
+    expect(tagged({ "P.al": par(""), "O.al": caller(body) })).toEqual([
+      "false->true -",
+      "true->false -",
+      "true->false -",
+    ]);
+  });
+
   // R-457. A `false` RunTrigger flipped to `true` FORCES the trigger. `forceCanRaise` keeps
   // `run-trigger-forced` unless the table resolves, is decided, and has no `On<X>` (any arm not
   // compiled out), no project tableextension `OnBefore/OnAfter<X>` and no subscriber to its two
