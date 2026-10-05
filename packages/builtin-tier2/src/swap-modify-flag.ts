@@ -1,4 +1,9 @@
-import { claimsRecordMethod, modifySkipCanRaise } from "@lethal/engine";
+import {
+  type RunTriggerKind,
+  claimsRecordMethod,
+  forceCanRaise,
+  modifySkipCanRaise,
+} from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
@@ -9,11 +14,7 @@ import {
   type SemanticContext,
   isStatementPosition,
 } from "@lethal/operator-sdk";
-import {
-  deleteSkipCanRaise,
-  forcedTriggerCanRaise,
-  resolveForcedTrigger,
-} from "./forced-trigger-raise";
+import { deleteSkipCanRaise, resolveForcedTrigger } from "./forced-trigger-raise";
 import { insertSkipCanRaise } from "./insert-key-assignment";
 import { exactArguments, soleArgument, synthesizeAfter } from "./mutate-helpers";
 
@@ -331,8 +332,7 @@ function forcedTriggerSite(
 function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
   const method = claimedRunTriggerMethod(node, ctx);
   if (method === null) return [];
-  const trigger = forcedTriggerSite(node, ctx, method);
-  if (trigger === null) return [];
+  if (forcedTriggerSite(node, ctx, method) === null) return [];
   // The call's own text with `true` placed inside its empty parentheses. Sliced rather than rebuilt
   // so the receiver, casing and any interior trivia survive exactly as written.
   const text = node.text;
@@ -348,10 +348,11 @@ function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly Muta
       before: node,
       after: synthesizeAfter(node, mutatedText),
       parentContext: parentContextOf(node),
-      // Tagged only where the trigger body PROVABLY contains a raise-capable statement. Unlike the
-      // skip direction's blanket tag, this one is emitted from the trigger itself, which is
-      // available precisely because the site test refused everything it could not resolve.
-      ...(forcedTriggerCanRaise(trigger, ctx) ? { platformKillMechanism: RUN_TRIGGER_FORCED } : {}),
+      // R-457: `forceCanRaise` reads no trigger body. The site test above already requires the
+      // trigger, so every forward mutant is tagged: the price of not trusting a body reader.
+      ...(forceCanRaise(node, ctx, method.toLowerCase() as RunTriggerKind)
+        ? { platformKillMechanism: RUN_TRIGGER_FORCED }
+        : {}),
     },
   ];
 }

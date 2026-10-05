@@ -111,13 +111,15 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "not read, so finding none here is not proof that none exists. WEAK, like the `Delete` tag: " +
     "the route is not measured live. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-forced":
-    "rewriting `Modify()` to `Modify(true)` makes the table's `OnModify` RUN where it did not — " +
-    "`Rec.Modify()` means `RunTrigger = false`. Forcing a trigger writes more than the unmutated " +
-    "program, so unlike skipping one it can add an error the suite never had to catch: an " +
-    "`Error`, a `TestField`, a `FieldError`, or a write to another table hitting a duplicate key " +
-    "or a locked row. STRONGER THAN `run-trigger-skipped-insert`: this operator is scoped to " +
-    "tables this project declares AND that declare the trigger, so the tag is emitted only where " +
-    "the trigger body PROVABLY contains a raise-capable statement, never as a blanket. It " +
-    "under-tags for a raise reached through a project procedure, which is the honest direction " +
-    "for a screen whose value is that a tag means something.",
+    "rewriting `Modify()` or `Modify(false)` to `Modify(true)` (and the same for `Insert`, " +
+    "`Delete`, `ModifyAll(Field, Value, false)` and `DeleteAll(false)`) makes the table's trigger " +
+    "RUN where it did not, and raises its events with `RunTrigger` true. Forcing a trigger writes " +
+    "more than the unmutated program, so unlike skipping one it can add an error the suite never " +
+    "had to catch: an `Error`, a `TestField`, a `FieldError`, or a write to another table hitting " +
+    "a duplicate key or a locked row. Kept unless LethAL proves the table has no such trigger and " +
+    "no subscriber or `tableextension` trigger for it in this project. No trigger body is read, so " +
+    "every table with that trigger keeps it, and so does every table it cannot read, such as a " +
+    "base-app record. SCOPE: it reads only this project. A subscriber or `tableextension` trigger " +
+    "in another app (the test app, say) is not read, so finding none here is not proof that none " +
+    "exists. Treat it as a prompt to read the kill, not as a verdict on it.",
 };
