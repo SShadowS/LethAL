@@ -218,3 +218,73 @@ describe("R239: flip-boolean-literal refuses a literal that reaches a loop's exi
     );
   });
 });
+
+/**
+ * R454 shapes 1 and 2: a literal that sits in a loop's exit test but that the R164/R239 walks
+ * missed. Both refusals are SILENT (not the hang check), so `refusesHangCapable` stays false.
+ */
+describe("R454: literals in a loop's exit test the older walks missed", () => {
+  const CUST = "Done: Boolean; Go: Boolean; Total: Integer; Cust: Record Customer;";
+
+  it("shift-integer: a literal in a loop condition's `#if` tail is refused; the body is claimed", () => {
+    const src = unit(
+      [
+        "        while false", // 7
+        "#if LETHALX",
+        "            or (Cust.Next() <> 0)", // 9 refused
+        "#endif",
+        "        do", // 11
+        "            Total := 7;", // 12 same-loop control
+      ].join("\n"),
+      CUST,
+    );
+    for (const b of [["LETHALX"], undefined])
+      expect(claimedSites(shiftInteger, src, b), `[${b}]`).toEqual(["12|7"]);
+  });
+
+  it("flip-boolean-literal: a literal inside a comparison in an until condition is refused", () => {
+    expect(
+      claimedSites(
+        flipBooleanLiteral,
+        unit("        repeat\n            Go := Done = true;\n        until Done = true;"),
+      ),
+    ).toEqual(["8|true"]);
+  });
+
+  it("flip-boolean-literal: a literal inside a comparison in an in-loop `if` guard is refused", () => {
+    expect(
+      claimedSites(
+        flipBooleanLiteral,
+        unit(
+          "        while Go do begin\n            Total += 1;\n            if Done = true then exit;\n        end;",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("neither refusal is counted as a hang refusal", () => {
+    const root = wrapRoot(
+      parseAL(
+        unit(
+          "        while false\n#if LETHALX\n            or (Cust.Next() <> 0)\n#endif\n        do;\n        repeat until Done = true;",
+          CUST,
+        ),
+      ),
+    );
+    const ctx = buildSemanticContext([{ path: "fixture.al", root }]);
+    const seen: string[] = [];
+    visit(root, (n: ALSyntaxNode) => {
+      if (n.rawKind === "integer" && n.text === "0") {
+        seen.push("0");
+        expect(shiftInteger.targets(n, ctx)).toBe(false);
+        expect(shiftInteger.refusesHangCapable?.(n, ctx)).toBe(false);
+      }
+      if (n.rawKind === "boolean" && n.text === "true") {
+        seen.push("true");
+        expect(flipBooleanLiteral.targets(n, ctx)).toBe(false);
+        expect(flipBooleanLiteral.refusesHangCapable?.(n, ctx)).toBe(false);
+      }
+    });
+    expect(seen.sort()).toEqual(["0", "true"]);
+  });
+});

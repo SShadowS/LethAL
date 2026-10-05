@@ -3797,6 +3797,10 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     const { files } = await generateMutationSet(dirs.projectDir);
     const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
     expect(texts).not.toContain("Remaining := Remaining - 1");
+    // swap-additive's `before` is the EXPRESSION, so the statement check alone misses it (R454).
+    expect(texts).not.toContain("Remaining - 1");
+    // Control: the preheader `Remaining + 1` is still emitted by the same operator.
+    expect(texts).toContain("Remaining + 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {

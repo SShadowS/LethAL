@@ -307,12 +307,14 @@ function isLoopCondition(node: ALSyntaxNode): boolean {
   return false;
 }
 
-/** R239: what `isLoopCondition` walks up through from a literal towards its condition. */
+/** R239: what `isLoopCondition` walks up through from a literal towards its condition. R454 adds
+ *  the comparison: `until X.Next() = false` -> `= true` removes or inverts the exit just the same. */
 const CONDITION_TAIL = "preproc_conditional_expression_tail";
 const CONDITION_WRAPPERS: ReadonlySet<string> = new Set([
   ALNodeKind.parenthesized_expression,
   ALNodeKind.unary_expression,
   ALNodeKind.logical_expression,
+  ALNodeKind.comparison_expression,
   CONDITION_TAIL,
 ]);
 

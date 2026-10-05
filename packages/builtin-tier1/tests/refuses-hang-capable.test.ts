@@ -108,6 +108,78 @@ describe("R447: refusesHangCapable (5.1a)", () => {
   }
 });
 
+describe("R454: a MEMBER loop-condition write, through all four operators", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const TABLE = `table 50480 "Probe" { fields { field(1; Qty; Integer) { } field(2; Other; Integer) { }
+    field(3; Done; Boolean) { } field(4; Flag; Boolean) { } } }`;
+  const unit = (id: number, body: string) =>
+    `${TABLE} codeunit ${id} "R" { procedure P() var R: Record Probe; begin ${body} end; }`;
+  const MEMBER: Case[] = [
+    {
+      op: removeAssignment,
+      src: unit(50481, "repeat R.Done := true; R.Flag := true; until R.Done;"),
+      kind: "assignment_statement",
+      refused: "R.Done := true",
+      claimed: "R.Flag := true",
+    },
+    {
+      op: flipBooleanLiteral,
+      src: unit(50482, "repeat R.Done := true; R.Flag := true; until R.Done;"),
+      kind: "boolean",
+      refused: "true",
+      refusedWithin: "R.Done := true",
+      claimed: "true",
+      claimedWithin: "R.Flag := true",
+    },
+    {
+      op: shiftInteger,
+      src: unit(50483, "while R.Qty <> 7 do begin R.Qty := 5; R.Other := 5; end;"),
+      kind: "integer",
+      refused: "5",
+      refusedWithin: "R.Qty := 5",
+      claimed: "5",
+      claimedWithin: "R.Other := 5",
+    },
+    {
+      op: swapAdditive,
+      src: unit(50484, "while R.Qty > 0 do begin R.Qty := R.Qty - 1; R.Other := R.Other + 1; end;"),
+      kind: "additive_expression",
+      refused: "R.Qty - 1",
+      claimed: "R.Other + 1",
+    },
+  ];
+
+  for (const c of MEMBER) {
+    it(`${c.op.name}: refused AND counted at the member the condition reads, emitted at its sibling`, () => {
+      const { root, ctx } = load(c.src);
+      const refused = nodeAt(root, c.kind, c.refused, c.refusedWithin);
+      const claimed = nodeAt(root, c.kind, c.claimed, c.claimedWithin);
+      expect(c.op.targets(refused, ctx)).toBe(false);
+      expect(c.op.refusesHangCapable?.(refused, ctx)).toBe(true);
+      expect(c.op.targets(claimed, ctx)).toBe(true);
+      expect(c.op.refusesHangCapable?.(claimed, ctx)).toBe(false);
+      // No generated spec inside the refused node, over the whole file as the orchestrator walks it.
+      const spans: { start: number; end: number }[] = [];
+      const walk = (n: ALSyntaxNode): void => {
+        if (c.op.targets(n, ctx)) {
+          for (const s of c.op.generate(n, ctx)) {
+            spans.push({ start: s.before.startIndex, end: s.before.endIndex });
+          }
+        }
+        for (const ch of n.children) walk(ch);
+      };
+      walk(root);
+      const inside = (p: ALSyntaxNode) =>
+        spans.filter((s) => s.start >= p.startIndex && s.end <= p.endIndex).length;
+      expect(inside(refused)).toBe(0);
+      expect(inside(claimed)).toBeGreaterThan(0);
+    });
+  }
+});
+
 describe("R447: an earlier check refuses, the hang check would not (5.1b)", () => {
   beforeAll(async () => {
     await initParser();

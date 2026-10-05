@@ -337,6 +337,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **Three more loop-hang shapes are refused; identity scheme 14** (R454). `shift-integer` now
+  refuses a literal in a loop condition's `#if` tail; `flip-boolean-literal` refuses a literal
+  inside a comparison in a loop's exit test (`until X.Next() = false`) or an in-loop `if` guard;
+  and all four value operators refuse a write to `R.Field` that an enclosing loop's condition
+  reads (receiver and field compared separately; an unresolved receiver is still not seen). The
+  first two are silent refusals; the third counts into `hang-refused`. Measured: BaseApp loses 47
+  mutants (15 more hang-refused), CDO 1, no fixture or gate figure moves. A later same-tuple twin
+  of a refused mutant can take its key, hence the scheme bump: re-check equivalence marks.
 - **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
   of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
   type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a
