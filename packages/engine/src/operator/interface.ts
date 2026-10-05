@@ -48,8 +48,10 @@ export type AstNodeId = string;
  * skipping the table's delete code is proven harmless (`deleteSkipCanRaise`). The duplicate-key
  * route itself is NOT measured live for `Delete`.
  *
- * `Modify` gets NO skip mechanism (R138's ruling stands for it): skipping `OnModify` writes less and
- * the row is still located by the same key.
+ * `"run-trigger-skipped-modify"` — R-452, the same refusal detector for `Modify(true)` to
+ * `Modify(false)` and for `ModifyAll(F, V, true)` to `..., false)` (`modifySkipCanRaise`). R138's
+ * "skipping `OnModify` writes less" holds for the row itself and not for an `OnModify` that writes
+ * OTHER rows. `DeleteAll(true)` to `DeleteAll(false)` carries `run-trigger-skipped-delete`.
  *
  * Deliberately keyed on SYNTAX and never on BC's failure text. The refusal's message is BC's
  * generic "An error occurred and the transaction is stopped", which names neither `Codeunit.Run`
@@ -71,7 +73,9 @@ export type PlatformKillMechanism =
    */
   | "run-trigger-forced"
   /** R281 — see the type's comment above. */
-  | "run-trigger-skipped-delete";
+  | "run-trigger-skipped-delete"
+  /** R-452 — see the type's comment above. */
+  | "run-trigger-skipped-modify";
 
 /**
  * R196: which rule decided this site can make a loop run forever.

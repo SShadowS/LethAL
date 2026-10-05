@@ -234,4 +234,34 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
     expect(explanation).toContain("another app");
     expect(explanation).toContain("not measured live");
   });
+
+  // R-452 (P1): a `Modify(true)` / `ModifyAll(..., true)` kill gets its own group, sorted, with its
+  // own explanation, which states the cross-app scope and never that a local absence proves
+  // harmlessness. Revert: give the modify key the delete explanation.
+  test("groups a kill tagged run-trigger-skipped-modify on its own, with its own explanation", () => {
+    const r = build([
+      {
+        mutant: entry("M0001", { platformKillMechanism: "run-trigger-skipped-modify" }),
+        verdict: "killed",
+        batchIndex: 0,
+      },
+      {
+        mutant: entry("M0002", { platformKillMechanism: "run-trigger-skipped-delete" }),
+        verdict: "killed",
+        batchIndex: 0,
+      },
+    ]);
+    expect(r.platformArtifactKills?.killedCount).toBe(2);
+    const groups = r.platformArtifactKills?.byMechanism ?? [];
+    expect(groups.map((g) => [g.mechanism, g.mutants])).toEqual([
+      ["run-trigger-skipped-delete", ["0/M0002"]],
+      ["run-trigger-skipped-modify", ["0/M0001"]],
+    ]);
+    const explanation = groups[1]?.explanation ?? "";
+    expect(explanation).toContain("`OnModify`");
+    expect(explanation).toContain("`ModifyAll(Field, Value, true)`");
+    expect(explanation).toContain("another app");
+    expect(explanation).toContain("not proof that none exists");
+    expect(groups[0]?.explanation).toContain("`DeleteAll(true)`");
+  });
 });

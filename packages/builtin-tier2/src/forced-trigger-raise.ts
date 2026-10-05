@@ -27,7 +27,8 @@ export {
  *
  * R138 ruled that `Delete` and `Modify` need no mechanism when SKIPPING a trigger, because skipping
  * writes strictly LESS than the unmutated program and can add no error. (R281 overturned that for
- * `Delete`, see `deleteSkipCanRaise` below: skipped child deletes leave rows a later insert hits.)
+ * `Delete` and R-452 for `Modify`, see `skipCanRaise` in `@lethal/engine`: a skipped trigger's
+ * writes to OTHER rows do not happen, and a later statement can hit what they would have changed.)
  * Forcing writes MORE. Any
  * statement the trigger runs can raise: an `Error`, a `TestField`, a `FieldError`, a write to
  * another table that hits a duplicate key or a locked row. So all three methods can produce a kill

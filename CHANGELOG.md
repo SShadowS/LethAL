@@ -92,6 +92,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A skipped `OnModify` is now screened, and so are `ModifyAll`/`DeleteAll` RunTrigger flips**
+  (R452). `swap-modify-flag`'s `Modify(true)` -> `Modify(false)` mutants carry the new
+  `platformKillMechanism` value `run-trigger-skipped-modify` unless LethAL can prove that skipping
+  the table's `OnModify` (and its modify subscribers and tableextension triggers) is harmless, the
+  same refusal detector R281 built for `Delete`. `flip-boolean-literal`'s `true` -> `false` flip
+  of a Record `ModifyAll`'s third argument carries the same tag, and of a `DeleteAll`'s argument
+  carries `run-trigger-skipped-delete`. The detector itself got stricter for both kinds: no
+  `Modify` or `Delete` inside the trigger counts as harmless any more, a parenthesis-less
+  split-header procedure call keeps the tag, and a bare `X.Y` counts as a field read only for the
+  trigger's own `Rec`/`xRec` and its own table's fields. Verdicts and scores do not move; only the
+  screen grows. Measured (probe, no `#if` arms): BC.History gains 22,521 tagged `Modify` mutants,
+  188 `ModifyAll` and 846 `DeleteAll`; CDO 35 and 9; the fixtures one (unpinned `grammar-probe`).
+  It reads only this project: a subscriber in another app, such as the test app, is not seen.
+
 - **The results store no longer fsyncs on every commit** (R449). `lethal.sqlite` now runs with
   `PRAGMA synchronous = NORMAL` under WAL, SQLite's recommended pairing, and opening a new store went
   from a 238 ms median to 54 ms on Linux. A crashed or killed LethAL process loses nothing. An OS

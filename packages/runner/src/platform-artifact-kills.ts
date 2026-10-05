@@ -87,7 +87,8 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "the primary key is not visible at the call site, and for a base-app record it is not visible " +
     "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-delete":
-    "rewriting `Delete(true)` to `Delete(false)` skips `OnDelete` and the table's delete " +
+    "rewriting `Delete(true)` to `Delete(false)`, or `DeleteAll(true)` to `DeleteAll(false)`, " +
+    "skips `OnDelete` and the table's delete " +
     "subscribers. When that code deletes or writes OTHER rows (child lines, a log row), those rows " +
     "are left behind, and a later insert of one can raise a duplicate key before any assertion " +
     "runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
@@ -96,6 +97,16 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "tag: the duplicate-key route is not measured live for `Delete`, and whether `RunTrigger` " +
     "changes how BC deletes record links, notes or media is not measured either. Treat it as a " +
     "prompt to read the kill, not as a verdict on it.",
+  "run-trigger-skipped-modify":
+    "rewriting `Modify(true)` to `Modify(false)`, or `ModifyAll(Field, Value, true)` to " +
+    "`ModifyAll(Field, Value, false)`, skips `OnModify` and the table's modify subscribers. When " +
+    "that code deletes or writes OTHER rows, those writes do not happen, and a later statement can " +
+    "raise on the rows they would have changed (a duplicate key, a missing record) before any " +
+    "assertion runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes " +
+    "every table it cannot read, such as a base-app record. SCOPE: it reads only this project. A " +
+    "modify subscriber or `tableextension` modify trigger in another app (the test app, say) is " +
+    "not read, so finding none here is not proof that none exists. WEAK, like the `Delete` tag: " +
+    "the route is not measured live. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-forced":
     "rewriting `Modify()` to `Modify(true)` makes the table's `OnModify` RUN where it did not — " +
     "`Rec.Modify()` means `RunTrigger = false`. Forcing a trigger writes more than the unmutated " +
