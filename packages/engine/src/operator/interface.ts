@@ -67,9 +67,10 @@ export type PlatformKillMechanism =
    * writes MORE than the unmutated program, so unlike SKIPPING one it can add an error: an `Error`,
    * a `TestField`, a `FieldError`, or a write to another table that hits a duplicate key.
    *
-   * Emitted only where the trigger body PROVABLY contains a raise-capable statement, which is
-   * possible here and not for the skip direction because the forward operator is scoped to tables
-   * this project declares and that declare the trigger. See `forcedTriggerCanRaise`.
+   * R-457: also on `flip-boolean-literal`'s `false` -> `true` RunTrigger flips (`Modify(false)`,
+   * `Insert(false)`, `Delete(false)`, `ModifyAll(F, V, false)`, `DeleteAll(false)`). Kept unless
+   * `forceCanRaise` proves the table has no such trigger and no observer of it in this project; no
+   * trigger body is read, so a table it cannot read keeps the tag.
    */
   | "run-trigger-forced"
   /** R281 — see the type's comment above. */

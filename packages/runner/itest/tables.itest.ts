@@ -551,8 +551,15 @@ const EXPECTED = {
    * (`DeleteWithTrigger`) gains it because `Data Trigger Probe`'s OnDelete inserts a tombstone row.
    * That is a named OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
    * docs/superpowers/specs/2026-10-05-r281-delete-tag-precommitment.md before the run.
+   *
+   * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
+   * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
+   * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
+   * mutant that gains it is M0223 (`Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
+   * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
+   * docs/superpowers/specs/2026-10-05-r457-forced-tag-precommitment.md before the run.
    */
-  platformArtifactKills: 3,
+  platformArtifactKills: 4,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -1039,8 +1046,13 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(screen.killedCount, EXPECTED.platformArtifactKills, "screened-kill count mismatch");
   assert.deepEqual(
     screen.byMechanism.map((g) => g.mechanism),
-    ["run-trigger-skipped-delete", "run-trigger-skipped-insert", "write-txn-codeunit-run"],
-    "all three mechanisms must be present and named — R138 added Insert, R281 Delete, and the report sorts them",
+    [
+      "run-trigger-forced",
+      "run-trigger-skipped-delete",
+      "run-trigger-skipped-insert",
+      "write-txn-codeunit-run",
+    ],
+    "all four mechanisms must be present and named — R138 added Insert, R281 Delete, R457 forced, and the report sorts them",
   );
   const groupOf = (mechanism: string) => {
     const g = screen.byMechanism.find((x) => x.mechanism === mechanism);
@@ -1075,7 +1087,7 @@ function assertVerdictTable(report: SessionReport): void {
   // fixture has three `Insert(true)` sites and the interesting fact is exactly WHICH of them the
   // screen holds — arms A and K (both killed), never arm B (which survives, and a survivor at such
   // a site is just a survivor), and never the `Delete` site (R281 gives it its own mechanism, below)
-  // or a `Modify` site, which gets no mechanism at all.
+  // or a `Modify` site (R452's skipped-modify mechanism finds no unproven site on this fixture).
   const insertGroup = groupOf("run-trigger-skipped-insert");
   const insertScreened = insertGroup.mutants.map(mutantOf);
   assert.equal(insertScreened.length, 1, "the Insert mechanism screens exactly one kill");
@@ -1125,6 +1137,47 @@ function assertVerdictTable(report: SessionReport): void {
   assert.ok(
     deleteGroup.explanation.includes("Delete(false)"),
     "the Delete mechanism must explain ITS own mechanism",
+  );
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0223, an over-tag.
+  // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
+  const forcedGroup = groupOf("run-trigger-forced");
+  const forcedScreened = forcedGroup.mutants.map(mutantOf);
+  assert.deepEqual(
+    forcedScreened.map((m) => [
+      m.operatorName,
+      m.procedureName,
+      m.verdict,
+      m.killingTest,
+      m.file,
+      m.line,
+    ]),
+    [
+      [
+        "lethal.flip-boolean-literal",
+        "InsertWithoutTrigger",
+        "killed",
+        "InsertWithoutTriggerKeepsAmount",
+        "src/DataOps.Codeunit.al",
+        96,
+      ],
+    ],
+    "the ONE screened forced kill is M0223 (Insert(false)->true, an over-tag: its test raises its own " +
+      "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
+      "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
+  );
+  assert.ok(
+    // flip-boolean-literal's span is the literal alone, so the forcing direction reads false -> true.
+    (forcedScreened[0]?.originalText ?? "").trim().toLowerCase() === "false",
+    "the screened forced mutant must flip the RunTrigger literal false -> true",
+  );
+  assert.ok(
+    forcedGroup.explanation.includes("RUN where it did not"),
+    "the forced mechanism must explain ITS own mechanism",
+  );
+  assert.notEqual(
+    forcedGroup.explanation,
+    groupOf("run-trigger-skipped-insert").explanation,
+    "the forced and skipped-Insert mechanisms must not share one explanation",
   );
   // The mechanisms must not share one explanation: the reader would be told a duplicate-key
   // artifact was measured on Cronus281 as a write-transaction abort.

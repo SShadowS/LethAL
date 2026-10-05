@@ -37,6 +37,9 @@ const NON_WRITING_RECORD_METHODS: ReadonlySet<string> = new Set([
 /** The table triggers a skip can be judged for. */
 export type HarmlessTriggerKind = "delete" | "modify";
 
+/** R-457: the table triggers a RunTrigger argument can force or skip. */
+export type RunTriggerKind = HarmlessTriggerKind | "insert";
+
 /** System calls that write nothing. Harmless only UNQUALIFIED and not shadowed (`claimsSystemCall`). */
 const NON_WRITING_SYSTEM_CALLS: ReadonlySet<string> = new Set(["error", "message", "confirm"]);
 
@@ -46,7 +49,7 @@ const OWN_RECORD_NAMES: ReadonlySet<string> = new Set(["rec", "xrec"]);
  *  it, and the text an unindexed object is matched by. */
 const SKIP_KINDS: Readonly<
   Record<
-    HarmlessTriggerKind,
+    RunTriggerKind,
     {
       readonly trigger: string;
       readonly events: ReadonlySet<string>;
@@ -66,6 +69,12 @@ const SKIP_KINDS: Readonly<
     events: new Set(["onbeforemodifyevent", "onaftermodifyevent"]),
     extensionTriggers: ["OnBeforeModify", "OnAfterModify"],
     unindexedText: /on(before|after)modify/i,
+  },
+  insert: {
+    trigger: "OnInsert",
+    events: new Set(["onbeforeinsertevent", "onafterinsertevent"]),
+    extensionTriggers: ["OnBeforeInsert", "OnAfterInsert"],
+    unindexedText: /on(before|after)insert/i,
   },
 };
 const EVENT_NAME_KINDS: ReadonlySet<string> = new Set([
@@ -147,6 +156,34 @@ export function deleteSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): bo
   return skipCanRaise(node, ctx, "delete");
 }
 
+/**
+ * R-457: for a call that FORCES the receiver table's `kind` trigger (`Modify()` or `Modify(false)`
+ * to `Modify(true)`, `ModifyAll(F, V, false)` to `..., true)`, `DeleteAll(false)` to
+ * `DeleteAll(true)`), does the mutant keep `run-trigger-forced`? TRUE unless the table resolves, its
+ * file is decided, the project neither subscribes to its `kind` events nor extends its `kind`
+ * triggers, and it declares no `On<Kind>`. No trigger body is read: R165's reading of one missed
+ * calls without parentheses, `with`, indirect calls and raising assignments. An UNDECIDED member
+ * arm counts as present, and with no arm map so does every `#if` arm (only "inactive" is skipped).
+ * A subscriber or tableextension in ANOTHER app is not visible here (stated in the explanation).
+ */
+export function forceCanRaise(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  kind: RunTriggerKind,
+): boolean {
+  const tableRef = resolveReceiverTable(node, ctx);
+  if (tableRef === null) return true;
+  const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
+  if (symbols === undefined) return true;
+  const table = symbols.resolveObject({ kind: "table", idOrName: tableRef });
+  if (table === null) return true;
+  if (armOfNode(ctx, table.node) === "undecided") return true;
+  const raw = rawArmOf(ctx);
+  const anyArm = (n: ALSyntaxNode): NodeArm => (raw?.(n) === "inactive" ? "inactive" : "active");
+  if (projectObserves(table, symbols, ctx, kind, anyArm)) return true;
+  return findTableTrigger(table.node, SKIP_KINDS[kind].trigger, anyArm) !== null;
+}
+
 /** R-452: `skipCanRaise` for `Modify(true)` and `ModifyAll(F, V, true)`. */
 export function modifySkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   return skipCanRaise(node, ctx, "modify");
@@ -184,12 +221,14 @@ function procedureNamesOn(table: ObjectSymbol, symbols: SymbolTable): ReadonlySe
   return names;
 }
 
-/** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers? */
+/** Does the project subscribe to this table's `kind` events, or extend its `kind` triggers?
+ *  `armOf` decides which member-level `#if` arms of an extension's triggers count. */
 function projectObserves(
   table: ObjectSymbol,
   symbols: SymbolTable,
   ctx: SemanticContext,
-  kind: HarmlessTriggerKind,
+  kind: RunTriggerKind,
+  armOf: ((node: ALSyntaxNode) => NodeArm) | undefined = rawArmOf(ctx),
 ): boolean {
   const { events, extensionTriggers, unindexedText } = SKIP_KINDS[kind];
   const tableName = table.name.toLowerCase();
@@ -197,7 +236,7 @@ function projectObserves(
     if (ext.baseObject.toLowerCase() !== tableName) continue;
     if (armOfNode(ctx, ext.node) === "undecided") return true;
     for (const t of extensionTriggers) {
-      if (findTableTrigger(ext.node, t, rawArmOf(ctx)) !== null) return true;
+      if (findTableTrigger(ext.node, t, armOf) !== null) return true;
     }
   }
   // Objects the symbol table does not index (wrapped whole in `#if`, or unparsable) are read by
@@ -332,8 +371,7 @@ export function findTableTrigger(
   return null;
 }
 
-/** The bare method name of a call, qualified or not. Same as the copy in Tier 2's
- *  `forced-trigger-raise.ts`, which its forcing half still uses. */
+/** The bare method name of a call, qualified or not. */
 function calleeName(call: ALSyntaxNode): string | null {
   const callee = call.childForFieldName("function");
   if (callee === null) return null;

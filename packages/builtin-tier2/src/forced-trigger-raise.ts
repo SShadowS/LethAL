@@ -1,9 +1,7 @@
 import {
-  ALNodeKind,
   type ALSyntaxNode,
   type SemanticContext,
   type SymbolTable,
-  armOfNode,
   findTableTrigger,
   rawArmOf,
   resolveReceiverTable,
@@ -18,60 +16,15 @@ export {
 } from "@lethal/engine";
 
 /**
- * R165: can FORCING a table trigger to run add an error the unmutated program cannot raise?
- *
- * `lethal.swap-modify-flag`'s forward direction rewrites `Rec.Modify()` to `Rec.Modify(true)`.
+ * R165: `lethal.swap-modify-flag`'s forward direction rewrites `Rec.Modify()` to `Rec.Modify(true)`.
  * `Rec.Modify()` means `RunTrigger = false`, so the mutant makes `OnModify` run where it did not.
+ * This file holds only that direction's SITE test (`resolveForcedTrigger`).
  *
- * ## Why this needs a screen at all, and why the SKIP direction did not
- *
- * R138 ruled that `Delete` and `Modify` need no mechanism when SKIPPING a trigger, because skipping
- * writes strictly LESS than the unmutated program and can add no error. (R281 overturned that for
- * `Delete` and R-452 for `Modify`, see `skipCanRaise` in `@lethal/engine`: a skipped trigger's
- * writes to OTHER rows do not happen, and a later statement can hit what they would have changed.)
- * Forcing writes MORE. Any
- * statement the trigger runs can raise: an `Error`, a `TestField`, a `FieldError`, a write to
- * another table that hits a duplicate key or a locked row. So all three methods can produce a kill
- * the suite did not earn, where the skip direction could only do it through `Insert`.
- *
- * ## Why this predicate can be PRECISE where R143's is a refusal detector
- *
- * `insertSkipCanRaise` tags unless it can prove the mechanism unavailable, and keeps the tag for a
- * receiver it cannot resolve, because an untagged platform kill is a platform refusal credited to
- * the suite. That asymmetry is right there and would be useless here: the forward operator is SCOPED
- * to receivers whose table this project declares AND that declare the trigger, so by construction
- * this predicate always has the trigger body in front of it. A tag on every mutant would separate
- * nothing, which is the `vacuous` state R132 exists to distinguish from a real finding.
- *
- * So this reads the trigger and answers from what is in it:
- *
- *   - the trigger body contains a raise-capable statement  -> TAG (a kill here can be the platform)
- *   - it does not                                          -> NO tag (a kill is assertion-earned)
- *
- * ## What counts as raise-capable, and why the list is what it is
- *
- * `Error` and `FieldError` raise unconditionally. `TestField` raises on a blank or mismatched field.
- * A record write (`Insert`, `Modify`, `Delete`, `Rename`, `ModifyAll`, `DeleteAll`) can hit a
- * duplicate key, a missing record or a locked row. `Validate` runs another field's `OnValidate`,
- * which is the same question one level down and is treated as raise-capable rather than followed.
- *
- * Deliberately NOT here: a call to a project procedure, which could raise anything. Following it
- * would need a call graph and would end at "almost everything can raise", which is the tag that
- * separates nothing. So this predicate UNDER-tags for indirect raises, and that is the honest
- * direction for a screen whose whole value is that a tag means something.
+ * R-457: whether the mutant carries `run-trigger-forced` is `forceCanRaise` in `@lethal/engine`,
+ * which reads no trigger body. R165's body reader (`forcedTriggerCanRaise`, a list of ten
+ * raise-capable call names) was unsound and is gone: it missed calls without parentheses, `with`,
+ * indirect calls, raising assignments and subscribers that branch on `RunTrigger`.
  */
-const RAISE_CAPABLE_METHODS: ReadonlySet<string> = new Set([
-  "error",
-  "fielderror",
-  "testfield",
-  "insert",
-  "modify",
-  "delete",
-  "rename",
-  "modifyall",
-  "deleteall",
-  "validate",
-]);
 
 /** The table trigger each run-trigger method runs. */
 const TRIGGER_OF: Readonly<Record<string, string>> = {
@@ -106,40 +59,4 @@ export function resolveForcedTrigger(
   // file keeps today's lookup of DIRECT triggers (only "inactive" is skipped). R405 (a): a trigger
   // inside a member-level `#if` is found only when its arm is active; never in an undecided file.
   return findTableTrigger(table.node, triggerName, rawArmOf(ctx));
-}
-
-/**
- * Does the trigger body contain a statement that can raise? See the module comment for the list.
- *
- * R378: a call in an arm the build compiles out never runs, so it is skipped. A trigger whose file
- * is UNDECIDED keeps the tag without a scan: an undecided arm could hold the raise, and for a
- * screen the unsafe direction is under-tagging.
- */
-export function forcedTriggerCanRaise(trigger: ALSyntaxNode, ctx?: SemanticContext): boolean {
-  if (armOfNode(ctx, trigger) === "undecided") return true;
-  let found = false;
-  const walk = (n: ALSyntaxNode): void => {
-    if (found) return;
-    if (n.kind === ALNodeKind.procedure_call && armOfNode(ctx, n) !== "inactive") {
-      const name = calleeName(n);
-      if (name !== null && RAISE_CAPABLE_METHODS.has(name.toLowerCase())) {
-        found = true;
-        return;
-      }
-    }
-    for (const c of n.namedChildren) walk(c);
-  };
-  walk(trigger);
-  return found;
-}
-
-/** The bare method name of a call, qualified or not. */
-function calleeName(call: ALSyntaxNode): string | null {
-  const callee = call.childForFieldName("function");
-  if (callee === null) return null;
-  if (callee.kind === ALNodeKind.identifier) return callee.text;
-  if (callee.kind === ALNodeKind.field_access) {
-    return callee.childForFieldName("member")?.text ?? null;
-  }
-  return null;
 }
