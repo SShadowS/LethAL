@@ -449,7 +449,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   digest and reads as new once (the safe direction), and every other test keeps its digest. Measured: 5 of 1,854 DC
   tests and 2 of 1,986 DO tests newly take the whole-source digest, CDO none; every DO test's
   digest moves once, because test-app codeunits implementing dependency interfaces now fold into
-  every digest.
+  every digest. A Variant parameter is traced through its callers only where no other app can call
+  the procedure: always for a `local` one, and for a `public` or `internal` one only when the
+  server reports that no published app depends on the test app (the new `DependentCount` action
+  of LethAL Control 1.0.0.21, on bcdev; `internal` also needs no `internalsVisibleTo` in the test
+  app.json). Otherwise (al-runner, an older control app, an error, a dependent app) the test takes
+  the whole-source digest: on DC that is every test. The answer is part of every digest, so a run
+  and a verify that got different answers share no digest. `MIN_CONTROL_VERSION` stays 1.0.0.20.
 
 - **A mutant's covering tests run in the same order on every host** (R481). The last tie between
   two covering tests was broken by name with the host's default collation, which decides

@@ -1,6 +1,6 @@
 /**
  * R348: docs must never state the CURRENT control-app version as a number. The number lives in
- * `extensions/lethal-control/app.json` (pinned equal to `MIN_CONTROL_VERSION` by harness.test.ts),
+ * `extensions/lethal-control/app.json` (never behind `MIN_CONTROL_VERSION`, by harness.test.ts),
  * and every doc that wrote it down went stale at the next bump (CLAUDE.md said 1.0.0.19 while the
  * code required 1.0.0.20). What a container has INSTALLED is machine state: `lethal doctor`.
  *
@@ -18,6 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { MIN_CONTROL_VERSION } from "../packages/runner/src/harness";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -98,12 +99,13 @@ describe("R348: no doc states the current control-app version as a literal", () 
   test("scanned docs name app.json or lethal doctor instead of the number", () => {
     const files = scannedFiles();
     expect(files.length).toBeGreaterThan(5);
-    const appJson = JSON.parse(
-      readFileSync(join(ROOT, "extensions", "lethal-control", "app.json"), "utf8"),
-    ) as { version: string };
+    // R389: the pinned guide states the MINIMUM (agent-contract.test.ts pins it to
+    // MIN_CONTROL_VERSION), which may lag app.json for an optional action.
     const hits = files
       .flatMap((f) => findDrift(relative(ROOT, f).replaceAll("\\", "/"), readFileSync(f, "utf8")))
-      .filter((h) => !(PINNED.some((p) => h.startsWith(`${p}:`)) && h.endsWith(appJson.version)));
+      .filter(
+        (h) => !(PINNED.some((p) => h.startsWith(`${p}:`)) && h.endsWith(MIN_CONTROL_VERSION)),
+      );
     expect(hits).toEqual([]);
   });
 });
