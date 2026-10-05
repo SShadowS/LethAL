@@ -16,6 +16,22 @@ export class AlcCompileError extends Error {}
 export class ArtifactPrepareError extends Error {}
 
 /**
+ * R461: alc rejected the batch's instrumented build, and then rejected LethAL's staged copy of the
+ * UNMUTATED target too. States that observation and alc's own output, nothing more: staging stamps
+ * `app.json`, flattens paths and rebases resources, so this claims neither broken source nor an
+ * environment fault. Extends `Error` DIRECTLY: bisection reads only `AlcCompileError` as "this
+ * subset does not compile", and this is not a subset answer.
+ */
+export class UnmutatedBuildFailedError extends Error {
+  constructor(alcError: AlcCompileError) {
+    super(
+      `alc rejected LethAL's staged copy of the unmutated target, using this compiler and package cache. No mutant was in that build, so no mutant is blamed and the run stops here. alc's output:\n${alcError.message}`,
+    );
+    this.name = "UnmutatedBuildFailedError";
+  }
+}
+
+/**
  * A deployment whose outcome is not `accepted`: the publish failed, or identity verification
  * could not confirm the server runs the artifact we just published. Critically NOT an
  * `AlcCompileError` — this is never a compiler verdict, so compile-failure bisection must
@@ -216,8 +232,9 @@ export class ArtifactCompiler {
       );
     }
     if (res.exitCode !== 0) {
+      // R461: BOTH streams, labelled. `stderr || stdout` let a stderr warning hide a stdout error.
       throw new AlcCompileError(
-        `alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
+        `alc compile failed (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
       );
     }
 

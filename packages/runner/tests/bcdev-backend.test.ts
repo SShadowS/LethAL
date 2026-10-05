@@ -1414,6 +1414,54 @@ describe("BcDevMcpBackend.deploy", () => {
   });
 });
 
+describe("BcDevMcpBackend.compilePlainCheck (R461)", () => {
+  test("compiles the dir as given: no Control dependency staged, no altool, no .app left", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      const appJson = JSON.stringify({ id: TEST_APP_ID, name: "Fixture", version: "1.0.0.0" });
+      await Bun.write(join(plain, "app.json"), appJson);
+      const calls: string[][] = [];
+      let appJsonSeen = "";
+      const spawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const project = argv.find((a) => a.startsWith("/project:"))?.slice("/project:".length);
+        if (project !== undefined) appJsonSeen = await readFile(join(project, "app.json"), "utf8");
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "plain-app-bytes");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const staging = await controlStaging(dir);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...staging,
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      await backend.compilePlainCheck(plain);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      expect(calls[0]).toContain(`/project:${plain.replaceAll("\\", "/")}`);
+      expect(calls[0]).toContain(
+        `/packagecachepath:${staging.packageCachePath.replaceAll("\\", "/")}`,
+      );
+      expect(appJsonSeen).toBe(appJson);
+      expect(await readdir(staging.packageCachePath).catch(() => [])).not.toContain(
+        "lethal-control.app",
+      );
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("BcDevMcpBackend.compileCheck", () => {
   test("compiles without ever spawning altool (no publish, no verify)", async () => {
     const dir = scratch("lethal-bcdev-compilecheck-test-");

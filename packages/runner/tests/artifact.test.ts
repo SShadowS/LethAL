@@ -59,6 +59,22 @@ describe("ArtifactCompiler", () => {
     await expect(compiler.compile(BASE_INPUT)).rejects.toBeInstanceOf(AlcCompileError);
   });
 
+  it("R461: keeps BOTH streams, labelled, so a stderr warning cannot hide a stdout error", async () => {
+    const compiler = new ArtifactCompiler(CFG, {
+      spawn: async () => ({
+        exitCode: 1,
+        stdout: "X.al(5,9): error AL0118: The name 'Amont' does not exist",
+        stderr: "warning AL0432: Method 'Y' is marked for removal",
+      }),
+      readArtifact: async () => new Uint8Array(),
+      writeArtifact: async () => {},
+    });
+    const err = await compiler.compile(BASE_INPUT).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(
+      "alc compile failed (exit 1):\nstdout:\nX.al(5,9): error AL0118: The name 'Amont' does not exist\nstderr:\nwarning AL0432: Method 'Y' is marked for removal",
+    );
+  });
+
   it("throws ArtifactPrepareError — NOT AlcCompileError — when the compiler cannot be spawned", async () => {
     const compiler = new ArtifactCompiler(CFG, {
       spawn: async () => {

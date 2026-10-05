@@ -111,7 +111,12 @@ import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
-import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  StaleTestAppError,
+  TestAppChangedError,
+  runMutantLineCountMessage,
+  testAppRefusal,
+} from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import {
   type CompiledTestApp,
@@ -2180,6 +2185,88 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       expect(report.validity.caveats).not.toContain("tests-permission-refused");
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
+    });
+
+    // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
+    // the refusal. `before` answers every read until the baseline ran; `after` answers from then on.
+    describe("R462: the test app's identity before the baseline and at the refusal", () => {
+      type Read = Uint8Array | null | undefined | "throw";
+      async function refuse(before: Read, after: Read): Promise<unknown> {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let baselineRan = false;
+        const reader = async () => {
+          const r = baselineRan ? after : before;
+          if (r === "throw") throw new Error("read failed");
+          return r;
+        };
+        const store = new ResultsStore(":memory:");
+        return runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: reader,
+            run: (ref: TestMethodRef, opts: RunOpts) => {
+              baselineRan = true;
+              return run(ref, opts);
+            },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      }
+      const A = new Uint8Array([1]);
+      const B = new Uint8Array([2]);
+
+      test("11: A -> B is TestAppChangedError, naming both packages", async () => {
+        const err = await refuse(A, B);
+        expect(err).toBeInstanceOf(TestAppChangedError);
+        expect((err as Error).message).toContain(`package:${hashPackage(A)}`);
+        expect((err as Error).message).toContain(`package:${hashPackage(B)}`);
+        expect((err as TestAppChangedError).missingTests).toEqual([
+          "Sandbox Tests.UnsupportedTest",
+        ]);
+      });
+
+      test("12: A -> A is StaleTestAppError, cause unchanged-endpoints", async () => {
+        const err = await refuse(A, A);
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+        expect((err as Error).message).toContain("replace-and-restore");
+        expect((err as Error).message).toContain("If no other session publishes");
+      });
+
+      test("13: a failed or missing read is identity-unverified, never unchanged or changed", async () => {
+        for (const after of [null, "throw", undefined] as const) {
+          const err = await refuse(A, after);
+          expect(err).toBeInstanceOf(StaleTestAppError);
+          expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        }
+        // No package reader at all: the `source:` hash of the test tree, the same both times.
+        const dirs = await qualProject();
+        const err = await runSession({
+          backend: new QualificationBackend(missingFor),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        // No first read (the verify path passes no snapshot).
+        const missing = [{ name: "T.A", description: "d" }];
+        const pkg = `package:${hashPackage(A)}`;
+        expect((testAppRefusal(missing, undefined, pkg) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+        expect((testAppRefusal(missing, pkg, undefined) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+      });
     });
   });
 });
