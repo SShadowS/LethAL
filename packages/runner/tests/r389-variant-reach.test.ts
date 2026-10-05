@@ -579,9 +579,7 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     expect(r.closure).toBeUndefined();
   });
   test("N1b. hole 1 through a parameter: a caller passing a Mock-holding Variant folds Mock", () => {
-    const sc = s((e) =>
-      LIB(e, "", "", runB(V + MOCK, "        V := Mock;\n        Check(V);\n")),
-    );
+    const sc = s((e) => LIB(e, "", "", runB(V + MOCK, "        V := Mock;\n        Check(V);\n")));
     expect(moves(sc, "mock", "B")).toBe(true);
     expect(moves(sc, "mock", "A")).toBe(true); // the union over every caller
     expect(moves(sc, "unrelated", "A")).toBe(false);
@@ -590,7 +588,14 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
   test("N1c. a caller the walk cannot trace (a global) keeps the fallback", () => {
     const r = run(
       s((e) =>
-        LIB(e, "", "", runB("", "        Check(GlobalV);\n"), "local ", "        GlobalV: Variant;\n"),
+        LIB(
+          e,
+          "",
+          "",
+          runB("", "        Check(GlobalV);\n"),
+          "local ",
+          "        GlobalV: Variant;\n",
+        ),
       )({}),
     );
     expect(r.why("A")).toContain("the global GlobalV");
@@ -629,7 +634,15 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     for (let i = 0; i < 40; i += 1)
       chain += `\n    procedure H${i}(R: Variant)\n    begin\n        ${i === 0 ? "Check" : `H${i - 1}`}(R);\n    end;\n`;
     const r = run(
-      s((e) => LIB(e, "", "", chain.replaceAll("    procedure H", "    local procedure H") + runB("", "        H39(5);\n")))({}),
+      s((e) =>
+        LIB(
+          e,
+          "",
+          "",
+          chain.replaceAll("    procedure H", "    local procedure H") +
+            runB("", "        H39(5);\n"),
+        ),
+      )({}),
     );
     expect(r.why("A")).toContain("deeper than");
   });
@@ -727,7 +740,11 @@ describe("R-389 re-review (sol): namespaces and this", () => {
       // digest falls back), so the dependency's IDerived is reached through `using`.
       "Dep.al": `namespace Tests;\n\nusing Dep;\n\ncodeunit 50170 "DepMock" implements "IDerived"\n{\n    procedure Go()\n    begin\n${at(e, "impl")}    end;\n}\n`,
       "T.al": `${testNs}${testUnit(
-        proc("A()", `${V}        I: Interface ${handed};\n${EXT}`, "        V := I;\n        Ext.Go(V);\n"),
+        proc(
+          "A()",
+          `${V}        I: Interface ${handed};\n${EXT}`,
+          "        V := I;\n        Ext.Go(V);\n",
+        ),
       )}`,
     });
   test("R2a. Dep.IBase handed out while the test app declares Tests.IBase: unknown-ancestry Mock folds", () => {

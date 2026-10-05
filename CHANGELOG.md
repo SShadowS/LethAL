@@ -423,8 +423,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   codeunit's id). Where the walk cannot see the value (a global, a collection element, a procedure
   the platform calls) the test takes the whole-source digest. A namespace-qualified name the test
   app does not declare now reads as a dependency's object instead of falling back. No scheme
-  change, because the change only adds coverage: a test whose digest now covers more gets a new
-  digest and reads as new once, and every other test keeps its digest. Measured: 5 of 1,854 DC
+  change: a test whose digest covers more, or that leaves the whole-source digest, gets a new
+  digest and reads as new once (the safe direction), and every other test keeps its digest. Measured: 5 of 1,854 DC
   tests and 2 of 1,986 DO tests newly take the whole-source digest, CDO none; every DO test's
   digest moves once, because test-app codeunits implementing dependency interfaces now fold into
   every digest.

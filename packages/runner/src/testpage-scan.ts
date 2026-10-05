@@ -2745,7 +2745,7 @@ function scanFile(
       .map((c) => namespaceOf(c.childForFieldName("name")?.text ?? "")),
   );
   const ns: FileNamespace = {
-    namespace: spaces.size === 0 ? "" : spaces.size === 1 ? [...spaces][0] ?? "" : "\u0000",
+    namespace: spaces.size === 0 ? "" : spaces.size === 1 ? ([...spaces][0] ?? "") : "\u0000",
     usings: top
       .filter((c) => c.rawKind === "using_statement")
       .map((c) => namespaceOf(c.childForFieldName("namespace")?.text ?? "")),
