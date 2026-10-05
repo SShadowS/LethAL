@@ -14,7 +14,7 @@ import type {
 } from "../src/backend";
 import { parseCliConfig, resolveLineRanges } from "../src/cli";
 import type { RunEvent, RunEventInput } from "../src/events";
-import { lineCount, parseLineArg, parseUnifiedDiffAdded, spanTouches } from "../src/line-filter";
+import { parseLineArg, parseUnifiedDiffAdded, spanTouches } from "../src/line-filter";
 import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
@@ -118,14 +118,6 @@ describe("parsing", () => {
     expect(parseUnifiedDiffAdded("+++ b/My File.al\t\n@@ -2 +2 @@\n")).toEqual([
       { file: "My File.al", start: 2, end: 2 },
     ]);
-  });
-
-  test("lineCount counts rows the way tree-sitter does (GH-25)", () => {
-    expect(lineCount("")).toBe(0);
-    expect(lineCount("a")).toBe(1);
-    expect(lineCount("a\n")).toBe(1);
-    expect(lineCount("a\r\nb")).toBe(2);
-    expect(lineCount("a\n\n")).toBe(2);
   });
 
   test("spanTouches: any shared line counts, and the file compares case-insensitively", () => {

@@ -124,9 +124,13 @@ export class SourceSnapshotUnreadableError extends Error {
  * a separate read that an edit could land between.
  *
  * R205: a read failure throws `SourceSnapshotUnreadableError`, except a missing `app.json`, which
- * leaves the key out (readers then treat it as absent, never as "read the disk").
+ * leaves the key out (readers then treat it as absent, never as "read the disk"). `readFileFn` is
+ * the file read, a parameter so a test can fail one read deterministically on every platform.
  */
-export async function readTargetSource(projectDir: string): Promise<ReadonlyMap<string, Buffer>> {
+export async function readTargetSource(
+  projectDir: string,
+  readFileFn: (path: string) => Promise<Buffer> = (p) => readFile(p),
+): Promise<ReadonlyMap<string, Buffer>> {
   const read = async <T>(path: string, f: () => Promise<T>) => {
     try {
       return await f();
@@ -137,11 +141,11 @@ export async function readTargetSource(projectDir: string): Promise<ReadonlyMap<
   const snapshot = new Map<string, Buffer>();
   for (const rel of await read(projectDir, () => targetAlFiles(projectDir))) {
     const path = join(projectDir, rel);
-    snapshot.set(rel, await read(path, () => readFile(path)));
+    snapshot.set(rel, await read(path, () => readFileFn(path)));
   }
   const appJson = join(projectDir, "app.json");
   const manifest = await read(appJson, () =>
-    readFile(appJson).catch((err: NodeJS.ErrnoException) => {
+    readFileFn(appJson).catch((err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") return undefined;
       throw err;
     }),

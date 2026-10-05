@@ -37,7 +37,6 @@ import {
 } from "./al-runner-canary";
 import { contractRefusals, contractSummary, runAlRunnerContractProbe } from "./al-runner-contract";
 import { alRunnerCoverageSupport } from "./al-runner-coverage";
-import { readTargetSource } from "./baseline-snapshot";
 import {
   predefinedSymbolsChangedWarning,
   probeAlRunnerPredefinedSymbols,
@@ -47,6 +46,7 @@ import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
 import { ArtifactCompiler, defaultArtifactIo } from "./artifact";
 import type { BackendStatus, ExecutionBackend } from "./backend";
+import { readTargetSource } from "./baseline-snapshot";
 import { bcFetch } from "./bc-fetch";
 import { BcDevMcpBackend } from "./bcdev-backend";
 import type { BcDevConfig } from "./bcdev-backend";
@@ -234,11 +234,18 @@ export function validateSelectorIdsConfig(
  */
 async function readTargetAppManifestForIdCheck(
   projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<Record<string, unknown>> {
   const appJsonPath = join(projectDir, "app.json");
   let raw: string;
   try {
-    raw = await readFile(appJsonPath, "utf8");
+    // R205: from the session's snapshot when given, where a missing app.json is missing.
+    if (snapshot === undefined) raw = await readFile(appJsonPath, "utf8");
+    else {
+      const bytes = snapshot.get("app.json");
+      if (bytes === undefined) throw new Error("the source snapshot holds no app.json");
+      raw = bytes.toString("utf8");
+    }
   } catch (err) {
     throw new Error(
       `cannot read ${appJsonPath} to validate selector ids against the target app's idRanges: ${err instanceof Error ? err.message : String(err)}`,
@@ -273,13 +280,19 @@ const EMITTED_FILENAMES: ReadonlySet<string> = new Set([
  * `emitRegisterUpgrade`), and a BC object id is unique only within its own type, so a same-id
  * table/page is not a real collision.
  */
-async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, DeclaredObject>> {
-  const entries = (await readdir(projectDir, { recursive: true }))
+async function scanProjectCodeunitIds(
+  projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
+): Promise<Map<number, DeclaredObject>> {
+  const entries = (
+    snapshot !== undefined ? [...snapshot.keys()] : await readdir(projectDir, { recursive: true })
+  )
     .filter((e) => e.toLowerCase().endsWith(".al"))
     .filter((e) => !EMITTED_FILENAMES.has(basename(e)));
   const byId = new Map<number, DeclaredObject>();
   for (const rel of entries) {
-    const source = await readFile(join(projectDir, rel), "utf8");
+    const source =
+      snapshot?.get(rel)?.toString("utf8") ?? (await readFile(join(projectDir, rel), "utf8"));
     for (const obj of scanDeclaredObjects(source)) {
       if (obj.type === "codeunit" && !byId.has(obj.id)) byId.set(obj.id, obj);
     }
@@ -299,14 +312,16 @@ async function scanProjectCodeunitIds(projectDir: string): Promise<Map<number, D
  * `buildBackend` (both branches), positioned after every pre-existing early-exit check that
  * doesn't need a real project directory — kept as defense in depth for any caller that reaches
  * `buildBackend` some other way, and because it costs nothing beyond a second fs read.
+ * R205: `snapshot` is the session's source snapshot; when given, both reads come from it.
  */
 export async function validateSelectorIdsForProject(
   projectDir: string,
   selectorIds: SelectorConfig,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<void> {
-  const manifest = await readTargetAppManifestForIdCheck(projectDir);
+  const manifest = await readTargetAppManifestForIdCheck(projectDir, snapshot);
   const idRanges: AppIdRange[] = parseIdRanges(manifest);
-  const existingCodeunitIds = await scanProjectCodeunitIds(projectDir);
+  const existingCodeunitIds = await scanProjectCodeunitIds(projectDir, snapshot);
   validateSelectorIds(selectorIds, idRanges, existingCodeunitIds);
 }
 
@@ -2921,6 +2936,8 @@ export async function buildBackend(
   // before without having to name it. `runFromCli` is the one real caller that threads a
   // non-default value through.
   selectorIds: SelectorConfig = DEFAULT_SELECTOR_IDS,
+  /** R205: the session's source snapshot, so the id check reads the source the build uses. */
+  source?: ReadonlyMap<string, Buffer>,
 ): Promise<ExecutionBackend> {
   // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
   // list must fail immediately rather than after a compile that silently used the other branch.
@@ -2929,7 +2946,7 @@ export async function buildBackend(
     // R3/R4: validated here, first, before constructing anything — al-runner's own `alc` run is
     // lazy (`AlRunnerBackend.activate()`, see `selector.ts`'s doc comment), so this is the
     // earliest point that can catch a bad id for this backend too.
-    await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
+    await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
     const c = validateAlRunnerConfig(configFile.alRunner);
     // R387: the defaults are applied HERE and nowhere else. A default in the backend's constructor
     // would silently turn the gate's one-shot legs, which build the backend directly, into server
@@ -3016,7 +3033,7 @@ export async function buildBackend(
   // error-priority for an incomplete install) but before any compiler/deployer object touches the
   // target project, and well before an actual `alc` invocation would burn a live BC round trip on
   // an AL0297.
-  await validateSelectorIdsForProject(parsed.projectDir, selectorIds);
+  await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source);
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
@@ -3762,7 +3779,7 @@ export async function runFromCli(
   // resolved `selectorIds` — are available now, with no I/O of `resolveSession`'s own in between,
   // so there is no reason to defer it past this point.
   const validateIds = deps.validateSelectorIdsForProject ?? validateSelectorIdsForProject;
-  await validateIds(parsed.projectDir, selectorIds);
+  await validateIds(parsed.projectDir, selectorIds, source);
   const scratchRoot = await mkdtemp(join(tmpdir(), "lethal-"));
   // R360 I2: this invocation owns `scratchRoot` from here on. On any throw it is kept and named,
   // since compile diagnostics name files in it; a killed process leaves it by design. After a
@@ -3893,7 +3910,15 @@ export async function runFromCli(
         // code 3, and the report would never be printed/written.
         let report: SessionReport | undefined;
         try {
-          backend = await build(parsed, effectiveConfig, scratchRoot, deploy, {}, selectorIds);
+          backend = await build(
+            parsed,
+            effectiveConfig,
+            scratchRoot,
+            deploy,
+            {},
+            selectorIds,
+            source,
+          );
           // `SessionConfig.backendFactory` is synchronous (`runSession` calls it
           // without awaiting — see orchestrator.ts), but building a worker's backend
           // is async (bcdev needs `defaultAlToolPaths()` + `mkdir`). So every worker
@@ -3921,6 +3946,7 @@ export async function runFromCli(
                   deploy,
                   {},
                   selectorIds,
+                  source,
                 ),
               );
             }

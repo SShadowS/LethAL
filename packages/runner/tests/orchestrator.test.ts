@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -27,6 +27,8 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+// R205: namespace import so a test can fail one source read through `readTargetSource`'s seam.
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import {
   SourceSnapshotUnreadableError,
   hashPackage,
@@ -4959,20 +4961,46 @@ describe("runSession — Layer 5A deployment identity", () => {
     expect(cli.sourceSha()).toBe(await hashTargetSource(dirs.projectDir, []));
   });
 
+  /**
+   * R205: the `failOnCall`-th source snapshot read (1-based) fails to read `file` with EACCES,
+   * through `readTargetSource`'s read seam, ONCE; every other read is real. Deterministic on every
+   * platform and user (chmod denies nothing on Windows or to root).
+   */
+  function failSourceRead(file: string, failOnCall: number) {
+    const real = baselineSnapshotModule.readTargetSource;
+    let calls = 0;
+    return spyOn(baselineSnapshotModule, "readTargetSource").mockImplementation(async (dir) => {
+      calls += 1;
+      if (calls !== failOnCall) return real(dir);
+      return real(dir, async (p) => {
+        if (p === file) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${p}'`), {
+            code: "EACCES",
+          });
+        }
+        return readFileSync(p);
+      });
+    });
+  }
+
   test("R205: an unreadable source file refuses the session by name before anything is built", async () => {
     const dirs = await makeProject();
     const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
-    chmodSync(file, 0o000);
     const backend = new PhaseBackend();
     const store = new ResultsStore(":memory:");
+    const spy = failSourceRead(file, 1);
     try {
       const err = await runSession({ backend, store, ...dirs, selectorIds }).catch((e) => e);
       expect(err).toBeInstanceOf(SourceSnapshotUnreadableError);
       expect(String(err)).toContain(file);
       expect(String(err)).toContain("EACCES");
       expect(backend.calls).toEqual([]);
+      // The readable control: the one-shot failure is spent, so the same project now runs.
+      const again = new PhaseBackend();
+      await runSession({ backend: again, store, ...dirs, selectorIds });
+      expect(again.returned).toHaveLength(1);
     } finally {
-      chmodSync(file, 0o644);
+      spy.mockRestore();
       store.close();
     }
   });
@@ -4983,21 +5011,18 @@ describe("runSession — Layer 5A deployment identity", () => {
     const backend = new PhaseBackend();
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
+    // Read 1 is the session's snapshot, read 2 the last batch's re-read.
+    const spy = failSourceRead(file, 2);
     try {
       await runSession({
         backend,
         store,
         ...dirs,
         selectorIds,
-        emit: [
-          (e) => {
-            events.push(e);
-            if (e.type === "phase-left" && e.phase === "generate") chmodSync(file, 0o000);
-          },
-        ],
+        emit: [(e) => events.push(e)],
       });
     } finally {
-      chmodSync(file, 0o644);
+      spy.mockRestore();
     }
     expect(backend.returned).toHaveLength(1);
     const warned = sourceWarnings(events);
@@ -5240,6 +5265,25 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
     // not `undefined`: the field is always written.
     expect(report.artifacts).toEqual([]);
+    store.close();
+  });
+
+  test("R205: records the snapshot's app.json version, not a version-only edit made after it", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    const appJson = join(dirs.projectDir, "app.json");
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "1.2.3.4" }));
+    const source = await baselineSnapshotModule.readTargetSource(dirs.projectDir);
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "5.6.7.8" }));
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, source, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
     store.close();
   });
 

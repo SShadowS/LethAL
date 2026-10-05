@@ -2028,9 +2028,11 @@ async function quarantineInFlight(args: {
  * sites at all, and a project with none is documented to reach no app.json requirement whatsoever
  * (see `planArtifacts`'s doc comment) — this lookup must not turn that into a hard requirement.
  */
-async function readAppVersionBestEffort(projectDir: string): Promise<string | undefined> {
+function readAppVersionBestEffort(source: ReadonlyMap<string, Buffer>): string | undefined {
+  // R205: from the session's source snapshot, so the row records the version that was built.
   try {
-    const raw = await readFile(join(projectDir, "app.json"), "utf8");
+    const raw = source.get("app.json")?.toString("utf8");
+    if (raw === undefined) return undefined;
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
@@ -4994,7 +4996,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // own app.json version instead of the placeholder when the caller didn't already supply one.
     appVersion:
       cfg.appVersion ??
-      (caps.authoritative ? undefined : await readAppVersionBestEffort(cfg.projectDir)) ??
+      (caps.authoritative ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
       "0.0.0.0",
   });
   // stream-started: the header event, carrying the run's own id. Emitted HERE, immediately after

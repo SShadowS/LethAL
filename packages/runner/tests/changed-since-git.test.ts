@@ -617,13 +617,25 @@ describe("R205: the diff runs from the base blobs to the source snapshot", () =>
     });
   });
 
-  test("the diff reads the snapshot, not the disk: an edit after the snapshot is not seen", async () => {
+  test("the diff reads the snapshot, not the disk: A, then B during the diff, then A again gives A's lines", async () => {
     const { root, app } = await prFixture();
     try {
-      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
+      const a = TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n");
+      await writeFile(join(app, "src/A.al"), a);
       const snapshot = await readTargetSource(app);
-      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l2\n", "L2\n"));
-      const { ranges } = await changedLinesSince(app, "main", hermeticSpawn, snapshot);
+      // B lands with the first git call and A is back once the diff has run.
+      const spawn: typeof hermeticSpawn = async (argv, opts) => {
+        if (argv[1] === "merge-base") {
+          await writeFile(
+            join(app, "src/A.al"),
+            TEN.replace("l5\n", "L5\n").replace("l2\n", "L2\n"),
+          );
+        }
+        const out = await hermeticSpawn(argv, opts);
+        if (argv.includes("--no-index")) await writeFile(join(app, "src/A.al"), a);
+        return out;
+      };
+      const { ranges } = await changedLinesSince(app, "main", spawn, snapshot);
       expect(ranges).toEqual([
         { file: "src/A.al", start: 5, end: 5 },
         { file: "src/A.al", start: 9, end: 9 },
@@ -667,9 +679,17 @@ test("runFromCli hands the changed-since source to runSession", async () => {
     // Capture the config, then stop: nothing after `runSession` is under test here.
     let captured: SessionConfig | undefined;
     const stop = new Error("captured");
+    // R205: an edit landing with the first git call, after runFromCli's snapshot, must not reach
+    // the lines: the entry point hands its snapshot to the diff.
+    const gitSpawn: typeof hermeticSpawn = async (argv, opts) => {
+      if (argv[1] === "merge-base") {
+        await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
+      }
+      return hermeticSpawn(argv, opts);
+    };
     await expect(
       runFromCli(parsed, {
-        gitSpawn: hermeticSpawn,
+        gitSpawn,
         validateSelectorIdsForProject: async () => {},
         buildBackend: async () =>
           new AlRunnerBackend({

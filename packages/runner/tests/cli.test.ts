@@ -2236,6 +2236,39 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect((await listingOf()).has(9)).toBe(true); // the disk really moved
   });
 
+  // R205: `main`'s dry-run branch must hand its snapshot to the listing. A FOLDER named `*.al` is
+  // not in the snapshot (it holds files only), but a disk enumeration lists it and then fails to
+  // read it, so the real CLI succeeds only when the snapshot reaches `printDryRun`.
+  test("R205: `lethal run --dry-run` lists from its snapshot, not a fresh disk walk", async () => {
+    const { root, projectDir } = await r214Project();
+    await mkdir(join(projectDir, "Folder.al"));
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, "{}");
+    const outPath = join(root, "dry-run.json");
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "run",
+        "--project",
+        projectDir,
+        "--dry-run",
+        "--config",
+        configPath,
+        "--db",
+        join(root, "lethal.sqlite"),
+        "--out",
+        outPath,
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(`${await proc.exited} ${stderr}`).toStartWith("0 ");
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as { files: number };
+    expect(listing.files).toBe(1);
+  }, 60_000);
+
   // The R214 dry-run test calls printDryRun directly, so it cannot see main() drop the config's symbols on
   // the way. This one runs the real CLI as a subprocess, which is the only way to reach main().
   test("R214: `lethal run --dry-run --config` lists the arm the config's symbols build", async () => {

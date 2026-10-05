@@ -151,14 +151,6 @@ export function parseUnifiedDiffAdded(diff: string): LineRange[] {
 const binaryAlMessage = (path: string) =>
   `a binary .al file (${path}): git reports no lines for it, so its changes would silently get no mutants`;
 
-/** Lines in a text as tree-sitter counts rows: split on "\n", a trailing newline ends the last
- *  line rather than starting a new one. "" is 0. CRLF counts the same as LF. */
-export function lineCount(text: string): number {
-  if (text === "") return 0;
-  const n = text.split("\n").length;
-  return text.endsWith("\n") ? n - 1 : n;
-}
-
 /** GH-25: where `--changed-since` lines came from. Recorded in the report. */
 export interface ChangedSinceSource {
   /** The ref as given. */
