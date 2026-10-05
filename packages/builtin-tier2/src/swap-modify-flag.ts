@@ -1,7 +1,9 @@
 import {
   type RunTriggerKind,
-  claimsRecordMethod,
+  claimedRunTriggerMethod,
+  claimedRunTriggerSkip,
   forceCanRaise,
+  insertSkipCanRaise,
   modifySkipCanRaise,
 } from "@lethal/engine";
 import {
@@ -15,19 +17,9 @@ import {
   isStatementPosition,
 } from "@lethal/operator-sdk";
 import { deleteSkipCanRaise, resolveForcedTrigger } from "./forced-trigger-raise";
-import { insertSkipCanRaise } from "./insert-key-assignment";
-import { exactArguments, soleArgument, synthesizeAfter } from "./mutate-helpers";
+import { exactArguments, synthesizeAfter } from "./mutate-helpers";
 
-const TRUE_LITERAL = "true";
 const FALSE_REPLACEMENT = "false";
-
-/**
- * The three AL record methods that take a run-trigger flag boolean and mutate the record. Kept as
- * one list rather than three separate `targets()` branches so a fourth such method (there is not
- * one today) is a one-line addition, and so `generate()` cannot drift from `targets()` on which
- * names are in scope.
- */
-const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
 
 /**
  * R281. The tag `Delete` mutants carry, wherever `deleteSkipCanRaise` cannot prove skipping the
@@ -43,7 +35,7 @@ const RUN_TRIGGER_SKIPPED_MODIFY: PlatformKillMechanism = "run-trigger-skipped-m
  * The tag `Insert` mutants carry. Declared as a typed constant rather than an inline string so a
  * value the engine's union does not know is a compile error here, at the one place that writes it.
  *
- * R143 gave it a detector: `insertSkipCanRaise` (`./insert-key-assignment.ts`) resolves the
+ * R143 gave it a detector: `insertSkipCanRaise` (`@lethal/engine`, `insert-key-assignment.ts`) resolves the
  * receiver's table, finds its `OnInsert` and checks whether that trigger assigns a primary-key
  * field. Unlike `write-txn-codeunit-run`'s detector, which fires only on an exact measured shape,
  * this one is a REFUSAL detector: it drops the tag only where the mechanism is provably
@@ -119,13 +111,16 @@ const OPERATOR_VERSION = "1.2.0";
  *
  * Two guards:
  *
- *   1. `claimsAnyRunTriggerMethod`: is this actually one of the three AL record methods above, on
+ * Both live in `claimedRunTriggerSkip` (`@lethal/engine`, R-459), which `flip-boolean-literal`
+ * cedes with too:
+ *
+ *   1. `claimedRunTriggerMethod`: is this actually one of the three AL record methods above, on
  *      a record? Tries each name in `RUN_TRIGGER_METHODS` through `claimsRecordMethod`
  *      (Task 2, `./receiver.ts`), which handles the implicit-`Rec` form, case-insensitivity, and
  *      every receiver/shadowing refusal, short-circuiting on the first match. Everything downstream
  *      of the claim (the boolean-argument predicate, the argument splice, and `parentContextOf`) is
  *      already method-name-agnostic and needed no change to cover the two new names.
- *   2. `booleanTrueArgument` — is the (sole) argument the literal `true`, case-insensitively?
+ *   2. The literal: is the (sole) argument the literal `true`, case-insensitively?
  *      `Modify(SomeBoolean)` is refused: the semantic layer cannot evaluate an arbitrary Boolean
  *      expression, so anything other than the literal `true` token is out of scope — literal
  *      `true` only, never a variable or comparison that merely happens to be Boolean-typed.
@@ -168,7 +163,7 @@ const OPERATOR_VERSION = "1.2.0";
  * R143 NARROWED the `Insert` tag from "every one" to "every one whose mechanism is not provably
  * unavailable": the receiver's table is resolved, and a table whose `OnInsert` does not assign the
  * primary key (or has no `OnInsert` at all) loses the tag. A receiver this project cannot resolve
- * KEEPS it — see `insertSkipCanRaise` (`./insert-key-assignment.ts`) for that ruling, its three
+ * KEEPS it — see `insertSkipCanRaise` (`@lethal/engine`, `insert-key-assignment.ts`) for that ruling, its three
  * measured limits, and why a screen resolves the unknown case in the opposite direction from every
  * other Tier-2 guard. The tag still means "read this kill", never "this kill is false".
  *
@@ -194,24 +189,21 @@ export const swapModifyFlag: MutationOperator = {
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     if (node.kind !== ALNodeKind.procedure_call) return false;
-    const method = claimedRunTriggerMethod(node, ctx);
-    if (method === null) return false;
-    // The SKIP direction: an explicit `true` to flip to `false`.
-    if (booleanTrueArgument(node) !== null) return true;
+    // The SKIP direction: an explicit sole `true` to flip to `false`. R-459: `claimedRunTriggerSkip`
+    // is also what `flip-boolean-literal` cedes, so the two cannot disagree on a site.
+    if (claimedRunTriggerSkip(node, ctx) !== null) return true;
     // R165, the FORWARD direction: an argument-less call, which means `RunTrigger = false`.
-    return forcedTriggerSite(node, ctx, method) !== null;
+    const method = claimedRunTriggerMethod(node, ctx);
+    return method !== null && forcedTriggerSite(node, ctx, method) !== null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
-    const arg = booleanTrueArgument(node);
-    if (arg === null) return generateForced(node, ctx);
-    const mutatedText = replaceArgument(node, arg, FALSE_REPLACEMENT);
+    const skip = claimedRunTriggerSkip(node, ctx);
+    if (skip === null) return generateForced(node, ctx);
+    const mutatedText = replaceArgument(node, skip.literal, FALSE_REPLACEMENT);
     if (mutatedText === null) return [];
-    // R138: the tag follows the matched METHOD, not the operator. Re-asking rather than threading
-    // the name from `targets()` — `generate()` is called on nodes `targets()` accepted, but the two
-    // are separate entry points and an operator that assumed otherwise would be relying on the
-    // walker's calling convention rather than on its own guards.
-    const method = claimedRunTriggerMethod(node, ctx);
+    // R138: the tag follows the matched METHOD, not the operator.
+    const { method } = skip;
     // R143: and, for `Insert`, only where the mechanism is not PROVABLY unavailable — see
     // `insertSkipCanRaise` (`insert-key-assignment.ts`) for the four cases and for why an
     // unresolvable receiver keeps the tag rather than losing it. R281: `Delete` the same way, through
@@ -358,24 +350,6 @@ function generateForced(node: ALSyntaxNode, ctx: SemanticContext): readonly Muta
 }
 
 /**
- * WHICH of `RUN_TRIGGER_METHODS` does `node` call on a proven record receiver, or `null` for none?
- * Tries each name in order through `claimsRecordMethod` and short-circuits on the first match: a
- * non-matching node costs at most three cheap callee-name comparisons and nothing more, since
- * `claimsRecordMethod` itself rejects on the callee name before doing any symbol-table work.
- *
- * Returns the matched NAME rather than a boolean, which is what R138 needed: the tag depends on the
- * method (`Insert` and, since R281, `Delete`), so `generate()` has to know which of the three names
- * claimed. The name returned is this file's own spelling from `RUN_TRIGGER_METHODS`, not the
- * source's — `claimsRecordMethod` matches case-insensitively, so `INSERT(True)` claims under
- * `"Insert"` and is tagged exactly as `Insert(true)` is.
- */
-function claimedRunTriggerMethod(node: ALSyntaxNode, ctx: SemanticContext): string | null {
-  return (
-    RUN_TRIGGER_METHODS.find((methodName) => claimsRecordMethod(node, ctx, methodName)) ?? null
-  );
-}
-
-/**
  * The honest `parentContext` for this site.
  *
  * Unlike the three deletion operators, this one claims sites that are NOT in statement position
@@ -387,29 +361,6 @@ function claimedRunTriggerMethod(node: ALSyntaxNode, ctx: SemanticContext): stri
  */
 function parentContextOf(node: ALSyntaxNode): ParentContextHint {
   return isStatementPosition(node) ? "statement-position" : "expression-position";
-}
-
-/**
- * Does the call carry exactly one argument, and is it the literal `true` (any case)?
- *
- * Returns the argument node so the caller can splice its span, or `null` for anything else: zero
- * arguments (the default-`RunTrigger=false` form), more than one argument (not a real `Modify`
- * overload but not this predicate's contract to police), or a sole argument that is not a
- * `boolean_literal` node at all (an identifier, a comparison, the literal `false`) — the only
- * literal this operator ever swaps is `true`.
- *
- * "Exactly one argument" comes from `soleArgument` (`./mutate-helpers.ts`), shared with
- * `RemoveSetRange`'s `countArguments` so the two cannot drift apart on the same grammar fact: the
- * grammar emits comments as **named** children of an `argument_list`, so a plain
- * `namedChildren.length === 1` test refuses a `Modify(true)` with a comment inside its
- * parentheses. Here that refusal was merely a missed site; in `RemoveSetRange` the same blindness
- * produced an inverted mutation, which is why both now read the argument list through one helper.
- */
-function booleanTrueArgument(node: ALSyntaxNode): ALSyntaxNode | null {
-  const only = soleArgument(node);
-  if (only === null) return null;
-  if (only.kind !== ALNodeKind.boolean_literal) return null;
-  return only.text.toLowerCase() === TRUE_LITERAL ? only : null;
 }
 
 /**

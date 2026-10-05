@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**91 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**90 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -181,7 +181,7 @@ that ordering is the priority.
 - **R456** · A report whose request page declares `SourceTable` is an implicit-record scope in its OWN triggers and procedures too; R294's predicate types them by the report's globals · [R456.md](docs/roadmap/R456.md) · closed 2026-10-05 — stated limit: real in alc, but 0 typed mutants in the 3 BaseApp reports with a…
 - **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · done (81096714)
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
-- **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · open
+- **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · done (0a8dd701)
 - **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · done (c7d06747)
 - **R464** · Implicit `Rec` is resolved in three places with three different scope lists: a qualified `Rec.` in a page or a TableNo codeunit's `OnRun` is unresolved where the bare call is claimed (measured: +2,914 Tier-2 specs, -236 flips, 3 run-trigger tags if unified) · [R464.md](docs/roadmap/R464.md) · open
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · closed 2026-10-05 — latent: query is not a carrier kind, so no query mutant is ever deployed; the fix is…

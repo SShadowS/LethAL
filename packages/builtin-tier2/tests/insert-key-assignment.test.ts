@@ -17,8 +17,8 @@ import {
   type SemanticContext,
   findAll,
   initParser,
+  primaryKeyFields,
 } from "@lethal/engine";
-import { primaryKeyFields } from "../src/insert-key-assignment";
 import { swapModifyFlag } from "../src/swap-modify-flag";
 import { parseClean, projectContextFor } from "./parse-clean";
 

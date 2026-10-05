@@ -1,10 +1,12 @@
 import {
   type RunTriggerKind,
+  claimedRunTriggerSkip,
   claimsRecordMethod,
   deleteSkipCanRaise,
   exactArguments,
   forceCanRaise,
   inMemberBody,
+  insertSkipCanRaise,
   modifySkipCanRaise,
   receiverUnresolved,
 } from "@lethal/engine";
@@ -20,27 +22,9 @@ import { hangCapableForMutatedNode, hasEnclosingLoop } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.flip-boolean-literal";
-const OPERATOR_VERSION = "1.0.0";
-
-/**
- * Record methods whose run-trigger boolean `swap-modify-flag` (Tier 2) already flips.
- *
- * A boolean argument to one of these is CEDED: flipping `Rec.Modify(true)` to `Modify(false)` is the
- * same mutation whether you reach it through the call or through the literal, and emitting both
- * would put two operators on one behaviour change. §3.2 dedup would NOT catch it, because that rule
- * compares SPANS and the two differ (the call node against the literal inside it). Measured on
- * `do-rel2/Cloud`: 72 sites, 2% of the candidate's footprint.
- *
- * The cession asks `claimsRecordMethod` — the SAME predicate `swap-modify-flag` claims with — rather
- * than restating it. The first draft tested the method NAME alone, and that is not what that operator
- * claims: it requires a name AND a receiver that resolves to a Record. Measured on the corpus, the
- * mismatch ORPHANED 55 sites — `Modify`/`Insert`/`Delete` calls whose receiver is unresolvable, which
- * this operator refused and that one never claimed. R171 is the same bug one operator earlier, and
- * `receiver.ts` moved into `@lethal/engine` so a shared predicate makes it structurally impossible
- * instead of a thing to remember. This list still has to track `RUN_TRIGGER_METHODS`, which is what
- * the fixture arm pins.
- */
-const CEDED_TO_MODIFY_FLAG = ["Modify", "Insert", "Delete"] as const;
+/** R459: 1.1.0, MINOR. A two-argument `Insert`'s Booleans are no longer ceded, so the operator
+ *  gains sites and changes no existing replacement; the identity tuple reads the major only. */
+const OPERATOR_VERSION = "1.1.0";
 
 /**
  * Parent kinds that make a boolean literal a CASE LABEL, where flipping it does not compile.
@@ -96,8 +80,9 @@ const CASE_LABEL_PARENTS: ReadonlySet<string> = new Set(["case_branch", "case_st
  * `Modify`/`Delete`, from the same engine detector (`runTriggerTag`). The `false` -> `true`
  * direction FORCES the trigger, at `Modify`/`Insert`/`Delete` (a `false` there is not ceded) as well
  * as `ModifyAll`/`DeleteAll`, and carries `run-trigger-forced` unless `forceCanRaise` proves the
- * table has no such trigger and no observer of it in this project. A two-argument `Insert(false, X)`
- * is not read (exact count 1) and stays untagged.
+ * table has no such trigger and no observer of it in this project. R459: a two-argument
+ * `Insert(RunTrigger, InsertWithSystemId)` is wholly this operator's (Tier 2 claims a sole `true`
+ * only); its first literal is tagged both ways, its second gets no RunTrigger tag.
  *
  * **Documented limits:**
  *   - Equivalence is not detected. A flipped boolean that no path reads is an equivalent mutant this
@@ -260,6 +245,14 @@ const RUN_TRIGGER_ARGUMENTS = [
   { method: "Modify", count: 1, index: 0, kind: "modify", skip: null },
   { method: "Delete", count: 1, index: 0, kind: "delete", skip: null },
   { method: "Insert", count: 1, index: 0, kind: "insert", skip: null },
+  // R459: `Insert(RunTrigger, InsertWithSystemId)`. Index 1 runs no trigger and has no row.
+  {
+    method: "Insert",
+    count: 2,
+    index: 0,
+    kind: "insert",
+    skip: { canRaise: insertSkipCanRaise, tag: "run-trigger-skipped-insert" },
+  },
 ] as const satisfies readonly {
   method: string;
   count: number;
@@ -442,22 +435,22 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
 }
 
 /**
- * Is this literal the run-trigger flag of a record method `swap-modify-flag` owns?
+ * Is this literal the run-trigger flag `swap-modify-flag` (Tier 2) flips?
  *
- * Walks only as far as the ARGUMENT LIST's own call, never further: a `true` nested inside another
- * call that happens to sit within a `Modify(...)` argument is not that call's flag.
+ * Such a literal is CEDED: flipping `Rec.Modify(true)` to `Modify(false)` is the same mutation
+ * whether reached through the call or the literal, and §3.2 dedup would NOT catch the pair, because
+ * it compares SPANS (the call node against the literal inside it). Measured on `do-rel2/Cloud`: 72
+ * sites.
+ *
+ * R459: the cession is `claimedRunTriggerSkip`, the SAME engine answer that operator claims with,
+ * span-equal. Every restatement of it orphaned sites: a name-only test refused 55 it does not claim
+ * (R171's seam bug), ceding `false` too orphaned 39 more (it has no `false` -> `true` direction),
+ * and ceding every `true` of a claimed `Insert` orphaned both literals of `Insert(true, X)` and
+ * `Insert(X, true)`, which it never claims (BC.History 30).
  */
 function isCededRunTriggerFlag(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  const args = node.parent;
-  if (args === null || args.rawKind !== "argument_list") return false;
-  const call = args.parent;
-  if (call === null || call.rawKind !== ALNodeKind.procedure_call) return false;
-  // Only `true` is ceded. `swap-modify-flag` claims the SKIP direction (an explicit `true` to flip
-  // to `false`) and, since 1.2.0, the argument-LESS call; it has no `false` -> `true` direction, so
-  // `Rec.Modify(false)` is claimed by nobody and belongs here. Measured: ceding `false` as well
-  // orphaned a further 39 corpus sites.
-  if (node.text.toLowerCase() !== "true") return false;
-  // Ask the SAME predicate that operator claims with, never a restatement of it. A name-only test
-  // here refused 55 sites it does not claim, leaving them to nobody — R171's seam bug exactly.
-  return CEDED_TO_MODIFY_FLAG.some((method) => claimsRecordMethod(call, ctx, method));
+  const call = node.parent?.parent;
+  if (call?.kind !== ALNodeKind.procedure_call) return false;
+  const literal = claimedRunTriggerSkip(call, ctx)?.literal;
+  return literal?.startIndex === node.startIndex && literal.endIndex === node.endIndex;
 }
