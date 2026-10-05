@@ -218,7 +218,8 @@ describe("R307: the per-file trial", () => {
  * value valid on Windows and Linux alike. It was the Windows capture before (manifest b03f52f2...,
  * all files e889a463...), which no Linux run ever matched; the values below are the ones Linux
  * gave all along, re-recorded deliberately. The identity scheme is not written into these files,
- * so the scheme 11 bump does not move them.
+ * so the scheme 11 bump does not move them. R281 re-pinned both (manifest was b754095f...588e, all
+ * files 9abd8f06...73c6): `DeleteWithTrigger`'s mutant gained `run-trigger-skipped-delete`.
  */
 describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   let dir = "";
@@ -243,7 +244,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     });
     const manifest = await readFile(join(dir, "mutant-manifest.json"));
     expect(createHash("sha256").update(manifest).digest("hex")).toBe(
-      "b754095f8aebddf35074c5d032bdac8692076e3e9c1b015d6810bc0ec0ff588e",
+      "5e997a85dfdfe30095ab7745efa22224772068c5374237cf83de45744ade5e4e",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -251,7 +252,7 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(await readFile(join(dir, f)));
     }
     expect(all.digest("hex")).toBe(
-      "9abd8f06e020d8f0fa0113b1534f70927664f1c0383540fd958dec19b7fa73c6",
+      "da7243c934c0c3ee2d91bc912b99e03c24f223cad491b643191a41a19f86bd74",
     );
   }, 60_000);
 });

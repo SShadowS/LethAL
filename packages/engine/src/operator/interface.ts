@@ -34,15 +34,22 @@ export type AstNodeId = string;
  *
  * THE TWO ARE NOT EQUALLY PROVEN, and the report must not present them as if they were. The
  * write-transaction tag is emitted only where a detector found the exact measured shape.
- * `run-trigger-skipped-insert` is emitted on EVERY `Insert` mutant, because whether the target
- * table's `OnInsert` touches the primary key is not visible at the call site and, for a base-app
- * record, is not visible at all — the semantic layer is source-derived and cannot see base-app
- * triggers. So it means "a kill here CAN be the platform; read it", never "this kill is false".
- * See `PLATFORM_KILL_MECHANISM_EXPLANATIONS` (runner), where each mechanism states its own evidence.
+ * `run-trigger-skipped-insert` is a REFUSAL detector (R143, `insertSkipCanRaise`): it is dropped
+ * only where the target table resolves and its `OnInsert` provably does not assign the primary key,
+ * and KEPT wherever that cannot be shown, which includes every base-app record — the semantic layer
+ * is source-derived and cannot see base-app triggers. So it means "a kill here CAN be the platform;
+ * read it", never "this kill is false". See `PLATFORM_KILL_MECHANISM_EXPLANATIONS` (runner), where
+ * each mechanism states its own evidence.
  *
- * `Delete` and `Modify` get NO mechanism, ruled 2026-08-14 and recorded on R138: skipping `OnDelete`
- * or `OnModify` writes LESS than the unmutated program, never more, and the row is still located by
- * the same key — there is no error the mutation can add.
+ * `"run-trigger-skipped-delete"` — R281, the same kind of refusal detector for `Delete(true)` to
+ * `Delete(false)`. R138 ruled (2026-08-14) that skipping `OnDelete` only writes less and so cannot
+ * add an error. That is wrong for an `OnDelete` that deletes or writes OTHER rows: they are left
+ * behind, and a later insert of one hits a duplicate key no test asserted. Dropped only where
+ * skipping the table's delete code is proven harmless (`deleteSkipCanRaise`). The duplicate-key
+ * route itself is NOT measured live for `Delete`.
+ *
+ * `Modify` gets NO skip mechanism (R138's ruling stands for it): skipping `OnModify` writes less and
+ * the row is still located by the same key.
  *
  * Deliberately keyed on SYNTAX and never on BC's failure text. The refusal's message is BC's
  * generic "An error occurred and the transaction is stopped", which names neither `Codeunit.Run`
@@ -62,7 +69,9 @@ export type PlatformKillMechanism =
    * possible here and not for the skip direction because the forward operator is scoped to tables
    * this project declares and that declare the trigger. See `forcedTriggerCanRaise`.
    */
-  | "run-trigger-forced";
+  | "run-trigger-forced"
+  /** R281 — see the type's comment above. */
+  | "run-trigger-skipped-delete";
 
 /**
  * R196: which rule decided this site can make a loop run forever.
