@@ -263,5 +263,12 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
     expect(explanation).toContain("another app");
     expect(explanation).toContain("not proof that none exists");
     expect(groups[0]?.explanation).toContain("`DeleteAll(true)`");
+    // sol final r1 finding 3: table events still fire with RunTrigger=false, so neither skip
+    // explanation may say the subscribers are skipped. Revert: the old "and the table's ...
+    // subscribers" wording.
+    for (const g of groups) {
+      expect(g.explanation).toContain("events still fire, with `RunTrigger` false");
+      expect(g.explanation).not.toMatch(/skips `On(Delete|Modify)` and the table's/);
+    }
   });
 });

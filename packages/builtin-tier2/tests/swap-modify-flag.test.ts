@@ -577,6 +577,39 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     );
   });
 
+  // sol final r1 finding 4: the GLOBAL half of the binding check, on its own. alc 18.0.43 refuses a
+  // table global named `Rec` (AL0155, already defined), so this shape does not compile today; the
+  // test pins the guard against the engine's var-ref resolution, not against a real program.
+  // Revert: drop `resolveVarRef` from `ownFieldRead`.
+  it("tags a bare Rec.CleanUp when a GLOBAL Rec of another table shadows the own record", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } procedure CleanUp(): Boolean var K: Record "Kid"; begin K.DeleteAll(); exit(true); end; }`;
+    const p = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; CleanUp; Boolean) { } field(3; Done; Boolean) { } }\n    keys { key(PK; "No.") { } }\n    var\n        Rec: Record "Kid";\n${onDelete("", "if Rec.CleanUp then Done := true;")}}\n`;
+    expect(deleteTag({ "P.al": p, "K.al": kid, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // sol final r1 finding 1. A parenthesis-less call inside `with` binds to the `with` record, and
+  // only a call with parentheses met the `with` check. No other statement keeps the tag here.
+  // Revert: drop the `with_statement` check in `onlyHarmlessCalls`.
+  it("tags a parenthesis-less call inside `with Kid do` in OnDelete", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } procedure CleanUpChildren(): Boolean var K: Record "Kid"; begin K.DeleteAll(); exit(true); end; }`;
+    const t = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; Done; Boolean) { } }\n    keys { key(PK; "No.") { } }\n${onDelete(KID_VAR, "with Kid do if CleanUpChildren then Done := true;")}}\n`;
+    expect(deleteTag({ "P.al": t, "K.al": kid, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
+  // sol final r1 finding 2. A same-project tableextension wrapped whole in `#if` is not indexed, so
+  // its procedures were not table procedures. Revert: drop the unindexed-extension check.
+  it("tags a parenthesis-less call to a procedure of an #if-wrapped project tableextension", () => {
+    const ext = `#if X\ntableextension 50305 "Par Ext" extends "Par"\n{\n    procedure CleanUpChildren(): Boolean\n    begin\n        exit(true);\n    end;\n}\n#endif\n`;
+    const t = `table 50300 "Par"\n{\n    fields { field(1; "No."; Code[20]) { } field(2; Done; Boolean) { } }\n    keys { key(PK; "No.") { } }\n${onDelete("", "if CleanUpChildren then Done := true;")}}\n`;
+    expect(deleteTag({ "P.al": t, "X.al": ext, "O.al": CALLER })).toBe(
+      "run-trigger-skipped-delete",
+    );
+  });
+
   it("does NOT tag a resolved table with no OnDelete", () => {
     expect(deleteTag({ "P.al": par(""), "O.al": CALLER })).toBeUndefined();
   });
@@ -667,8 +700,9 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     );
   });
 
-  // Final review fix 1, re-aimed by sol plan r2 finding 2. Revert: drop the `with_statement` check
-  // in `isHarmlessTriggerCall`. Rule D refuses every `Delete()`, so the old `with Kid do Delete()`
+  // Final review fix 1, re-aimed by sol plan r2 finding 2. Revert: drop BOTH `with_statement`
+  // checks (since sol final r1, `onlyHarmlessCalls` refuses any live `with` too; the
+  // `isHarmlessTriggerCall` one is pinned on its own below). Rule D refuses every `Delete()`, so the old `with Kid do Delete()`
   // stayed tagged without the guard. `Reset` is otherwise allow-listed (Par declares none), and
   // `with` binds it to Kid, whose own `Reset` deletes rows.
   it("tags an allow-listed Reset() inside `with Kid do` (Kid's own writing Reset)", () => {
@@ -706,9 +740,19 @@ describe("swap-modify-flag Delete mechanism (R281)", () => {
     expect(calls.map((c) => c.text)).toEqual(["Rec.Delete()", "xRec.Modify()", "Modify(false)"]);
     expect(calls.map((c) => isHarmlessTriggerCall(c, ctx))).toEqual([false, false, false]);
   });
+
+  // The exported helper's own `with` refusal, now that `onlyHarmlessCalls` also refuses a live
+  // `with`. Revert: drop the `with_statement` check in `isHarmlessTriggerCall`.
+  it("isHarmlessTriggerCall: an allow-listed Reset() inside `with` is not harmless", () => {
+    const root = parseClean(par(onDelete(KID_VAR, "with Kid do Reset(); Reset();")));
+    const ctx = contextFor(root);
+    const calls = findAll(root, ALNodeKind.procedure_call);
+    expect(calls.map((c) => c.text)).toEqual(["Reset()", "Reset()"]);
+    expect(calls.map((c) => isHarmlessTriggerCall(c, ctx))).toEqual([false, true]);
+  });
 });
 
-// R-452. `Modify(true)` -> `Modify(false)` skips `OnModify` and the table's modify subscribers. The
+// R-452. `Modify(true)` -> `Modify(false)` skips `OnModify` (its events still fire, RunTrigger false). The
 // same refusal detector as R281's `Delete`, with the modify trigger, events and extension triggers.
 // Each test names the revert that turns it red.
 describe("swap-modify-flag Modify mechanism (R-452)", () => {
@@ -776,7 +820,7 @@ describe("swap-modify-flag Modify mechanism (R-452)", () => {
     expect(tag({ "P.al": t, "O.al": CALLER })).toBe(MOD);
   });
 
-  // M7 (sol plan r2 finding 2). Revert: drop the `with_statement` check.
+  // M7 (sol plan r2 finding 2). Revert: drop both `with_statement` checks.
   it("tags an allow-listed Reset() inside `with Kid do` (Kid's own writing Reset)", () => {
     const t = par(onModify(KID_VAR, "with Kid do Reset();"));
     expect(tag({ "P.al": t, "K.al": KID, "O.al": CALLER })).toBe(MOD);
@@ -836,6 +880,13 @@ describe("swap-modify-flag Modify mechanism (R-452)", () => {
   it("#if: an UNDECIDED table file tags", () => {
     const t = par(`#if and\n${onModify(KID_VAR, "Kid.DeleteAll();")}#endif\n`);
     expect(tag({ "P.al": t, "K.al": KID, "O.al": CALLER }, ["X"])).toBe(MOD);
+  });
+
+  // sol final r1 finding 1, OnModify. Revert: drop the `with_statement` check in `onlyHarmlessCalls`.
+  it("tags a parenthesis-less call inside `with Kid do` in OnModify", () => {
+    const kid = `table 50302 "Kid" { fields { field(1; "Parent No."; Code[20]) { } } procedure CleanUpChildren(): Boolean var K: Record "Kid"; begin K.DeleteAll(); exit(true); end; }`;
+    const t = par(onModify(KID_VAR, "with Kid do if CleanUpChildren then Amount := 1;"));
+    expect(tag({ "P.al": t, "K.al": kid, "O.al": CALLER })).toBe(MOD);
   });
 
   // Delete is still judged by OnDelete, not OnModify: the kind is not crossed. Revert: pass

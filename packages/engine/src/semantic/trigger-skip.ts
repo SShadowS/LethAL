@@ -201,9 +201,19 @@ function projectObserves(
     }
   }
   // Objects the symbol table does not index (wrapped whole in `#if`, or unparsable) are read by
-  // their text, for any table: over-tagging is the safe direction.
+  // their text, for any table: over-tagging is the safe direction. One that looks like a
+  // tableextension naming this table keeps the tag whatever its triggers, since its procedures
+  // are not among `procedureNamesOn`'s and a trigger may call one without parentheses (sol final
+  // r1 finding 2).
   for (const n of [...symbols.unindexedObjects, ...symbols.unparsedObjects]) {
     if (unindexedText.test(n.text)) return true;
+    const text = n.text.toLowerCase();
+    if (
+      /\btableextension\b/.test(text) &&
+      (text.includes(tableName) || text.includes(String(table.id)))
+    ) {
+      return true;
+    }
   }
   const names = new Set([tableName, String(table.id)]);
   let found = false;
@@ -262,7 +272,9 @@ function onlyHarmlessCalls(
       tableProcedures.has(n.text.replace(/"/g, "").toLowerCase())
     ) {
       harmless = false;
-    } else if (n.rawKind === "call_statement") {
+    } else if (n.rawKind === "call_statement" || n.rawKind === "with_statement") {
+      // A live `with` keeps the tag whole (sol final r1 finding 1): its bare names bind to the
+      // `with` record, so a parenthesis-less call inside it escapes every check here.
       harmless = false;
     } else if (n.kind === ALNodeKind.field_access && n.parent?.kind !== ALNodeKind.procedure_call) {
       fields ??= new Set(symbols.fieldsOf(table.name).map((f) => f.name.toLowerCase()));

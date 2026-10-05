@@ -88,10 +88,11 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "at all. Treat it as a prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-delete":
     "rewriting `Delete(true)` to `Delete(false)`, or `DeleteAll(true)` to `DeleteAll(false)`, " +
-    "skips `OnDelete` and the table's delete " +
-    "subscribers. When that code deletes or writes OTHER rows (child lines, a log row), those rows " +
-    "are left behind, and a later insert of one can raise a duplicate key before any assertion " +
-    "runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
+    "skips `OnDelete`. The table's delete events still fire, with `RunTrigger` false, so a " +
+    "subscriber that branches on that flag, or on state the skipped trigger would have changed, " +
+    "behaves differently too. When the skipped code deletes or writes OTHER rows (child lines, a " +
+    "log row), those rows are left behind, and a later insert of one can raise a duplicate key " +
+    "before any assertion runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes every table " +
     "it cannot read, such as a base-app record. It cannot see a delete subscriber or a " +
     "`tableextension` delete trigger in another app (the test app, say). WEAK, like the `Insert` " +
     "tag: the duplicate-key route is not measured live for `Delete`, and whether `RunTrigger` " +
@@ -99,8 +100,10 @@ export const PLATFORM_KILL_MECHANISM_EXPLANATIONS: Record<PlatformKillMechanism,
     "prompt to read the kill, not as a verdict on it.",
   "run-trigger-skipped-modify":
     "rewriting `Modify(true)` to `Modify(false)`, or `ModifyAll(Field, Value, true)` to " +
-    "`ModifyAll(Field, Value, false)`, skips `OnModify` and the table's modify subscribers. When " +
-    "that code deletes or writes OTHER rows, those writes do not happen, and a later statement can " +
+    "`ModifyAll(Field, Value, false)`, skips `OnModify`. The table's modify events still fire, " +
+    "with `RunTrigger` false, so a subscriber that branches on that flag, or on state the skipped " +
+    "trigger would have changed, behaves differently too. When the skipped code deletes or writes " +
+    "OTHER rows, those writes do not happen, and a later statement can " +
     "raise on the rows they would have changed (a duplicate key, a missing record) before any " +
     "assertion runs. Kept wherever LethAL cannot prove the skipped code harmless, which includes " +
     "every table it cannot read, such as a base-app record. SCOPE: it reads only this project. A " +
