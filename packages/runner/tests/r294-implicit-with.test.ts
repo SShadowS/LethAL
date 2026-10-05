@@ -163,6 +163,14 @@ report 92700 "IW R"
     begin
     end;
 
+}
+
+report 92702 "IW R2"
+{
+    ProcessingOnly = true;
+    var
+        Q2, Z: Integer;
+
     procedure RTakeInts(A: Integer; B: Integer)
     begin
     end;
