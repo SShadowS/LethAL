@@ -713,7 +713,8 @@ describe("R-389 re-review (sol): namespaces and this", () => {
     expect(moves(sc, "unrelated", "A")).toBe(false);
   });
   test("R3 control: a codeunit that formats a value only: its OnRun is not walked", () => {
-    expect(moves(bridge("Ext.RunFormatted(Format(5));"), "inner2", "A")).toBe(false);
+    // A variable, not a literal: a literal argument never reaches the built-in rule at all.
+    expect(moves(bridge("Ext.RunFormatted(Format(Ext));"), "inner2", "A")).toBe(false);
   });
 
   // #2: interface ownership by namespace, not by the last name segment.
