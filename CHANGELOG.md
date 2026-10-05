@@ -388,13 +388,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   declare its globals in several sections, usually `protected var` then `var`; LethAL read only
   the first, so every name in a later one resolved to nothing. Record operators lost those
   receivers, and the loop-hang check could not refuse a write to such a variable. Measured on
-  BaseApp (BC.History w1-28, 203 projects): 7 hang-capable mutants are now refused (6 report
-  files, among them `SuggestVendorPayments`); 680 call deletions move from `void-method-call` to
-  `remove-setrange`, `remove-testfield` or `remove-calcfields` with the same deleted text; 25
-  `true` RunTrigger flips cede to `swap-modify-flag`; 637 new sites appear, mostly typed record
-  operators and argument swaps; one
-  `run-trigger-forced` tag drops where the table is now known to have no `OnModify`. CDO: one
-  site changes. No fixture changes. No name in a later section was found to bind where AL binds a
+  BaseApp (BC.History w1-28, 203 projects), on top of R-458: 1 more hang-capable mutant is
+  refused (`SuggestVendorPayments`; R-458 already refuses the other 6 this fix would have caught,
+  by name); 680 call deletions move from `void-method-call` to `remove-setrange`,
+  `remove-testfield` or `remove-calcfields` with the same deleted text; 25 `true` RunTrigger flips
+  cede to `swap-modify-flag`; 637 new sites appear, mostly typed record operators and argument
+  swaps; one `run-trigger-forced` tag drops where the table is now known to have no `OnModify`.
+  CDO: one site changes. No fixture changes. No name in a later section was found to bind where AL binds a
   record field instead; that check, and the 39 places where an existing FIRST-section global
   already does, are recorded on R464.
 - **The loop-hang refusal now sees writes through an implicit record or a `with` subject** (R-458).
