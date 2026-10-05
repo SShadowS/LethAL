@@ -7,11 +7,14 @@ import {
   ALNodeKind,
   type ALSyntaxNode,
   type ArmEvaluation,
+  type FileRefusalFields,
+  FileRefusedError,
   type MutationOperator,
   type MutationSpec,
   buildSemanticContext,
   buildSpanIndex,
   evaluateArms,
+  formatRefusal,
   initParser,
   parseAL,
   procedureLikeNameNode,
@@ -23,16 +26,26 @@ import {
 import {
   CARRIER_KINDS,
   IDENTITY_SCHEME,
+  type IdentityEntry,
   type InstrumentedFile,
   type MutantManifest,
   type MutantManifestEntry,
   type SelectorConfig,
   type TierResolver,
+  assignMutantIds,
   canCarryMutationSelectorVar,
+  coarseIdentityTupleOf,
   dedupeSpecs,
   describeObjectKinds,
+  identityEntriesOf,
+  identityFieldsOf,
+  identitySiteKey,
   isMutableSite,
+  numberIdentityOrdinals,
+  planOneFile,
   reachLatchRefusedOwner,
+  runIdentityEntries,
+  runIdentityOrdinals,
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
@@ -52,6 +65,7 @@ import {
   ArtifactPrepareError,
   DeploymentError,
   InstalledArtifactError,
+  UnmutatedBuildFailedError,
 } from "./artifact";
 import type { CompiledArtifact } from "./artifact";
 import type {
@@ -79,6 +93,7 @@ import { bisectFailingMutant } from "./bisect";
 import type { PublishOutcome } from "./deployment-verifier";
 import {
   DependencyUnreadableError,
+  type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
   packageFolderReader,
@@ -103,7 +118,7 @@ import {
   STREAM_SCHEMA_VERSION,
   createEmitter,
 } from "./events";
-import type { PreprocExcludedFile } from "./excluded-sites";
+import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { homeDir } from "./home";
 import {
@@ -115,7 +130,7 @@ import {
 import type { AcquireOutcome, Lease, LeaseApi } from "./lease";
 import { discoveredRelPaths, isEnumeratedAl, normalizeRelPath, spanTouches } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { type AlSource, coverageRefusedObjects } from "./line-map";
+import { type AlSource, ManifestDeclarationError, coverageRefusedObjects } from "./line-map";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
 import {
   type PermissionCanaryResult,
@@ -179,16 +194,18 @@ import {
   filterHistory,
   identityKeyOf,
   testKeyOf,
+  twinSitesOf,
 } from "./selection";
-import type { CoverageAttribution } from "./selection";
+import type { CoverageAttribution, CurrentCarrySide, RecordedCarrySide } from "./selection";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
-  StaleTestAppError,
   describeStaleTestApp,
   isRunMutantLineCountMessage,
+  testAppRefusal,
 } from "./stale-test-app";
+import { sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
-import type { MutantVerdict, RunRow, RunnerKind } from "./store";
+import type { CarryHidden, MutantVerdict, RunRow, RunnerKind } from "./store";
 import { TestAppError } from "./test-app-publish";
 import { TestDigestError, type TestDigestParts, testDigestsOfModel } from "./test-digest";
 import {
@@ -370,6 +387,30 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  * into `SessionReport.notInstrumented` (report.ts) — present in both the console render and the
  * `--out` JSON, not just stderr.
  */
+/**
+ * R307: one file refused whole by `generateMutationSet`'s per-file trial. It deploys no mutant and
+ * is published uninstrumented. The fields are the `FileRefusedError`'s own (no source text),
+ * except its `site` (R-307 O2), which names LethAL code and stays out of the report.
+ */
+export interface RefusedFile extends Omit<FileRefusalFields, "site"> {
+  /** Object kind(s) the file declares, from `describeObjectKinds` (the same text `skipped` rows carry). */
+  readonly kinds: string;
+  /** Its post-filter, deduped site count: the mutants it would have deployed. */
+  readonly sites: number;
+  /**
+   * Only when the header rule refused it (no object name to reserve an exact entry under): the
+   * `coarseIdentityTupleOf` of each deduped site (R442). Absent for an exact refusal, whose sites
+   * are reserved in the set's `reservedIdentityEntries` instead.
+   */
+  readonly coarseTuples?: readonly string[];
+  /**
+   * R307 section 3 (fail closed): how many of this run's deployed mutants share a coarse tuple with
+   * this file's `coarseTuples`, and so carry no verdict across runs this session (history, resume,
+   * equivalence marks). Present only when `coarseTuples` is and the count is above zero.
+   */
+  readonly carryDisabled?: number;
+}
+
 export interface MutationSetResult {
   readonly files: readonly InstrumentedFile[];
   /** Files with >=1 spec that no selector var could be injected into — see doc comment above. */
@@ -424,11 +465,31 @@ export interface MutationSetResult {
    * keeps.
    */
   readonly declarativeSites: readonly DeclarativeSiteFile[];
+  /** R447: per file, the sites R196's hang check refused (`MutationOperator.refusesHangCapable`),
+   *  after the `--operator` and `--lines` filters and outside inactive `#if` arms. */
+  readonly hangRefused: readonly HangRefusedFile[];
+  /**
+   * R307: the exact identity entries of every file the trial refused (empty for a header-rule
+   * refusal, which has `looseTuples` instead). They take a run-wide ordinal and get no row.
+   * The ordinals themselves are NOT numbered here (R400): `identityOrdinalsOf` numbers them where
+   * they are consumed, so a dry run never builds them and the loop holds no per-mutant entry.
+   */
+  readonly reservedIdentityEntries: readonly IdentityEntry[];
+  /** R307: files the per-file trial refused, in path order. Empty when none was. */
+  readonly refusedFiles: readonly RefusedFile[];
   /** R214: files whose sites the build's preprocessor symbols decided: sites in an arm the build
    *  compiles out, and files whose directives could not be evaluated as alc does. */
   readonly preprocExcluded: readonly PreprocExcludedFile[];
   /** R214: the effective set generation used. */
   readonly buildSymbols: readonly string[];
+  /**
+   * R442: what this run numbered no ordinal for, stored on the run row (`runs.carry_hidden`) so a
+   * later run can tell which of its keys may have moved. `tuples`: the coarse tuples of sites the
+   * run generated but numbered nothing for (header-rule refusals, sites a line filter dropped).
+   * `files`: sorted paths of files hidden whole, whose sites cannot be listed exactly (outside
+   * `--only`/`--exclude`, `preproc-undecided`, no selector var fits).
+   */
+  readonly carryHidden: CarryHidden;
 }
 
 export interface MutationSetOptions {
@@ -709,6 +770,19 @@ export function reachLatchRefusals(specs: readonly MutationSpec[]): {
   return [...byStart.values()].sort((x, y) => x.start - y.start);
 }
 
+/**
+ * R374: the run-wide identity ordinals of a generated set: every deployed mutant plus the reserved
+ * entries of refused files, numbered ONCE. Called where the ordinals are consumed (`runSession`,
+ * before any batch is written; scripts that write a set), never inside `generateMutationSet`, so
+ * a dry run never builds them (R400). The sort in `numberIdentityOrdinals` is global and stable,
+ * and ties come from one file only, so this numbers exactly as the in-loop numbering did.
+ */
+export function identityOrdinalsOf(
+  set: Pick<MutationSetResult, "files" | "reservedIdentityEntries">,
+): Map<string, number> {
+  return runIdentityOrdinals(set.files, operatorTiers, set.reservedIdentityEntries);
+}
+
 export async function generateMutationSet(
   projectDir: string,
   options: MutationSetOptions = {},
@@ -838,15 +912,32 @@ export async function generateMutationSet(
   let excludedByLines = 0;
   const producedAnywhere = new Set<string>();
   const producedInstrumentable = new Set<string>();
+  // R307: which operators found sites in a skipped file, and in each file refused whole, so the
+  // barren-operator message names only the reasons that apply.
+  const producedInSkipped = new Set<string>();
+  const producedInRefused = new Map<string, Set<string>>();
   // Sites an operator claimed that are not inside executable AL — see the drop below. The total
   // feeds the warning; the per-file rows feed `SessionReport.declarativeSites` (R144), because a
   // bare total cannot tell a reader whether the refusal touched anything they care about.
   let nonExecutableSites = 0;
   const declarativeSites: DeclarativeSiteFile[] = [];
+  // R447: hang-refused sites per file, and per admitted operator per file for the barren message.
+  const hangRefused: HangRefusedFile[] = [];
+  const hangRefusedByOperator = new Map<string, Map<string, number>>();
+  // R307: the exact entries of refused files only. A deployed file's entries are built when the
+  // ordinals are numbered (`identityOrdinalsOf`), not held across this loop (R400).
+  const reservedIdentityEntries: IdentityEntry[] = [];
+  const refusedFiles: RefusedFile[] = [];
+  // R442: what the run numbers no ordinal for (`MutationSetResult.carryHidden`).
+  const hiddenTuples: string[] = [];
+  const hiddenFiles: string[] = [];
+  const coarseOf = (spec: MutationSpec): string =>
+    coarseIdentityTupleOf(identityFieldsOf(spec, ""));
   for (const { path: rel, source, root } of parsed) {
     // R41: excluded from MUTATION, not from the context above and not from the published app —
     // `prepareBatchProject` still copies this file into the batch dir verbatim.
     if (admitted !== undefined && !admitted.has(rel)) {
+      hiddenFiles.push(rel); // R442: never walked, so its sites cannot be listed
       // R221: attributed to the flag that actually dropped it. One counter could not tell a caller
       // using BOTH flags which one removed a file, and the report reunites these with the patterns
       // that were given -- a count attributed to the wrong flag would send someone editing the
@@ -867,9 +958,22 @@ export async function generateMutationSet(
     let compiledOutHere = 0;
     const specs: MutationSpec[] = [];
     let declarativeInThisFile = 0;
+    const hangRefusedHere = new Map<string, number>();
     visit(root, (node) => {
       for (const op of allOperators) {
-        if (op.targets(node, ctx)) {
+        if (!op.targets(node, ctx)) {
+          // R447: a site R196's hang check refused, counted only where this run would have
+          // mutated it: not compiled out, and admitted by `--operator` and `--lines`.
+          if (
+            op.refusesHangCapable?.(node, ctx) === true &&
+            !startsInInactiveArm(inactive, node.startIndex) &&
+            (admittedOperators === undefined || admittedOperators.has(op.name)) &&
+            (lineRanges === undefined ||
+              spanTouches(lineRanges, rel, node.startPosition.row + 1, node.endPosition.row + 1))
+          ) {
+            hangRefusedHere.set(op.name, (hangRefusedHere.get(op.name) ?? 0) + 1);
+          }
+        } else {
           for (const spec of op.generate(node, ctx)) {
             if (startsInInactiveArm(inactive, spec.before.startIndex)) {
               compiledOutHere++;
@@ -911,6 +1015,19 @@ export async function generateMutationSet(
         sites: declarativeInThisFile,
       });
     }
+    // R447: like R144's row, BEFORE every bail below, so a file whose only sites were refused is
+    // still named. Not for an undecided file: its `preproc-undecided` row stands for every site in
+    // it, and with its arms unknown a count would be a guess.
+    if (hangRefusedHere.size > 0 && arms.kind !== "undecided") {
+      let sites = 0;
+      for (const [name, n] of hangRefusedHere) {
+        sites += n;
+        const perFile = hangRefusedByOperator.get(name) ?? new Map<string, number>();
+        perFile.set(rel, n);
+        hangRefusedByOperator.set(name, perFile);
+      }
+      hangRefused.push({ file: rel, kinds: describeObjectKinds(root), sites });
+    }
     // R214: after the declarative row (so a refused file's declarative sites stay in that row,
     // counted once) and BEFORE the bail below (so a file whose only sites were compiled out or
     // refused is still recorded).
@@ -927,6 +1044,9 @@ export async function generateMutationSet(
         reason: "preproc-undecided",
         detail: arms.reason,
       });
+      // R442: walked under an undecided context, so a decided build may emit sites this walk
+      // missed: hidden whole, not by tuple.
+      hiddenFiles.push(rel);
       continue;
     }
     if (compiledOutHere > 0) {
@@ -965,16 +1085,60 @@ export async function generateMutationSet(
         const first = spec.before.startPosition.row + 1;
         const last = spec.before.endPosition.row + 1;
         if (spanTouches(lineRanges, rel, first, last)) selected.push(spec);
-        else excludedByLines++;
+        else {
+          excludedByLines++;
+          hiddenTuples.push(coarseOf(spec)); // R442: generated, numbered nothing
+        }
       }
       fileSpecs = selected;
     }
     if (fileSpecs.length === 0) continue;
     for (const spec of fileSpecs) producedAnywhere.add(spec.operatorName);
     if (!canCarryMutationSelectorVar(root)) {
+      for (const spec of fileSpecs) producedInSkipped.add(spec.operatorName);
       skipped.push({ file: rel, kinds: describeObjectKinds(root), sites: fileSpecs.length });
+      hiddenFiles.push(rel); // R442: numbered nothing; flips only with the object's kind
       continue;
     }
+    // R307: the writer's own per-file PLAN (R-307 O6: `planOneFile`, every decision and every
+    // throw, and no instrumented text), run once here as a trial. A `FileRefusedError` refuses
+    // THIS file whole; anything else is a LethAL bug and still aborts the run. Only a refused file
+    // has its exact identity entries computed here, to reserve them: a header-rule refusal (no
+    // object name) has none, and records loose tuples instead (fail closed, I3). The trial runs
+    // the same header rule (`objectHeadersOf` + `attributeHeader`), so a file it accepts always
+    // has entries (R400: they are built at numbering time, not here).
+    const deduped = dedupeSpecs(fileSpecs, tierOf);
+    try {
+      planOneFile(
+        { path: rel, source, root },
+        deduped,
+        assignMutantIds(new Map([[rel, deduped]])).get(rel) ?? [],
+      );
+    } catch (e) {
+      if (!(e instanceof FileRefusedError)) throw e;
+      const { file, shape, objects, lines } = e;
+      let entries: IdentityEntry[] | undefined;
+      try {
+        entries = identityEntriesOf(rel, source, deduped);
+      } catch (err) {
+        if (!(err instanceof FileRefusedError)) throw err;
+        if (err.shape !== "no-header" && err.shape !== "site-before-header") throw err;
+      }
+      producedInRefused.set(file, new Set(fileSpecs.map((spec) => spec.operatorName)));
+      if (entries !== undefined) reservedIdentityEntries.push(...entries); // a number, no row
+      refusedFiles.push({
+        file,
+        shape,
+        ...(objects !== undefined ? { objects } : {}),
+        ...(lines !== undefined ? { lines } : {}),
+        kinds: describeObjectKinds(root),
+        sites: deduped.length,
+        ...(entries === undefined ? { coarseTuples: deduped.map(coarseOf) } : {}),
+      });
+      if (entries === undefined) hiddenTuples.push(...deduped.map(coarseOf));
+      continue;
+    }
+    // Only AFTER the trial: an operator whose only sites sit in refused files deploys nothing.
     for (const spec of fileSpecs) producedInstrumentable.add(spec.operatorName);
     files.push({ path: rel, source, root, specs: fileSpecs });
     for (const r of reachLatchRefusals(fileSpecs)) {
@@ -988,6 +1152,19 @@ export async function generateMutationSet(
       );
     }
   }
+  // R307 section 5: refusing only when nothing is left to measure. A plain Error (exit 1).
+  if (refusedFiles.length > 0 && files.length === 0) {
+    // R399: files left out for an undecided `#if` (R214) are named too, so the message covers
+    // everything that left nothing to measure. An undecided-ONLY project does not reach here.
+    const undecided = preprocExcluded.filter((f) => f.reason === "preproc-undecided");
+    throw new Error(
+      `nothing is left to measure: no file with mutation sites could be instrumented, and ${refusedFiles.length} file(s) were refused whole at instrumentation (R307): ${refusedFiles.map(formatRefusal).join(" | ")}${
+        undecided.length > 0
+          ? `; ${undecided.length} more file(s) were left out for an undecided #if (R214): ${undecided.map((f) => f.file).join(", ")}`
+          : ""
+      }`,
+    );
+  }
   // R127: an operator that contributes no deployable mutant is refused, for the same reason a
   // `--only` pattern matching no file is. A run that quietly dropped it would publish, run a whole
   // baseline and report a null score with no failures — "nothing to fix" rather than "that
@@ -997,12 +1174,37 @@ export async function generateMutationSet(
     if (barren.length > 0) {
       const named = barren.map((n) => `"${n}"`).join(", ");
       const uninstrumentableOnly = barren.filter((n) => producedAnywhere.has(n)).sort();
+      // R307: each reason only when a file of that kind held one of these operators' sites. A
+      // refused file is named HERE: the run stops before its warning or any report exists.
+      const where: string[] = [];
+      if (uninstrumentableOnly.some((n) => producedInSkipped.has(n))) {
+        where.push("files no selector var can be injected into (see the skip list above)");
+      }
+      const refusedHere = refusedFiles.filter((r) =>
+        uninstrumentableOnly.some((n) => producedInRefused.get(r.file)?.has(n) === true),
+      );
+      if (refusedHere.length > 0) {
+        where.push(
+          `files refused whole at instrumentation (R307): ${refusedHere.map((r) => `${r.file} (${r.shape})`).join(", ")}`,
+        );
+      }
       const nuance =
         uninstrumentableOnly.length > 0
-          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in files no selector var can be injected into (see the skip list above), so nothing would deploy.`
+          ? ` ${uninstrumentableOnly.map((n) => `"${n}"`).join(", ")} DID find sites, but only in ${where.join(" or in ")}, so nothing would deploy.`
           : "";
+      // R447: an operator whose sites R196 refused DID find sites; say where, as R307 does.
+      const hangNuance = barren
+        .flatMap((n) => {
+          const perFile = hangRefusedByOperator.get(n);
+          if (perFile === undefined) return [];
+          const where = [...perFile].map(([f, c]) => `${f} (${c})`).join(", ");
+          return [
+            ` "${n}" had site(s) refused as hang-capable (R196: each writes a variable an enclosing loop's condition reads): ${where}.`,
+          ];
+        })
+        .join("");
       throw new Error(
-        `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
+        `--operator ${barren.length === 1 ? "matched no deployable mutation site for operator" : "matched no deployable mutation site for operators"} ${named} in this project${admitted !== undefined ? " (within the --only scope)" : ""}.${nuance}${hangNuance} Refusing rather than running with a smaller mutant set than asked for, which would report a score for a scope that was never measured.`,
       );
     }
   }
@@ -1017,6 +1219,30 @@ export async function generateMutationSet(
     warn(
       "line-narrowed-run",
       `[lethal] the line filter narrowed this run to ${lineRanges.length} line range(s); ${excludedByLines} mutation site(s) on other lines were excluded. The score below covers those lines ONLY — it is not a project score.`,
+    );
+  }
+  // R307 section 3 (fail closed, I3): a header-rule refusal reserved no exact entry, so a deployed
+  // mutant sharing one of its coarse tuples (R442) may hold a key a prior run gave a site of the
+  // refused file. Counted here, per refused file; `runSession` turns carry off for each such mutant.
+  if (refusedFiles.some((r) => r.coarseTuples !== undefined)) {
+    const deployedCoarse = files.flatMap((f) => dedupeSpecs(f.specs, tierOf).map(coarseOf));
+    for (const [i, r] of refusedFiles.entries()) {
+      if (r.coarseTuples === undefined) continue;
+      const coarse = new Set(r.coarseTuples);
+      const count = deployedCoarse.filter((t) => coarse.has(t)).length;
+      if (count === 0) continue;
+      refusedFiles[i] = { ...r, carryDisabled: count };
+      warn(
+        "identity-carry-disabled",
+        `[lethal] ${r.file} was refused (${r.shape}) and has no object name to reserve its sites under, so ${count} mutant(s) elsewhere that share a site shape with it carry no verdict from an earlier run this session: --skip-known-survivors does not skip them, --resume does not carry them, and no equivalence mark applies. A mutant an earlier run stranded on is still skipped (R53), so nothing that hung before runs again. This run records the refused file's site shapes, so the next run without this refusal re-measures these mutants once more (their keys here may name another mutant there), and only the run after that carries them (R442). Keep any equivalence mark that reads stale this run: the marks file is untouched and the mark applies again once the refusal is gone (R307).`,
+      );
+    }
+  }
+  if (refusedFiles.length > 0) {
+    const where = refusedFiles.map((r) => `${r.file} (${r.shape}, ${r.sites} site(s))`).join(", ");
+    warn(
+      "instrumentation-refused-files",
+      `[lethal] refused ${refusedFiles.length} file(s) whole at instrumentation; they run unmutated and the score covers the other files only: ${where}.`,
     );
   }
   if (skipped.length > 0) {
@@ -1078,8 +1304,12 @@ export async function generateMutationSet(
     excludedByOperator,
     excludedByLines,
     declarativeSites,
+    hangRefused,
+    reservedIdentityEntries,
+    refusedFiles,
     preprocExcluded,
     buildSymbols,
+    carryHidden: { tuples: [...new Set(hiddenTuples)].sort(), files: hiddenFiles.sort() },
   };
 }
 
@@ -1095,6 +1325,12 @@ export interface SessionConfig {
   readonly alRunnerContractProbe?: typeof runAlRunnerContractProbe;
   readonly store: ResultsStore;
   readonly projectDir: string; // target AL project (source of truth)
+  /**
+   * R205: the `readTargetSource` snapshot `runFromCli` took before any other reader, so the
+   * `--changed-since` lines, the coverage guard and the build all see one source. Absent, the
+   * session reads its own before its first reader.
+   */
+  readonly source?: ReadonlyMap<string, Buffer>;
   readonly testDir: string;
   readonly instrumentedDir: string; // scratch output dir for schemata writes
   /**
@@ -1477,9 +1713,9 @@ export function narrowFilesToSubset(
   subset: readonly MutantManifestEntry[],
 ): InstrumentedFile[] {
   const specKey = (file: string, spec: MutationSpec) =>
-    `${file}\0${spec.before.startIndex}\0${spec.before.endIndex}\0${spec.operatorName}`;
+    identitySiteKey(file, spec.before.startIndex, spec.before.endIndex, spec.operatorName);
   const wanted = new Set(
-    subset.map((m) => `${m.file}\0${m.startIndex}\0${m.endIndex}\0${m.operatorName}`),
+    subset.map((m) => identitySiteKey(m.file, m.startIndex, m.endIndex, m.operatorName)),
   );
   const seen = new Set<string>();
   const out: InstrumentedFile[] = [];
@@ -1556,10 +1792,10 @@ export function targetAppIdOf(projectManifest: Readonly<Record<string, unknown>>
   return id;
 }
 
-/** C02-06: `hashTargetSource` plus the snapshot it hashed (generation parses that snapshot), or
- *  the reason the tree could not be read (no `app.json`, say). An
- *  unread tree never matches, so it records no hash rather than a wrong one, and the warning can
- *  say which of "edited" and "unreadable" happened. */
+/** C02-06: `hashTargetSource` plus the snapshot it hashed, or the reason the tree could not be
+ *  read. R205: only the last-batch re-read uses it, which is diagnostic: an unread tree never
+ *  matches, so it records no hash rather than a wrong one, and the warning can say which of
+ *  "edited" and "unreadable" happened. */
 async function readTargetSourceHash(
   projectDir: string,
   symbols: readonly string[],
@@ -1575,10 +1811,37 @@ async function readTargetSourceHash(
   }
 }
 
+/** R205: the paths two source snapshots differ in, named for `source-changed-during-run`. */
+function sourceChanges(
+  before: ReadonlyMap<string, Buffer>,
+  after: ReadonlyMap<string, Buffer>,
+): string {
+  const names = (keys: readonly string[]) =>
+    keys
+      .map((k) => k.replaceAll("\\", "/"))
+      .sort()
+      .join(", ");
+  const added = [...after.keys()].filter((k) => !before.has(k));
+  const removed = [...before.keys()].filter((k) => !after.has(k));
+  const changed = [...before].filter(([k, b]) => after.get(k)?.equals(b) === false).map(([k]) => k);
+  return (
+    [
+      ["added", added],
+      ["removed", removed],
+      ["changed", changed],
+    ] as const
+  )
+    .filter(([, keys]) => keys.length > 0)
+    .map(([what, keys]) => `${what}: ${names(keys)}`)
+    .join("; ");
+}
+
 async function prepareArtifactDir(args: {
   readonly targetDir: string;
   readonly files: readonly InstrumentedFile[];
   readonly subset?: readonly MutantManifestEntry[];
+  /** R374: the run-wide ordinals from `identityOrdinalsOf`. */
+  readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
   readonly projectManifest: Readonly<Record<string, unknown>>;
@@ -1599,6 +1862,7 @@ async function prepareArtifactDir(args: {
     artifactId: args.artifactId,
     targetAppId: targetAppIdOf(args.projectManifest),
     operatorTiers,
+    identityOrdinals: args.identityOrdinals,
   });
   return await prepareBatchProject(
     args.projectDir,
@@ -1608,6 +1872,56 @@ async function prepareArtifactDir(args: {
     args.source,
     args.excludeOutputs,
   );
+}
+
+/**
+ * R461: compile LethAL's staged copy of the UNMUTATED target: the batch layout (`prepareBatchProject`)
+ * with no `writeInstrumentedProject`, so no selector, install/upgrade codeunits or guards. The
+ * scratch dir is cleared first, since `prepareBatchProject` keeps a file already there. Only an
+ * `AlcCompileError` becomes `UnmutatedBuildFailedError`; a preparation or spawn failure propagates
+ * as itself. Cleanup is best-effort, so it never masks the compile's answer.
+ */
+async function checkPlainBuild(args: {
+  readonly scratchDir: string;
+  readonly projectDir: string;
+  readonly projectManifest: Readonly<Record<string, unknown>>;
+  readonly appVersion: string;
+  readonly source: ReadonlyMap<string, Buffer> | undefined;
+  readonly excludeOutputs: readonly string[];
+  readonly compilePlainCheck: (dir: string) => Promise<void>;
+}): Promise<void> {
+  await rm(args.scratchDir, { recursive: true, force: true });
+  await mkdir(args.scratchDir, { recursive: true });
+  try {
+    await prepareBatchProject(
+      args.projectDir,
+      args.scratchDir,
+      args.projectManifest,
+      args.appVersion,
+      args.source,
+      args.excludeOutputs,
+    );
+    try {
+      await args.compilePlainCheck(args.scratchDir);
+    } catch (err) {
+      if (err instanceof AlcCompileError) throw new UnmutatedBuildFailedError(err);
+      throw err;
+    }
+  } finally {
+    await rm(args.scratchDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * R461: `start` runs at the FIRST call only. Every later call, concurrent or after it settled, gets
+ * that same promise, so a success is not re-checked and a failure is not retried.
+ */
+export function firstCallOnly<A>(start: (arg: A) => Promise<void>): (arg: A) => Promise<void> {
+  let started: Promise<void> | undefined;
+  return (arg) => {
+    started ??= start(arg);
+    return started;
+  };
 }
 
 /**
@@ -1639,6 +1953,7 @@ async function bisectAndNote(args: {
   readonly subsetMutants: readonly MutantManifestEntry[];
   readonly scratchDir: string;
   readonly batchFiles: readonly InstrumentedFile[];
+  readonly identityOrdinals: ReadonlyMap<string, number>;
   readonly selectorIds: SelectorConfig;
   readonly projectDir: string;
   readonly projectManifest: Readonly<Record<string, unknown>>;
@@ -1661,6 +1976,7 @@ async function bisectAndNote(args: {
           targetDir: args.scratchDir,
           files: args.batchFiles,
           subset,
+          identityOrdinals: args.identityOrdinals,
           selectorIds: args.selectorIds,
           projectDir: args.projectDir,
           projectManifest: args.projectManifest,
@@ -1766,9 +2082,11 @@ async function quarantineInFlight(args: {
  * sites at all, and a project with none is documented to reach no app.json requirement whatsoever
  * (see `planArtifacts`'s doc comment) — this lookup must not turn that into a hard requirement.
  */
-async function readAppVersionBestEffort(projectDir: string): Promise<string | undefined> {
+function readAppVersionBestEffort(source: ReadonlyMap<string, Buffer>): string | undefined {
+  // R205: from the session's source snapshot, so the row records the version that was built.
   try {
-    const raw = await readFile(join(projectDir, "app.json"), "utf8");
+    const raw = source.get("app.json")?.toString("utf8");
+    if (raw === undefined) return undefined;
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
@@ -3122,7 +3440,8 @@ class LeaseSession {
  * ever constructs one when `decidePublishOutcome` already returned `"failed"`, so there is no
  * separate outcome field to re-check, unlike `DeploymentError` which also carries `indeterminate`/
  * `anomalous`), and a version conflict (BC named the installed version verbatim — a deterministic
- * rejection), and `EnvToolNotStartedError` (R237: the env tool's process was never created).
+ * rejection), `EnvToolNotStartedError` (R237: the env tool's process was never created), and
+ * `ManifestDeclarationError` (R-307: the manifest refused against the declarations, pre-publish).
  * R250: the conflict counts only as BC's whole sentence naming THIS publish's app, publisher and
  * attempted version (`confirmedDowngradeRefusal`): `attempted` when the caller knows
  * it, else the identity an `EnvToolError` carries. With neither, a quoted phrase proves nothing.
@@ -3137,6 +3456,8 @@ function isConfirmedTerminalPublishFailure(err: unknown, attempted?: PublishIden
   if (err instanceof AlcCompileError || err instanceof ArtifactPrepareError) return true;
   if (err instanceof DeploymentError) return err.outcome === "failed";
   if (err instanceof PublishFailedError) return true;
+  // R-307 section 4: the manifest-vs-declarations refusal fires before any publish.
+  if (err instanceof ManifestDeclarationError) return true;
   // R237: the env tool never started, so nothing reached the server. A started tool that timed
   // out, was killed or exited non-zero is a plain EnvToolError and stays uncertain below.
   if (err instanceof EnvToolNotStartedError) return true;
@@ -3261,6 +3582,15 @@ function describeTestApp(hash: string | null | undefined): string {
   return hash === null || hash === undefined ? "unknown" : hash;
 }
 
+/** R442: a run's hidden-file list in a refusal or warning. */
+function describeHiddenFiles(files: readonly string[]): string {
+  return files.length === 0 ? "no file" : files.join(", ");
+}
+
+/** R442: why a run without `carry_hidden` carries nothing, said the same way on every path. */
+const CARRY_UNTRUSTED_WHY =
+  "recorded no list of the sites it numbered no identity ordinal for (it ran before R442, or stopped before generation), so any of its keys may name another mutant in this run";
+
 /** R247: why no verdict crosses a test-app change, said the same way on every path. */
 const TEST_APP_WHY =
   "A verdict measured against one test app says nothing about another: a changed test is exactly what might kill a survivor or spare a kill. Any change to the package's bytes counts, including a republish that only moved the version stamp and a recompile alc did not reproduce byte for byte";
@@ -3320,10 +3650,15 @@ function resolveResume(
   buildSymbols: readonly string[],
   /** R-236c: the tests this session refuses; a carried verdict any of them took part in is re-scored. */
   refusedTests: ReadonlyArray<{ readonly qualifiedName: string; readonly method: string }> = [],
-): { runId: number; index: ResumeIndex } | undefined {
+):
+  | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
+  | undefined {
   if (cfg.resume === undefined) return undefined;
 
   let priorRunId: number;
+  // R391: the resumed run's generation hash and `twin_tuples`, never its `source_sha256`.
+  let recorded: RecordedCarrySide;
+  let priorHidden: CarryHidden | null;
   if (cfg.resume === "last") {
     const found = cfg.store.findResumableRun({
       projectPath: cfg.projectDir,
@@ -3380,6 +3715,13 @@ function resolveResume(
     // still never be read as a match.
     assertSameTestApp(foundRow, "--resume", testAppHash);
     assertSameBuildSymbols(foundRow, `--resume: run ${found}`, buildSymbols);
+    priorHidden = foundRow?.carryHidden ?? null;
+    if (priorHidden === null) {
+      throw new Error(
+        `--resume found run ${found}, but it ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume to run from scratch.`,
+      );
+    }
+    recorded = recordedCarrySideOf(foundRow);
   } else {
     const row = cfg.store.getRun(cfg.resume);
     if (row === null) throw new Error(`--resume-run ${cfg.resume}: no such run in this database`);
@@ -3420,6 +3762,13 @@ function resolveResume(
         }`,
       );
     }
+    priorHidden = row.carryHidden;
+    if (priorHidden === null) {
+      throw new Error(
+        `--resume-run ${cfg.resume} ${CARRY_UNTRUSTED_WHY}, so none of its verdicts is carried (R442). Drop --resume-run to run from scratch.`,
+      );
+    }
+    recorded = recordedCarrySideOf(row);
     priorRunId = cfg.resume;
   }
 
@@ -3472,7 +3821,16 @@ function resolveResume(
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
   });
-  return { runId: priorRunId, index };
+  return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+}
+
+/** R391: a run row's side of `carryRecord`. A missing row, like a NULL column, carries nothing. */
+function recordedCarrySideOf(row: RunRow | null): RecordedCarrySide {
+  const twins = row?.twinTuples ?? null;
+  return {
+    hash: row?.generationSourceSha256 ?? null,
+    twins: twins === null ? null : new Set(twins),
+  };
 }
 
 /**
@@ -3965,24 +4323,30 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     | { readonly batchHash: string; readonly testAppHash: string | undefined }
     | undefined;
   let reused: BaselineSnapshot | undefined;
+  // R462: read again at a stale-test-app refusal, to tell "changed mid-baseline" from "older".
+  let hashTestApp: (() => Promise<string | undefined>) | undefined;
   if (input.snapshot !== undefined) {
     const { batchDir, testDir, allowReuse } = input.snapshot;
     const batchHash = await hashAlTree(batchDir);
     const packageReader = backend.fetchPublishedAppPackage;
-    const testAppHash = await testAppHashFor(
-      packageReader === undefined
-        ? undefined
-        : async () => {
-            const manifest = await readTestAppManifest(testDir);
-            return manifest === undefined
-              ? undefined
-              : packageReader.call(backend, {
-                  publisher: manifest.publisher,
-                  name: manifest.name,
-                });
-          },
-      testDir,
-    );
+    // R462: the request identity is read ONCE, so the re-read at a refusal asks for the same app
+    // even if the local app.json changed meanwhile.
+    const manifest = packageReader === undefined ? undefined : await readTestAppManifest(testDir);
+    hashTestApp = () =>
+      testAppHashFor(
+        packageReader === undefined
+          ? undefined
+          : async () => {
+              return manifest === undefined
+                ? undefined
+                : packageReader.call(backend, {
+                    publisher: manifest.publisher,
+                    name: manifest.name,
+                  });
+            },
+        testDir,
+      );
+    const testAppHash = await hashTestApp();
     const reusable =
       allowReuse && testAppHash !== undefined
         ? store.findBaselineSnapshot(batchHash, testAppHash, caps.coverage)
@@ -4151,7 +4515,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       ? []
       : [{ name: qualifiedTestName(b.ref), description: described }];
   });
-  if (missingFromServer.length > 0) throw new StaleTestAppError(missingFromServer);
+  if (missingFromServer.length > 0) {
+    // R462: a failed re-read proves nothing, so it is `undefined`, never a guess.
+    const after = await hashTestApp?.().catch(() => undefined);
+    throw testAppRefusal(missingFromServer, snapshotKey?.testAppHash, after);
+  }
 
   const plan = input.select(baseline);
   if (plan === undefined) return "nothing-to-run";
@@ -4588,6 +4956,17 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // the refusal, on the server's own words. See `published-test-app.ts`.
   // R247: it also returns this session's test-app identity, recorded on the run and compared by
   // `--resume` and `--skip-known-survivors`.
+  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
+  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
+  // construction (review r1: a separate earlier read let an edit undone before the last read slip
+  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
+  // copies of the uninstrumented files; recorded only when the two agree.
+  // R205: `runFromCli` hands over the snapshot it took before anything else read the source (the
+  // `--changed-since` lines, the coverage guard); a caller that did not is read here, before the
+  // first reader below (`testAppIdentity`). An unreadable source refuses the run
+  // (`SourceSnapshotUnreadableError`): every batch copies its files and `app.json` from this one
+  // snapshot, so each compiles exactly the hashed bytes.
+  const sourceSnapshot = cfg.source ?? (await readTargetSource(cfg.projectDir));
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const { testAppHash, testDigests, testDigestParts } = await testAppIdentity(
     cfg,
@@ -4597,20 +4976,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     emit,
     // R403 phase B: R139's source-to-source comparison filters both sides alike.
     armPolicyApplied ? testBuildSymbols : undefined,
+    sourceSnapshot,
   );
-
-  // C02-06 decision 8: the source is read ONCE into a snapshot, hashed, and generation parses that
-  // snapshot rather than the disk, so the first hash is of the bytes generation consumed by
-  // construction (review r1: a separate earlier read let an edit undone before the last read slip
-  // through). Hashed again after the last batch is prepared (below), which brackets the per-batch
-  // copies of the uninstrumented files; recorded only when the two agree.
   const sourceSymbols = cfg.preprocessorSymbols ?? [];
-  const sourceHashAtGeneration = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-  // Every batch copies its uninstrumented files and `app.json` from this same snapshot, so each
-  // compiles exactly the hashed bytes. Undefined only when the read failed, and then no hash is
-  // recorded anyway, so the disk is read as before.
-  const sourceSnapshot =
-    "snapshot" in sourceHashAtGeneration ? sourceHashAtGeneration.snapshot : undefined;
+  const sourceHashAtGeneration = hashSourceSnapshot(sourceSnapshot, sourceSymbols);
   // R214: the EFFECTIVE symbols (config plus app.json), read from the same snapshot generation
   // parses. Recorded on the run and compared by history, resume and marks: a key names a site
   // within one build.
@@ -4676,7 +5045,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       discovery.splitTests.length > 0,
     ),
   });
-  const resumeState = resolveResume(
+  const resolvedResume = resolveResume(
     cfg,
     backendName,
     configFingerprint,
@@ -4691,6 +5060,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     identityScheme: IDENTITY_SCHEME,
     buildSymbols,
     coverageMode: caps.coverage,
+    // R391: rule 1's "same source" fact, recorded with the row so no mutant row exists without it.
+    generationSourceSha256: sourceHashAtGeneration,
     // R360: the group `finishRun` prunes installed bundles within, with the run's app id.
     ...(resourceKey !== undefined ? { resourceKey } : {}),
     ...(testAppHash !== undefined ? { testAppHash } : {}),
@@ -4706,7 +5077,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     // own app.json version instead of the placeholder when the caller didn't already supply one.
     appVersion:
       cfg.appVersion ??
-      (caps.authoritative ? undefined : await readAppVersionBestEffort(cfg.projectDir)) ??
+      (caps.authoritative ? undefined : readAppVersionBestEffort(sourceSnapshot)) ??
       "0.0.0.0",
   });
   // stream-started: the header event, carrying the run's own id. Emitted HERE, immediately after
@@ -4741,8 +5112,12 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByOperator,
     excludedByLines,
     declarativeSites: declarativeSiteFiles,
+    hangRefused,
+    reservedIdentityEntries,
+    refusedFiles,
     preprocExcluded,
     buildSymbols: generatedSymbols,
+    carryHidden,
   } = await generateMutationSet(cfg.projectDir, {
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     ...(cfg.exclude !== undefined ? { exclude: cfg.exclude } : {}),
@@ -4753,12 +5128,55 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     backend: buildBackend,
     emit,
   });
+  // R442: before any mutant row, so a run that dies earlier holds no verdict and stays NULL.
+  cfg.store.setCarryHidden(runId, carryHidden);
+  // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
+  // which then held one entry per mutant until its end (R400). Still inside the generate phase.
+  // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
+  const identityEntries = runIdentityEntries(allFiles, operatorTiers, reservedIdentityEntries);
+  const identityOrdinals = numberIdentityOrdinals(identityEntries);
+  // R391: which tuples have a twin in their FILE, from exactly the set the ordinals number. A fact
+  // of the run, written before any mutant row (known-survivor and stranded rows included): an
+  // interrupted run's rows undercount it. `carryCurrent` is this session's side of every carry.
+  const twinTuples = twinSitesOf(identityEntries);
+  cfg.store.setTwinTuples(runId, twinTuples);
+  const carryCurrent: CurrentCarrySide = {
+    hash: sourceHashAtGeneration,
+    twins: new Set(twinTuples),
+    refused: new Set(),
+  };
   // R214: fail loudly if the set recorded on the run (above) and the set generation enumerated
   // under ever diverge; today both read the same snapshot.
   if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
     throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
   }
   const generateMutationSetMs = Date.now() - generateStartedMs;
+  // R307 section 3 (fail closed, I3), R442: the coarse tuples of every site this run numbered no
+  // ordinal for. A mutant matching one is not skipped by history, not carried by resume and takes
+  // no equivalence mark this run (`isCarryDisabled`); its key is still written. Undefined when
+  // nothing is disabled.
+  const carryDisabled = carryHidden.tuples.length > 0 ? new Set(carryHidden.tuples) : undefined;
+  // R442: a resume also distrusts what the RESUMED run hid: the union, never this run's alone
+  // (which would let a repaired refusal's twins carry). Other hidden files refuse the resume.
+  let resumeState = resolvedResume;
+  if (resolvedResume !== undefined) {
+    const prior = resolvedResume.carryHidden;
+    if (!sameHiddenFiles(prior.files, carryHidden.files)) {
+      throw new Error(
+        `--resume: run ${resolvedResume.runId} hid ${describeHiddenFiles(prior.files)} whole from identity numbering, and this run hides ${describeHiddenFiles(carryHidden.files)}. A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant (R442). Drop the resume flag to run from scratch.`,
+      );
+    }
+    const union = new Set([...prior.tuples, ...carryHidden.tuples]);
+    resumeState = {
+      ...resolvedResume,
+      index: {
+        ...resolvedResume.index,
+        ...(union.size > 0 ? { carryDisabled: union } : {}),
+        // R391: the resumed run's generation facts against this session's.
+        carryRule: { recorded: resolvedResume.recorded, current: carryCurrent },
+      },
+    };
+  }
   // R298: objects declared inside, or after, a #if object wrapper, by the line map's own rule.
   // Passed to BOTH `coverageFilter` calls so no coverage mode and no fallback scores their mutants.
   const coverageRefused = coverageRefusedObjects(allFiles);
@@ -4797,9 +5215,26 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     excludedByExclude,
     excludedByOperator,
     ...(cfg.lines !== undefined ? { excludedByLines } : {}),
+    // R307: no looseTuples in the stream: they are a carry detail, not report data.
+    ...(refusedFiles.length > 0
+      ? {
+          refusedFiles: refusedFiles.map((r) => ({
+            file: r.file,
+            shape: r.shape,
+            ...(r.objects !== undefined ? { objects: r.objects } : {}),
+            ...(r.lines !== undefined ? { lines: r.lines } : {}),
+            kinds: r.kinds,
+            sites: r.sites,
+            ...(r.carryDisabled !== undefined ? { carryDisabled: r.carryDisabled } : {}),
+          })),
+        }
+      : {}),
+    // R447: present only when non-empty, like `refusedFiles`.
+    ...(hangRefused.length > 0 ? { hangRefusedFiles: hangRefused } : {}),
   });
   // R196: announced BEFORE deployment (spec §5.3), not after scoring. A warning at the end would
-  // satisfy a presence check while being useless to the person it is for.
+  // satisfy a presence check while being useless to the person it is for. Built-in operators now
+  // REFUSE these sites, so only a plug-in operator's tag can raise this warning.
   //
   // The message states what is true in THIS build, not spec §5.3's own wording. §5.3's text
   // promises that an over-budget mutant ends the BC session regardless of `--stop-hung-sessions`,
@@ -4884,6 +5319,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // stay strictly increasing within one session even when the clock doesn't advance (or a
   // conflict retry re-stamped above something newer than the clock would produce).
   let lastIssuedVersion: string | undefined;
+  // R461: the unmutated build is compiled at most once per session, at the first compile failure.
+  const plainBuild = firstCallOnly(checkPlainBuild);
   // R325: the history filter runs per batch; its scheme warning is said once per session.
   let historySchemeWarned = false;
   let historySymbolsWarned = false;
@@ -4891,6 +5328,8 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   let historyCoverageModeWarned = false;
   // R247: likewise for its test-app warning.
   let historyTestAppWarned = false;
+  // R442: likewise for its untrusted-run and hidden-files warnings.
+  let historyCarryWarned = false;
 
   // Layer 5C-B1 (design §6 step 1): acquire the machine-global lease BEFORE the first deploy —
   // outside the try/finally below, since a failed acquire has nothing to release. Everything from
@@ -5095,6 +5534,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       const pathChanges = await prepareArtifactDir({
         targetDir: batchDir,
         files: batchFiles,
+        identityOrdinals,
         selectorIds: cfg.selectorIds,
         projectDir: cfg.projectDir,
         projectManifest,
@@ -5113,19 +5553,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
       }
       if (batchIdx === artifacts.length - 1) {
         const atLastBatch = await readTargetSourceHash(cfg.projectDir, sourceSymbols);
-        if (
-          "hash" in atLastBatch &&
-          "hash" in sourceHashAtGeneration &&
-          atLastBatch.hash === sourceHashAtGeneration.hash
-        ) {
+        if ("hash" in atLastBatch && atLastBatch.hash === sourceHashAtGeneration) {
           cfg.store.recordSourceHash(runId, atLastBatch.hash);
         } else {
+          // R205: diagnostic only. The build is pinned to the snapshot, so an unreadable or edited
+          // tree withholds the hash and warns; it never aborts the run.
           const why =
-            "unreadable" in sourceHashAtGeneration
-              ? `could not be read before generation (${sourceHashAtGeneration.unreadable})`
-              : "unreadable" in atLastBatch
-                ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
-                : "changed between generation and the last batch's preparation";
+            "unreadable" in atLastBatch
+              ? `could not be read after the last batch was prepared (${atLastBatch.unreadable})`
+              : `changed between generation and the last batch's preparation (${sourceChanges(sourceSnapshot, atLastBatch.snapshot)}; this run measured the source as first read)`;
           emit({
             type: "warning",
             code: "source-changed-during-run",
@@ -5231,6 +5667,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         caps.coverage,
         testAppHash,
         buildSymbols,
+        carryHidden.files,
         {
           schemeChanged: (old) => {
             if (historySchemeWarned || !(cfg.skipKnownSurvivors ?? false)) return;
@@ -5268,10 +5705,30 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
               message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, was measured against test app ${describeTestApp(old.testAppHash)}, and this session's test app is ${describeTestApp(testAppHash)}. ${TEST_APP_WHY}, so no survivor from it is skipped: every mutant is executed (R247).`,
             });
           },
+          carryUntrusted: (old) => {
+            if (historyCarryWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCarryWarned = true;
+            emit({
+              type: "warning",
+              code: "history-carry-untrusted",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, ${CARRY_UNTRUSTED_WHY}. No survivor from it is skipped: every mutant is executed, and the next run can skip from this one (R442).`,
+            });
+          },
+          hiddenFilesChanged: (old) => {
+            if (historyCarryWarned || !(cfg.skipKnownSurvivors ?? false)) return;
+            historyCarryWarned = true;
+            emit({
+              type: "warning",
+              code: "history-hidden-files-changed",
+              message: `[lethal] --skip-known-survivors: the latest finished run, run ${old.runId}, hid ${describeHiddenFiles(old.before)} whole from identity numbering, and this run hides ${describeHiddenFiles(old.now)} (--only/--exclude scope, a preprocessor directive that could not be evaluated, or a file no selector var fits). A file hidden in one run and not the other moves its twins' ordinals, so a recorded key can name another mutant: no survivor from it is skipped, every mutant is executed (R442).`,
+            });
+          },
         },
       );
       const { execute, knownSurvivors } = filterHistory([...manifest.mutants], prior, {
         skipKnownSurvivors: cfg.skipKnownSurvivors ?? false,
+        ...(carryDisabled !== undefined ? { carryDisabled } : {}),
+        current: carryCurrent,
       });
       for (const m of knownSurvivors)
         record(cfg.store, runId, m, "known-survivor", outcomes, batchIdx, emit);
@@ -5302,7 +5759,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // installed version verbatim. Re-stamp strictly above it, recompile, and retry
         // EXACTLY once — a second conflict means the server's installed version is moving
         // underneath us, and that must fail the session loudly, not loop.
-        const installed = parseVersionConflict(messageOf(deployErr));
+        // R461: an AlcCompileError is never read as a conflict, here or in the retry below: its text is
+        // alc's output, which now carries stdout too. A conflict is a publish answer.
+        const installed =
+          deployErr instanceof AlcCompileError ? null : parseVersionConflict(messageOf(deployErr));
         if (installed !== null) {
           const bumped = nextAbove(installed);
           lastIssuedVersion = bumped;
@@ -5321,7 +5781,10 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
             );
             deployed = true;
           } catch (retryErr) {
-            const stillInstalled = parseVersionConflict(messageOf(retryErr));
+            const stillInstalled =
+              retryErr instanceof AlcCompileError
+                ? null
+                : parseVersionConflict(messageOf(retryErr));
             if (stillInstalled !== null) {
               throw new Error(
                 `version conflict persisted after retry: re-stamped to ${bumped} above BC's ` +
@@ -5367,6 +5830,20 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
         // `AlcCompileError` — `instanceof` cannot cross-match them, so this guard alone is
         // sufficient to exclude both.
         if (!(deployErr instanceof AlcCompileError)) throw deployErr;
+        // 3b'. R461: before blaming a mutant, does the UNMUTATED target compile? Sequential path
+        // only: bcdev, the one backend with the check, refuses `workers > 1`.
+        const compilePlainCheck = cfg.backend.compilePlainCheck?.bind(cfg.backend);
+        if (compilePlainCheck !== undefined) {
+          await plainBuild({
+            scratchDir: join(cfg.instrumentedDir, `run-${runId}-plain`),
+            projectDir: cfg.projectDir,
+            projectManifest,
+            appVersion,
+            source: sourceSnapshot,
+            excludeOutputs: cfg.excludeOutputs ?? [],
+            compilePlainCheck,
+          });
+        }
         // 3c. Layer 4.3 put every mutant in one artifact (design spec §6): one
         // malformed spec now fails this ONE compile and would otherwise turn
         // every mutant `execute` holds into an equally uninformative "error"
@@ -5388,6 +5865,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
           subsetMutants: manifest.mutants,
           scratchDir: join(cfg.instrumentedDir, `run-${runId}-batch-${batchIdx}-bisect`),
           batchFiles,
+          identityOrdinals,
           selectorIds: cfg.selectorIds,
           projectDir: cfg.projectDir,
           projectManifest,
@@ -5872,6 +6350,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
                   `run-${runId}-batch-${batchIdx}-bisect-worker-${i}`,
                 ),
                 batchFiles,
+                identityOrdinals,
                 selectorIds: cfg.selectorIds,
                 projectDir: cfg.projectDir,
                 projectManifest,
@@ -6002,6 +6481,15 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // already earned a clean attestation, which a batch can do moments before the lease is lost.
   emitLeaseLostInvalidation(leaseSession, safety, emit);
 
+  // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
+  if (carryCurrent.refused.size > 0) {
+    emit({
+      type: "warning",
+      code: "carry-refused-renumbered",
+      message: `[lethal] ${carryCurrent.refused.size} mutant(s) matched a recorded verdict by identity key, but that verdict was not carried and the mutant is scored in this run: the source changed since the recorded run (or that run predates the record of it), and the mutant is a twin in its file in either run, or no record of it in its own file was found. A key holds no file, so after an edit it can name another twin (R391).`,
+    });
+  }
+
   // Layer 5C-A Task 8, Task 10 (design §G): a quarantined run must NEVER be marked finished.
   // `priorSurvivorKeys` (store.ts) selects the most recent run with `finished_at IS NOT NULL` and
   // treats its "survived"/"known-survivor" mutant rows as a future session's skip-list
@@ -6128,6 +6616,7 @@ export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
     ...(cfg.equivalenceMarks !== undefined && cfg.equivalenceMarks.length > 0
       ? { equivalenceMarks: cfg.equivalenceMarks }
       : {}),
+    ...(carryDisabled !== undefined ? { carryDisabled } : {}),
     // R101(c): ALWAYS carried, including as `[]`. "No symbol was defined" is the statement a reader
     // needs when a project has an `#if` — it is the difference between measuring the branch the
     // customer ships and measuring the other one, and the report was silent about it.
@@ -6242,6 +6731,21 @@ export interface NamedMutantsConfig {
     readonly unreached: ReadonlySet<string>;
     readonly notRerun?: ReadonlySet<string>;
   };
+  /**
+   * R259: called once, after the covering loop and before the decision-11 reruns, unless the
+   * session latched, with the target outcomes. Each returned request names exactly ONE method,
+   * which must be in the baseline. Requests are grouped by that method; each group is its own
+   * covering pass over this call's baseline (no second baseline) with a fresh kill ledger, so every
+   * probe runs its method alone, first in its own call. Answered in `NamedMutantsResult.probes`,
+   * never in `outcomes`.
+   */
+  readonly probe?: (outcomes: readonly SessionOutcome[]) => readonly NamedMutantRequest[];
+}
+
+/** R259: one `probe` request and its outcome. */
+export interface NamedProbe {
+  readonly request: NamedMutantRequest;
+  readonly outcome: SessionOutcome;
 }
 
 /** C02-06 decision 11: one unmutated run of one method, and whether its session was fresh. */
@@ -6277,6 +6781,9 @@ export interface NamedMutantsResult {
    *  `rerunOnUnmutated` order. Each ran its baseline only. Absent when `narrow` was not given or
    *  not called. */
   readonly notRerun?: readonly string[];
+  /** R259: one per `probe` request, in request order; `error` when the session stopped before it
+   *  ran, and invalidated with the batch like `outcomes`. Absent when `probe` was not called. */
+  readonly probes?: readonly NamedProbe[];
 }
 
 /** R206 section 2.1: the server reported that tests had already run in this call's session. */
@@ -6426,6 +6933,9 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   const rerunRefs = cfg.rerunOnUnmutated ?? [];
   const baselineRan = new Map<string, TestVerdict>();
   const rerunRan = new Map<string, UnmutatedRun>();
+  // R259: the rows `select` was handed, reused by the probes; and the probes, once `probe` ran.
+  let baselineRows: readonly BaselineRow[] | undefined;
+  let probeRuns: ProbeRun[] | undefined;
   try {
     // Before the first op: a lease lost from here on invalidates THIS batch's verdicts.
     if (leaseSession !== undefined) leaseSession.currentBatchIndex = installed.batchIndex;
@@ -6473,6 +6983,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       artifactId: artifact.artifactId,
       tests: baselineTests,
       select: (baseline) => {
+        baselineRows = baseline;
         for (const b of baseline) baselineRan.set(testKeyOf(b.ref), b.verdict);
         const narrow = cfg.narrow;
         if (narrow !== undefined) {
@@ -6485,6 +6996,21 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
         return selectNamed(baseline, named, scope, installed.batchIndex, strict);
       },
     });
+    // R259: before the reruns, so decision 11 still reruns each new test after every mutant run.
+    const probe = cfg.probe;
+    if (probe !== undefined && baselineRows !== undefined && !safety.isUnsafe) {
+      probeRuns = [];
+      const requests = probe(outcomes);
+      await runProbes(
+        scope,
+        manifest,
+        requests,
+        baselineRows,
+        installed.batchIndex,
+        strict,
+        probeRuns,
+      );
+    }
     // Decision 11: after the covering loop on purpose, so a test that passes clean but fails
     // once mutant runs have touched the server is caught. Freshness for a rerun also needs a
     // session no earlier call of this run used: the ids recorded so far, grown as the loop goes.
@@ -6515,10 +7041,7 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
   emitLeaseLostInvalidation(leaseSession, safety, emit);
   applyBatchInvalidations(outcomes, invalidations);
 
-  const byId = new Map(outcomes.map((o) => [o.mutant.mutantId, o]));
-  const answered = named.map(({ mutant }): SessionOutcome => {
-    const o = byId.get(mutant.mutantId);
-    if (o !== undefined) return o;
+  const notRunOf = (mutant: MutantManifestEntry): SessionOutcome => {
     if (!safety.isUnsafe) {
       throw new Error(
         `${who}: ${mutant.mutantId} got no outcome although the session did not latch (a bug, not a verdict)`,
@@ -6530,9 +7053,23 @@ export async function runNamedMutants(cfg: NamedMutantsConfig): Promise<NamedMut
       batchIndex: installed.batchIndex,
       failureNote: `not run: the session latched unsafe before this mutant (${safety.reason ?? "unknown"})`,
     };
-  });
+  };
+  const byId = new Map(outcomes.map((o) => [o.mutant.mutantId, o]));
+  const answered = named.map(({ mutant }) => byId.get(mutant.mutantId) ?? notRunOf(mutant));
+  // R259: a lost lease or an unattested batch discards the probes' verdicts too.
+  const probeOutcomes = probeRuns?.map((p) => p.outcome ?? notRunOf(p.mutant));
+  if (probeOutcomes !== undefined) applyBatchInvalidations(probeOutcomes, invalidations);
   return {
     outcomes: answered,
+    ...(probeRuns !== undefined && probeOutcomes !== undefined
+      ? {
+          probes: probeRuns.map((p, i) => {
+            const outcome = probeOutcomes[i];
+            if (outcome === undefined) throw new Error(`${who}: probe ${i} lost its outcome`);
+            return { request: p.request, outcome };
+          }),
+        }
+      : {}),
     ...(safety.isUnsafe ? { quarantined: safety.reason ?? "unknown" } : {}),
     ...(unreached !== undefined ? { unreached } : {}),
     baseline: baselineTests.map((ref) => {
@@ -6631,6 +7168,118 @@ function applyNarrow(
     unreached,
     notRerun: rerun.rerunRefs.map(testKeyOf).filter((k) => skip.has(k)),
   };
+}
+
+/** R259: one probe request, its manifest entry, and its outcome once scored. */
+interface ProbeRun {
+  readonly request: NamedMutantRequest;
+  readonly mutant: MutantManifestEntry;
+  outcome?: SessionOutcome;
+}
+
+/**
+ * R259: `NamedMutantsConfig.probe`'s requests. Every request is checked and pushed to `into` in
+ * request order before anything runs; then each one-method group is a covering pass of its own
+ * through `selectNamed` (the same green-baseline rule) and `runMutantsOnBackend` (the same
+ * kill confirmation and session checks), with section G's attestation gate as in `scoreBatch`.
+ *
+ * A sibling that is also a requested target, and was not answered for the new test, is probed, so
+ * the run holds TWO `mutants` rows for it (no unique index). Safe today: a verify run records no
+ * artifact, so verify.ts's `installedOf` refuses its id as `unknown-artifact` and it is never a
+ * source; `resolveVerifySource`'s "a mutant twice" guard would fire if one ever were.
+ */
+async function runProbes(
+  scope: BatchScope,
+  manifest: MutantManifest,
+  requests: readonly NamedMutantRequest[],
+  baseline: readonly BaselineRow[],
+  batchIndex: number,
+  strict: boolean,
+  into: ProbeRun[],
+): Promise<void> {
+  const groups = new Map<string, NamedMutantRequest[]>();
+  for (const r of requests) {
+    const [method, ...more] = r.methods;
+    if (method === undefined || more.length > 0) {
+      throw new NamedMutantError(
+        `runNamedMutants: probe ${r.mutantId} names ${r.methods.length} methods; a probe names exactly one`,
+      );
+    }
+    groups.set(testKeyOf(method), [...(groups.get(testKeyOf(method)) ?? []), r]);
+  }
+  const resolved = [...groups].map(([key, g]) => ({
+    key,
+    named: resolveNamedMutants(manifest, g),
+  }));
+  for (const r of requests) {
+    const mutant = manifest.mutants.find((m) => m.mutantId === r.mutantId);
+    if (mutant === undefined) throw new Error(`runNamedMutants: probe ${r.mutantId} was resolved`);
+    into.push({ request: r, mutant });
+  }
+  // A probe is not a requested mutant: its `mutant-scored` would be counted as one by a progress
+  // reader. Its rows stay in the store, under this never-finished run, where `sessionIdsOf` must
+  // see its sessions so a rerun in one is not fresh. Every other event (warnings) goes through.
+  const probeEmit: RunEmitter = (e) => {
+    if (e.type !== "mutant-scored") scope.emit(e);
+  };
+  for (const { key, named } of resolved) {
+    if (scope.safety.isUnsafe) return;
+    // A throw from here (a latch) loses this group's outcomes: they are answered "not run".
+    const outcomes: SessionOutcome[] = [];
+    const probeScope: BatchScope = {
+      ...scope,
+      outcomes,
+      killLedger: newKillLedger(),
+      emit: probeEmit,
+    };
+    const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
+    if (plan !== undefined) {
+      const attestation = { clean: false };
+      await runMutantsOnBackend({
+        backend: scope.backend,
+        safety: scope.safety,
+        ...(scope.leaseSession !== undefined ? { leaseSession: scope.leaseSession } : {}),
+        mutants: plan.mutants,
+        perMutantTests: plan.perMutantTests,
+        coverageAttribution: plan.coverageAttribution,
+        baselineDuration: plan.baselineDuration,
+        fallbackTimeoutMs: scope.baselineTimeoutMs,
+        minMutantBudgetMs: scope.minMutantBudgetMs,
+        store: scope.store,
+        runId: scope.runId,
+        batchIndex,
+        outcomes,
+        quarantineStore: scope.quarantineStore,
+        resourceKey: scope.resourceKey,
+        nowIso: scope.nowIso,
+        attestation,
+        emit: probeEmit,
+        killLedger: probeScope.killLedger,
+        memberCountsByTest: plan.memberCountsByTest,
+        groupRuns: scope.groupRuns,
+        sessionReuse: scope.sessionReuse,
+      });
+      if (scope.caps.authoritative && !attestation.clean) {
+        for (const [i, o] of outcomes.entries()) {
+          outcomes[i] = {
+            mutant: o.mutant,
+            verdict: "error",
+            batchIndex,
+            failureNote: "unattested probe: no run observed the deployed binary's selector",
+          };
+        }
+      }
+    }
+    for (const o of outcomes) {
+      const run = into.find(
+        (p) =>
+          p.mutant.mutantId === o.mutant.mutantId &&
+          p.request.methods.some((m) => testKeyOf(m) === key),
+      );
+      if (run === undefined) throw new Error(`runNamedMutants: no probe for ${o.mutant.mutantId}`);
+      run.outcome = o;
+    }
+  }
 }
 
 /**
@@ -7118,6 +7767,8 @@ async function testAppIdentity(
   diskModel: TestAppModel,
   emit: RunEmitter,
   armSymbols: readonly string[] | undefined,
+  /** R205: the target's source snapshot, so `targetOf` reads the pinned `app.json`. */
+  source: ReadonlyMap<string, Buffer>,
 ): Promise<{
   testAppHash: string | undefined;
   testDigests?: Record<string, string>;
@@ -7155,7 +7806,24 @@ async function testAppIdentity(
       published && fetchPackage !== undefined
         ? publishedPackageReader(fetchPackage)
         : packageFolderReader(cfg.backend.dependencyPackageDirs?.() ?? []);
-    const dependencies = await dependencyFingerprint(inputs, read, await targetOf(cfg.projectDir));
+    // R-385: the published path reads Microsoft apps, System and the control app's dependencies by
+    // the bytes the server holds (the backend's microsoftMode, required there: never a fallback to
+    // declared versions); al-runner keeps declared versions under a tag (D6).
+    let microsoft: MicrosoftMode = { kind: "declared" };
+    if (published) {
+      if (cfg.backend.microsoftMode === undefined) {
+        throw new DependencyUnreadableError(
+          "this backend publishes the test app but cannot read the Microsoft dependencies, System or the control app's dependencies from the server (it has no microsoftMode)",
+        );
+      }
+      microsoft = cfg.backend.microsoftMode();
+    }
+    const dependencies = await dependencyFingerprint(
+      inputs,
+      read,
+      microsoft,
+      await targetOf(cfg.projectDir, source),
+    );
     const { digests, parts } = testDigestsOfModel(
       published ? buildTestAppModel(sources.files) : diskModel,
       tests,

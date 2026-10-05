@@ -6,7 +6,7 @@ import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import { IDENTITY_SCHEME, type MutantManifest, writeInstrumentedProject } from "@lethal/schemata";
 import { applyEquivalenceMarks, parseEquivalenceMarks } from "../src/equivalence-marks";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { BaselineRecordedError, RECORD_BASELINE_ENV } from "./baseline-guard";
@@ -37,6 +37,7 @@ async function manifest(): Promise<MutantManifest> {
     await writeInstrumentedProject({
       targetDir: dir,
       files: set.files,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 79547, controlId: 79548, tableId: 79549 },
       artifactId: "0123456789abcdef0123456789abcdef",
       targetAppId: appJson.id,

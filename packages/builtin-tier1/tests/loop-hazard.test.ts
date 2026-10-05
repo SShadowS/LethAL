@@ -55,11 +55,10 @@ describe("classifyHangCapable", () => {
     const { root, ctx } = load(`codeunit 50302 "R" {
       procedure P() var Outer: Integer; Inner: Integer; begin
         while Outer < 10 do begin
-          while Inner < 3 do Inner += 1;
-          Outer += 1;
+          while Inner < 3 do begin Inner += 1; Outer += 1; end;
         end;
       end; }`);
-    // `Outer += 1` sits inside the inner loop's sibling, but the OUTER condition reads it.
+    // `Outer += 1` sits inside the INNER loop, whose condition does not read it; the OUTER one does.
     expect(classifyHangCapable(assignment(root, "Outer += 1"), ctx)).toBe("loop-condition-target");
   });
 
@@ -319,5 +318,119 @@ describe("R402: an UNDECIDED arm is read, so the tag errs toward claiming", () =
     expect(classifyHangCapable(assignment(root, "B := B + 1"), undecided)).toBe(
       "loop-condition-target",
     );
+  });
+});
+
+// R295: every name of `A, B: Integer` is declared, and both share ONE declaration node. So
+// `sameDeclaration` keys by that node's position AND the name: by position alone A and B would be
+// one variable and `while A < 10 do B := B + 1` would be tagged, a false hang.
+describe("R295: a multi-name declaration in the hang classifier", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const src = (loop: string) =>
+    load(`codeunit 50295 "R" {
+      procedure P() var A, B: Integer; begin
+        ${loop}
+      end; }`);
+
+  it("CLAIMS the later name's own write: while B < 10 do B := B + 1", () => {
+    const { root, ctx } = src("while B < 10 do B := B + 1;");
+    expect(classifyHangCapable(assignment(root, "B := B + 1"), ctx)).toBe("loop-condition-target");
+  });
+
+  it("control: CLAIMS the first name's own write: while A < 10 do A := A + 1", () => {
+    const { root, ctx } = src("while A < 10 do A := A + 1;");
+    expect(classifyHangCapable(assignment(root, "A := A + 1"), ctx)).toBe("loop-condition-target");
+  });
+
+  // WRONG-FIX CONTROLS: pass on the unfixed code (B was invisible), red under a position-only key.
+  it("DECLINES a write to the OTHER name: while A < 10 do B := B + 1", () => {
+    const { root, ctx } = src("while A < 10 do B := B + 1;");
+    expect(classifyHangCapable(assignment(root, "B := B + 1"), ctx)).toBeNull();
+  });
+
+  it("DECLINES the reverse: while B < 10 do A := A + 1", () => {
+    const { root, ctx } = src("while B < 10 do A := A + 1;");
+    expect(classifyHangCapable(assignment(root, "A := A + 1"), ctx)).toBeNull();
+  });
+});
+
+// R294: a member-expression RECEIVER in a loop condition resolves again, so its own write is a hang.
+describe("R294: a member receiver in the loop condition", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("CLAIMS while Txt.Contains('a') do Txt := Txt.Replace('a', 'b')", () => {
+    const { root, ctx } = load(`codeunit 50294 "R" {
+      procedure P() var Txt: Text; begin
+        while Txt.Contains('a') do Txt := Txt.Replace('a', 'b');
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "Txt := Txt.Replace"), ctx)).toBe(
+      "loop-condition-target",
+    );
+  });
+
+  it("control: DECLINES when the member name, not the receiver, matches the target", () => {
+    const { root, ctx } = load(`codeunit 50296 "R" {
+      procedure P() var R: Record Customer; Amount: Decimal; begin
+        while R.Amount < 10 do Amount := Amount + 1;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "Amount := Amount + 1"), ctx)).toBeNull();
+  });
+});
+
+// R454 shape 3: a MEMBER write the loop condition reads, keyed by receiver declaration AND member.
+describe("R454: a member-target loop write", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("CLAIMS repeat R.Done := true; until R.Done, not another member or another receiver", () => {
+    const { root, ctx } = load(`codeunit 50454 "R" {
+      procedure P() var R: Record Customer; R2: Record Customer; begin
+        repeat R.Done := true; R.Other := true; R2.Done := true; until R.Done;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "R.Done := true"), ctx)).toBe(
+      "loop-condition-target",
+    );
+    expect(classifyHangCapable(assignment(root, "R.Other := true"), ctx)).toBeNull();
+    expect(classifyHangCapable(assignment(root, "R2.Done := true"), ctx)).toBeNull();
+  });
+
+  it('compares receiver and member SEPARATELY: "A.B".C is not A."B.C"', () => {
+    // One declaration list, so both receivers share a declaration offset; a joined
+    // `<receiver>.<member>` key reads both writes as `a.b.c`.
+    const { root, ctx } = load(`codeunit 50455 "R" {
+      procedure P() var A, "A.B": Record Customer; begin
+        repeat "A.B".C := true; A."B.C" := true; until A."B.C";
+      end; }`);
+    expect(classifyHangCapable(assignment(root, '"A.B".C := true'), ctx)).toBeNull();
+    expect(classifyHangCapable(assignment(root, 'A."B.C" := true'), ctx)).toBe(
+      "loop-condition-target",
+    );
+  });
+
+  it("CLAIMS through an OUTER loop whose condition reads the member", () => {
+    const { root, ctx } = load(`codeunit 50456 "R" {
+      procedure P() var R: Record Customer; I: Integer; begin
+        while not R.Done do
+          while I < 1 do begin
+            I += 1;
+            R.Done := true;
+          end;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "R.Done := true"), ctx)).toBe(
+      "loop-condition-target",
+    );
+  });
+
+  it("DECLINES a member write whose receiver cannot be resolved", () => {
+    const { root, ctx } = load(`codeunit 50457 "R" {
+      procedure P() begin
+        repeat Unknown.Done := true; until Unknown.Done;
+      end; }`);
+    expect(classifyHangCapable(assignment(root, "Unknown.Done := true"), ctx)).toBeNull();
   });
 });

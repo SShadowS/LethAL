@@ -532,6 +532,8 @@ function verifySchemaFixtureEntry(): MutantManifestEntry {
 async function buildVerifyHappyPathOutput() {
   const projectDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-proj-"));
   const instrumentedDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-instr-"));
+  // R-260: the test project sits beside the target; a nested one is refused.
+  const testsDir = mkdtempSync(join(tmpdir(), "lethal-verify-schema-tests-"));
   try {
     writeFileSync(join(projectDir, "app.json"), '{"id":"x"}');
     mkdirSync(join(projectDir, "src"));
@@ -597,7 +599,7 @@ async function buildVerifyHappyPathOutput() {
     });
 
     const out = await runVerify(
-      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: join(projectDir, "tests") },
+      { artifact: manifest.artifactId, survivors: ["0/M0001"], testDir: testsDir },
       {
         store,
         backend: neverCalledBackend(),
@@ -612,6 +614,7 @@ async function buildVerifyHappyPathOutput() {
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(instrumentedDir, { recursive: true, force: true });
+    rmSync(testsDir, { recursive: true, force: true });
   }
 }
 
@@ -690,6 +693,34 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
       "flaky-unknown",
       "infra-error",
     ]);
+  });
+
+  // R-260: v7 added the refusal reason `test-project-nested`. v6 stays as it was published.
+  test("verify-v6.schema.json is kept as published", () => {
+    const v6 = loadSchema("verify-v6.schema.json");
+    expect((v6.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(6);
+    expect(enumAt(v6, "$.newTests[].state")).toContain("not-rerun");
+    expect(enumAt(v6, "$.refused.reason")).not.toContain("test-project-nested");
+  });
+
+  // R259: v8 added `results[].sameProcedure`. v7 stays as it was published.
+  test("verify-v7.schema.json is kept as published", () => {
+    const v7 = loadSchema("verify-v7.schema.json");
+    expect((v7.properties as Record<string, Schema>).verifySchemaVersion?.const).toBe(7);
+    expect(enumAt(v7, "$.refused.reason")).toContain("test-project-nested");
+    expect([...schemaLeafPaths(v7)].some((p) => p.startsWith("$.results[].sameProcedure"))).toBe(
+      false,
+    );
+  });
+
+  // R259: a real v8 output, printed by orchestrator.test.ts's "a probe that fails is alsoKills"
+  // (runVerify through runNamedMutants and the covering loop), validates against v8 and not v7.
+  test("a real v8 output with sameProcedure validates", () => {
+    const real = JSON.parse(
+      readFileSync(join(import.meta.dir, "fixtures", "verify-v8-r259-probe.json"), "utf8"),
+    ) as unknown;
+    expect(conformsTo(verifySchema, real)).toEqual([]);
+    expect(conformsTo(loadSchema("verify-v7.schema.json"), real)).not.toEqual([]);
   });
 
   test("results[].gapId is a declared leaf of the current verify schema", () => {
@@ -848,8 +879,34 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
           verdict: "survived",
           testsRun: ["Sandbox Tests.OverBudgetDetected"],
         },
+        // R259: a row killed by a new test, with what that test alone does to its siblings.
+        {
+          id: "0/M0003",
+          batchIndex: 0,
+          mutantCode: "M0003",
+          file: "Logic.Codeunit.al",
+          line: 10,
+          operatorName: "lethal.negate-conditional",
+          procedureName: "Post",
+          verdict: "killed",
+          testsRun: ["New Tests.OverBudgetDetected"],
+          killingTest: {
+            codeunitId: 79102,
+            codeunitName: "New Tests",
+            method: "OverBudgetDetected",
+          },
+          killedByNewTest: true,
+          killedBy: "other",
+          sameProcedure: {
+            test: { codeunitId: 79102, codeunitName: "New Tests", method: "OverBudgetDetected" },
+            alsoKills: ["0/M0004"],
+            notKilled: ["0/M0002"],
+            unknown: ["0/M0005"],
+            overCap: 1,
+          },
+        },
       ],
-      counts: { killed: 1, survived: 1, error: 0, skipped: 0 },
+      counts: { killed: 2, survived: 1, error: 0, skipped: 0 },
       timings: { totalMs: 1234, compileMs: 200, publishMs: 50 },
     };
     expect(conformsTo(verifySchema, measured)).toEqual([]);
@@ -901,11 +958,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   });
 
   test("R214: the report schema names the two preprocessor exclusion reasons", () => {
+    // R307's `instrumentation-refused` follows them, then R447's `hang-refused`.
     expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
       "not-instrumentable",
       "declarative",
       "compiled-out",
       "preproc-undecided",
+      "instrumentation-refused",
+      "hang-refused",
     ]);
   });
 
@@ -1124,6 +1184,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v11.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "report-v2.schema.json": [
         "authoritative",
         "backend",
@@ -1225,6 +1297,26 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "timings",
         "verifySchemaVersion",
       ],
+      // R-260: the same seven; v7 only grew refused.reason.
+      "verify-v7.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // R259: the same seven; v8 only grew results[].sameProcedure.
+      "verify-v8.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
     });
   });
 
@@ -1272,6 +1364,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "line-narrowed",
         "tests-narrowed",
         "uninstrumentable-files",
+        "files-refused",
         "stale-test-app",
         "tests-permission-refused",
         "tests-testpage-unsupported",
@@ -1362,6 +1455,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v9.schema.json")).toEqual(required("explain-v8.schema.json"));
     // R403's v10 added two caveat values, not a required field.
     expect(required("explain-v10.schema.json")).toEqual(required("explain-v9.schema.json"));
+    // R307's v11 added a caveat value, not a required field.
+    expect(required("explain-v11.schema.json")).toEqual(required("explain-v10.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

@@ -48,6 +48,7 @@ import { itestConfigName, itestConfigPath } from "./config-path";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
+import { armOracleDiffs } from "./r254-arm-oracle";
 import {
   type DirectTransportProbe,
   type ReachControlRun,
@@ -268,7 +269,11 @@ const EXPECTED = {
   // docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md (section 5): 407 sites,
   // 301 / 68 / 18, groupedCalls 369 + 13. The owner updates them, and re-records
   // tables.baseline.json, only after a live run matches that file per mutant.
-  totalMutantSites: 407,
+  // R254 moves this from 407 to 422: `reportextension 79341 "Data Band Ext"`
+  // (`src/DataBandExt.ReportExt.al`) is instrumented for the first time, 15 deployed mutants, none
+  // displaced. Pre-committed in docs/superpowers/specs/2026-10-05-r254-reportextension-arm-precommitment.md
+  // and checked row by row by `assertArmOracle` (`r254-arm-oracle.ts`).
+  totalMutantSites: 422,
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
@@ -374,7 +379,9 @@ const EXPECTED = {
   // kill. That is deliberate rather than lucky -- every covering test drives BOTH sides of its
   // blank check, so a toggled literal cannot pass by accident on whichever input a test happened to
   // pick. A survivor here would mean a test that does not actually separate the two states.
-  killed: 301,
+  // R254 moves this from 301 to 310: nine of the reportextension arm's 15 mutants are killed, by
+  // `BandClassifiesDirectly` (the `Band` procedure) and `BandReportSumsBands` (the report run).
+  killed: 310,
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
@@ -457,7 +464,9 @@ const EXPECTED = {
   // R159's `shift-integer` moves this from 60 to 63: the same three `Data Commit Ops` arms every
   // value-mutating operator survives, whose tests assert the row exists and that `Flagged` is set
   // and never read `Amount`.
-  survived: 68,
+  // R254 moves this from 68 to 70: the arm's `Total := 0` in `OnPreReport` (its `empty-block` and
+  // `remove-assignment`) is equivalent, since `Total` already starts at 0.
+  survived: 70,
   // R78 moved this from 6 to 9. The three new sites all belong to the TestPage-only pair
   // (`Data Value Source` / `Data Value Card`), and all three land `no-coverage` because the one
   // test that reaches them is refused on the fenced path. That is the measured statement of the
@@ -496,7 +505,9 @@ const EXPECTED = {
   // that would cover it was removed after wedging the fenced session twice.
   // R159's `remove-assignment` moves this from 12 to 15: three of its sites sit in procedures no
   // test calls.
-  noCoverage: 18,
+  // R254 moves this from 18 to 22: the arm's `Unreached` procedure, which no test calls (M1
+  // measured no coverage row for it), is its no-coverage control.
+  noCoverage: 22,
   // 183 / 214 does not reduce (183 is 3 x 61, 214 is 2 x 107). It is about 0.8551, DOWN from
   // 0.8626: a wave that adds six deliberate survivors is SUPPOSED to move the score down, and a
   // score that rose instead would mean the survivors did not arrive.
@@ -523,7 +534,8 @@ const EXPECTED = {
   // of nineteen kills and no survivors raises it. Fully DERIVED from the killed and survived counts
   // pre-committed before the run, not an independent claim -- though the pre-commitment should have
   // said so explicitly and did not, which cost a re-run.
-  mutationScore: 301 / (301 + 68),
+  // R254 moves it to 310 / 380, about 0.81579 from 0.81572: nine kills against two survivors.
+  mutationScore: 310 / (310 + 70),
   /**
    * R72, extended by R138: the screen must fire, and on exactly these mutants under exactly these
    * mechanisms.
@@ -545,8 +557,22 @@ const EXPECTED = {
    * second member there would mean the detector had started claiming the STATEMENT form of
    * `Codeunit.Run`, the shape measured to survive and the false prediction R72 spent a probe
    * correcting.
+   *
+   * R281 TOOK THIS FROM 2 TO 3: `swap-modify-flag`'s Delete mutants now declare
+   * `run-trigger-skipped-delete` unless the skipped OnDelete is proven harmless. Arm C
+   * (`DeleteWithTrigger`) gains it because `Data Trigger Probe`'s OnDelete inserts a tombstone row.
+   * That is a named OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
+   * docs/superpowers/specs/2026-10-05-r281-delete-tag-precommitment.md before the run.
+   *
+   * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
+   * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
+   * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
+   * mutant that gains it is M0238 (M0223 before R254's arm shifted codes by 15;
+   * `Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
+   * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
+   * docs/superpowers/specs/2026-10-05-r457-forced-tag-precommitment.md before the run.
    */
-  platformArtifactKills: 2,
+  platformArtifactKills: 4,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -591,8 +617,10 @@ const EXPECTED = {
    * R198: one `RunMutantMany` call per mutant that reached the covering loop: 299 killed + 63
    * survived; the 15 no-coverage never reach it, and 299 + 63 + 15 = 377 deployed leaves no other
    * outcome to account for. A number, not a predicate, for the reason bcdev's 15 is one.
+   * R254: 310 killed + 70 survived scored, plus 15 warm-kill replays (the arm's 11 scored mutants
+   * and its two warm kills, M0005 and M0009).
    */
-  groupedCalls: 369 + 13,
+  groupedCalls: 380 + 15,
   /**
    * R206: kills measured at group position > 1, each confirmed by replaying its call's prefix
    * unmutated (one extra `RunMutantMany` each, hence the `+ 13` above). MEASURED from run 334's
@@ -601,12 +629,19 @@ const EXPECTED = {
    * session-scoped state, so these are an ORDER fact (the killer is not always first in the
    * ledger's order), which is why three named positions are pinned below as well: the field must
    * measure the order and not which confirmation branch ran.
+   *
+   * R254 moves this from 13 to 15: the arm's first kill in each report-extension trigger (M0005 in
+   * the `modify` trigger, M0009 in `OnPreReport`) runs after `BandClassifiesDirectly` (1 member,
+   * covers the object, passes), so both are at position 2. The arm sorts before `DataMain.Table.al`,
+   * so the three older pins move +15 (M0160/M0164/M0156 -> M0175/M0179/M0171), same mutants.
    */
-  warmKills: 13,
+  warmKills: 15,
   killPositions: [
-    { mutantCode: "M0160", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
-    { mutantCode: "M0164", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
-    { mutantCode: "M0156", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+    { mutantCode: "M0175", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
+    { mutantCode: "M0179", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
+    { mutantCode: "M0171", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+    { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 2 },
+    { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 2 },
   ],
   /**
    * Task 4 (excluded-sites-spine): the `notInstrumented` half's ONLY live proof, added because it
@@ -1033,8 +1068,13 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(screen.killedCount, EXPECTED.platformArtifactKills, "screened-kill count mismatch");
   assert.deepEqual(
     screen.byMechanism.map((g) => g.mechanism),
-    ["run-trigger-skipped-insert", "write-txn-codeunit-run"],
-    "both mechanisms must be present and named — R138 added the second, and the report sorts them",
+    [
+      "run-trigger-forced",
+      "run-trigger-skipped-delete",
+      "run-trigger-skipped-insert",
+      "write-txn-codeunit-run",
+    ],
+    "all four mechanisms must be present and named — R138 added Insert, R281 Delete, R457 forced, and the report sorts them",
   );
   const groupOf = (mechanism: string) => {
     const g = screen.byMechanism.find((x) => x.mechanism === mechanism);
@@ -1068,8 +1108,8 @@ function assertVerdictTable(report: SessionReport): void {
   // Mechanism 2, R138. Pinned BY MUTANT, because a count of two is satisfied by the wrong two: the
   // fixture has three `Insert(true)` sites and the interesting fact is exactly WHICH of them the
   // screen holds — arms A and K (both killed), never arm B (which survives, and a survivor at such
-  // a site is just a survivor), and never the `Delete` or either `Modify` site, which the R138
-  // ruling says get no mechanism at all.
+  // a site is just a survivor), and never the `Delete` site (R281 gives it its own mechanism, below)
+  // or a `Modify` site (R452's skipped-modify mechanism finds no unproven site on this fixture).
   const insertGroup = groupOf("run-trigger-skipped-insert");
   const insertScreened = insertGroup.mutants.map(mutantOf);
   assert.equal(insertScreened.length, 1, "the Insert mechanism screens exactly one kill");
@@ -1102,7 +1142,66 @@ function assertVerdictTable(report: SessionReport): void {
       "refusing a table it can resolve, which is the direction that credits a platform refusal to " +
       "the suite",
   );
-  // The two mechanisms must not share one explanation: the reader would be told a duplicate-key
+  // Mechanism 3, R281. Pinned BY MUTANT: the fixture's only `Delete(true)` site is arm C, killed.
+  const deleteGroup = groupOf("run-trigger-skipped-delete");
+  const deleteScreened = deleteGroup.mutants.map(mutantOf);
+  assert.deepEqual(
+    deleteScreened.map((m) => [m.operatorName, m.procedureName, m.verdict]),
+    [["lethal.swap-modify-flag", "DeleteWithTrigger", "killed"]],
+    "the ONE screened Delete kill is arm C (an over-tag: its OnDelete inserts a tombstone and the " +
+      "kill is assertion-earned). It disappearing means the detector dropped the tag on an OnDelete " +
+      "that writes another row, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
+  );
+  assert.ok(
+    /\.?delete\s*\(\s*true/i.test(deleteScreened[0]?.originalText ?? ""),
+    "the screened Delete mutant must be at a Delete(true) site",
+  );
+  assert.ok(
+    deleteGroup.explanation.includes("Delete(false)"),
+    "the Delete mechanism must explain ITS own mechanism",
+  );
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0238, an over-tag.
+  // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
+  const forcedGroup = groupOf("run-trigger-forced");
+  const forcedScreened = forcedGroup.mutants.map(mutantOf);
+  assert.deepEqual(
+    forcedScreened.map((m) => [
+      m.operatorName,
+      m.procedureName,
+      m.verdict,
+      m.killingTest,
+      m.file,
+      m.line,
+    ]),
+    [
+      [
+        "lethal.flip-boolean-literal",
+        "InsertWithoutTrigger",
+        "killed",
+        "InsertWithoutTriggerKeepsAmount",
+        "src/DataOps.Codeunit.al",
+        96,
+      ],
+    ],
+    "the ONE screened forced kill is M0238 (Insert(false)->true, an over-tag: its test raises its own " +
+      "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
+      "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
+  );
+  assert.ok(
+    // flip-boolean-literal's span is the literal alone, so the forcing direction reads false -> true.
+    (forcedScreened[0]?.originalText ?? "").trim().toLowerCase() === "false",
+    "the screened forced mutant must flip the RunTrigger literal false -> true",
+  );
+  assert.ok(
+    forcedGroup.explanation.includes("RUN where it did not"),
+    "the forced mechanism must explain ITS own mechanism",
+  );
+  assert.notEqual(
+    forcedGroup.explanation,
+    groupOf("run-trigger-skipped-insert").explanation,
+    "the forced and skipped-Insert mechanisms must not share one explanation",
+  );
+  // The mechanisms must not share one explanation: the reader would be told a duplicate-key
   // artifact was measured on Cronus281 as a write-transaction abort.
   assert.ok(
     insertGroup.explanation.includes("duplicate primary key"),
@@ -1297,9 +1396,11 @@ async function assertTriggerKillAndSurvive(
   // the manifest (which comes from the AL parse) while surviving any object kind the fixture grows.
   for (const t of triggers) {
     const source = await readFile(join(PROJECT_DIR, "src", basename(t.entry.file)), "utf8");
-    const header = /^\s*(table|codeunit|page|report|tableextension|pageextension)\s+\d+/im.exec(
-      source,
-    );
+    // R254: `reportextension` too, or the arm's first trigger mutant (M0005) fails here.
+    const header =
+      /^\s*(table|codeunit|page|report|tableextension|pageextension|reportextension)\s+\d+/im.exec(
+        source,
+      );
     assert.ok(
       header !== null,
       `${t.code}: cannot read an object header out of ${t.entry.file}, so its attribution cannot be checked — and passing without checking is what this assertion exists to prevent`,
@@ -1503,6 +1604,16 @@ function assertAssertionScreenTwinPair(
 }
 
 /**
+ * R254: the 15 mutants of `src/DataBandExt.ReportExt.al` against the oracle pre-committed in
+ * docs/superpowers/specs/2026-10-05-r254-reportextension-arm-precommitment.md (verdict, killer,
+ * kill position, failure text, by file+line+operator). A difference is a BLOCK, not a re-record.
+ */
+function assertArmOracle(report: SessionReport): void {
+  const diffs = armOracleDiffs(report.mutants);
+  assert.deepEqual(diffs, [], `R254 arm oracle:\n${diffs.join("\n")}`);
+}
+
+/**
  * R134: the six `lethal.flip-filter-literal` sites, pinned by TEXT and by the verdict of the
  * `void-method-call` sharing each span.
  *
@@ -1677,6 +1788,9 @@ async function main(): Promise<void> {
     // R134: the six flip-filter-literal arms, their texts, and the pairing with each span's
     // void-method-call: the wave's discrimination claim, which no baseline row can express.
     assertFilterLiteralEvidence(first.report);
+    // R254: the reportextension arm against its pre-committed oracle, BEFORE the baseline, so a
+    // record run that disagrees never writes tables.baseline.json.
+    assertArmOracle(first.report);
     // Per-mutant regression guard against the committed baseline, keyed on semantic identity
     // (astHash/codeunitName/operatorName/operatorMajor) rather than mutant code — so it survives
     // renumbering that the EXPECTED.verdicts map above deliberately does not.
@@ -1690,6 +1804,7 @@ async function main(): Promise<void> {
     );
     assertTrioTextEvidence(second.report);
     assertFilterLiteralEvidence(second.report);
+    assertArmOracle(second.report);
 
     // GH-24 Task 6: the live reach control, pre-committed in
     // docs/superpowers/specs/2026-09-25-gh24-reach-control-precommitment.md. The baseline probes run

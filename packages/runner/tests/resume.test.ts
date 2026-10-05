@@ -29,7 +29,7 @@ import {
   sessionFingerprint,
   wasStranded,
 } from "../src/resume";
-import type { SessionFingerprintInput } from "../src/resume";
+import type { ResumeIndex, SessionFingerprintInput } from "../src/resume";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
@@ -270,10 +270,23 @@ function row(over: Partial<MutantVerdictRow> = {}): MutantVerdictRow {
     procedureName: "Post",
     operatorName: "lethal.negate-conditional",
     operatorMajor: 1,
+    file: "src/SandboxLogic.Codeunit.al",
     identityOrdinal: 0,
     verdict: "survived",
     durationMs: 42,
     ...over,
+  };
+}
+
+/** R391: `index` under rule 1 (the recorded run had this session's source), so the tests below
+ *  exercise the key lookup they were written for. */
+function sameSource(index: ResumeIndex): ResumeIndex {
+  return {
+    ...index,
+    carryRule: {
+      recorded: { hash: "same", twins: null },
+      current: { hash: "same", twins: new Set(), refused: new Set() },
+    },
   };
 }
 
@@ -381,8 +394,8 @@ describe("buildResumeIndex (R47)", () => {
     expect(index.carryable.size).toBe(1);
     const first = manifestEntry("hash-a");
     const second = { ...manifestEntry("hash-a"), mutantId: "M-second", identityOrdinal: 1 };
-    expect(carriedVerdictFor(index, first)?.verdict).toBe("killed");
-    expect(carriedVerdictFor(index, second)).toBeUndefined();
+    expect(carriedVerdictFor(sameSource(index), first)?.verdict).toBe("killed");
+    expect(carriedVerdictFor(sameSource(index), second)).toBeUndefined();
     expect(wasStranded(index, first)).toBe(false);
     expect(wasStranded(index, second)).toBe(true);
   });
@@ -458,7 +471,21 @@ describe("sessionFingerprint (R47)", () => {
   // it was 25fdc64a...3be4f under scheme 4. It moved again for R418 (scheme 6); it was
   // ef3bb9d1...daf5 under scheme 5. It moved again for R421 (scheme 7); it was b3f6072b...0c0e
   // under scheme 6. It moved again for R405 (scheme 8); it was 5c8357ec...0c4b under scheme 7.
-  const PINNED = "cf9df227106f6e473fbd6dd68acd370e5df846497434036fd0232459bff428d7";
+  // It moved again for R307 (scheme 9, R374's run-wide ordinals); it was cf9df227...28d7 under
+  // scheme 8. It moved again for R196 (scheme 10, refused loop-exit sites); it was
+  // eab8b0ef...5539 under scheme 9. It moved again for R295/R294 (scheme 11); it was
+  // 64769073...984e under scheme 10. It moved again for R455 (scheme 13); it was 667cd9c9...02aa
+  // under scheme 11. It moved again for R454 (scheme 14, more refused loop-exit sites); it was
+  // b5155ac2...1864 under scheme 13. It moved again for R-364 (scheme 16, hang refusal by name in
+  // an unindexed object); it was a721384a...f23c under scheme 14. It moved again for R254 (scheme
+  // 17, reportextensions instrumented); it was 961d7a41...3b65 under scheme 16. It moved again for
+  // R-458 (scheme 18, hang refusal by name through `with` subjects and implicit records); it was
+  // f6e4a1c6...c971 under scheme 17. It moved again for R468 (scheme 19, every object-level var
+  // section is globals); it was 44f5ea54...3e7a under scheme 18. It moved again for R459 (scheme
+  // 21, a two-argument Insert's Booleans flipped); it was 869bd1ae...68cd9 under scheme 19. It
+  // moved again for R-464 (scheme 22, one implicit-record resolver); it was 6aab8fc7...be41 under
+  // scheme 21.
+  const PINNED = "06081a494e516555c2a16ff9120ec8955c0b59b7ff5e79c28b7c1adb7aa8f571";
   test("a run with no exclusions adds nothing to the digest", () => {
     expect(sessionFingerprint(base)).toBe(PINNED);
   });
@@ -782,6 +809,7 @@ describe("ResultsStore resume queries (R47)", () => {
         procedureName: "Post",
         operatorName: "op",
         operatorMajor: 2,
+        file: "f.al",
         identityOrdinal: 0,
         verdict: "killed",
         killingTest: "T",
@@ -1360,11 +1388,13 @@ describe("runSession --resume (R47)", () => {
   test("R192: a batch whose carried rows predate the coverage columns is deployed as before", () => {
     // A pre-R192 database holds verdicts without covering tests. Skipping on those would record
     // a carried survivor with an invented empty list, so the batch takes the ordinary path.
-    const withFacts = buildResumeIndex(
-      [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
-      false,
+    const withFacts = sameSource(
+      buildResumeIndex(
+        [row({ astHash: "a", coveringTests: ["T.one"], coverageAttribution: "exact" })],
+        false,
+      ),
     );
-    const withoutFacts = buildResumeIndex([row({ astHash: "a" })], false);
+    const withoutFacts = sameSource(buildResumeIndex([row({ astHash: "a" })], false));
     const mutant = manifestEntry("a");
     expect(batchCarriesEntirely(withFacts, [mutant], false)).toBe(true);
     expect(batchCarriesEntirely(withoutFacts, [mutant], false)).toBe(false);
@@ -1944,6 +1974,17 @@ describe("R325: no verdict crosses an identity-scheme change", () => {
       ...dirs,
       selectorIds,
     });
+    // Pinned by value so a bump is deliberate: 22 since R-464 (one implicit-record resolver: page
+    // and TableNo `Rec`, dataitems and `with` subjects resolve); 21 was R459 (a two-argument
+    // Insert's Booleans are flipped; 20 is unused); 19 was R468 (every object-level var section is
+    // globals); 18 was R-458 (hang refusal by name through `with` subjects and implicit records);
+    // 17 was R254 (reportextensions instrumented); 16
+    // was R-364 (hang refusal by name inside an unindexed object; 15 was reserved for R-254 and is
+    // unused); 14 was R454 (more refused loop-exit sites); 13 was R455 (field-designator swaps,
+    // calls in a record scope, case-only pairs removed; 12 was reserved for R254 and is unused); 11
+    // was R295/R294 (every name of `A, B: T`, member receivers); 10 was R196 (refused loop-exit
+    // sites move twins).
+    expect(IDENTITY_SCHEME).toBe(22);
     expect(report.identityScheme).toBe(IDENTITY_SCHEME);
   });
 
@@ -2529,9 +2570,8 @@ class R318Backend implements ExecutionBackend {
 
 describe("R318: a resume across R318 re-scores a renamed member instead of keeping no-coverage", () => {
   test("carriedVerdictFor: a no-coverage row does not carry onto a mutant with coverageArmNames", () => {
-    const index = buildResumeIndex(
-      [row({ astHash: "h-r", procedureName: "", verdict: "no-coverage" })],
-      false,
+    const index = sameSource(
+      buildResumeIndex([row({ astHash: "h-r", procedureName: "", verdict: "no-coverage" })], false),
     );
     const base = { ...manifestEntry("h-r"), procedureName: "" };
     expect(
@@ -2540,9 +2580,8 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     // Controls: the same row onto an entry without the field still carries, and a kill on a
     // renamed member still carries (a kill is a measurement whatever attributed it).
     expect(carriedVerdictFor(index, base)?.verdict).toBe("no-coverage");
-    const killed = buildResumeIndex(
-      [row({ astHash: "h-k", procedureName: "", verdict: "killed" })],
-      false,
+    const killed = sameSource(
+      buildResumeIndex([row({ astHash: "h-k", procedureName: "", verdict: "killed" })], false),
     );
     expect(
       carriedVerdictFor(killed, {

@@ -26,7 +26,7 @@ describe("R-278: testDigestsOfSources", () => {
   test("a digest is recorded for every discovered test, keyed by codeunit id and lowercased method", () => {
     const d = digests(unit(A + B));
     expect(Object.keys(d).sort()).toEqual(["50100::a", "50100::b"]);
-    expect(d["50100::a"]).toMatch(/^v2:[0-9a-f]{64}$/);
+    expect(d["50100::a"]).toMatch(/^v3:[0-9a-f]{64}$/);
     expect(testDigestKey({ codeunitId: 50100, method: "MyTest" })).toBe(
       testDigestKey({ codeunitId: 50100, method: "mytest" }),
     );
@@ -163,7 +163,7 @@ ${procs}}
   /** The edit turns A new, and an unreached edit does not (A is not on the fallback). */
   function expectReached(files: Files, path: string, from: string, to: string): void {
     const was = digestA(files);
-    expect(was).toMatch(/^v2:/);
+    expect(was).toMatch(/^v3:/);
     expect(digestA(edit(files, path, from, to))).not.toBe(was);
     expect(digestA(unrelated(files))).toBe(was);
   }
@@ -747,5 +747,78 @@ codeunit 50120 "Sub"
       },
     );
     expectReached(files, "Lib.al", "G := 2;", "G := 3;");
+  });
+
+  // R466: a TableNo codeunit's implicit `Rec` exists in its OnRun only (alc AL0118 elsewhere).
+  describe("R466: a TableNo codeunit's Rec is its OnRun's alone", () => {
+    const RUNNER = (onRun: string, procs = "") => `codeunit 50140 "Runner"
+{
+    TableNo = "TT";
+
+    trigger OnRun()
+    begin
+${onRun}
+    end;
+${procs}}
+`;
+    const TOUCHED = TABLE(
+      "",
+      "    procedure Touch()\n    begin\n        Marks := 1;\n    end;\n\n    var\n        Marks: Integer;\n",
+    );
+
+    // Over-applied fix (no implicit Rec in a codeunit at all): OnRun's `Rec.Touch()` loses its edge.
+    test("Rec in OnRun is still typed through TableNo", () => {
+      const files = base(
+        T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Runner");\n    end;\n'),
+        { "Runner.al": RUNNER("        Rec.Touch();"), "TT.al": TOUCHED },
+      );
+      expectReached(files, "TT.al", "Marks := 1;", "Marks := 2;");
+    });
+
+    // Missing fix: Go's bare `Rec` resolves to TT through TableNo, so Touch is reached from Go.
+    test("Rec in another procedure is not typed through TableNo", () => {
+      const files = base(
+        T(
+          '    procedure A()\n    var\n        L: Codeunit "Runner";\n    begin\n        L.Go();\n    end;\n',
+        ),
+        {
+          "Runner.al": RUNNER(
+            "",
+            "\n    procedure Go()\n    begin\n        Rec.Touch();\n    end;\n",
+          ),
+          "TT.al": TOUCHED,
+        },
+      );
+      const was = digestA(files);
+      expect(was).toMatch(/^v3:/);
+      expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // Go itself IS reached, so the line above is not passing because Go fell out of the walk.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
+    });
+
+    // A codeunit's `triggers` holds EVERY trigger it declares (an install codeunit's
+    // `OnInstallAppPerCompany`, for one), not only OnRun. Wrong fix "any trigger": the install
+    // trigger's `Rec.Touch()` reaches TT through the id fold `Codeunit::"Runner"` triggers.
+    test("Rec in a trigger other than OnRun is not typed through TableNo", () => {
+      const files = base(
+        T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Runner");\n    end;\n'),
+        {
+          "Runner.al": RUNNER(
+            "",
+            "\n    trigger OnInstallAppPerCompany()\n    begin\n        Rec.Touch();\n    end;\n",
+          ),
+          "TT.al": TOUCHED,
+        },
+      );
+      const was = digestA(files);
+      expect(was).toMatch(/^v3:/);
+      expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // The install trigger IS walked, so the line above is not passing because it fell out.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
+    });
   });
 });

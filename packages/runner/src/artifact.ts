@@ -1,4 +1,4 @@
-import { readFile, rename } from "node:fs/promises";
+import { readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import type { DeploymentVerification, PublishOutcome } from "./deployment-verifier";
@@ -14,6 +14,22 @@ export class AlcCompileError extends Error {}
 
 /** Any failure that is not a compiler verdict: spawn, I/O, manifest inconsistency. */
 export class ArtifactPrepareError extends Error {}
+
+/**
+ * R461: alc rejected the batch's instrumented build, and then rejected LethAL's staged copy of the
+ * UNMUTATED target too. States that observation and alc's own output, nothing more: staging stamps
+ * `app.json`, flattens paths and rebases resources, so this claims neither broken source nor an
+ * environment fault. Extends `Error` DIRECTLY: bisection reads only `AlcCompileError` as "this
+ * subset does not compile", and this is not a subset answer.
+ */
+export class UnmutatedBuildFailedError extends Error {
+  constructor(alcError: AlcCompileError) {
+    super(
+      `alc rejected LethAL's staged copy of the unmutated target, using this compiler and package cache. No mutant was in that build, so no mutant is blamed and the run stops here. alc's output:\n${alcError.message}`,
+    );
+    this.name = "UnmutatedBuildFailedError";
+  }
+}
 
 /**
  * A deployment whose outcome is not `accepted`: the publish failed, or identity verification
@@ -197,7 +213,11 @@ export class ArtifactCompiler {
     packageCachePath: string,
     name: string,
   ): Promise<{ readonly appPath: string; readonly sha256: string }> {
-    const scratch = toForwardSlashes(join(this.cfg.outputDir, `${name}.app`));
+    // R461: a scratch path this call alone owns, so the failure cleanup below can never delete a
+    // concurrent same-name call's output or an earlier artifact whose file name is `${name}.app`.
+    const scratch = toForwardSlashes(
+      join(this.cfg.outputDir, `${name}.${crypto.randomUUID()}.partial.app`),
+    );
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
@@ -215,9 +235,25 @@ export class ArtifactCompiler {
         `could not run alc (${this.cfg.alcPath}): ${describeThrown(err)}`,
       );
     }
+    try {
+      return await this.placeOutput(res, scratch, name);
+    } catch (err) {
+      // R461: a failed compile or placement can leave alc's partial output; removed best-effort,
+      // never masking the original error.
+      await rm(scratch, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  private async placeOutput(
+    res: { exitCode: number; stdout: string; stderr: string },
+    scratch: string,
+    name: string,
+  ): Promise<{ readonly appPath: string; readonly sha256: string }> {
     if (res.exitCode !== 0) {
+      // R461: BOTH streams, labelled. `stderr || stdout` let a stderr warning hide a stdout error.
       throw new AlcCompileError(
-        `alc compile failed (exit ${res.exitCode}):\n${res.stderr || res.stdout}`,
+        `alc compile failed (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
       );
     }
 

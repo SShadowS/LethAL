@@ -152,7 +152,7 @@ if (projectDir === undefined || projectDir.startsWith("--"))
   throw new Error("usage: r214-capture.ts <project> [--symbols A,B]");
 const symbolsArg = flag("--symbols");
 const symbols = symbolsArg === undefined || symbolsArg === "" ? [] : symbolsArg.split(",");
-const { generateMutationSet, operatorTiers } = await import(
+const { generateMutationSet, identityOrdinalsOf, operatorTiers } = await import(
   `${repo}/packages/runner/src/orchestrator`
 );
 const { identityKeyOf, serializeKey } = await import(`${repo}/packages/runner/src/selection`);
@@ -160,27 +160,20 @@ const { writeInstrumentedProject } = await import(`${repo}/packages/schemata/src
 
 const out = await mkdtemp(join(tmpdir(), "r214-sites-"));
 const set = await generateMutationSet(projectDir, { preprocessorSymbols: symbols });
-// Loaded by dynamic import, so `bun run typecheck` never sees this call. R-307 (the code lane) makes
-// an `identityOrdinals` option required; until this script passes it, say so instead of crashing
-// with an unexplained TypeError.
-try {
-  await writeInstrumentedProject({
-    targetDir: out,
-    files: set.files,
-    selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
-    artifactId: "0123456789abcdef0123456789abcdef",
-    targetAppId: "00000000-0000-0000-0000-000000000000",
-    operatorTiers,
-  });
-} catch (err) {
-  if (err instanceof TypeError || /identityOrdinals/.test(String(err))) {
-    throw new Error(
-      `scripts/r214-capture.ts: writeInstrumentedProject failed, most likely because R-307 made an option this script does not pass (identityOrdinals) required. Update this script for R-307; it does not support it yet. Cause: ${String(err)}`,
-      { cause: err },
-    );
-  }
-  throw err;
-}
+// Loaded by dynamic import, so `bun run typecheck` never sees this call. A repo with R-307 requires
+// run-wide `identityOrdinals` (numbered by `identityOrdinalsOf`, the same call `runSession` makes);
+// a repo between R374 and R400 returns them on the set; a repo without R374 has neither, and
+// numbers per file inside the writer.
+const identityOrdinals = identityOrdinalsOf?.(set) ?? set.identityOrdinals;
+await writeInstrumentedProject({
+  targetDir: out,
+  files: set.files,
+  ...(identityOrdinals !== undefined ? { identityOrdinals } : {}),
+  selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+  artifactId: "0123456789abcdef0123456789abcdef",
+  targetAppId: "00000000-0000-0000-0000-000000000000",
+  operatorTiers,
+});
 const m = JSON.parse(await readFile(join(out, "mutant-manifest.json"), "utf8"));
 const raw = set.files.reduce((n: number, f: { specs: unknown[] }) => n + f.specs.length, 0);
 console.log(`raw ${raw} deployed ${m.mutants.length} skippedFiles ${set.skipped.length}`);

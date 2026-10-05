@@ -28,7 +28,11 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateMutationSet, operatorTiers } from "../packages/runner/src/orchestrator";
+import {
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+} from "../packages/runner/src/orchestrator";
 import { writeInstrumentedProject } from "../packages/schemata/src/project";
 
 interface CensusMutant {
@@ -64,6 +68,7 @@ export async function censusMutants(projectDir: string): Promise<readonly Census
     await writeInstrumentedProject({
       targetDir: target,
       files: set.files,
+      identityOrdinals: identityOrdinalsOf(set),
       selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
       artifactId: "00000000000000000000000000000000",
       targetAppId: appJson.id,

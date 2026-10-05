@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/verify-v7.schema.json",
+  "title": "lethal verify output",
+  "description": "What `lethal verify --artifact <id> --survivors <ids> --tests <dir> --db <path>` prints on stdout (C02-06 decision 7). Versioned by verifySchemaVersion: bumped when a field is renamed, removed or changes meaning, or when a value domain changes in either direction. Additive fields do not bump it, so a consumer must tolerate properties it does not know. `ok` mirrors `exitCode === 0`; the exit code, not this document, is the gate. Version 2 (C02-09) added the refused.reason values unknown-gap and gap-has-no-survivor, and results[].gapId; --survivors also takes gap ids. Version 3 (R354) added the refused.reason value coverage-mode-changed. Version 4 (R-371) added the refused.reason values too-many-new-tests and dependency-unreadable; --max-new-tests sets the first one's limit. Version 5 (R-425) added reachFilter and results[].reachNarrowed, the R-384 reach filter's state. It bumps although the fields are additive because their ABSENCE means \"not decided\" only from version 5 on; in an older document it means the document predates the record, and the version is the only way to tell the two apart. Read a document below version 5 as unknown, never as filter off. Version 6 (R-427) added the newTests[].state value not-rerun: a new test the reach filter sent to no survivor runs its baseline only, so its runs hold one entry and its stability is unknown. It does not block exit 0, since it gated no verdict. Version 7 (R-260) added the refused.reason value test-project-nested: the test project lies inside the target project (so the target build compiles it), contains it, or cannot be resolved to a real path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verifySchemaVersion", "ok", "exitCode", "newTests", "results", "counts", "timings"],
+  "properties": {
+    "verifySchemaVersion": {
+      "type": "integer",
+      "const": 7,
+      "description": "The version of THIS document's structure."
+    },
+    "reachFilter": {
+      "type": "object",
+      "description": "R-425: whether R-384's reach filter ran (it sends a new test only to the survivors its coverage reaches), and when not, why. Present whenever verify got past the coverage-mode-changed check, including a later refusal. Absent = not decided: verify stopped before deciding (malformed-request, unknown-artifact, not-a-survivor, coverage-mode-changed, and the other early refusals). Never read absence as off.",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "type": "string", "enum": ["on", "off"] },
+        "reason": {
+          "type": "string",
+          "description": "Present exactly when state is off. coverage-mode-al-runner cannot occur today (verify runs on bcdev only).",
+          "enum": [
+            "no-reach-filter",
+            "coverage-mode-none",
+            "coverage-mode-procedure",
+            "coverage-mode-line",
+            "coverage-mode-al-runner"
+          ]
+        }
+      }
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "True only when exitCode is 0: every non-skipped survivor killed, and every new test stable or not-rerun."
+    },
+    "exitCode": {
+      "type": "integer",
+      "description": "0 ok, 3 quarantined, 4 nothing measured, 5 not all killed, 6 refused, 1 an uncaught failure. Precedence 3, 6, 4, 5, 0."
+    },
+    "source": {
+      "type": "object",
+      "description": "Present once the request resolved to a source run and artifact, even on a LATER refusal (source-changed, no-tests-to-run, and the rest of the post-resolution refusals all carry this).",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "batchIndex",
+        "artifactId",
+        "artifactSha256",
+        "sourceSha256",
+        "projectPath"
+      ],
+      "properties": {
+        "runId": { "type": "integer" },
+        "batchIndex": { "type": "integer" },
+        "artifactId": {
+          "type": "string",
+          "description": "The id the request named; the source has none of its own."
+        },
+        "artifactSha256": { "type": "string" },
+        "sourceSha256": { "type": "string" },
+        "projectPath": {
+          "type": "string",
+          "description": "The source run's project path, resolved against the current directory."
+        }
+      }
+    },
+    "verifyRunId": {
+      "type": "integer",
+      "description": "Absent when every survivor was skipped: verify never opens a run row for a call that measures nothing. Never finished, never resumable, never history."
+    },
+    "testApp": {
+      "type": "object",
+      "description": "The SERVER's read-back identity of the published test app, never the local compile's.",
+      "additionalProperties": false,
+      "required": ["name", "version", "sha256", "compiledAgainst"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "sha256": { "type": "string" },
+        "compiledAgainst": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["artifactId", "sha256"],
+          "properties": {
+            "artifactId": { "type": "string" },
+            "sha256": { "type": "string" }
+          }
+        }
+      }
+    },
+    "newTests": {
+      "type": "array",
+      "description": "Every test discovered in the test project that the source run's baseline does not name, one entry per test regardless of which survivor(s) it joined.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test", "codeunitId", "state", "runs"],
+        "properties": {
+          "test": { "type": "string", "description": "Qualified Codeunit.Method." },
+          "codeunitId": { "type": "integer" },
+          "state": {
+            "type": "string",
+            "description": "not-rerun (R-427): passed its one baseline run in a fresh session, and was not rerun because the reach filter sent it to no survivor; stability unknown, never stable.",
+            "enum": ["stable", "flaky", "red", "flaky-unknown", "infra-error", "not-rerun"]
+          },
+          "runs": {
+            "type": "array",
+            "description": "[baseline, rerun], both unmutated; [baseline] alone when state is not-rerun.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["outcome", "fresh"],
+              "properties": {
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "skip",
+                    "timeout",
+                    "deadline-exceeded",
+                    "error",
+                    "not-run"
+                  ]
+                },
+                "fresh": { "type": "boolean" },
+                "sessionId": { "type": "integer" },
+                "testRunsBefore": { "type": "integer" }
+              }
+            }
+          },
+          "failure": { "type": "string", "description": "The first failing run's text." }
+        }
+      }
+    },
+    "results": {
+      "type": "array",
+      "description": "One entry per requested survivor id, in request order, including a skipped one. A gap id stands for its survivors, which follow the ids named directly, in gap order.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "batchIndex",
+          "mutantCode",
+          "file",
+          "line",
+          "operatorName",
+          "procedureName",
+          "verdict"
+        ],
+        "properties": {
+          "id": { "type": "string", "description": "<batchIndex>/<mutantCode>." },
+          "batchIndex": { "type": "integer" },
+          "mutantCode": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "operatorName": { "type": "string" },
+          "procedureName": { "type": "string" },
+          "gapId": {
+            "type": "string",
+            "description": "The manifest entry's gap id, whether the mutant was named directly or through a gap. Absent only when the installed manifest predates gap ids."
+          },
+          "verdict": { "type": "string", "enum": ["killed", "survived", "error", "skipped"] },
+          "testsRun": {
+            "type": "array",
+            "description": "Qualified names sent to runNamedMutants.",
+            "items": { "type": "string" }
+          },
+          "notRun": {
+            "type": "array",
+            "description": "R-236c: qualified names of requested methods not sent, each with a reachable call that may open a TestPage.",
+            "items": { "type": "string" }
+          },
+          "invalidBaseline": {
+            "type": "array",
+            "description": "Requested methods without a valid green unmutated run; the mutant is then error.",
+            "items": { "type": "string" }
+          },
+          "killingTest": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["codeunitId", "codeunitName", "method"],
+            "properties": {
+              "codeunitId": { "type": "integer" },
+              "codeunitName": { "type": "string" },
+              "method": { "type": "string" }
+            }
+          },
+          "killedByNewTest": {
+            "type": "boolean",
+            "description": "By testKeyOf, never by method name."
+          },
+          "killedBy": {
+            "type": "string",
+            "description": "What raised the killing failure, from its text. Reported, never gating.",
+            "enum": ["assertion", "runtime-error", "other"]
+          },
+          "killingTestFailure": { "type": "string" },
+          "failureNote": { "type": "string" },
+          "reachNarrowed": {
+            "type": "boolean",
+            "description": "R-425: true when the reach filter left at least one new test out of this survivor's request; false when it did not, or the filter was off. The tests left out are newTests[].test minus testsRun. Absent = not decided for this row: skipped, every test TestPage-refused, or the session stopped before the filter ran."
+          },
+          "skipped": {
+            "type": "object",
+            "description": "Present only when verdict is skipped: a reader mark, and nothing else.",
+            "additionalProperties": false,
+            "required": ["reason", "mark"],
+            "properties": {
+              "reason": { "type": "string", "const": "reader-marked-equivalent" },
+              "mark": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "reason"],
+                "properties": {
+                  "key": { "type": "string" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["killed", "survived", "error", "skipped"],
+      "properties": {
+        "killed": { "type": "integer" },
+        "survived": { "type": "integer" },
+        "error": { "type": "integer" },
+        "skipped": { "type": "integer" }
+      }
+    },
+    "quarantined": {
+      "type": "string",
+      "description": "Present only on exit 3: TestAppError publish-indeterminate/publish-anomalous, both container-needs-recycle."
+    },
+    "refused": {
+      "type": "object",
+      "description": "Present only on exit 6, before anything was measured. results is then always [].",
+      "additionalProperties": false,
+      "required": ["reason", "detail"],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "malformed-request",
+            "unknown-artifact",
+            "batch-not-installed",
+            "wrong-batch",
+            "unknown-mutant",
+            "not-a-survivor",
+            "unknown-gap",
+            "gap-has-no-survivor",
+            "carried",
+            "source-predates-verify",
+            "source-changed",
+            "test-project-nested",
+            "covering-test-unmatched",
+            "no-tests-to-run",
+            "unsupported-config",
+            "project-unreadable",
+            "equivalence-marks-unreadable",
+            "stale-artifact",
+            "artifact-files-unusable",
+            "artifact-identity-unavailable",
+            "test-app-manifest-unreadable",
+            "test-app-symbols-unreadable",
+            "test-app-compile-failed",
+            "test-app-version-below-resident",
+            "test-app-publish-failed",
+            "test-app-resident-unreadable",
+            "coverage-mode-changed",
+            "too-many-new-tests",
+            "dependency-unreadable"
+          ]
+        },
+        "detail": { "type": "string" }
+      }
+    },
+    "testPageRefused": {
+      "type": "object",
+      "description": "R-236c: every discovered test not sent because it has a reachable call that may open a TestPage. Absent when none was refused.",
+      "additionalProperties": false,
+      "required": ["tests", "diagnosis"],
+      "properties": {
+        "tests": { "type": "array", "items": { "type": "string" } },
+        "diagnosis": { "type": "string" }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["totalMs"],
+      "properties": {
+        "totalMs": { "type": "integer" },
+        "compileMs": { "type": "integer" },
+        "publishMs": { "type": "integer" }
+      }
+    }
+  }
+}

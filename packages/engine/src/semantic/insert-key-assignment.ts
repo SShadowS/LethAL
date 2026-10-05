@@ -1,6 +1,9 @@
 /**
  * R143: can skipping a table's `OnInsert` ADD an error the unmutated program cannot raise?
  *
+ * R-459: MOVED here from `builtin-tier2/src` so Tier-1 `flip-boolean-literal` can tag the
+ * RunTrigger of a two-argument `Insert(true, X)` against the same rule.
+ *
  * `lethal.swap-modify-flag` rewrites `Insert(true)` to `Insert(false)`, which skips the target
  * table's `OnInsert`. That is a platform-artifact risk only under one specific shape: the trigger
  * assigns the PRIMARY KEY. Skipped, the key stays blank; the first blank-key insert succeeds and a
@@ -53,19 +56,12 @@
  *    itself, so an extension has no `OnInsert` to contribute. If that ever changes, this predicate
  *    would under-tag, and the fix belongs here rather than at the call site.
  */
-import {
-  ALNodeKind,
-  type ALSyntaxNode,
-  type NodeArm,
-  type SemanticContext,
-  type SymbolTable,
-  armOfNode,
-  findAll,
-  liveMembers,
-  rawArmOf,
-  resolveReceiverTable,
-  visit,
-} from "@lethal/engine";
+import { ALNodeKind } from "../ast/node-kinds";
+import { type ALSyntaxNode, findAll, visit } from "../ast/syntax-node";
+import { liveMembers } from "../ast/tree-walks";
+import { type NodeArm, type SemanticContext, armOfNode, rawArmOf } from "./context";
+import { resolveReceiverTable } from "./receiver";
+import type { SymbolTable } from "./symbol-table";
 
 /** Grammar node kinds this module reads. Local consts for the same reason `receiver.ts` keeps its
  *  own: `ALNodeKind` enumerates what the mutation pipeline TARGETS, and widening it widens

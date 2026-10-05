@@ -110,7 +110,7 @@ describe("HarnessVerifier.fetchExtensionInstalled", () => {
   test("filters by app id in the configured company, and reads isInstalled", async () => {
     const { urls, fetchFn } = fake([
       {
-        id: "app-1",
+        id: "8a1b2c3d-0000-4000-8000-00000000a001",
         isInstalled: true,
         versionMajor: 1,
         versionMinor: 0,
@@ -118,14 +118,18 @@ describe("HarnessVerifier.fetchExtensionInstalled", () => {
         versionRevision: 17,
       },
     ]);
-    const r = await new HarnessVerifier(CFG, fetchFn).fetchExtensionInstalled("app-1");
+    const r = await new HarnessVerifier(CFG, fetchFn).fetchExtensionInstalled(
+      "8a1b2c3d-0000-4000-8000-00000000a001",
+    );
     expect(r).toEqual({ installed: true, versions: ["1.0.0.17"] });
     expect(urls[1]).toBe(
-      "http://bc:7048/BC/api/microsoft/automation/v2.0/companies(c-1)/extensions?%24filter=id+eq+app-1&tenant=default",
+      "http://bc:7048/BC/api/microsoft/automation/v2.0/companies(c-1)/extensions?%24filter=id+eq+8a1b2c3d-0000-4000-8000-00000000a001&tenant=default",
     );
   });
   test("an empty list is not installed", async () => {
-    const r = await new HarnessVerifier(CFG, fake([]).fetchFn).fetchExtensionInstalled("app-1");
+    const r = await new HarnessVerifier(CFG, fake([]).fetchFn).fetchExtensionInstalled(
+      "8a1b2c3d-0000-4000-8000-00000000a001",
+    );
     expect(r).toEqual({ installed: false, versions: [] });
   });
 });

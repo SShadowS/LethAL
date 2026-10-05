@@ -10,6 +10,7 @@
  * The two views are the ONLY way the legacy fields are produced (`buildReport` consumes them, not
  * the raw arrays), so they cannot drift into a parallel implementation that agrees by accident.
  */
+import { formatRefusal } from "@lethal/engine";
 import type { DeclarativeSiteFile, NotInstrumentedFile } from "./report";
 
 /** R214: a file whose sites the build's preprocessor symbols decided. `detail` is the effective
@@ -22,12 +23,48 @@ export interface PreprocExcludedFile {
   readonly detail: string;
 }
 
+/** R447: a file where R196's hang check refused sites an operator would otherwise have claimed. */
+export interface HangRefusedFile {
+  readonly file: string;
+  readonly kinds: string;
+  /** (node, operator) pairs, after the `--operator` and `--lines` filters and the `#if` arms. */
+  readonly sites: number;
+}
+
 /** Why a site or file was excluded. `buildReport` maps each to its legacy view. */
 export type ExclusionReason =
   | "not-instrumentable"
   | "declarative"
   | "compiled-out"
-  | "preproc-undecided";
+  | "preproc-undecided"
+  | "instrumentation-refused"
+  | "hang-refused";
+
+/** R307: one file `generateMutationSet`'s trial refused whole, with its object kinds and site count. */
+export interface RefusedExcludedFile {
+  // The engine's `FileRefusalFields`, spelled out rather than imported: the schema generator
+  // follows neither an `extends` nor a reference into another package. Assignable both ways.
+  readonly file: string;
+  readonly shape:
+    | "overlap"
+    | "unsupported-kind"
+    | "latch-owner"
+    | "no-anchor"
+    | "no-header"
+    | "object-mix"
+    | "site-before-header";
+  readonly objects?: readonly {
+    readonly type: string;
+    readonly id: number;
+    readonly name: string;
+  }[];
+  /** 1-based first and last line (two numbers; an array because the generator has no tuples). */
+  readonly lines?: readonly number[];
+  readonly kinds: string;
+  readonly sites: number;
+  /** R307 section 3: mutants elsewhere whose cross-run carry this refusal disabled (`RefusedFile`). */
+  readonly carryDisabled?: number;
+}
 
 export interface ExcludedSiteFile {
   readonly file: string;
@@ -43,6 +80,9 @@ export interface ExcludedSiteFile {
    *    `canCarryMutationSelectorVar` check.
    *  - `compiled-out` (R214) counts RAW specs, before validation, dedup and the operator or line
    *    filters.
+   *  - `hang-refused` (R447) counts (node, operator) pairs R196's hang check refused, AFTER the
+   *    `--operator` and `--lines` filters and outside inactive `#if` arms. They never became specs,
+   *    so no other row counts them.
    *
    * Changing either is a separate decision with its own live-gate consequences.
    */
@@ -50,7 +90,8 @@ export interface ExcludedSiteFile {
   readonly reason: ExclusionReason;
   /**
    * Free-text detail for reasons that have one. R214's two reasons carry one: the effective
-   * symbols, or a reason code. Neither is source text.
+   * symbols, or a reason code. R307's `instrumentation-refused` carries the refusal's shape, objects
+   * and line span (`formatRefusal`). None is source text.
    *
    * MUST NEVER carry target source (no `originalText`, no snippet of the excluded site's AL):
    * `scripts/redact-campaign-report.ts` redacts only `originalText`/`mutatedText` inside
@@ -65,8 +106,9 @@ export interface ExcludedSites {
   readonly totalFiles: number;
   readonly siteCount: number;
   /**
-   * DISTINCT FILES, which is NOT `files.length`: a file can be excluded under both reasons and
-   * therefore appear as two rows. Each VIEW's `fileCount` is that view's own row count, because
+   * DISTINCT FILES, which is NOT `files.length`: a file can be excluded under several reasons and
+   * therefore appear as several rows. A `hang-refused` row's file is usually ALSO a mutated file,
+   * and may also carry a `not-instrumentable` or `instrumentation-refused` row (R447). Each VIEW's `fileCount` is that view's own row count, because
    * within one reason a file appears at most once — and because `itest:tables` pins the
    * declarative one.
    */
@@ -78,6 +120,10 @@ export function buildExcludedSites(input: {
   readonly skipped: readonly NotInstrumentedFile[];
   readonly declarative: readonly DeclarativeSiteFile[];
   readonly preproc: readonly PreprocExcludedFile[];
+  /** R307: files refused whole. Optional so every existing caller is unchanged. */
+  readonly refused?: readonly RefusedExcludedFile[];
+  /** R447: files with hang-refused sites. Optional so every existing caller is unchanged. */
+  readonly hangRefused?: readonly HangRefusedFile[];
   readonly totalFiles: number;
 }): ExcludedSites {
   // Mapped explicitly, field by field — never `{ ...f, reason }` — so a field later added to
@@ -104,6 +150,30 @@ export function buildExcludedSites(input: {
       sites: f.sites,
       reason: f.reason,
       detail: f.detail,
+    })),
+    ...(input.refused ?? []).map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: "instrumentation-refused" as const,
+      detail: `${formatRefusal({
+        file: f.file,
+        shape: f.shape,
+        ...(f.objects !== undefined ? { objects: f.objects } : {}),
+        ...(f.lines?.[0] !== undefined && f.lines[1] !== undefined
+          ? { lines: [f.lines[0], f.lines[1]] as const }
+          : {}),
+      })}${
+        f.carryDisabled !== undefined
+          ? `; identity carry disabled for ${f.carryDisabled} mutant(s)`
+          : ""
+      }`,
+    })),
+    ...(input.hangRefused ?? []).map((f) => ({
+      file: f.file,
+      kinds: f.kinds,
+      sites: f.sites,
+      reason: "hang-refused" as const,
     })),
   ];
   return {

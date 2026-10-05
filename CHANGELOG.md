@@ -13,6 +13,42 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A `reportextension` is mutated; identity scheme 17** (R254). Until now such a file was skipped
+  as a non-carrier kind. BC reports a report extension's coverage as object type 22 under the
+  extension's own id (measured on BC 28), and al-runner as its own Cobertura class, so both are
+  attributed now; its members also get a variable scope, so the typed operators reach it. A
+  reportextension beside another object in one file is still refused (`object-mix`). Tier 2 does not
+  yet claim record calls inside one (R463). Measured: BaseApp (w1-28.6) gains 543 mutants in 13
+  report-extension files, none of its other mutants moved, CDO none (it has no report extension). An admitted extension can share an
+  object name with another object, and its mutants then take identity ordinals ahead of that one's,
+  so keys can move for unchanged source: marks files need `"identityScheme": 17` after re-checking
+  each mark (R325), and the first run on a project with report extensions does not carry the
+  previous run's history once (R442).
+
+- **The report names the loop steps R196 refused** (R447). A site an operator would have mutated
+  but R196's hang check refused (the mutation writes a variable an enclosing loop's condition
+  reads, so it could make the loop never end) is now counted per file as an `excludedSites` row
+  with reason `hang-refused`. A row with sites makes `reliability` `narrowed`, adds
+  `; N hang-refused site(s) in M file(s) not mutated` to `scoreDescribes`, prints a
+  `HANG-REFUSED SITES` console line, becomes an `Ignored` entry in the mutation-testing export, and
+  makes `lethal explain` withhold `gaps[].unobservedBlock` in that file. The count honours
+  `--operator`, `--lines` and inactive `#if` arms. Only the hang-check refusals are counted; the
+  loop-CONDITION literal refusals (R239) stay silent, as other operator refusals do. **Expect
+  `reliability: full` to become rare on real projects.** Measured: Microsoft BaseApp has 1,463
+  hang-refused sites and CDO Cloud 136, so any whole-project run over either now reads `narrowed`.
+  That is the correct reading: those loop steps were never mutated, and until now the report did
+  not say so. Operators opt in through the optional `MutationOperator.refusesHangCapable`; a
+  plug-in without it is not counted. The report schema gains one enum value and the stream schema
+  one optional property, in place: no version bump, and older reports still validate.
+- **`lethal verify` says what a killing new test does to the rest of its procedure** (R259, verify
+  schema v8). Every row killed by a new test carries `sameProcedure`: for each other survived or
+  no-coverage mutant of the source run in the same procedure or trigger (by the manifest's line
+  span, never by name), whether that test alone `alsoKills` it, it survived a run that included
+  the test (`notKilled`), or the answer is `unknown`. Answers come from the named survivors' own
+  runs when they prove the pair, else from one extra run of that test against that mutant in the
+  same lease, counted against `--max-new-tests` as two runs (`overCap` counts the pairs left out). Reported only: never in `counts` or the exit code.
+  `verify-v7.schema.json` is kept as published.
+
 - **`SessionReport.buildSymbols`: the target's effective build symbols** (R381). The set the build
   used (config, the target `app.json`, and on al-runner its predefined symbols), sorted. Written on
   every new report, `[]` included, so `[]` means "built with no symbols" and absent means a report
@@ -48,9 +84,127 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **One advisory line on an al-runner run** (R387): `[lethal] al-runner settings: ...` names each
   slow or unmeasured setting and the key that changes it. Until coverage is on by default it always
   names `coverage`.
+- **A file whose instrumentation throws is refused whole, and the rest of the project still runs**
+  (R307). Before, one such file (an object mix, no object header, a statement the injector cannot
+  place) aborted the whole run. Now LethAL tries each file on its own, skips the one that fails,
+  and measures the others. The report shows it: an `excludedSites` row with reason
+  `instrumentation-refused` (file, object kinds, site count and the reason), the caveat
+  `files-refused`, the warning `instrumentation-refused-files`, and `reliability` `narrowed`,
+  because the score then leaves that file out. A refused file's mutants carry no identity, so
+  history, resume and equivalence marks skip them, and a warning says so. If EVERY file with sites
+  is refused, nothing is left to measure and the run exits 1 naming each file. The explain document
+  is now version 10. A mixed-object file is still refused whole: [[R299]] tracks per-object
+  dropping. Instrumenting a file is now two steps, PLAN (decides the edits and every refusal) and
+  EMIT (writes the text), and the per-file trial runs PLAN only. A dry run therefore sees every
+  refusal a real run would, with one exception: the latch-owner and no-anchor refusals can first
+  fire when the writer re-instruments a smaller batch of a file's mutants (see R419); EMIT can fail only with the RangeError "Invalid string length", a
+  real-run crash. Measured on Base Application (dry run): peak memory 4520 MB against 4473 MB on
+  master (+1.0%) and 4888 MB before the split; wall time +13.7% over master. Output is
+  byte-identical to the build before the split.
 
 ### Changed
 
+- **One implicit-record resolver; identity scheme 22** (R464; 20 was held for R-464 and is unused,
+  21 is R459). Which record a bare name or a `Rec.`-qualified call binds to is decided in one place
+  in the engine (`recordScopesAt`): a page's `SourceTable`, a TableNo codeunit's `OnRun` (`Rec`
+  only), every enclosing report dataitem, and every enclosing `with` subject; a pageextension stays
+  refused. So a qualified `Rec.Modify(true)` in a page or a TableNo `OnRun` is now claimed exactly
+  as the bare `Modify(true)` was, and bare calls in report dataitems and `with` bodies are claimed
+  on the record they bind to. `lookupVar` gains a precise guard: a record field wins over a
+  variable only where AL binds it (a `with` subject's field over any variable, an implicit record's
+  field over an object global, never in a table or tableextension) and only for a field the
+  project declares. Measured on BaseApp, CDO, the other BC.History apps and every fixture: +3,928
+  Tier-2 mutants; 250 `true` RunTrigger flips cede to `swap-modify-flag` at the same call, none
+  orphaned; no hang refusal moves. Run-trigger tags: 12 dropped where the receiver now resolves
+  and the real predicate proves the trigger absent (CDO Page 6175303 x2, EDocOrderLineMatching,
+  ShpfyVariantImageExport x2, SubBillingActivities, CreateSubContractRenewal,
+  ItemServCommitmentPackages, sandbox-probes LangRefusalRunner, SustExciseJnlPost,
+  AITLogEntries, CommandLineTestTool), 1 added (DeleteExpiredSalesQuotes). Of R473's new skip
+  tags, 231 move onto the replacing `swap-modify-flag` mutant: 198 keep a tag and 33 are untagged
+  by its proof (four of those are a known under-tag, R476). No gate fixture moves. Re-check
+  equivalence marks.
+- **One source snapshot per run, and `--changed-since` diffs against it** (R205). `lethal run`
+  reads the target's `.al` files and `app.json` once, before anything else, and every reader of
+  them uses that copy: the `--changed-since` lines, the al-runner coverage guard, the selector-id
+  check, `--dry-run`, the build and the app version an al-runner run records. Still read from the
+  disk: the test project, the target's resources (`.xlf`, layouts) and `lethal verify`.
+  An edit made during the run is not built; the run warns `source-changed-during-run`, naming each
+  added, removed and changed file, and records no source hash. A source file that cannot be read
+  stops the run, naming the file. Under `--changed-since`, a git-ignored `.al` file now gets
+  mutants, consistent with alc compiling every `.al` under the folder, and a renamed or new path is
+  selected whole. The refusal of an `.al` marked assume-unchanged or skip-worktree is removed: the
+  index is no longer read for content, so such a file's edits are seen.
+- **A two-argument `Insert(RunTrigger, InsertWithSystemId)` is mutated; identity scheme 21**
+  (R459; 20 is held by R-464). `flip-boolean-literal` (now 1.1.0) used to cede every `true` of a
+  claimed `Insert` to `swap-modify-flag`, which claims a sole `true` only, so the `true` literals of
+  `Insert(true, X)` and `Insert(X, true)` were mutated by nobody (a `false` there already had a flip). Both operators now ask one engine
+  answer for the sole-argument skip site, so the seam cannot orphan or duplicate a literal. The
+  first literal is tagged `run-trigger-skipped-insert` / `run-trigger-forced` by the same rules as
+  `Insert(true)` / `Insert(false)`; the second gets no RunTrigger tag (a SystemId mechanism for it
+  is R472). Measured: BC.History +30 mutants, 7 gain `run-trigger-forced`, 9 keys move ordinal;
+  CDO and the fixtures unchanged apart from the operator version in manifests. Re-check
+  equivalence marks.
+- **Identity scheme 19** (R468; 18 was R-458). Every object-level `var` section is now read
+  (below), so call deletions move between operators, flips cede, hang-capable writes are removed,
+  and 26 BaseApp swaps choose a different pair under an unchanged key: re-check equivalence marks.
+- **Identity scheme 18** (R-458; 17 was R254). The hang refusal through implicit
+  records and `with` subjects (below) removes mutants, and a later same-tuple twin of a removed
+  mutant can take its key: re-check equivalence marks.
+- **Identity scheme 16** (R-364; 15 is reserved for R-254). The hang refusal below removes
+  mutants inside wrapped objects, and a later same-tuple twin of a removed mutant can take its key:
+  re-check equivalence marks.
+
+- **A skipped `OnModify` is now screened, and so are `ModifyAll`/`DeleteAll` RunTrigger flips**
+  (R452). `swap-modify-flag`'s `Modify(true)` -> `Modify(false)` mutants carry the new
+  `platformKillMechanism` value `run-trigger-skipped-modify` unless LethAL can prove that skipping
+  the table's `OnModify` is harmless (no project modify subscriber or tableextension trigger), the
+  same refusal detector R281 built for `Delete`. `flip-boolean-literal`'s `true` -> `false` flip
+  of a Record `ModifyAll`'s third argument carries the same tag, and of a `DeleteAll`'s argument
+  carries `run-trigger-skipped-delete`. The detector itself got stricter for both kinds: no
+  `Modify` or `Delete` inside the trigger counts as harmless any more, a parenthesis-less
+  split-header procedure call keeps the tag, and a bare `X.Y` counts as a field read only for the
+  trigger's own `Rec`/`xRec` and its own table's fields. Verdicts and scores do not move; only the
+  screen grows. Measured (probe, no `#if` arms): BC.History gains 22,523 tagged `Modify` mutants,
+  188 `ModifyAll` and 846 `DeleteAll`; CDO 35 and 9; the fixtures one (unpinned `grammar-probe`).
+  It reads only this project: a subscriber in another app, such as the test app, is not seen.
+
+- **The results store no longer fsyncs on every commit** (R449). `lethal.sqlite` now runs with
+  `PRAGMA synchronous = NORMAL` under WAL, SQLite's recommended pairing, and opening a new store went
+  from a 238 ms median to 54 ms on Linux. A crashed or killed LethAL process loses nothing. An OS
+  crash or power cut can lose the last few commits, but never corrupts the file, and a lost verdict
+  row is a mutant that `--resume` runs again.
+
+- **`lethal verify` refuses a test project nested in the target, by name** (R260, verify schema
+  v7). The target build compiles every `.al` under its folder, so a test project inside it is part
+  of the installed target app, and a test edit there used to read as `source-changed`. Verify now
+  refuses `test-project-nested` before it builds anything when `--tests` lies inside the target,
+  contains it, or cannot be resolved to a real path (symlinks and junctions are resolved). The fix
+  is to move the test project beside the target, point `--tests` at it, run `lethal run` again,
+  then verify. v6 is kept as published.
+- **`lethal verify` sees a Microsoft dependency rebuilt or upgraded on the server** (R385). On
+  bcdev, the dependency fingerprint in every test digest now hashes Microsoft packages by the bytes
+  the server holds, as it already did for the others, over the whole closure (so a Microsoft app
+  reached only through another counts too). It also always hashes `System`, hashes `Application`
+  (by its id) when any app in the closure declares one, and hashes the dependencies of the
+  `LethAL Control` app the server runs, today Test Runner, which runs every test. The control
+  package is read from the server and must be the version the running control app reports. Each
+  Microsoft app (except `System`, which is not an extension) must have exactly one installed
+  version, equal to the package served, read by app id. Any failure refuses by name: the run
+  records no digests (`test-digests-unavailable`) and verify refuses `dependency-unreadable`; it
+  never falls back to declared versions and never treats every test as new. Cost: about 4.3 s per
+  run and per verify, measured on Cronus284 (BC 28.4): 3.2 s to download 14 packages (68.9 MB),
+  0.6 s for the per-id installed checks, 0.4 s to read the running control version. No cache.
+  Stated limits, each of which verify reports as OLD tests with no warning: an installed app
+  outside the closure, and a non-Microsoft dependency that is published but not installed (R434);
+  a body-only rebuild of a symbols-only package, which is `Application` (0 `.al`, expected for a
+  wrapper app whose dependencies carry the source) and the `LethAL Control` package (0 `.al`; its
+  bytes are not hashed anyway); a service-tier update with no new `System` package (unmeasured);
+  and the control app's own changes (its bytes are not hashed, or every control-app upgrade would
+  make every test new). al-runner keeps Microsoft apps by declared version, under a tag that never
+  matches a bytes digest (R435); verify is bcdev only. The test digest scheme is now `v3`, so every
+  digest moves once: verify refuses, once per source run, every run recorded before R385 as
+  `source-predates-verify` (the detail names both schemes); run `lethal run` again. The verify
+  JSON schema stays v6.
 - **`lethal verify` does not rerun a new test the reach filter sent to no survivor** (R427,
   verify schema v6). Every new test still runs once, unmutated, before the mutants. Only a test
   sent to at least one survivor runs again after them. A test sent to none reads the new
@@ -148,7 +302,7 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   non-Microsoft dependency by the SHA-256 of its package. A call the walk cannot follow makes the
   digest cover the whole test-app source, so it can only make a test new; so does a test-app object passed to code in another app (R386: on
   BaseApp Test every test is on the whole-source digest today). Microsoft dependencies are
-  covered by their declared version only (R385). A Variant holding a test-app codeunit or interface that
+  covered by their declared version only (R385, since changed: see its entry above). A Variant holding a test-app codeunit or interface that
   code in another app runs is not seen (R389), nor is a test-app codeunit whose id the test
   reads from the platform, such as an `AllObj` loop, or computes, such as `50000 + 101` passed to
   code in another app that runs it (R390). An unreadable test-app `app.json` is
@@ -165,6 +319,25 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   refused once by `--resume` and `--resume-run`, the next `--skip-known-survivors` run skips
   nothing once, and `lethal verify` (schema v3) refuses a source run measured under another or an
   unrecorded coverage mode.
+- **Identity scheme 10** (R196, R239): mutants that can stop a loop from ending are no longer
+  made. `remove-assignment`, `shift-integer`, `swap-additive` and `flip-boolean-literal` now refuse
+  a site that writes a variable an enclosing `while`/`repeat` condition reads (these were tagged
+  `hangCapable` and deployed before), and `flip-boolean-literal` also refuses a literal nested in a
+  loop condition (through parentheses, `not`, `and`/`or`, or a `#if` tail) or in the condition of
+  an `if` inside a loop. The refusal is silent, like every other operator refusal: no report field,
+  warning or event changes, and `hangCapableCount` now reads 0 for built-in operators (the field
+  stays for plug-in operators). Keys can move where such a site is refused: a later twin (same
+  object, member, operator and code) takes the refused mutant's ordinal and its old key, and `M`
+  codes after it renumber. Every older store stops resuming (`--resume` and `--resume-run` refuse
+  it by name), the next `--skip-known-survivors` run skips nothing once, and marks files need
+  `"identityScheme": 10` after re-checking each mark against a fresh report (R325).
+- **Identity scheme 9** (R307, R374): identity ordinals are now numbered once over the whole run,
+  not per batch. Before, two twin mutants (same object, member, operator and code) that
+  `--max-guards-per-batch` put in two different batches both got ordinal 0 and shared one key, so
+  `--skip-known-survivors` could skip one on the other's verdict. Keys move only where batching
+  split twins; a one-batch run keeps every key. Every older store stops resuming (`--resume` and
+  `--resume-run` refuse it by name), the next `--skip-known-survivors` run skips nothing once, and
+  marks files need `"identityScheme": 9` after re-checking each mark against a fresh report (R325).
 - **Identity scheme 8** (R405, part a): a procedure or trigger inside a member-level `#if` is now
   seen by arm in the symbol table, the table-trigger readers and the receiver filter. A call that
   was refused is admitted, and when the new mutant has the same tuple as an existing one earlier in
@@ -240,6 +413,203 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **`validate-to-assign` writes the record the call binds to** (R464). Its bare form synthesized a
+  literal `Rec.`: inside `with R do begin Validate(Amount, 1); end;` in a table trigger or a page,
+  that was `Rec.Amount := 1`, a mutant of a different record (no real site in the measured
+  corpora). It now writes the binding (`R.`, a dataitem name, `Rec.`), and only where that spelling
+  is PROVEN to bind that record: every reachable table is declared in the project and has no field
+  or procedure of that name (in any `#if` arm), and the name is provably undeclared at the call
+  (or, for a `with` subject, the same declaration). Otherwise the site is refused, in `targets()`
+  too. Cost: 29 of the bare sites mutated before are refused (Intrastat 23 and SAF-T 3 in
+  tableextensions of tables outside the project, BaseApp 3), and 6 new claims are not taken
+  (R477). The name scans read the engine's lexer (`maskAlNonCode`), so a `//` inside a string no
+  longer hides the rest of a line, as do `projectDeclaresProcedureOnTable`'s unparsed-object scans.
+- **A recorded verdict no longer carries onto a different mutant after an edit** (R391).
+  `--skip-known-survivors` and `--resume` matched a mutant to its earlier record by identity key
+  alone. When two mutants share every identity field, for instance the same statement in two
+  same-named objects, or twice in one procedure, an edit that removed one of them renumbered the
+  other onto its key, and the old verdict, `killed` included, carried to code that never ran.
+  - Now a verdict carries by key only when the project's source is unchanged since the recorded
+    run, interrupted runs included.
+  - After an edit, a verdict carries only to a mutant that is the only one of its kind in its file in
+    both runs, and every such "twin" runs again.
+  - Refused carries are counted in one `carry-refused-renumbered` warning.
+  - No key or baseline changes.
+  - **One-time cost:** history and resume data recorded before this release lack the new run facts,
+    so nothing carries from it; the next run measures everything once.
+- **A `Modify(true)`, `Delete(true)` or `Insert(true)` flip on a receiver LethAL cannot resolve
+  keeps its skip tag** (R473). `swap-modify-flag` does not claim such a call, so
+  `flip-boolean-literal` flips its `true`, and that flip carried no `run-trigger-skipped-*` tag. It
+  now carries the tag of its kind, as the `false` flip on the same receiver already did (R460).
+  Tags only: no mutant added or removed and no identity key moved. Measured: BC.History 1116 flips
+  newly tagged (879 modify, 130 delete, 107 insert), CDO 1, fixtures none.
+- **The test-app scan reads a TableNo codeunit's `Rec` in its `OnRun` only** (R466), as AL does,
+  instead of in every procedure of the codeunit. Measured: no test digest or TestPage result
+  changes on CDO or on 178 BC.History test apps, because none of them uses `Rec` outside `OnRun`.
+- **The al-runner warning printed when no al-runner path is configured gives the current reason**
+  (R255, R267): conditional coverage and unverified transaction semantics, not the v1 `asserterror`
+  defect that al-runner v2 fixed.
+- **A report and its reportextension can both be mutated in one project** (R470). A report's
+  globals and its reportextensions' share one namespace, so the `MutationSelector` variable LethAL
+  declares in each instrumented object was declared twice, and BC's compiler refused the project
+  (AL0155). Two reportextensions of one report collided the same way, even when the report itself
+  had no mutants. On bcdev the whole batch then ended as `error`. Measured: 10 such groups in
+  Microsoft's Base Application (13 reportextensions, about 2,700 mutants in those files), none in
+  CDO. A reportextension's selector is now named after its own object id
+  (`MutationSelector<id>`, with a suffix if that name is already used in the file); every other
+  object kind is unchanged. No mutant or key moves, and the gates' verdicts are unchanged; a batch
+  that collided before stops ending as `error`. The instrumented text of
+  reportextensions changes, so a project that has them re-measures its baseline once
+  (the baseline key hashes the instrumented AL). al-runner had accepted the colliding project
+  (R471).
+- **A global declared in an object's second `var` section is now known** (R468). An object may
+  declare its globals in several sections, usually `protected var` then `var`; LethAL read only
+  the first, so every name in a later one resolved to nothing. Record operators lost those
+  receivers, and the loop-hang check could not refuse a write to such a variable. Measured on
+  BaseApp (BC.History w1-28, 203 projects), on top of R-458: 1 more hang-capable mutant is
+  refused (`SuggestVendorPayments`; R-458 already refuses the other 6 this fix would have caught,
+  by name); 680 call deletions move from `void-method-call` to `remove-setrange`,
+  `remove-testfield` or `remove-calcfields` with the same deleted text; 25 `true` RunTrigger flips
+  cede to `swap-modify-flag`; 637 new sites appear, mostly typed record operators and argument
+  swaps; one `run-trigger-forced` tag drops where the table is now known to have no `OnModify`.
+  CDO: one site changes. No fixture changes. No name in a later section was found to bind where AL binds a
+  record field instead; that check, and the 39 places where an existing FIRST-section global
+  already does, are recorded on R464.
+- **The loop-hang refusal now sees writes through an implicit record or a `with` subject** (R-458).
+  A loop that writes a field through `Rec` (table, tableextension, pageextension, page with
+  `SourceTable`, TableNo codeunit `OnRun`, request page), a report dataitem, a reportextension
+  `modify(X)` or a `with` subject, and reads it back in its condition, was mutated with no refusal
+  (for example a table's number-series loop). Such a site is now refused by name and counted in
+  `hang-refused`, following R294's measured precedence (a local wins over the field outside a
+  `with`; a global wins in a table). Measured: 43 more refused sites (BaseApp 37, CDO 2, other
+  BC.History apps 4), nothing else changed; some are over-refusals (e.g. a loop that also ends on
+  `Next() = 0`).
+- **A target whose unmutated build alc rejects is refused as that, not blamed on a mutant or the
+  environment** (R461). At a session's first compile failure (bcdev, sequential path), LethAL now
+  compiles its staged copy of the unmutated target once. If alc rejects that too, the run stops
+  with `UnmutatedBuildFailedError` and alc's output, records no `error` rows for the batch, and
+  stays resumable. If it compiles, bisection runs as before. Compile-failure text now carries
+  BOTH alc streams, labelled `stdout:` and `stderr:`, so a stderr warning no longer hides a stdout
+  error; bisection notes and `TestAppError.detail` get longer accordingly.
+- **A stale-test-app refusal says what the test app's identity shows, not that the app is older**
+  (R462). At the refusal the published test app (the same publisher and name as the first read) is
+  hashed again and compared with the hash taken at the start of the baseline. A changed package
+  throws the new `TestAppChangedError`. An unchanged one throws `StaleTestAppError`
+  (`cause: "unchanged-endpoints"`), which notes that a replace-and-restore between the two reads
+  cannot be ruled out. A read that cannot be compared throws `StaleTestAppError`
+  (`cause: "identity-unverified"`): the app may be older or may have been replaced. Both give the
+  republish remedy only "if no other session publishes to this server". A replacement restored
+  before the second read is still reported as unchanged.
+- **The loop-hang refusal now works inside an object wrapped whole in `#if`** (R-364, R343).
+  The symbol table does not index such an object, so no variable there resolved and the four value
+  operators deployed hang-capable mutants. Now, when a write's target does not resolve and its own
+  object is unindexed, an enclosing loop condition that reads the same NAME refuses the site (a
+  plain name against a plain read, `R.Field` against the same receiver and field), and it is
+  counted in `hang-refused`. Indexed objects are unchanged: there an unresolved target is still not
+  matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
+- **A forcing RunTrigger flip carries `run-trigger-forced` when the receiver does not resolve**
+  (R460). The `false` -> `true` flip at `ModifyAll`, `DeleteAll`, `Modify`, `Delete` or `Insert`
+  can force a table trigger to run, and was tagged only on a receiver the project resolves. An
+  unresolved receiver now gets the tag too, the same conservative rule R-364 applied to the skip
+  direction (`true`); where the receiver is not really a record this over-tags, the accepted
+  direction (R143). Measured, tags only (no mutant added, removed or re-keyed): 45 rows gain the
+  tag: 40 BaseApp rows (BC.History w1-28, 203 projects), 4 CDO rows covering 2 sites across two
+  symbol sets, and 1 `sandbox-probes` row. `sandbox-data` is unchanged.
+- **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
+  not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
+  screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged. The tag is
+  conservative over-tagging: inside a wrapped object a codeunit variable calling a project
+  procedure named `DeleteAll` or `ModifyAll` with `true` also gets the tag (its receiver does not
+  resolve), which is the accepted direction.
+  - Measured on BaseApp (BC.History w1-28, 203 projects, under `[]`): 11 `flip-boolean-literal`
+    mutants gain a tag, and none loses one.
+  - **1 restored**, in a wrapped object: `CalculateSubcontracts.Report.al`'s
+    `RequisitionLine.DeleteAll(true)` (`run-trigger-skipped-delete`).
+  - **10 newly added**, in indexed objects. The line numbers are in the R-364 site diff.
+    - 8 are a qualified `Rec.` call in a page or a `TableNo` codeunit, where an implicit `Rec` does
+      not resolve (R458's territory):
+      - Base Application: `Rec.ModifyAll` in `DimensionCorrectionChanges.Page.al`,
+        `ReminderAutErrorOverview.Page.al` and `MonitoredFieldsWorksheet.page.al`, and
+        `Rec.DeleteAll` in `ArchivedWFStepInstances.Page.al`;
+      - Sustainability: `Rec.DeleteAll` in `SustExciseJnlPost.Codeunit.al` and
+        `SustainabilityJnlPost.Codeunit.al`;
+      - AI Test Toolkit: `Rec.DeleteAll` in `AITLogEntries.Page.al`;
+      - Test Runner: `Rec.ModifyAll` in `CommandLineTestTool.Page.al`.
+    - 2 are a global the symbol table does not read because a `#if` sits in the global var section
+      (R369's class): `PurchReqLine.DeleteAll` in `CalculatePlanReqWksh.Report.al` and
+      `SalesLine.DeleteAll` in `SalesHeader.Table.al`'s `RecreateSalesLines`.
+  - CDO and every fixture are unchanged.
+
+- **Three more loop-hang shapes are refused; identity scheme 14** (R454). `shift-integer` now
+  refuses a literal in a loop condition's `#if` tail; `flip-boolean-literal` refuses a literal
+  inside a comparison in a loop's exit test (`until X.Next() = false`) or an in-loop `if` guard;
+  and all four value operators refuse a write to `R.Field` that an enclosing loop's condition
+  reads (receiver and field compared separately; an unresolved receiver is still not seen). The
+  first two are silent refusals; the third counts into `hang-refused`. Measured: BaseApp loses 47
+  mutants (15 more hang-refused), CDO 1, no fixture or gate figure moves. A later same-tuple twin
+  of a refused mutant can take its key, hence the scheme bump: marks files need
+  `"identityScheme": 14` after re-checking each mark (R325).
+- **`swap-call-arguments` no longer swaps an argument that names a field** (R455). In
+  `R.SetRange(Amount, Value)` the first argument is the record's field even when a local has the
+  same name, so the swap did not compile (AL0166). Record builtins are matched by method name, with
+  the field positions of each (SetRange, SetFilter, Validate, TestField and others at position 1;
+  CalcFields, CalcSums, SetLoadFields, SetCurrentKey and others at every position; CopyFilter at 1
+  and 3). Swaps between value arguments stay. BaseApp: 43 swaps removed, among them 28 that alc
+  rejects; CDO: 1.
+- **An unqualified call in a record scope has no type** (R455). Inside `with R do`, on a page with a
+  `SourceTable`, in a `TableNo` codeunit's OnRun and in a report dataitem, a call `F()` binds to the
+  table's method first, so typing it by the object's own procedure could emit `F() - F()` on Text
+  (AL0175). BaseApp: 13 `swap-additive` mutants removed; CDO: 0.
+- **A case-only pair is not swapped** (R455): `SetRange(ID, Id)` names one variable twice.
+- **Identity scheme 13** (R455; 12 is reserved for R254): swaps and additive flips are removed, so
+  same-tuple ordinals can move. Every older store stops resuming once, the next
+  `--skip-known-survivors` run skips nothing once, and marks files need `"identityScheme": 13`
+  after re-checking each mark (R325). History only: R454 moved the effective scheme to 14, so
+  marks files now need `"identityScheme": 14`.
+- **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
+  of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
+  type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a
+  Codeunit's `SetRange`. Every name is now declared with the full shared type. A bare name inside a
+  `with` body now types as nothing, because the record's field of that name wins there (an
+  `alc`-failing swap was possible before too). Measured: BaseApp +1,169 sites, and all 129 wrong
+  rows of the later-name class gone (30 `swap-call-arguments`, 99 `flip-boolean-literal`); CDO +4,
+  and its 1 wrong row gone. No fixture or gate figure moves. These counts cover the class the
+  census looked for (a later name typed by a global); they do not prove that no other class of
+  wrong mutant exists.
+- **Member-expression receivers resolve again** (R294): the `R` of `R.Field` and `Txt` of
+  `Txt.Contains(...)` were always refused, so a loop such as
+  `while Txt.Contains('a') do Txt := Txt.Replace('a', 'b')` was not seen as hang-capable. Such sites
+  are now refused by R196's rule (36 BaseApp, 1 CDO, measured with the R295 fix: both together).
+- **No more swaps typed by a global that an implicit record's field hides** (R294 review). Some
+  bodies run inside an implicit `with` over a record. There, a field of that record wins over an
+  object global of the same name (a procedure's local or parameter still wins over the field). The
+  type layer does not read those fields, so in these places a bare name that would fall through to
+  the globals now types as nothing. The places, measured with `alc` 18.0: a page with a
+  `SourceTable`, every pageextension, a codeunit's `OnRun` when it has `TableNo`, report dataitem
+  triggers, a report request page with a `SourceTable`, and reportextension dataset and request
+  page triggers. Table, tableextension and xmlport triggers were measured safe and are unchanged.
+  Before, on a page over a table with a Text field `Z`, two Integer page globals `Q2` and `Z` were
+  swapped, which `alc` rejects (AL0133). Measured: 1,961 BaseApp and 38 CDO rows removed
+  (`swap-call-arguments` and `swap-additive`), and 12 BaseApp swaps moved to another argument pair,
+  each new pair made of procedure locals, parameters or named returns of one type. A type-level
+  check found none of the removed rows wrong in these corpora: in each one the implicit record has
+  no field of the refused name, or (2 rows) has one of the same type. So the refusal closes a real
+  door (the synthetic case), but these corpora had not used it; the cost is the lost sites.
+- **Identity scheme 11** (R295, R294): sites are added and removed, so same-tuple ordinals can
+  move. Every older store stops resuming once, the next `--skip-known-survivors` run skips nothing
+  once, and marks files need `"identityScheme": 11` after re-checking each mark (R325).
+- **`reliability` is now `narrowed` when a file with sites was left out for an undecided `#if` or
+  because its object kind cannot carry the selector** (R399). R307 did this for refused files
+  only, so a run that left such a file out still said `full`. A zero-site undecided row, a
+  compiled-out row and a declarative row still do not narrow. `scoreDescribes` and the console
+  `SCOPE:` line now name the left-out files and sites, and the "nothing is left to measure" error
+  also names undecided files. The console text that said only a codeunit or a table can carry the
+  selector now lists the real carrier kinds. The explain document's `score.reliability` copies the
+  same value. Treated as a correction like R307's: no report or explain version change. Measured
+  at generation: the `fixtures/sandbox-data` run (its query object, 5 sites) and the r214
+  `p12-refused` unit fixture flip from `full` to `narrowed`; every other `fixtures/` and `examples/`
+  project under its gate symbol sets, the r214 and r364 unit fixtures, and the six CDO at 5f2a71d
+  projects (with and without `DOSMTP`) do not move. No live-gate assertion reads these values.
 - **A codeunit after an enum, interface or permission set in the same file got the wrong base line**
   (R383). The line map moved a file's base line only past objects with a coverage identity, so every
   covered line of such a codeunit was looked up in the wrong place (latent on bcdev too; no fixture

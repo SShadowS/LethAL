@@ -16,7 +16,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashTargetSource } from "../src/baseline-snapshot";
+import { hashTargetSource, readTargetSource } from "../src/baseline-snapshot";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
 import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/cli";
 import { runFromCli } from "../src/cli";
@@ -74,6 +74,7 @@ import {
 } from "../src/verify";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
 import { tinyBundle } from "./helpers/bundle";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { removeRunScratchAfterAll, scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -1712,6 +1713,10 @@ describe("announceAlRunnerCanary (R7/R8)", () => {
     expect(calls).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("al-runner is NOT authoritative");
+    // R255: the reason given is the CURRENT one. The asserterror defect (R7) is fixed in v2 and the
+    // canary reports it `defect-not-reproduced`, so the fallback must not name it.
+    expect(warnings[0]).not.toContain("asserterror");
+    expect(warnings[0]).toContain("coverage");
     expect(result).toBeUndefined();
   });
 });
@@ -2205,7 +2210,70 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(lines.has(8)).toBe(false);
   });
 
-  // The test above calls printDryRun directly, so it cannot see main() drop the config's symbols on
+  test("R205: --dry-run lists the source snapshot, not an edit made after it", async () => {
+    const { root, projectDir } = await r214Project();
+    const snapshot = await readTargetSource(projectDir);
+    const logic = join(projectDir, "Logic.Codeunit.al");
+    await writeFile(logic, `\n\n\n${await readFile(logic, "utf8")}`);
+    const listingOf = async (source?: ReadonlyMap<string, Buffer>) => {
+      const outPath = join(root, `dry-run-${source === undefined ? "disk" : "snap"}.json`);
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await printDryRun(projectDir, undefined, {
+          dbPath: join(root, "lethal.sqlite"),
+          configPath: join(root, "none.json"),
+          outPath,
+          preprocessorSymbols: ["X"],
+          ...(source !== undefined ? { source } : {}),
+        });
+      } finally {
+        log.mockRestore();
+      }
+      const listing = JSON.parse(await readFile(outPath, "utf8")) as {
+        batches: { sites: { line: number }[] }[];
+      };
+      return new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
+    };
+    const pinned = await listingOf(snapshot);
+    expect(pinned.has(6)).toBe(true);
+    expect(pinned.has(9)).toBe(false);
+    expect((await listingOf()).has(9)).toBe(true); // the disk really moved
+  });
+
+  // R205: `main`'s dry-run branch must hand its snapshot to the listing. A FOLDER named `*.al` is
+  // not in the snapshot (it holds files only), but a disk enumeration lists it and then fails to
+  // read it, so the real CLI succeeds only when the snapshot reaches `printDryRun`.
+  test("R205: `lethal run --dry-run` lists from its snapshot, not a fresh disk walk", async () => {
+    const { root, projectDir } = await r214Project();
+    await mkdir(join(projectDir, "Folder.al"));
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, "{}");
+    const outPath = join(root, "dry-run.json");
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        cli,
+        "run",
+        "--project",
+        projectDir,
+        "--dry-run",
+        "--config",
+        configPath,
+        "--db",
+        join(root, "lethal.sqlite"),
+        "--out",
+        outPath,
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    expect(`${await proc.exited} ${stderr}`).toStartWith("0 ");
+    const listing = JSON.parse(await readFile(outPath, "utf8")) as { files: number };
+    expect(listing.files).toBe(1);
+  }, 60_000);
+
+  // The R214 dry-run test calls printDryRun directly, so it cannot see main() drop the config's symbols on
   // the way. This one runs the real CLI as a subprocess, which is the only way to reach main().
   test("R214: `lethal run --dry-run --config` lists the arm the config's symbols build", async () => {
     const { root, projectDir } = await r214Project();
@@ -2385,6 +2453,8 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         onReach(target.artifactId);
         throw new Error("R358 fake: verify reached compileTestApp");
       },
+      // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+      microsoftMode: () => fakeMicrosoftMode(),
       close: async () => {},
     }) as BcDevMcpBackend;
   }
@@ -2490,6 +2560,48 @@ describe("lethal run then lethal verify on one store (R358)", () => {
     expect(out.refused.reason).toBe("artifact-files-unusable");
     expect(out.refused.detail).toContain("selector ids");
     expect(out.exitCode).toBe(VERIFY_REFUSED_EXIT_CODE);
+  });
+
+  // R-260: on a fully valid source run (recorded source hash, installed bundle, selector ids), a
+  // nested --tests is refused by name before the config is read and before any backend is built.
+  // Without the CLI guard the valid-config call reaches buildBackend, and the tripwire call reads
+  // its (missing) config file.
+  test("R-260: verify refuses a nested test project before the config read and the backend build", async () => {
+    const ctx = await runThenArtifact();
+    const nested = join(ctx.projectDir, "test");
+    await mkdir(nested);
+    let built = 0;
+    const attempt = async (configPath: string) => {
+      let printed = "";
+      const outcome = await verifyFromCli(
+        {
+          mode: "verify",
+          dbPath: ctx.dbPath,
+          artifact: ctx.artifactId,
+          testDir: nested,
+          survivors: [`${ctx.survivor.batchIndex}/${ctx.survivor.mutantCode}`],
+          configPath,
+        },
+        {
+          write: (s) => {
+            printed += s;
+          },
+          buildBackend: async () => {
+            built++;
+            throw new Error("R-260 tripwire: verify reached buildBackend");
+          },
+        },
+      ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+      return { outcome, printed };
+    };
+    for (const configPath of [ctx.configPath, join(ctx.root, "tripwire-no-such-config.json")]) {
+      const { outcome, printed } = await attempt(configPath);
+      expect(outcome).toBe(VERIFY_REFUSED_EXIT_CODE);
+      const out = JSON.parse(printed);
+      expect(out.refused.reason).toBe("test-project-nested");
+      expect(out.refused.detail).toContain("--tests");
+    }
+    expect(built).toBe(0);
   });
 
   test("R-384: verifyFromCli hands --no-reach-filter and its stderr writer to runVerify", async () => {
@@ -2694,6 +2806,8 @@ describe("C02-06: lethal verify (Task 7)", () => {
     const root = scratch("lethal-verify-cli-");
     const project = join(root, "proj");
     await mkdir(project);
+    // R-260: the test project must exist beside the target, or verify refuses it first.
+    await mkdir(join(root, "t"));
     await writeFile(
       join(project, "lethal.config.json"),
       JSON.stringify({ bcdev: { server: "http://x", serverInstance: "BC" }, envTool: {} }),

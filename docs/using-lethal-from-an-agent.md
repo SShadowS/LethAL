@@ -222,6 +222,27 @@ saved mutant verdict that such a test took part in (it killed the mutant, or it 
 tests the mutant ran against) is not carried: the resumed run scores that mutant again without the
 test, and says so in a `resume-testpage-rescored` warning.
 
+A file LethAL cannot instrument is refused whole and published unchanged (R307). The run goes on
+with the other files, so the score does not cover the refused file's sites: `reliability` is
+`narrowed` (or `narrowed-degraded`), `validity.caveats` carries `files-refused`,
+`scoreDescribes` says "N file(s) refused, M site(s) not mutated", the
+`instrumentation-refused-files` warning names each file, and `excludedSites` has one row per file
+with reason `instrumentation-refused` and the cause in `detail`. When every file with mutation sites
+is refused, nothing is left to measure and the run exits `1`, naming each file. When it was refused
+because no object name could be read from it, a mutant elsewhere that matches one of its sites
+apart from the object name could hold a key an earlier run gave that file. For that run such a
+mutant is not skipped by `--skip-known-survivors`, not carried by `--resume` or `--resume-run`, and
+takes no equivalence mark (a mark on its key reads stale). The `identity-carry-disabled` warning
+names the file and the count, and the refused file's row says "identity carry disabled for N
+mutant(s)". Its key is still recorded, so the next run without the refusal carries it normally.
+
+Every such refusal is decided in PLAN, the first of the two steps LethAL uses to instrument a file
+(PLAN decides what to change; EMIT writes the new text). So a `--dry-run` sees every refusal a real
+run would, with one exception: the latch-owner and no-anchor refusals can first fire when the
+writer re-instruments a smaller batch of a file's mutants (see R419). EMIT can fail in one named way only: a RangeError "Invalid string length", when a file's
+instrumented text is too large for one string. That is a real-run crash a dry run does not see (it
+is the one entry in `EMIT_CRASHES`).
+
 `4` means the report exists but holds no verdict: every recorded mutant is an `error` and the score
 is `null`. The cause is in the mutants' `failureNote` (the one measured case was an instrumented
 build the compiler refused). Fix that and re-run; there is nothing to `--resume`.
@@ -234,7 +255,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v10.schema.json](../schemas/explain-v10.schema.json)
+- `lethal explain`: [../schemas/explain-v11.schema.json](../schemas/explain-v11.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json)
 
@@ -280,7 +301,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 10`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 11`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`.
 
@@ -318,7 +339,10 @@ lists the block's survivors only; the four counts cover every recorded mutant of
 `unobservedBlock` says whether every RECORDED mutant of the block survived. It speaks about the
 mutants the run recorded, not ones it never generated, and it is absent on a run narrowed with
 `--operator`, `--lines` or `--changed-since`, which can drop mutants inside a block, and on a
-quarantined run, which stops scheduling mutants mid-run. Each gap has
+quarantined run, which stops scheduling mutants mid-run. It is also absent for every gap in a file
+the source report lists as hang-refused among its excluded sites (R447): there a loop's own step was
+refused and never generated, so "every recorded mutant survived" would overstate what was measured.
+Each gap has
 exactly one of `artifactId` (the artifact to verify it against) and `artifactIdAbsent` (why there
 is none, with the same values as on a survivor row; a gap is `carried` when any of its members is).
 `--top` never shortens `gaps`: every gap is listed, even one none of whose survivors is shown.
@@ -445,7 +469,7 @@ nothing.
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 6`. Schema: [../schemas/verify-v6.schema.json](../schemas/verify-v6.schema.json).
+`verifySchemaVersion: 8`. Schema: [../schemas/verify-v8.schema.json](../schemas/verify-v8.schema.json).
 
 | field | values |
 |---|---|
@@ -457,7 +481,7 @@ nothing.
 | `reachFilter.reason` | `no-reach-filter`, `coverage-mode-none`, `coverage-mode-procedure`, `coverage-mode-line`, `coverage-mode-al-runner` |
 
 `killedBy` never changes the exit code. Each `results` row can also carry `killedByNewTest`,
-`invalidBaseline` and `gapId`.
+`invalidBaseline`, `gapId` and `sameProcedure`.
 Every result names its `gapId`, whether the survivor was named directly or through a gap; only a
 run whose build predates gap ids leaves it out.
 
@@ -481,6 +505,23 @@ just it. Its stability is unknown: it is never `stable`, and a test that is flak
 survivor is not caught in this verify. It is caught when a later verify sends it to a survivor,
 because then it is rerun. It does not block exit `0`, because it gated no verdict: it is in no
 row's `testsRun` and killed nothing.
+
+`sameProcedure` (schema v8, R259) is on every row killed by a new test, and on no other row. It
+says what is known about that test (`sameProcedure.test`) against each OTHER survived or no-coverage
+mutant of the source run in the same procedure or trigger (the same line span in the manifest).
+Verify runs the test once more against each one it has no answer for yet, after the named survivors
+and inside the same lease. These extra runs count against `--max-new-tests` with the rest, two per
+mutant (the run, and the unmutated rerun a kill needs).
+`alsoKills`, the only claim about the test on its own: the test ran first, in a fresh session,
+against that mutant, failed, and passed when rerun unmutated. `notKilled`: that mutant survived a
+run that included the test, possibly with other tests. `unknown`: no answer
+(an error, a timeout, a session that latched or lost its lease, a carried or reader-marked
+equivalent mutant, a procedure written on one line, or over the cap; `overCap` counts the last
+kind). Read `unknown` as unknown, never as not killed. A long `alsoKills` list suggests the test is
+broad rather than aimed at the survivor you named. The field never changes `results` or `counts`.
+It does not change the exit code either, with one exception, by design: a probe that latches (a
+timeout, or an in-flight call whose outcome is unknown) quarantines the whole call, so verify
+exits `3`.
 
 ### Verify exit codes (checked)
 
@@ -515,7 +556,8 @@ The set of reasons is checked; the advice is guidance.
 | `not-a-survivor` | That mutant was not a survivor. Drop the id. If it is a known survivor the run skipped, run again without `--skip-known-survivors`. |
 | `carried` | The verdict was carried, so nothing of it is installed. Run a fresh `lethal run`. |
 | `source-predates-verify` | Run `lethal run` again: the run predates verify, stopped early, or its source changed while it ran. A gap id against an artifact whose manifest was written before gap ids existed refuses this way too; name its mutants as `<batchIndex>/<mutantCode>` ids instead, or run again. |
-| `source-changed` | The target changed since it was instrumented. Run again. A test project nested inside the target makes every test edit trigger this (R260). |
+| `source-changed` | The target changed since it was instrumented. Run again. |
+| `test-project-nested` | The `--tests` folder lies inside the target project, contains it, or cannot be resolved (R-260). The target build compiles every `.al` under its folder, so nested tests are part of the installed target app. Move the test project out of the target folder so it sits beside it, update the `--tests` you pass to both `lethal run` and `lethal verify` to that folder (no config field names the test folder), run `lethal run` again, then verify with its artifact id. |
 | `covering-test-unmatched` | A covering test was renamed, renumbered or removed. Restore it, or run again. |
 | `no-tests-to-run` | Write a test first. |
 | `unsupported-config` | Verify runs on `bcdev` only, with no `envTool`. |
@@ -532,14 +574,14 @@ The set of reasons is checked; the advice is guidance.
 | `test-app-resident-unreadable` | Check the dev credentials with `lethal doctor`. It can also mean the test app was never published. |
 | `coverage-mode-changed` | The source run was measured under another coverage mode, or before runs recorded one (R354), so its covering tests and verdicts do not apply. Run `lethal run` again under this configuration, then verify with its artifact id. |
 | `too-many-new-tests` | The new or edited tests need more extra test runs than the budget, `--max-new-tests` (default 50) x (survivors + 2). With the reach filter off this is the old rule, more new tests than `--max-new-tests`. With it on, verify refuses before the lease when the one unmutated run per new test alone exceeds the budget, and otherwise after those unmutated runs, before any mutant, when the runs left after the filter still do (a second unmutated run per new test sent to a survivor, plus one run per survivor a new test joins); the detail then says the unmutated runs had already run. The detail names the count, the runs with and without the filter, the exact value to pass, what made the tests new (a subscriber, an object, the whole-source fallback, a procedure, a dependency) and up to five changed procedures. Pass `--max-new-tests <n>` to pay for them, or run `lethal run` again so this source is the recorded one. |
-| `dependency-unreadable` | A non-Microsoft dependency's package on the server could not be read. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
+| `dependency-unreadable` | A dependency's package on the server could not be read, or did not check out (R385): a Microsoft package in the closure, `System`, or the `LethAL Control` package (which must be the version the running control app reports) was not served or was another app, or a Microsoft app has no installed version, two, or one that differs from the package served (an upgrade in progress). The detail names the app. Check the dev credentials with `lethal doctor`, and that every dependency of the test app is installed. |
 
 ### Marking an equivalent survivor (checked)
 
 Mark an equivalent survivor in `<project>/lethal.equivalent.json`:
 
 ```json
-{ "identityScheme": 8, "marks": [ { "key": "...", "reason": "..." } ] }
+{ "identityScheme": 22, "marks": [ { "key": "...", "reason": "..." } ] }
 ```
 
 `reason` is required. To mark a survivor:
@@ -591,10 +633,28 @@ than a stronger assertion. The test must pass twice on the unmutated build, or v
 an existing test whose own source (its attributes and its procedure) changed since the run
 (R-278, R258). A test is also new when anything it runs changed (R371): a test-app procedure or
 handler it reaches, the header, globals or triggers of an object it reaches, ANY event-subscriber
-codeunit in the test app (every test is then new), or a dependency (a non-Microsoft one by the
-package the server holds; a Microsoft one by its version only, so a rebuild at an unchanged version
-is not seen). A test with a call the walk cannot follow (an interface, a `RecordRef` insert, a run by
-id) is new after ANY test-app edit. So one shared-helper edit can make many tests new.
+codeunit in the test app (every test is then new), or a dependency, by the bytes of the package the
+server holds (R385: Microsoft ones too, so a rebuild or an upgrade at an unchanged declared version is
+seen). Every test also covers `System`, `Application` when the test app declares one, and Test
+Runner, which the `LethAL Control` app runs every test through, so a platform or Base App update
+makes every test new. A Microsoft app must have exactly one installed version, the one the server
+serves, or verify refuses `dependency-unreadable` naming it. This adds about 4.3 s per run and per
+verify (14 packages, 68.9 MB, on BC 28.4). A test with a call the walk cannot follow (an interface,
+a `RecordRef` insert, a run by id) is new after ANY test-app edit. So one shared-helper edit can make
+many tests new.
+
+What verify still does NOT see, so it reports the affected tests as OLD (not re-run, no cause) with
+no warning:
+- an installed app no test-app dependency reaches (for example one with a global event
+  subscriber), and a non-Microsoft dependency that is published but not the installed version
+  (R434);
+- a body-only rebuild of a symbols-only package (no `.al` source inside): measured, that is
+  `Application`, which is expected because it is a wrapper app whose dependencies carry the source,
+  and the `LethAL Control` package, whose bytes are not hashed anyway;
+- a service-tier binary update with no new `System` package (unmeasured);
+- the control app's own changes: its bytes are not hashed, or every control-app upgrade would make
+  every test new;
+- on al-runner, Microsoft apps are still read by declared version (R435; verify is bcdev only).
 
 Under `fenced` coverage (bcdev's default) a new test is sent only to the survivors its own
 coverage reaches (R-384), read from the unmutated run verify already makes of it, so the filter
@@ -631,8 +691,9 @@ The cap counts extra test runs: two unmutated runs per new test, plus one per su
 joins, against `--max-new-tests` (default 50) x (survivors + 2). With the reach filter on, a new
 test sent to no survivor is not rerun, so it counts one unmutated run, not two (R-427); before the
 lease only the one run per new test is checked. Above it verify refuses
-`too-many-new-tests` and names the value that would run them. A run recorded before R371 is
-refused once as `source-predates-verify`. An edited test
+`too-many-new-tests` and names the value that would run them. A run recorded before R385 (digest
+scheme v1 or v2) is refused once as `source-predates-verify`, and the detail names both schemes
+(`scheme v2, this build v3`). An edited test
 gets the same unmutated runs as an added one. On bcdev the run records each test's source from the
 PUBLISHED test app, the body the server ran (R372), so a test you edited without republishing reads
 as new to verify. Where the run could not read that source (no dev endpoint, an env-tool session
@@ -678,7 +739,8 @@ Stated so a consumer does not read an absence as a finding.
 
 ### Which mutants can fail to terminate (guidance)
 
-Six shapes have been found and three were fixed by giving the same question a form that cannot hang.
+Six shapes were listed. Three were fixed by giving the same question a form that cannot hang, and
+one turned out never to be produced (below).
 What remains is small and named, so a stranded run is diagnosable rather than mysterious.
 
 **Fixed, and listed so an older report reads correctly:**
@@ -689,6 +751,9 @@ What remains is small and named, so a stranded run is diagnosable rather than my
 - `empty-block` on a `while` loop's body. A `while` loop's body is what advances its condition, so
   emptying it freezes the loop forever. Ceded to `loop-skip` (`while false`), which runs the body
   zero times (R179).
+- `empty-block` on a `repeat` body was listed here as a remaining hazard. It never occurred:
+  `empty-block` has never claimed a `repeat` body on this grammar, so no such mutant exists (R244).
+  Whether to add one for cursor loops only is R467.
 - `flip-boolean-literal` at a loop's whole-condition literal. `until true` and `while false` flipped
   to loops whose condition never ends; both are refused (issue #7 and its follow-up). `until false`
   and `while true` are ceded to `loop-truncate` and `loop-skip`, which emit the same text.
@@ -700,9 +765,6 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   idiom. **Seven such sites on one real 554-file app.** It is NOT refused, because the identical
   syntax on a decrementing counter terminates and is a good mutant, and telling them apart requires
   reasoning about values rather than syntax (R173).
-- `empty-block` on a `repeat` body whose condition its body advances. `repeat` always runs its body
-  once, so there is no "run it zero times" rewrite to cede to. A handful of sites on the same app,
-  and the count is an estimate rather than a measurement (R179).
 - `flip-boolean-literal` at a literal NESTED in a loop condition, under a unary `not`, or in the loop
   body guarding its only exit. None of these three shapes is refused; zero sites measured for the
   condition shapes, and the body-guard shape is not yet counted (R239).

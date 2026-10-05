@@ -39,6 +39,8 @@
  * `declarationMembers`, `SymbolTable`, `ObjectSymbol` and `VarSymbol` are
  * engine surface. Both are declared dependencies of this package.
  */
+import { soleArgument } from "../ast/arguments";
+import { maskAlNonCode } from "../ast/mask";
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import {
@@ -104,12 +106,6 @@ const OBJECT_KINDS: ReadonlySet<string> = new Set<string>([
   ALNodeKind.tableextension,
   ALNodeKind.pageextension,
 ]);
-
-/**
- * Receiver names that denote the implicit record of a table object. They are
- * not declared anywhere, so the symbol table cannot see them.
- */
-const IMPLICIT_RECORD_NAMES: ReadonlySet<string> = new Set(["rec", "xrec"]);
 
 /** The grammar's quoted-identifier kind; not declared in `ALNodeKind`. */
 const QUOTED_IDENTIFIER = "quoted_identifier";
@@ -185,14 +181,10 @@ export function claimsRecordMethod(
     // Reading a property that is PRESENT is resolution; a `pageextension` is still refused because
     // ITS implicit record is the EXTENDED page's SourceTable, in an object this project usually
     // cannot see, and guessing that would be the R29 shape.
-    const implicitTable =
-      objectNode.kind === ALNodeKind.table
-        ? objectName
-        : objectNode.kind === ALNodeKind.tableextension
-          ? (extendedTableOf(objectNode) ?? null)
-          : objectNode.kind === ALNodeKind.page
-            ? sourceTableOf(objectNode)
-            : null;
+    // R-464: the record a bare call binds to, from the one resolver (`recordScopesAt`): the
+    // innermost `with` subject, report dataitem or implicit record (a TableNo codeunit's `OnRun`
+    // too). A `with` subject wins over the implicit record.
+    const implicitTable = bareRecordAt(node, symbols)?.table ?? null;
     if (implicitTable === null) return false;
     // GUARD: project-declared procedure (rule 3). The table itself, AND any `tableextension` of
     // it — an extension's procedure is callable on the implicit `Rec` here exactly as the table's
@@ -203,7 +195,7 @@ export function claimsRecordMethod(
     return true;
   }
 
-  const receiver = resolveReceiver(target.receiver, node, objectNode, objectName, symbols);
+  const receiver = resolveReceiver(target.receiver, node, symbols);
 
   // GUARD: unresolvable receiver (rule 4).
   if (receiver.kind === "unresolved") return false;
@@ -221,6 +213,74 @@ export function claimsRecordMethod(
   }
 
   return true;
+}
+
+/** The Record methods whose RunTrigger `lethal.swap-modify-flag` claims. */
+export const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
+export type RunTriggerMethod = (typeof RUN_TRIGGER_METHODS)[number];
+
+/**
+ * WHICH of `RUN_TRIGGER_METHODS` does `node` call on a proven record receiver, or `null`? This
+ * file's spelling of the name, matched case-insensitively through `claimsRecordMethod`.
+ */
+export function claimedRunTriggerMethod(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): RunTriggerMethod | null {
+  return RUN_TRIGGER_METHODS.find((m) => claimsRecordMethod(node, ctx, m)) ?? null;
+}
+
+/**
+ * R-459: the SKIP site `lethal.swap-modify-flag` claims, as the method and the literal it flips:
+ * a claimed `RUN_TRIGGER_METHODS` call whose SOLE argument (comment-aware, `soleArgument`) is the
+ * literal `true`. Else `null`: `Insert()` has no literal, `Insert(true, X)` and longer are not
+ * claimed, and an unresolved receiver or a project namesake is refused by `claimsRecordMethod`.
+ *
+ * ONE answer for two operators: Tier 2 claims what this returns, and `flip-boolean-literal` cedes
+ * exactly the literal it returns, so the seam cannot orphan or duplicate a site (R171, R-459).
+ */
+export function claimedRunTriggerSkip(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): { method: RunTriggerMethod; literal: ALSyntaxNode } | null {
+  const only = soleArgument(node);
+  if (only === null || only.kind !== ALNodeKind.boolean_literal) return null;
+  if (only.text.toLowerCase() !== "true") return null;
+  const method = claimedRunTriggerMethod(node, ctx);
+  return method === null ? null : { method, literal: only };
+}
+
+/**
+ * R-364: is `node` a QUALIFIED call to `methodName` whose receiver this project's source cannot
+ * resolve (`claimsRecordMethod`'s rule 4)? For conservative screen TAGGING only, never for
+ * claiming: a platform-kill tag must stay where nothing proves the skip harmless, and an
+ * unresolved receiver proves nothing (R143). Inside an object the symbol table does not index
+ * (R343) every receiver outside a trigger's own `var` section is unresolved.
+ *
+ * R-254: inside a `reportextension` (not in `OBJECT_KINDS`, so never claimed: R463) every
+ * qualified receiver counts as unresolved, so Tier-1 RunTrigger flips there keep their tag.
+ */
+export function receiverUnresolved(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  methodName: string,
+): boolean {
+  if (node.kind !== ALNodeKind.procedure_call) return false;
+  const callee = node.childForFieldName("function");
+  if (callee === null) return false;
+  const target = describeCallee(callee);
+  if (target === null || target.receiver === null) return false;
+  if (!equalsIgnoreCase(target.name, methodName)) return false;
+  const objectNode = enclosingObject(node);
+  if (objectNode === null) {
+    for (let p = node.parent; p !== null; p = p.parent) {
+      if (p.kind === ALNodeKind.reportextension) return true;
+    }
+    return false;
+  }
+  const objectName = objectNameOf(objectNode);
+  if (objectName === null) return false;
+  return resolveReceiver(target.receiver, node, ctx.symbols).kind === "unresolved";
 }
 
 /**
@@ -264,16 +324,10 @@ export function resolveReceiverTable(node: ALSyntaxNode, ctx: SemanticContext): 
     // Implicit `Rec`, resolved exactly as `claimsRecordMethod` resolves it — including the
     // `pageextension` refusal, whose implicit record is the extended page's `SourceTable` and is
     // not visible here.
-    return objectNode.kind === ALNodeKind.table
-      ? objectName
-      : objectNode.kind === ALNodeKind.tableextension
-        ? extendedTableOf(objectNode)
-        : objectNode.kind === ALNodeKind.page
-          ? sourceTableOf(objectNode)
-          : null;
+    return bareRecordAt(node, symbols)?.table ?? null;
   }
 
-  const receiver = resolveReceiver(target.receiver, node, objectNode, objectName, symbols);
+  const receiver = resolveReceiver(target.receiver, node, symbols);
   return receiver.kind === "record" ? receiver.tableRef : null;
 }
 
@@ -338,22 +392,14 @@ export function claimsSystemCall(node: ALSyntaxNode, ctx: SemanticContext, name:
   if (declaresProcedure(objectNode, target.name, armOf)) return false;
   // …and so does one added to the enclosing TABLE by an extension, which is callable on the
   // implicit `Rec` here exactly as the table's own is.
-  const enclosingTable =
-    objectNode.kind === ALNodeKind.table
-      ? objectName
-      : objectNode.kind === ALNodeKind.tableextension
-        ? extendedTableOf(objectNode)
-        : // R67: same resolution as the implicit-receiver branch above, so rule 3 reaches the
-          // page's SourceTable exactly as it reaches a tableextension's base object. Omitting it
-          // here would bypass the shadowing guard for a whole object kind.
-          objectNode.kind === ALNodeKind.page
-          ? sourceTableOf(objectNode)
-          : null;
-  if (
-    enclosingTable !== null &&
-    projectDeclaresProcedureOnTable(symbols, enclosingTable, target.name, armOf)
-  ) {
-    return false;
+  // R67, R-464: every record a bare name here can bind to (each `with` subject, dataitem, and the
+  // implicit record, a TableNo `OnRun`'s included); any of them declaring the name refuses.
+  for (const scope of recordScopesAt(node, symbols)) {
+    if (
+      scope.table !== null &&
+      projectDeclaresProcedureOnTable(symbols, scope.table, target.name, armOf)
+    )
+      return false;
   }
   return true;
 }
@@ -428,12 +474,23 @@ type ResolvedReceiver =
 function resolveReceiver(
   receiver: ALSyntaxNode,
   callNode: ALSyntaxNode,
-  objectNode: ALSyntaxNode,
-  objectName: string,
   symbols: SymbolTable,
 ): ResolvedReceiver {
   const receiverName = identifierText(receiver);
   if (receiverName === null) return { kind: "unresolved" };
+  return resolveReceiverName(receiverName, callNode, symbols);
+}
+
+/** R-464: `resolveReceiver` by NAME at a position, so a `with` subject resolves the same way. */
+function resolveReceiverName(
+  receiverName: string,
+  callNode: ALSyntaxNode,
+  symbols: SymbolTable,
+): ResolvedReceiver {
+  const objectNode = enclosingObject(callNode);
+  if (objectNode === null) return { kind: "unresolved" };
+  const objectName = objectNameOf(objectNode);
+  if (objectName === null) return { kind: "unresolved" };
 
   // R30: inside an extension object, the declaring SCOPE is the extension itself — its locals,
   // parameters and globals are visible only there. `SymbolTable` indexes them under a namespaced
@@ -447,31 +504,327 @@ function resolveReceiver(
   // should be refused here could then resolve through the other object's declaration and be
   // CLAIMED. `objectScopeKeyOfNode` returns null for a node this table does not index; falling back
   // to the bare name there would reintroduce exactly the collision.
-  const scopeOwner =
-    objectNode.kind === ALNodeKind.tableextension
-      ? extensionScopeKey("tableextension", objectName)
-      : objectNode.kind === ALNodeKind.pageextension
-        ? extensionScopeKey("pageextension", objectName)
-        : objectScopeKeyOfNode(objectNode, objectName);
+  const scopeOwner = scopeOwnerOf(objectNode, objectName);
   if (scopeOwner === null) return { kind: "unresolved" };
   const declared = lookupVar(receiverName, callNode, scopeOwner, symbols);
   if (declared !== null) return classifyDeclaredType(declared);
 
-  // Not declared anywhere the symbol table can see. The cases still PROVABLE from source:
-  if (IMPLICIT_RECORD_NAMES.has(lower(receiverName))) {
-    // A table's own implicit `Rec` / `xRec`.
-    if (objectNode.kind === ALNodeKind.table) return { kind: "record", tableRef: objectName };
-    // R30: inside a `tableextension`, `Rec`/`xRec` is the EXTENDED table — named by the header's
-    // `base_object` field, not declared anywhere. A `pageextension` is deliberately NOT handled:
-    // its `Rec` is the extended PAGE's `SourceTable`, which lives in an object this project
-    // usually cannot see, and guessing it would claim sites wrongly.
-    if (objectNode.kind === ALNodeKind.tableextension) {
-      const tableRef = extendedTableOf(objectNode);
-      if (tableRef !== null) return { kind: "record", tableRef };
+  // Not declared anywhere the symbol table can see. R-464: an implicit record by the name it is
+  // spelled with here (`Rec`, `xRec` where it exists, an enclosing dataitem's name), from the one
+  // resolver. A `with` subject is never a qualified receiver's binding. A scope whose table is not
+  // provable stays unresolved: a `pageextension`'s `Rec` is the extended PAGE's `SourceTable`,
+  // which lives in an object this project usually cannot see (R30), and a reportextension `modify`.
+  const want = lower(receiverName);
+  for (const scope of recordScopesAt(callNode, symbols)) {
+    if (scope.kind === "with") continue;
+    const own = lower(stripQuotes(scope.receiver));
+    if (own !== want && !(want === "xrec" && own === "rec" && scope.xRec)) continue;
+    return scope.table === null
+      ? { kind: "unresolved" }
+      : { kind: "record", tableRef: scope.table };
+  }
+  return { kind: "unresolved" };
+}
+
+/** The symbol table's scope key for an object or extension node (R30, R70). */
+function scopeOwnerOf(objectNode: ALSyntaxNode, objectName: string): string | null {
+  return objectNode.kind === ALNodeKind.tableextension
+    ? extensionScopeKey("tableextension", objectName)
+    : objectNode.kind === ALNodeKind.pageextension
+      ? extensionScopeKey("pageextension", objectName)
+      : objectScopeKeyOfNode(objectNode, objectName);
+}
+
+/** R-464: one record a bare name or a bare record-method call can bind to at some position. */
+export interface RecordScope {
+  readonly kind:
+    | "with"
+    | "table"
+    | "tableextension"
+    | "page"
+    | "pageextension"
+    | "codeunit"
+    | "dataitem"
+    | "requestpage"
+    | "modify";
+  /** How the record is spelled when qualified: `Rec`, a dataitem's name, a `with` subject's text
+   *  (`""` when the subject is not a plain name). Raw source text, quotes kept. */
+  readonly receiver: string;
+  /** The table, or `null` where this source cannot prove it (pageextension, reportextension
+   *  `modify`, a `with` subject that does not resolve to a record). */
+  readonly table: string | null;
+  /** Does `xRec` exist beside `Rec` here? */
+  readonly xRec: boolean;
+  /** The `with` statement, for a `with` scope. */
+  readonly at?: ALSyntaxNode;
+}
+
+/**
+ * R-464: every record a bare name at `node` can bind to, INNERMOST FIRST. The one implicit-record
+ * resolver: bare and qualified claims, rule 3, `receiverUnresolved` and `lookupVar`'s guard read it.
+ *   - each enclosing `with` BODY's subject, resolved by the same receiver resolver;
+ *   - each enclosing report dataitem (an outer one's fields are visible too);
+ *   - then the object's implicit record, per R294's measured rules (`types.ts`
+ *     `implicitRecordShadowsGlobals`): table and tableextension `Rec`/`xRec`; a page's
+ *     `SourceTable`; a pageextension (table unknown); a TableNo codeunit's `OnRun` only (`Rec`, no
+ *     `xRec`: alc 18.0.43, AL0118 / AL0161); a request page with a `SourceTable` (any
+ *     reportextension request page, table unknown); a reportextension `modify(X)`'s X (unknown).
+ * Loop-hazard's `implicitRecordsAt` stays separate on purpose: a hang refusal needs "could bind"
+ * (an `#if`-arm-aware over-approximation), a claim needs "does bind" (this one).
+ */
+export function recordScopesAt(node: ALSyntaxNode, symbols: SymbolTable): RecordScope[] {
+  const out: RecordScope[] = [];
+  for (let p = node.parent; p !== null; p = p.parent) {
+    switch (p.rawKind) {
+      case "with_statement": {
+        const body = p.childForFieldName("body");
+        if (body === null || node.startIndex < body.startIndex || node.endIndex > body.endIndex)
+          continue;
+        const subject = p.childForFieldName("record");
+        const name = subject === null ? null : identifierText(subject);
+        const resolved = name === null ? null : resolveReceiverName(name, p, symbols);
+        out.push({
+          kind: "with",
+          receiver: name === null || subject === null ? "" : subject.text,
+          table: resolved?.kind === "record" ? resolved.tableRef : null,
+          xRec: false,
+          at: p,
+        });
+        continue;
+      }
+      case "report_dataitem": {
+        const name = p.childForFieldName("name");
+        const table = p.childForFieldName("table_name");
+        out.push({
+          kind: "dataitem",
+          receiver: name?.text ?? "",
+          table: table === null ? null : stripQuotes(table.text),
+          xRec: false,
+        });
+        continue;
+      }
+      case "modify_modification": {
+        // Only a reportextension dataset's `modify(X)`; a tableextension field's or pageextension
+        // control's `modify` has the same node kind and binds nothing new.
+        if (!hasAncestor(p, (a) => a.rawKind === "reportextension_declaration")) continue;
+        const name = p.childForFieldName("target");
+        out.push({ kind: "modify", receiver: name?.text ?? "", table: null, xRec: false });
+        continue;
+      }
+      case "requestpage_section": {
+        const inExtension = p.parent?.parent?.rawKind === "reportextension_declaration";
+        const table = inExtension ? null : sourceTableOf(p);
+        if (inExtension || table !== null)
+          out.push({ kind: "requestpage", receiver: "Rec", table, xRec: false });
+        return out;
+      }
+      case "reportextension_declaration":
+        return out;
+    }
+    switch (p.kind) {
+      case ALNodeKind.table:
+        out.push({ kind: "table", receiver: "Rec", table: objectNameOf(p), xRec: true });
+        return out;
+      case ALNodeKind.tableextension:
+        out.push({
+          kind: "tableextension",
+          receiver: "Rec",
+          table: extendedTableOf(p),
+          xRec: true,
+        });
+        return out;
+      case ALNodeKind.page: {
+        const table = sourceTableOf(p);
+        if (table !== null) out.push({ kind: "page", receiver: "Rec", table, xRec: true });
+        return out;
+      }
+      case ALNodeKind.pageextension:
+        out.push({ kind: "pageextension", receiver: "Rec", table: null, xRec: true });
+        return out;
+      case ALNodeKind.codeunit: {
+        const table = propertyValueOf(p, "TableNo");
+        const trigger = enclosingTrigger(node)?.childForFieldName("name")?.text;
+        if (table !== null && trigger !== undefined && equalsIgnoreCase(trigger, "OnRun"))
+          out.push({ kind: "codeunit", receiver: "Rec", table, xRec: false });
+        return out;
+      }
+      case ALNodeKind.report:
+        return out;
     }
   }
+  return out;
+}
 
-  return { kind: "unresolved" };
+/** R-464: the record a BARE record-method call binds to (the innermost scope), when provable. */
+function bareRecordAt(node: ALSyntaxNode, symbols: SymbolTable): RecordScope | null {
+  const [innermost] = recordScopesAt(node, symbols);
+  return innermost !== undefined && innermost.table !== null ? innermost : null;
+}
+
+/**
+ * R-464: the receiver a bare record-method call at `node` binds to, spelled out (`Rec`, a
+ * dataitem's name, a `with` subject), for an operator that must write it (`validate-to-assign`).
+ * `null` unless PROVEN: the spelling is not the binding. The name, resolved at the call, must bind
+ * the very record the call binds to (sol r1-r3, Opus r4-r5):
+ *   - every record a bare name reaches here has a table DECLARED in this project, and none of them
+ *     (nor any project tableextension of it, in any `#if` arm) has a field or procedure of that
+ *     name, which would capture the qualification;
+ *   - for an implicit record or dataitem, the name is PROVABLY undeclared here (a local `Rec`
+ *     would capture it; an `#if`-only or unindexed declaration counts as declared), and the first
+ *     implicit scope spelled that way is this one;
+ *   - for a `with` subject, the name means the same declaration at the call as at the `with`.
+ */
+export function bareReceiverText(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const symbols = ctx.symbols;
+  const scopes = recordScopesAt(node, symbols);
+  const [scope] = scopes;
+  if (scope === undefined || scope.table === null || scope.receiver === "") return null;
+  const name = stripQuotes(scope.receiver);
+  for (const s of scopes) {
+    if (s.table === null) return null;
+    const table = resolveTable(symbols, s.table);
+    if (table === null || mayHaveMember(symbols, table, name)) return null;
+  }
+  const atCall = declarationAt(name, node, symbols);
+  if (atCall === "unknown") return null;
+  if (scope.kind === "with") {
+    if (scope.at === undefined || atCall === null) return null;
+    const atWith = declarationAt(name, scope.at, symbols);
+    return atWith !== null &&
+      atWith !== "unknown" &&
+      atWith.node.startIndex === atCall.node.startIndex
+      ? scope.receiver
+      : null;
+  }
+  if (atCall !== null) return null;
+  const named = scopes.find(
+    (s) => s.kind !== "with" && lower(stripQuotes(s.receiver)) === lower(name),
+  );
+  return named === scope ? scope.receiver : null;
+}
+
+/**
+ * R-464: the declaration a bare `name` binds to at `node`, in three states: `null` only when
+ * PROVABLY absent; `"unknown"` for any refusal that is not absence (`lookupDeclaredState`), and
+ * also whenever the visible source text declares `name` where the index does not show it (inside
+ * `#if`, in an unindexed member, swallowed by the grammar).
+ */
+function declarationAt(
+  name: string,
+  node: ALSyntaxNode,
+  symbols: SymbolTable,
+): VarSymbol | null | "unknown" {
+  const objectNode = enclosingObject(node);
+  const objectName = objectNode === null ? null : objectNameOf(objectNode);
+  if (objectNode === null || objectName === null) return "unknown";
+  const scopeOwner = scopeOwnerOf(objectNode, objectName);
+  if (scopeOwner === null) return "unknown";
+  const found = lookupDeclaredState(name, node, scopeOwner, symbols);
+  if (found !== null) return found;
+  return declaresName(visibleDeclarationText(node, objectNode), name) ? "unknown" : null;
+}
+
+/**
+ * The source text whose declarations are visible at `node`: its own procedure or trigger, plus the
+ * object with every OTHER procedure and trigger blanked out (offsets kept). With `node` null, every
+ * procedure and trigger is blanked.
+ */
+function visibleDeclarationText(node: ALSyntaxNode | null, objectNode: ALSyntaxNode): string {
+  const own = node === null ? null : (findEnclosingProcedure(node) ?? enclosingTrigger(node));
+  const spans: [number, number][] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    for (const c of n.namedChildren) {
+      if (isProcedureLike(c) || c.kind === ALNodeKind.trigger)
+        spans.push([c.startIndex, c.endIndex]);
+      else walk(c);
+    }
+  };
+  walk(objectNode);
+  let text = objectNode.text;
+  const base = objectNode.startIndex;
+  for (const [a, b] of spans.reverse()) {
+    if (own !== null && own.startIndex === a) continue;
+    text = `${text.slice(0, a - base)}${" ".repeat(b - a)}${text.slice(b - base)}`;
+  }
+  return text;
+}
+
+/**
+ * Does `text` declare `name`: `name :` alone or inside a comma-separated list (`Rec, Dummy: X`),
+ * never `:=` or `::`? Read through the engine's lexer (`maskAlNonCode`, strings blanked), with
+ * every preprocessor line blanked too, so all `#if` arms read together: that can only add refusals.
+ */
+function declaresName(text: string, name: string): boolean {
+  const code = maskAlNonCode(text, { blankStringContents: true }).replace(/^[ \t]*#.*$/gm, (m) =>
+    " ".repeat(m.length),
+  );
+  const esc = escapeRegExp(name);
+  // Unicode letters (`u`): an ASCII-only class stopped a list at a name like `Beløb`.
+  const id = `(?:"[^"\\n]*"|[\\p{L}_][\\p{L}\\p{N}_]*)`;
+  return new RegExp(
+    `(^|[^\\p{L}\\p{N}_".])("${esc}"|${esc})(\\s*,\\s*${id})*\\s*:(?![=:])`,
+    "iu",
+  ).test(code);
+}
+
+/**
+ * Could a field or procedure named `member` exist on `table`? Read by TEXT through the engine's
+ * lexer, so one in any `#if` arm counts: the table itself, every project tableextension of it
+ * (indexed or wrapped whole in `#if`), and any unparsed object that says `tableextension`. A
+ * procedure counts like a field (refused by ruling, not measured with alc).
+ */
+function mayHaveMember(symbols: SymbolTable, table: ObjectSymbol, member: string): boolean {
+  const esc = escapeRegExp(member);
+  const field = new RegExp(`\\bfield\\s*\\(\\s*\\d+\\s*;\\s*("${esc}"|${esc})\\s*;`, "i");
+  const proc = new RegExp(`\\bprocedure\\s+("${esc}"|${esc})\\s*\\(`, "i");
+  const holds = (text: string): boolean => {
+    const code = maskAlNonCode(text, { blankStringContents: true });
+    return field.test(code) || proc.test(code);
+  };
+  if (holds(table.node.text)) return true;
+  const name = table.name.toLowerCase();
+  const id = table.node.childForFieldName("object_id")?.text ?? "";
+  const extendsIt = (base: string): boolean => {
+    const b = stripQuotes(base).toLowerCase();
+    return b === name || (id !== "" && b === id);
+  };
+  for (const ext of symbols.tableExtensions)
+    if (extendsIt(ext.baseObject) && holds(ext.node.text)) return true;
+  for (const o of symbols.unindexedObjects) {
+    const base = o.childForFieldName("base_object")?.text ?? "";
+    if (o.kind === ALNodeKind.tableextension && extendsIt(base) && holds(o.text)) return true;
+  }
+  return symbols.unparsedObjects.some(
+    (o) => identifierTokens(o.text).has("tableextension") && holds(o.text),
+  );
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * R-464, the PRECISE guard in `lookupVar`: does a bare `name` at `node` bind a record field before
+ * the variable found? A `with` subject's field beats every variable; an implicit record's field
+ * beats an object GLOBAL only (R294), never in a table or tableextension (there the global wins).
+ * Only a field this project declares on that table counts: an unknown table proves nothing, so the
+ * variable stands. Never `types.ts`'s blanket refusal, which would blind the hang check.
+ */
+function fieldShadows(
+  name: string,
+  node: ALSyntaxNode,
+  symbols: SymbolTable,
+  global: boolean,
+): boolean {
+  for (const scope of recordScopesAt(node, symbols)) {
+    if (scope.table === null) continue;
+    const implicit = scope.kind !== "with";
+    if (implicit && (!global || scope.kind === "table" || scope.kind === "tableextension"))
+      continue;
+    const table = resolveTable(symbols, scope.table)?.name ?? scope.table;
+    if (symbols.fieldsOf(table).some((f) => equalsIgnoreCase(f.name, name))) return true;
+  }
+  return false;
 }
 
 /**
@@ -493,6 +846,24 @@ export function lookupVar(
   objectName: string,
   symbols: SymbolTable,
 ): VarSymbol | null {
+  const found = lookupDeclaredState(name, callNode, objectName, symbols);
+  if (found === null || found === "unknown") return null;
+  // R-464: the precise field-over-variable guard (`fieldShadows`).
+  const global = symbols.globalsOf(objectName).includes(found);
+  return fieldShadows(name, callNode, symbols, global) ? null : found;
+}
+
+/**
+ * `lookupVar`'s search, in three states: `null` = provably no declaration of `name` here;
+ * `"unknown"` = a refusal that is NOT absence (R330's trigger-header `#if` name, R331's unindexed
+ * member, R302's ambiguous name; `lookupVar` answers `null` for both); else the declaration.
+ */
+function lookupDeclaredState(
+  name: string,
+  callNode: ALSyntaxNode,
+  objectName: string,
+  symbols: SymbolTable,
+): VarSymbol | null | "unknown" {
   const matches = (v: VarSymbol): boolean => equalsIgnoreCase(v.name, name);
 
   // R68: a TRIGGER's own `var` section, resolved from the AST node rather than from a name-keyed
@@ -507,7 +878,7 @@ export function lookupVar(
   // R330 (run 002 fix round): a name the enclosing trigger declares elsewhere in its header (inside
   // a `#if` region, which `triggerScopeVar` does not read) is unknown, never a global.
   const trigger = enclosingTrigger(callNode);
-  if (trigger !== null && triggerLocalNames(trigger).has(name.toLowerCase())) return null;
+  if (trigger !== null && triggerLocalNames(trigger).has(name.toLowerCase())) return "unknown";
 
   const procedure = findEnclosingProcedure(callNode);
   if (procedure !== null) {
@@ -526,10 +897,10 @@ export function lookupVar(
     // R331 (run 003): an unindexed member of ANY shape resolves nothing, neither by name nor
     // through the globals below. See `resolveIdentifierType` (types.ts).
     const symbol = symbols.resolveProcedureAt(objectName, procedure.startIndex);
-    if (symbol === null) return null;
+    if (symbol === null) return "unknown";
     {
       // R302: an ambiguous name resolves to nothing, and never to a global of that name.
-      if (symbol.ambiguous?.includes(name.toLowerCase())) return null;
+      if (symbol.ambiguous?.includes(name.toLowerCase())) return "unknown";
       const local = symbol.locals.find(matches);
       if (local !== undefined) return local;
       const parameter = symbol.parameters.find(matches);
@@ -714,9 +1085,10 @@ function projectDeclaresProcedureOnTable(
 /** R331 (run 005): the lowercase identifier tokens of `text`, comments stripped. A quoted
  *  identifier counts as its inner text. Strings are not stripped: a false match only refuses. */
 function identifierTokens(text: string): ReadonlySet<string> {
-  const code = text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  // R-464: the engine's lexer, so a `//` inside a string no longer hides the rest of the line.
+  const code = maskAlNonCode(text, { blankStringContents: false });
   const out = new Set<string>();
-  for (const m of code.matchAll(/"([^"\n]*)"|[A-Za-z_][A-Za-z0-9_]*/g))
+  for (const m of code.matchAll(/"([^"\n]*)"|[\p{L}_][\p{L}\p{N}_]*/gu))
     out.add((m[1] ?? m[0]).toLowerCase());
   return out;
 }
@@ -790,10 +1162,15 @@ function extendedTableOf(objectNode: ALSyntaxNode): string | null {
  * record) and the honest answer is "no implicit record", not a default.
  */
 function sourceTableOf(objectNode: ALSyntaxNode): string | null {
+  return propertyValueOf(objectNode, "SourceTable");
+}
+
+/** The value of a direct `property` member (`SourceTable`, R-464's `TableNo`), quotes stripped. */
+function propertyValueOf(objectNode: ALSyntaxNode, property: string): string | null {
   for (const member of declarationMembers(objectNode)) {
     if (member.kind !== ALNodeKind.property) continue;
     const name = member.childForFieldName("name");
-    if (name === null || !equalsIgnoreCase(name.text, "SourceTable")) continue;
+    if (name === null || !equalsIgnoreCase(name.text, property)) continue;
     const value = member.childForFieldName("value");
     if (value === null) return null;
     const table = stripQuotes(value.text);

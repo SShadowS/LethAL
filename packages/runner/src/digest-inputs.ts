@@ -6,20 +6,43 @@
  *    package's NavxManifest (R-372's rule: the body the server runs), verify and al-runner from the
  *    test project's `app.json`, so both are read into one canonical text that compares equal when
  *    they say the same thing.
- * 2. The DEPENDENCY FINGERPRINT: every dependency the test app runs against, transitive ones too.
- *    A Microsoft one by publisher, id and version: rebuilding one at an UNCHANGED version is not
- *    seen, a stated limit (filed on the roadmap). Every other one by the SHA-256 of the package
- *    that RAN: read one at a time, hashed and dropped. The target app itself is left out: verify
- *    requires its source unchanged (`assertSourceUnchanged`), and the package the server holds for
- *    it is the instrumented build of whichever run published last. Its own dependencies are taken
- *    from the target project's `app.json` and walked like any other.
+ * 2. The DEPENDENCY FINGERPRINT: every dependency the test app runs against, transitive ones too,
+ *    by the SHA-256 of the package that RAN: read one at a time, hashed and dropped. The target app
+ *    itself is left out: verify requires its source unchanged (`assertSourceUnchanged`), and the
+ *    package the server holds for it is the instrumented build of whichever run published last.
+ *    Its own dependencies are taken from the target project's `app.json` and walked like any other.
+ *    R-385 (bcdev, `MicrosoftMode` `bytes`): Microsoft apps are hashed by bytes too, and each must
+ *    have exactly one INSTALLED row at the hashed version. Three roots: the test app's
+ *    dependencies; `System` always, plus `Application` (by its id) when any walked app declares
+ *    one; and the dependencies of the `LethAL Control` app the server runs (Test Runner, which runs
+ *    every test). al-runner keeps Microsoft apps by declared version (`declared`, tagged so it
+ *    never equals a bytes fingerprint; R435).
  *
  * A package that cannot be read throws `DependencyUnreadableError`: the run then records no
  * digests (`test-digests-unavailable`) and verify refuses, never a partial fingerprint.
+ *
+ * Stated limits (bytes mode). In each, verify reports the affected tests as OLD (not re-run, no
+ * cause) with no warning; only the docs say it can happen.
+ * - L0: an INSTALLED app outside the closure (any publisher) that changes a test, for example
+ *   through a global event subscriber, is not read; nor is a non-Microsoft dependency checked to be
+ *   the installed version (R434).
+ * - L1: a symbols-only package (no `.al` entries, only `SymbolReference.json`) keeps its bytes when
+ *   only procedure bodies change. Measured on Cronus28 and Cronus284: `Application` (0 `.al`; that
+ *   is expected, it is a wrapper app whose dependencies carry the source) and the `LethAL Control`
+ *   package (0 `.al`, 4 entries; its bytes are not hashed anyway, L3). Every other closure package
+ *   holds source.
+ * - L2: a server-only binary update (new service-tier DLLs, no new `System` package) changes how
+ *   tests run; whether `System`'s bytes move with it is unmeasured.
+ * - L3: the control app's own bytes are not hashed: that would make every recorded test new on
+ *   every control-app upgrade. Its version is checked against `MIN_CONTROL_VERSION`, and the live
+ *   gates measure its behaviour.
+ * Cost: about 4.3 s per run and per verify on Cronus284 (3.2 s to download 14 packages, 68.9 MB;
+ * 0.6 s of per-id installed checks; 0.4 s to read the running control version). No cache.
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readPackageEntry } from "./app-package";
+import { CONTROL_APP_ID } from "./harness";
 import { readAppIdentity } from "./published-test-app";
 
 export interface AppDependency {
@@ -201,29 +224,124 @@ export type PackageReader = (dep: AppDependency) => Promise<ReadonlyArray<Uint8A
 const isMicrosoft = (publisher: string): boolean => publisher.trim().toLowerCase() === "microsoft";
 const sha256 = (b: Uint8Array | string): string =>
   new Bun.CryptoHasher("sha256").update(b).digest("hex");
+const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * R-385: Microsoft's `Application` meta app. Every `Microsoft_Application_*.app` manifest under
+ * `fixtures/*\/.alpackages` (17) and the package Cronus28 and Cronus284 served carry this App Id.
+ * It is walked by id when any walked app declares an `application` property.
+ */
+export const APPLICATION_APP_ID = "c1335042-3002-4257-bf8a-75c898ccb1b8";
+
+/**
+ * R-385: how `dependencyFingerprint` treats Microsoft apps. Required, with no default, so no
+ * caller gets either behaviour by leaving it out.
+ *
+ * - `bytes`: a Microsoft app is hashed by the bytes of the package the SERVER holds, like any
+ *   other dependency, and must have exactly one INSTALLED row at the hashed manifest's version.
+ *   `System` is always hashed (`readSystem`), and so are the dependencies of the `LethAL Control`
+ *   app the server runs (`readControl`, which must report `controlVersion()`): today only Test
+ *   Runner, which runs every test.
+ * - `declared`: a Microsoft app by id and DECLARED version only (`M <id> <version>`), plus a
+ *   `K declared` line so such a fingerprint never equals a bytes one. al-runner's (D6).
+ */
+export type MicrosoftMode =
+  | {
+      readonly kind: "bytes";
+      readSystem(): Promise<Uint8Array | null | undefined>;
+      readControl(): Promise<Uint8Array | null | undefined>;
+      controlVersion(): Promise<string>;
+      installed(appId: string): Promise<readonly string[]>;
+    }
+  | { readonly kind: "declared" };
+
+/** A package's identity and manifest, or `DependencyUnreadableError` naming `what`. */
+function openPackage(
+  bytes: Uint8Array | null | undefined,
+  what: string,
+): { bytes: Uint8Array; identity: ReturnType<typeof readAppIdentity>; manifest: string } {
+  if (bytes === null || bytes === undefined || bytes.byteLength === 0) {
+    throw new DependencyUnreadableError(`the package of ${what} could not be read`);
+  }
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  try {
+    const identity = readAppIdentity(buf);
+    const manifest = readPackageEntry(buf, "NavxManifest.xml");
+    if (manifest === null) throw new Error("no NavxManifest.xml");
+    return { bytes, identity, manifest: manifest.toString("utf8") };
+  } catch (err) {
+    throw new DependencyUnreadableError(
+      `the package read for ${what} is not a readable app package: ${message(err)}`,
+    );
+  }
+}
 
 /**
  * The dependency fingerprint of an app whose inputs are `root`. `target` is the app under test,
  * which is not hashed (see the module comment) but whose own dependencies are walked from its
- * project's `app.json`. Packages are read one at a time, in a stable order, and each is dropped
- * once hashed.
+ * project's `app.json`. Packages are read one at a time, and each is dropped once hashed; the
+ * lines are sorted, so the walk order does not matter.
  */
 export async function dependencyFingerprint(
   root: AppInputs,
   read: PackageReader,
+  microsoft: MicrosoftMode,
   target?: { readonly id: string; readonly inputs: AppInputs },
 ): Promise<string> {
   const lines = new Set<string>();
   const seen = new Set<string>();
   const queue: AppDependency[] = [];
-  const platformOf = (i: Pick<AppInputs, "application" | "platform">): void => {
-    if (i.application !== undefined) lines.add(`M application ${i.application}`);
-    if (i.platform !== undefined) lines.add(`M platform ${i.platform}`);
-  };
+  const bytesMode = microsoft.kind === "bytes" ? microsoft : undefined;
   const enqueue = (i: AppInputs): void => {
-    platformOf(i);
+    if (i.application !== undefined) {
+      lines.add(`M application ${i.application}`);
+      // R-385: a real suite reaches Base and System Application through this meta app.
+      if (bytesMode !== undefined)
+        queue.push({
+          id: APPLICATION_APP_ID,
+          name: "Application",
+          publisher: "Microsoft",
+          version: i.application,
+        });
+    }
+    if (i.platform !== undefined) lines.add(`M platform ${i.platform}`);
     queue.push(...i.dependencies);
   };
+  if (bytesMode === undefined) {
+    lines.add("K declared");
+  } else {
+    // R-385 platform root: System, always. It is not an extension: no installed check.
+    const system = openPackage(await bytesMode.readSystem(), 'the platform package "System"');
+    if (system.identity.name !== "System" || !isMicrosoft(system.identity.publisher)) {
+      throw new DependencyUnreadableError(
+        `the platform package read for "System" is "${system.identity.name}" by "${system.identity.publisher}", not Microsoft's System`,
+      );
+    }
+    lines.add(`P ${sha256(system.bytes)}`);
+    enqueue(appInputsOfManifest(system.manifest));
+    // R-385 control root: the dependencies of the control app the server RUNS (Test Runner). Its
+    // own bytes are not hashed (limit L3); its version proves the served package is the running one.
+    const control = openPackage(await bytesMode.readControl(), 'the control app "LethAL Control"');
+    if (control.identity.id.toLowerCase() !== CONTROL_APP_ID) {
+      throw new DependencyUnreadableError(
+        `the package served for the control app "LethAL Control" is app ${control.identity.id} ("${control.identity.name}"), not ${CONTROL_APP_ID}`,
+      );
+    }
+    let running: string;
+    try {
+      running = await bytesMode.controlVersion();
+    } catch (err) {
+      throw new DependencyUnreadableError(
+        `the running control app "LethAL Control" did not report its version: ${message(err)}`,
+      );
+    }
+    if (control.identity.version !== running) {
+      throw new DependencyUnreadableError(
+        `the package served for the control app "LethAL Control" is version ${control.identity.version}, but the running one reports ${running}`,
+      );
+    }
+    queue.push(...appInputsOfManifest(control.manifest).dependencies);
+  }
   enqueue(root);
   const targetId = target?.id.toLowerCase();
   for (let dep = queue.shift(); dep !== undefined; dep = queue.shift()) {
@@ -234,7 +352,7 @@ export async function dependencyFingerprint(
       enqueue(target.inputs);
       continue;
     }
-    if (isMicrosoft(dep.publisher)) {
+    if (bytesMode === undefined && isMicrosoft(dep.publisher)) {
       lines.add(`M ${dep.id} ${dep.version}`);
       continue;
     }
@@ -245,27 +363,47 @@ export async function dependencyFingerprint(
       );
     }
     for (const bytes of packages) {
-      const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      let identity: ReturnType<typeof readAppIdentity>;
-      let manifest: Buffer | null;
-      try {
-        identity = readAppIdentity(buf);
-        manifest = readPackageEntry(buf, "NavxManifest.xml");
-      } catch (err) {
-        throw new DependencyUnreadableError(
-          `the package read for dependency "${dep.name}" (${dep.id}) is not a readable app package: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      if (identity.id.toLowerCase() !== dep.id || manifest === null) {
+      const { identity, manifest } = openPackage(bytes, `dependency "${dep.name}" (${dep.id})`);
+      if (identity.id.toLowerCase() !== dep.id) {
         throw new DependencyUnreadableError(
           `the package read for dependency "${dep.name}" (${dep.id}) is app ${identity.id} ("${identity.name}"), not that dependency`,
         );
       }
+      if (
+        bytesMode !== undefined &&
+        (isMicrosoft(dep.publisher) || isMicrosoft(identity.publisher))
+      )
+        await checkInstalled(bytesMode, dep, identity.version);
       lines.add(`X ${dep.id} ${sha256(bytes)}`);
-      enqueue(appInputsOfManifest(manifest.toString("utf8")));
+      enqueue(appInputsOfManifest(manifest));
     }
   }
   return sha256([...lines].sort().join("\n"));
+}
+
+/**
+ * R-385 D2: a Microsoft package the server serves must be the one INSTALLED: exactly one installed
+ * row, at the hashed manifest's version. `dev/packages` returns "a version you have", which during
+ * a staged upgrade may be published but not installed; hashing that would call it resident.
+ */
+async function checkInstalled(
+  mode: Extract<MicrosoftMode, { kind: "bytes" }>,
+  dep: AppDependency,
+  served: string,
+): Promise<void> {
+  let installed: readonly string[];
+  try {
+    installed = await mode.installed(dep.id);
+  } catch (err) {
+    throw new DependencyUnreadableError(
+      `the installed version of "${dep.name}" (${dep.id}) could not be read: ${message(err)}`,
+    );
+  }
+  if (installed.length !== 1 || installed[0] !== served) {
+    throw new DependencyUnreadableError(
+      `"${dep.name}" (${dep.id}): the server serves version ${served}, but its installed version(s) are [${installed.join(", ")}]; exactly one installed row at the served version is required`,
+    );
+  }
 }
 
 /** R-372's read: bcdev's `fetchPublishedAppPackage`, the package the SERVER holds. */
@@ -319,15 +457,20 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
   };
 }
 
-/** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. */
+/** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. R205: from
+ *  `snapshot` when given, where a missing `app.json` is unreadable, never a disk read. */
 export async function targetOf(
   projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<{ readonly id: string; readonly inputs: AppInputs }> {
   let json: unknown;
   try {
-    json = JSON.parse(
-      (await readFile(join(projectDir, "app.json"), "utf8")).replace(/^\uFEFF/, ""),
-    );
+    const bytes = snapshot?.get("app.json");
+    if (snapshot !== undefined && bytes === undefined) {
+      throw new Error("the source snapshot holds no app.json");
+    }
+    const text = bytes?.toString("utf8") ?? (await readFile(join(projectDir, "app.json"), "utf8"));
+    json = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (err) {
     throw new DependencyUnreadableError(
       `the target project's app.json could not be read (${err instanceof Error ? err.message : String(err)})`,
@@ -342,7 +485,7 @@ export async function targetOf(
 /**
  * The bcdev step on its own (the build measures its live cost with it: see
  * scripts/r371-reach-measure/dep-download.ts). Reads the PUBLISHED test app for its dependency
- * list, then every non-Microsoft dependency's resident package.
+ * list, then every dependency's resident package (Microsoft ones as `microsoft` says).
  */
 export async function bcdevDependencyFingerprint(
   fetchPackage: (app: {
@@ -351,6 +494,7 @@ export async function bcdevDependencyFingerprint(
   }) => Promise<Uint8Array | null | undefined>,
   testDir: string,
   projectDir: string,
+  microsoft: MicrosoftMode,
 ): Promise<string> {
   const local = JSON.parse(
     (await readFile(join(testDir, "app.json"), "utf8")).replace(/^\uFEFF/, ""),
@@ -368,6 +512,7 @@ export async function bcdevDependencyFingerprint(
   return dependencyFingerprint(
     appInputsOfPackage(bytes),
     publishedPackageReader(fetchPackage),
+    microsoft,
     await targetOf(projectDir),
   );
 }

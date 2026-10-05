@@ -78,12 +78,19 @@ export const swapAdditive: MutationOperator = {
   tier: 1,
   targetNodeKinds: [ALNodeKind.additive_expression],
   producesNodeKinds: [ALNodeKind.additive_expression],
-  // R196: adds to what it already declared for the type guard. The tag also resolves symbols
-  // (`hangCapableForMutatedNode` calls `resolveVarRef`).
+  // R196: adds to what it already declared for the type guard. The hang refusal also resolves
+  // symbols (`hangCapableForMutatedNode` calls `resolveVarRef`).
   requiresSemantic: ["type-info", "symbol-table"],
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
     return flipFor(node, ctx) !== null;
+  },
+
+  // R447: asks `flipFor`'s checks only, not `replaceOperatorToken`, so a hang-refused node whose
+  // token replacement would ALSO have failed is still counted. A possible small over-count, bounded
+  // by such nodes (none known); not worth a second token replacement on the refusal path.
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return flipBeforeHang(node, ctx) !== null && hangCapableForMutatedNode(node, ctx) !== null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
@@ -91,7 +98,6 @@ export const swapAdditive: MutationOperator = {
     if (flip === null) return [];
     const mutatedText = replaceOperatorToken(node, flip.token, flip.replacement);
     if (mutatedText === null) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -100,7 +106,6 @@ export const swapAdditive: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, mutatedText),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
       },
     ];
   },
@@ -139,7 +144,7 @@ export const swapAdditive: MutationOperator = {
       expectedSpecs: [],
     },
     {
-      name: "tags an in-loop subtraction that advances the condition (R196), and does NOT tag the preheader addition",
+      name: "REFUSES an in-loop subtraction that advances the condition (R196), and keeps the preheader addition",
       sourceAL: `codeunit 51604 "C" { procedure P() var Remaining: Integer; Total: Integer; begin Total := Remaining + 1; while Remaining > 0 do Remaining := Remaining - 1; end; }`,
       expectedSpecs: [
         {
@@ -147,12 +152,6 @@ export const swapAdditive: MutationOperator = {
           beforeText: "Remaining + 1",
           afterText: "Remaining - 1",
           hangCapable: null,
-        },
-        {
-          parentContext: "statement-position",
-          beforeText: "Remaining - 1",
-          afterText: "Remaining + 1",
-          hangCapable: "loop-condition-target",
         },
       ],
     },
@@ -169,8 +168,22 @@ interface AdditiveFlip {
  *
  * One decision function for both entry points, so `targets()` and `generate()` cannot drift apart
  * about which sites are claimed.
+ *
+ * A BOUND in a loop's own condition (`while I < N - 1`) is KEPT, by ruling (R454 point 4): the 7
+ * such sites on BaseApp were each read and none can loop forever. That is corpus evidence, not a
+ * rule: a bound change can add passes on which a conditional step does not advance
+ * (`while I < N - 1 do if I < 2 then I += 1;` hangs at `N + 1`). The run's timeout, strand and
+ * quarantine handling catches such a site; revisit if a hang from this operator is ever measured.
  */
 function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null {
+  const flip = flipBeforeHang(node, ctx);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return flip !== null && hangCapableForMutatedNode(node, ctx) === null ? flip : null;
+}
+
+/** `flipFor` without R196's hang check: every other guard, in the same order (R447). */
+function flipBeforeHang(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null {
   if (node.kind !== ALNodeKind.additive_expression) return null;
 
   const token = findOperatorToken(node);
@@ -191,6 +204,5 @@ function flipFor(node: ALSyntaxNode, ctx: SemanticContext): AdditiveFlip | null 
   // failing the whole project's compile.
   if (leftType === null || rightType === null) return null;
   if (!NUMERIC_TYPES.has(leftType) || !NUMERIC_TYPES.has(rightType)) return null;
-
   return { token: token.text, replacement };
 }

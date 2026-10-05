@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
+import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
   ArtifactCompiler,
@@ -494,6 +495,7 @@ describe("BcDevMcpBackend.attach", () => {
       appJsonText: JSON.stringify({ idRanges: [{ from: 70000, to: 70099 }] }),
       alSources: opts.alSources ?? [],
       renamedMemberNames: opts.renamedMemberNames ?? new Map(),
+      manifestObjectKeys: new Set<string>(),
     };
     return {
       backend,
@@ -707,6 +709,62 @@ describe("BcDevMcpBackend.run", () => {
       expect(v.durationMs).toBeGreaterThanOrEqual(0);
       expect(v.coverage?.entries[0]?.procedure).toBe("Post");
       expect(v.coverage?.entries[0]?.objectType).toBe("Codeunit");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // R254, hub direction. MEASURED on Cronus28 (scripts/r254-probe/README.md): a test calling only
+  // the extension's `Classify` reported exactly `22:91601` methodId 1710736425. The base REPORT
+  // shares the id 91601 here on purpose, with a method of the SAME id, so a lookup or a conversion
+  // that drops the kind and keys by id alone resolves the wrong object.
+  test("R254: a 22:<id> row names the REPORTEXTENSION's method, never the same-id report's", async () => {
+    const symbols = {
+      ReportExtensions: [
+        { Id: 91601, Name: "R254 Probe RepExt", Methods: [{ Id: 1710736425, Name: "Classify" }] },
+      ],
+      Reports: [
+        { Id: 91601, Name: "R254 Same Id Report", Methods: [{ Id: 1710736425, Name: "OnReport" }] },
+      ],
+    };
+    for (const sr of [symbols, { Namespaces: [{ Name: "Probe", ...symbols }] }]) {
+      const index = AppMethodIndex.fromSymbolReference(sr);
+      expect(index.lookup(22, 91601, 1710736425)).toBe("Classify");
+      expect(index.declaredObjects().has("reportextension:91601")).toBe(true);
+      expect(index.lookup(3, 91601, 1710736425)).toBe("OnReport");
+      expect(index.lookup(14, 91601, 1710736425)).toBeUndefined();
+      expect(index.lookup(15, 91601, 1710736425)).toBeUndefined();
+    }
+    const { backend, cleanup } = await makeBackendWithDeploy(
+      () => ({
+        results: [
+          {
+            codeunitId: 79100,
+            method: "PostingUpdatesTotal",
+            status: "passed",
+            durationMs: 1,
+            output: "",
+          },
+        ],
+        coverage: [
+          {
+            testObjectId: 79100,
+            testMethodId: 111,
+            coveredProcedures: [
+              { objectType: 22, objectId: 91601, methodId: 1710736425 },
+              { objectType: 3, objectId: 91601, methodId: 1710736425 },
+            ],
+          },
+        ],
+      }),
+      symbols,
+    );
+    try {
+      const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "ReportExtension", objectId: 91601, procedure: "Classify" },
+        { objectType: "Report", objectId: 91601, procedure: "OnReport" },
+      ]);
     } finally {
       await cleanup();
     }
@@ -1210,6 +1268,12 @@ describe("BcDevMcpBackend.deploy", () => {
           mutants: [mutantEntry("m1"), mutantEntry("m2"), mutantEntry("m3")],
         }),
       );
+      // R-307 section 4: the manifest's object must be declared and mapped, or deploy() refuses
+      // before it ever reaches the publish this test is about.
+      await Bun.write(
+        join(dir, "Foo.Codeunit.al"),
+        'codeunit 79100 "Foo"\n{\n    procedure P1()\n    begin\n    end;\n}\n',
+      );
       // alc "compiles" normally; altool "runs" but reports exit 1, so
       // ContainerDeployer.publish() THROWS — a genuine, observed publish failure, not merely an
       // identity puzzle. reportedIdentity is pinned to a well-formed but WRONG id regardless of
@@ -1218,7 +1282,7 @@ describe("BcDevMcpBackend.deploy", () => {
       const failingSpawn: SpawnFn = async (argv) => {
         const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
         if (argv[0]?.includes("alc") && out !== undefined) {
-          await Bun.write(out, buildFakeApp({ Codeunits: [] }));
+          await Bun.write(out, buildFakeApp({ Codeunits: [{ Id: 79100, Name: "Foo" }] }));
           return { exitCode: 0, stdout: "", stderr: "" };
         }
         if (argv[1] === "publishapp") {
@@ -1237,7 +1301,7 @@ describe("BcDevMcpBackend.deploy", () => {
         undefined,
         makeDeployment(
           dir,
-          { Codeunits: [] },
+          { Codeunits: [{ Id: 79100, Name: "Foo" }] },
           {
             spawn: failingSpawn,
             reportedIdentity: "f".repeat(32),
@@ -1401,6 +1465,86 @@ describe("BcDevMcpBackend.deploy", () => {
       await expect(backend.deploy(dir)).rejects.toBeInstanceOf(HarnessVerificationError);
       expect(verify).toHaveBeenCalledTimes(1);
       expect(compile).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("BcDevMcpBackend.compilePlainCheck (R461)", () => {
+  test("compiles the dir as given: no Control dependency staged, no altool, no .app left", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      const appJson = JSON.stringify({ id: TEST_APP_ID, name: "Fixture", version: "1.0.0.0" });
+      await Bun.write(join(plain, "app.json"), appJson);
+      const calls: string[][] = [];
+      let appJsonSeen = "";
+      const spawn: SpawnFn = async (argv) => {
+        calls.push([...argv]);
+        const project = argv.find((a) => a.startsWith("/project:"))?.slice("/project:".length);
+        if (project !== undefined) appJsonSeen = await readFile(join(project, "app.json"), "utf8");
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "plain-app-bytes");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const staging = await controlStaging(dir);
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...staging,
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      await backend.compilePlainCheck(plain);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe("C:/fake/alc.exe");
+      expect(calls[0]).toContain(`/project:${plain.replaceAll("\\", "/")}`);
+      expect(calls[0]).toContain(
+        `/packagecachepath:${staging.packageCachePath.replaceAll("\\", "/")}`,
+      );
+      expect(appJsonSeen).toBe(appJson);
+      expect(await readdir(staging.packageCachePath).catch(() => [])).not.toContain(
+        "lethal-control.app",
+      );
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed compile leaves no partial plain-check.app, and the error is alc's own", async () => {
+    const dir = scratch("lethal-bcdev-plaincheck-fail-");
+    try {
+      const plain = join(dir, "plain");
+      await mkdir(plain);
+      await Bun.write(join(plain, "app.json"), "{}");
+      // alc writes its output, then exits non-zero: the shape of a crash mid-emit.
+      const spawn: SpawnFn = async (argv) => {
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (out !== undefined) await Bun.write(out, "partial");
+        return { exitCode: 1, stdout: "error AL0001: boom", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, { Codeunits: [] }, { spawn }),
+      );
+      const err = await backend.compilePlainCheck(plain).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AlcCompileError);
+      expect((err as Error).message).toContain("error AL0001: boom");
+      expect((await readdir(dir)).filter((f) => f.endsWith(".app"))).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1688,6 +1832,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       appJsonText: "{}",
       alSources: [],
       renamedMemberNames: new Map(),
+      manifestObjectKeys: new Set(),
     };
   }
 
@@ -2986,6 +3131,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     coverage: unknown,
     extraFiles: Record<string, string> = {},
     tables: readonly { Id: number; Name: string }[] = [],
+    codeunits: readonly { Id: number; Name: string }[] = [],
   ): Promise<{
     backend: BcDevMcpBackend;
     cleanup: () => Promise<void>;
@@ -3015,10 +3161,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
         throw new Error("bc-dev-mcp must not be contacted in fenced mode");
       },
       makeDeployment(outputDir, {
-        Codeunits: [
-          { Id: 50103, Name: "Repro B2" },
-          { Id: 50107, Name: "Other" },
-        ],
+        Codeunits: [{ Id: 50103, Name: "Repro B2" }, { Id: 50107, Name: "Other" }, ...codeunits],
         Tables: tables,
       }),
       factory(coverage),
@@ -3171,8 +3314,186 @@ table 50110 "Wrapped T"
       await cleanup();
     }
   });
+  test("(a) R-307: an R305 split-header object, declared, with no mutant, is refused by name, not thrown", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const SPLIT = `#if not SYM\ncodeunit 50130 "Split" implements IFirst\n#else\ncodeunit 50130 "Split" implements ISecond\n#endif\n${BODY("S")}`;
+    const { backend, cleanup } = await deployed(
+      [
+        { objectType: 5, objectId: 50130, lineNo: 9, hits: 1 },
+        { objectType: 5, objectId: 50107, lineNo: 3, hits: 1 },
+      ],
+      { "Split.Codeunit.al": SPLIT },
+      [],
+      [{ Id: 50130, Name: "Split" }],
+    );
+    try {
+      const unmapped =
+        "[lethal] coverage refused for codeunit:50130: the compiled artifact declares it, but LethAL found no object declaration it can read in the source (an object header split by #if is one such shape, R305). It carries no mutant, so no verdict reads its coverage.";
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((s) => s === unmapped)).toHaveLength(
+        1,
+      );
+      // A row for it is dropped like any refused object's row (before R-307 it threw here).
+      const v = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      expect(v.coverage?.entries).toEqual([
+        { objectType: "Codeunit", objectId: 50107, procedure: "R" },
+      ]);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
 });
 
+/**
+ * R-307 section 4. One whole-run check per deploy, before publish and so before any baseline: the
+ * manifest's objects against the compiled declarations, both directions. `deployed` stops at the
+ * first throw and reports whether publish was ever reached.
+ */
+describe("manifest objects against declarations, before any baseline (R-307 section 4)", () => {
+  const BODY = "{\n    procedure P()\n    begin\n    end;\n}\n";
+  const PLAIN = `codeunit 50107 Other\n${BODY}`;
+  const mutant = (codeunitId: number) => ({
+    mutantId: `M${codeunitId}`,
+    file: "X.Codeunit.al",
+    startIndex: 0,
+    endIndex: 1,
+    startLine: 1,
+    operatorName: "lethal.void-method-call",
+    operatorVersion: "1",
+    astHash: "h",
+    objectType: "codeunit",
+    codeunitId,
+    codeunitName: "X",
+    procedureName: "P",
+    originalText: "a",
+    mutatedText: "",
+  });
+
+  async function deployed(opts: {
+    coverageMode: "fenced" | "procedure" | "none";
+    files: Record<string, string>;
+    codeunits: readonly { Id: number; Name: string }[];
+    mutantIds: readonly number[];
+  }): Promise<{ err: unknown; published: boolean }> {
+    const dir = scratch("lethal-r307-manifest-");
+    let published = false;
+    try {
+      await writeDeployInputs(dir);
+      await Bun.write(
+        join(dir, "app.json"),
+        JSON.stringify({
+          id: TEST_APP_ID,
+          name: "Fixture",
+          publisher: "LethAL",
+          version: "1.0.20653.100",
+          idRanges: [{ from: 50100, to: 50149 }],
+        }),
+      );
+      await Bun.write(
+        join(dir, "mutant-manifest.json"),
+        JSON.stringify({
+          selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+          artifactId: TEST_ARTIFACT_ID,
+          mutants: opts.mutantIds.map(mutant),
+        }),
+      );
+      for (const [rel, text] of Object.entries(opts.files)) await Bun.write(join(dir, rel), text);
+      const symbols = { Codeunits: opts.codeunits };
+      const spawn: SpawnFn = async (argv) => {
+        if (argv[1] === "publishapp") published = true;
+        const out = argv.find((a) => a.startsWith("/out:"))?.slice("/out:".length);
+        if (argv[0]?.includes("alc") && out !== undefined) {
+          await Bun.write(out, buildFakeApp(symbols));
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+      const backend = new BcDevMcpBackend(
+        {
+          mcpCommand: ["unused"],
+          project: "/al",
+          server: "http://bc",
+          serverInstance: "BC",
+          coverageMode: opts.coverageMode,
+          ...(await controlStaging(dir)),
+        },
+        undefined,
+        makeDeployment(dir, symbols, { spawn }),
+      );
+      const err = await backend.deploy(dir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      return { err, published };
+    } finally {
+      await rmStaged(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const A_THROW =
+    "line-map: the compiled artifact declares codeunit:50140 but no line map was built for it — every declared object's source is written by LethAL and must be mappable. This is a LethAL bug, not a problem with the project under test.";
+  const B_THROW =
+    "a mutant is attributed to codeunit:50145, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.";
+
+  test("(b) Direction A: a declared object WITH a mutant and no line-map entry throws, before publish", async () => {
+    const { err, published } = await deployed({
+      coverageMode: "fenced",
+      files: { "Other.Codeunit.al": PLAIN },
+      codeunits: [
+        { Id: 50107, Name: "Other" },
+        { Id: 50140, Name: "No Source" },
+      ],
+      mutantIds: [50107, 50140],
+    });
+    expect((err as Error | undefined)?.message).toBe(A_THROW);
+    expect(published).toBe(false);
+  });
+
+  test("(c) Direction B: a manifest object the compiled app does not declare throws, before publish (fenced and hub)", async () => {
+    for (const coverageMode of ["fenced", "procedure"] as const) {
+      const { err, published } = await deployed({
+        coverageMode,
+        files: { "Other.Codeunit.al": PLAIN, "Gone.Codeunit.al": `codeunit 50145 Gone\n${BODY}` },
+        codeunits: [{ Id: 50107, Name: "Other" }],
+        mutantIds: [50107, 50145],
+      });
+      expect((err as Error | undefined)?.message).toBe(B_THROW);
+      expect(published).toBe(false);
+    }
+  });
+
+  test("coverage none reads no coverage and checks nothing", async () => {
+    const { err, published } = await deployed({
+      coverageMode: "none",
+      files: { "Other.Codeunit.al": PLAIN },
+      codeunits: [{ Id: 50107, Name: "Other" }],
+      mutantIds: [50107, 50145],
+    });
+    expect(err).toBeUndefined();
+    expect(published).toBe(true);
+  });
+
+  test("(d) exempt: mutants in an R298-wrapped object the build compiles out do not throw (fenced and hub)", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const coverageMode of ["fenced", "procedure"] as const) {
+        const { err, published } = await deployed({
+          coverageMode,
+          files: {
+            "Other.Codeunit.al": PLAIN,
+            "Wrapped.Codeunit.al": `#if NEVERDEFINED\ncodeunit 50120 Wrapped\n${BODY}#endif\n`,
+          },
+          codeunits: [{ Id: 50107, Name: "Other" }],
+          mutantIds: [50107, 50120],
+        });
+        expect(err).toBeUndefined();
+        expect(published).toBe(true);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 /**
  * R298, review r1 Important 3: the HUB path (`coverageMode: "procedure"`) applies the same
  * refusal. A wrapped object's method ids, named or not, produce no entry, and the refusal is named

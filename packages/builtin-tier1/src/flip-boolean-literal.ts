@@ -1,36 +1,30 @@
-import { claimsRecordMethod, inMemberBody } from "@lethal/engine";
+import {
+  type RunTriggerKind,
+  claimedRunTriggerSkip,
+  claimsRecordMethod,
+  deleteSkipCanRaise,
+  exactArguments,
+  forceCanRaise,
+  inMemberBody,
+  insertSkipCanRaise,
+  modifySkipCanRaise,
+  receiverUnresolved,
+} from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
   type MutationOperator,
   type MutationSpec,
+  type PlatformKillMechanism,
   type SemanticContext,
 } from "@lethal/operator-sdk";
-import { hangCapableForMutatedNode } from "./loop-hazard";
+import { hangCapableForMutatedNode, hasEnclosingLoop } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.flip-boolean-literal";
-const OPERATOR_VERSION = "1.0.0";
-
-/**
- * Record methods whose run-trigger boolean `swap-modify-flag` (Tier 2) already flips.
- *
- * A boolean argument to one of these is CEDED: flipping `Rec.Modify(true)` to `Modify(false)` is the
- * same mutation whether you reach it through the call or through the literal, and emitting both
- * would put two operators on one behaviour change. §3.2 dedup would NOT catch it, because that rule
- * compares SPANS and the two differ (the call node against the literal inside it). Measured on
- * `do-rel2/Cloud`: 72 sites, 2% of the candidate's footprint.
- *
- * The cession asks `claimsRecordMethod` — the SAME predicate `swap-modify-flag` claims with — rather
- * than restating it. The first draft tested the method NAME alone, and that is not what that operator
- * claims: it requires a name AND a receiver that resolves to a Record. Measured on the corpus, the
- * mismatch ORPHANED 55 sites — `Modify`/`Insert`/`Delete` calls whose receiver is unresolvable, which
- * this operator refused and that one never claimed. R171 is the same bug one operator earlier, and
- * `receiver.ts` moved into `@lethal/engine` so a shared predicate makes it structurally impossible
- * instead of a thing to remember. This list still has to track `RUN_TRIGGER_METHODS`, which is what
- * the fixture arm pins.
- */
-const CEDED_TO_MODIFY_FLAG = ["Modify", "Insert", "Delete"] as const;
+/** R459: 1.1.0, MINOR. A two-argument `Insert`'s Booleans are no longer ceded, so the operator
+ *  gains sites and changes no existing replacement; the identity tuple reads the major only. */
+const OPERATOR_VERSION = "1.1.0";
 
 /**
  * Parent kinds that make a boolean literal a CASE LABEL, where flipping it does not compile.
@@ -77,10 +71,20 @@ const CASE_LABEL_PARENTS: ReadonlySet<string> = new Set(["case_branch", "case_st
  * compile probe failed 2 of 10 shapes on it. `CASE_LABEL_PARENTS` is the refusal; everywhere else the
  * type argument does hold, verified against real `alc` on every shape the corpus contains.
  *
- * **No `PlatformKillMechanism`.** Flipping a value is ordinary changed behaviour. The one shape that
- * could look otherwise is a ceded one: `Rec.Insert(true)` to `Insert(false)` skips a trigger and can
- * die on a duplicate key with no assertion, which is exactly why R138 tagged it — and those sites
- * belong to `swap-modify-flag`, which carries the tag. This operator never reaches them.
+ * **`PlatformKillMechanism` only on a RunTrigger it skips (R-452) or forces (R-457).** Flipping a
+ * value is ordinary changed behaviour. `Rec.Insert(true)` to `Insert(false)` skips a trigger and
+ * can die on a duplicate key with no assertion, which is why R138 tagged it, and those sites are
+ * ceded to `swap-modify-flag`, which carries the tag. `ModifyAll` and `DeleteAll` are NOT ceded, so their
+ * RunTrigger flips are this operator's: `ModifyAll(F, V, true)` and `DeleteAll(true)` flipped to
+ * `false` skip `OnModify`/`OnDelete` for every affected row, and carry the same tag as
+ * `Modify`/`Delete`, from the same engine detector (`runTriggerTag`). The `false` -> `true`
+ * direction FORCES the trigger, at `Modify`/`Insert`/`Delete` (a `false` there is not ceded) as well
+ * as `ModifyAll`/`DeleteAll`, and carries `run-trigger-forced` unless `forceCanRaise` proves the
+ * table has no such trigger and no observer of it in this project. R459: a two-argument
+ * `Insert(RunTrigger, InsertWithSystemId)` is wholly this operator's (Tier 2 claims a sole `true`
+ * only); its first literal is tagged both ways, its second gets no RunTrigger tag. R473: a sole
+ * `true` on an UNRESOLVED receiver is not ceded (Tier 2 does not claim it), so its flip is this
+ * operator's and keeps the skip tag of its kind, as R-364 rules for `ModifyAll`/`DeleteAll`.
  *
  * **Documented limits:**
  *   - Equivalence is not detected. A flipped boolean that no path reads is an equivalent mutant this
@@ -100,10 +104,14 @@ export const flipBooleanLiteral: MutationOperator = {
     return flipped(node, ctx) !== null;
   },
 
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return flippedBeforeHang(node, ctx) !== null && hangCapableForMutatedNode(node, ctx) !== null;
+  },
+
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
-    const hangCapable = hangCapableForMutatedNode(node, ctx);
+    const platformKillMechanism = runTriggerTag(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -112,7 +120,7 @@ export const flipBooleanLiteral: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
-        ...(hangCapable !== null ? { hangCapable } : {}),
+        ...(platformKillMechanism !== undefined ? { platformKillMechanism } : {}),
       },
     ];
   },
@@ -195,7 +203,7 @@ export const flipBooleanLiteral: MutationOperator = {
       ],
     },
     {
-      name: "tags an in-loop boolean guard that advances the condition (R196), and does NOT tag the preheader one",
+      name: "REFUSES an in-loop boolean guard that advances the condition (R196), and keeps the preheader one",
       sourceAL: `codeunit 51708 "C" { procedure P() var Continue: Boolean; begin Continue := true; while Continue do Continue := false; end; }`,
       expectedSpecs: [
         {
@@ -204,19 +212,126 @@ export const flipBooleanLiteral: MutationOperator = {
           afterText: "false",
           hangCapable: null,
         },
-        {
-          parentContext: "statement-position",
-          beforeText: "false",
-          afterText: "true",
-          hangCapable: "loop-condition-target",
-        },
       ],
+    },
+    {
+      name: "REFUSES a literal nested in a loop condition, or guarding an in-loop if (R239)",
+      sourceAL: `codeunit 51711 "C" { procedure P() var Go: Boolean; begin while not (Go or false) do if true then exit; end; }`,
+      expectedSpecs: [],
     },
   ],
 };
 
+/**
+ * R-452: the Record methods whose RunTrigger argument this operator flips, its position under an
+ * EXACT argument count, the trigger kind it runs, and the skip detector that judges a `true` ->
+ * `false` flip. AL has no named arguments (alc 18: AL0104 on `RunTrigger := true`), so the position
+ * is the whole answer. R-457 adds `Modify`/`Delete`/`Insert`: their `true` is ceded to
+ * `swap-modify-flag` wherever it claims the call, so a claimed `true` never reaches this operator.
+ * R473: their `skip` is reached only on an UNRESOLVED receiver, which Tier 2 does not claim, and
+ * there `runTriggerTag` keeps the tag (R-364's rule) without calling `canRaise`.
+ */
+const RUN_TRIGGER_ARGUMENTS = [
+  {
+    method: "ModifyAll",
+    count: 3,
+    index: 2,
+    kind: "modify",
+    skip: { canRaise: modifySkipCanRaise, tag: "run-trigger-skipped-modify" },
+  },
+  {
+    method: "DeleteAll",
+    count: 1,
+    index: 0,
+    kind: "delete",
+    skip: { canRaise: deleteSkipCanRaise, tag: "run-trigger-skipped-delete" },
+  },
+  {
+    method: "Modify",
+    count: 1,
+    index: 0,
+    kind: "modify",
+    skip: { canRaise: modifySkipCanRaise, tag: "run-trigger-skipped-modify" },
+  },
+  {
+    method: "Delete",
+    count: 1,
+    index: 0,
+    kind: "delete",
+    skip: { canRaise: deleteSkipCanRaise, tag: "run-trigger-skipped-delete" },
+  },
+  {
+    method: "Insert",
+    count: 1,
+    index: 0,
+    kind: "insert",
+    skip: { canRaise: insertSkipCanRaise, tag: "run-trigger-skipped-insert" },
+  },
+  // R459: `Insert(RunTrigger, InsertWithSystemId)`. Index 1 runs no trigger and has no row.
+  {
+    method: "Insert",
+    count: 2,
+    index: 0,
+    kind: "insert",
+    skip: { canRaise: insertSkipCanRaise, tag: "run-trigger-skipped-insert" },
+  },
+] as const satisfies readonly {
+  method: string;
+  count: number;
+  index: number;
+  kind: RunTriggerKind;
+  skip: {
+    canRaise: (node: ALSyntaxNode, ctx: SemanticContext) => boolean;
+    tag: PlatformKillMechanism;
+  } | null;
+}[];
+
+/**
+ * The tag for a literal that IS the RunTrigger argument of a Record method in
+ * `RUN_TRIGGER_ARGUMENTS` (the argument itself, span-equal, read comment-aware through
+ * `exactArguments`; a `(true)` or any other expression around it is not). A `true` (skip) gets the
+ * skip tag when skipping that trigger is not proven harmless; a `false` (force) gets
+ * `run-trigger-forced` unless `forceCanRaise` proves nothing runs. Else `undefined`.
+ */
+function runTriggerTag(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): PlatformKillMechanism | undefined {
+  const value = node.text.toLowerCase();
+  const call = node.parent?.parent;
+  if (call?.kind !== ALNodeKind.procedure_call) return undefined;
+  for (const { method, count, index, kind, skip } of RUN_TRIGGER_ARGUMENTS) {
+    const arg = exactArguments(call, count)?.[index];
+    if (arg === undefined || arg.startIndex !== node.startIndex || arg.endIndex !== node.endIndex) {
+      continue;
+    }
+    // R-364: an UNRESOLVED receiver keeps the SKIP tag (R143's rule; screen tagging is
+    // conservative). `claimsRecordMethod` refuses it, which is right for claiming and is left
+    // unchanged. R460: the forcing `false` (R-457) is tagged there too, at every method, since
+    // nothing proves the forced trigger harmless (`forceCanRaise` itself keeps an unresolved table).
+    if (!claimsRecordMethod(call, ctx, method)) {
+      if (receiverUnresolved(call, ctx, method)) {
+        if (value === "false") return "run-trigger-forced";
+        if (skip !== null) return skip.tag;
+      }
+      continue;
+    }
+    if (value === "false") return forceCanRaise(call, ctx, kind) ? "run-trigger-forced" : undefined;
+    return skip?.canRaise(call, ctx) ? skip.tag : undefined;
+  }
+  return undefined;
+}
+
 /** The flipped text for a boolean this operator will claim, else `null`. */
 function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const after = flippedBeforeHang(node, ctx);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return after !== null && hangCapableForMutatedNode(node, ctx) === null ? after : null;
+}
+
+/** `flipped` without R196's hang check: every other check, in the same order (R447). */
+function flippedBeforeHang(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (node.rawKind !== "boolean") return null;
   const text = node.text.toLowerCase();
   if (text !== "true" && text !== "false") return null;
@@ -227,14 +342,14 @@ function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   return text === "true" ? "false" : "true";
 }
 
-/** The loop kinds whose WHOLE condition this operator refuses: see `isLoopCondition`. */
+/** The loop kinds whose condition this operator refuses: see `isLoopCondition`. */
 const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
   ALNodeKind.repeat_statement,
   ALNodeKind.while_statement,
 ]);
 
 /**
- * Is this literal a `repeat` or `while` loop's whole condition?
+ * Does this literal reach a `repeat` or `while` loop's exit: its condition, or an in-loop `if`'s?
  *
  * Refused for two reasons that arrive at the same line, one reported and one not.
  *
@@ -262,15 +377,17 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
  * issue #7 fix): `while true do` collided the identical way, one loop kind over, and the mistake
  * was recorded nowhere until it was measured (see `docs/mutation-testing-ourselves.md` on R175).
  *
- * Parentheses are walked through, because `until (false)` and `while (true)` are the same sites
- * wearing brackets. A literal NESTED in a compound condition is NOT refused: `until Done or false`
- * flips to `until Done or true`, and `while Go and true` flips to `while Go and false`, both of
- * which still terminate. Measured 0 sites of either shape across 725 `repeat` loops on both
- * reference corpora; the `while` forms were checked only by grep over `fixtures/` and `examples/`,
- * not counted in that corpus pass, so this is about being exact rather than about a count. The
- * OTHER polarity of a nested literal (`until Done and true` -> `until Done and false`, `while X or
- * false` -> `while X or true`) can hang and is not handled here: recorded as a known gap, filed as
- * [[R239]], not fixed in this change.
+ * R239 widened it from the WHOLE condition to any literal that reaches a loop's exit. The walk goes
+ * up through parentheses, `not` and `and`/`or`/`xor` (`until Done and true`, `while not false`),
+ * and it stops at a `while`/`repeat` OR at an `if` that sits inside one, since an in-loop `if`
+ * usually guards the body's `exit` (`while true do if true then exit;`). A `#if` tail of either
+ * condition (`while false` `#if X or false #endif` `do`) sits BESIDE the `condition` field in the
+ * grammar, so a tail that is a direct child of the statement counts as its condition, the way
+ * `loop-hazard.ts`'s `conditionIdentifiers` reads it. Both polarities are refused: `until Done or
+ * false` -> `or true` still terminates, but a polarity-aware rule tracks parity through every `not`
+ * for zero measured sites, so the terminating flip is lost with the hanging one. The walk stops at
+ * anything else, so a call ARGUMENT in such a condition (`if not Confirm('x', false) then exit;`)
+ * is still claimed.
  *
  * Spans are compared by POSITION, never by node identity, for the reason recorded in [[R209]]: the
  * AST wrappers are rebuilt on access, so reference equality is not reliable.
@@ -278,7 +395,11 @@ const LOOP_STATEMENTS: ReadonlySet<string> = new Set([
 function isLoopCondition(node: ALSyntaxNode): boolean {
   let current = node;
   for (let p: ALSyntaxNode | null = node.parent; p !== null; p = p.parent) {
-    if (LOOP_STATEMENTS.has(p.kind)) {
+    if (
+      LOOP_STATEMENTS.has(p.kind) ||
+      (p.kind === ALNodeKind.if_statement && hasEnclosingLoop(p))
+    ) {
+      if (current.rawKind === CONDITION_TAIL) return true;
       const condition = p.childForFieldName("condition");
       return (
         condition !== null &&
@@ -286,11 +407,22 @@ function isLoopCondition(node: ALSyntaxNode): boolean {
         condition.endIndex === current.endIndex
       );
     }
-    if (p.kind !== ALNodeKind.parenthesized_expression) return false;
+    if (!CONDITION_WRAPPERS.has(p.rawKind)) return false;
     current = p;
   }
   return false;
 }
+
+/** R239: what `isLoopCondition` walks up through from a literal towards its condition. R454 adds
+ *  the comparison: `until X.Next() = false` -> `= true` removes or inverts the exit just the same. */
+const CONDITION_TAIL = "preproc_conditional_expression_tail";
+const CONDITION_WRAPPERS: ReadonlySet<string> = new Set([
+  ALNodeKind.parenthesized_expression,
+  ALNodeKind.unary_expression,
+  ALNodeKind.logical_expression,
+  ALNodeKind.comparison_expression,
+  CONDITION_TAIL,
+]);
 
 /** A case LABEL, not a boolean in a branch body — see `CASE_LABEL_PARENTS`. */
 function isCaseLabel(node: ALSyntaxNode): boolean {
@@ -325,22 +457,22 @@ function inExecutableBody(node: ALSyntaxNode): boolean {
 }
 
 /**
- * Is this literal the run-trigger flag of a record method `swap-modify-flag` owns?
+ * Is this literal the run-trigger flag `swap-modify-flag` (Tier 2) flips?
  *
- * Walks only as far as the ARGUMENT LIST's own call, never further: a `true` nested inside another
- * call that happens to sit within a `Modify(...)` argument is not that call's flag.
+ * Such a literal is CEDED: flipping `Rec.Modify(true)` to `Modify(false)` is the same mutation
+ * whether reached through the call or the literal, and §3.2 dedup would NOT catch the pair, because
+ * it compares SPANS (the call node against the literal inside it). Measured on `do-rel2/Cloud`: 72
+ * sites.
+ *
+ * R459: the cession is `claimedRunTriggerSkip`, the SAME engine answer that operator claims with,
+ * span-equal. Every restatement of it orphaned sites: a name-only test refused 55 it does not claim
+ * (R171's seam bug), ceding `false` too orphaned 39 more (it has no `false` -> `true` direction),
+ * and ceding every `true` of a claimed `Insert` orphaned both literals of `Insert(true, X)` and
+ * `Insert(X, true)`, which it never claims (BC.History 30).
  */
 function isCededRunTriggerFlag(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  const args = node.parent;
-  if (args === null || args.rawKind !== "argument_list") return false;
-  const call = args.parent;
-  if (call === null || call.rawKind !== ALNodeKind.procedure_call) return false;
-  // Only `true` is ceded. `swap-modify-flag` claims the SKIP direction (an explicit `true` to flip
-  // to `false`) and, since 1.2.0, the argument-LESS call; it has no `false` -> `true` direction, so
-  // `Rec.Modify(false)` is claimed by nobody and belongs here. Measured: ceding `false` as well
-  // orphaned a further 39 corpus sites.
-  if (node.text.toLowerCase() !== "true") return false;
-  // Ask the SAME predicate that operator claims with, never a restatement of it. A name-only test
-  // here refused 55 sites it does not claim, leaving them to nobody — R171's seam bug exactly.
-  return CEDED_TO_MODIFY_FLAG.some((method) => claimsRecordMethod(call, ctx, method));
+  const call = node.parent?.parent;
+  if (call?.kind !== ALNodeKind.procedure_call) return false;
+  const literal = claimedRunTriggerSkip(call, ctx)?.literal;
+  return literal?.startIndex === node.startIndex && literal.endIndex === node.endIndex;
 }

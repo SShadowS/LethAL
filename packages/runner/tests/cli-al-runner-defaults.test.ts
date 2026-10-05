@@ -14,6 +14,7 @@ import {
 import { AL_RUNNER_PROVISION_SENTINEL, type AlRunnerBackend } from "../src/al-runner-backend";
 import type { AlRunnerCanaryResult } from "../src/al-runner-canary";
 import { isPredefinedProbeArgv, predefinedProbeArgv } from "../src/al-runner-predefined-probe";
+import { readTargetSource } from "../src/baseline-snapshot";
 import type { LethalConfigFile, RunCliConfig } from "../src/cli";
 import {
   alRunnerAdvisory,
@@ -574,6 +575,27 @@ describe("R387: the coverage guard and the once-per-session preparation", () => 
     expect(advisory).not.toContain('"alRunner.coverage": "al-runner" runs only');
   });
 
+  // R205: the guard judges the session's snapshot, not a disk that changed after it was taken.
+  test("R205: prepareAlRunnerSession judges the snapshot: multi-object there, single on disk, falls back", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": TWO_OBJECTS });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
+    expect(out.alRunner?.coverage).toBe("none");
+    expect(warned[0]).toContain("Two.Codeunit.al (more than one object)");
+  });
+
+  test("R205: prepareAlRunnerSession judges the snapshot: single there, multi-object on disk, keeps coverage", async () => {
+    const dir = await alProject({ "Two.Codeunit.al": "codeunit 50104 P\n{\n}\n" });
+    const snapshot = await readTargetSource(dir);
+    await writeFile(join(dir, "Two.Codeunit.al"), TWO_OBJECTS, "utf8");
+    const warned: string[] = [];
+    const out = await prepareAlRunnerSession(cfg(dir), dir, (l) => warned.push(l), snapshot);
+    expect(out.alRunner?.coverage).toBe("al-runner");
+    expect(warned.filter((l) => l.includes("al-runner-coverage-unsupported"))).toEqual([]);
+  });
+
   test("prepareAlRunnerSession refuses a bad section before anything else", async () => {
     await expect(
       prepareAlRunnerSession({ alRunner: { alRunnerPath: "a", typo: 1 } as never }, "unused"),
@@ -593,9 +615,15 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     transactionRollback: "defect-not-reproduced",
   };
 
-  async function coverageReachingBuild(files: Record<string, string>): Promise<{
+  async function coverageReachingBuild(
+    files: Record<string, string>,
+    /** R205: an edit made after `runFromCli`'s snapshot (inside id validation). */
+    edit?: (projectDir: string) => Promise<void>,
+  ): Promise<{
     readonly coverage: string | undefined;
     readonly warnings: readonly string[];
+    readonly validated: ReadonlyMap<string, Buffer> | undefined;
+    readonly built: ReadonlyMap<string, Buffer> | undefined;
   }> {
     const projectDir = await alProject(files);
     const configPath = join(projectDir, "lethal.config.json");
@@ -617,20 +645,26 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
       allowExpiringEnv: false,
     };
     let coverage: string | undefined;
+    let validated: ReadonlyMap<string, Buffer> | undefined;
+    let built: ReadonlyMap<string, Buffer> | undefined;
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     let warnings: string[] = [];
     try {
       await expect(
         runFromCli(parsed, {
-          validateSelectorIdsForProject: async () => {},
+          validateSelectorIdsForProject: async (_dir, _ids, source) => {
+            validated = source;
+            await edit?.(projectDir);
+          },
           runAlRunnerContractProbe: async () => ({
             facts: [],
             measuredProvisioning: "auto-provision",
             bannerOnStdout: true,
           }),
           runAlRunnerCanary: async () => CANARY,
-          buildBackend: async (_p, configFile) => {
+          buildBackend: async (_p, configFile, _s, _d, _deps, _ids, source) => {
             coverage = configFile.alRunner?.coverage;
+            built = source;
             throw new Error("stop before a real backend build");
           },
         }),
@@ -639,8 +673,20 @@ describe("R387: runFromCli applies the coverage guard before any backend is buil
     } finally {
       warnSpy.mockRestore();
     }
-    return { coverage, warnings };
+    return { coverage, warnings, validated, built };
   }
+
+  // R205: the entry point hands its ONE snapshot to the guard, the id check and the backend build.
+  test("R205: an edit after runFromCli's snapshot changes neither the guard's verdict nor what the id check and build read", async () => {
+    const { coverage, warnings, validated, built } = await coverageReachingBuild(
+      { "Two.Codeunit.al": TWO_OBJECTS },
+      async (dir) => writeFile(join(dir, "Two.Codeunit.al"), "codeunit 50104 P\n{\n}\n", "utf8"),
+    );
+    expect(coverage).toBe("none");
+    expect(warnings.some((w) => w.includes("Two.Codeunit.al (more than one object)"))).toBe(true);
+    expect(validated?.get("Two.Codeunit.al")?.toString("utf8")).toBe(TWO_OBJECTS);
+    expect(built?.get("Two.Codeunit.al")?.toString("utf8")).toBe(TWO_OBJECTS);
+  });
 
   test("a multi-object file reaches buildBackend with coverage none, and the named warning prints", async () => {
     const { coverage, warnings } = await coverageReachingBuild({ "Two.Codeunit.al": TWO_OBJECTS });

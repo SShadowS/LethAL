@@ -15,6 +15,8 @@ import { tinyBundle } from "./helpers/bundle";
 
 const ref = { codeunitId: 79100, codeunitName: "Sandbox Tests", method: "PostingUpdatesTotal" };
 const APP = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
+/** R442: a run that hid nothing from identity numbering, as `runSession` records a clean one. */
+const NO_HIDDEN = { tuples: [], files: [] };
 
 function mutantRow(verdict: MutantVerdict, over: Record<string, unknown> = {}) {
   return {
@@ -46,12 +48,13 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1.0.1.1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordTestResult(runId, null, null, ref, "pass", 30);
     store.recordMutant(runId, mutantRow("killed", { killingTest: "PostingUpdatesTotal" }));
     store.recordMutant(runId, mutantRow("survived", { mutantCode: "M0002", astHash: "def456" }));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
       new Set(["def456|Sample|Post|conditional-boundary|1"]),
     );
     store.close();
@@ -67,6 +70,7 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
@@ -78,10 +82,11 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "2",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r2, mutantRow("killed"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", []).size).toBe(0);
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys.size).toBe(0);
     store.close();
   });
 
@@ -101,10 +106,11 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r1, mutantRow("survived"));
     store.finishRun(r1, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
 
     // Run 2 skips re-testing it (skip-known-survivors) and records it as
     // "known-survivor" instead of re-deriving "survived".
@@ -116,6 +122,7 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "2",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(r2, mutantRow("known-survivor"));
     store.finishRun(r2, { batchCount: 1, baselineGreen: true });
@@ -131,7 +138,7 @@ describe("ResultsStore", () => {
       backend: "bcdev",
       appVersion: "3",
     });
-    expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(new Set([key]));
+    expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(new Set([key]));
     store.close();
   });
 
@@ -480,9 +487,9 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     const seen: unknown[] = [];
     expect(
-      store.priorSurvivorKeys("P", "procedure", "T", [], {
+      store.priorSurvivorKeys("P", "procedure", "T", [], [], {
         coverageModeChanged: (i) => seen.push(i),
-      }).size,
+      }).keys.size,
     ).toBe(0);
     expect(seen).toEqual([{ runId: 1, coverageMode: null }]);
     const runId = store.createRun({
@@ -538,9 +545,9 @@ describe("ResultsStore", () => {
     store.finishRun(1, { batchCount: 1, baselineGreen: true });
     for (const current of ["T", undefined]) {
       const seen: unknown[] = [];
-      const keys = store.priorSurvivorKeys("P", "procedure", current, [], {
+      const keys = store.priorSurvivorKeys("P", "procedure", current, [], [], {
         testAppChanged: (i) => seen.push(i),
-      });
+      }).keys;
       expect(keys.size).toBe(0);
       expect(seen).toEqual([{ runId: 1, testAppHash: null }]);
     }
@@ -617,14 +624,15 @@ describe("ResultsStore", () => {
       projectPath: "/p",
       backend: "bcdev",
       appVersion: "1",
+      carryHidden: NO_HIDDEN,
     });
     store.recordMutant(runId, mutantRow("survived"));
     store.finishRun(runId, { batchCount: 1, baselineGreen: true });
-    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", []).size).toBe(1);
+    expect(store.priorSurvivorKeys("/p", "procedure", "package:a", [], []).keys.size).toBe(1);
     const seen: unknown[] = [];
-    const keys = store.priorSurvivorKeys("/p", "procedure", "package:b", [], {
+    const keys = store.priorSurvivorKeys("/p", "procedure", "package:b", [], [], {
       testAppChanged: (i) => seen.push(i),
-    });
+    }).keys;
     expect(keys.size).toBe(0);
     expect(seen).toEqual([{ runId, testAppHash: "package:a" }]);
     store.close();
@@ -748,11 +756,12 @@ CREATE TABLE IF NOT EXISTS mutants (
           projectPath: "/p",
           backend: "bcdev",
           appVersion: "1",
+          carryHidden: NO_HIDDEN,
         });
         store.recordMutant(runId, mutantRow("survived"));
         store.finishRun(runId, { batchCount: 1, baselineGreen: true });
         // The identity must round-trip through the new column, not silently key on the old tuple.
-        expect(store.priorSurvivorKeys("/p", "procedure", "T", [])).toEqual(
+        expect(store.priorSurvivorKeys("/p", "procedure", "T", [], []).keys).toEqual(
           new Set(["abc123|Sample|Post|conditional-boundary|1"]),
         );
         store.close();
@@ -1200,12 +1209,13 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       backend: "bcdev",
       appVersion: "0.0.0.0",
       configFingerprint: "fp",
+      carryHidden: NO_HIDDEN,
     });
     store.recordArtifact(a, artifact(0, A0, { appPath: "x.app", instrumentedDir: "d" }));
     store.recordMutant(a, mutantRow("survived", { carried: false, coveringTests: [] }));
     store.finishRun(a, { batchCount: 1, baselineGreen: true });
-    const aKeys = store.priorSurvivorKeys("P", "procedure", "T", []);
-    expect(aKeys.size).toBe(1);
+    const aKeys = store.priorSurvivorKeys("P", "procedure", "T", [], []);
+    expect(aKeys.keys.size).toBe(1);
     // Run B, the verify row, created exactly as decision 4 says.
     const b = store.createRun({
       coverageMode: "procedure",
@@ -1226,7 +1236,7 @@ describe("ResultsStore: what lethal verify reads (C02-06)", () => {
       carryableVerdicts: [...CARRYABLE_VERDICTS],
     };
     expect(store.findResumableRun(query)).toBeNull();
-    expect(store.priorSurvivorKeys("P", "procedure", "T", [])).toEqual(aKeys);
+    expect(store.priorSurvivorKeys("P", "procedure", "T", [], [])).toEqual(aKeys);
     expect(store.artifactRecordById(A0)?.runId).toBe(a);
 
     // Negative control: a row with A's backend and fingerprint and a survivor IS found, so the
@@ -1283,6 +1293,18 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     expect(store.db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: STORE_BUSY_TIMEOUT_MS });
     expect(STORE_BUSY_TIMEOUT_MS).toBe(5000);
     store.close();
+  });
+
+  test("R449: a file store commits without an fsync per commit (WAL, synchronous NORMAL)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r449-"));
+    const store = new ResultsStore(join(dir, "s.sqlite"));
+    try {
+      expect(store.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      expect(store.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {

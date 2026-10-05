@@ -1,4 +1,5 @@
 import type { CompiledArtifact } from "./artifact";
+import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
@@ -270,6 +271,8 @@ export interface BoundArtifact {
   readonly alSources: readonly AlSource[];
   /** R318: the verified manifest's renamed-member coverage names (`renamedMemberNamesOf`). */
   readonly renamedMemberNames: RenamedMemberNames;
+  /** R-307 section 4: the verified manifest's object keys (`manifestObjectKeys`), checked by `attach`. */
+  readonly manifestObjectKeys: ReadonlySet<string>;
 }
 
 export interface ExecutionBackend {
@@ -290,6 +293,12 @@ export interface ExecutionBackend {
    * Backends with no publish step may implement this as their existing deploy.
    */
   compileCheck(instrumentedDir: string): Promise<void>;
+  /**
+   * R461, OPTIONAL: compile a staged copy of the UNMUTATED target (no selector, no guards, no
+   * Control dependency) with the same compiler, package cache and /define, and throw on a
+   * rejection. No publish. Absent on al-runner, whose compile happens per test.
+   */
+  compilePlainCheck?(dir: string): Promise<void>;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**
@@ -337,4 +346,13 @@ export interface ExecutionBackend {
    * RAN. Absent: none, and such a dependency cannot be read (the run records no test digests).
    */
   dependencyPackageDirs?(): readonly string[];
+
+  /**
+   * R-385, OPTIONAL: how a backend that PUBLISHES reads Microsoft dependencies for the dependency
+   * fingerprint: the bytes the server holds (`System`, every Microsoft app in the closure, the
+   * control app's dependencies) and each one's installed version. A run or verify on the
+   * published path without it records no digests or refuses; it never falls back to declared
+   * versions. Throws `DependencyUnreadableError` when it cannot be built.
+   */
+  microsoftMode?(): MicrosoftMode;
 }

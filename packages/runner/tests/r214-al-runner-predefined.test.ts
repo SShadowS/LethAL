@@ -212,7 +212,7 @@ describe("R377: al-runner's predefined CLEANSCHEMA1..25", () => {
       db.run("UPDATE runs SET test_app_hash = 'same-test-app'");
       const refusedOnSymbols = (symbols: readonly string[]) => {
         let changed = false;
-        store.priorSurvivorKeys(join(root, "app"), "procedure", "same-test-app", symbols, {
+        store.priorSurvivorKeys(join(root, "app"), "procedure", "same-test-app", symbols, [], {
           symbolsChanged: () => {
             changed = true;
           },

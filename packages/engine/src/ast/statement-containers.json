@@ -1,0 +1,190 @@
+{
+  "grammarVersion": "4.4.1",
+  "nodeTypesSha256": "fa3d87833009afb1e06f2111748cf7bfabbcbe2a50960bc3a5fd85716b9b1955",
+  "candidates": [
+    {
+      "container": "action_group_body",
+      "field": "children"
+    },
+    {
+      "container": "assembly_body",
+      "field": "children"
+    },
+    {
+      "container": "asserterror_statement",
+      "field": "body"
+    },
+    {
+      "container": "case_branch",
+      "field": "body"
+    },
+    {
+      "container": "controladdin_body",
+      "field": "children"
+    },
+    {
+      "container": "dataset_mod_body",
+      "field": "children"
+    },
+    {
+      "container": "declaration_body",
+      "field": "children"
+    },
+    {
+      "container": "for_statement",
+      "field": "body"
+    },
+    {
+      "container": "foreach_statement",
+      "field": "body"
+    },
+    {
+      "container": "if_statement",
+      "field": "else_branch"
+    },
+    {
+      "container": "if_statement",
+      "field": "then_branch"
+    },
+    {
+      "container": "interface_body",
+      "field": "children"
+    },
+    {
+      "container": "layout_container_body",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_controladdin",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_layout_mixed",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_object",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_query",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_report",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_statement",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_var",
+      "field": "children"
+    },
+    {
+      "container": "preproc_conditional_xmlport",
+      "field": "children"
+    },
+    {
+      "container": "preproc_fragmented_else_tail",
+      "field": "children"
+    },
+    {
+      "container": "preproc_guarded_statement",
+      "field": "children"
+    },
+    {
+      "container": "preproc_guarded_statement",
+      "field": "then_branch"
+    },
+    {
+      "container": "preproc_split_case_branch",
+      "field": "body"
+    },
+    {
+      "container": "preproc_split_case_end_branch",
+      "field": "body"
+    },
+    {
+      "container": "preproc_split_case_extended",
+      "field": "body"
+    },
+    {
+      "container": "preproc_split_code_block_end",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_code_block_over_endif",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_else_begin_over_endif",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_if_begin_asymmetric",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_if_begin_else",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_if_else_statement",
+      "field": "else_branch"
+    },
+    {
+      "container": "preproc_split_if_else_statement",
+      "field": "then_branch"
+    },
+    {
+      "container": "preproc_split_if_statement",
+      "field": "else_branch"
+    },
+    {
+      "container": "preproc_split_if_statement",
+      "field": "then_branch"
+    },
+    {
+      "container": "preproc_split_if_then_begin",
+      "field": "children"
+    },
+    {
+      "container": "preproc_split_if_then_begin_else_shared",
+      "field": "children"
+    },
+    {
+      "container": "query_body",
+      "field": "children"
+    },
+    {
+      "container": "report_body",
+      "field": "children"
+    },
+    {
+      "container": "source_file",
+      "field": "children"
+    },
+    {
+      "container": "statement_block",
+      "field": "children"
+    },
+    {
+      "container": "while_statement",
+      "field": "body"
+    },
+    {
+      "container": "with_statement",
+      "field": "body"
+    },
+    {
+      "container": "xmlport_body",
+      "field": "children"
+    }
+  ]
+}

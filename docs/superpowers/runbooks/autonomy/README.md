@@ -18,6 +18,33 @@ share the BC containers, so they share container leases and the owner's pause.
 after any fixture `.al` change, and the roadmap rules (`docs/roadmap/R<nnn>.md`, re-check the
 next free id right before writing).
 
+## Working rules for every session (owner, 2026-10-03 to 2026-10-05)
+
+- **Pick the model per task, not Opus for everything.** Set `model` on every Agent call:
+  `haiku` for lookups, greps and status reads; `sonnet` for mechanical work (the build/test loop,
+  running a gate and reporting figures, red-checks that follow a recipe, routine edits, regenerating
+  the roadmap index); `opus` for design, plans, hard root-causing and reviewing verdict logic. A
+  session's own model is set by the owner, not by the session.
+- **Edit files only with the Edit and Write tools.** Never `sed -i`, inline scripts or shell
+  redirects (`printf`/`cat >>`) on any file, including temporary red-check reverts. Put this sentence
+  in every subagent brief.
+- **Never let a subagent grep or print a credential file.** Briefs name the non-secret config fields.
+- **A task branch lives in its own worktree** (`/work/lethal-wt/<task>`); a lane worktree stays on
+  its lane branch, or kraken refuses to start.
+- **Reviews:** gpt-6.1-sol through `pi_ask` (provider `openai-codex`). For any two-way check, require a
+  red-going test for EACH direction; "it works both ways" is not evidence.
+- **Submit only on green CI, both jobs.** Push the task branch; `check` (Windows) and `unit-linux`
+  must both pass, and the submit note names the run id. The container is Linux, so CI is the only
+  Windows check.
+- **Never pipe a gating command into `grep` or `tail` before `&&`.** The pipeline's status is the
+  last command's. Use `set -o pipefail;` if the output must be trimmed.
+- **At most two BaseApp-corpus jobs at once.** The container has 24 GB; a third census or diff
+  process gets OOM-killed (R-458 planner, 2026-10-05).
+- **Push work early, but WIP pushes carry `[skip ci]`** in the head commit's message. Unplanned
+  restarts happen, so push; but CI runs on every branch and every red run emails the owner. Push
+  WITHOUT `[skip ci]` only when you want a real CI result (before submitting, or to reproduce a
+  Windows-only failure); the submitted head must have a CI run.
+
 ## coord
 
 ```

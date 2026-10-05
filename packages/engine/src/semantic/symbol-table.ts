@@ -215,10 +215,12 @@ const OBJECT_KIND_BY_NODE: Record<string, ObjectSymbol["kind"]> = {
  */
 const TABLEEXTENSION_DECLARATION = "tableextension_declaration";
 const PAGEEXTENSION_DECLARATION = "pageextension_declaration";
+const REPORTEXTENSION_DECLARATION = "reportextension_declaration";
 const BASE_OBJECT_FIELD = "base_object";
 
-/** The extension object kinds whose members are indexed for variable scope. */
-export type ExtensionKind = "tableextension" | "pageextension";
+/** The extension object kinds whose members are indexed for variable scope (`reportextension`
+ *  since R254, when it became instrumentable). */
+export type ExtensionKind = "tableextension" | "pageextension" | "reportextension";
 
 /**
  * The `procedures`/`globals` key under which an extension object's own members are indexed for
@@ -384,11 +386,17 @@ export function buildSymbolTable(
     const placed = liveMembers(objectNode, armOf);
     const members = placed.map((m) => m.node);
 
-    // Globals: the first var_section that's a direct member of the object, as before, plus (R405 a)
-    // every var_section inside a member-level `#if` whose arm the build compiles, in source order.
+    // Globals: EVERY var_section that's a direct member of the object, plus (R405 a) every
+    // var_section inside a member-level `#if` whose arm the build compiles, in source order.
+    // R468: this read only the FIRST direct section, so `protected var A; var B;` (621 of 704 extra
+    // sections in the BaseApp history corpus) left every name of the second section unresolved:
+    // Tier 2 lost the receiver and R196's hang check declined the write. A procedure's own `var`
+    // section is not a member of the object, and a swallowed split member's sits inside a section's
+    // body (R327), so neither is read here.
     const varSections = placed.filter((m) => m.node.kind === ALNodeKind.var_section);
-    const firstDirect = varSections.find((m) => m.place === "direct");
-    const globalSections = varSections.filter((m) => m === firstDirect || m.place === "inside-if");
+    const globalSections = varSections.filter(
+      (m) => m.place === "direct" || m.place === "inside-if",
+    );
     if (globalSections.length > 0) {
       globals.set(
         ownerName,
@@ -486,7 +494,9 @@ export function buildSymbolTable(
         // so every call on a declared record variable there was refused as unresolvable. Measured
         // on Continia Document Output: that is the shape its extension code overwhelmingly uses —
         // 17 sites in its `tableextension`s and 18 more in a `pageextension`
-        // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here.
+        // (`scripts/probe-r30-pageext.ts`), which is why BOTH kinds are indexed here. R254 adds
+        // `reportextension` (instrumentable since then); it is never pushed to `tableExtensions`
+        // and gets no `indexFields`, since it adds report columns, not table fields.
         indexMembers(objectNode, extensionScopeKey(extension.kind, extension.name));
         // R160: a `tableextension`'s fields belong to the table it EXTENDS, which is the name any
         // expression uses to reach them. Keyed on `baseObject` for that reason, never on the
@@ -560,16 +570,16 @@ export function buildSymbolTable(
 }
 
 /**
- * `tableextension|pageextension <id> "<name>" extends "<base>"` -> its kind, name and extends
- * target.
+ * `tableextension|pageextension|reportextension <id> "<name>" extends "<base>"` -> its kind, name
+ * and extends target.
  *
  * `null` for any other node kind, and for an extension missing either name — both are what the
  * matching in `@lethal/builtin-tier2`'s `claimsRecordMethod` keys on, and half an entry could
  * only ever produce a wrong match.
  *
- * Both kinds are parsed because both own a variable SCOPE (R30). What the caller does with them
- * differs: only a `tableextension` declares procedures callable on a record, so only it enters
- * `tableExtensions`.
+ * All three kinds are parsed because each owns a variable SCOPE (R30; R254 for reportextension).
+ * What the caller does with them differs: only a `tableextension` declares procedures callable on
+ * a record, so only it enters `tableExtensions`.
  */
 function parseExtensionHeader(
   node: ALSyntaxNode,
@@ -579,7 +589,9 @@ function parseExtensionHeader(
       ? "tableextension"
       : node.rawKind === PAGEEXTENSION_DECLARATION
         ? "pageextension"
-        : null;
+        : node.rawKind === REPORTEXTENSION_DECLARATION
+          ? "reportextension"
+          : null;
   if (kind === null) return null;
   const nameNode = node.childForFieldName("object_name");
   const baseNode = node.childForFieldName(BASE_OBJECT_FIELD);
@@ -667,8 +679,7 @@ export function triggerLocalNames(trigger: ALSyntaxNode): ReadonlySet<string> {
       if (c.kind === ALNodeKind.block) continue;
       // R330 (run 003 fix round): a trigger's PARAMETERS are its header's names too.
       if (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter) {
-        const name = c.childForFieldName("name")?.text ?? "";
-        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+        for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
       // R323: a trigger's named return value is a header name too.
       if (c.fieldName === "return_value") out.add(stripQuotes(c.text).toLowerCase());
@@ -696,8 +707,7 @@ function conditionallyDeclared(member: ALSyntaxNode): string[] {
         under &&
         (c.kind === ALNodeKind.variable_declaration || c.kind === ALNodeKind.parameter)
       ) {
-        const name = c.childForFieldName("name")?.text ?? "";
-        if (name !== "") out.add(stripQuotes(name).toLowerCase());
+        for (const name of declaredNames(c)) out.add(name.toLowerCase());
       }
       walk(c, under);
     }
@@ -738,18 +748,8 @@ function parseSplitProcedure(node: ALSyntaxNode, owner: string): ProcedureSymbol
         c.kind === ALNodeKind.var_section ||
         c.rawKind === "preproc_conditional_var_block"
       ) {
-        for (const d of findAll(c, ALNodeKind.variable_declaration)) {
-          const name = d.childForFieldName("name")?.text ?? "";
-          if (name !== "")
-            add(
-              {
-                name: stripQuotes(name),
-                typeText: d.childForFieldName("type")?.text ?? "",
-                node: d,
-              },
-              false,
-            );
-        }
+        for (const d of findAll(c, ALNodeKind.variable_declaration))
+          for (const sym of declarationSymbols(d)) add(sym, false);
       }
     }
     return { m, bad };
@@ -810,13 +810,31 @@ export function collectVarDeclarations(varSection: ALSyntaxNode): VarSymbol[] {
   const out: VarSymbol[] = [];
   for (const decl of varDeclarations(varSection)) {
     if (decl.kind !== ALNodeKind.variable_declaration) continue;
-    const name = decl.childForFieldName("name")?.text ?? "";
-    const type = decl.childForFieldName("type")?.text ?? "";
-    if (name !== "") {
-      out.push({ name: stripQuotes(name), typeText: type, node: decl });
-    }
+    out.push(...declarationSymbols(decl));
   }
   return out;
+}
+
+/**
+ * R295: every name a declaration declares. `A, B: T` repeats the grammar's `name` field, and
+ * `childForFieldName("name")` returns only the first, so B was invisible and a use of it resolved
+ * to a same-named global of another type. DIRECT children only: a Label's attributes
+ * (`Comment = '...'`) carry `name` fields of their own one level down. The four readers of a
+ * declaration (`collectVarDeclarations`, `triggerLocalNames`, `conditionallyDeclared`,
+ * `parseSplitProcedure`) all go through this, so they cannot drift apart.
+ */
+function declaredNames(decl: ALSyntaxNode): string[] {
+  return decl.children
+    .filter((c) => c.fieldName === "name" && c.text !== "")
+    .map((c) => stripQuotes(c.text));
+}
+
+/** One symbol per name, each with the declaration's full type text and the SHARED declaration
+ *  node (`receiver.ts` reads that node's `type` field; `loop-hazard.ts` keys by its position AND
+ *  the name, since all names of one declaration share it). */
+function declarationSymbols(decl: ALSyntaxNode): VarSymbol[] {
+  const typeText = decl.childForFieldName("type")?.text ?? "";
+  return declaredNames(decl).map((name) => ({ name, typeText, node: decl }));
 }
 
 function stripQuotes(s: string): string {

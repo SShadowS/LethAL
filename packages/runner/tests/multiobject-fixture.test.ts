@@ -14,6 +14,7 @@ import { withAlRunnerCoverageGuard } from "../src/cli";
 import { lineMapFromSources } from "../src/line-map";
 import {
   generateMutationSet,
+  identityOrdinalsOf,
   operatorTiers,
   planArtifacts,
   prepareBatchProject,
@@ -57,7 +58,8 @@ interface Built {
 
 /** Instruments the project as `runSession` does (default batching), into a scratch directory. */
 async function build(root: string): Promise<Built> {
-  const { files } = await generateMutationSet(PROJECT);
+  const set = await generateMutationSet(PROJECT);
+  const { files } = set;
   const batches = planArtifacts(files, {});
   const manifest = JSON.parse(await readFile(join(PROJECT, "app.json"), "utf8")) as Record<
     string,
@@ -73,6 +75,7 @@ async function build(root: string): Promise<Built> {
     artifactId: "0123456789abcdef0123456789abcdef",
     targetAppId: String(manifest.id),
     operatorTiers,
+    identityOrdinals: identityOrdinalsOf(set),
   });
   await prepareBatchProject(PROJECT, dir, manifest, "1.0.1.1");
   const written = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8")) as {

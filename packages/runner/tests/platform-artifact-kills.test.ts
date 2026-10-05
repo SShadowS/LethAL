@@ -209,4 +209,66 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
     expect(withTag.platformArtifactKills?.killedCount).toBe(1);
     expect(without.platformArtifactKills).toBeUndefined();
   });
+
+  // R281: a `Delete(true)` -> `Delete(false)` kill gets its own group and its own explanation, which
+  // names the cross-app limit and what is not measured.
+  test("groups a kill tagged run-trigger-skipped-delete on its own, with its own explanation", () => {
+    const r = build([
+      { mutant: entry("M0001", TAG), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002", INSERT_TAG), verdict: "killed", batchIndex: 0 },
+      {
+        mutant: entry("M0003", { platformKillMechanism: "run-trigger-skipped-delete" }),
+        verdict: "killed",
+        batchIndex: 0,
+      },
+    ]);
+    expect(r.platformArtifactKills?.killedCount).toBe(3);
+    const groups = r.platformArtifactKills?.byMechanism ?? [];
+    expect(groups.map((g) => [g.mechanism, g.mutants])).toEqual([
+      ["run-trigger-skipped-delete", ["0/M0003"]],
+      ["run-trigger-skipped-insert", ["0/M0002"]],
+      ["write-txn-codeunit-run", ["0/M0001"]],
+    ]);
+    const explanation = groups[0]?.explanation ?? "";
+    expect(explanation).toContain("`OnDelete`");
+    expect(explanation).toContain("another app");
+    expect(explanation).toContain("not measured live");
+  });
+
+  // R-452 (P1): a `Modify(true)` / `ModifyAll(..., true)` kill gets its own group, sorted, with its
+  // own explanation, which states the cross-app scope and never that a local absence proves
+  // harmlessness. Revert: give the modify key the delete explanation.
+  test("groups a kill tagged run-trigger-skipped-modify on its own, with its own explanation", () => {
+    const r = build([
+      {
+        mutant: entry("M0001", { platformKillMechanism: "run-trigger-skipped-modify" }),
+        verdict: "killed",
+        batchIndex: 0,
+      },
+      {
+        mutant: entry("M0002", { platformKillMechanism: "run-trigger-skipped-delete" }),
+        verdict: "killed",
+        batchIndex: 0,
+      },
+    ]);
+    expect(r.platformArtifactKills?.killedCount).toBe(2);
+    const groups = r.platformArtifactKills?.byMechanism ?? [];
+    expect(groups.map((g) => [g.mechanism, g.mutants])).toEqual([
+      ["run-trigger-skipped-delete", ["0/M0002"]],
+      ["run-trigger-skipped-modify", ["0/M0001"]],
+    ]);
+    const explanation = groups[1]?.explanation ?? "";
+    expect(explanation).toContain("`OnModify`");
+    expect(explanation).toContain("`ModifyAll(Field, Value, true)`");
+    expect(explanation).toContain("another app");
+    expect(explanation).toContain("not proof that none exists");
+    expect(groups[0]?.explanation).toContain("`DeleteAll(true)`");
+    // sol final r1 finding 3: table events still fire with RunTrigger=false, so neither skip
+    // explanation may say the subscribers are skipped. Revert: the old "and the table's ...
+    // subscribers" wording.
+    for (const g of groups) {
+      expect(g.explanation).toContain("events still fire, with `RunTrigger` false");
+      expect(g.explanation).not.toMatch(/skips `On(Delete|Modify)` and the table's/);
+    }
+  });
 });

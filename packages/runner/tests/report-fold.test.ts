@@ -1081,3 +1081,67 @@ describe("foldEvents — a stream written before R214", () => {
     expect(report.validity.caveats).not.toContain("preproc-files-refused");
   });
 });
+
+describe("foldEvents — a stream written before R307", () => {
+  const generated = (extra: Partial<Extract<RunEventInput, { type: "mutation-set-generated" }>>) =>
+    seq([
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 2,
+        instrumentableFiles: 1,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+        ...extra,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 10 },
+    ]);
+
+  test("a mutation-set-generated line WITHOUT refusedFiles folds to the same bytes as an empty list", () => {
+    const before = buildReport(STATICS, generated({}));
+    expect(JSON.stringify(before)).toBe(
+      JSON.stringify(buildReport(STATICS, generated({ refusedFiles: [] }))),
+    );
+    expect(before.excludedSites?.files ?? []).toEqual([]);
+    expect(before.validity.caveats).not.toContain("files-refused");
+    expect(before.validity.scoreDescribes).not.toContain("refused");
+  });
+
+  test("a refusedFiles entry folds to the row, the caveat and the narrowed scope", () => {
+    const report = buildReport(
+      STATICS,
+      generated({
+        refusedFiles: [
+          { file: "src/Mixed.al", shape: "object-mix", kinds: "codeunit_declaration", sites: 3 },
+        ],
+      }),
+    );
+    expect(report.excludedSites?.files.map((f) => [f.file, f.reason, f.sites])).toEqual([
+      ["src/Mixed.al", "instrumentation-refused", 3],
+    ]);
+    expect(report.validity.caveats).toContain("files-refused");
+    expect(report.validity.reliability).toMatch(/^narrowed/);
+    expect(report.validity.scoreDescribes).toContain("; 1 file(s) refused, 3 site(s) not mutated");
+  });
+
+  test("R447: a hangRefusedFiles entry folds to its row; an absent list folds like an empty one", () => {
+    expect(JSON.stringify(buildReport(STATICS, generated({})))).toBe(
+      JSON.stringify(buildReport(STATICS, generated({ hangRefusedFiles: [] }))),
+    );
+    const report = buildReport(
+      STATICS,
+      generated({
+        hangRefusedFiles: [{ file: "src/Hang.al", kinds: "codeunit_declaration", sites: 2 }],
+      }),
+    );
+    expect(report.excludedSites?.files).toEqual([
+      { file: "src/Hang.al", kinds: "codeunit_declaration", sites: 2, reason: "hang-refused" },
+    ]);
+  });
+});

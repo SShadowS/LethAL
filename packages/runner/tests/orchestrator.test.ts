@@ -1,13 +1,14 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { swapAdditive } from "@lethal/builtin-tier1";
 import type { ALSyntaxNode, MutationSpec } from "@lethal/engine";
 import { IDENTITY_SCHEME, type InstrumentedFile, type MutantManifestEntry } from "@lethal/schemata";
-import { writeInstrumentedProject } from "@lethal/schemata";
+import { withRunIdentityOrdinals, writeInstrumentedProject } from "@lethal/schemata";
 import {
   AlcCompileError,
   ArtifactPrepareError,
@@ -26,9 +27,16 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { hashPackage, hashTargetSource, testAppHashFor } from "../src/baseline-snapshot";
+// R205: namespace import so a test can fail one source read through `readTargetSource`'s seam.
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
+import {
+  SourceSnapshotUnreadableError,
+  hashPackage,
+  hashTargetSource,
+  testAppHashFor,
+} from "../src/baseline-snapshot";
 import { PublishFailedError } from "../src/bcdev-backend";
-import { afterLeaseAcquiredFor, withEnvTeardown } from "../src/cli";
+import { type RunCliConfig, afterLeaseAcquiredFor, runFromCli, withEnvTeardown } from "../src/cli";
 import { DeploymentVerifier, decidePublishOutcome } from "../src/deployment-verifier";
 import { EnvToolClient, EnvToolError, EnvToolNotStartedError } from "../src/env-tool";
 import type { EnvToolConfigSection } from "../src/env-tool";
@@ -53,6 +61,7 @@ import type {
   ReleaseOutcome,
   RenewOutcome,
 } from "../src/lease";
+import { assertManifestObjectsDeclared } from "../src/line-map";
 import { loadInstalledArtifact } from "../src/named-mutants";
 import { NamedMutantError } from "../src/named-mutants";
 import { measuredV2_12 } from "./helpers/al-runner-predefined";
@@ -61,6 +70,8 @@ import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
 import {
+  DependencyUnreadableError,
+  type MicrosoftMode,
   appInputsOfPackage,
   dependencyFingerprint,
   readAppJsonInputs,
@@ -100,7 +111,13 @@ import { quarantineResourceKey } from "../src/resource-key";
 import { isStrandedNote } from "../src/resume";
 import { identityKeyOf, serializeKey } from "../src/selection";
 import { SessionSafety, SessionUnsafeError } from "../src/session-safety";
-import { StaleTestAppError, runMutantLineCountMessage } from "../src/stale-test-app";
+import {
+  STALE_TEST_APP_REMEDY,
+  StaleTestAppError,
+  TestAppChangedError,
+  runMutantLineCountMessage,
+  testAppRefusal,
+} from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import {
   type CompiledTestApp,
@@ -108,9 +125,9 @@ import {
   TestAppError,
   publishTestApp,
 } from "../src/test-app-publish";
-import { testDigestsOfSources } from "../src/test-digest";
+import { testDigestsOfModel, testDigestsOfSources } from "../src/test-digest";
 import { PublishAppUnreadableError, TestAppDiffersError } from "../src/test-membership";
-import { TestPageScanError } from "../src/testpage-scan";
+import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { testPageNotRunMessage } from "../src/testpage-unsupported";
 import {
   type VerifyDeps,
@@ -118,11 +135,13 @@ import {
   planVerify,
   runVerify,
   verifyDependencyFingerprint,
+  verifyRefusalOf,
 } from "../src/verify";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { legacyBuildReport } from "./helpers/legacy-report";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 
 const TARGET_AL = `codeunit 79000 "Sandbox Logic"
 {
@@ -564,7 +583,8 @@ describe("runSession", () => {
         ...entries,
       });
     const OLD_PKG = pkg({ "src/SandboxTests.Codeunit.al": TEST_AL });
-    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json. */
+    /** R-371: the inputs the run digests with: the package's manifest, or the disk's app.json.
+     *  R-385: the published path reads Microsoft apps by bytes, al-runner's by declared version. */
     const inputsFor = async (dirs: { projectDir: string; testDir: string }, from?: Uint8Array) => {
       const app =
         from !== undefined ? appInputsOfPackage(from) : await readAppJsonInputs(dirs.testDir);
@@ -572,6 +592,7 @@ describe("runSession", () => {
         dependencies: await dependencyFingerprint(
           app,
           async () => null,
+          from !== undefined ? fakeMicrosoftMode() : { kind: "declared" },
           await targetOf(dirs.projectDir),
         ),
         buildInputs: app.buildInputs,
@@ -586,6 +607,8 @@ describe("runSession", () => {
         | ((app: { readonly name: string }) => Promise<Uint8Array | null | undefined>),
       extra: Partial<SessionConfig> = {},
       fetch = true,
+      /** `null`: a backend with no microsoftMode. */
+      microsoft: MicrosoftMode | null = fakeMicrosoftMode(),
     ) {
       const dirs = await makeProject(NEW_AL);
       await Bun.write(join(dirs.testDir, "app.json"), JSON.stringify(TESTS_APP));
@@ -595,6 +618,7 @@ describe("runSession", () => {
       const backend = fetch
         ? Object.assign(stub, {
             fetchPublishedAppPackage: typeof read === "function" ? read : async () => read,
+            ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
           })
         : stub;
       const store = new ResultsStore(":memory:");
@@ -639,7 +663,11 @@ describe("runSession", () => {
           identityScheme: IDENTITY_SCHEME,
           buildSymbols: [],
           coverageMode: "procedure",
+          carryHidden: null,
+          generationSourceSha256: null,
+          twinTuples: null,
           targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+          rows: [],
         },
         manifest: {
           selectorIds,
@@ -731,36 +759,58 @@ describe("runSession", () => {
     });
 
     // R-371: a non-Microsoft dependency is fingerprinted by the bytes of the package the server
-    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify.
-    describe("R-371: a non-Microsoft dependency of the published test app", () => {
-      const DEP_ID = "55555555-5555-5555-5555-555555555555";
-      const DEP = { id: DEP_ID, name: "Dep Lib", publisher: "Partner", version: "1.0.0.0" };
+    // holds, so one rebuilt at an UNCHANGED version turns the tests new at verify. R-385: so is a
+    // Microsoft one (Library Assert), on the published path, through the backend's microsoftMode.
+    describe.each([
+      [
+        "R-371: a non-Microsoft dependency",
+        "55555555-5555-5555-5555-555555555555",
+        "Dep Lib",
+        "Partner",
+      ],
+      [
+        "R-385: a Microsoft dependency",
+        "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+        "Library Assert",
+        "Microsoft",
+      ],
+    ])("%s of the published test app", (_label, DEP_ID, DEP_NAME, DEP_PUBLISHER) => {
+      const DEP = { id: DEP_ID, name: DEP_NAME, publisher: DEP_PUBLISHER, version: "1.0.0.0" };
       const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
       // Published body = disk body, so only the dependency can make K new.
       const TESTS_PKG = new Uint8Array(
         buildFakeAppWithEntries({
-          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" MinVersion="1.0.0.0" /></Dependencies></Package>`,
+          "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies><Dependency Id="${DEP_ID}" Name="${DEP_NAME}" Publisher="${DEP_PUBLISHER}" MinVersion="1.0.0.0" /></Dependencies></Package>`,
           "src/SandboxTests.Codeunit.al": NEW_AL,
         }),
       );
       const depPkg = (build: string) =>
         new Uint8Array(
           buildFakeAppWithEntries({
-            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="Dep Lib" Publisher="Partner" Version="1.0.0.0" /></Package>`,
+            "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${DEP_ID}" Name="${DEP_NAME}" Publisher="${DEP_PUBLISHER}" Version="1.0.0.0" /></Package>`,
             "src/Dep.al": `// build ${build}`,
           }),
         );
       const serverWith = (dep: Uint8Array | null) => async (app: { readonly name: string }) =>
         app.name === DEP.name ? dep : TESTS_PKG;
 
-      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
-      async function newAtVerify(
+      /** Verify's plan against a server holding `dep` for the dependency; `microsoft` undefined
+       *  is a backend with no microsoftMode. */
+      async function verifyAgainst(
         r: Awaited<ReturnType<typeof r372Run>>,
         dep: Uint8Array,
-      ): Promise<string[]> {
+        over: {
+          readonly maxNewTests?: number;
+          readonly microsoft?: MicrosoftMode | null;
+          readonly server?: (app: { readonly name: string }) => Promise<Uint8Array | null>;
+        } = {},
+      ) {
         const { dirs, store, runId } = r;
         const recorded = store.testDigests(runId);
-        const plan = await planVerify({
+        const microsoft = over.microsoft === undefined ? fakeMicrosoftMode() : over.microsoft;
+        return planVerify({
+          ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+          sourceTestDigestParts: store.testDigestParts(runId),
           coverage: "procedure",
           source: {
             runId,
@@ -771,6 +821,9 @@ describe("runSession", () => {
             identityScheme: IDENTITY_SCHEME,
             buildSymbols: [],
             coverageMode: "procedure",
+            carryHidden: null,
+            generationSourceSha256: null,
+            twinTuples: null,
             targets: [
               {
                 batchIndex: 0,
@@ -778,6 +831,7 @@ describe("runSession", () => {
                 coveringTests: [`${K.codeunitName}.${K.method}`],
               },
             ],
+            rows: [],
           },
           manifest: {
             selectorIds,
@@ -805,13 +859,18 @@ describe("runSession", () => {
           sourceTestDigests: recorded,
           testDir: dirs.testDir,
           dependencies: await verifyDependencyFingerprint(
-            { fetchPublishedAppPackage: serverWith(dep) },
+            {
+              fetchPublishedAppPackage: over.server ?? serverWith(dep),
+              ...(microsoft !== null ? { microsoftMode: () => microsoft } : {}),
+            },
             dirs.testDir,
             dirs.projectDir,
           ),
         });
-        return plan.newTests.map((t) => t.method);
       }
+      /** The methods verify plans as new, against a server holding `dep` for the dependency. */
+      const newAtVerify = async (r: Awaited<ReturnType<typeof r372Run>>, dep: Uint8Array) =>
+        (await verifyAgainst(r, dep)).newTests.map((t) => t.method);
 
       test("the same package at verify reads K as unchanged; a rebuild at the same version reads it as new", async () => {
         const r = await r372Run(serverWith(depPkg("one")));
@@ -832,8 +891,77 @@ describe("runSession", () => {
         expect(store.testDigests(runId)).toBeNull();
         expect(digestWarning).toHaveLength(1);
         expect(digestWarning[0]).toContain("dependencies could not be fingerprinted");
-        expect(digestWarning[0]).toContain("Dep Lib");
+        expect(digestWarning[0]).toContain(DEP_NAME);
         store.close();
+      });
+
+      // R-385 T4 (down): nothing changed but every buffer is a fresh copy per read, and verify's
+      // app.json lists the two dependencies in the other order from the published manifest.
+      test("unchanged packages read as fresh buffers, dependencies in another order: K stays old", async () => {
+        const DEP2 = { ...DEP, id: "66666666-6666-6666-6666-666666666666", name: `${DEP_NAME} 2` };
+        const pkgOf = (d: typeof DEP) =>
+          new Uint8Array(
+            buildFakeAppWithEntries({
+              "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${d.id}" Name="${d.name}" Publisher="${d.publisher}" Version="1.0.0.0" /></Package>`,
+              "src/Dep.al": "// build one",
+            }),
+          );
+        const tag = (d: typeof DEP) =>
+          `<Dependency Id="${d.id}" Name="${d.name}" Publisher="${d.publisher}" MinVersion="1.0.0.0" />`;
+        const testsPkg = () =>
+          new Uint8Array(
+            buildFakeAppWithEntries({
+              "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${APP_ID}" Name="Sandbox Tests" Publisher="LethAL" Version="1.0.0.2" /><Dependencies>${tag(DEP)}${tag(DEP2)}</Dependencies></Package>`,
+              "src/SandboxTests.Codeunit.al": NEW_AL,
+            }),
+          );
+        const fresh = async (app: { readonly name: string }) =>
+          app.name === DEP.name ? pkgOf(DEP) : app.name === DEP2.name ? pkgOf(DEP2) : testsPkg();
+        const r = await r372Run(fresh);
+        expect(r.digestWarning).toEqual([]);
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP2, DEP] }),
+        );
+        const plan = await verifyAgainst(r, pkgOf(DEP), { server: fresh });
+        expect(plan.newTests.map((t) => t.method)).toEqual([]);
+        r.store.close();
+      });
+
+      test("the rebuilt dependency is named as the cause (dependency)", async () => {
+        const r = await r372Run(serverWith(depPkg("one")));
+        await Bun.write(
+          join(r.dirs.testDir, "app.json"),
+          JSON.stringify({ ...TESTS_APP, dependencies: [DEP] }),
+        );
+        const e = await verifyAgainst(r, depPkg("two"), { maxNewTests: 0 }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        const refusal = verifyRefusalOf(e);
+        expect(refusal).toMatchObject({ kind: "refused", reason: "too-many-new-tests" });
+        expect(refusal?.kind === "refused" ? refusal.detail : "").toContain(
+          "dependency: 1 test(s)",
+        );
+        r.store.close();
+      });
+
+      // R-385 D4: a published path with no microsoftMode never falls back to declared versions.
+      test("a published-path backend with no microsoftMode: the run records NULL, verify refuses dependency-unreadable", async () => {
+        const r = await r372Run(serverWith(depPkg("one")), {}, true, null);
+        expect(r.store.testDigests(r.runId)).toBeNull();
+        expect(r.digestWarning).toHaveLength(1);
+        expect(r.digestWarning[0]).toContain("dependencies could not be fingerprinted");
+        const e = await verifyAgainst(r, depPkg("one"), { microsoft: null }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+        expect(e).toBeInstanceOf(DependencyUnreadableError);
+        expect(verifyRefusalOf(e)).toMatchObject({
+          kind: "refused",
+          reason: "dependency-unreadable",
+        });
+        r.store.close();
       });
     });
   });
@@ -2063,6 +2191,138 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
       for (const m of report.mutants.filter((m) => m.verdict === "error"))
         expect(m.failureNote).not.toContain("TestPermissions = Disabled");
     });
+
+    // R462: the published test app is hashed before the baseline (R192's snapshot key) and again at
+    // the refusal. `before` answers every read until the baseline ran; `after` answers from then on.
+    describe("R462: the test app's identity before the baseline and at the refusal", () => {
+      type Read = Uint8Array | null | undefined | "throw";
+      async function refuse(before: Read, after: Read): Promise<unknown> {
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let baselineRan = false;
+        const reader = async () => {
+          const r = baselineRan ? after : before;
+          if (r === "throw") throw new Error("read failed");
+          return r;
+        };
+        const store = new ResultsStore(":memory:");
+        return runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: reader,
+            run: (ref: TestMethodRef, opts: RunOpts) => {
+              baselineRan = true;
+              return run(ref, opts);
+            },
+          }),
+          store,
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      }
+      const A = new Uint8Array([1]);
+      const B = new Uint8Array([2]);
+
+      test("11: A -> B is TestAppChangedError, naming both packages", async () => {
+        const err = await refuse(A, B);
+        expect(err).toBeInstanceOf(TestAppChangedError);
+        expect((err as Error).message).toContain(`package:${hashPackage(A)}`);
+        expect((err as Error).message).toContain(`package:${hashPackage(B)}`);
+        expect((err as TestAppChangedError).missingTests).toEqual([
+          "Sandbox Tests.UnsupportedTest",
+        ]);
+      });
+
+      test("12: A -> A is StaleTestAppError, cause unchanged-endpoints", async () => {
+        const err = await refuse(A, A);
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+        expect((err as Error).message).toContain("replace-and-restore");
+        expect((err as Error).message).toContain("If no other session publishes");
+      });
+
+      test("13: a failed or missing read is identity-unverified, never unchanged or changed", async () => {
+        for (const after of [null, "throw", undefined] as const) {
+          const err = await refuse(A, after);
+          expect(err).toBeInstanceOf(StaleTestAppError);
+          expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        }
+        // No package reader at all: the `source:` hash of the test tree, the same both times.
+        const dirs = await qualProject();
+        const err = await runSession({
+          backend: new QualificationBackend(missingFor),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect((err as StaleTestAppError).cause).toBe("identity-unverified");
+        // No first read (the verify path passes no snapshot).
+        const missing = [{ name: "T.A", description: "d" }];
+        const pkg = `package:${hashPackage(A)}`;
+        expect((testAppRefusal(missing, undefined, pkg) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+        expect((testAppRefusal(missing, pkg, undefined) as StaleTestAppError).cause).toBe(
+          "identity-unverified",
+        );
+      });
+
+      test("the re-read asks for the SAME app even if the local app.json changed during the baseline", async () => {
+        // The server holds two different apps and neither changes. Only the local manifest's name
+        // moves, after the first read; an unpinned re-read would compare app "Tests" with "Other".
+        const dirs = await qualProject();
+        const backend = new QualificationBackend(missingFor);
+        const run = backend.run.bind(backend);
+        let renamed = false;
+        const err = await runSession({
+          backend: Object.assign(backend, {
+            fetchPublishedAppPackage: async (app: { readonly name: string }) =>
+              app.name === "Tests" ? A : B,
+            run: async (ref: TestMethodRef, opts: RunOpts) => {
+              if (!renamed) {
+                renamed = true;
+                await Bun.write(
+                  join(dirs.testDir, "app.json"),
+                  '{"name":"Other","publisher":"P","version":"1.0.0.0"}',
+                );
+              }
+              return run(ref, opts);
+            },
+          }),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+        }).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(StaleTestAppError);
+        expect((err as StaleTestAppError).cause).toBe("unchanged-endpoints");
+      });
+
+      test("each refusal's full message: the observed interval, no inferred age, a conditional remedy", () => {
+        const missing = [{ name: "T.A", description: "d" }];
+        const head =
+          "the published test app is missing 1 test(s) this project's source declares:\n  T.A: d\n" +
+          "Refusing to measure: every mutant covered only by these would be recorded no-coverage and " +
+          "the run would report a plausible score for a suite that never ran.";
+        expect(testAppRefusal(missing, "package:a", "package:a").message).toBe(
+          `${head} The published test app's package was the same at the start of this batch's baseline and at this refusal; a replace-and-restore between the two reads cannot be ruled out. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", undefined).message).toBe(
+          `${head} LethAL could not compare the published test app's package at the start of this batch's baseline with the one at this refusal, so the app may be older than the source OR may have been replaced between the two. If no other session publishes to this server: ${STALE_TEST_APP_REMEDY}`,
+        );
+        expect(testAppRefusal(missing, "package:a", "package:b").message).toBe(
+          `${head} The published test app's package CHANGED between the start of this batch's baseline and this refusal (package:a at the start, package:b at the refusal): something published to this server in that interval. Re-run when no other session publishes to it.`,
+        );
+      });
+    });
   });
 });
 
@@ -2519,6 +2779,125 @@ describe("runSession — C3 batch app.json + full source copy", () => {
     expect(copied).toBe(NO_MUTANTS_AL); // writeInstrumentedProject never wrote this file
   });
 
+  // R307 Task 7: a refused file is published uninstrumented and its tests still run.
+  const R307_GOOD_AL = `codeunit 79000 "Sandbox Logic"
+{
+    procedure P1(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+
+    procedure P2(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount < Budget);
+    end;
+}
+`;
+  // An object-mix file (table + enum + codeunit): the per-file trial refuses it whole.
+  const R307_BAD_AL = `table 79310 "Mixed Table"
+{
+    fields { field(1; Code; Code[20]) { } }
+}
+
+enum 79311 "Mixed Enum"
+{
+    value(0; Zero) { }
+}
+
+codeunit 79312 "Mixed Code"
+{
+    procedure Compute()
+    var
+        Counter: Integer;
+    begin
+        Counter := 1;
+    end;
+}
+`;
+  const R307_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GoodAndBad()
+    begin
+    end;
+
+    [Test]
+    procedure GoodP2ThenBadFails()
+    begin
+    end;
+}
+`;
+
+  test("R307: a refused file is copied byte-identical, keeps its tests' coverage, and a red test in it makes the covered mutants error", async () => {
+    const dirs = await makeProject(R307_TESTS_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), R307_GOOD_AL);
+    await Bun.write(join(dirs.projectDir, "Bad.Mixed.al"), R307_BAD_AL);
+    // The baseline failure of GoodP2ThenBadFails is set by this fake, not caused by Bad's source.
+    const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
+      mutant === null && ref.method === "GoodP2ThenBadFails" ? "fail" : "pass",
+    );
+    backend.coverageEntriesFor = (ref) =>
+      ref.method === "GoodAndBad"
+        ? [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P1" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ]
+        : [
+            { objectType: "Codeunit", objectId: 79000, procedure: "P2" },
+            { objectType: "Codeunit", objectId: 79312, procedure: "Compute" },
+          ];
+    // Bad really is refused by the per-file trial (so the checks below are about a refused file).
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      ["Bad.Mixed.al", "object-mix"],
+    ]);
+    const store = new ResultsStore(":memory:");
+    const report = await runSession({ backend, store, ...dirs, selectorIds });
+
+    const batchDirs = (await readdir(dirs.instrumentedDir)).filter((e) =>
+      e.match(/^run-\d+-batch-0$/),
+    );
+    expect(batchDirs.length).toBe(1);
+    const batchDir = join(dirs.instrumentedDir, batchDirs[0] as string);
+    expect(await readFile(join(batchDir, "Bad.Mixed.al"), "utf8")).toBe(R307_BAD_AL);
+
+    const p1 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 5);
+    const p2 = report.mutants.filter((m) => m.file.includes("SandboxLogic") && m.line === 10);
+    expect(p1.length).toBeGreaterThan(0);
+    expect(p2.length).toBeGreaterThan(0);
+    // Good's coverage survives the refusal: P1 is still covered by the green test and scored.
+    for (const m of p1) expect(m.verdict).toBe("survived");
+    // P2's only covering test is red at baseline: never a finding.
+    for (const m of p2) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain("did not pass at baseline");
+      expect(m.failureNote).toContain("Sandbox Tests.GoodP2ThenBadFails");
+    }
+    expect(report.mutants.some((m) => m.file.includes("Bad.Mixed"))).toBe(false);
+  });
+
+  test("R307: a refused file and a good file sharing a basename still abort with the duplicate-basename message", async () => {
+    const dirs = await makeProject();
+    await Bun.write(join(dirs.projectDir, "a", "Dup.Codeunit.al"), R307_BAD_AL);
+    await Bun.write(
+      join(dirs.projectDir, "b", "Dup.Codeunit.al"),
+      TARGET_AL.replace("79000", "79003").replace("Sandbox Logic", "Dup Logic"),
+    );
+    // The message below is thrown for ANY two files sharing a basename, so prove a/Dup is refused.
+    const set = await generateMutationSet(dirs.projectDir);
+    expect(set.refusedFiles.map((r) => [r.file, r.shape])).toEqual([
+      ["a/Dup.Codeunit.al", "object-mix"],
+    ]);
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    await expect(runSession({ backend, store, ...dirs, selectorIds })).rejects.toThrow(
+      /cannot build the batch project: two source files share the basename "Dup\.Codeunit\.al" \(.*Dup\.Codeunit\.al and .*Dup\.Codeunit\.al\)\. Instrumented files are written flat, so one would silently replace the other and its AL objects would be missing from the published app\. Rename one of them\./,
+    );
+    expect(backend.deploys.length).toBe(0);
+  });
+
   test("missing app.json aborts with a clear error before deploy", async () => {
     const dirs = await makeProject();
     await rm(join(dirs.projectDir, "app.json"));
@@ -2743,7 +3122,9 @@ describe("runSession — I7 second consecutive transport error aborts the sessio
     raw.close();
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => r.verdict === "error")).toBe(true);
-  });
+    // R439: 30 s, not bun's 5 s default. About 0.16 s inside this file normally, but measured at
+    // 6.04 s in a full verify under load on the kraken container.
+  }, 30_000);
 });
 
 describe("runSession — parallel workers", () => {
@@ -3468,34 +3849,24 @@ describe("runSession — single artifact", () => {
 // those would let the number silently shrink, and a warning emitted at the end would satisfy a
 // mere presence check while being useless to the person reading it live.
 //
-// Fixture shape measured, not guessed: `packages/builtin-tier1/tests/swap-additive.test.ts`'s own
-// "tags an in-loop additive expression that advances the condition" case, a `while` loop whose
-// condition reads a counter that an additive expression in its body advances. Scoped to
-// `lethal.swap-additive` alone (`operators: ["swap-additive"]`) so this project deploys exactly
-// ONE hang-capable mutant. There are FOUR callers of `hangCapableForMutatedNode`: `remove-assignment`,
-// `shift-integer`, `swap-additive` and `flip-boolean-literal`. Left unscoped, TWO of the other three
-// also tag this fixture, not three, each at its own different-span site (see the unscoped test
-// below for the full derivation):
-//   - `remove-assignment` claims the whole loop-body statement `Remaining := Remaining - 1;` and
-//     tags it: that node IS the assignment `hangCapableForMutatedNode` classifies directly.
-//   - `shift-integer` claims NOTHING here. The only literal in the loop body, the `1` inside
-//     `Remaining - 1`, has an `additive_expression` for a parent rather than an
-//     `assignment_statement`, and `shifted()` (shift-integer.ts) refuses any literal whose parent
-//     is neither. (This is why that operator's OWN conformance fixture for the tag uses
-//     `Remaining := 0`, a direct literal assignment, rather than this shape.)
-//   - `flip-boolean-literal` claims nothing, because this fixture's loop body has no boolean
-//     literal for it to target, not because it is a third operator rather than a fourth.
-// So this test scopes to `swap-additive` alone to hold the count at exactly 1; the unscoped test
-// below deploys the default operator set on the same fixture and expects 2 (`remove-assignment`
-// plus `swap-additive`), derived by this same reading before it was ever run.
+// Since R196's refusal no BUILT-IN operator tags a site: the four that called
+// `hangCapableForMutatedNode` (`remove-assignment`, `shift-integer`, `swap-additive`,
+// `flip-boolean-literal`) now refuse it, so `hangCapableCount` reads 0 for them (the unscoped test
+// below pins that end to end on a loop whose body advances its condition). The channel stays for a
+// plug-in operator, so the count and the warning are exercised through a STAND-IN for one:
+// `swap-additive`'s `generate` wrapped to tag every spec it returns, scoped to that operator, on a
+// project whose one emitted additive (`Remaining + 1`, before the loop) gives exactly ONE tagged
+// mutant.
 describe("runSession, R196: hang-capable sites announced before deployment", () => {
   const HANG_CAPABLE_AL = `codeunit 79000 "Sandbox Logic"
 {
     procedure Go()
     var
         Remaining: Integer;
+        Total: Integer;
     begin
         Remaining := 10;
+        Total := Remaining + 1;
         while Remaining > 0 do
             Remaining := Remaining - 1;
     end;
@@ -3519,14 +3890,25 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     const store = new ResultsStore(":memory:");
     const events: RunEvent[] = [];
     const emit = createEmitter([(e) => events.push(e)]);
-    await runSession({
-      backend,
-      store,
-      ...dirs,
-      selectorIds,
-      operators: ["swap-additive"],
-      emit: [emit],
-    });
+    // The plug-in stand-in: tag whatever swap-additive emits (here only the preheader additive).
+    const original = swapAdditive.generate;
+    const spy = spyOn(swapAdditive, "generate").mockImplementation((node, ctx) =>
+      original
+        .call(swapAdditive, node, ctx)
+        .map((s): MutationSpec => ({ ...s, hangCapable: "loop-condition-target" })),
+    );
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        operators: ["swap-additive"],
+        emit: [emit],
+      });
+    } finally {
+      spy.mockRestore();
+    }
     store.close();
     return events;
   }
@@ -3541,15 +3923,9 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
     expect(generated.hangCapableCount).toBe(1);
   });
 
-  test("counts DISTINCT tagged mutants when several operators tag the same statement, unscoped (R196)", async () => {
-    // Same fixture as `collectFromHangCapableRun`, but with the DEFAULT operator set rather than
-    // scoped to `swap-additive` alone. Expected count derived by reading the four operators
-    // against this fixture BEFORE running it (full trace in the comment above this `describe`):
-    // `remove-assignment` tags the whole statement `Remaining := Remaining - 1;`, `swap-additive`
-    // tags the `Remaining - 1` additive expression nested inside it, a DIFFERENT span, and
-    // `shift-integer` and `flip-boolean-literal` tag nothing here. `dedupeSpecs`'s identity is
-    // (node kind, span, replacement text), and `assignment_statement` and `additive_expression`
-    // share neither kind nor span, so dedup does not collapse the two. Derived total: 2.
+  test("built-in operators REFUSE the loop's step, so nothing is tagged or announced, unscoped (R196)", async () => {
+    // Same fixture, DEFAULT operator set, no stand-in. Before R196's refusal `remove-assignment`
+    // and `swap-additive` both tagged `Remaining := Remaining - 1` (count 2); now neither emits it.
     const dirs = await makeHangCapableProject(HANG_CAPABLE_AL);
     const backend = new StubBackend(CAPS_NST, () => "pass", ["Go"]);
     const store = new ResultsStore(":memory:");
@@ -3562,7 +3938,18 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
         e.type === "mutation-set-generated",
     );
     if (generated === undefined) throw new Error("no mutation-set-generated event");
-    expect(generated.hangCapableCount).toBe(2);
+    expect(generated.hangCapableCount).toBe(0);
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "hang-capable-sites-deployed"),
+    ).toBe(false);
+    // Count 0 also holds if the step is emitted UNTAGGED (the unsafe direction): it must not exist.
+    const { files } = await generateMutationSet(dirs.projectDir);
+    const texts = files.flatMap((f) => f.specs.map((s) => s.before.text.replace(/\s+/g, " ")));
+    expect(texts).not.toContain("Remaining := Remaining - 1");
+    // swap-additive's `before` is the EXPRESSION, so the statement check alone misses it (R454).
+    expect(texts).not.toContain("Remaining - 1");
+    // Control: the preheader `Remaining + 1` is still emitted by the same operator.
+    expect(texts).toContain("Remaining + 1");
   });
 
   test("reports zero rather than nothing on a project with no hang-capable site", async () => {
@@ -3951,14 +4338,16 @@ describe("generateMutationSet: real cross-tier collisions", () => {
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
     try {
       const { files } = await generateMutationSet(projectDir);
-      await writeInstrumentedProject({
-        targetDir: outDir,
-        files,
-        selectorIds,
-        artifactId: "0123456789abcdef0123456789abcdef",
-        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-        operatorTiers,
-      });
+      await writeInstrumentedProject(
+        withRunIdentityOrdinals({
+          targetDir: outDir,
+          files,
+          selectorIds,
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+          operatorTiers,
+        }),
+      );
       const manifest = JSON.parse(await readFile(join(outDir, "mutant-manifest.json"), "utf8")) as {
         mutants: Array<{ startIndex: number; operatorName: string }>;
       };
@@ -4604,6 +4993,190 @@ describe("runSession — Layer 5A deployment identity", () => {
     store.close();
   });
 
+  // R205 pin-and-warn: `runFromCli` reads the source once, before anything else does, and the
+  // session builds THAT snapshot. An edit landing after it (here inside selector-id validation,
+  // which runs between the snapshot and `runSession`) is never built, and the last-batch re-read
+  // warns naming every changed path. Real `runFromCli` and real `runSession`; the wrapper only adds
+  // an event sink and reads the store before `runFromCli` closes it.
+  async function runCliOn(dirs: { projectDir: string; testDir: string; instrumentedDir: string }) {
+    const root = join(dirs.projectDir, "..");
+    const configPath = join(root, "lethal.config.json");
+    writeFileSync(configPath, "{}");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir: dirs.projectDir,
+      testDir: dirs.testDir,
+      backendKind: "al-runner",
+      dbPath: ":memory:",
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const events: RunEvent[] = [];
+    let sourceSha: string | null | undefined;
+    return {
+      events,
+      sourceSha: () => sourceSha,
+      run: (edit: () => void) =>
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => edit(),
+          buildBackend: async () => new PhaseBackend(),
+          runSession: async (cfg) => {
+            const report = await runSession({
+              ...cfg,
+              instrumentedDir: dirs.instrumentedDir,
+              emit: [...(cfg.emit ?? []), (e) => events.push(e)],
+            });
+            sourceSha = (
+              cfg.store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+                source_sha256: string | null;
+              }
+            ).source_sha256;
+            return report;
+          },
+        }),
+    };
+  }
+  const sourceWarnings = (events: readonly RunEvent[]) =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "source-changed-during-run" ? [e.message] : [],
+    );
+
+  test("R205: an edit after runFromCli's snapshot is not built, and the warning names every changed path", async () => {
+    const dirs = await makeProject();
+    const p = dirs.projectDir;
+    writeFileSync(join(p, "SandboxNoOp.Codeunit.al"), NO_MUTANTS_AL);
+    const pinnedAppJson = JSON.stringify({
+      ...JSON.parse(APP_JSON),
+      preprocessorSymbols: ["PINNED"],
+    });
+    writeFileSync(join(p, "app.json"), pinnedAppJson);
+    const cli = await runCliOn(dirs);
+    const report = await cli.run(() => {
+      writeFileSync(join(p, "Added.Codeunit.al"), NO_MUTANTS_AL.replace("79002", "79004"));
+      unlinkSync(join(p, "SandboxNoOp.Codeunit.al"));
+      writeFileSync(
+        join(p, "SandboxLogic.Codeunit.al"),
+        TARGET_AL.replace("    begin\n", "    begin\n        // EDITED-AFTER-SNAPSHOT\n"),
+      );
+      writeFileSync(
+        join(p, "app.json"),
+        JSON.stringify({
+          ...JSON.parse(pinnedAppJson),
+          name: "EDITED",
+          preprocessorSymbols: ["EDITED"],
+        }),
+      );
+    });
+    const built = (await readdir(dirs.instrumentedDir, { recursive: true }))
+      .map(String)
+      .filter((f) => f.endsWith("SandboxLogic.Codeunit.al"));
+    expect(built.length).toBeGreaterThan(0);
+    for (const f of built) {
+      const dir = join(dirs.instrumentedDir, f, "..");
+      expect(readFileSync(join(dirs.instrumentedDir, f), "utf8")).not.toContain(
+        "EDITED-AFTER-SNAPSHOT",
+      );
+      expect(readFileSync(join(dir, "SandboxNoOp.Codeunit.al"), "utf8")).toBe(NO_MUTANTS_AL);
+      expect((await readdir(dir)).includes("Added.Codeunit.al")).toBe(false);
+      expect(JSON.parse(readFileSync(join(dir, "app.json"), "utf8")).name).toBe(
+        "Sandbox Orchestrator Fixture",
+      );
+    }
+    expect(report.buildSymbols).toContain("PINNED");
+    expect(report.buildSymbols).not.toContain("EDITED");
+    const warned = sourceWarnings(cli.events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(
+      "(added: Added.Codeunit.al; removed: SandboxNoOp.Codeunit.al; changed: SandboxLogic.Codeunit.al, app.json;",
+    );
+    expect(cli.sourceSha()).toBeNull();
+  });
+
+  test("R205: an untouched tree through runFromCli does not warn and records the source hash", async () => {
+    const dirs = await makeProject();
+    const cli = await runCliOn(dirs);
+    await cli.run(() => {});
+    expect(sourceWarnings(cli.events)).toEqual([]);
+    expect(cli.sourceSha()).toBe(await hashTargetSource(dirs.projectDir, []));
+  });
+
+  /**
+   * R205: the `failOnCall`-th source snapshot read (1-based) fails to read `file` with EACCES,
+   * through `readTargetSource`'s read seam, ONCE; every other read is real. Deterministic on every
+   * platform and user (chmod denies nothing on Windows or to root).
+   */
+  function failSourceRead(file: string, failOnCall: number) {
+    const real = baselineSnapshotModule.readTargetSource;
+    let calls = 0;
+    return spyOn(baselineSnapshotModule, "readTargetSource").mockImplementation(async (dir) => {
+      calls += 1;
+      if (calls !== failOnCall) return real(dir);
+      return real(dir, async (p) => {
+        if (p === file) {
+          throw Object.assign(new Error(`EACCES: permission denied, open '${p}'`), {
+            code: "EACCES",
+          });
+        }
+        return readFileSync(p);
+      });
+    });
+  }
+
+  test("R205: an unreadable source file refuses the session by name before anything is built", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const spy = failSourceRead(file, 1);
+    try {
+      const err = await runSession({ backend, store, ...dirs, selectorIds }).catch((e) => e);
+      expect(err).toBeInstanceOf(SourceSnapshotUnreadableError);
+      expect(String(err)).toContain(file);
+      expect(String(err)).toContain("EACCES");
+      expect(backend.calls).toEqual([]);
+      // The readable control: the one-shot failure is spent, so the same project now runs.
+      const again = new PhaseBackend();
+      await runSession({ backend: again, store, ...dirs, selectorIds });
+      expect(again.returned).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      store.close();
+    }
+  });
+
+  test("R205: a last-batch re-read that fails warns and withholds the hash, never aborts", async () => {
+    const dirs = await makeProject();
+    const file = join(dirs.projectDir, "SandboxLogic.Codeunit.al");
+    const backend = new PhaseBackend();
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    // Read 1 is the session's snapshot, read 2 the last batch's re-read.
+    const spy = failSourceRead(file, 2);
+    try {
+      await runSession({
+        backend,
+        store,
+        ...dirs,
+        selectorIds,
+        emit: [(e) => events.push(e)],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(backend.returned).toHaveLength(1);
+    const warned = sourceWarnings(events);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("could not be read after the last batch was prepared");
+    const run = store.db.query("SELECT source_sha256 FROM runs LIMIT 1").get() as {
+      source_sha256: string | null;
+    };
+    expect(run.source_sha256).toBeNull();
+    store.close();
+  });
+
   test("an edit between generation and the last batch's preparation records NULL and warns", async () => {
     const dirs = await makeProject();
     // A second carrier file so maxGuardsPerBatch: 1 gives two batches; the edit lands while the
@@ -4834,6 +5407,25 @@ describe("runSession — deploy:none (al-runner) app_version", () => {
     // C02-02 Task 3: a deploy:"none" backend never publishes an artifact, so `artifacts` is `[]`,
     // not `undefined`: the field is always written.
     expect(report.artifacts).toEqual([]);
+    store.close();
+  });
+
+  test("R205: records the snapshot's app.json version, not a version-only edit made after it", async () => {
+    const dirs = await makeProject();
+    const manifest = JSON.parse(APP_JSON) as Record<string, unknown>;
+    const appJson = join(dirs.projectDir, "app.json");
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "1.2.3.4" }));
+    const source = await baselineSnapshotModule.readTargetSource(dirs.projectDir);
+    await Bun.write(appJson, JSON.stringify({ ...manifest, version: "5.6.7.8" }));
+    const backend = new StubBackend(AL_RUNNER_CAPS, (mutant) =>
+      mutant === null ? "pass" : "fail",
+    );
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, source, selectorIds });
+    const row = store.db.query("SELECT app_version FROM runs LIMIT 1").get() as {
+      app_version: string;
+    };
+    expect(row.app_version).toBe("1.2.3.4");
     store.close();
   });
 
@@ -5266,14 +5858,16 @@ async function manifestMutants(
   scratchDir: string,
 ): Promise<readonly MutantManifestEntry[]> {
   const { files } = await generateMutationSet(projectDir);
-  await writeInstrumentedProject({
-    targetDir: scratchDir,
-    files,
-    selectorIds,
-    artifactId: "seed00000000000000000000000000",
-    targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
-    operatorTiers,
-  });
+  await writeInstrumentedProject(
+    withRunIdentityOrdinals({
+      targetDir: scratchDir,
+      files,
+      selectorIds,
+      artifactId: "seed00000000000000000000000000",
+      targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+      operatorTiers,
+    }),
+  );
   const manifest = JSON.parse(await readFile(join(scratchDir, "mutant-manifest.json"), "utf8")) as {
     mutants: MutantManifestEntry[];
   };
@@ -5306,6 +5900,11 @@ async function seedPriorSurvivor(
     buildSymbols: [],
     backend: "bcdev",
     appVersion: "0.0.0.1",
+    // R442: a run that hid nothing from numbering; a NULL list is untrusted and skips nothing.
+    carryHidden: { tuples: [], files: [] },
+    // R391: a run that measured its twins and found none, so the seed (a singleton) carries under
+    // rule 2. A NULL record is "not measured" and carries nothing.
+    twinTuples: [],
   });
   store.recordMutant(runId, {
     mutantCode: "SEED",
@@ -6849,8 +7448,9 @@ describe("runSession — Task 10 fix: a quarantined run never seeds a future ski
       backend.capabilities().coverage,
       await testAppHashFor(undefined, dirs.testDir),
       [],
+      [],
     );
-    expect(keys.size).toBe(0);
+    expect(keys.keys.size).toBe(0);
     store.close();
   });
 });
@@ -8643,6 +9243,31 @@ describe("runSession — Layer 5C-B1 fix round 1: publish-fence failure paths + 
     expect(client.endPublishArgs[0]?.outcome).toBe("failed");
     expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
     // The assertion that actually matters: no durable tier quarantine for a CONFIRMED failure.
+    expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
+  });
+
+  test("a ManifestDeclarationError (R-307 section 4) is a confirmed terminal: EndPublish once as failed, no recycle record", async () => {
+    // The manifest-vs-declarations check refuses BEFORE anything is published. As a plain Error it
+    // fell to the "UNKNOWN result" branch: marker left set, `container-needs-recycle` written, and
+    // the next session's publish blocked by a publish that never happened.
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    const { lease } = leaseCfg(client);
+    // The REAL check raises it, so a plain `Error` there would fail this test, not only a missing
+    // case in the fence's classifier.
+    const backend = leaseBackend({
+      deploy: async () => {
+        assertManifestObjectsDeclared(["codeunit:50145"], new Set(), undefined, new Set());
+        return null;
+      },
+    });
+    await expect(runSessionForTest(backend, { quarantineDir: dir, lease })).rejects.toThrow(
+      "a mutant is attributed to codeunit:50145, which the compiled app does not declare.",
+    );
+    expect(client.endPublishArgs).toHaveLength(1);
+    expect(client.endPublishArgs[0]?.outcome).toBe("failed");
+    expect(client.endPublishArgs[0]?.attemptId).toBe(client.beginPublishArgs[0]?.attemptId ?? "x");
+    // `recordRecycle` is the only writer of this record: null means it was never called.
     expect(await new QuarantineStore(dir).read("http://cronus281|BC")).toBeNull();
   });
 
@@ -12380,6 +13005,15 @@ class NamedFake implements ExecutionBackend {
         readonly ref: TestMethodRef;
         readonly nth: number;
       }) => TestVerdict | undefined;
+      /** R259: a mutated run's answer for (mutant, method), ahead of `killer`: an outcome for that
+       *  method, or a whole group-call answer when the method opens the call. */
+      readonly answer?: (c: {
+        readonly mutant: string;
+        readonly ref: TestMethodRef;
+      }) =>
+        | { readonly outcome: "pass" | "fail"; readonly reachedActive?: boolean }
+        | RunManyResult
+        | undefined;
     },
   ) {}
   private readonly kindSeq = new Map<string, number>();
@@ -12438,6 +13072,17 @@ class NamedFake implements ExecutionBackend {
       return { ref, outcome: "deadline-exceeded", durationMs: 1, operation: "in-flight-unknown" };
     }
     const attestation = { observedAny: this.o.observedAny ?? true, identityMismatch: false };
+    const scripted = this.o.answer?.({ mutant: m, ref });
+    if (scripted !== undefined && !("kind" in scripted)) {
+      return {
+        ref,
+        outcome: scripted.outcome,
+        durationMs: 5,
+        attestation,
+        ...(scripted.outcome === "fail" ? { failureMessage: `killed by ${m}` } : {}),
+        ...(scripted.reachedActive !== undefined ? { reachedActive: scripted.reachedActive } : {}),
+      };
+    }
     const killerRef = this.o.killerRef;
     const isKillingRun =
       m === (this.o.killer ?? "M0001") &&
@@ -12452,6 +13097,11 @@ class NamedFake implements ExecutionBackend {
     const fencedOp = { attemptId: `n${this.manySeq}`, opSeq: 100 + this.manySeq };
     const verdicts: TestVerdict[] = [];
     const [first] = opts.methods;
+    const whole =
+      first !== undefined && this.active !== null
+        ? this.o.answer?.({ mutant: this.active, ref: first.ref })
+        : undefined;
+    if (whole !== undefined && "kind" in whole) return whole;
     const keys =
       first === undefined
         ? {}
@@ -12512,6 +13162,7 @@ async function installedFixture(
     readonly observedAny?: boolean;
     readonly session?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["session"]>;
     readonly unmutated?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["unmutated"]>;
+    readonly answer?: NonNullable<ConstructorParameters<typeof NamedFake>[0]["answer"]>;
     /** Default true: a lease-bindable fake under a `FakeLeaseClient` lease. */
     readonly lease?: boolean;
   } = {},
@@ -13512,6 +14163,138 @@ describe("C02-06 Task 5.2: killingTestRef (decision 14)", () => {
   });
 });
 
+// R259: M0001, M0002 and M0003 are IsOverBudget's three mutants.
+describe("R259: runNamedMutants' probes", () => {
+  test("probes run after the targets, one method each, and never enter outcomes", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0002" && ref.codeunitId === OVER2.codeunitId ? { outcome: "fail" } : undefined,
+    });
+    const handed: string[][] = [];
+    const scored: string[] = [];
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      emit: [
+        ...(fx.cfg.emit ?? []),
+        (e) => {
+          if (e.type === "mutant-scored") scored.push(e.mutant.mutantId);
+        },
+      ],
+      // A probe's method must have run at the baseline: OVER2 does through M0001's request.
+      requests: [
+        { mutantId: "M0001", methods: [OVER, OVER2] },
+        { mutantId: "M0002", methods: [OVER] },
+      ],
+      probe: (outcomes) => {
+        handed.push(outcomes.map((o) => `${o.mutant.mutantId} ${o.verdict}`));
+        return [
+          { mutantId: "M0002", methods: [OVER2] },
+          { mutantId: "M0003", methods: [OVER2] },
+        ];
+      },
+    });
+    expect(handed).toEqual([["M0001 killed", "M0002 survived"]]);
+    expect(res.outcomes.map((o) => [o.mutant.mutantId, o.verdict])).toEqual([
+      ["M0001", "killed"],
+      ["M0002", "survived"],
+    ]);
+    expect(
+      res.probes?.map((p) => [p.request.mutantId, p.outcome.verdict, p.outcome.killPosition]),
+    ).toEqual([
+      ["M0002", "killed", 1],
+      ["M0003", "survived", undefined],
+    ]);
+    expect(res.probes?.[0]?.outcome.killingTestRef).toEqual(OVER2);
+    // A progress reader counts mutant-scored events: only the two requested mutants emit one.
+    expect(scored).toEqual(["M0001", "M0002"]);
+  });
+
+  test("a rerun in a session a probe used is not fresh: probe rows stay in the run's store", async () => {
+    // Every group call gets a new session id; OVER2's rerun (its 2nd unmutated run) is handed the
+    // session of the last group call, which is the probe's.
+    let lastMany = 0;
+    let over2Unmutated = 0;
+    const fx = await installedFixture({
+      session: ({ kind, n, ref }) => {
+        if (kind === "many" || kind === "replay") {
+          lastMany = 1000 + n + (kind === "replay" ? 500 : 0);
+          return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        if (kind === "unmutated" && ref.codeunitId === OVER2.codeunitId) {
+          over2Unmutated += 1;
+          if (over2Unmutated === 2) return { sessionId: lastMany, testRunsBefore: 0 };
+        }
+        return { sessionId: 100 + n, testRunsBefore: 0 };
+      },
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.probes?.map((p) => p.outcome.verdict)).toEqual(["survived"]);
+    expect(res.rerun.map((r) => [r.outcome, r.sessionId, r.fresh])).toEqual([
+      ["pass", lastMany, false],
+    ]);
+  });
+
+  test("a probe that no run attested is error, never a verdict", async () => {
+    let op = 0;
+    const fx = await installedFixture({
+      session: freshSessions(),
+      answer: ({ mutant, ref }) =>
+        mutant === "M0003"
+          ? {
+              kind: "verdicts",
+              endedBy: "complete",
+              ranCount: 1,
+              verdicts: [{ ref, outcome: "pass", durationMs: 5 }],
+              durationMs: 5,
+              fencedOp: { attemptId: `unattested-${++op}`, opSeq: 800 + op },
+            }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      requests: [{ mutantId: "M0001", methods: [OVER] }],
+      probe: () => [{ mutantId: "M0003", methods: [OVER] }],
+    });
+    expect(res.outcomes.map((o) => o.verdict)).toEqual(["killed"]);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 18)]),
+    ).toEqual([["error", "unattested probe: "]]);
+  });
+
+  test("a lease lost during the reruns discards the probes' verdicts too", async () => {
+    const fx = await installedFixture({
+      session: freshSessions(),
+      unmutated: ({ ref, nth }) =>
+        ref.codeunitId === OVER2.codeunitId && nth === 2
+          ? { ref, outcome: "error", durationMs: 1, operation: "lease-lost" }
+          : undefined,
+    });
+    const res = await runNamedMutants({
+      ...fx.cfg,
+      // OVER2's unmutated runs: its baseline (1), then its rerun (2), which loses the lease.
+      requests: [
+        { mutantId: "M0001", methods: [OVER] },
+        { mutantId: "M0002", methods: [OVER2] },
+      ],
+      rerunOnUnmutated: [OVER2],
+      probe: () => [{ mutantId: "M0003", methods: [OVER2] }],
+    });
+    expect(res.quarantined).toMatch(/lease/);
+    expect(
+      res.probes?.map((p) => [p.outcome.verdict, p.outcome.failureNote?.slice(0, 11)]),
+    ).toEqual([["error", "lease-lost:"]]);
+  });
+});
+
 // C02-05 Task 6. COMPILED, deps, NEW, OLD and DOWNGRADE are copied from test-app-publish.test.ts:
 // importing that file would register its tests a second time.
 const TESTS_ID = "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7"; // fixtures/sandbox-tests
@@ -13980,12 +14763,40 @@ describe("C02-06 Task 5.4: runVerify", () => {
     } = {},
   ) {
     const fx = await installedFixture({ unmutated: ALL_GREEN, session: freshSessions(), ...o });
+    // R-385: the setup run's PhaseBackend reads no published package, so it records al-runner's
+    // declared-mode digests (tagged `K declared`, never equal to a bytes one). A bcdev source run,
+    // the only kind verify reads, records bytes-mode digests: record those, over the same tests.
+    {
+      const { testDir, projectDir } = fx.dirs;
+      const { digests, parts } = testDigestsOfModel(
+        buildTestAppModel(await readTestAppSources(testDir)),
+        await discoverTests(testDir),
+        {
+          dependencies: await verifyDependencyFingerprint(
+            { microsoftMode: () => fakeMicrosoftMode() },
+            testDir,
+            projectDir,
+          ),
+          buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
+        },
+      );
+      const recorded = fx.store.testDigests(fx.installed.fromRunId);
+      if (recorded === null) throw new Error("verifyFixture: the setup run recorded no digests");
+      expect(Object.keys(digests).sort()).toEqual(Object.keys(recorded).sort());
+      fx.store.db.run("UPDATE runs SET test_digests = ?, test_digest_parts = ? WHERE id = ?", [
+        JSON.stringify(digests),
+        JSON.stringify(parts),
+        fx.installed.fromRunId,
+      ]);
+    }
     if (o.withNewTest === true) {
       await Bun.write(join(fx.dirs.testDir, "NewTests.Codeunit.al"), NEW_TESTS_AL);
     }
     const log: string[] = [];
     const tlog: string[] = [];
     const backend = Object.assign(fx.cfg.backend, {
+      // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+      microsoftMode: () => fakeMicrosoftMode(),
       compileTestApp:
         o.compile ??
         (async (_dir: string, target: BoundArtifact): Promise<CompiledTestApp> => {
@@ -14609,6 +15420,154 @@ describe("C02-06 Task 5.4: runVerify", () => {
     expect(out.refused?.reason).toBe("batch-not-installed");
     expect(fx.trace).toEqual([]);
     expect(fx.log).toEqual([]);
+  });
+
+  // R259: M0001 is killed by the new test; M0002 and M0003, IsOverBudget's other two source
+  // survivors, are probed with it through the real covering loop.
+  describe("R259: sameProcedure probes through the covering loop", () => {
+    const isNew = (ref: TestMethodRef) => ref.codeunitId === NEWT.codeunitId;
+    let op = 0;
+    const fencedOp = () => {
+      op += 1;
+      return { attemptId: `r259-${op}`, opSeq: 900 + op };
+    };
+    /** M0002's probe answers `m0002`; M0003's passes without reaching the active statement. */
+    const probing = async (
+      m0002: NonNullable<Parameters<typeof installedFixture>[0]>["answer"],
+      o: Parameters<typeof verifyFixture>[0] = {},
+    ) => {
+      const fx = await verifyFixture({
+        withNewTest: true,
+        killerRef: NEWT,
+        answer: (c) =>
+          !isNew(c.ref)
+            ? undefined
+            : c.mutant === "M0002"
+              ? m0002?.(c)
+              : c.mutant === "M0003"
+                ? { outcome: "pass", reachedActive: false }
+                : undefined,
+        ...o,
+      });
+      return fx.verify(["0/M0001"]);
+    };
+
+    test("a probe that fails is alsoKills; one that passes without reaching the statement is notKilled", async () => {
+      const out = await probing(() => ({ outcome: "fail" }));
+      expect(out.results.map((r) => [r.verdict, r.killedByNewTest])).toEqual([["killed", true]]);
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: ["0/M0002"],
+        notKilled: ["0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
+      expect(out.exitCode).toBe(0);
+    });
+
+    const unknownM0002 = {
+      test: NEWT,
+      alsoKills: [],
+      notKilled: ["0/M0003"],
+      unknown: ["0/M0002"],
+      overCap: 0,
+    };
+    // Post-merge weak test (b), R-452: the group's attestation must be clean, or `runProbes`' own
+    // unattested-probe gate answers `unknown` and the attempted-set guard is never what decides.
+    // It is: M0003's run in the same group attests (NamedFake's default), and the skip verdict
+    // below now carries a clean attestation of its own. Revert: delete the R198 attempted-set guard
+    // in `runMutantsOnBackend`; all three cases go red (measured).
+    const clean = { observedAny: true, identityMismatch: false } as const;
+    const endings: ReadonlyArray<readonly [string, (ref: TestMethodRef) => RunManyResult]> = [
+      [
+        "a skip",
+        (ref) => ({
+          kind: "verdicts",
+          endedBy: "failure",
+          ranCount: 1,
+          verdicts: [{ ref, outcome: "skip", durationMs: 1, attestation: clean }],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a suite-unresolved group error",
+        (ref) => ({
+          kind: "call",
+          verdict: { ref, outcome: "error", durationMs: 1, failureMessage: "suite-unresolved" },
+          methodIndex: 1,
+          cause: "group-run-error",
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a complete answer with no entry",
+        () => ({
+          kind: "verdicts",
+          endedBy: "complete",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+      [
+        "a cap whose count outran its entries",
+        () => ({
+          kind: "verdicts",
+          endedBy: "cap",
+          ranCount: 1,
+          verdicts: [],
+          durationMs: 1,
+          fencedOp: fencedOp(),
+        }),
+      ],
+    ];
+    for (const [what, answer] of endings) {
+      test(`a probe that ends in ${what} is unknown, never notKilled`, async () => {
+        const out = await probing(({ ref }) => answer(ref));
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+        expect(out.exitCode).toBe(0);
+      });
+    }
+
+    for (const confirmation of ["fail", "error"] as const) {
+      test(`a probe kill whose unmutated confirmation ends in ${confirmation} is unknown`, async () => {
+        let probed = false;
+        let failed = false;
+        const out = await probing(
+          () => {
+            probed = true;
+            return { outcome: "fail" };
+          },
+          {
+            unmutated: ({ ref }) => {
+              if (isNew(ref) && probed && !failed) {
+                failed = true;
+                return { ref, outcome: confirmation, durationMs: 5, failureMessage: "unmutated" };
+              }
+              return { ref, outcome: "pass", durationMs: 5 };
+            },
+          },
+        );
+        expect(failed).toBe(true);
+        expect(out.results[0]?.sameProcedure).toEqual(unknownM0002);
+      });
+    }
+
+    test("a session that latches mid-probe leaves every sibling unknown", async () => {
+      const out = await probing(() => ({ outcome: "fail" }), { strand: "M0003" });
+      expect(out.quarantined).toBeDefined();
+      expect(out.results[0]?.sameProcedure).toEqual({
+        test: NEWT,
+        alsoKills: [],
+        notKilled: [],
+        unknown: ["0/M0002", "0/M0003"],
+        overCap: 0,
+      });
+      expect(out.exitCode).toBe(3);
+    });
   });
 });
 

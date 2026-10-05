@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep, win32 } from "node:path";
 import * as engineModule from "@lethal/engine";
 import { initParser, parsesSinceStart } from "@lethal/engine";
 import {
@@ -17,6 +17,7 @@ import type {
   TestOutcome,
   TestVerdict,
 } from "../src/backend";
+import * as baselineSnapshotModule from "../src/baseline-snapshot";
 import { hashTargetSource } from "../src/baseline-snapshot";
 import {
   DependencyUnreadableError,
@@ -28,13 +29,13 @@ import { discoverTests } from "../src/discovery";
 import { EquivalenceMarksError } from "../src/equivalence-marks";
 import { explain } from "../src/explain";
 import { bundleOfParts } from "../src/installed-bundle";
-import { NamedMutantError } from "../src/named-mutants";
+import { NamedMutantError, type NamedMutantRequest } from "../src/named-mutants";
 import type { NamedMutantsConfig } from "../src/orchestrator";
-import type { MutantOutcome, SessionReport } from "../src/report";
+import type { MutantOutcome, SessionOutcome, SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey, testKeyOf } from "../src/selection";
 import { type MutantVerdict, ResultsStore } from "../src/store";
-import { TestAppError } from "../src/test-app-publish";
-import { testDigests, testDigestsOfModel } from "../src/test-digest";
+import { type PublishedTestApp, TestAppError } from "../src/test-app-publish";
+import { TEST_DIGEST_SCHEME, testDigests, testDigestsOfModel } from "../src/test-digest";
 import { TestPageScanError, buildTestAppModel, readTestAppSources } from "../src/testpage-scan";
 import { TESTPAGE_REFUSED_DIAGNOSIS } from "../src/testpage-unsupported";
 import {
@@ -47,12 +48,19 @@ import {
   type VerifyPlan,
   type VerifySource,
   assertSourceUnchanged,
+  assertTestProjectSeparate,
+  declarationKeyOf,
   expandGapIds,
+  isSameOrInside,
   killedByOf,
+  pairAnswerOf,
+  pairsToProbe,
   parseVerifyRequest,
   planVerify,
   resolveVerifySource,
   runVerify,
+  sameProcedureOf,
+  siblingsOf,
   verifyDependencyFingerprint,
   verifyExitCode,
   verifyRefusalOf,
@@ -60,6 +68,7 @@ import {
 import type { ReachFilterOffReason } from "../src/verify-reach";
 import { droppedNewTestsOf } from "../src/verify-read";
 import { tinyBundle } from "./helpers/bundle";
+import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import { scratchDirs } from "./helpers/scratch";
 
 const scratch = scratchDirs();
@@ -441,9 +450,13 @@ describe("resolveVerifySource", () => {
 describe("assertSourceUnchanged", () => {
   const SYMBOLS = ["CLEAN24"];
 
-  async function project(): Promise<{ dir: string; source: VerifySource }> {
-    const dir = scratch("lethal-verify-src-");
-    mkdirSync(join(dir, "src"));
+  /** The target at `<root>/app`, its test project beside it at `<root>/tests`. */
+  async function project(): Promise<{ dir: string; tests: string; source: VerifySource }> {
+    const root = scratch("lethal-verify-src-");
+    const dir = join(root, "app");
+    const tests = join(root, "tests");
+    mkdirSync(tests);
+    mkdirSync(join(dir, "src"), { recursive: true });
     writeFileSync(join(dir, "app.json"), '{"id":"x"}');
     writeFileSync(join(dir, "src", "Logic.Codeunit.al"), "codeunit 50100 Logic { }");
     writeFileSync(join(dir, "src", "Helper.Codeunit.al"), "codeunit 50101 Helper { }");
@@ -456,18 +469,22 @@ describe("assertSourceUnchanged", () => {
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       coverageMode: "procedure",
+      carryHidden: null,
+      generationSourceSha256: null,
+      twinTuples: null,
       targets: [{ batchIndex: 0, mutantCode: "M0001", coveringTests: [] }],
+      rows: [],
     };
-    return { dir, source };
+    return { dir, tests, source };
   }
 
   test("an edit to a helper outside every mutated procedure is refused as source-changed", async () => {
-    const { dir, source } = await project();
+    const { dir, tests, source } = await project();
     writeFileSync(
       join(dir, "src", "Helper.Codeunit.al"),
       "codeunit 50101 Helper { var x: Integer; }",
     );
-    const e = await assertSourceUnchanged(source, SYMBOLS).then(
+    const e = await assertSourceUnchanged(source, SYMBOLS, tests).then(
       () => undefined,
       (err: unknown) => err,
     );
@@ -482,47 +499,168 @@ describe("assertSourceUnchanged", () => {
     const src = resolveVerifySource(store, parseVerifyRequest(A1, ["0/M0001"]));
     expect(src.projectPath).toBe(resolve("some/rel/app"));
     store.close();
-    const missing = await assertSourceUnchanged(src, SYMBOLS).catch((e: unknown) => e);
+    const missing = await assertSourceUnchanged(src, SYMBOLS, "some/rel/tests").catch(
+      (e: unknown) => e,
+    );
     expect(missing).toBeInstanceOf(VerifyError);
     expect((missing as VerifyError).reason).toBe("project-unreadable");
     expect((missing as VerifyError).detail).toContain(resolve("some/rel/app"));
 
-    const { dir, source } = await project();
+    const { dir, tests, source } = await project();
     rmSync(join(dir, "app.json"));
-    const noAppJson = await assertSourceUnchanged(source, SYMBOLS).catch((e: unknown) => e);
+    const noAppJson = await assertSourceUnchanged(source, SYMBOLS, tests).catch((e: unknown) => e);
     expect(noAppJson).toBeInstanceOf(VerifyError);
     expect((noAppJson as VerifyError).reason).toBe("project-unreadable");
     expect((noAppJson as VerifyError).detail).toContain("app.json");
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("a source change says so in plain words when the test project is nested in the target", async () => {
+  // R-260: a nested test project is compiled into the target build, so verify refuses the layout
+  // by name. A test edit or add there is refused as `test-project-nested`, never `source-changed`.
+  /** A target with a nested `test/T.Codeunit.al`, its hash recorded with the test inside. */
+  async function nestedProject(): Promise<{ nestedTests: string; recorded: VerifySource }> {
     const { dir, source } = await project();
-    mkdirSync(join(dir, "test"));
-    const nestedSource = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
-    // Only a TEST file changes, inside the nested test project.
-    writeFileSync(join(dir, "test", "T.Codeunit.al"), "codeunit 50200 T { }");
-    const nested = await assertSourceUnchanged(nestedSource, SYMBOLS, join(dir, "test")).catch(
-      (e: unknown) => e,
-    );
-    expect((nested as VerifyError).reason).toBe("source-changed");
-    expect((nested as VerifyError).detail).toContain("lies inside the target project");
-    expect((nested as VerifyError).detail).toContain("editing or adding a test there refuses too");
-    // A sibling test project: the same refusal, without the nested-project sentence.
-    const sibling = await assertSourceUnchanged(
-      nestedSource,
-      SYMBOLS,
-      join(dir, "..", "sibling-tests"),
-    ).catch((e: unknown) => e);
-    expect((sibling as VerifyError).reason).toBe("source-changed");
-    expect((sibling as VerifyError).detail).not.toContain("lies inside the target project");
-    rmSync(dir, { recursive: true, force: true });
+    const nestedTests = join(dir, "test");
+    mkdirSync(nestedTests);
+    writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { }");
+    return {
+      nestedTests,
+      recorded: { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) },
+    };
+  }
+
+  /** Runs the source check with the target hash spied on: the refusal must come before any hash. */
+  async function refusalWithoutHashing(recorded: VerifySource, testDir: string): Promise<unknown> {
+    const hash = spyOn(baselineSnapshotModule, "hashTargetSource");
+    try {
+      const e = await assertSourceUnchanged(recorded, SYMBOLS, testDir).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(hash).toHaveBeenCalledTimes(0);
+      return e;
+    } finally {
+      hash.mockRestore();
+    }
+  }
+
+  test("a nested test EDIT is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
+    writeFileSync(join(nestedTests, "T.Codeunit.al"), "codeunit 50200 T { var x: Integer; }");
+    const edited = await refusalWithoutHashing(recorded, nestedTests);
+    expect(edited).toBeInstanceOf(VerifyError);
+    expect((edited as VerifyError).reason).toBe("test-project-nested");
+    expect((edited as VerifyError).detail).toContain("lies inside the target project");
+    expect((edited as VerifyError).detail).toContain("beside the target");
+    expect((edited as VerifyError).detail).toContain("--tests");
   });
 
-  test("an unchanged project passes the source check", async () => {
-    const { dir, source } = await project();
-    await assertSourceUnchanged(source, SYMBOLS);
-    rmSync(dir, { recursive: true, force: true });
+  test("a nested test ADD is refused as test-project-nested before any hash", async () => {
+    const { nestedTests, recorded } = await nestedProject();
+    // The original test file is untouched; only a new one appears.
+    writeFileSync(join(nestedTests, "U.Codeunit.al"), "codeunit 50201 U { }");
+    const added = await refusalWithoutHashing(recorded, nestedTests);
+    expect(added).toBeInstanceOf(VerifyError);
+    expect((added as VerifyError).reason).toBe("test-project-nested");
+  });
+
+  // R-260: the hash comparison is kept whole. A target edit in a folder whose NAME looks like a test
+  // folder, and an app.json edit, are both still source-changed in the sibling layout.
+  test("a target .al edit under a test-named folder is source-changed", async () => {
+    const { dir, tests, source } = await project();
+    mkdirSync(join(dir, "test"));
+    writeFileSync(join(dir, "test", "Probe.Codeunit.al"), "codeunit 50102 Probe { }");
+    const recorded = { ...source, sourceSha256: await hashTargetSource(dir, SYMBOLS) };
+    writeFileSync(
+      join(dir, "test", "Probe.Codeunit.al"),
+      "codeunit 50102 Probe { var x: Integer; }",
+    );
+    const al = await assertSourceUnchanged(recorded, SYMBOLS, tests).catch((e: unknown) => e);
+    expect((al as VerifyError).reason).toBe("source-changed");
+  });
+
+  test("a target app.json edit is source-changed", async () => {
+    const { dir, tests, source } = await project();
+    writeFileSync(join(dir, "app.json"), '{"id":"y"}');
+    const manifest = await assertSourceUnchanged(source, SYMBOLS, tests).catch((e: unknown) => e);
+    expect((manifest as VerifyError).reason).toBe("source-changed");
+  });
+
+  test("an unchanged project with its tests beside it passes the source check", async () => {
+    const { tests, source } = await project();
+    await assertSourceUnchanged(source, SYMBOLS, tests);
+  });
+});
+
+describe("assertTestProjectSeparate (R-260)", () => {
+  async function reasonOf(projectPath: string, testDir: string): Promise<string | undefined> {
+    return assertTestProjectSeparate(projectPath, testDir).then(
+      () => undefined,
+      (e: unknown) => (e instanceof VerifyError ? e.reason : `not a VerifyError: ${String(e)}`),
+    );
+  }
+
+  function layout(): { root: string; target: string } {
+    const root = scratch("lethal-verify-layout-");
+    const target = join(root, "target");
+    mkdirSync(target);
+    return { root, target };
+  }
+
+  test("a test project inside the target is refused however the path is spelled", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "test"));
+    expect(await reasonOf(target, join(target, "test"))).toBe("test-project-nested");
+    expect(await reasonOf(`${target}${sep}`, `${join(target, "test")}${sep}`)).toBe(
+      "test-project-nested",
+    );
+    expect(await reasonOf(target, relative(process.cwd(), join(target, "test")))).toBe(
+      "test-project-nested",
+    );
+    // Unnormalised on purpose: `join` would fold the `..` away before the guard saw it.
+    const dotted = `${root}${sep}target${sep}..${sep}target${sep}test`;
+    expect(dotted).toContain(`${sep}..${sep}`);
+    expect(await reasonOf(target, dotted)).toBe("test-project-nested");
+    // The same folder.
+    expect(await reasonOf(target, target)).toBe("test-project-nested");
+  });
+
+  test("a symlinked alias of the target does not hide a nested test project", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "test"));
+    const alias = join(root, "alias");
+    symlinkSync(target, alias, "junction");
+    expect(await reasonOf(target, join(alias, "test"))).toBe("test-project-nested");
+  });
+
+  test("a child folder named ..tests is inside; a sibling target-tests is not", async () => {
+    const { root, target } = layout();
+    mkdirSync(join(target, "..tests"));
+    expect(await reasonOf(target, join(target, "..tests"))).toBe("test-project-nested");
+    mkdirSync(join(root, "target-tests"));
+    expect(await reasonOf(target, join(root, "target-tests"))).toBeUndefined();
+  });
+
+  test("a test project that contains the target is refused, and says so", async () => {
+    const { root, target } = layout();
+    const e = await assertTestProjectSeparate(target, root).catch((err: unknown) => err);
+    expect((e as VerifyError).reason).toBe("test-project-nested");
+    expect((e as VerifyError).detail).toContain("contains the target project");
+  });
+
+  test("a root that cannot be resolved is refused, never guessed", async () => {
+    const { root, target } = layout();
+    expect(await reasonOf(target, join(root, "missing"))).toBe("test-project-nested");
+  });
+
+  test("isSameOrInside on win32 folds drive-letter and UNC case and stops at a separator", () => {
+    expect(isSameOrInside("C:\\Proj", "c:\\proj\\tests", win32)).toBe(true);
+    expect(isSameOrInside("\\\\Server\\Share\\proj", "\\\\server\\share\\PROJ\\tests", win32)).toBe(
+      true,
+    );
+    expect(isSameOrInside("C:\\proj", "C:\\proj-tests", win32)).toBe(false);
+    expect(isSameOrInside("C:\\proj", "D:\\proj\\tests", win32)).toBe(false);
+    expect(isSameOrInside("C:\\proj", "C:\\proj\\..tests", win32)).toBe(true);
   });
 });
 /** R-236c: `Old.A` (green, only when asked), `Old.P` and `New.NP`, both with a reachable call that
@@ -590,7 +728,11 @@ describe("planVerify", () => {
       identityScheme: IDENTITY_SCHEME,
       buildSymbols: [],
       coverageMode: "procedure",
+      carryHidden: null,
+      generationSourceSha256: null,
+      twinTuples: null,
       targets: targets.map((t) => ({ batchIndex: 0, ...t })),
+      rows: [],
     };
   }
 
@@ -614,7 +756,8 @@ describe("planVerify", () => {
     // A source run records a digest for every test it ran (or none): a baseline test that is gone
     // from the project now still had one then.
     for (const r of a.sourceBaseline)
-      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??= `v2:${"0".repeat(64)}`;
+      recorded[`${r.codeunitId}::${r.method.toLowerCase()}`] ??=
+        `${TEST_DIGEST_SCHEME}:${"0".repeat(64)}`;
     return planVerify({
       coverage: "procedure",
       ...a,
@@ -912,12 +1055,40 @@ describe("planVerify", () => {
     expect(e.detail).toContain("test digests");
   });
 
+  // R-385: a v2 digest (R-371's) fingerprints Microsoft dependencies by declared version only, so
+  // it never equals a v3 one: verify refuses once per source run, naming both schemes.
+  test("R-385: a source run that recorded v2 digests is source-predates-verify, naming both schemes", async () => {
+    const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
+    const current = await recordedOver(codeunits);
+    const v2 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "v2:")]),
+    );
+    expect(Object.values(v2).every((d) => d.startsWith("v2:"))).toBe(true);
+    const e = await planRefusal(
+      planVerify({
+        coverage: "procedure",
+        source: source(project(), [{ mutantCode: "M0001", coveringTests: ["T.M"] }]),
+        manifest: manifest([entry("M0001")]),
+        sourceBaseline: [row(50100, "T", "M")],
+        sourceTestDigests: v2,
+        dependencies: DEPS,
+        testDir: testDir(codeunits),
+        maxNewTests: 1000,
+      }),
+    );
+    expect(e.reason).toBe("source-predates-verify");
+    expect(e.detail).toContain("scheme v2, this build v3");
+    expect(e.detail).toContain("once per source run");
+  });
+
   // R-371: a v1 digest (R-278's, no scheme tag) covers the method only; no comparison with it
   // means anything, so verify refuses once instead of reading every test as edited.
   test("R-371: a source run that recorded v1 digests is source-predates-verify, naming the scheme", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
-    const v2 = await recordedOver(codeunits);
-    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const current = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "")]),
+    );
     const e = await planRefusal(
       planVerify({
         coverage: "procedure",
@@ -963,8 +1134,10 @@ describe("planVerify", () => {
   // with an unreadable dependency is source-predates-verify, and no package is read at all.
   test("R-371: a v1 source with an unreadable dependency refuses source-predates-verify, reading no package", async () => {
     const codeunits = [{ id: 50100, name: "T", methods: ["M"] }];
-    const v2 = await recordedOver(codeunits);
-    const v1 = Object.fromEntries(Object.entries(v2).map(([k, d]) => [k, d.replace(/^v2:/, "")]));
+    const current = await recordedOver(codeunits);
+    const v1 = Object.fromEntries(
+      Object.entries(current).map(([k, d]) => [k, d.replace(/^v3:/, "")]),
+    );
     let reads = 0;
     const e = await planRefusal(
       planVerify({
@@ -1829,6 +2002,8 @@ describe("C02-09: gap ids", () => {
       readonly emit?: VerifyDeps["emit"];
       readonly noReachFilter?: boolean;
       readonly maxNewTests?: number;
+      /** R259: what the test-app publish answers; without it a publish throws. */
+      readonly published?: PublishedTestApp;
     } = {},
   ) {
     const projectDir = scratch("lethal-verify-gap-proj-");
@@ -1870,7 +2045,11 @@ describe("C02-09: gap ids", () => {
         ? null
         : JSON.stringify(
             await testDigests(testDir, await discoverTests(testDir), {
-              dependencies: await verifyDependencyFingerprint({}, testDir, projectDir),
+              dependencies: await verifyDependencyFingerprint(
+                { microsoftMode: () => fakeMicrosoftMode() },
+                testDir,
+                projectDir,
+              ),
               buildInputs: (await readAppJsonInputs(testDir)).buildInputs,
             }),
           ),
@@ -1897,6 +2076,8 @@ describe("C02-09: gap ids", () => {
         compileCheck: async () => boom(),
         activate: async () => boom(),
         run: async () => boom(),
+        // R-385: verify reads Microsoft dependencies, System and the control app by bytes.
+        microsoftMode: () => fakeMicrosoftMode(),
         compileTestApp: async (_dir, target) => ({
           appPath: "t.app",
           sha256: "e".repeat(64),
@@ -1906,7 +2087,7 @@ describe("C02-09: gap ids", () => {
           version: "1.0.0.0",
           compiledAgainst: { artifactId: target.artifactId, sha256: target.sha256 },
         }),
-        publishTestApp: async () => boom(),
+        publishTestApp: async () => over.published ?? boom(),
       },
       lease: {
         client: {
@@ -2055,6 +2236,27 @@ describe("C02-09: gap ids", () => {
     expect(w.store.db.query("SELECT COUNT(*) AS n FROM runs").get()).toEqual({ n: 1 });
     w.store.close();
   });
+
+  // R442: verify's run row carries the SOURCE run's keys, so it copies the source's carry_hidden
+  // exactly (a later history or resume reads it). Through runVerify's own writer, three values.
+  for (const [label, stored] of [
+    ["a non-empty list", '{"tuples":["ab|lethal.empty-block|1"],"files":["src/A.al"]}'],
+    ["empty lists", '{"tuples":[],"files":[]}'],
+    ["NULL", null],
+  ] as const) {
+    test(`R442: runVerify copies the source run's carry_hidden (${label}) onto its own run row`, async () => {
+      const w = await verifyWorld([seed("M0001", undefined, "survived")]);
+      w.store.db.run("UPDATE runs SET carry_hidden = ?", [stored]);
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      const rows = w.store.db
+        .query("SELECT backend, carry_hidden FROM runs ORDER BY id")
+        .all() as Array<{ backend: string; carry_hidden: string | null }>;
+      expect(rows.map((r) => r.backend)).toEqual(["bcdev", "lethal-verify"]);
+      expect(rows.map((r) => r.carry_hidden)).toEqual([stored, stored]);
+      w.store.close();
+    });
+  }
 
   describe("R354: verify refuses a source run measured under another coverage mode", () => {
     const neverRun: VerifyDeps["runNamed"] = async () => {
@@ -3036,6 +3238,513 @@ describe("C02-09: gap ids", () => {
         expect(out.refused).toBeUndefined();
         expect(out.results.map((r) => r.testsRun)).toEqual([["T.M", "New.N1", "New.N2"]]);
         w.store.close();
+      });
+    });
+  });
+
+  // R259: `sameProcedure`, through runVerify with a scripted `runNamed`. `T.M` is the source run's
+  // covering test; `New.N1` and `New.N2` are new. Every `inPost` seed sits in one declaration.
+  describe("R259: sameProcedure", () => {
+    const N1 = { codeunitId: 50101, codeunitName: "New", method: "N1" };
+    const N2 = { codeunitId: 50101, codeunitName: "New", method: "N2" };
+    const T_M = { codeunitId: 50100, codeunitName: "T", method: "M" };
+    const K1 = testKeyOf(N1);
+    const PUBLISHED: PublishedTestApp = {
+      appId: APP,
+      name: "Tests",
+      publisher: "P",
+      version: "1.0.0.0",
+      sha256: "e".repeat(64),
+      compiledAgainst: { artifactId: A1, sha256: "b".repeat(64) },
+    };
+    type Script = Pick<SessionOutcome, "verdict"> &
+      Partial<Pick<SessionOutcome, "killingTestRef" | "killPosition">>;
+    const killedBy = (ref: TestMethodRef, killPosition = 1): Script => ({
+      verdict: "killed",
+      killingTestRef: ref,
+      killPosition,
+    });
+    const SURVIVED: Script = { verdict: "survived" };
+
+    const inPost = (code: string, verdict: MutantVerdict, over: { carried?: boolean } = {}) =>
+      seed(code, undefined, verdict, { procedureStartLine: 3, procedureEndLine: 9, ...over });
+
+    function newTestDir(): string {
+      const dir = scratch("lethal-verify-same-");
+      writeFileSync(join(dir, "app.json"), TEST_APP_JSON);
+      const proc = (m: string) => `    [Test]\n    procedure ${m}()\n    begin\n    end;\n`;
+      writeFileSync(
+        join(dir, "50100.Codeunit.al"),
+        `codeunit 50100 "T"\n{\n    Subtype = Test;\n\n${proc("M")}}\n`,
+      );
+      writeFileSync(
+        join(dir, "50101.Codeunit.al"),
+        `codeunit 50101 "New"\n{\n    Subtype = Test;\n\n${["N1", "N2"].map(proc).join("\n")}}\n`,
+      );
+      return dir;
+    }
+
+    /** Stands in for runNamedMutants: publishes, answers each target from `target`, calls
+     *  `probe` where runNamedMutants does and answers each probe from `probe` (default survived),
+     *  and answers every unmutated run as a fresh pass. `seen` collects the probe requests. */
+    function scripted(
+      seeds: readonly Seed[],
+      o: {
+        readonly target: Readonly<Record<string, Script>>;
+        readonly probe?: (code: string, t: string) => Script | undefined;
+        readonly seen?: NamedMutantRequest[];
+      },
+    ): NonNullable<VerifyDeps["runNamed"]> {
+      const byId = new Map(seeds.map((s) => [s.entry.mutantId, s.entry] as const));
+      const outcomeOf = (code: string, s: Script | undefined): SessionOutcome => {
+        const mutant = byId.get(code);
+        if (mutant === undefined) throw new Error(`no seed ${code}`);
+        return { mutant, batchIndex: 0, ...(s ?? SURVIVED) };
+      };
+      return async (cfg) => {
+        await cfg.inLease?.({ publish: (run) => run() });
+        const outcomes = cfg.requests.map((r) => outcomeOf(r.mutantId, o.target[r.mutantId]));
+        const requests = cfg.probe?.(outcomes) ?? [];
+        o.seen?.push(...requests);
+        const probes = requests.map((request) => {
+          const [t] = request.methods;
+          if (t === undefined) throw new Error("a probe with no method");
+          return {
+            request,
+            outcome: outcomeOf(request.mutantId, o.probe?.(request.mutantId, testKeyOf(t))),
+          };
+        });
+        const pass = (ref: TestMethodRef) => ({
+          ref,
+          outcome: "pass" as const,
+          fresh: true,
+          sessionId: 1,
+          testRunsBefore: 0,
+        });
+        const keys = new Set<string>();
+        const sent = cfg.requests
+          .flatMap((r) => r.methods)
+          .filter((m) => !keys.has(testKeyOf(m)) && keys.add(testKeyOf(m)) !== undefined);
+        return {
+          outcomes,
+          baseline: sent.map(pass),
+          rerun: (cfg.rerunOnUnmutated ?? []).map(pass),
+          probes,
+        };
+      };
+    }
+
+    async function sameWorld(
+      seeds: readonly Seed[],
+      run: Parameters<typeof scripted>[1],
+      over: { readonly markCodes?: readonly string[]; readonly maxNewTests?: number } = {},
+    ) {
+      return verifyWorld(seeds, over.markCodes ?? [], {
+        testDir: newTestDir(),
+        baseline: [T_M],
+        published: PUBLISHED,
+        runNamed: scripted(seeds, run),
+        ...(over.maxNewTests !== undefined ? { maxNewTests: over.maxNewTests } : {}),
+      });
+    }
+    const probed = (seen: readonly NamedMutantRequest[]) =>
+      seen.map((r) => `${r.mutantId}|${r.methods.map(testKeyOf).join(",")}`);
+    const sameOf = (out: Awaited<ReturnType<typeof runVerify>>, id: string) =>
+      out.results.find((r) => r.id === id)?.sameProcedure;
+
+    test("a probe that fails is alsoKills, one that passes is notKilled; probes stay out of results, counts and exit", async () => {
+      const seeds = [
+        inPost("M0001", "survived"),
+        inPost("M0002", "survived"),
+        inPost("M0003", "no-coverage"),
+        // Another declaration: never a sibling.
+        seed("M0004", undefined, "survived", { procedureStartLine: 11, procedureEndLine: 20 }),
+      ];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1) },
+        probe: (code) => (code === "M0002" ? killedBy(N1) : SURVIVED),
+        seen,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(out.refused).toBeUndefined();
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0002"],
+        notKilled: ["0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      expect(out.results.map((r) => r.id)).toEqual(["0/M0001"]);
+      expect(out.counts).toEqual({ killed: 1, survived: 0, error: 0, skipped: 0 });
+      expect(out.exitCode).toBe(VERIFY_EXIT.ok);
+      w.store.close();
+    });
+
+    test("a survivor counts as notKilled only when the exact test was sent to it", () => {
+      const o: SessionOutcome = { mutant: entry("M0002"), batchIndex: 0, verdict: "survived" };
+      expect(pairAnswerOf(o, [N1, N2], K1)).toBe("not");
+      expect(pairAnswerOf(o, [N2, T_M], K1)).toBeUndefined();
+      // Same method name in another codeunit is another test.
+      expect(pairAnswerOf(o, [{ ...N1, codeunitId: 50199 }], K1)).toBeUndefined();
+    });
+
+    /**
+     * `scripted`, plus the store writes the real run makes: one row per target and per probe.
+     * Post-merge weak test (c), R-452: the probe rows come from the requests production's
+     * `cfg.probe` built (captured as the fake asks it), never from the fake's own `res.probes`.
+     */
+    const recordingWorld = (
+      seeds: readonly Seed[],
+      o: Parameters<typeof scripted>[1],
+    ): ReturnType<typeof verifyWorld> => {
+      const inner = scripted(seeds, o);
+      return verifyWorld(seeds, [], {
+        testDir: newTestDir(),
+        baseline: [T_M],
+        published: PUBLISHED,
+        runNamed: async (cfg) => {
+          const sent: NamedMutantRequest[] = [];
+          const { probe } = cfg;
+          const res = await inner({
+            ...cfg,
+            ...(probe !== undefined
+              ? {
+                  probe: (outcomes: readonly SessionOutcome[]) => {
+                    const r = probe(outcomes);
+                    sent.push(...r);
+                    return r;
+                  },
+                }
+              : {}),
+          });
+          for (const r of [...cfg.requests, ...sent]) {
+            cfg.store.recordMutant(
+              cfg.runId,
+              mutantRow(r.mutantId, "survived", { astHash: `h-${r.mutantId}` }),
+            );
+          }
+          return res;
+        },
+      });
+    };
+
+    test("a target sibling is probed too: two rows in the verify run, the target's own result unchanged", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const seen: NamedMutantRequest[] = [];
+      const w = await recordingWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: killedBy(N2) },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen).sort()).toEqual([`M0001|${testKeyOf(N2)}`, `M0002|${K1}`]);
+      expect(out.results.map((r) => [r.id, r.verdict, r.killingTest?.method])).toEqual([
+        ["0/M0001", "killed", "N1"],
+        ["0/M0002", "killed", "N2"],
+      ]);
+      const rows = w.store.db
+        .query(
+          "SELECT mutant_code, COUNT(*) AS n FROM mutants WHERE run_id = (SELECT id FROM runs WHERE backend = 'lethal-verify') GROUP BY mutant_code ORDER BY mutant_code",
+        )
+        .all();
+      expect(rows).toEqual([
+        { mutant_code: "M0001", n: 2 },
+        { mutant_code: "M0002", n: 2 },
+      ]);
+      w.store.close();
+    });
+
+    test("verify's target and probe rows never reach priorSurvivorKeys (verify never finishes its run)", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const w = await recordingWorld(seeds, { target: { M0001: killedBy(N1) } });
+      // The verify run copies its source's hidden files; a NULL there would make the history
+      // refuse the run for a reason that has nothing to do with `finished_at`.
+      w.store.db.run("UPDATE runs SET carry_hidden = ?", [
+        JSON.stringify({ tuples: [], files: [] }),
+      ]);
+      await w.verify(["0/M0001"]);
+      const run = w.store.db
+        .query("SELECT id, project_path FROM runs WHERE backend = 'lethal-verify'")
+        .get() as { id: number; project_path: string };
+      const rows = w.store.db
+        .query("SELECT mutant_code FROM mutants WHERE run_id = ? ORDER BY mutant_code")
+        .all(run.id) as Array<{ mutant_code: string }>;
+      // M0001 is the target, M0002 its probe sibling.
+      expect(rows.map((r) => r.mutant_code)).toEqual(["M0001", "M0002"]);
+      const info = w.store.getRun(run.id);
+      if (info?.coverageMode == null || info.testAppHash === null || info.carryHidden === null) {
+        throw new Error("the verify run did not record what priorSurvivorKeys checks");
+      }
+      // Exactly the arguments the next `lethal run` of this project would pass.
+      expect(
+        w.store.priorSurvivorKeys(
+          run.project_path,
+          info.coverageMode,
+          info.testAppHash,
+          info.buildSymbols ?? [],
+          info.carryHidden.files,
+        ).keys.size,
+      ).toBe(0);
+      w.store.close();
+    });
+
+    test("a target killed by another test is probed with the new test, never read as killed by it", async () => {
+      const seeds = [inPost("M0001", "survived"), inPost("M0002", "survived")];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: killedBy(N2) },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen).sort()).toEqual([`M0001|${testKeyOf(N2)}`, `M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")?.notKilled).toEqual(["0/M0002"]);
+      expect(sameOf(out, "0/M0002")?.notKilled).toEqual(["0/M0001"]);
+      expect(sameOf(out, "0/M0001")?.alsoKills).toEqual([]);
+      w.store.close();
+    });
+
+    test("a target killed by the new test at position 2 or 3 is probed; at position 1 it is reused", async () => {
+      const seeds = ["M0001", "M0002", "M0003", "M0004"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: {
+          M0001: killedBy(N1),
+          M0002: killedBy(N1, 2),
+          M0003: killedBy(N1, 3),
+          M0004: killedBy(N1),
+        },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002,0/M0003,0/M0004"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0004"],
+        notKilled: ["0/M0002", "0/M0003"],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    const TIMEOUT: Script = { verdict: "timeout-killed", killingTestRef: N1, killPosition: 1 };
+
+    test("a target timeout-killed by the new test is probed, never reused as alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1), M0002: TIMEOUT },
+        seen,
+      });
+      const out = await w.verify(["0/M0001,0/M0002"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: ["0/M0002"],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("a probe answering timeout-killed is unknown, never alsoKills", async () => {
+      const seeds = ["M0001", "M0002"].map((c) => inPost(c, "survived"));
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(seeds, {
+        target: { M0001: killedBy(N1) },
+        probe: () => TIMEOUT,
+        seen,
+      });
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: [],
+        unknown: ["0/M0002"],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("a carried or reader-marked-equivalent sibling is unknown and never probed", async () => {
+      const seeds = [
+        inPost("M0001", "survived"),
+        inPost("M0002", "survived", { carried: true }),
+        inPost("M0003", "survived"),
+        inPost("M0004", "survived"),
+      ];
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(
+        seeds,
+        { target: { M0001: killedBy(N1) }, probe: () => killedBy(N1), seen },
+        { markCodes: ["M0003"] },
+      );
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0004|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0004"],
+        notKilled: [],
+        unknown: ["0/M0002", "0/M0003"],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    test("pairs past R-384's budget are unknown and counted in overCap; nothing past it is sent", async () => {
+      // S = 1, N = 2: the cap counts S*N + 2N = 6 runs, so --max-new-tests 4 leaves 4 x 3 - 6 = 6,
+      // and each probe reserves 2 (its run and a kill's unmutated confirmation): 3 probes.
+      const seeds = ["M0001", "M0002", "M0003", "M0004", "M0005", "M0006"].map((c) =>
+        inPost(c, "survived"),
+      );
+      const seen: NamedMutantRequest[] = [];
+      const w = await sameWorld(
+        seeds,
+        { target: { M0001: killedBy(N1) }, probe: () => killedBy(N1), seen },
+        { maxNewTests: 4 },
+      );
+      const out = await w.verify(["0/M0001"]);
+      expect(probed(seen)).toEqual([`M0002|${K1}`, `M0003|${K1}`, `M0004|${K1}`]);
+      // An odd budget: 5 runs pay for floor(5 / 2) = 2 probes.
+      const odd = pairsToProbe({
+        rows: [{ test: N1, eligible: ["M0002", "M0003", "M0004"] }],
+        answered: () => undefined,
+        budget: 5,
+      });
+      expect(odd.probe.map((r) => r.mutantId)).toEqual(["M0002", "M0003"]);
+      expect([...odd.overCap]).toEqual([`M0004|${K1}`]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: ["0/M0002", "0/M0003", "0/M0004"],
+        notKilled: [],
+        unknown: ["0/M0005", "0/M0006"],
+        overCap: 2,
+      });
+      w.store.close();
+    });
+
+    test("only a row killed by a new test carries the field, with empty lists at zero siblings", async () => {
+      const own = (code: string, start: number, verdict: MutantVerdict = "survived") =>
+        seed(code, undefined, verdict, { procedureStartLine: start, procedureEndLine: start + 5 });
+      const seeds = [
+        own("M0001", 10),
+        own("M0002", 20),
+        own("M0003", 30),
+        own("M0004", 40),
+        own("M0005", 50),
+      ];
+      const w = await sameWorld(
+        seeds,
+        {
+          target: {
+            M0001: killedBy(N1),
+            M0002: SURVIVED,
+            M0003: { verdict: "error" },
+            M0004: killedBy(T_M),
+          },
+        },
+        { markCodes: ["M0005"] },
+      );
+      const out = await w.verify(["0/M0001,0/M0002,0/M0003,0/M0004,0/M0005"]);
+      expect(out.results.map((r) => [r.id, r.verdict, r.sameProcedure !== undefined])).toEqual([
+        ["0/M0001", "killed", true],
+        ["0/M0002", "survived", false],
+        ["0/M0003", "error", false],
+        ["0/M0004", "killed", false],
+        ["0/M0005", "skipped", false],
+      ]);
+      expect(sameOf(out, "0/M0001")).toEqual({
+        test: N1,
+        alsoKills: [],
+        notKilled: [],
+        unknown: [],
+        overCap: 0,
+      });
+      w.store.close();
+    });
+
+    describe("which mutants are siblings", () => {
+      const at = (code: string, over: Partial<MutantManifestEntry>) =>
+        entry(code, { procedureStartLine: 3, procedureEndLine: 9, ...over });
+      const measurable = (...es: MutantManifestEntry[]) =>
+        es.map((e) => ({ entry: e, measurable: true }));
+
+      test("two overloads are not siblings", () => {
+        const a = at("M0001", { procedureName: "Post" });
+        const b = at("M0002", {
+          procedureName: "Post",
+          procedureStartLine: 11,
+          procedureEndLine: 15,
+        });
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("two fields' OnValidate triggers are not siblings", () => {
+        const t1 = at("M0003", { procedureName: "", triggerName: "OnValidate" });
+        const t2 = at("M0004", {
+          procedureName: "",
+          triggerName: "OnValidate",
+          procedureStartLine: 11,
+          procedureEndLine: 15,
+        });
+        expect(siblingsOf(t1, measurable(t1, t2))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("a one-line member cannot be told apart: its same-named members are unknown", () => {
+        const a = at("M0001", { procedureStartLine: 5, procedureEndLine: 5 });
+        const b = at("M0002", { procedureStartLine: 5, procedureEndLine: 5 });
+        expect(declarationKeyOf(a)).toBeUndefined();
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: ["M0002"] });
+      });
+
+      test("a member with no lines cannot be told apart: its same-named members are unknown", () => {
+        const a = entry("M0001");
+        const b = entry("M0002");
+        expect(declarationKeyOf(a)).toBeUndefined();
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: ["M0002"] });
+      });
+
+      test("a table and a page sharing a name and lines are not siblings", () => {
+        const t = at("M0001", { objectType: "table", codeunitName: "Foo", file: "Foo.Table.al" });
+        const p = at("M0002", {
+          objectType: "page",
+          codeunitId: 50001,
+          codeunitName: "Foo",
+          file: "Foo.Page.al",
+        });
+        expect(siblingsOf(t, measurable(t, p))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("two members whose qualified names collide are not siblings", () => {
+        // "A.B" + "C" and "A" + "B.C" both qualify as A.B.C.
+        const a = at("M0001", { codeunitName: "A.B", procedureName: "C", file: "AB.al" });
+        const b = at("M0002", {
+          codeunitName: "A",
+          codeunitId: 50001,
+          procedureName: "B.C",
+          file: "A.al",
+        });
+        expect(siblingsOf(a, measurable(a, b))).toEqual({ eligible: [], unknown: [] });
+      });
+
+      test("ids carry the installed batch, so codes that restart per batch never collide", () => {
+        const same = sameProcedureOf({
+          test: N1,
+          batchIndex: 1,
+          siblings: { eligible: ["M0002", "M0003"], unknown: ["M0004"] },
+          answer: (code) => (code === "M0002" ? "kills" : code === "M0003" ? "not" : undefined),
+          overCap: new Set(),
+        });
+        expect(same).toEqual({
+          test: N1,
+          alsoKills: ["1/M0002"],
+          notKilled: ["1/M0003"],
+          unknown: ["1/M0004"],
+          overCap: 0,
+        });
       });
     });
   });

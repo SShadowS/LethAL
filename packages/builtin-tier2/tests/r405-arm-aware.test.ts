@@ -23,11 +23,12 @@ import {
   evaluateArms,
   findAll,
   initParser,
+  insertSkipCanRaise,
   objectScopeKey,
+  onInsertTrigger,
   resolveReceiverTable,
 } from "@lethal/engine";
 import { resolveForcedTrigger } from "../src/forced-trigger-raise";
-import { insertSkipCanRaise, onInsertTrigger } from "../src/insert-key-assignment";
 import { parseClean } from "./parse-clean";
 
 beforeAll(async () => {

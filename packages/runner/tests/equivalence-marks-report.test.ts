@@ -17,7 +17,7 @@ import {
 } from "../src/equivalence-marks";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { explain } from "../src/explain";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { buildReport } from "../src/report";
 import type { SessionReport } from "../src/report";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -61,6 +61,7 @@ async function mutate(
   await writeInstrumentedProject({
     targetDir: out,
     files: set.files,
+    identityOrdinals: identityOrdinalsOf(set),
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
     artifactId: "0123456789abcdef0123456789abcdef",
     targetAppId: APP_JSON.id,

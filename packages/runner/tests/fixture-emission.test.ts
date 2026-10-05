@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 
 /**
  * R-297 review r1 (minor): the fixture byte-identity claim was a scratch comparison. RUST-03 S1.5
@@ -22,7 +22,21 @@ import { generateMutationSet, operatorTiers } from "../src/orchestrator";
  * `\`-keyed snapshot (the shape a Windows read gives) and must give the same hashes.
  *
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
- * the same commit, and says so.
+ * the same commit, and says so. R196: sandbox-hang's `HangLogic.Codeunit.al` and manifest were
+ * re-pinned because its line-104 `remove-assignment` and `shift-integer` sites are now refused as
+ * hang-capable (they were 977eb7bb...ef67 and f7b49d85...86e6). R281: sandbox-data's manifest was
+ * re-pinned because `Data Flag Ops.DeleteWithTrigger`'s `Delete(true)` mutant now carries
+ * `platformKillMechanism: run-trigger-skipped-delete`, its only change (it was 90fa82e4...17ba).
+ * R-457: sandbox-data's manifest re-pinned because seven mutants (M0034, M0045, M0056, M0065,
+ * M0186, M0223, M0362) gained `run-trigger-forced`, its only change (it was 65d75386...e4ea).
+ * R254: sandbox-data's `DataBandExt.ReportExt.al` (a reportextension) is instrumented, 15 mutants
+ * as M0005..M0019, so every file after `DataAssertOps` and the manifest re-pinned (ids +15; the
+ * manifest was 245847db...a603).
+ * R459: sandbox-data's manifest re-pinned for provenance only: its 13 `flip-boolean-literal`
+ * entries carry operatorVersion 1.1.0 (it was eda8a324...7379). No site, tag or id moved.
+ * R470: `DataBandExt.ReportExt.al` re-pinned because its selector var is now
+ * `MutationSelector79341` (its own object id), declared and called; its only change (it was
+ * 758b11c9...74cb). The manifest is unchanged by R470.
  */
 const PINNED: Record<
   string,
@@ -52,66 +66,68 @@ const PINNED: Record<
     hashes: {
       "DataAssertOps.Codeunit.al":
         "ab73e45da78c6edd02e17cf89592632809f5de666029cdb79dbe96f91c41c217",
+      "DataBandExt.ReportExt.al":
+        "2b82077f0c0403a3785e7c2e0a3cba5eb364681fc70dcd5aafec9ed43b8dbab7",
       "DataBlankOps.Codeunit.al":
-        "51f10bf158b11aa07bb4ffc8166aaacfe8af8e71d726ae153f3e2dfd8b493203",
-      "DataBuilder.Codeunit.al": "f7b80bfbbbed9c401333d8d6a6c86f2165f9e3d3811ac70096285e64241075b0",
-      "DataCaseOps.Codeunit.al": "719a5b369982cec7e88124279702aeb80eb33e6f13da798318c2d2f483926dbd",
+        "ce3170f1504ede010a162a31fbb39d3951c62e9c4eedcfda2e3a9c75621f9654",
+      "DataBuilder.Codeunit.al": "ddb5175a823eaee47cca8ce55b9c725851c4ade9dca086fcd37b20c897a29b88",
+      "DataCaseOps.Codeunit.al": "7dd90fbbbc824ed0460b2ba269e2ff6368ffcc136ff6cb9409a1fe23d3ca9f12",
       "DataCommitOps.Codeunit.al":
-        "042a1761904971746cca2afdf7bf195e237f5b96217fef905dc076643ac3a56a",
+        "561c34b0d088c0a7be33e7ebea9234f6df051ece70a492da9257fc711d691625",
       "DataCommitTarget.Codeunit.al":
-        "8262d3168ee7150da470195d4a3266bab96c07189409eb0ae57f0ce1239ff705",
+        "60ded8763f1bd23aec222dde5c2c8ccf5f3450b2cbbc8866a283298687a77943",
       "DataFilterOps.Codeunit.al":
-        "71f4efefb12ceb2b5f7557cf5f5b5f9dddb25b54af6065443fc4a2833f3ff47f",
-      "DataFindOps.Codeunit.al": "6c6eba6213b0744e1c83233d8db35cf94493d282fc11c501c435cb10e795855b",
-      "DataFlagOps.Codeunit.al": "da78ee0608b8e8ccb2d3cd8e0d47d713ec246d68cdbf5804f0f1e846d83ba1f7",
-      "DataKeyProbe.Table.al": "394b9ed4c3462dbf39f03ad0701d283ab764147d3ffd41226d40e01695f722fa",
-      "DataLoader.Codeunit.al": "d4c21aef679dbf6e7cda3c7e203f1d77caae9b60c85011a30d2d42b57f53b20d",
-      "DataMain.Table.al": "72a06305ed7a6c4803f638c1e4e22ae3358cdae9ade15d63cb9aeaddf985da18",
-      "DataMainExt.TableExt.al": "e5e91ce2188b9e320e43a4102f20911d3d6a7265f4b4d318460e41915b98c088",
+        "cb2830f50870b3194d61c4d7c81ae87c56e3e39afe99ae44d79c15a1d8ad31f2",
+      "DataFindOps.Codeunit.al": "fc4c3ec6afc5815746e21d08686294436f29c5ce71ea7bfe6744ebc877a59eb2",
+      "DataFlagOps.Codeunit.al": "d7e07b2daf04ca8f5e044e670e258077321eb6033075b42f6e5522fd7ffd8d28",
+      "DataKeyProbe.Table.al": "bc3094c8025138a91078fd40ccc61db79bd9aed902d18579ff05aae7c6273bea",
+      "DataLoader.Codeunit.al": "1c10abbbfc02603d846b29a564dca8f7c6a8c5acb422cd37c1995e5e3d1dba36",
+      "DataMain.Table.al": "63198d2227bb93407be8365d12ccea2b984d96834241625534e2515f1522abf6",
+      "DataMainExt.TableExt.al": "85d18f756b30fcf51ba91e7a2270014a407519b64e501f6c84b9ca44e2e5ed2d",
       "DataMainListExt.PageExt.al":
-        "c1c60d413b41a6f39cee1dbb1186c9a2a7bb80040e3cc45118a4a1b8892f7646",
-      "DataNoTrigger.Table.al": "15cb9fe58160e5ccc31794cad09bcb95cccabe9d3a3897f64d60dfa60b509a96",
-      "DataOps.Codeunit.al": "49237ed804de3ac3c336092a91de0b3bf26918207cffc5d69535d2e94056fac3",
+        "5e1dfcdfc2333e504d92a413a46311c19f3a6d93caa889b79e9addee5ca78b5f",
+      "DataNoTrigger.Table.al": "26f155efdfb7bce6d0b860160c65a10c60a72adf96695088fdcbb93a94230162",
+      "DataOps.Codeunit.al": "35095c29940b067fdde79e228778cdf82932be740cfef9c74e2a0ace1d019b40",
       "DataReachOps.Codeunit.al":
-        "4fd2e5671c136fe64fcc4a728a641a7d8d9531dd5b94c4d83ee27ae09a84f0f6",
-      "DataScopeProbe.Page.al": "764bf3e2b31c5f50554fbd9a9e362a62cc9868c85c2e322c20a623fb8dc11b9f",
-      "DataScopeProbe.Table.al": "4d6333f185e87aaa8bd7d4a54866293fe7bea0b174a44399d6b699936ea82fa2",
-      "DataSetOps.Codeunit.al": "281216eeae2058508d488875ad938f576730bb587cec83c177c2e8df436f2dfb",
-      "DataShadow.Table.al": "257f7ef65dccf54d695b06b244d1a0b0a80cfb59aad04d91c2f49bb88ca7767b",
+        "dda14cf5c81daea8754b921a55cb0c342260c0535ec537c432db86e1f66f0d00",
+      "DataScopeProbe.Page.al": "df59eb9c79f1e8e423fad0e8a2baea672ff8ccf0c2a68b6c0b61ac7e242ad3bd",
+      "DataScopeProbe.Table.al": "1f69862c13b6793847407ef276a8aa65ebf87ac582f82cf57f33a98a62952ce0",
+      "DataSetOps.Codeunit.al": "bfc7099e3881ebc4ac9fad649ffd70e69d296d7f90991c0ce388e54f3d44515a",
+      "DataShadow.Table.al": "1dfab812d695fe460aaecec1f35183db8f5af0f4a6f96f6cdbdff0c12d9cbbd7",
       "DataShiftOps.Codeunit.al":
-        "b9874effb8aa3b4d9874fe9e42a3d44e68bf17b5eff4dbea96702ba4fc6ca8dc",
-      "DataSwapOps.Codeunit.al": "db494f1dbe8e6a75712165ee3700139e81fa2f7da4ac08ff5f1c769751d7929c",
+        "9ec2277f1d5e939a9c030218646971bcba9580833f959a88f4e8ad4be3874f1b",
+      "DataSwapOps.Codeunit.al": "7d0047ec24b6dce06fa0ff6324da4ac9b195bfac170833f85ba2f66221f5bea9",
       "DataTemporalOps.Codeunit.al":
-        "b2c61d54a8e7c743bd701f5490072981c289d7a3a4534f9912ed226193d52b98",
+        "bca26a659700e89315f98dd40b11d6dbe6ae973ea10d68b850a522cdc3760ce1",
       "DataTriggerProbe.Table.al":
-        "822936cbef436467d2968f7ad742bfee5bfce6abccad033ff33a62e86e5b10b5",
+        "f8592636efcaa4c6841369490f41e34cc39295ce40971067dca8d833df2e7c90",
       "DataValidateOps.Codeunit.al":
-        "9bffd1b34774090e8ebec8541fd2bc415e5539935524039e03bd6a2b868d70ab",
+        "276886dcfbee16c2ac56066f34d624550959741cfb7fc06cfe0ac47fa2e44005",
       "DataValidator.Codeunit.al":
-        "03fae50678a777875624c9b4cbfd98b5b44b792b03012aa846d8315e3b201751",
-      "DataValueCard.Page.al": "efab3edeb832a3ba4998de8e64e4f5a129e4c246381cb4b9e190c7b379ba6017",
+        "d87d3036a015385e05f864dd73a72e1ae5c99108f5a430b070d755847336b4b6",
+      "DataValueCard.Page.al": "41d469aae497927a40830bf5f23830e749c9462782ecd3664e5fc3d39b715375",
       "DataValueSource.Codeunit.al":
-        "f6ec5508b511228dac6e7322fe25517a0415dab998659d33d99d59c0ae6bcec6",
+        "25b9ec1c1a7b1d1bf6b009e28456fcca9e1462fea5aba6d102f057a921be3af7",
       "MutationRegister.Codeunit.al":
         "bcaa8ed28992b8e244a4174e2235c57575f3677c37de65fd7318c3b41b891830",
       "MutationSelector.Codeunit.al":
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "90fa82e468b6c90a88a73bb74bf9e55c0c19cd56a07bcccdc8cbce976ca317ba",
+      "mutant-manifest.json": "257d5dde5b30d401b8fee4fd5c361bb156dbc4b90b8605eeb7e1166ff0d2752e",
     },
   },
   "sandbox-hang": {
     selectorIds: { selectorId: 79449, controlId: 79448, tableId: 79447 },
     hashes: {
-      "HangLogic.Codeunit.al": "977eb7bb07ca49400fda1c94d8bb021579f0032217e15a4d145f5cae97e9ef67",
+      "HangLogic.Codeunit.al": "2ccc529539ddd590aab5be08e801c316d3dcf67882ec1843953c340c5d9e5746",
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "f7b49d85171168e3a2403e55ad69b077fc1ab6645ecf44492b7d9de2de1f86e6",
+      "mutant-manifest.json": "cdfb8da1c27398281faa615f9665812eca960ab4d5eaae74047b0f54669cdd3b",
     },
   },
   "sandbox-harden": {
@@ -171,6 +187,7 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
       await writeInstrumentedProject({
         targetDir,
         files: set.files,
+        identityOrdinals: identityOrdinalsOf(set),
         selectorIds,
         artifactId: "0123456789abcdef0123456789abcdef",
         targetAppId: "00000000-0000-0000-0000-000000000000",

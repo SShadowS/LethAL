@@ -142,10 +142,89 @@ export function refusedWholeFileReason(objectType: string, objectId: number, fil
   return `coverage refused for ${objectType}:${objectId} (${file}): its file also holds a #if ... #endif object wrapper, and al-runner refuses such a file whole (R298, R300). Its mutants read no-coverage.`;
 }
 
+/**
+ * R-307 section 4: the sentence for a DECLARED object the source yields no declaration for (R305's
+ * split header is the measured shape). Only an object with no mutant keeps this refusal: one with
+ * mutants is refused by `assertManifestObjectsDeclared`'s Direction A throw before any baseline.
+ */
+export function unmappedCoverageReason(key: string): string {
+  return `coverage refused for ${key}: the compiled artifact declares it, but LethAL found no object declaration it can read in the source (an object header split by #if is one such shape, R305). It carries no mutant, so no verdict reads its coverage.`;
+}
+
+/**
+ * R-307 section 4: every `type:id` key (lower-cased, as `keyOf`) the manifest's mutants are
+ * attributed to. An entry without a usable object throws: it could be checked against nothing.
+ */
+export function manifestObjectKeys(
+  mutants: readonly { readonly objectType?: unknown; readonly codeunitId?: unknown }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const m of mutants) {
+    if (typeof m.objectType !== "string" || typeof m.codeunitId !== "number") {
+      throw new Error("line-map: a manifest entry has no objectType/codeunitId");
+    }
+    out.add(keyOf(m.objectType, m.codeunitId));
+  }
+  return out;
+}
+
+/**
+ * R-307 section 4: `assertManifestObjectsDeclared`'s refusal. Typed so the publish fence can tell
+ * it is a CONFIRMED terminal failure: it is raised before anything is published (bcdev indexes
+ * before publish; al-runner publishes nothing), so the fence tombstones the attempt rather than
+ * latching the tier for recycle. Extends `Error` directly, like every typed error here.
+ */
+export class ManifestDeclarationError extends Error {
+  override readonly name = "ManifestDeclarationError";
+}
+
+/**
+ * R-307 section 4: the batch manifest's objects against the declarations coverage resolves
+ * through, checked once per deploy, before any baseline.
+ *
+ * - Direction A (`mapped` given): a declared key with mutants but no line-map entry throws. The
+ *   map refuses such a key by name instead of throwing at the first coverage row, so this is
+ *   the only place an unmappable object WITH mutants is caught.
+ * - Direction B: a key `declared` lacks throws, unless `exempt` (the run's named coverage
+ *   refusals) names it. An empty `declared` therefore fails every key; it never passes them.
+ */
+export function assertManifestObjectsDeclared(
+  manifestKeys: Iterable<string>,
+  declared: ReadonlySet<string>,
+  mapped: ReadonlySet<string> | undefined,
+  exempt: ReadonlySet<string>,
+): void {
+  for (const key of manifestKeys) {
+    if (declared.has(key)) {
+      if (mapped !== undefined && !mapped.has(key)) {
+        const why =
+          "every declared object's source is written by LethAL and must be mappable. " +
+          "This is a LethAL bug, not a problem with the project under test.";
+        throw new ManifestDeclarationError(
+          `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}`,
+        );
+      }
+    } else if (!exempt.has(key)) {
+      throw new ManifestDeclarationError(
+        `a mutant is attributed to ${key}, which the compiled app does not declare. It is not named in the run's coverage refusals, so its mutants would read no-coverage with no reason given.`,
+      );
+    }
+  }
+}
+
 export class LineMap {
   private readonly byObject = new Map<string, ObjectLines>();
   /** R298: declared objects whose coverage is refused, key -> reason. Read before `byObject`. */
   private readonly refused = new Map<string, string>();
+  /** R-307: the subset of `refused` that is declared with no entry at all (`unmappedCoverageReason`). */
+  private readonly unmapped = new Set<string>();
+  /**
+   * R-307: every object the SOURCE refuses by R298's per-object rule, declared or not: the
+   * exemption for Direction B. It is `coverageRefusedObjects` without al-runner's whole-file
+   * widening, which only adds bare objects outside every wrapper; those are compiled, so declared,
+   * so B never consults the exemption for them.
+   */
+  private readonly refusedInSource = new Set<string>();
 
   /**
    * @param declared the `(objectType, objectId)` pairs the compiled ARTIFACT declares. A coverage
@@ -171,6 +250,7 @@ export class LineMap {
       // AFTER `fileLineMapEntries` computed the base lines, never before: objects PARTITION the
       // file, so an undeclared object still consumes the lines its declared neighbours are numbered
       // relative to.
+      if (e.refused !== undefined) this.refusedInSource.add(key);
       if (!declared.has(key)) continue;
       // R298: no spans at all for a refused object, so nothing can name one of its lines, and
       // `lookup`/`isNamingGap` answer from `refused` before they look for spans.
@@ -180,6 +260,27 @@ export class LineMap {
       }
       this.byObject.set(key, spansOf(e.root, e.baseLine, renamedNames.get(key) ?? []));
     }
+    // R-307 section 4: a declared object with no entry (R305's split header) is refused by name,
+    // never thrown at its first coverage row. One WITH mutants is `assertManifestObjectsDeclared`'s
+    // Direction A, checked before any baseline.
+    for (const key of declared) {
+      if (this.byObject.has(key) || this.refused.has(key)) continue;
+      this.unmapped.add(key);
+      this.refused.set(key, unmappedCoverageReason(key));
+    }
+  }
+
+  /** R-307: the declared keys with a line-map entry, spans or an R298 refusal: Direction A's `mapped`. */
+  mappedKeys(): ReadonlySet<string> {
+    return new Set([
+      ...this.byObject.keys(),
+      ...[...this.refused.keys()].filter((k) => !this.unmapped.has(k)),
+    ]);
+  }
+
+  /** R-307: Direction B's exemption on the fenced path (see `refusedInSource`). */
+  sourceRefusedKeys(): ReadonlySet<string> {
+    return this.refusedInSource;
   }
 
   /**
@@ -241,9 +342,9 @@ export class LineMap {
    *   differential gate — a silent divergence from the hub's `byObject`-only behaviour
    * - var sections, blank lines and anything else between procedures
    *
-   * Throws only when the artifact DECLARES the object but this map has no entry for it. That is a
-   * caller-contract violation — the artifact was compiled from source LethAL wrote — and the
-   * project's rule is to fail loudly rather than return a plausible empty default.
+   * Never throws. A declared object this map has no entry for is refused (R-307 section 4): one
+   * with mutants fails `assertManifestObjectsDeclared` before any baseline, so no verdict can read
+   * its coverage, and one without mutants cannot affect a verdict.
    */
   /**
    * R175: did this line fall inside NOTHING this map knows about, procedure or trigger?
@@ -274,17 +375,9 @@ export class LineMap {
     const key = keyOf(objectType, objectId);
     if (this.refused.has(key)) return undefined; // R298: refused, never unmapped
     const entry = this.byObject.get(key);
-    if (entry === undefined) {
-      if (this.declared.has(key)) {
-        const why =
-          "every declared object's source is written by LethAL and must be mappable. " +
-          "This is a LethAL bug, not a problem with the project under test.";
-        throw new Error(
-          `line-map: the compiled artifact declares ${key} but no line map was built for it — ${why}`,
-        );
-      }
-      return undefined; // not ours: platform/base-app/test-app code incidentally covered
-    }
+    // Not ours (platform, base app, test app). A declared object with no entry is in `refused`
+    // (the constructor's unmapped rule), so it returned above.
+    if (entry === undefined) return undefined;
     // Line 0 is BC's object-level row. Deliberately checked before the span scan so it can never
     // fall inside a procedure whose range happens to start at 0 through some future bug.
     if (lineNo <= 0) return undefined;
@@ -487,13 +580,19 @@ export function renamedMemberNamesOf(
  * one silently dropping renamed members' names is the say-less-on-one-leg bug this exists to fix.
  */
 export async function readRenamedMemberNames(dir: string): Promise<RenamedMemberNames> {
+  const mutants = await readManifestMutants(dir);
+  return mutants === undefined ? NO_RENAMED_NAMES : renamedMemberNamesOf(mutants);
+}
+
+/** `<dir>/mutant-manifest.json`'s `mutants`, `undefined` when there is no manifest; else throws. */
+async function readManifestMutants(dir: string): Promise<Record<string, unknown>[] | undefined> {
   const path = join(dir, "mutant-manifest.json");
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
   } catch (err) {
     if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
-      return NO_RENAMED_NAMES;
+      return undefined;
     }
     throw new Error(
       `line-map: could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
@@ -512,7 +611,7 @@ export async function readRenamedMemberNames(dir: string): Promise<RenamedMember
       ? (parsed as { mutants?: unknown }).mutants
       : undefined;
   if (!Array.isArray(mutants)) throw new Error(`line-map: ${path} has no "mutants" array`);
-  return renamedMemberNamesOf(mutants);
+  return mutants as Record<string, unknown>[];
 }
 
 /**
@@ -861,6 +960,7 @@ const OBJECT_KIND_TO_TYPE_NAME: Readonly<Record<string, string>> = {
   query_declaration: "Query",
   [ALNodeKind.pageextension]: "PageExtension",
   [ALNodeKind.tableextension]: "TableExtension",
+  [ALNodeKind.reportextension]: "ReportExtension",
 };
 
 /** The `(objectType, objectId)` of an object declaration node, or null for anything else. */
@@ -940,18 +1040,33 @@ export async function lineMapFromSources(
 }
 
 /**
- * R298, for the HUB path, which builds no line map: the refused DECLARED objects of these sources,
- * by the same rule (`coverageRefusedObjects`), keyed as `LineMap.refusedByKey` keys them.
+ * R298, for the HUB path, which builds no line map: `coverageRefusedObjects` over these sources,
+ * keyed as `LineMap.refusedByKey` keys them, declared or not. The hub names the declared ones and
+ * exempts all of them from R-307's Direction B.
  */
-export async function refusedCoverageFromSources(
+export async function coverageRefusedFromSources(
   sources: readonly AlSource[],
-  declared: ReadonlySet<string>,
 ): Promise<ReadonlyMap<string, string>> {
   await initParser();
-  const all = coverageRefusedObjects(
+  return coverageRefusedObjects(
     sources.map((s) => ({ path: s.path, root: wrapRoot(parseAL(s.text)) })),
   );
-  return new Map([...all].filter(([key]) => declared.has(key)));
+}
+
+/**
+ * R-307: the object keys of `<dir>/mutant-manifest.json`'s mutants. STRICT: a missing manifest
+ * throws too, unlike `readRenamedMemberNames`, because the caller checks these keys and an empty
+ * set would pass that check with nothing checked.
+ */
+export async function readManifestObjectKeys(dir: string): Promise<Set<string>> {
+  const mutants = await readManifestMutants(dir);
+  if (mutants === undefined) {
+    // Fix round 1: an absent manifest would check nothing, and empty-vs-anything "matches".
+    throw new ManifestDeclarationError(
+      `line-map: ${join(dir, "mutant-manifest.json")} does not exist, so the batch's mutant objects cannot be checked against its declarations`,
+    );
+  }
+  return manifestObjectKeys(mutants);
 }
 
 /** Forward slashes, so a path quoted to a user reads the same on every platform. */
