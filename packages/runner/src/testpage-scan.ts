@@ -1200,11 +1200,14 @@ const NO_RUN: ReadonlySet<number> = new Set();
 /**
  * R466: the implicit variable `key` as `p` sees it. A TableNo codeunit's `Rec` exists in its
  * `OnRun` trigger only (alc 18.0.43: AL0118 in any other procedure, measured under R-458; the
- * engine's `implicitRecordShadowsGlobals` agrees), and a codeunit's only trigger is `OnRun`, so
- * outside its triggers a codeunit has no implicit variables. Other kinds are unchanged.
+ * engine's `implicitRecordShadowsGlobals` agrees). The trigger is checked by NAME as well as by
+ * membership: a codeunit's `triggers` holds every trigger it declares (an install codeunit's
+ * `OnInstallAppPerCompany`, for one), not only `OnRun`. Other kinds are unchanged.
  */
 function implicitAt(p: Proc, key: string): readonly string[] | undefined {
-  if (p.unit.kind === "codeunit" && !p.unit.triggers.includes(p)) return undefined;
+  if (p.unit.kind === "codeunit" && !(p.name === "onrun" && p.unit.triggers.includes(p))) {
+    return undefined;
+  }
   return p.unit.implicit.get(key);
 }
 

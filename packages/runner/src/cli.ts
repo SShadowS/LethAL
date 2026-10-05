@@ -2682,7 +2682,7 @@ function warnAlRunnerNotAuthoritative(): void {
   console.warn(
     "[lethal] al-runner is NOT authoritative: its coverage depends on the project's file " +
       "layout (a file whose later objects carry code turns it off for the whole run), and its " +
-      "transaction semantics are not verified against BC. Treat survivors from this backend as " +
+      "`Codeunit.Run` rollback has not been re-measured against BC. Treat survivors from this backend as " +
       "unconfirmed — re-run them under --backend bcdev before acting on them.",
   );
 }

@@ -792,6 +792,33 @@ ${procs}}
       const was = digestA(files);
       expect(was).toMatch(/^v3:/);
       expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // Go itself IS reached, so the line above is not passing because Go fell out of the walk.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
+    });
+
+    // A codeunit's `triggers` holds EVERY trigger it declares (an install codeunit's
+    // `OnInstallAppPerCompany`, for one), not only OnRun. Wrong fix "any trigger": the install
+    // trigger's `Rec.Touch()` reaches TT through the id fold `Codeunit::"Runner"` triggers.
+    test("Rec in a trigger other than OnRun is not typed through TableNo", () => {
+      const files = base(
+        T('    procedure A()\n    begin\n        Codeunit.Run(Codeunit::"Runner");\n    end;\n'),
+        {
+          "Runner.al": RUNNER(
+            "",
+            "\n    trigger OnInstallAppPerCompany()\n    begin\n        Rec.Touch();\n    end;\n",
+          ),
+          "TT.al": TOUCHED,
+        },
+      );
+      const was = digestA(files);
+      expect(was).toMatch(/^v3:/);
+      expect(digestA(edit(files, "TT.al", "Marks := 1;", "Marks := 2;"))).toBe(was);
+      // The install trigger IS walked, so the line above is not passing because it fell out.
+      expect(
+        digestA(edit(files, "Runner.al", "Rec.Touch();", "Rec.Touch(); Rec.Touch();")),
+      ).not.toBe(was);
     });
   });
 });
