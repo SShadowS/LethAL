@@ -450,7 +450,10 @@ describe("R-389 final review (sol): three holes, each closed fail-closed", () =>
     (body: string): Scenario =>
     (e) => ({
       ...base(e),
-      "T.al": testUnit(proc("A()", `${V}        S: Text;\n${MOCK}${EXT}`, body), "        GlobalV: Variant;\n"),
+      "T.al": testUnit(
+        proc("A()", `${V}        S: Text;\n${MOCK}${EXT}`, body),
+        "        GlobalV: Variant;\n",
+      ),
     });
   const viaFormat = formatted("        V := Mock;\n        Ext.RunFormatted(Format(V));\n");
   test("H1a. V := Mock; Ext.RunFormatted(Format(V)): an edit to Mock moves the digest", () => {
@@ -475,15 +478,17 @@ describe("R-389 final review (sol): three holes, each closed fail-closed", () =>
   });
 
   // Hole 2: a parenthesis-less call is a call, never an undeclared (harmless) name.
-  const own = (body: string, extra = ""): Scenario => (e) => ({
-    ...base(e),
-    "T.al": testUnit(
-      proc("A()", V + EXT, body) +
-        proc("MakeVariant(): Variant", MOCK, "        exit(Mock);\n", "    local") +
-        proc("MakeMock(): Codeunit \"Mock\"", MOCK, "        exit(Mock);\n", "    local") +
-        extra,
-    ).replaceAll("    local    procedure", "    local procedure"),
-  });
+  const own =
+    (body: string, extra = ""): Scenario =>
+    (e) => ({
+      ...base(e),
+      "T.al": testUnit(
+        proc("A()", V + EXT, body) +
+          proc("MakeVariant(): Variant", MOCK, "        exit(Mock);\n", "    local") +
+          proc('MakeMock(): Codeunit "Mock"', MOCK, "        exit(Mock);\n", "    local") +
+          extra,
+      ).replaceAll("    local    procedure", "    local procedure"),
+    });
   test("H2a. V := MakeVariant (no parentheses) falls back, as MakeVariant() does", () => {
     const r = run(own("        V := MakeVariant;\n        Ext.Go(V);\n")({}));
     expect(r.why("A")).toContain("assigned from a value of Variant");

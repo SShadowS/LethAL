@@ -420,9 +420,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   implementation of an interface; a subscriber or folded codeunit handing a value back through a
   `var` parameter or its return value is read the same way. Where the walk cannot see the value (a
   parameter, a global, a collection element) the test takes the whole-source digest. An interface
-  with no test-app implementation adds nothing. No scheme change: an unchanged test keeps its
-  digest; a test that newly covers more reads as new once. Measured: 29 of 1,854 DC tests and 29 of
-  1,986 DO tests move to the whole-source digest, CDO none.
+  with no test-app implementation adds nothing. No scheme change, because the change only adds
+  coverage: a test whose digest now covers more (one newly on the whole-source digest, or with a
+  new fold) gets a new digest and reads as new once, and every other test keeps its digest.
+  Measured at 41ff941d: 29 of 1,854 DC tests and 29 of 1,986 DO tests move to the whole-source
+  digest, CDO none.
 
 - **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 is held
   by R-446). The run-wide twin numbering sorted files with `localeCompare`, the host's default
