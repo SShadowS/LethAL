@@ -92,6 +92,20 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A skipped `OnModify` is now screened, and so are `ModifyAll`/`DeleteAll` RunTrigger flips**
+  (R452). `swap-modify-flag`'s `Modify(true)` -> `Modify(false)` mutants carry the new
+  `platformKillMechanism` value `run-trigger-skipped-modify` unless LethAL can prove that skipping
+  the table's `OnModify` is harmless (no project modify subscriber or tableextension trigger), the
+  same refusal detector R281 built for `Delete`. `flip-boolean-literal`'s `true` -> `false` flip
+  of a Record `ModifyAll`'s third argument carries the same tag, and of a `DeleteAll`'s argument
+  carries `run-trigger-skipped-delete`. The detector itself got stricter for both kinds: no
+  `Modify` or `Delete` inside the trigger counts as harmless any more, a parenthesis-less
+  split-header procedure call keeps the tag, and a bare `X.Y` counts as a field read only for the
+  trigger's own `Rec`/`xRec` and its own table's fields. Verdicts and scores do not move; only the
+  screen grows. Measured (probe, no `#if` arms): BC.History gains 22,523 tagged `Modify` mutants,
+  188 `ModifyAll` and 846 `DeleteAll`; CDO 35 and 9; the fixtures one (unpinned `grammar-probe`).
+  It reads only this project: a subscriber in another app, such as the test app, is not seen.
+
 - **The results store no longer fsyncs on every commit** (R449). `lethal.sqlite` now runs with
   `PRAGMA synchronous = NORMAL` under WAL, SQLite's recommended pairing, and opening a new store went
   from a 238 ms median to 54 ms on Linux. A crashed or killed LethAL process loses nothing. An OS
@@ -344,7 +358,24 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   reads (receiver and field compared separately; an unresolved receiver is still not seen). The
   first two are silent refusals; the third counts into `hang-refused`. Measured: BaseApp loses 47
   mutants (15 more hang-refused), CDO 1, no fixture or gate figure moves. A later same-tuple twin
-  of a refused mutant can take its key, hence the scheme bump: re-check equivalence marks.
+  of a refused mutant can take its key, hence the scheme bump: marks files need
+  `"identityScheme": 14` after re-checking each mark (R325).
+- **`swap-call-arguments` no longer swaps an argument that names a field** (R455). In
+  `R.SetRange(Amount, Value)` the first argument is the record's field even when a local has the
+  same name, so the swap did not compile (AL0166). Record builtins are matched by method name, with
+  the field positions of each (SetRange, SetFilter, Validate, TestField and others at position 1;
+  CalcFields, CalcSums, SetLoadFields, SetCurrentKey and others at every position; CopyFilter at 1
+  and 3). Swaps between value arguments stay. BaseApp: 43 swaps removed, among them 28 that alc
+  rejects; CDO: 1.
+- **An unqualified call in a record scope has no type** (R455). Inside `with R do`, on a page with a
+  `SourceTable`, in a `TableNo` codeunit's OnRun and in a report dataitem, a call `F()` binds to the
+  table's method first, so typing it by the object's own procedure could emit `F() - F()` on Text
+  (AL0175). BaseApp: 13 `swap-additive` mutants removed; CDO: 0.
+- **A case-only pair is not swapped** (R455): `SetRange(ID, Id)` names one variable twice.
+- **Identity scheme 13** (R455; 12 is reserved for R254): swaps and additive flips are removed, so
+  same-tuple ordinals can move. Every older store stops resuming once, the next
+  `--skip-known-survivors` run skips nothing once, and marks files need `"identityScheme": 13`
+  after re-checking each mark (R325).
 - **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
   of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
   type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a

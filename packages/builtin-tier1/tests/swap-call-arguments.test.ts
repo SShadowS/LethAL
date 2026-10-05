@@ -163,3 +163,154 @@ describe("swapCallArguments", () => {
     expect(specsFor(src).map((s) => s.after.text)).toEqual(["Take(Z, Q)"]);
   });
 });
+
+// R455. In a record builtin's field-designator argument the receiver's FIELD wins over a local of
+// the same name (alc 18.0.43: `R.SetRange(Amount, Value)` compiles and its swap is AL0166). So such
+// an argument is never swapped, by method name and argument POSITION; value arguments still are.
+describe("swapCallArguments: field-designator arguments (R455)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const TABLE = `table 92800 "R455 T" { fields { field(1; Code; Code[20]) { } field(2; Amount; Decimal) { } field(3; Name; Text[50]) { } field(4; Qty; Integer) { } } keys { key(PK; Code) { Clustered = true; } } }`;
+  const withTable = (decls: string, body: string): string =>
+    `${TABLE}\ncodeunit 92800 "R455 C" { procedure P() var R: Record "R455 T"; ${decls} begin ${body} end; }`;
+  const swaps = (decls: string, body: string): string[] =>
+    specsFor(withTable(decls, body)).map((s) => s.after.text);
+
+  // Same-typed locals, so only the field-designator rule refuses it: `Name` binds to the Text field.
+  // alc rejects this ORIGINAL too (AL0193, an Integer value for a Text field), so it pins the
+  // generator only; the next test is the same shape as AL that compiles.
+  it("pin: R.Validate(Name, Other) with Integer locals is not swapped", () => {
+    expect(swaps("Name: Integer; Other: Integer;", "R.Validate(Name, Other);")).toEqual([]);
+  });
+
+  // alc 18.0.43: compiles; the swap `R.Validate(Other, Qty)` is AL0166.
+  it("pin: R.Validate(Qty, Other) with Integer locals and an Integer field is not swapped", () => {
+    expect(swaps("Qty: Integer; Other: Integer;", "R.Validate(Qty, Other);")).toEqual([]);
+  });
+
+  it("pin: R.SetRange(Amount, Value) with Integer locals is not swapped", () => {
+    expect(swaps("Amount: Integer; Value: Integer;", "R.SetRange(Amount, Value);")).toEqual([]);
+  });
+
+  // Documents the binding only: Integer `Name` and Text `T` already fail the same-type check.
+  it("R.Validate(Name, T) with an Integer local Name: no swap (binding documentation)", () => {
+    expect(swaps("Name: Integer; T: Text;", "R.Validate(Name, T);")).toEqual([]);
+  });
+
+  it("control: the two VALUE arguments of R.SetRange(F, A, B) are still swapped", () => {
+    expect(swaps("F: Integer; A: Integer; B: Integer;", "R.SetRange(F, A, B);")).toEqual([
+      "R.SetRange(F, B, A)",
+    ]);
+  });
+
+  // Positions count over every argument expression: a quoted first argument is position 1.
+  it('positions: R.SetRange("Field Name", A, B) swaps A and B', () => {
+    expect(swaps("A: Integer; B: Integer;", 'R.SetRange("Field Name", A, B);')).toEqual([
+      'R.SetRange("Field Name", B, A)',
+    ]);
+  });
+
+  it("positions: a comment inside the arguments does not advance the count", () => {
+    expect(swaps("F: Integer; A: Integer; B: Integer;", "R.SetRange(/* c */ F, A, B);")).toEqual([
+      "R.SetRange(/* c */ F, B, A)",
+    ]);
+  });
+
+  it("positions: a nested call is one argument, and is mutated on its own", () => {
+    expect(
+      swaps(
+        "F: Integer; Fmt: Text; A: Integer; B: Integer; C: Integer; D: Integer;",
+        "R.SetFilter(F, StrSubstNo(Fmt, A, B), C, D);",
+      ),
+    ).toEqual(["R.SetFilter(F, StrSubstNo(Fmt, A, B), D, C)", "StrSubstNo(Fmt, B, A)"]);
+  });
+
+  // Each local shares a type with another argument, so unprotecting THAT position makes a swap
+  // appear: F pairs with Dest (both Integer) when position 1 is open, Dest pairs with G (both
+  // Record) when position 3 is open. These pin the generator, not valid AL.
+  it("CopyFilter names a field at position 1", () => {
+    expect(swaps("F: Integer; Dest: Integer; G: Text;", "R.CopyFilter(F, Dest, G);")).toEqual([]);
+  });
+
+  it("CopyFilter names a field at position 3", () => {
+    expect(
+      swaps('F: Integer; Dest: Record "R455 T"; G: Record "R455 T";', "R.CopyFilter(F, Dest, G);"),
+    ).toEqual([]);
+  });
+
+  // alc 18.0.43: `SetAscending(Flag, Ascend)` compiles with Boolean field Flag; the swap is AL0166
+  // (argument 1 must be a member).
+  it("SetAscending names a field at position 1 only", () => {
+    expect(swaps("Flag: Boolean; Ascend: Boolean;", "R.SetAscending(Flag, Ascend);")).toEqual([]);
+  });
+
+  // alc 18.0.43: LoadFields and AreFieldsLoaded take fields at every position (AL0166 otherwise).
+  it("LoadFields names a field at every position", () => {
+    expect(swaps("A: Integer; B: Integer;", "R.LoadFields(A, B);")).toEqual([]);
+  });
+
+  it("AreFieldsLoaded names a field at every position", () => {
+    expect(swaps("A: Integer; B: Integer;", "if R.AreFieldsLoaded(A, B) then;")).toEqual([]);
+  });
+
+  // Every listed method, called with three same-typed locals. A position-1 method keeps the
+  // (2, 3) swap; an every-position method loses all of them. Method names compare without case.
+  const FIRST = [
+    "SetRange",
+    "SetFilter",
+    "Validate",
+    "TestField",
+    "FieldError",
+    "FieldNo",
+    "FieldCaption",
+    "FieldName",
+    "FieldActive",
+    "GetFilter",
+    "GetRangeMin",
+    "GetRangeMax",
+    "ModifyAll",
+    "setrange",
+  ];
+  const EVERY = [
+    "CalcFields",
+    "CalcSums",
+    "SetLoadFields",
+    "AddLoadFields",
+    "SetCurrentKey",
+    "SetAutoCalcFields",
+  ];
+  for (const m of FIRST) {
+    it(`table: ${m} names a field at position 1 only`, () => {
+      expect(swaps("A: Integer; B: Integer; C: Integer;", `R.${m}(A, B, C);`)).toEqual([
+        `R.${m}(A, C, B)`,
+      ]);
+    });
+  }
+  for (const m of EVERY) {
+    it(`table: ${m} names a field at every position`, () => {
+      expect(swaps("A: Integer; B: Integer; C: Integer;", `R.${m}(A, B, C);`)).toEqual([]);
+    });
+  }
+
+  // By name, so an unqualified call against an implicit record is covered too.
+  it("an unqualified SetRange(Amount, Value) in a page with SourceTable is not swapped", () => {
+    const src = `${TABLE}\npage 92800 "R455 P" { SourceTable = "R455 T"; procedure P() var Amount: Integer; Value: Integer; begin SetRange(Amount, Value); end; }`;
+    expect(specsFor(src).map((s) => s.after.text)).toEqual([]);
+  });
+
+  it("control: a non-builtin call Take(A, B) still swaps", () => {
+    expect(swaps("A: Integer; B: Integer;", "Take(A, B);")).toEqual(["Take(B, A)"]);
+  });
+
+  // AL names ignore case: `ID` and `Id` are one variable, so the swap is the identical call. A
+  // non-builtin callee, so the field table cannot be what refuses it.
+  it("case: Take(ID, Id) is not swapped", () => {
+    expect(swaps("ID: Integer;", "Take(ID, Id);")).toEqual([]);
+  });
+
+  it("quoted arguments stay ineligible", () => {
+    expect(swaps('"My A": Integer; "My B": Integer;', 'Take("My A", "My B");')).toEqual([]);
+  });
+});

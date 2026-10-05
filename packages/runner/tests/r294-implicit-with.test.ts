@@ -265,8 +265,10 @@ describe("R294 review: implicit `with` over a record, the deployed manifest", ()
   }
 
   // Not load-bearing for this refusal (red-checked): the symbol table gives a reportextension no
-  // scope, so nothing in one is typed. Pinned so that giving it a scope must keep this site refused.
-  test("reportextension modify: no swap", () => {
+  // scope, so nothing in one is typed and this passes with or without the refusal. No case that can
+  // fail exists until a reportextension gets a scope (R254, R455 point 4). Pinned so that giving it
+  // a scope must keep this site refused.
+  test("reportextension modify: no swap (NOT load-bearing: a reportextension has no scope)", () => {
     expect(swapsAt("REFUSED reportextension modify")).toBe(0);
   });
 

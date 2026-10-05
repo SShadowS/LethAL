@@ -1,9 +1,16 @@
-import { claimsRecordMethod, inMemberBody } from "@lethal/engine";
+import {
+  claimsRecordMethod,
+  deleteSkipCanRaise,
+  exactArguments,
+  inMemberBody,
+  modifySkipCanRaise,
+} from "@lethal/engine";
 import {
   ALNodeKind,
   type ALSyntaxNode,
   type MutationOperator,
   type MutationSpec,
+  type PlatformKillMechanism,
   type SemanticContext,
 } from "@lethal/operator-sdk";
 import { hangCapableForMutatedNode, hasEnclosingLoop } from "./loop-hazard";
@@ -77,10 +84,14 @@ const CASE_LABEL_PARENTS: ReadonlySet<string> = new Set(["case_branch", "case_st
  * compile probe failed 2 of 10 shapes on it. `CASE_LABEL_PARENTS` is the refusal; everywhere else the
  * type argument does hold, verified against real `alc` on every shape the corpus contains.
  *
- * **No `PlatformKillMechanism`.** Flipping a value is ordinary changed behaviour. The one shape that
- * could look otherwise is a ceded one: `Rec.Insert(true)` to `Insert(false)` skips a trigger and can
- * die on a duplicate key with no assertion, which is exactly why R138 tagged it — and those sites
- * belong to `swap-modify-flag`, which carries the tag. This operator never reaches them.
+ * **`PlatformKillMechanism` only on a RunTrigger it skips (R-452).** Flipping a value is ordinary
+ * changed behaviour. `Rec.Insert(true)` to `Insert(false)` skips a trigger and can die on a
+ * duplicate key with no assertion, which is why R138 tagged it, and those sites are ceded to
+ * `swap-modify-flag`, which carries the tag. `ModifyAll` and `DeleteAll` are NOT ceded, so their
+ * RunTrigger flips are this operator's: `ModifyAll(F, V, true)` and `DeleteAll(true)` flipped to
+ * `false` skip `OnModify`/`OnDelete` for every affected row, and carry the same tag as
+ * `Modify`/`Delete`, from the same engine detector (`runTriggerSkipTag`). The `false` -> `true`
+ * direction forces the trigger and is not tagged here.
  *
  * **Documented limits:**
  *   - Equivalence is not detected. A flipped boolean that no path reads is an equivalent mutant this
@@ -107,6 +118,7 @@ export const flipBooleanLiteral: MutationOperator = {
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
+    const platformKillMechanism = runTriggerSkipTag(node, ctx);
     return [
       {
         operatorName: OPERATOR_NAME,
@@ -115,6 +127,7 @@ export const flipBooleanLiteral: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
+        ...(platformKillMechanism !== undefined ? { platformKillMechanism } : {}),
       },
     ];
   },
@@ -215,6 +228,57 @@ export const flipBooleanLiteral: MutationOperator = {
     },
   ],
 };
+
+/**
+ * R-452: the Record methods whose RunTrigger argument this operator flips (not ceded), its position
+ * under an EXACT argument count, and the skip detector that judges a `true` -> `false` flip. AL has
+ * no named arguments (alc 18: AL0104 on `RunTrigger := true`), so the position is the whole answer.
+ */
+const RUN_TRIGGER_ARGUMENTS = [
+  {
+    method: "ModifyAll",
+    count: 3,
+    index: 2,
+    canRaise: modifySkipCanRaise,
+    tag: "run-trigger-skipped-modify",
+  },
+  {
+    method: "DeleteAll",
+    count: 1,
+    index: 0,
+    canRaise: deleteSkipCanRaise,
+    tag: "run-trigger-skipped-delete",
+  },
+] as const satisfies readonly {
+  method: string;
+  count: number;
+  index: number;
+  canRaise: (node: ALSyntaxNode, ctx: SemanticContext) => boolean;
+  tag: PlatformKillMechanism;
+}[];
+
+/**
+ * The tag for a `true` that IS the RunTrigger argument of a Record `ModifyAll`/`DeleteAll` (the
+ * argument itself, span-equal, read comment-aware through `exactArguments`; a `(true)` or any other
+ * expression around it is not), when skipping that trigger is not proven harmless. Else `undefined`.
+ */
+function runTriggerSkipTag(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): PlatformKillMechanism | undefined {
+  if (node.text.toLowerCase() !== "true") return undefined;
+  const call = node.parent?.parent;
+  if (call?.kind !== ALNodeKind.procedure_call) return undefined;
+  for (const { method, count, index, canRaise, tag } of RUN_TRIGGER_ARGUMENTS) {
+    const arg = exactArguments(call, count)?.[index];
+    if (arg === undefined || arg.startIndex !== node.startIndex || arg.endIndex !== node.endIndex) {
+      continue;
+    }
+    if (!claimsRecordMethod(call, ctx, method)) continue;
+    return canRaise(call, ctx) ? tag : undefined;
+  }
+  return undefined;
+}
 
 /** The flipped text for a boolean this operator will claim, else `null`. */
 function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
