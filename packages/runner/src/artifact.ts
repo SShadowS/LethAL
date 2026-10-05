@@ -213,7 +213,11 @@ export class ArtifactCompiler {
     packageCachePath: string,
     name: string,
   ): Promise<{ readonly appPath: string; readonly sha256: string }> {
-    const scratch = toForwardSlashes(join(this.cfg.outputDir, `${name}.app`));
+    // R461: a scratch path this call alone owns, so the failure cleanup below can never delete a
+    // concurrent same-name call's output or an earlier artifact whose file name is `${name}.app`.
+    const scratch = toForwardSlashes(
+      join(this.cfg.outputDir, `${name}.${crypto.randomUUID()}.partial.app`),
+    );
     let res: { exitCode: number; stdout: string; stderr: string };
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
