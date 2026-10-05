@@ -621,6 +621,15 @@ describe("R-389 option (a), narrowing 1: a Variant parameter traced through its 
     const r = run({ ...s((e) => LIB(e))({}), "Other.al": other });
     expect(r.why("A")).toBeUndefined();
   });
+  test("N1i. a procedure a [HandlerFunctions] list names (the platform calls it) keeps the fallback", () => {
+    const r = run(
+      s(
+        (e) => LIB(e),
+        proc("B()", LIBV, "        Lib.Check(5);\n", "    [Test]\n    [HandlerFunctions('Check')]\n"),
+      )({}),
+    );
+    expect(r.why("A")).toContain("can be called from outside the test app");
+  });
   test("N1h. a caller passing a test-app codeunit's id or reference keeps the fallback", () => {
     for (const arg of ["50101", 'Codeunit::"Mock"']) {
       const r = run(s((e) => LIB(e), proc("B()", LIBV, `        Lib.Check(${arg});\n`))({}));
