@@ -443,6 +443,103 @@ describe("R-389 bi:none: an interface with no test-app implementation folds noth
   });
 });
 
+describe("R-389 final review (sol): three holes, each closed fail-closed", () => {
+  // Hole 1: Format(V) gives the held codeunit's object id (live probe R4d), and the string can
+  // reach a dependency's `Evaluate` + `Codeunit.Run` through any argument.
+  const formatted =
+    (body: string): Scenario =>
+    (e) => ({
+      ...base(e),
+      "T.al": testUnit(proc("A()", `${V}        S: Text;\n${MOCK}${EXT}`, body), "        GlobalV: Variant;\n"),
+    });
+  const viaFormat = formatted("        V := Mock;\n        Ext.RunFormatted(Format(V));\n");
+  test("H1a. V := Mock; Ext.RunFormatted(Format(V)): an edit to Mock moves the digest", () => {
+    expect(moves(viaFormat, "mock", "A")).toBe(true);
+    expect(moves(viaFormat, "unrelated", "A")).toBe(false);
+    expect(run(viaFormat({})).why("A")).toBeUndefined();
+  });
+  test("H1b. the same through StrSubstNo into a Text, handed out later", () => {
+    const s = formatted(
+      "        V := Mock;\n        S := StrSubstNo('%1', V);\n        Ext.RunFormatted(S);\n",
+    );
+    expect(moves(s, "mock", "A")).toBe(true);
+    expect(moves(s, "unrelated", "A")).toBe(false);
+  });
+  test("H1c. Format of a Variant the walk cannot trace falls back", () => {
+    const r = run(formatted("        Ext.RunFormatted(Format(GlobalV));\n")({}));
+    expect(r.why("A")).toContain("the global GlobalV");
+  });
+  test("H1 control: Format of a Variant that holds only a value: digest byte-identical", () => {
+    const r = run(formatted("        V := 5;\n        Ext.RunFormatted(Format(V));\n")({}));
+    expect(r.digest("A")).toBe(PIN_FORMAT_VALUE);
+  });
+
+  // Hole 2: a parenthesis-less call is a call, never an undeclared (harmless) name.
+  const own = (body: string, extra = ""): Scenario => (e) => ({
+    ...base(e),
+    "T.al": testUnit(
+      proc("A()", V + EXT, body) +
+        proc("MakeVariant(): Variant", MOCK, "        exit(Mock);\n", "    local") +
+        proc("MakeMock(): Codeunit \"Mock\"", MOCK, "        exit(Mock);\n", "    local") +
+        extra,
+    ).replaceAll("    local    procedure", "    local procedure"),
+  });
+  test("H2a. V := MakeVariant (no parentheses) falls back, as MakeVariant() does", () => {
+    const r = run(own("        V := MakeVariant;\n        Ext.Go(V);\n")({}));
+    expect(r.why("A")).toContain("assigned from a value of Variant");
+  });
+  test("H2b. Ext.Go(MakeVariant) (no parentheses) falls back", () => {
+    const r = run(own("        Ext.Go(MakeVariant);\n")({}));
+    expect(r.why("A")).toContain("a value of Variant");
+  });
+  test("H2c. V := MakeMock (no parentheses, returns a test-app codeunit) folds Mock", () => {
+    const s = own("        V := MakeMock;\n        Ext.Go(V);\n");
+    expect(moves(s, "mock", "A")).toBe(true);
+    expect(moves(s, "unrelated", "A")).toBe(false);
+    expect(run(s({})).why("A")).toBeUndefined();
+  });
+  test("H2d. a name that resolves to nothing the walk knows (V := Today) falls back", () => {
+    const r = run(own("        V := Today;\n        Ext.Go(V);\n")({}));
+    expect(r.why("A")).toContain("Today");
+  });
+
+  // Hole 3: an interface the test app does not declare can extend another (a dependency's
+  // `IDerived extends IBase`), which the walk cannot see. A test-app codeunit implementing such
+  // an interface, directly or through a test-app interface, may implement the one handed out.
+  const ancestry =
+    (handed: string): Scenario =>
+    (e) => ({
+      ...base(e),
+      "Dep.al": plain(50170, "DepMock", "impl", e, ` implements "IDerived"`),
+      "IX.al": `interface "IX" extends "IDerived"\n{\n}\n`,
+      "Dep2.al": plain(50171, "DepMock2", "inner2", e, ` implements "IX"`),
+      "T.al": testUnit(
+        proc(
+          "A()",
+          `${V}        I: Interface "${handed}";\n${EXT}`,
+          "        V := I;\n        Ext.Go(V);\n",
+        ) + TRIVIAL,
+      ),
+      "Subs.al": subscribers(sub("OnGet", `var J: Interface "${handed}"`, "", "")),
+    });
+  test("H3. a dependency interface handed out folds every test-app codeunit of unknown ancestry", () => {
+    const s = ancestry("IBase");
+    expect(moves(s, "impl", "A")).toBe(true);
+    expect(moves(s, "impl", "Trivial")).toBe(true);
+    expect(moves(s, "inner2", "Trivial")).toBe(true);
+    expect(moves(s, "unrelated", "Trivial")).toBe(false);
+  });
+  test("H3 control: a TEST-APP interface handed out does not fold them (no dependency can extend it)", () => {
+    const s = ancestry("IFace");
+    expect(moves(s, "impl", "A")).toBe(false);
+    expect(moves(s, "inner2", "Trivial")).toBe(false);
+    expect(moves(s, "mock", "Trivial")).toBe(true);
+  });
+});
+
+// Recorded on lethal/r389 at e458eb55, BEFORE the final-review fixes.
+const PIN_FORMAT_VALUE = "v3:f76b1742a86bdd76bae3c61adefbfaf6ee5c07e64c0f3e18a117cd89897cbb95";
+
 // Recorded on lethal/r389 at 48598264 (master 5c0631a5 merged), BEFORE R-389's code: these
 // shapes must digest exactly as they did, so a change here is a regression, never a re-record.
 const PIN_RECORD = "v3:bed9abb7629d75d7adea58a19093f9aa35bbc94cdb65f43c0cae918ce2908d8b";

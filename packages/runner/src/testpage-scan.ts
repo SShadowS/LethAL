@@ -1362,6 +1362,9 @@ export class Scanner {
   private readonly unitsForCache = new Map<string, Unit[]>();
   /** R-389: interface name -> the test-app codeunits and interfaces naming it in `implements`. */
   private readonly implementers = new Map<string, Unit[]>();
+  /** R-389: the normalised name of every interface the test app declares. */
+  private readonly testAppInterfaces = new Set<string>();
+  private unknownAncestryCache: Set<Unit> | undefined;
   /** R-389: `name|arity` -> the `var` positions of every test-app procedure of that name and arity. */
   private readonly varPositions = new Map<string, Set<number>>();
 
@@ -1397,6 +1400,7 @@ export class Scanner {
     this.lowIds = model.units.some((u) => u.id < 1000);
     for (const u of [...model.units, ...model.objects]) {
       for (const i of u.implements) add(this.implementers, lastSegment(i), u);
+      if (u.kind === "interface") this.testAppInterfaces.add(u.name);
       for (const p of u.procs) {
         if (p.varParams.size === 0) continue;
         const k = `${p.name}|${p.params}`;
@@ -1409,10 +1413,23 @@ export class Scanner {
 
   /**
    * R-389: every test-app codeunit an `Interface <raw>` variable can hold: each codeunit that
-   * implements it, or implements an interface that extends it, transitively. A dependency's
-   * implementations are EXTERNAL (the dependency fingerprint).
+   * implements it, or implements an interface that extends it, transitively through the test
+   * app's own interfaces. A dependency's implementations are EXTERNAL (the dependency
+   * fingerprint). An interface the test app does not declare may also be extended by another
+   * interface the test app does not declare (`IDerived extends IBase` in a dependency), which the
+   * walk cannot see: so for such an interface, every test-app codeunit whose ancestry reaches a
+   * non-test-app interface counts too (final review, hole 3). A test-app interface cannot be
+   * extended by a dependency's (it cannot name the test app's types), so it needs only the first.
    */
   private implementationsOf(raw: string): Unit[] {
+    const name = lastSegment(raw);
+    const out = this.implementersOf([name]);
+    if (!this.testAppInterfaces.has(name)) for (const u of this.unknownAncestry()) out.add(u);
+    return [...out];
+  }
+
+  /** Every test-app codeunit implementing one of `names`, through test-app `extends`. */
+  private implementersOf(names: Iterable<string>): Set<Unit> {
     const out = new Set<Unit>();
     const seen = new Set<string>();
     const go = (name: string): void => {
@@ -1423,8 +1440,17 @@ export class Scanner {
         else go(u.name);
       }
     };
-    go(lastSegment(raw));
-    return [...out];
+    for (const n of names) go(n);
+    return out;
+  }
+
+  /** Every test-app codeunit whose `implements` ancestry names an interface the test app does
+   *  not declare, computed once. */
+  private unknownAncestry(): Set<Unit> {
+    this.unknownAncestryCache ??= this.implementersOf(
+      [...this.implementers.keys()].filter((n) => !this.testAppInterfaces.has(n)),
+    );
+    return this.unknownAncestryCache;
   }
 
   /**
@@ -1866,8 +1892,10 @@ export class Scanner {
       if (f.k === "ref") {
         if (this.isTestAppObject(f.kind === "database" ? "table" : f.kind, f.name))
           what = `${f.kind}::${f.name}`;
-      } else if (refsOnly) continue;
-      else what = this.argHolds(p, f.recv, st, label);
+      } else if (refsOnly) {
+        this.builtinArg(p, f.recv, label, st);
+        continue;
+      } else what = this.argHolds(p, f.recv, st, label);
       if (what !== undefined) {
         fallBack(st, `${label} is handed ${what}, a test-app object, by ${p.display}`);
         return;
@@ -1897,6 +1925,9 @@ export class Scanner {
         const key = this.norm(r.name);
         if (key === "this") return "this";
         const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+        // Final review, hole 2: an undeclared name may be a parenthesis-less call.
+        const call = types === undefined ? this.parenless(p, r.name) : undefined;
+        if (call !== undefined) return this.argHolds(p, call, st, label);
         // A Variant or RecordRef may hold a record of any test-app table: every test-app table,
         // with its triggers and what they reach, is folded in (an unfollowed edge there falls
         // back).
@@ -2118,6 +2149,61 @@ export class Scanner {
     }
   }
 
+  /**
+   * R-389, final review hole 1: a value handed to a BUILT-IN (`Format`, `StrSubstNo`, a system
+   * method). `Format` of a Variant holding a codeunit gives its object id (live probe R4d), and
+   * that text can reach a dependency's `Evaluate` + `Codeunit.Run` by any road the walk does not
+   * follow. So a Variant, an Interface or a test-app codeunit handed to a built-in is a hand-out:
+   * traced and folded, or the fallback when the walk cannot see what it holds. A record, a value
+   * or a system name is not (its text names no codeunit).
+   */
+  private builtinArg(p: Proc, r: Recv, label: string, st: ReachState): void {
+    const why = `${label} is handed ${r.k === "name" ? r.name : "a value"} by ${p.display}`;
+    let recv = r;
+    if (r.k === "name") {
+      const key = this.norm(r.name);
+      if (key === "this") return;
+      const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+      if (types === undefined) {
+        const call = this.parenless(p, r.name);
+        if (call === undefined) return; // a system name
+        recv = call;
+      } else {
+        if (types.some((t) => VARIANT_TYPE.test(t)))
+          this.traceVariant(p, r.name, why, st, false, []);
+        for (const t of types) this.builtinHolds(t, why, st);
+        return;
+      }
+    }
+    const types = this.typesOf(p, recv);
+    if (typeof types === "string") {
+      fallBack(st, `${why}: a value of unknown type (${types})`);
+      return;
+    }
+    if (types.some((t) => VARIANT_TYPE.test(t))) this.traceValue(p, recv, why, st, []);
+    for (const t of types) this.builtinHolds(t, why, st);
+  }
+
+  /** `builtinArg` for one non-Variant type: an Interface or a test-app codeunit is folded. */
+  private builtinHolds(t: string, why: string, st: ReachState): void {
+    const iface = INTERFACE_TYPE.exec(t)?.[1];
+    if (iface !== undefined) this.foldInterface(iface, why, st);
+    else if (CODEUNIT_TYPE.test(t)) for (const u of this.unitsFor(t)) this.foldEntryUnit(u, st);
+  }
+
+  /** R-389: `raw` as a parenthesis-less call of `p`'s own object's procedure, when it is one. */
+  private parenless(p: Proc, raw: string): Recv | undefined {
+    const name = this.norm(raw);
+    const has = (u: Unit): boolean => u.procs.some((c) => c.name === name && c.params === 0);
+    if (has(p.unit)) return { k: "call", name: raw, args: 0, inWith: false };
+    // An extension's code can call its base object's procedure (`reachOwn`), whose return
+    // `typesOf` does not read: unknown.
+    const kin = p.unit.baseKey === undefined ? [] : (this.otherByBase.get(p.unit.baseKey) ?? []);
+    if (p.unit.kind !== "codeunit" && kin.some(has))
+      return { k: "opaque", kind: `parenthesis-less call ${raw}` };
+    return undefined;
+  }
+
   /** R-389: what a value assigned to a traced Variant can be, folded (part 1's table). */
   private traceValue(p: Proc, r: Recv, why: string, st: ReachState, path: readonly string[]): void {
     switch (r.k) {
@@ -2136,7 +2222,16 @@ export class Scanner {
           else fallBack(st, `${why}: assigned from this in a ${p.unit.kind}`);
           return;
         }
-        const types = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key) ?? [];
+        const declared = p.scope.get(key) ?? p.unit.globals.get(key) ?? implicitAt(p, key);
+        if (declared === undefined) {
+          // Final review, hole 2: a name no variable declares is a parenthesis-less call of the
+          // object's own procedure, traced as one; anything else is unknown, never harmless.
+          const call = this.parenless(p, r.name);
+          if (call !== undefined) this.traceValue(p, call, why, st, path);
+          else fallBack(st, `${why}: assigned from ${r.name}, which the walk cannot resolve`);
+          return;
+        }
+        const types = declared;
         if (types.some((t) => VARIANT_TYPE.test(t)))
           this.traceVariant(p, r.name, why, st, false, path);
         for (const t of types) if (!VARIANT_TYPE.test(t)) this.holdType(t, r.name, why, st);
