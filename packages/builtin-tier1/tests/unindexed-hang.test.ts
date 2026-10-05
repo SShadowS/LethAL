@@ -103,10 +103,16 @@ describe("R-364: loopConditionReadsByName (the matcher alone)", () => {
   it("walks OUTER loops to the scope boundary, and no further", () => {
     const { root, ctx } = load(`codeunit 50366 "R" {
       procedure P() begin while Outer < 3 do while Inner < 1 do X := 0; end;
-      procedure Q() begin X := 0; end; }`);
+      procedure Q() begin Outer := 7; end; }`);
     const inner = assignment(root, "X := 0");
     expect(loopConditionReadsByName(inner, { receiver: null, member: "Outer" }, ctx)).toBe(true);
     expect(loopConditionReadsByName(inner, { receiver: null, member: "Nope" }, ctx)).toBe(false);
+    // The SIBLING procedure's assignment of the very name P's loop reads: Q is not inside P's loop.
+    const sibling = assignment(root, "Outer := 7");
+    let proc: ALSyntaxNode | null = sibling;
+    while (proc !== null && proc.kind !== ALNodeKind.procedure) proc = proc.parent;
+    expect(proc?.text).toContain("procedure Q");
+    expect(loopConditionReadsByName(sibling, { receiver: null, member: "Outer" }, ctx)).toBe(false);
   });
 
   it("skips a condition tail in an arm the build compiles out, reads it when active", () => {
@@ -279,8 +285,29 @@ codeunit 50375 "W" { procedure P() var I: Integer; N: Integer; begin while I < N
     const a = assignment(root, "N := 0");
     const target = assignmentTargetOf(a);
     if (target === null) throw new Error("no target");
-    expect(resolveVarRef(target, ctx)).not.toBeNull();
+    const sym = resolveVarRef(target, ctx);
+    expect(sym).not.toBeNull();
+    // Discriminating probe: the loop condition's own `N` resolves to the SAME declaration, so the
+    // refusal is reachable by declaration alone. (A name-first path would also say yes here, which
+    // is why the control below matters: a trigger-local the loop does NOT read.)
+    const condN = nodeAt(root, ALNodeKind.identifier, "N", "N < 3");
+    expect(resolveVarRef(condN, ctx)).toEqual(sym);
     expect(classifyHangCapable(a, ctx)).toBe("loop-condition-target");
+  });
+
+  it("a wrapped trigger-local the loop does NOT read is declined, though a same-named table field is read", () => {
+    // `N` the loop reads is the table FIELD (Rec.N, unresolved by name); the trigger-local is `K`.
+    // A name-first path keyed on the target's text `K` has nothing to match, and must stay null.
+    const { root, ctx } = load(
+      wrapped(`table 50377 "W" { fields { field(1; N; Integer) { } }
+        trigger OnInsert() var K: Integer; begin while N < 3 do K := 0; end; }`),
+      [],
+    );
+    const a = assignment(root, "K := 0");
+    const target = assignmentTargetOf(a);
+    if (target === null) throw new Error("no target");
+    expect(resolveVarRef(target, ctx)).not.toBeNull();
+    expect(classifyHangCapable(a, ctx)).toBeNull();
   });
 });
 
@@ -360,11 +387,29 @@ describe("R-364: all four operators in an unindexed object", () => {
     });
   }
 
-  it("swap-additive: its type guard admits NO wrapped loop step, so it has nothing to refuse", () => {
+  it("swap-additive: `I + 1` has unresolved operands, so the type guard declines it first", () => {
     const { root, ctx } = load(src("while I < N do I := I + 1;"), []);
     const node = nodeAt(root, "additive_expression", "I + 1");
-    // Unresolved operands are refused on type before the hang check runs.
     expect(swapAdditive.targets(node, ctx)).toBe(false);
     expect(swapAdditive.refusesHangCapable?.(node, ctx)).toBe(false);
+  });
+
+  it("swap-additive: wrapped `while I < N do I := 1 + 1` (literals type fine) is refused and counted", () => {
+    // Without the fallback the site is a candidate: the same shape in an INDEXED object, whose
+    // loop reads an unresolvable Ghost, is not refused and emits a mutant.
+    const open = load(
+      `codeunit 50381 "R" { procedure P() begin while Ghost < 3 do Ghost := 1 + 1; end; }`,
+      [],
+    );
+    const openNode = nodeAt(open.root, "additive_expression", "1 + 1");
+    expect(open.ctx.symbols.unindexedObjects.length).toBe(0);
+    expect(swapAdditive.targets(openNode, open.ctx)).toBe(true);
+    expect(swapAdditive.generate(openNode, open.ctx).length).toBe(1);
+    // Wrapped, the name fallback refuses it, and it counts as hang-refused.
+    const { root, ctx } = load(src("while I < N do I := 1 + 1;"), []);
+    const node = nodeAt(root, "additive_expression", "1 + 1");
+    expect(swapAdditive.refusesHangCapable?.(node, ctx)).toBe(true);
+    expect(swapAdditive.targets(node, ctx)).toBe(false);
+    expect(swapAdditive.generate(node, ctx)).toEqual([]);
   });
 });

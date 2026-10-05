@@ -364,7 +364,10 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   matched by name. Measured: the 7 BaseApp mutants of the census are now refused.
 - **A `ModifyAll`/`DeleteAll` RunTrigger flip keeps its platform-kill tag when the receiver does
   not resolve** (R-364). `flip-boolean-literal` dropped the tag there, the unsafe direction for the
-  screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged.
+  screen (R143); it is now kept, in every object. Tier-2 claiming is unchanged. The tag is
+  conservative over-tagging: inside a wrapped object a codeunit variable calling a project
+  procedure named `DeleteAll` or `ModifyAll` with `true` also gets the tag (its receiver does not
+  resolve), which is the accepted direction.
   - Measured on BaseApp (BC.History w1-28, 203 projects, under `[]`): 11 `flip-boolean-literal`
     mutants gain a tag, and none loses one.
   - **1 restored**, in a wrapped object: `CalculateSubcontracts.Report.al`'s
