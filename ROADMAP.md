@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 471 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**89 of 472 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -192,6 +192,7 @@ that ordering is the priority.
 - **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · open
 - **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · open
 - **R474** · A carried `killed` lands on an unchanged statement whose surrounding code changed, because the identity key hashes only the statement's subtree · [R474.md](docs/roadmap/R474.md) · open
+- **R475** · Identity ordinals are numbered in `localeCompare` file order, so two hosts with different collations can number the same source's twins differently · [R475.md](docs/roadmap/R475.md) · open
 
 ## Product gaps a real project hits
 
