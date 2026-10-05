@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**93 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**91 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -433,7 +433,7 @@ that ordering is the priority.
 - **R206** · A grouped call runs a mutant's covering tests in ONE BC session, so `SingleInstance` state carries from test to test where the per-request path gave every test a cold session: 8 of 741 verdicts moved `survived` to `killed` on Document Output, all cache code, all killed at group position 2 or later · [R206.md](docs/roadmap/R206.md) · done (`59081aa`, control app 1.0.0.18 in `a4ece0b`) — option (A) built after five design revisions and four…
 - **R207** · al-runner's `provision` subcommand is refused by `provisionOnce` for a reason that no longer reproduces: on v2.10.0.0 the run and the subcommand both resolve every artifact at the binary's build, so the toolkit-version gap measured on 2.1.1.0 is not visible on the fixture · [R207.md](docs/roadmap/R207.md) · open — filed 2026-09-03 while sweeping stale al-runner claims at the runner author's prompting; the reason…
 - **R208** · The chunked group path (`--max-methods-per-call`) has no live gate: R198 §7/§8's two forced-chunk campaigns were never implemented, and under R206 a chunked replay is the one place where `chunkPrefix` versus `ordered` is verdict-bearing · [R208.md](docs/roadmap/R208.md) · done (`itest:chunked`, 2026-09-04) — a two-leg differential gate over…
-- **R224** · The `al-compiler` subagent probes only the `bin/win32` alc layout, which R167 already recorded as insufficient, so a valid install reports BLOCKED · [R224.md](docs/roadmap/R224.md) · open, filed 2026-09-13, one-line fix, diverged from the skill that does it correctly
+- **R224** · The `al-compiler` subagent probes only the `bin/win32` alc layout, which R167 already recorded as insufficient, so a valid install reports BLOCKED · [R224.md](docs/roadmap/R224.md) · done (77b8517f)
 - **R225** · A freshly bootstrapped container's FIRST `itest:tables` run quarantines on the TestPage baseline test and scores nothing; the immediately following run passes · [R225.md](docs/roadmap/R225.md) · open, filed 2026-09-18, measured on Cronus285 while qualifying the orchestrator's containers
 - **R233** · `EXPLAIN_SCHEMA_VERSION` 4 drifted: five commits grew its value domains without the bump its own rule requires; from GH-24b on, every added value bumps, and a test enforces it · [R233.md](docs/roadmap/R233.md) · done (83c5839)
 - **R235** · `itest:alrunner` fails on al-runner v2.11.0: no execution context carries a `platformAppsDir`, so R147's platform-app pin never engages · [R235.md](docs/roadmap/R235.md) · done (f2420e0)
@@ -441,7 +441,7 @@ that ordering is the priority.
 - **R237** · An env-tool command that fails to START is read as an uncertain publish, so a missing tool quarantines the tier · [R237.md](docs/roadmap/R237.md) · done (6b277d14)
 - **R241** · al-runner v2.11.0 fails on an EMPTY cache before any platform app is provisioned: the CDN's latest 28.x has no shipped engine variant, so every mutant would score `error` · [R241.md](docs/roadmap/R241.md) · open
 - **R242** · On the al-runner `--server` and resource legs, `executionContexts[].platformAppsDir` records a pin the daemon never receives · [R242.md](docs/roadmap/R242.md) · done (f7c46702)
-- **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · open
+- **R243** · fixtures/README.md's hand-computed sandbox-app verdict table lists 16 mutant sites; the fixture has 19 on both backends · [R243.md](docs/roadmap/R243.md) · done (409fc467)
 - **R255** · The al-runner warning `lethal run` prints still says al-runner reports `pass` for an `asserterror` that raised no error, a v1 finding fixed in v2 · [R255.md](docs/roadmap/R255.md) · open
 - **R257** · The EMEA runbook's explain rank and executionProven claims were measured on a pre-GH-24 report and need a new one · [R257.md](docs/roadmap/R257.md) · open
 - **R263** · The TestPage baseline reply was lost in 6 of 7 Cronus28 smoke sessions but only 6 of 60 counted sessions on a fresh Cronus284; the cause of the difference is unknown · [R263.md](docs/roadmap/R263.md) · open
