@@ -1,5 +1,6 @@
-import { IDENTITY_SCHEME, type ReachGrain } from "@lethal/schemata";
+import { IDENTITY_SCHEME, type ReachGrain, coarseIdentityTupleOf } from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
+import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import {
@@ -14,6 +15,7 @@ import {
   STRANDED_SKIP_INTERPRETATION,
   guardEvidenceOf,
   markIdentityOf,
+  markTupleOfRow,
   survivorReachOf,
 } from "./report";
 import type {
@@ -25,7 +27,7 @@ import type {
   SessionReport,
   SurvivorReach,
 } from "./report";
-import { ATTRIBUTION_INTERPRETATIONS } from "./selection";
+import { ATTRIBUTION_INTERPRETATIONS, twinSiteOf } from "./selection";
 import type { CoverageAttribution } from "./selection";
 import type { MutantVerdict } from "./store";
 
@@ -203,8 +205,12 @@ import type { MutantVerdict } from "./store";
  * value, so it bumps (R233); v10 is frozen. R307 added no explain field.
  * R447 withholds the already optional `gaps[].unobservedBlock` also per file, where a
  * `hang-refused` row has sites: no new field or value, so no bump.
+ *
+ * 12: R443 added `survivors[].mark`, the whole mark a reader pastes into `lethal.equivalent.json`.
+ * Additive, but `survivors[].markKey` CHANGED MEANING: a mark holding the key alone is now refused
+ * (`no-proof`), so the key is no longer a usable mark by itself. A changed meaning bumps.
  */
-export const EXPLAIN_SCHEMA_VERSION = 11;
+export const EXPLAIN_SCHEMA_VERSION = 12;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
@@ -380,6 +386,34 @@ export interface ExplainSurvivor {
    * `ExplainOutput.markIdentityScheme`, not necessarily under this build's (see `markKeysStale`).
    */
   readonly markKey: string;
+  /**
+   * R443: the mark to paste into `lethal.equivalent.json`'s `marks` array, with its proof. Absent
+   * when the report records no numbering facts (a report from before R443): a mark without proof
+   * is refused, so none is offered.
+   */
+  readonly mark?: ExplainMark;
+}
+
+/**
+ * R443: one ready-to-paste equivalence mark. Every field is what `parseEquivalenceMarks` reads.
+ * `reason` is a placeholder the parser refuses until the reader replaces it.
+ */
+export interface ExplainMark {
+  /** `markKey`, restated so the object pastes alone. */
+  readonly key: string;
+  readonly reason: string;
+  /** The survivor's file, `/` separators. */
+  readonly file: string;
+  /** The report's `numberingDigest`. */
+  readonly numberingDigest: string;
+  /**
+   * True only when the survivor's (file, tuple) is not one of the report's RECORDED `twinSites`,
+   * its coarse tuple is not in `carryHidden.tuples` and its file is not in `carryHidden.files`.
+   * Never counted from the report's rows: a twin a line filter dropped has no row.
+   */
+  readonly fileSingleton: boolean;
+  /** The report's `buildSymbols`, when non-empty: a mark applies only to a build with that set. */
+  readonly preprocessorSymbols?: readonly string[];
 }
 
 /**
@@ -807,6 +841,42 @@ export function assertExplainableReport(value: unknown): SessionReport {
     !(Number.isInteger(identityScheme) && (identityScheme as number) >= 1)
   ) {
     refuse("`identityScheme` is present but is not a positive integer", identityScheme);
+  }
+  // R443: decide every survivor's `mark` (its `numberingDigest` and `fileSingleton`). Written
+  // together by the producer, so some without the others is a corrupt report.
+  const strings = (v: unknown): boolean =>
+    Array.isArray(v) && v.every((s) => typeof s === "string");
+  const numbering = [record.numberingDigest, record.twinSites, record.carryHidden];
+  if (numbering.some((v) => v !== undefined)) {
+    if (numbering.some((v) => v === undefined)) {
+      refuse(
+        "`numberingDigest`, `twinSites` and `carryHidden` are written together, and this report has only some of them",
+        Object.fromEntries(
+          ["numberingDigest", "twinSites", "carryHidden"].map((k, i) => [k, numbering[i]]),
+        ),
+      );
+    }
+    if (
+      typeof record.numberingDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(record.numberingDigest)
+    ) {
+      refuse("`numberingDigest` is not a sha256 hex digest", record.numberingDigest);
+    }
+    if (!strings(record.twinSites))
+      refuse("`twinSites` is not an array of strings", record.twinSites);
+    const hidden = record.carryHidden as Record<string, unknown> | null;
+    if (
+      typeof hidden !== "object" ||
+      hidden === null ||
+      !strings(hidden.tuples) ||
+      !strings(hidden.files)
+    ) {
+      refuse("`carryHidden` is not { tuples: string[], files: string[] }", hidden);
+    }
+  }
+  // R443: copied into every mark, and a mark under the wrong set is stale.
+  if (record.buildSymbols !== undefined && !strings(record.buildSymbols)) {
+    refuse("`buildSymbols` is present but is not an array of strings", record.buildSymbols);
   }
   // R252: branched on below (it decides whether a survivor may lack an attribution), so a value
   // outside the closed set is refused rather than read as "not none".
@@ -1427,6 +1497,43 @@ export function rankSurvivors(survivors: readonly ExplainSurvivor[]): ExplainSur
   });
 }
 
+/**
+ * R443: builds each survivor's ready-to-paste mark from the report's RECORDED numbering facts, or
+ * `undefined` when the report has none. `fileSingleton` follows R-443's rule B2: the (file, tuple)
+ * is not a recorded twin site, and nothing this run hid from numbering could be its twin (its
+ * coarse tuple is not in `carryHidden.tuples`, its file not in `carryHidden.files`).
+ */
+function markBuilderOf(report: SessionReport): ((m: MutantOutcome) => ExplainMark) | undefined {
+  const { numberingDigest, twinSites, carryHidden, buildSymbols } = report;
+  if (numberingDigest === undefined || twinSites === undefined || carryHidden === undefined) {
+    return undefined;
+  }
+  const twins = new Set(twinSites);
+  const hiddenTuples = new Set(carryHidden.tuples);
+  const hiddenFiles = new Set(carryHidden.files.map((f) => f.replaceAll("\\", "/")));
+  return (m) => {
+    const file = m.file.replaceAll("\\", "/");
+    const coarse = coarseIdentityTupleOf({
+      astHash: m.astHash,
+      operatorName: m.operatorName,
+      operatorVersion: `${m.operatorMajor}.0.0`,
+    });
+    return {
+      key: markIdentityOf(m),
+      reason: MARK_REASON_PLACEHOLDER,
+      file,
+      numberingDigest,
+      fileSingleton:
+        !twins.has(twinSiteOf(file, markTupleOfRow(m))) &&
+        !hiddenTuples.has(coarse) &&
+        !hiddenFiles.has(file),
+      ...(buildSymbols !== undefined && buildSymbols.length > 0
+        ? { preprocessorSymbols: [...buildSymbols] }
+        : {}),
+    };
+  };
+}
+
 /** What `explain` may be asked to do differently. Absent means the whole projection, in report
  *  order — the behaviour every caller had before R150 added the cap. */
 export interface ExplainOptions {
@@ -1456,9 +1563,14 @@ export function explain(report: SessionReport, options: ExplainOptions = {}): Ex
       `explain: topSurvivors must be a positive integer, got ${JSON.stringify(topSurvivors)}`,
     );
   }
+  const markOf = markBuilderOf(validated);
   const allSurvivors = validated.mutants
     .filter((m) => m.verdict === "survived")
-    .map((m) => survivorOf(m, validated.artifacts, validated.coverageMode));
+    .map((m) => {
+      const survivor = survivorOf(m, validated.artifacts, validated.coverageMode);
+      const mark = markOf?.(m);
+      return mark !== undefined ? { ...survivor, mark } : survivor;
+    });
   const survivors =
     topSurvivors === undefined ? allSurvivors : rankSurvivors(allSurvivors).slice(0, topSurvivors);
   // C02-09: from ALL rows, before the cap. `--top` bounds survivors only (Q6).

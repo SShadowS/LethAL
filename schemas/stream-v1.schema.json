@@ -523,6 +523,37 @@
             }
           }
         },
+        "numberingDigest": {
+          "type": "string"
+        },
+        "twinSites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "carryHidden": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tuples",
+            "files"
+          ],
+          "properties": {
+            "tuples": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "seq": {
           "type": "number"
         }

@@ -118,6 +118,23 @@ async function makeSymbolsProject() {
   return { projectDir, testDir, instrumentedDir: join(root, "instr") };
 }
 
+/** R443: the numbering digest a run of `dirs` under `symbols` records, read from a real run's
+ *  report, so a mark built here matches by key (rule 1). */
+async function numberingDigestFor(
+  dirs: Awaited<ReturnType<typeof makeSymbolsProject>>,
+  symbols: readonly string[],
+): Promise<string> {
+  const report = await runSession({
+    backend: new SurvivingBackend(),
+    store: new ResultsStore(":memory:"),
+    ...dirs,
+    selectorIds,
+    preprocessorSymbols: symbols,
+  });
+  if (report.numberingDigest === undefined) throw new Error("the report records no digest");
+  return report.numberingDigest;
+}
+
 /** The pre-committed key text of the arm pair's `return-value` under `set`, read from the committed
  *  expected capture, never typed here. Under the new scheme it is the SAME text for L13 under
  *  [LETHALA] and L15 under [LETHALB] (measured, the R-214 plan). */
@@ -367,6 +384,8 @@ describe("R214 C1: the same key text names a different site in another build", (
           key: await armKey(2),
           reason: "same either way",
           identityScheme: IDENTITY_SCHEME,
+          // R443: the numbering digest of this build's run, so only the symbols decide.
+          numberingDigest: await numberingDigestFor(dirs, B),
           ...(markSymbols !== undefined ? { preprocessorSymbols: markSymbols } : {}),
         },
       ],
@@ -562,6 +581,8 @@ describe("R214 I4: an old-engine record never reaches a current-scheme mutant wi
     const dirs = await makeSymbolsProject();
     const old = await oldEngineKey();
     const key = old.key;
+    // R443: the mark proves its mutant by this build's numbering digest (rule 1).
+    const numberingDigest = await numberingDigestFor(dirs, B);
     const run = (identityScheme: number) =>
       runSession({
         backend: new SurvivingBackend(),
@@ -570,7 +591,13 @@ describe("R214 I4: an old-engine record never reaches a current-scheme mutant wi
         selectorIds,
         preprocessorSymbols: B,
         equivalenceMarks: [
-          { key, reason: "same either way", identityScheme, preprocessorSymbols: B },
+          {
+            key,
+            reason: "same either way",
+            identityScheme,
+            preprocessorSymbols: B,
+            numberingDigest,
+          },
         ],
       });
     expect(armOf(await run(old.scheme), 15).readerMark).toBeUndefined();

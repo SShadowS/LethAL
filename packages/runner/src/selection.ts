@@ -1,4 +1,11 @@
-import { type MutantManifestEntry, coarseIdentityTupleOf, identityTupleOf } from "@lethal/schemata";
+import { createHash } from "node:crypto";
+import {
+  type IdentityEntry,
+  type MutantManifestEntry,
+  coarseIdentityTupleOf,
+  identitySiteKey,
+  identityTupleOf,
+} from "@lethal/schemata";
 import type { CoverageMap, TestMethodRef } from "./backend";
 import type { Interpretation } from "./interpretation";
 
@@ -116,6 +123,37 @@ export function twinSitesOf(
     else seen.add(site);
   }
   return [...twins].sort();
+}
+
+/**
+ * R443: sha256 of a run's numbering OUTPUT: every numbered entry's (file with `/` separators,
+ * startIndex, endIndex, operatorName, tuple, ordinal), in code-unit order (the default string sort,
+ * never `localeCompare`). Equal digests mean the same sites with the same ordinals, so a key names
+ * the same mutant in both runs, whatever caused the numbering (an edit, `--only`, `--lines`, a
+ * header refusal, the host's collation in `numberIdentityOrdinals`, R475).
+ */
+export function numberingDigestOf(
+  entries: readonly IdentityEntry[],
+  ordinals: ReadonlyMap<string, number>,
+): string {
+  const rows = entries.map((e) => {
+    const ordinal = ordinals.get(identitySiteKey(e.file, e.startIndex, e.endIndex, e.operatorName));
+    if (ordinal === undefined) {
+      throw new Error(
+        `numberingDigestOf: ${e.file} @${e.startIndex} ${e.operatorName} has no ordinal; the digest must be taken over the entries the ordinals were numbered from`,
+      );
+    }
+    return JSON.stringify([
+      e.file.replaceAll("\\", "/"),
+      e.startIndex,
+      e.endIndex,
+      e.operatorName,
+      e.tuple,
+      ordinal,
+    ]);
+  });
+  rows.sort();
+  return createHash("sha256").update(rows.join("\n")).digest("hex");
 }
 
 /** R391: what the RECORDED run says about its own generation, read from its run row. */

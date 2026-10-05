@@ -846,6 +846,7 @@ const ART = "0123456789abcdef0123456789abcdef";
 type ReportRow = {
   readonly batchIndex: number;
   readonly mutantCode: string;
+  readonly file: string;
   readonly verdict: string;
   readonly astHash: string;
   readonly codeunitName: string;
@@ -1065,7 +1066,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     expect([...seen].sort()).toEqual(["carried", "not-published", "present-earlier-batch"]);
   });
 
-  test("a mark built by the documented recipe loads and matches", () => {
+  test("the documented key recipe builds explain's markKey, and a mark with the key alone is refused (R443)", () => {
     const rows = (JSON.parse(read(GIFT_CARD)) as { readonly mutants: readonly ReportRow[] })
       .mutants;
     const survivors = rows.filter((m) => m.verdict === "survived" && !m.identityOrdinal);
@@ -1099,53 +1100,87 @@ describe("C02-07: the hardening loop, run from the documents", () => {
           operatorVersion: `${m.operatorMajor}.0.0`,
         } as unknown as MutantManifestEntry),
       );
+    // The recipe's key is the key the mark join matches against, for every survivor.
+    expect(marks.map((m) => m.key).sort()).toEqual(survivors.map(identity).sort());
     const result = applyEquivalenceMarks(
       marks,
       rows.map((m) => ({
         batchIndex: m.batchIndex,
         mutantCode: m.mutantCode,
         identity: identity(m),
+        file: m.file,
+        tuple: identity({ ...m, identityOrdinal: 0 }),
         verdict: m.verdict,
       })),
       IDENTITY_SCHEME,
       [],
+      { numberingDigest: "0".repeat(64), twinSites: new Set() },
     );
-    expect(result.stale).toEqual([]);
-    expect(result.contradicted).toEqual([]);
-    expect(result.matched.map((x) => x.mutantCode).sort()).toEqual(
-      survivors.map((m) => m.mutantCode).sort(),
+    // A key alone proves nothing about which twin it names, so every such mark is refused.
+    expect(result.matched).toEqual([]);
+    expect(new Set(result.refused.map((r) => r.reason))).toEqual(new Set(["no-proof"]));
+    expect(result.refused).toHaveLength(marks.length);
+    const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
+    expect(body).toContain(
+      "A mark with the key alone (written before R443) is refused (`no-proof`)",
     );
     const own = ownText(read(REFERENCE), "Marking an equivalent survivor (checked)");
     expect(own).toContain(`\`<project>/${EQUIVALENCE_MARKS_FILENAME}\``);
   });
 
-  test("R265: the explain recipe (copy markKey, set markIdentityScheme) matches, and stale means re-run", () => {
-    const report = JSON.parse(read(GIFT_CARD)) as SessionReport;
+  test("R265, R443: the explain recipe (paste mark, set markIdentityScheme) matches, and stale means re-run", () => {
+    // The committed report predates R443, so it records no numbering facts and explain prints no
+    // mark. Regenerating it needs a live run; the facts are added here instead, as a report from
+    // this build carries them (a digest and no twins or hidden sites).
+    const committed = JSON.parse(read(GIFT_CARD)) as SessionReport;
+    expect(explain(committed).survivors.every((s) => s.mark === undefined)).toBe(true);
+    const digest = "0".repeat(64);
+    const report: SessionReport = {
+      ...committed,
+      numberingDigest: digest,
+      twinSites: [],
+      carryHidden: { tuples: [], files: [] },
+    };
     const out = explain(report);
     const body = flowed(section(read(REFERENCE), "Marking an equivalent survivor (checked)"));
-    expect(body).toContain("Copy its `markKey` into `key`.");
+    expect(body).toContain("Copy its whole `mark` object into `marks`");
+    expect(body).toContain("replace its `reason`");
     expect(body).toContain("Set `identityScheme` to explain's `markIdentityScheme`.");
     expect(body).toContain("If explain printed `markKeysStale`");
     expect(body).toContain("Re-run under this build first");
-    const file = JSON.stringify({
-      identityScheme: out.markIdentityScheme,
-      marks: out.survivors.map((s) => ({ key: s.markKey, reason: "equivalent" })),
-    });
-    const marks = parseEquivalenceMarks(file, EQUIVALENCE_MARKS_FILENAME);
-    const rows = report.mutants.map((m) => ({
-      batchIndex: m.batchIndex,
-      mutantCode: m.mutantCode,
-      identity: serializeKey(
+    // The printed reason is a placeholder the parser refuses until the reader replaces it.
+    const pasted = (reason?: string) =>
+      JSON.stringify({
+        identityScheme: out.markIdentityScheme,
+        marks: out.survivors.map((s) => ({
+          ...s.mark,
+          ...(reason !== undefined ? { reason } : {}),
+        })),
+      });
+    expect(() => parseEquivalenceMarks(pasted(), EQUIVALENCE_MARKS_FILENAME)).toThrow(
+      /"reason" is required/,
+    );
+    const marks = parseEquivalenceMarks(pasted("equivalent"), EQUIVALENCE_MARKS_FILENAME);
+    const identity = (m: SessionReport["mutants"][number]) =>
+      serializeKey(
         identityKeyOf({
           ...m,
           operatorVersion: `${m.operatorMajor}.0.0`,
         } as unknown as MutantManifestEntry),
-      ),
+      );
+    const rows = report.mutants.map((m) => ({
+      batchIndex: m.batchIndex,
+      mutantCode: m.mutantCode,
+      identity: identity(m),
+      file: m.file,
+      tuple: identity({ ...m, identityOrdinal: 0 }),
       verdict: m.verdict,
     }));
-    // Under the report's own scheme every key matches its survivor.
-    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme, []);
+    const facts = { numberingDigest: digest, twinSites: new Set<string>() };
+    // Under the report's own scheme every mark matches its survivor.
+    const same = applyEquivalenceMarks(marks, rows, out.markIdentityScheme, [], facts);
     expect(same.stale).toEqual([]);
+    expect(same.refused).toEqual([]);
     expect(same.matched.map((x) => x.mutantCode).sort()).toEqual(
       out.survivors.map((s) => s.mutantCode).sort(),
     );
@@ -1153,7 +1188,7 @@ describe("C02-07: the hardening loop, run from the documents", () => {
     // run under this build does report every one of those marks stale: the doc's "re-run first".
     expect(out.markKeysStale?.buildScheme).toBe(IDENTITY_SCHEME);
     expect(out.markIdentityScheme).not.toBe(IDENTITY_SCHEME);
-    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, []).stale).toHaveLength(
+    expect(applyEquivalenceMarks(marks, rows, IDENTITY_SCHEME, [], facts).stale).toHaveLength(
       marks.length,
     );
   });

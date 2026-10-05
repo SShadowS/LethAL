@@ -513,11 +513,14 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     // R229: the trigger row is keyed by `identityKeyOf`, whose member is its `triggerName`.
     const TRIGGER_KEY = serializeKey(identityKeyOf(TRIGGER));
     const STALE_KEY = serializeKey(identityKeyOf(mutant("M0009", { astHash: "hash-gone" })));
+    // R443: every mark below carries the run's numbering digest, so it matches by key (rule 1).
+    const DIGEST = "d".repeat(64);
+    const PROOF = { numberingDigest: DIGEST } as const;
     const MARKS = [
-      { key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME },
-      { key: TRIGGER_KEY, reason: "R-trg", identityScheme: IDENTITY_SCHEME },
-      { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME },
-      { key: STALE_KEY, reason: "R-stale", identityScheme: IDENTITY_SCHEME },
+      { key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME, ...PROOF },
+      { key: TRIGGER_KEY, reason: "R-trg", identityScheme: IDENTITY_SCHEME, ...PROOF },
+      { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME, ...PROOF },
+      { key: STALE_KEY, reason: "R-stale", identityScheme: IDENTITY_SCHEME, ...PROOF },
     ];
 
     function scored(
@@ -550,6 +553,9 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         excludedByOnly: 0,
         excludedByExclude: 0,
         excludedByOperator: 0,
+        numberingDigest: DIGEST,
+        twinSites: [],
+        carryHidden: { tuples: [], files: [] },
       };
     }
 
@@ -569,7 +575,9 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       const report = buildReport(
         {
           ...STATICS,
-          equivalenceMarks: [{ key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME }],
+          equivalenceMarks: [
+            { key: KEY_B1, reason: "R-b1", identityScheme: IDENTITY_SCHEME, ...PROOF },
+          ],
         },
         TWO_BATCH_EVENTS,
       );
@@ -590,8 +598,8 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         {
           ...STATICS,
           equivalenceMarks: [
-            { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME },
-            { key: KEY_KS, reason: "R-ks", identityScheme: IDENTITY_SCHEME },
+            { key: KEY_KILLED, reason: "R-killed", identityScheme: IDENTITY_SCHEME, ...PROOF },
+            { key: KEY_KS, reason: "R-ks", identityScheme: IDENTITY_SCHEME, ...PROOF },
           ],
         },
         seq([
@@ -662,6 +670,8 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
             verdict: "killed",
           },
         ],
+        // R443: the one field the run-level list gained; no mark here is refused.
+        refused: [],
       });
     });
 
@@ -689,7 +699,9 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     describe("two rows sharing one identity, one survived and one killed (C02-01)", () => {
       const SITE = { astHash: "hash-shared" };
       const KEY_SHARED = serializeKey(identityKeyOf(mutant("M0001", SITE)));
-      const marks = [{ key: KEY_SHARED, reason: "R-shared", identityScheme: IDENTITY_SCHEME }];
+      const marks = [
+        { key: KEY_SHARED, reason: "R-shared", identityScheme: IDENTITY_SCHEME, ...PROOF },
+      ];
       const run = (first: "survived" | "killed", second: "survived" | "killed") =>
         buildReport(
           { ...STATICS, equivalenceMarks: marks },
@@ -739,8 +751,8 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         {
           ...STATICS,
           equivalenceMarks: [
-            { key: KEY_S1, reason: "R-s1", identityScheme: IDENTITY_SCHEME },
-            { key: KEY_K1, reason: "R-k1", identityScheme: IDENTITY_SCHEME },
+            { key: KEY_S1, reason: "R-s1", identityScheme: IDENTITY_SCHEME, ...PROOF },
+            { key: KEY_K1, reason: "R-k1", identityScheme: IDENTITY_SCHEME, ...PROOF },
           ],
         },
         seq([

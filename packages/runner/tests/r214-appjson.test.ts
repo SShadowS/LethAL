@@ -140,7 +140,16 @@ describe("R214: symbols from app.json only (no config symbols)", () => {
 
   test("a mark under ['APPSYM'] is applied; a mark with no field is stale and the warning says why", async () => {
     const key = await armKey();
-    const mark = { key, reason: "same either way", identityScheme: IDENTITY_SCHEME };
+    // R443: the mark carries this project's numbering digest, read from a real run.
+    const plain = await run(await makeProject(), new ResultsStore(":memory:"));
+    const numberingDigest = plain.report.numberingDigest;
+    if (numberingDigest === undefined) throw new Error("the report records no numbering digest");
+    const mark = {
+      key,
+      reason: "same either way",
+      identityScheme: IDENTITY_SCHEME,
+      numberingDigest,
+    };
     const applied = await run(await makeProject(), new ResultsStore(":memory:"), [
       { ...mark, preprocessorSymbols: ["APPSYM"] },
     ]);
