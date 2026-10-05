@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**92 of 455 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 456 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -182,6 +182,7 @@ that ordering is the priority.
 - **R458** · Loop writes through a receiver the hang walk cannot resolve (implicit `Rec` fields, `with`, report globals, xmlport locals) are still mutated untagged: BaseApp 38 sites / 50 mutants, CDO 2, including 13 table number-series loops · [R458.md](docs/roadmap/R458.md) · open
 - **R457** · `flip-boolean-literal`'s `false` -> `true` RunTrigger flip on `ModifyAll`/`DeleteAll` FORCES the trigger, R165's `run-trigger-forced` class, and is untagged · [R457.md](docs/roadmap/R457.md) · done (d8833acb)
 - **R459** · Two-argument `Insert(RunTrigger, InsertWithSystemId)`: the forcing `false` flip is untagged, and the cession orphans the second argument's `true` and the first argument's `true` · [R459.md](docs/roadmap/R459.md) · open
+- **R460** · Forcing RunTrigger flip on an UNRESOLVED receiver carries no `run-trigger-forced` · [R460.md](docs/roadmap/R460.md) · open
 
 ## Product gaps a real project hits
 
