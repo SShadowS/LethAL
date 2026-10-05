@@ -23,9 +23,17 @@ import {
  * error or an overflow cannot end the loop anyway. R179's `DrainQueue` is this repository's
  * counterexample: its frozen loop terminated by Int32 overflow in ~4.4 s rather than hanging.
  *
+ * R446: when a loop's condition reads no name and calls nothing (`while true`, `until false`), the
+ * guards of its body exits (`exit`, `Error`, `CurrReport.Quit`/`Break`, a `break` of that loop)
+ * count as its condition (`loopExitParts`). A scoped heuristic: a write ANY such guard reads is
+ * refused. Still NOT seen (R480, each pinned as not refused in `loop-exit-refusal.test.ts`): a
+ * body-exit flag under a condition that reads a name; an indirect guard (`Done := I >= 3` between
+ * the write to `I` and the exit); a condition that calls something; an outer `for`/`foreach`;
+ * `asserterror` as the only exit; `CurrReport.Skip`.
+ *
  * WHAT IT DELIBERATELY DOES NOT SEE, all UNCLASSIFIED rather than proven safe (spec 3.2): a target
- * read in the loop BODY rather than its condition; preheader assignments; progress that happens
- * through a CALL (which is both hangs in `fixtures/sandbox-hang`); a field target outside any `with`
+ * read in the loop BODY rather than its condition (beyond R446's body-exit guards); preheader
+ * assignments; progress that happens through a CALL (which is both hangs in `fixtures/sandbox-hang`); a field target outside any `with`
  * or implicit record (a resolved `R.Field` IS seen since R454; one written through an implicit
  * record or a `with` subject IS refused by name since R-458, see `byNameRefusal`); and
  * condition-side mutations, which are not assignments at all.
@@ -145,8 +153,120 @@ function conditionIdentifiers(loop: ALSyntaxNode, ctx: SemanticContext): ALSynta
     if (isIdentifierLike(n)) out.push(n);
     for (const c of n.namedChildren) walk(c);
   };
-  for (const part of loopConditionParts(loop)) walk(part);
+  for (const part of loopExitParts(loop, ctx)) walk(part);
   return out;
+}
+
+/**
+ * R446: the parts that decide whether `loop` ends. Its own condition parts, plus, ONLY when that
+ * condition reads no name and calls nothing in this build (`while true`, `until false`), the guard
+ * of every exit in its body (`bodyExitGuards`). A scoped heuristic, not a proof that no mutant
+ * hangs: see the R446 exclusions in the header.
+ */
+function loopExitParts(loop: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+  const own = loopConditionParts(loop);
+  return conditionIsNameAndCallFree(own, ctx) ? [...own, ...bodyExitGuards(loop)] : own;
+}
+
+const BREAK_SCOPES: ReadonlySet<string> = new Set([
+  "while_statement",
+  "repeat_statement",
+  "for_statement",
+  "foreach_statement",
+]);
+
+const samePos = (a: ALSyntaxNode, b: ALSyntaxNode): boolean =>
+  a.startIndex === b.startIndex && a.endIndex === b.endIndex;
+
+/** Does the condition (active arms, tails included) read no name and call nothing? True for
+ *  `while false` too, which does not loop at all: then the extra guards cost nothing. */
+function conditionIsNameAndCallFree(parts: ALSyntaxNode[], ctx: SemanticContext): boolean {
+  const walk = (n: ALSyntaxNode): boolean => {
+    if (DIRECTIVE_MARKERS.has(n.rawKind)) return true;
+    if (armOfNode(ctx, n) === "inactive") return true;
+    if (n.rawKind === "call_expression" || isIdentifierLike(n)) return false;
+    return n.namedChildren.every(walk);
+  };
+  return parts.length > 0 && parts.every(walk);
+}
+
+/** `CurrReport.Quit`/`Break` and their XMLport twins end the trigger, so the loop (R446). With or
+ *  without `()`: both forms hold this `member_expression`. `Skip` is NOT here: its docs do not say
+ *  it interrupts an AL loop. */
+const REPORT_EXITS: ReadonlySet<string> = new Set(["quit", "break"]);
+const REPORT_INSTANCES: ReadonlySet<string> = new Set(["currreport", "currxmlport"]);
+
+/** Does `n` end `loop`: `exit`, `Error(...)` outside `asserterror`, `CurrReport.Quit`/`Break`, or a
+ *  `break` whose nearest loop is `loop`. */
+function exitsLoop(n: ALSyntaxNode, loop: ALSyntaxNode): boolean {
+  if (n.rawKind === "exit_statement") return true;
+  if (n.rawKind === "member_expression") {
+    const obj = n.childForFieldName("object");
+    const mem = n.childForFieldName("member");
+    return (
+      obj !== null &&
+      mem !== null &&
+      REPORT_INSTANCES.has(normalizeAlName(obj.text)) &&
+      REPORT_EXITS.has(normalizeAlName(mem.text))
+    );
+  }
+  if (n.rawKind === "call_expression") {
+    const f = n.childForFieldName("function");
+    if (f === null || !isIdentifierLike(f) || normalizeAlName(f.text) !== "error") return false;
+    // An error `asserterror` catches does not end the loop.
+    for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
+      if (a.rawKind === "asserterror_statement") return false;
+    }
+    return true;
+  }
+  if (n.rawKind !== "break_statement") return false;
+  for (let a = n.parent; a !== null; a = a.parent) {
+    if (BREAK_SCOPES.has(a.rawKind)) return samePos(a, loop);
+  }
+  return false;
+}
+
+/** Every condition between a body exit and `loop`: `if` conditions, `case` selectors and patterns,
+ *  inner loop conditions and `for` bounds, with their `#if` tails. */
+function bodyExitGuards(loop: ALSyntaxNode): ALSyntaxNode[] {
+  const body = loop.childForFieldName("body");
+  if (body === null) return [];
+  const out = new Map<number, ALSyntaxNode>();
+  const add = (n: ALSyntaxNode | null): void => {
+    if (n !== null) out.set(n.startIndex, n);
+  };
+  const visitN = (n: ALSyntaxNode): void => {
+    if (exitsLoop(n, loop)) {
+      for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
+        switch (a.rawKind) {
+          case "if_statement":
+          case "while_statement":
+          case "repeat_statement":
+            add(a.childForFieldName("condition"));
+            break;
+          case "case_statement":
+            add(a.childForFieldName("expression"));
+            break;
+          case "case_branch":
+            add(a.childForFieldName("pattern"));
+            break;
+          case "for_statement":
+            add(a.childForFieldName("start"));
+            add(a.childForFieldName("end"));
+            break;
+          case "foreach_statement":
+            add(a.childForFieldName("iterable"));
+            break;
+        }
+        for (const t of a.namedChildren) {
+          if (t.rawKind === "preproc_conditional_expression_tail") add(t);
+        }
+      }
+    }
+    for (const c of n.namedChildren) visitN(c);
+  };
+  visitN(body);
+  return [...out.values()];
 }
 
 /**
@@ -200,7 +320,7 @@ function conditionReadsMember(
     }
     return n.namedChildren.some(walk);
   };
-  return loopConditionParts(loop).some(walk);
+  return loopExitParts(loop, ctx).some(walk);
 }
 
 /** The member target of the assignment at, or enclosing, `node`, as its receiver and member
@@ -278,7 +398,7 @@ export function loopConditionReadsByName(
     return n.namedChildren.some(walk);
   };
   for (let cur = assignment.parent; cur !== null && !isScope(cur); cur = cur.parent) {
-    if (LOOP_KINDS.has(cur.kind) && loopConditionParts(cur).some(walk)) return true;
+    if (LOOP_KINDS.has(cur.kind) && loopExitParts(cur, ctx).some(walk)) return true;
   }
   return false;
 }

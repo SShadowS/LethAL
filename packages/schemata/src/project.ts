@@ -174,11 +174,14 @@ export function coarseIdentityTupleOf(
  * a report dataitem and a `with` subject now resolve, so Tier 2 claims sites there (and the `true`
  * RunTrigger flips they held cede to `swap-modify-flag`), `validate-to-assign`'s bare form writes
  * the record the call binds to or is refused, and a later same-tuple twin of a removed mutant takes
- * its ordinal. 23 is held by R-446. 24: R475, twins are numbered in code-unit file order (was the
- * host's default collation), so a cross-file twin pair whose paths order differently under the
- * two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
+ * its ordinal. 23 was held for R-446 and is unused. 24: R475, twins are numbered in code-unit file
+ * order (was the host's default collation), so a cross-file twin pair whose paths order
+ * differently under the two can swap ordinals (fixtures, CDO and BaseApp measured: 0 keys move).
+ * 25: R446, in a loop whose condition reads no name and calls nothing (`while true`), a write a
+ * body-exit guard reads is hang-refused, so a later same-tuple twin of a refused mutant takes its
+ * ordinal (BC.History: 16 keys).
  */
-export const IDENTITY_SCHEME = 24;
+export const IDENTITY_SCHEME = 25;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,

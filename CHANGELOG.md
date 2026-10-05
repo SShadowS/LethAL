@@ -104,6 +104,17 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **A write a body-exit guard reads, in a `while true` loop, is hang-refused; identity scheme 25**
+  (R446; 24 was R475, 23 is unused, 22 was R464). When a loop's condition reads no name and calls nothing
+  (`while true`, `until false`), the four value operators now also refuse a write that the guard
+  of any of its body exits reads: `exit`, `Error(...)` outside `asserterror`,
+  `CurrReport.Quit`/`Break`, or a `break` of that loop. Such a write could leave the loop with no
+  way out. The refusals are counted as `hang-refused` sites (R447). This is a scoped rule, not a
+  proof that no mutant hangs; the shapes it still misses are R480. Measured against master `fc9ff10a`:
+  BC.History 74 sites move from mutated to hang-refused (remove-assignment 55,
+  flip-boolean-literal 11, shift-integer 6, swap-additive 2) and 16 keys move ordinal in
+  `ItemJnlPostLine`; CDO, the fixtures and the examples unchanged.
+  Re-check equivalence marks.
 - **One implicit-record resolver; identity scheme 22** (R464; 20 was held for R-464 and is unused,
   21 is R459). Which record a bare name or a `Rec.`-qualified call binds to is decided in one place
   in the engine (`recordScopesAt`): a page's `SourceTable`, a TableNo codeunit's `OnRun` (`Rec`
@@ -413,8 +424,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
-- **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 is held
-  by R-446). The run-wide twin numbering sorted files with `localeCompare`, the host's default
+- **Identity twins are numbered in code-unit file order; identity scheme 24** (R475; 23 was held
+  for R-446, which landed as 25, and is unused). The run-wide twin numbering sorted files with `localeCompare`, the host's default
   collation, while file discovery and the generation hash sort by code unit. A resume on a host
   with another collation (Danish puts `Aa_…` after `Z_…`) could give a cross-file twin the other
   twin's key under an equal source hash, so a recorded `killed` landed on a mutant that was never
