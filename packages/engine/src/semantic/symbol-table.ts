@@ -386,11 +386,17 @@ export function buildSymbolTable(
     const placed = liveMembers(objectNode, armOf);
     const members = placed.map((m) => m.node);
 
-    // Globals: the first var_section that's a direct member of the object, as before, plus (R405 a)
-    // every var_section inside a member-level `#if` whose arm the build compiles, in source order.
+    // Globals: EVERY var_section that's a direct member of the object, plus (R405 a) every
+    // var_section inside a member-level `#if` whose arm the build compiles, in source order.
+    // R468: this read only the FIRST direct section, so `protected var A; var B;` (621 of 704 extra
+    // sections in the BaseApp history corpus) left every name of the second section unresolved:
+    // Tier 2 lost the receiver and R196's hang check declined the write. A procedure's own `var`
+    // section is not a member of the object, and a swallowed split member's sits inside a section's
+    // body (R327), so neither is read here.
     const varSections = placed.filter((m) => m.node.kind === ALNodeKind.var_section);
-    const firstDirect = varSections.find((m) => m.place === "direct");
-    const globalSections = varSections.filter((m) => m === firstDirect || m.place === "inside-if");
+    const globalSections = varSections.filter(
+      (m) => m.place === "direct" || m.place === "inside-if",
+    );
     if (globalSections.length > 0) {
       globals.set(
         ownerName,

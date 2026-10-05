@@ -163,9 +163,13 @@ export function coarseIdentityTupleOf(
  * reportextension is instrumented; its mutants take ordinals, so a same-named twin elsewhere can
  * move. 18: R-458, the same refusal also matches by name through every `with` subject and implicit
  * record (`Rec`, report dataitems, reportextension `modify`) a target's name can bind to, so those
- * hang-capable writes are removed and a later same-tuple twin takes the removed one's ordinal.
+ * hang-capable writes are removed and a later same-tuple twin takes the removed one's ordinal. 19:
+ * R468, every direct object-level var section is the object's globals (only the first was), so a
+ * later section's record receivers move call deletions from `void-method-call` to Tier 2, `true`
+ * RunTrigger flips cede to `swap-modify-flag`, new hang refusals remove writes, and swaps choose a
+ * different typed pair under an unchanged key.
  */
-export const IDENTITY_SCHEME = 18;
+export const IDENTITY_SCHEME = 19;
 
 /**
  * R193: number each mutant among its identity twins in SOURCE order (file, then start offset,
