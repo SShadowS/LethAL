@@ -17,6 +17,7 @@ import {
   type SemanticContext,
   findAll,
   initParser,
+  onInsertAssignsPrimaryKey,
   primaryKeyFields,
 } from "@lethal/engine";
 import { swapModifyFlag } from "../src/swap-modify-flag";
@@ -148,8 +149,10 @@ describe("R143: the Insert tag follows the target table's OnInsert", () => {
   /**
    * The predicate must read the record being INSERTED, not any record. An `OnInsert` that stamps
    * another table's key leaves its own key blank exactly as a Boolean-only trigger does.
+   * R-476: the TAG is now kept anyway, by R-452's cut (a write through another record is not a
+   * proven-harmless statement), so the reader itself is what this pins.
    */
-  it("does NOT tag when the OnInsert assigns ANOTHER record's key field of the same name", () => {
+  it("the key reader does NOT count ANOTHER record's key field of the same name", () => {
     const table = `table 50203 "Other Record Key"
 {
     fields { field(1; "No."; Code[20]) { } }
@@ -159,13 +162,15 @@ describe("R143: the Insert tag follows the target table's OnInsert", () => {
         Helper: Record "No Trigger";
     begin
         Helper."No." := 'K-1';
-        Helper.Insert(false);
     end;
 }`;
+    const tableNode = findAll(parseClean(table), ALNodeKind.table)[0];
+    expect(tableNode).toBeDefined();
+    if (tableNode === undefined) return;
+    expect(onInsertAssignsPrimaryKey(tableNode)).toBe(false);
     const specs = specsForProject([inserter(50204, "Other Record Key"), table, NO_TRIGGER_TABLE]);
     const outer = specs.find((s) => s.before.text === "Target.Insert(true)");
-    expect(outer).toBeDefined();
-    expect(outer?.platformKillMechanism).toBeUndefined();
+    expect(outer?.platformKillMechanism).toBe("run-trigger-skipped-insert");
   });
 
   it("does NOT tag when the OnInsert assigns a non-key field of its own record", () => {
@@ -227,5 +232,99 @@ describe("R378 review r1: the primary key is the FIRST active key, readable or n
   it("a key in an inactive arm is still skipped, so the next active key is read", () => {
     const first = table.children[0]?.children[0];
     expect(primaryKeyFields(table, (n) => n !== first)).toEqual(["Code"]);
+  });
+});
+
+/**
+ * R-476: R-452's conservative cut. R143 read only DIRECT key assignments, so an `OnInsert` that
+ * fills the key through a procedure (BaseApp `Sales Header` -> `InitInsert`) proved "not assigned"
+ * and dropped the tag: the under-tag direction. Now any `OnInsert` call not proven harmless, a
+ * project insert-event subscriber, or a tableextension insert trigger keeps it.
+ */
+describe("R-476: an Insert keeps its tag unless skipping OnInsert is proven harmless", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const tagOf = (sources: readonly string[]) => {
+    const outer = specsForProject(sources).find((s) => s.before.text === "Target.Insert(true)");
+    expect(outer?.after.text).toBe("Target.Insert(false)");
+    return outer?.platformKillMechanism;
+  };
+
+  it("TAGS an OnInsert that assigns the key through its own procedure", () => {
+    const table = `table 50210 "Helper Key"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+    trigger OnInsert()
+    begin
+        InitInsert();
+    end;
+    procedure InitInsert()
+    begin
+        "No." := 'K-1';
+    end;
+}`;
+    expect(tagOf([inserter(50211, "Helper Key"), table])).toBe("run-trigger-skipped-insert");
+  });
+
+  it("TAGS an OnInsert that inserts another row (a later Get of it raises when skipped)", () => {
+    const table = `table 50212 "Inserts Other"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+    trigger OnInsert()
+    var
+        Helper: Record "No Trigger";
+    begin
+        Helper."No." := 'K-1';
+        Helper.Insert(false);
+    end;
+}`;
+    expect(tagOf([inserter(50213, "Inserts Other"), table, NO_TRIGGER_TABLE])).toBe(
+      "run-trigger-skipped-insert",
+    );
+  });
+
+  it("TAGS when a project codeunit subscribes to the table's OnBeforeInsertEvent", () => {
+    const subscriber = `codeunit 50214 "Subscriber"
+{
+    [EventSubscriber(ObjectType::Table, Database::"Boolean Only", 'OnBeforeInsertEvent', '', false, false)]
+    local procedure SetKey(var Rec: Record "Boolean Only")
+    begin
+        Rec."No." := 'K-1';
+    end;
+}`;
+    expect(tagOf([inserter(50215, "Boolean Only"), BOOLEAN_ONLY_TABLE, subscriber])).toBe(
+      "run-trigger-skipped-insert",
+    );
+  });
+
+  it("TAGS when a project tableextension declares OnBeforeInsert", () => {
+    const ext = `tableextension 50216 "Boolean Only Ext" extends "Boolean Only"
+{
+    trigger OnBeforeInsert()
+    begin
+        Rec."No." := 'K-1';
+    end;
+}`;
+    expect(tagOf([inserter(50217, "Boolean Only"), BOOLEAN_ONLY_TABLE, ext])).toBe(
+      "run-trigger-skipped-insert",
+    );
+  });
+
+  it("does NOT tag an OnInsert whose only calls are proven harmless (TestField)", () => {
+    const table = `table 50218 "Harmless Calls"
+{
+    fields { field(1; "No."; Code[20]) { } field(2; Flag; Boolean) { } }
+    keys { key(PK; "No.") { Clustered = true; } }
+    trigger OnInsert()
+    begin
+        TestField(Flag);
+        Flag := true;
+    end;
+}`;
+    expect(tagOf([inserter(50219, "Harmless Calls"), table])).toBeUndefined();
   });
 });

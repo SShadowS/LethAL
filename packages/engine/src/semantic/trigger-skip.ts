@@ -136,7 +136,7 @@ export function isHarmlessTriggerCall(call: ALSyntaxNode, ctx: SemanticContext):
 export function skipCanRaise(
   node: ALSyntaxNode,
   ctx: SemanticContext,
-  kind: HarmlessTriggerKind,
+  kind: RunTriggerKind,
 ): boolean {
   const tableRef = resolveReceiverTable(node, ctx);
   if (tableRef === null) return true;

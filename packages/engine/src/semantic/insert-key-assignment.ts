@@ -62,6 +62,7 @@ import { liveMembers } from "../ast/tree-walks";
 import { type NodeArm, type SemanticContext, armOfNode, rawArmOf } from "./context";
 import { resolveReceiverTable } from "./receiver";
 import type { SymbolTable } from "./symbol-table";
+import { skipCanRaise } from "./trigger-skip";
 
 /** Grammar node kinds this module reads. Local consts for the same reason `receiver.ts` keeps its
  *  own: `ALNodeKind` enumerates what the mutation pipeline TARGETS, and widening it widens
@@ -225,6 +226,15 @@ export function onInsertAssignsPrimaryKey(
  * losing it.
  */
 export function insertSkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  // R-476: R-452's conservative cut first. An `OnInsert` call not proven harmless (a helper that
+  // fills the key, a No. Series call), a project insert-event subscriber or a tableextension
+  // `OnBefore/AfterInsert` keeps the tag; only then can the direct-assignment proof drop it.
+  return skipCanRaise(node, ctx, "insert") || directKeySkipCanRaise(node, ctx);
+}
+
+/** R143's direct-assignment proof, unchanged: the tag unless `OnInsert` provably does not assign
+ *  the primary key itself. */
+function directKeySkipCanRaise(node: ALSyntaxNode, ctx: SemanticContext): boolean {
   const tableRef = resolveReceiverTable(node, ctx);
   if (tableRef === null) return true;
   const symbols = (ctx as { symbols?: SymbolTable } | undefined)?.symbols;
