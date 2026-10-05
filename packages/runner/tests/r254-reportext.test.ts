@@ -183,10 +183,17 @@ describe("R254: a reportextension is instrumented", () => {
   });
 
   test("each extension declares the selector var exactly once, after its members", () => {
-    for (const text of Object.values(instrumented)) {
-      expect(text.match(/MutationSelector: Codeunit "Mutation Selector";/g)?.length).toBe(1);
+    // R470: a reportextension's selector is named after its own object id (two extensions of one
+    // report sharing a name is AL0155).
+    for (const [rel, id] of [
+      [NO_VAR, 50201],
+      [WITH_VAR, 50202],
+    ] as const) {
+      const text = instrumented[rel] ?? "";
+      const decl = `MutationSelector${id}: Codeunit "Mutation Selector";`;
+      expect(text.split(decl).length - 1).toBe(1);
       // Never before the dataset section: alc AL0926 wants metadata sections before any `var`.
-      expect(text.indexOf("MutationSelector:")).toBeGreaterThan(text.indexOf("dataset"));
+      expect(text.indexOf(decl)).toBeGreaterThan(text.indexOf("dataset"));
     }
   });
 });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**95 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**93 of 470 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -187,8 +187,8 @@ that ordering is the priority.
 - **R465** · A query object's procedure does not resolve its own named return value, so `KeepReading := Read()` inside `while KeepReading do` is not hang-refused (14 sites in System Application) · [R465.md](docs/roadmap/R465.md) · closed 2026-10-05 — latent: query is not a carrier kind, so no query mutant is ever deployed; the fix is…
 - **R466** · The runner's TestPage scan (R-371) gives a TableNo codeunit's `Rec` to every procedure; `alc` binds it in `OnRun` only · [R466.md](docs/roadmap/R466.md) · open
 - **R468** · Only an object's FIRST direct `var` section is indexed as globals, so every global in a second section (`protected var` then `var`) resolves to nothing; `SuggestVendorPayments` is not hang-refused · [R468.md](docs/roadmap/R468.md) · done (25989d42)
-- **R469** · Schemata inserts the `MutationSelector` variable into an object's FIRST var section, which may be `protected var`, so the instrumented object exposes it to extensions · [R469.md](docs/roadmap/R469.md) · open
-- **R470** · A report and its reportextension in one project both get a `MutationSelector` global, which alc rejects (AL0155), so on bcdev every mutant of that batch is scored `error` · [R470.md](docs/roadmap/R470.md) · open
+- **R469** · Schemata inserts the `MutationSelector` variable into an object's FIRST var section, which may be `protected var`, so the instrumented object exposes it to extensions · [R469.md](docs/roadmap/R469.md) · closed 2026-10-05 — ruling: the exposure is harmless for tables and pages…
+- **R470** · A report and its reportextension in one project both get a `MutationSelector` global, which alc rejects (AL0155), so on bcdev every mutant of that batch is scored `error` · [R470.md](docs/roadmap/R470.md) · done (cad4420d)
 - **R472** · Flipping `Insert`'s second argument (InsertWithSystemId) can kill through a SystemId collision, and no platform mechanism names it · [R472.md](docs/roadmap/R472.md) · open
 - **R473** · An UNRESOLVED receiver's sole-argument `Modify(true)`/`Delete(true)`/`Insert(true)` is flipped by `flip-boolean-literal` with no skip tag · [R473.md](docs/roadmap/R473.md) · open
 

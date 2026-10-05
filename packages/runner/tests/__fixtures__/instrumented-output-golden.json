@@ -53,7 +53,7 @@
       "mutants": 4
     },
     "fixtures/sandbox-data/src/DataBandExt.ReportExt.al": {
-      "sha256": "96ec7ce958da24920d63d3023b6784856fdb9c3d6f98cd9670fb393f73e3ea89",
+      "sha256": "49f5318b439f664dfc8f3f4e8ddd621039e38f6f5033841d402890f66003ff8c",
       "mutants": 15
     },
     "fixtures/sandbox-data/src/DataBlankOps.Codeunit.al": {

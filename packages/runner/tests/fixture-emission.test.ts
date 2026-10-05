@@ -34,6 +34,9 @@ import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/o
  * manifest was 245847db...a603).
  * R459: sandbox-data's manifest re-pinned for provenance only: its 13 `flip-boolean-literal`
  * entries carry operatorVersion 1.1.0 (it was eda8a324...7379). No site, tag or id moved.
+ * R470: `DataBandExt.ReportExt.al` re-pinned because its selector var is now
+ * `MutationSelector79341` (its own object id), declared and called; its only change (it was
+ * 758b11c9...74cb). The manifest is unchanged by R470.
  */
 const PINNED: Record<
   string,
@@ -64,7 +67,7 @@ const PINNED: Record<
       "DataAssertOps.Codeunit.al":
         "ab73e45da78c6edd02e17cf89592632809f5de666029cdb79dbe96f91c41c217",
       "DataBandExt.ReportExt.al":
-        "758b11c91bc5365ec7e1512d7c8a5bc98cf6d2de93405e0b064d18b674a874cb",
+        "2b82077f0c0403a3785e7c2e0a3cba5eb364681fc70dcd5aafec9ed43b8dbab7",
       "DataBlankOps.Codeunit.al":
         "ce3170f1504ede010a162a31fbb39d3951c62e9c4eedcfda2e3a9c75621f9654",
       "DataBuilder.Codeunit.al": "ddb5175a823eaee47cca8ce55b9c725851c4ade9dca086fcd37b20c897a29b88",

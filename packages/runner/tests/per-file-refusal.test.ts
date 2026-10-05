@@ -257,9 +257,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(f);
       all.update(await readFile(join(dir, f)));
     }
+    // R470: re-pinned (was dec43213...a617) for DataBandExt's selector var `MutationSelector79341`;
+    // the manifest pin above is unchanged by R470. R459 (merged over R470): the manifest's 13 flip
+    // entries carry operatorVersion 1.1.0, so this moved again (R470 alone gave 4dfb9b56...a329).
     expect(all.digest("hex")).toBe(
-      // R459: moves with the manifest alone (was dec43213...a617); every .al file is unchanged.
-      "db5b5565d14e21f65b18a186a35a03e1d20db59b67cfe44a0a348e6f9c7f5328",
+      "4fb14bca6f1f6b1ba3241d98e707627e4504d31fd32657939f6d87a33194b9e6",
     );
   }, 60_000);
 });
