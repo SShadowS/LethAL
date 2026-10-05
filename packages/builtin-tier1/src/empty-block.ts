@@ -14,14 +14,15 @@ const BODY_PARENT_KINDS: ReadonlySet<string> = new Set([
   ALNodeKind.if_statement,
   ALNodeKind.while_statement,
   ALNodeKind.for_statement,
-  // R244: NO `repeat_statement`. It was listed and matched nothing: a repeat's body is a
-  // `statement_block`, and a `begin ... end` written inside it is a `code_block` whose parent is that
-  // `statement_block`, never the `repeat_statement`. MEASURED 2026-10-05: of 12,363 `repeat` loops
-  // (BaseApp history, CDO, fixtures) none is written `repeat begin ... end until`, so the entry
-  // could not have claimed anything even on a grammar where it worked. Repeat bodies are left
-  // unclaimed on purpose: emptying one freezes an `until` that the body advances (537 BaseApp loops
-  // whose `until` calls no `Next`) and hangs the session, the hazard R179 cedes `while` bodies for.
-  // Mutating only the cursor-advanced ones is a separate product question, filed as its own item.
+  // R244: NO `repeat_statement`. It was listed and matched nothing: in tree-sitter-al 4.4.1's
+  // `node-types.json` a `repeat_statement`'s only named children are its `body` (a
+  // `statement_block`), its `condition` and its two keywords, and `repeat_statement` is not among
+  // `code_block`'s possible parents. A `begin ... end` written in a repeat is a `code_block` whose
+  // parent is that `statement_block`. Repeat bodies are left unclaimed on purpose: emptying one can
+  // freeze an `until` that the body advances and hang the session, the hazard R179 cedes `while`
+  // bodies for (MEASURED 2026-10-05: 537 of 12,041 BaseApp-history loops have an `until` that calls
+  // no `Next(`, a textual risk class, not a count of proven hangs). Mutating only the
+  // cursor-advanced ones is a separate product question, R467.
   // R180: a case ARM's body. `case_statement` used to be listed here and matched NOTHING — an arm's
   // body is a `code_block` whose parent is `case_branch`, never the `case_statement` itself, so
   // every `begin ... end` case arm in every AL project went unmutated while the list looked like it
