@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**102 of 451 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**101 of 451 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -495,7 +495,7 @@ that ordering is the priority.
 - **R435** · On al-runner the dependency fingerprint still reads Microsoft apps by declared version; resolve them from the provisioned platform-apps directory before verify supports al-runner · [R435.md](docs/roadmap/R435.md) · open, filed 2026-10-04
 - **R439** · Two more unit tests time out at Bun's 5 s default under machine load and pass alone: manifest-stream's short-writes test and runSession's I7 transport-error abort · [R439.md](docs/roadmap/R439.md) · done (8ef7ce7e)
 - **R440** · scripts/r402-shape-sweep.ts crashes since R-307: it calls writeInstrumentedProject without identityOrdinals, and no typecheck covers the script · [R440.md](docs/roadmap/R440.md) · done (3e3555ab)
-- **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · open, filed 2026-10-05
+- **R449** · Three SQLite-heavy unit tests time out at bun's 5 s default on GitHub CI's Windows job only (7 to 8.3 s), each passing on other runs · [R449.md](docs/roadmap/R449.md) · done (f224fa0d)
 
 ---
 

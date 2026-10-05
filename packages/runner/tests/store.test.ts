@@ -1295,6 +1295,18 @@ describe("ResultsStore: installed bundles are kept and pruned by exact batch (R3
     store.close();
   });
 
+  test("R449: a file store commits without an fsync per commit (WAL, synchronous NORMAL)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-store-r449-"));
+    const store = new ResultsStore(join(dir, "s.sqlite"));
+    try {
+      expect(store.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      expect(store.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("review r1 #4: a checkpoint a reader keeps busy warns once, naming the WAL size", () => {
     const dir = mkdtempSync(join(tmpdir(), "lethal-store-r360-wal-"));
     const path = join(dir, "r.sqlite");

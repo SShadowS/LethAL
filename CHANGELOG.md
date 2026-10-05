@@ -92,6 +92,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **The results store no longer fsyncs on every commit** (R449). `lethal.sqlite` now runs with
+  `PRAGMA synchronous = NORMAL` under WAL, SQLite's recommended pairing, and opening a new store went
+  from a 238 ms median to 54 ms on Linux. A crashed or killed LethAL process loses nothing. An OS
+  crash or power cut can lose the last few commits, but never corrupts the file, and a lost verdict
+  row is a mutant that `--resume` runs again.
+
 - **`lethal verify` refuses a test project nested in the target, by name** (R260, verify schema
   v7). The target build compiles every `.al` under its folder, so a test project inside it is part
   of the installed target app, and a test edit there used to read as `source-changed`. Verify now
