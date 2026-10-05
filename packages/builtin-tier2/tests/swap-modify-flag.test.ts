@@ -416,7 +416,9 @@ describe("swap-modify-flag platform-kill mechanism (R138)", () => {
   });
 
   it("does NOT tag the implicit-receiver form when that table's OnInsert leaves the key alone", () => {
-    const src = `table 50176 "T4" { fields { field(1; "No."; Code[20]) { } field(2; Flag; Boolean) { } } keys { key(PK; "No.") { } } trigger OnInsert() begin Flag := true; Insert(true); end; }`;
+    // R-476: the site sits in a procedure, not in `OnInsert`: an `Insert` inside `OnInsert` is a
+    // write there, which R-452's cut keeps tagged.
+    const src = `table 50176 "T4" { fields { field(1; "No."; Code[20]) { } field(2; Flag; Boolean) { } } keys { key(PK; "No.") { } } trigger OnInsert() begin Flag := true; end; procedure P() begin Insert(true); end; }`;
     const specs = specsFor(src);
     expect(specs.map((s) => s.before.text)).toEqual(["Insert(true)"]);
     expect(specs.map((s) => s.after.text)).toEqual(["Insert(false)"]);
