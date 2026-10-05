@@ -2425,7 +2425,18 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const marks = statics.equivalenceMarks;
   let readerMarkedEquivalent: SessionReport["readerMarkedEquivalent"];
   if (marks !== undefined && marks.length > 0) {
-    const carryOff = input.outcomes.map((o) => isCarryDisabled(o.mutant, statics.carryDisabled));
+    // sol's final review (P1): the stream's OWN recorded `carryHidden` withholds a mutant too, not
+    // only the caller's optional `carryDisabled`. A replay that omits `carryDisabled` must not let
+    // rule 2 land a singleton's mark on a twin a line filter or a refusal hid from the numbering.
+    const recordedHidden = input.numbering?.carryHidden;
+    const hiddenTuples = new Set(recordedHidden?.tuples ?? []);
+    const hiddenFiles = new Set((recordedHidden?.files ?? []).map((f) => f.replaceAll("\\", "/")));
+    const carryOff = input.outcomes.map(
+      (o) =>
+        isCarryDisabled(o.mutant, statics.carryDisabled) ||
+        isCarryDisabled(o.mutant, hiddenTuples) ||
+        hiddenFiles.has(o.mutant.file.replaceAll("\\", "/")),
+    );
     const marked: EquivalenceMarkReport = applyEquivalenceMarks(
       marks,
       // R307 section 3: a mutant whose carry is disabled is not offered to any mark, so a mark on

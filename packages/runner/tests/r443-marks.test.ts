@@ -470,6 +470,40 @@ describe("R443 (d) N1: with this run's numbering facts absent, every mark is ref
   });
 });
 
+// sol's final review, P1: the public report builder must honour the RECORDED `carryHidden` itself,
+// not only the caller's optional `carryDisabled`. A replay that omits `carryDisabled` must still not
+// let rule 2 land a singleton's mark on a twin `--lines` hid from the numbering.
+describe("R443: a replayed stream honours its own carryHidden", () => {
+  test("mark A as a singleton; add twin B; run --lines on B only; replay without carryDisabled: no match", async () => {
+    const w = await world({ "B_Twin.Codeunit.al": codeunit('codeunit 50101 "Pair"', [TWIN]) });
+    const first = await w.run();
+    const a = one(twinsOf(first, "B_Twin.Codeunit.al"), "the singleton");
+    const mark = markFor(first, a);
+    expect(mark.fileSingleton).toBe(true);
+
+    await w.write(
+      "B_Twin.Codeunit.al",
+      codeunit('codeunit 50101 "Pair"', [TWIN, "X := X * 2;", TWIN]),
+    );
+    const events: RunEvent[] = [];
+    const narrowed = await w.run({
+      marks: [mark],
+      lines: [{ file: "B_Twin.Codeunit.al", start: 9, end: 9 }],
+      emit: (e) => events.push(e),
+    });
+    // The live run is protected by the session's own carryDisabled.
+    expect(matchedSites(narrowed)).toEqual([]);
+
+    const caps = new AllSurvive().capabilities();
+    const replayed = buildReport(
+      { caps, buildSymbols: [], equivalenceMarks: [mark], preprocessorSymbols: [] },
+      events,
+    );
+    expect(replayed.carryHidden?.tuples.length ?? 0).toBeGreaterThan(0);
+    expect(matchedSites(replayed)).toEqual([]);
+  });
+});
+
 describe("R443: explain's mark comes from the RECORDED facts", () => {
   test("numberingDigest is the report's; fileSingleton reads twinSites and carryHidden, never the rows", async () => {
     const w = await world({ "A_Twin.Table.al": table('table 50100 "Twin"', [TWIN]) });
