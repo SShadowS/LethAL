@@ -161,6 +161,9 @@ describe("R454: a MEMBER loop-condition write, through all four operators", () =
       expect(c.op.refusesHangCapable?.(refused, ctx)).toBe(true);
       expect(c.op.targets(claimed, ctx)).toBe(true);
       expect(c.op.refusesHangCapable?.(claimed, ctx)).toBe(false);
+      // Direct generate(): no spec at the refused node, a spec at the claimed control.
+      expect(c.op.generate(refused, ctx)).toEqual([]);
+      expect(c.op.generate(claimed, ctx).length).toBeGreaterThan(0);
       // No generated spec inside the refused node, over the whole file as the orchestrator walks it.
       const spans: { start: number; end: number }[] = [];
       const walk = (n: ALSyntaxNode): void => {

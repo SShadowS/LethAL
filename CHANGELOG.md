@@ -375,7 +375,8 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 - **Identity scheme 13** (R455; 12 is reserved for R254): swaps and additive flips are removed, so
   same-tuple ordinals can move. Every older store stops resuming once, the next
   `--skip-known-survivors` run skips nothing once, and marks files need `"identityScheme": 13`
-  after re-checking each mark (R325).
+  after re-checking each mark (R325). History only: R454 moved the effective scheme to 14, so
+  marks files now need `"identityScheme": 14`.
 - **No more wrong swaps and claims from the later names of `A, B: T`** (R295). Only the first name
   of a multi-name declaration was seen, so a use of B was typed by a same-named global of another
   type: `swap-call-arguments` emitted swaps `alc` rejects (AL0133) and `remove-setrange` claimed a
