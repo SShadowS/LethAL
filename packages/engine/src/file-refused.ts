@@ -16,9 +16,10 @@ export type FileRefusalShape =
   | "site-before-header";
 
 /**
- * R-307 O2: the twelve places a `FileRefusedError` is built, one id each. A refusal names its
- * site, so the PLAN/EMIT split can show every refusal still comes from the same code. The id is
- * for tests and the thrown error only: no report row or `detail` carries it.
+ * R-307 O2: the places a `FileRefusedError` is built, one id each (twelve, and a thirteenth since
+ * R470: `compile.selector-name`, a reportextension with no numeric id to name its selector after).
+ * A refusal names its site, so the PLAN/EMIT split can show every refusal still comes from the same
+ * code. The id is for tests and the thrown error only: no report row or `detail` carries it.
  */
 export const FILE_REFUSAL_SITES = [
   "project.no-header",
@@ -28,6 +29,7 @@ export const FILE_REFUSAL_SITES = [
   "compile.latch-preamble-anchor",
   "compile.latch-split-var-anchor",
   "compile.latch-var-anchor",
+  "compile.selector-name",
   "compile.selector-var-keyword",
   "compile.selector-no-members",
   "compile.selector-no-last-member",

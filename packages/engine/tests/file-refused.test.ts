@@ -126,7 +126,7 @@ describe("FileRefusedError.site", () => {
     expect(formatRefusal(e)).not.toContain("compile.");
   });
 
-  it("lists exactly the twelve construction sites", () => {
+  it("lists exactly the thirteen construction sites (R470 added compile.selector-name)", () => {
     expect([...FILE_REFUSAL_SITES]).toEqual([
       "project.no-header",
       "project.object-mix",
@@ -135,6 +135,7 @@ describe("FileRefusedError.site", () => {
       "compile.latch-preamble-anchor",
       "compile.latch-split-var-anchor",
       "compile.latch-var-anchor",
+      "compile.selector-name",
       "compile.selector-var-keyword",
       "compile.selector-no-members",
       "compile.selector-no-last-member",

@@ -256,8 +256,10 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       all.update(f);
       all.update(await readFile(join(dir, f)));
     }
+    // R470: re-pinned (was dec43213...a617) for DataBandExt's selector var `MutationSelector79341`;
+    // the manifest pin above is unchanged.
     expect(all.digest("hex")).toBe(
-      "dec4321304eab25663f4aee1db5c8c815d83a90576f1457c5140055350d6a617",
+      "4dfb9b56914b47c3b530f7584cfdc65b3f6d22171d61f221e992e294d9afa329",
     );
   }, 60_000);
 });

@@ -384,6 +384,19 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Fixed
 
+- **A report and its reportextension can both be mutated in one project** (R470). A report's
+  globals and its reportextensions' share one namespace, so the `MutationSelector` variable LethAL
+  declares in each instrumented object was declared twice, and BC's compiler refused the project
+  (AL0155). Two reportextensions of one report collided the same way, even when the report itself
+  had no mutants. On bcdev the whole batch then ended as `error`. Measured: 10 such groups in
+  Microsoft's Base Application (13 reportextensions, about 2,700 mutants in those files), none in
+  CDO. A reportextension's selector is now named after its own object id
+  (`MutationSelector<id>`, with a suffix if that name is already used in the file); every other
+  object kind is unchanged. No mutant or key moves, and the gates' verdicts are unchanged; a batch
+  that collided before stops ending as `error`. The instrumented text of
+  reportextensions changes, so a project that has them re-measures its baseline once
+  (the baseline key hashes the instrumented AL). al-runner had accepted the colliding project
+  (R471).
 - **A global declared in an object's second `var` section is now known** (R468). An object may
   declare its globals in several sections, usually `protected var` then `var`; LethAL read only
   the first, so every name in a later one resolved to nothing. Record operators lost those

@@ -4,7 +4,8 @@ import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 
 /**
- * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of twelve named sites, and
+ * R-307 O2, source scan part 1. Every `FileRefusedError` is built at one of thirteen named sites
+ * (R470 added `compile.selector-name`), and
  * each construction says which one in a literal `site:` property, so a refusal can be traced to
  * the code that raised it and the PLAN/EMIT split can show no site moved or vanished. Parsed with
  * the TypeScript compiler, so a comment or a string cannot hit.
@@ -12,13 +13,14 @@ import ts from "typescript";
 
 const REPO = resolve(import.meta.dir, "../../..");
 
-/** The twelve sites, in the order the scan meets them (file path, then source order). */
+/** The thirteen sites, in the order the scan meets them (file path, then source order). */
 const PINNED_SITES = [
   "rewrite.overlap",
   "compile.latch-owner",
   "compile.latch-preamble-anchor",
   "compile.latch-split-var-anchor",
   "compile.latch-var-anchor",
+  "compile.selector-name",
   "compile.selector-var-keyword",
   "compile.selector-no-members",
   "compile.selector-no-last-member",
@@ -102,7 +104,7 @@ describe("R-307 O2: every FileRefusedError names its site", () => {
     expect(missing).toEqual([]);
   });
 
-  test("the site ids are exactly the twelve pinned ones, each once", () => {
+  test("the site ids are exactly the thirteen pinned ones, each once", () => {
     expect(result.constructions.map((c) => c.site)).toEqual(PINNED_SITES);
   });
 
