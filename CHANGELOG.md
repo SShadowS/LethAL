@@ -13,6 +13,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **The report names the loop steps R196 refused** (R447). A site an operator would have mutated
+  but R196's hang check refused (the mutation writes a variable an enclosing loop's condition
+  reads, so it could make the loop never end) is now counted per file as an `excludedSites` row
+  with reason `hang-refused`. A row with sites makes `reliability` `narrowed`, adds
+  `; N hang-refused site(s) in M file(s) not mutated` to `scoreDescribes`, prints a
+  `HANG-REFUSED SITES` console line, becomes an `Ignored` entry in the mutation-testing export, and
+  makes `lethal explain` withhold `gaps[].unobservedBlock` in that file. The count honours
+  `--operator`, `--lines` and inactive `#if` arms. Only the hang-check refusals are counted; the
+  loop-CONDITION literal refusals (R239) stay silent, as other operator refusals do. **Expect
+  `reliability: full` to become rare on real projects.** Measured: Microsoft BaseApp has 1,463
+  hang-refused sites and CDO Cloud 136, so any whole-project run over either now reads `narrowed`.
+  That is the correct reading: those loop steps were never mutated, and until now the report did
+  not say so. Operators opt in through the optional `MutationOperator.refusesHangCapable`; a
+  plug-in without it is not counted. The report schema gains one enum value and the stream schema
+  one optional property, in place: no version bump, and older reports still validate.
 - **`lethal verify` says what a killing new test does to the rest of its procedure** (R259, verify
   schema v8). Every row killed by a new test carries `sameProcedure`: for each other survived or
   no-coverage mutant of the source run in the same procedure or trigger (by the manifest's line

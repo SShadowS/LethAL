@@ -65,13 +65,13 @@ export const removeAssignment: MutationOperator = {
   equivalenceRisk: "value-rewrite",
 
   targets(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-    if (node.rawKind !== ALNodeKind.assignment_statement) return false;
-    // Only in a statement SLOT, the same test `void-method-call` uses. An assignment that is not in
-    // one is not a statement this compiler can remove.
-    if (!isStatementSlot(node)) return false;
     // R196: REFUSED where an enclosing loop's condition reads the target, since deleting the write
-    // can make the loop never end. Silent, like every other operator refusal.
-    return hangCapableForMutatedNode(node, ctx) === null;
+    // can make the loop never end. Counted per file through `refusesHangCapable` (R447).
+    return candidate(node) && hangCapableForMutatedNode(node, ctx) === null;
+  },
+
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return candidate(node) && hangCapableForMutatedNode(node, ctx) !== null;
   },
 
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
@@ -135,3 +135,11 @@ export const removeAssignment: MutationOperator = {
     },
   ],
 };
+
+/** Every check except R196's hang check, shared by `targets` and `refusesHangCapable` (R447). */
+function candidate(node: ALSyntaxNode): boolean {
+  if (node.rawKind !== ALNodeKind.assignment_statement) return false;
+  // Only in a statement SLOT, the same test `void-method-call` uses. An assignment that is not in
+  // one is not a statement this compiler can remove.
+  return isStatementSlot(node);
+}

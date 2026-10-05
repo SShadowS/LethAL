@@ -958,13 +958,14 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
   });
 
   test("R214: the report schema names the two preprocessor exclusion reasons", () => {
-    // R307's `instrumentation-refused` follows them.
+    // R307's `instrumentation-refused` follows them, then R447's `hang-refused`.
     expect(enumAt(reportSchema, "$.excludedSites.files[].reason")).toEqual([
       "not-instrumentable",
       "declarative",
       "compiled-out",
       "preproc-undecided",
       "instrumentation-refused",
+      "hang-refused",
     ]);
   });
 

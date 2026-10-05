@@ -500,6 +500,29 @@
             }
           }
         },
+        "hangRefusedFiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "kinds",
+              "sites"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "string"
+              },
+              "sites": {
+                "type": "number"
+              }
+            }
+          }
+        },
         "seq": {
           "type": "number"
         }

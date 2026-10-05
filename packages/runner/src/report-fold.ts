@@ -3,6 +3,7 @@ import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
 import {
   type ExcludedSites,
+  type HangRefusedFile,
   type PreprocExcludedFile,
   type RefusedExcludedFile,
   buildExcludedSites,
@@ -237,6 +238,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let totalFiles = 0;
   let notInstrumentedFiles: readonly NotInstrumentedFile[] = [];
   let refusedFiles: readonly RefusedExcludedFile[] = [];
+  let hangRefusedFiles: readonly HangRefusedFile[] = [];
   let declarativeSiteFiles: readonly DeclarativeSiteFile[] = [];
   let preprocExcludedFiles: readonly PreprocExcludedFile[] = [];
   let excludedByOnly = 0;
@@ -328,6 +330,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         totalFiles = e.totalFiles;
         notInstrumentedFiles = e.notInstrumentedFiles;
         refusedFiles = e.refusedFiles ?? [];
+        hangRefusedFiles = e.hangRefusedFiles ?? [];
         declarativeSiteFiles = e.declarativeSiteFiles;
         preprocExcludedFiles = e.preprocExcludedFiles ?? [];
         excludedByOnly = e.excludedByOnly;
@@ -612,6 +615,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       declarative: declarativeSiteFiles,
       preproc: preprocExcludedFiles,
       refused: refusedFiles,
+      hangRefused: hangRefusedFiles,
       totalFiles,
     }),
     // R41: reunite the GIVEN patterns (statics) with the LEARNED exclusion count

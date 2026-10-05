@@ -100,6 +100,10 @@ export const flipBooleanLiteral: MutationOperator = {
     return flipped(node, ctx) !== null;
   },
 
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return flippedBeforeHang(node, ctx) !== null && hangCapableForMutatedNode(node, ctx) !== null;
+  },
+
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = flipped(node, ctx);
     if (after === null) return [];
@@ -214,6 +218,14 @@ export const flipBooleanLiteral: MutationOperator = {
 
 /** The flipped text for a boolean this operator will claim, else `null`. */
 function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const after = flippedBeforeHang(node, ctx);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return after !== null && hangCapableForMutatedNode(node, ctx) === null ? after : null;
+}
+
+/** `flipped` without R196's hang check: every other check, in the same order (R447). */
+function flippedBeforeHang(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (node.rawKind !== "boolean") return null;
   const text = node.text.toLowerCase();
   if (text !== "true" && text !== "false") return null;
@@ -221,8 +233,6 @@ function flipped(node: ALSyntaxNode, ctx: SemanticContext): string | null {
   if (isCaseLabel(node)) return null;
   if (isLoopCondition(node)) return null;
   if (isCededRunTriggerFlag(node, ctx)) return null;
-  // R196: a value written to a variable an enclosing loop's condition reads is refused, silently.
-  if (hangCapableForMutatedNode(node, ctx) !== null) return null;
   return text === "true" ? "false" : "true";
 }
 

@@ -2756,6 +2756,48 @@ describe("explain: gaps (C02-09)", () => {
     expect((quarantined.gaps ?? []).map((g) => "unobservedBlock" in g)).toEqual([false, false]);
   });
 
+  test("R447: unobservedBlock is withheld per FILE where a hang-refused row has sites", () => {
+    const presence = (sites?: number) =>
+      (
+        explain(
+          reportFixture({
+            mutants: twoGapRows(),
+            ...(sites !== undefined
+              ? {
+                  excludedSites: {
+                    totalFiles: 2,
+                    siteCount: sites,
+                    fileCount: 1,
+                    files: [
+                      {
+                        file: blockA.file,
+                        kinds: "codeunit_declaration",
+                        sites,
+                        reason: "hang-refused" as const,
+                      },
+                    ],
+                  },
+                }
+              : {}),
+          }),
+        ).gaps ?? []
+      ).map((g) => [g.file, "unobservedBlock" in g]);
+    // File A's refused loop step has no row, so "every recorded row survived" is not a block fact.
+    expect(presence(2)).toEqual([
+      [blockA.file, false],
+      [blockB.file, true],
+    ]);
+    // Controls: no excludedSites (an old report), and a zero-site row.
+    expect(presence()).toEqual([
+      [blockA.file, true],
+      [blockB.file, true],
+    ]);
+    expect(presence(0)).toEqual([
+      [blockA.file, true],
+      [blockB.file, true],
+    ]);
+  });
+
   test("an archived report has no gaps field, never an empty one", () => {
     const archived = explain(reportFixture());
     expect("gaps" in archived).toBe(false);

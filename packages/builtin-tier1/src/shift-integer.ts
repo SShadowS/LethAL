@@ -85,6 +85,10 @@ export const shiftInteger: MutationOperator = {
     return shifted(node, ctx) !== null;
   },
 
+  refusesHangCapable(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+    return shiftedBeforeHang(node) !== null && hangCapableForMutatedNode(node, ctx) !== null;
+  },
+
   generate(node: ALSyntaxNode, ctx: SemanticContext): readonly MutationSpec[] {
     const after = shifted(node, ctx);
     if (after === null) return [];
@@ -148,6 +152,14 @@ export const shiftInteger: MutationOperator = {
 
 /** The shifted literal text, or `null` where this operator does not claim the site. */
 function shifted(node: ALSyntaxNode, ctx: SemanticContext): string | null {
+  const after = shiftedBeforeHang(node);
+  // R196: a value written to a variable an enclosing loop's condition reads is refused, and
+  // counted per file through `refusesHangCapable` (R447).
+  return after !== null && hangCapableForMutatedNode(node, ctx) === null ? after : null;
+}
+
+/** `shifted` without R196's hang check: every other check, in the same order (R447). */
+function shiftedBeforeHang(node: ALSyntaxNode): string | null {
   if (node.rawKind !== ALNodeKind.integer_literal) return null;
   if (!inExecutableBody(node)) return null;
   if (inLoopCondition(node)) return null;
@@ -165,8 +177,6 @@ function shifted(node: ALSyntaxNode, ctx: SemanticContext): string | null {
 
   const value = Number.parseInt(node.text, 10);
   if (!Number.isSafeInteger(value) || value >= AL_MAX_INTEGER) return null;
-  // R196: a value written to a variable an enclosing loop's condition reads is refused, silently.
-  if (hangCapableForMutatedNode(node, ctx) !== null) return null;
   return String(value + 1);
 }
 

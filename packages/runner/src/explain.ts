@@ -201,6 +201,8 @@ import type { MutantVerdict } from "./store";
  *
  * 11: R307 added the caveat value `files-refused` (a file refused whole at instrumentation). A new
  * value, so it bumps (R233); v10 is frozen. R307 added no explain field.
+ * R447 withholds the already optional `gaps[].unobservedBlock` also per file, where a
+ * `hang-refused` row has sites: no new field or value, so no bump.
  */
 export const EXPLAIN_SCHEMA_VERSION = 11;
 
@@ -415,8 +417,8 @@ export interface ExplainGap {
   readonly killed: number;
   readonly noCoverage: number;
   readonly other: number;
-  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, and
-   *  on a quarantined run. */
+  /** Every RECORDED row of the block survived. Absent on an operator- or line-narrowed run, on a
+   *  quarantined run, and in a file with a `hang-refused` row with sites (R447). */
   readonly unobservedBlock?: boolean;
   /** The artifact to pass to `lethal verify --artifact` for this gap. Exactly one of this and
    *  `artifactIdAbsent` is present. */
@@ -1267,6 +1269,13 @@ function blocksOf(
   const withhold =
     report.quarantined !== undefined ||
     report.validity.caveats.some((c) => c === "operator-narrowed" || c === "line-narrowed");
+  // R447: per FILE, where R196 refused a loop step: that step has no row, so "every recorded row
+  // survived" says nothing about it. Per file, not per block: the row carries no spans.
+  const hangRefusedFiles = new Set(
+    (report.excludedSites?.files ?? [])
+      .filter((f) => f.reason === "hang-refused" && f.sites > 0)
+      .map((f) => f.file),
+  );
   const gaps: { readonly key: string; readonly gap: ExplainGap }[] = [];
   const noCoverageBlocks: { readonly key: string; readonly block: ExplainNoCoverageBlock }[] = [];
   for (const [gapId, t] of tallies) {
@@ -1300,7 +1309,9 @@ function blocksOf(
           killed: t.killed,
           noCoverage: t.noCoverage,
           other: t.other,
-          ...(withhold ? {} : { unobservedBlock: t.unobservedBlock }),
+          ...(withhold || hangRefusedFiles.has(r.file)
+            ? {}
+            : { unobservedBlock: t.unobservedBlock }),
           // `carried` when ANY member is: the gap was not measured by one artifact, and verify
           // refuses a carried member anyway.
           ...(carriedGaps.has(gapId)
