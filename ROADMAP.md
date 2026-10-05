@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**88 of 471 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**87 of 471 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -80,7 +80,7 @@ that ordering is the priority.
 - **R191** · A test that stalls AFTER BC has sent the RunMutant response headers is outside every LethAL timer: the budget, the R53 stop hook and the hard cap all end when `fetch` resolves, and the body read runs until the runtime gives up, then quarantines · [R191.md](docs/roadmap/R191.md) · done (`run-mutant-transport.ts`, `settleTimers` / `abortedVerdict`) — 2026-09-02, same day. One abort…
 - **R193** · The identity key still collides INSIDE a procedure, and every collision costs twice: a colliding key is re-executed on every `--resume`, and a stranded mutant's key excludes every twin it has · [R193.md](docs/roadmap/R193.md) · done (`MutantManifestEntry.identityOrdinal`, `assignIdentityOrdinals`, `IdentityKey.ordinal`) — 2026-09-02…
 - **R196** · Deletion and value operators make a loop infinite when they hit its exit flag, and unlike `negate-conditional` on `until X.Next() = 0` nothing refuses or marks the site · [R196.md](docs/roadmap/R196.md) · done (88de04e4)
-- **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · open, filed 2026-09-06 while building [[R196]]'s `classifyHangCapable`, which needed to compare two resolved…
+- **R209** · `resolveVarRef`'s `VarSymbol` reference identity holds for procedure locals, parameters and object globals, but NOT for trigger-locals, and nothing in its contract says so · [R209.md](docs/roadmap/R209.md) · closed 2026-10-05 — no caller compares a VarSymbol by reference (audited); option (b): the identity caveat is…
 - **R210** · `resolveVarRef` keys a procedure's locals/parameters by NAME alone, so an overloaded procedure name resolves against the wrong overload's declarations · [R210.md](docs/roadmap/R210.md) · done (f9af337)
 - **R211** · `docs/campaign/2026-08-16-gift-card/rehearsal.events.ndjson` predates `hangCapableCount` and is pinned as a known schema-validation failure, not backfilled · [R211.md](docs/roadmap/R211.md) · done (bef6693d..eab34a51): the R231 re-freeze re-ran the gift-card rehearsal live on Cronus28, seq 5 now…
 - **R212** · No fixture is a NAMESPACED AL app, which is why every gate stayed green while namespaced projects got zero coverage attribution · [R212.md](docs/roadmap/R212.md) · done (7f37015)
