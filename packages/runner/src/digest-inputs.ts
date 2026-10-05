@@ -457,15 +457,20 @@ export function packageFolderReader(dirs: readonly string[]): PackageReader {
   };
 }
 
-/** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. */
+/** The app under test, for `dependencyFingerprint`'s `target`: its project's app.json. R205: from
+ *  `snapshot` when given, where a missing `app.json` is unreadable, never a disk read. */
 export async function targetOf(
   projectDir: string,
+  snapshot?: ReadonlyMap<string, Buffer>,
 ): Promise<{ readonly id: string; readonly inputs: AppInputs }> {
   let json: unknown;
   try {
-    json = JSON.parse(
-      (await readFile(join(projectDir, "app.json"), "utf8")).replace(/^\uFEFF/, ""),
-    );
+    const bytes = snapshot?.get("app.json");
+    if (snapshot !== undefined && bytes === undefined) {
+      throw new Error("the source snapshot holds no app.json");
+    }
+    const text = bytes?.toString("utf8") ?? (await readFile(join(projectDir, "app.json"), "utf8"));
+    json = JSON.parse(text.replace(/^\uFEFF/, ""));
   } catch (err) {
     throw new DependencyUnreadableError(
       `the target project's app.json could not be read (${err instanceof Error ? err.message : String(err)})`,

@@ -12,6 +12,7 @@ import {
   appInputsOfManifest,
   dependencyFingerprint,
   readAppJsonInputs,
+  targetOf,
 } from "../src/digest-inputs";
 import { CONTROL_APP_ID } from "../src/harness";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -128,6 +129,14 @@ describe("R-371: digest-inputs", () => {
     expect((await readAppJsonInputs(ok)).buildInputs).toBe(
       appInputsOfAppJson({ runtime: "16.0" }).buildInputs,
     );
+  });
+
+  test("R205: targetOf reads app.json from the snapshot, and a snapshot without one never reads the disk", async () => {
+    const dir = scratch("lethal-targetof-");
+    writeFileSync(join(dir, "app.json"), `{"id": "${DEP}"}`);
+    const pinned = new Map([["app.json", Buffer.from(`{"id": "${SUB}"}`)]]);
+    expect((await targetOf(dir, pinned)).id).toBe(SUB);
+    await expect(targetOf(dir, new Map())).rejects.toBeInstanceOf(DependencyUnreadableError);
   });
 
   test("an unreadable non-Microsoft dependency throws, never a partial fingerprint", async () => {

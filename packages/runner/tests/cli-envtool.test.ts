@@ -131,7 +131,8 @@ const BCDEV_RAW = {
 
 const RUN_CONFIG_BCDEV: RunCliConfig = {
   mode: "run",
-  projectDir: "C:/proj",
+  // R205: `runFromCli` reads the project's source first, so it must exist (empty is enough).
+  projectDir: scratch("lethal-envtool-proj-"),
   testDir: "C:/tests",
   backendKind: "bcdev",
   dbPath: "db",

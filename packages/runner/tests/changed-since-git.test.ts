@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { AlRunnerBackend } from "../src/al-runner-backend";
+import { readTargetSource } from "../src/baseline-snapshot";
 import { type RunCliConfig, runFromCli } from "../src/cli";
 import { changedLinesSince, parseUnifiedDiffAdded } from "../src/line-filter";
 import type { SessionConfig } from "../src/orchestrator";
@@ -54,7 +55,9 @@ test("an uncommitted insertion above a committed change carries the committed ra
   }
 });
 
-test("a brand-new untracked codeunit counts whole; ignored, non-.al and outside-project files do not", async () => {
+// R205: an ignored .al is compiled by alc and parsed by LethAL, so it counts whole too; it is not
+// listed as untracked, which keeps its meaning (untracked, not ignored).
+test("a brand-new untracked codeunit and an ignored .al count whole; non-.al and outside-project files do not", async () => {
   const { root, app } = await prFixture();
   try {
     await writeFile(join(app, "src/New.Codeunit.al"), "a\r\nb\r\nc"); // CRLF, no trailing newline
@@ -64,7 +67,12 @@ test("a brand-new untracked codeunit counts whole; ignored, non-.al and outside-
     await writeFile(join(root, "Outside.al"), "o\n");
     const { ranges, source } = await changedLinesSince(app, "main", hermeticSpawn);
     expect(ranges).toContainEqual({ file: "src/New.Codeunit.al", start: 1, end: 3 });
-    expect(ranges.map((r) => r.file).sort()).toEqual(["src/A.al", "src/New.Codeunit.al"]);
+    expect(ranges).toContainEqual({ file: "Ignored.al", start: 1, end: 1 });
+    expect(ranges.map((r) => r.file).sort()).toEqual([
+      "Ignored.al",
+      "src/A.al",
+      "src/New.Codeunit.al",
+    ]);
     expect(source.untrackedFiles).toEqual(["src/Empty.al", "src/New.Codeunit.al"]);
     expect(source.mergeBase).toBe((await git(root, ["merge-base", "main", "HEAD"])).trim());
     expect(source.ref).toBe("main");
@@ -106,8 +114,9 @@ test("renames, spaces, non-ASCII names and hostile diff config all yield on-disk
     await git(app, ["mv", "src/Old.al", "src/My New.al"]);
     await writeFile(join(app, "src/My New.al"), "r1\nr2\nr3\nR4\n");
     await writeFile(join(app, "src/Æble.al"), "x\nY\n");
+    // R205: `--no-renames`, so a path absent at the base is selected whole.
     expect(await rangesOf(app, "HEAD")).toEqual([
-      { file: "src/My New.al", start: 4, end: 4 },
+      { file: "src/My New.al", start: 1, end: 4 },
       { file: "src/Æble.al", start: 2, end: 2 },
     ]);
   } finally {
@@ -252,20 +261,17 @@ describe("fails loudly", () => {
     }
   });
 
-  for (const [flag, clear] of [
-    ["--assume-unchanged", "--no-assume-unchanged"],
-    ["--skip-worktree", "--no-skip-worktree"],
-  ] as const) {
-    test(`a tracked .al marked ${flag}, whose edits git diff would hide`, async () => {
+  // R205: the index is no longer read for content, so an index flag hides nothing.
+  for (const flag of ["--assume-unchanged", "--skip-worktree"] as const) {
+    test(`a tracked .al marked ${flag}: its edited bytes give the edit's range`, async () => {
       const { root, app } = await prFixture();
       try {
-        await git(app, ["update-index", flag, ".gitignore"]); // not .al: does not count
-        expect(await rangesOf(app)).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
         await git(app, ["update-index", flag, "src/A.al"]);
         await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
-        const err = String(await changedLinesSince(app, "main", hermeticSpawn).catch((e) => e));
-        expect(err).toContain(`--changed-since main: src/A.al is marked ${flag.slice(2)}`);
-        expect(err).toContain(`git update-index ${clear} src/A.al`);
+        expect(await rangesOf(app)).toEqual([
+          { file: "src/A.al", start: 5, end: 5 },
+          { file: "src/A.al", start: 9, end: 9 },
+        ]);
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -500,6 +506,146 @@ describe("edges", () => {
   });
 });
 
+describe("R205: the diff runs from the base blobs to the source snapshot", () => {
+  const withRepo = async (
+    files: Record<string, string>,
+    body: (root: string, app: string) => Promise<void>,
+  ) => {
+    const root = await makeGitRepo(files);
+    try {
+      await body(root, join(root, "app"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  };
+  /** Commits `bytes` at app/src/A.al exactly as given (makeGitRepo writes text). */
+  const commitBytes = async (root: string, bytes: Buffer) => {
+    await writeFile(join(root, "app/src/A.al"), bytes);
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-qm", "bytes"]);
+  };
+
+  test("a subfolder project reads ITS blobs, not a same-named file at the repository root", async () => {
+    const decoy = TEN.replace(/l/g, "d");
+    await withRepo({ "app/src/A.al": TEN, "src/A.al": decoy }, async (_root, app) => {
+      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n"));
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "src/A.al", start: 5, end: 5 }]);
+    });
+  });
+
+  test("blobs travel as bytes: invalid UTF-8 and a BOM at the base give no spurious range", async () => {
+    await withRepo({ "app/src/A.al": TEN }, async (root, app) => {
+      const base = Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from("l1\nl2 "),
+        Buffer.from([0xff, 0xc3]),
+        Buffer.from(TEN.slice(TEN.indexOf("\nl3"))),
+      ]);
+      await commitBytes(root, base);
+      await writeFile(
+        join(app, "src/A.al"),
+        Buffer.from(base.toString("latin1").replace("l8\n", "L8\n"), "latin1"),
+      );
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "src/A.al", start: 8, end: 8 }]);
+    });
+  });
+
+  test("a UTF-8 BOM file edited at line 3 gives exactly 3..3", async () => {
+    await withRepo({ "app/src/A.al": `﻿${TEN}` }, async (_root, app) => {
+      await writeFile(join(app, "src/A.al"), `﻿${TEN.replace("l3\n", "L3\n")}`);
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "src/A.al", start: 3, end: 3 }]);
+    });
+  });
+
+  test("every changed byte is scanned: a NUL at byte 20000 is refused by name", async () => {
+    const long = `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`;
+    expect(long.length).toBeGreaterThan(20001);
+    await withRepo({ "app/src/A.al": long }, async (_root, app) => {
+      await writeFile(join(app, "src/A.al"), `${long.slice(0, 20000)}\0${long.slice(20001)}`);
+      await expect(changedLinesSince(app, "HEAD", hermeticSpawn)).rejects.toThrow(
+        /binary \.al file \(src\/A\.al\)/,
+      );
+    });
+  });
+
+  test("a UTF-16 .al is refused by name", async () => {
+    await withRepo({ "app/src/A.al": TEN }, async (_root, app) => {
+      await writeFile(
+        join(app, "src/U.al"),
+        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("u1\n", "utf16le")]),
+      );
+      await expect(changedLinesSince(app, "HEAD", hermeticSpawn)).rejects.toThrow(
+        /binary \.al file \(src\/U\.al\)/,
+      );
+    });
+  });
+
+  test("a binary base turned text is refused by name", async () => {
+    await withRepo({ "app/src/A.al": TEN }, async (root, app) => {
+      await commitBytes(root, Buffer.from(`l1\0\n${TEN.slice(3)}`));
+      await writeFile(join(app, "src/A.al"), TEN);
+      await expect(changedLinesSince(app, "HEAD", hermeticSpawn)).rejects.toThrow(
+        /binary \.al file \(src\/A\.al\)/,
+      );
+    });
+  });
+
+  test("an identical-content rename selects the new path whole", async () => {
+    await withRepo({ "app/src/Old.al": "r1\nr2\nr3\nr4\n" }, async (_root, app) => {
+      await git(app, ["mv", "src/Old.al", "src/New.al"]);
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "src/New.al", start: 1, end: 4 }]);
+    });
+  });
+
+  test("a deleted file never lends its base to an identical file elsewhere", async () => {
+    await withRepo({ "app/Old.al": "o1\no2\no3\n" }, async (_root, app) => {
+      await rm(join(app, "Old.al"));
+      await mkdir(join(app, "sub"), { recursive: true });
+      await writeFile(join(app, "sub/X.al"), "o1\no2\no3\n");
+      expect(await rangesOf(app, "HEAD")).toEqual([{ file: "sub/X.al", start: 1, end: 3 }]);
+    });
+  });
+
+  test("a listed blob that is missing from the object store throws, naming path and id", async () => {
+    await withRepo({ "app/src/A.al": TEN }, async (root, app) => {
+      const id = (await git(root, ["rev-parse", "HEAD:app/src/A.al"])).trim();
+      await rm(join(root, ".git/objects", id.slice(0, 2), id.slice(2)));
+      await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n"));
+      const err = String(await changedLinesSince(app, "HEAD", hermeticSpawn).catch((e) => e));
+      expect(err).toContain("src/A.al");
+      expect(err).toContain(id);
+    });
+  });
+
+  test("the diff reads the snapshot, not the disk: A, then B during the diff, then A again gives A's lines", async () => {
+    const { root, app } = await prFixture();
+    try {
+      const a = TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n");
+      await writeFile(join(app, "src/A.al"), a);
+      const snapshot = await readTargetSource(app);
+      // B lands with the first git call and A is back once the diff has run.
+      const spawn: typeof hermeticSpawn = async (argv, opts) => {
+        if (argv[1] === "merge-base") {
+          await writeFile(
+            join(app, "src/A.al"),
+            TEN.replace("l5\n", "L5\n").replace("l2\n", "L2\n"),
+          );
+        }
+        const out = await hermeticSpawn(argv, opts);
+        if (argv.includes("--no-index")) await writeFile(join(app, "src/A.al"), a);
+        return out;
+      };
+      const { ranges } = await changedLinesSince(app, "main", spawn, snapshot);
+      expect(ranges).toEqual([
+        { file: "src/A.al", start: 5, end: 5 },
+        { file: "src/A.al", start: 9, end: 9 },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 test("runFromCli hands the changed-since source to runSession", async () => {
   const { root, app } = await prFixture();
   try {
@@ -533,9 +679,17 @@ test("runFromCli hands the changed-since source to runSession", async () => {
     // Capture the config, then stop: nothing after `runSession` is under test here.
     let captured: SessionConfig | undefined;
     const stop = new Error("captured");
+    // R205: an edit landing with the first git call, after runFromCli's snapshot, must not reach
+    // the lines: the entry point hands its snapshot to the diff.
+    const gitSpawn: typeof hermeticSpawn = async (argv, opts) => {
+      if (argv[1] === "merge-base") {
+        await writeFile(join(app, "src/A.al"), TEN.replace("l5\n", "L5\n").replace("l9\n", "L9\n"));
+      }
+      return hermeticSpawn(argv, opts);
+    };
     await expect(
       runFromCli(parsed, {
-        gitSpawn: hermeticSpawn,
+        gitSpawn,
         validateSelectorIdsForProject: async () => {},
         buildBackend: async () =>
           new AlRunnerBackend({

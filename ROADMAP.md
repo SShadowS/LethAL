@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**90 of 457 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**91 of 459 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -236,7 +236,7 @@ that ordering is the priority.
 - **R197** · Covering tests run in discovery order, so a kill lands at position 9.4 on average when a test that already killed in the same procedure would have landed it first 81% of the time: 2,476 passing calls, 21 minutes, on one real run · [R197.md](docs/roadmap/R197.md) · done (`packages/runner/src/test-order.ts`, `orderCoveringTests`) — 2026-09-02, same day, landed with R193 in…
 - **R199** · The mutation-elements export renders a narrowed run as a full project's page, and the first real consumer hand-wrote a scope banner within minutes of the run finishing · [R199.md](docs/roadmap/R199.md) · done in part (`config.lethal`, `framework`) — 2026-09-02. The run's `validity`, `counts` and `mutationScore`…
 - **R201** · A stranded mutant's skip lasted exactly one resume: the skip note did not match `isStrandedNote`, so the resume after a resume re-ran the hang, and the first field run patched its database between iterations to stay skipped · [R201.md](docs/roadmap/R201.md) · done (`STRANDED_SKIP_NOTE` moved beside the detector in `resume.ts`, `isStrandedNote` recognises it)…
-- **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · open — filed 2026-09-03 from the Document Output PR 54483 run…
+- **R205** · A source file that changes on disk between session start and batch staging is instrumented from a stale parse: a mid-edit file with a missing `end;` produced a dispatch chain that repeated the file's tail 21 times, alc refused batch 0, and bisection blamed the environment; a test app republished under a running baseline was refused as stale · [R205.md](docs/roadmap/R205.md) · done (f6c789bf)
 - **R213** · `ModifyAll(Field, Value, true)` clears R13's bar and `DeleteAll(true)` does not, measured — extend `swap-modify-flag` to the first only · [R213.md](docs/roadmap/R213.md) · closed 2026-10-05 — RULING: not built. R213's probe read the LAST argument, so `ModifyAll(F, true)`…
 - **R216** · `isStatementSlot` omits `asserterror_statement.body`, so a call or an assignment there is not a statement site: real, measured, and inert on every app corpus (assignments added 2026-09-27) · [R216.md](docs/roadmap/R216.md) · closed 2026-09-27: not admitted: measured 0 deployable product sites on seven fixture targets…
 - **R217** · `isStatementSlot`'s container list is maintained by hand and is incomplete twice over, and the issue #6 context probe found both omissions, and nothing else can · [R217.md](docs/roadmap/R217.md) · done (557404f7) — the container list is pinned against the grammar; options 1 and 2 are not built
@@ -316,7 +316,9 @@ that ordering is the priority.
 - **R445** · lethal run on a test project nested inside the target compiles and mutates the test code as target code, without a warning · [R445.md](docs/roadmap/R445.md) · open
 - **R447** · R-196 refuses hang-capable loop-step sites silently, so a report reader cannot tell that a loop's own step writes were never measured · [R447.md](docs/roadmap/R447.md) · done (bb4a0c46)
 - **R451** · Forward direction `ModifyAll(Field, Value)` to `ModifyAll(Field, Value, true)` is a genuinely new edit; sites exist in BaseApp, none in CDO (low priority, measure before building) · [R451.md](docs/roadmap/R451.md) · open, filed 2026-10-05
+- **R461** · A target that does not compile UNMUTATED is reported as a deploy failure "not attributable to any single mutant", not as "your project does not compile" · [R461.md](docs/roadmap/R461.md) · open
 - **R467** · `empty-block` never empties a `repeat` body; the safe half (an `until` that advances a cursor) is ~11,500 BaseApp sites with no coarse mutant · [R467.md](docs/roadmap/R467.md) · open
+- **R462** · `StaleTestAppError` says the published test app is OLDER when it may be being REPLACED under the running baseline; its remedy (republish) is then wrong in cause · [R462.md](docs/roadmap/R462.md) · open
 
 ## Backends and tooling
 
