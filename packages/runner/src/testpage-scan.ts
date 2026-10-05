@@ -412,6 +412,23 @@ export interface Unit {
   /** R-389: a codeunit's `implements` interfaces, or an interface's `extends` ones, as written:
    *  the interfaces whose variables can hold this codeunit (or an implementation of this one). */
   readonly implements: readonly string[];
+  /** R-389: the file's `namespace` (normalised by `namespaceOf`), `""` for none. */
+  readonly namespace: string;
+  /** R-389: the file's `using` namespaces, normalised. */
+  readonly usings: readonly string[];
+}
+
+/** R-389: a namespace as written, normalised: each dotted segment unquoted and lower-cased. */
+function namespaceOf(text: string): string {
+  return (text.trim().match(/"[^"]*"|[^.]+/g) ?? [])
+    .map((s) => normalizeAlName(s.trim().replace(/^"|"$/g, "")))
+    .join(".");
+}
+
+/** R-389: a file's namespace and `using` directives, read once per file. */
+interface FileNamespace {
+  readonly namespace: string;
+  readonly usings: readonly string[];
 }
 
 export interface Proc {
@@ -964,6 +981,7 @@ function buildUnit(
   errors: readonly ErrorSite[],
   source: string,
   keys: Map<string, number>,
+  ns: FileNamespace,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const display = (nameNode(node)?.text ?? "").replace(/^"|"$/g, "");
@@ -1000,6 +1018,8 @@ function buildUnit(
       .filter((c) => c.rawKind === "implements_clause")
       .flatMap((c) => c.namedChildren.filter((i) => i.fieldName === "interface"))
       .map((i) => i.text),
+    namespace: ns.namespace,
+    usings: ns.usings,
   };
   if (body !== undefined) {
     const members = flattenPreproc(body.namedChildren).flatMap((c) =>
@@ -1057,6 +1077,7 @@ function buildObjectUnit(
   baseKey: string | undefined,
   extendsText: string | undefined,
   keys: Map<string, number>,
+  ns: FileNamespace,
 ): Unit {
   const id = Number(node.namedChildren.find((c) => c.rawKind === "integer")?.text);
   const nameText = nameNode(node)?.text ?? "";
@@ -1119,6 +1140,8 @@ function buildObjectUnit(
       kind === "interface"
         ? node.namedChildren.filter((c) => c.fieldName === "extends_interface").map((c) => c.text)
         : [],
+    namespace: ns.namespace,
+    usings: ns.usings,
   };
   const walk = (n: ALSyntaxNode): void => {
     if (isMemberKind(n.rawKind)) {
@@ -1384,7 +1407,9 @@ export class Scanner {
   /** R-389: interface name -> the test-app codeunits and interfaces naming it in `implements`. */
   private readonly implementers = new Map<string, Unit[]>();
   /** R-389: the normalised name of every interface the test app declares. */
-  private readonly testAppInterfaces = new Set<string>();
+  private readonly testAppInterfaces = new Map<string, Set<string>>();
+  /** R-389: every test-app unit with an `implements` (or interface `extends`) list. */
+  private readonly implementing: Unit[] = [];
   private unknownAncestryCache: Set<Unit> | undefined;
   /** R-389 (option a): every name a `[HandlerFunctions]` lists (the platform calls those). */
   private readonly handlerNames = new Set<string>();
@@ -1427,7 +1452,12 @@ export class Scanner {
     this.allProcs = [...model.units, ...model.objects].flatMap((u) => [...u.procs, ...u.triggers]);
     for (const u of [...model.units, ...model.objects]) {
       for (const i of u.implements) add(this.implementers, lastSegment(i), u);
-      if (u.kind === "interface") this.testAppInterfaces.add(u.name);
+      if (u.kind === "interface") {
+        const spaces = this.testAppInterfaces.get(u.name) ?? new Set<string>();
+        spaces.add(u.namespace);
+        this.testAppInterfaces.set(u.name, spaces);
+      }
+      if (u.implements.length > 0) this.implementing.push(u);
       for (const p of u.procs) for (const h of p.handlers) this.handlerNames.add(h);
       for (const p of u.procs) {
         if (p.varParams.size === 0) continue;
@@ -1448,12 +1478,29 @@ export class Scanner {
    * walk cannot see: so for such an interface, every test-app codeunit whose ancestry reaches a
    * non-test-app interface counts too (final review, hole 3). A test-app interface cannot be
    * extended by a dependency's (it cannot name the test app's types), so it needs only the first.
+   * Re-review #2: "the test app declares it" is decided with the namespace (`ownsInterface`), not
+   * the last name segment, so a test-app `Tests.IBase` does not hide a dependency's `Dep.IBase`.
    */
-  private implementationsOf(raw: string): Unit[] {
-    const name = lastSegment(raw);
-    const out = this.implementersOf([name]);
-    if (!this.testAppInterfaces.has(name)) for (const u of this.unknownAncestry()) out.add(u);
+  private implementationsOf(raw: string, from: Unit): Unit[] {
+    const out = this.implementersOf([lastSegment(raw)]);
+    if (!this.ownsInterface(raw, from)) for (const u of this.unknownAncestry()) out.add(u);
     return [...out];
+  }
+
+  /**
+   * R-389 re-review #2: whether the interface reference `raw`, written in `from`'s file, resolves to
+   * a test-app interface. A qualified name must equal a test-app interface's namespace plus name;
+   * an unqualified one resolves through the file's own namespace, its `using` directives, or no
+   * namespace. Anything else, an ambiguity with a dependency's interface included (the walk cannot
+   * see those), counts as not the test app's: the safe answer, since it adds the unknown-ancestry
+   * fold.
+   */
+  private ownsInterface(raw: string, from: Unit): boolean {
+    const segments = raw.trim().match(/"[^"]*"|[^.]+/g) ?? [raw];
+    const spaces = this.testAppInterfaces.get(lastSegment(raw));
+    if (spaces === undefined) return false;
+    if (segments.length > 1) return spaces.has(namespaceOf(segments.slice(0, -1).join(".")));
+    return [from.namespace, ...from.usings, ""].some((n) => spaces.has(n));
   }
 
   /** Every test-app codeunit implementing one of `names`, through test-app `extends`. */
@@ -1472,12 +1519,19 @@ export class Scanner {
     return out;
   }
 
-  /** Every test-app codeunit whose `implements` ancestry names an interface the test app does
-   *  not declare, computed once. */
+  /** Every test-app codeunit whose `implements` ancestry names an interface that does not resolve
+   *  to a test-app one (`ownsInterface`, in the declaring file), computed once. */
   private unknownAncestry(): Set<Unit> {
-    this.unknownAncestryCache ??= this.implementersOf(
-      [...this.implementers.keys()].filter((n) => !this.testAppInterfaces.has(n)),
-    );
+    if (this.unknownAncestryCache === undefined) {
+      const out = new Set<Unit>();
+      for (const u of this.implementing)
+        for (const i of u.implements) {
+          if (this.ownsInterface(i, u)) continue;
+          if (u.kind === "codeunit") out.add(u);
+          else for (const c of this.implementersOf([u.name])) out.add(c);
+        }
+      this.unknownAncestryCache = out;
+    }
     return this.unknownAncestryCache;
   }
 
@@ -2115,7 +2169,7 @@ export class Scanner {
     }
     const iface = INTERFACE_TYPE.exec(t)?.[1];
     // The type alone bounds what an Interface can hold: no tracing.
-    if (iface !== undefined) this.foldInterface(iface, why, st);
+    if (iface !== undefined) this.foldInterface(iface, why, st, p.unit);
     else if (/^\s*(recordref|fieldref)\b/i.test(t)) this.foldTables(st);
     else if (!VARIANT_TYPE.test(t)) return;
     else if (element)
@@ -2128,8 +2182,8 @@ export class Scanner {
 
   /** R-389: every test-app implementation of an interface, folded whole as an entry. With none,
    *  nothing is added, unless the name could hide one (`outside`'s condition). */
-  private foldInterface(raw: string, why: string, st: ReachState): void {
-    const us = this.implementationsOf(raw);
+  private foldInterface(raw: string, why: string, st: ReachState, from: Unit): void {
+    const us = this.implementationsOf(raw, from);
     for (const u of us) this.foldEntryUnit(u, st);
     if (us.length === 0) this.outside("interface", raw, why, st);
   }
@@ -2202,7 +2256,7 @@ export class Scanner {
       } else {
         if (types.some((t) => VARIANT_TYPE.test(t)))
           this.traceVariant(p, r.name, why, st, false, []);
-        for (const t of types) this.builtinHolds(t, why, st);
+        for (const t of types) this.builtinHolds(t, why, st, p.unit);
         return;
       }
     }
@@ -2212,13 +2266,13 @@ export class Scanner {
       return;
     }
     if (types.some((t) => VARIANT_TYPE.test(t))) this.traceValue(p, recv, why, st, []);
-    for (const t of types) this.builtinHolds(t, why, st);
+    for (const t of types) this.builtinHolds(t, why, st, p.unit);
   }
 
   /** `builtinArg` for one non-Variant type: an Interface or a test-app codeunit is folded. */
-  private builtinHolds(t: string, why: string, st: ReachState): void {
+  private builtinHolds(t: string, why: string, st: ReachState, from: Unit): void {
     const iface = INTERFACE_TYPE.exec(t)?.[1];
-    if (iface !== undefined) this.foldInterface(iface, why, st);
+    if (iface !== undefined) this.foldInterface(iface, why, st, from);
     else if (CODEUNIT_TYPE.test(t)) for (const u of this.unitsFor(t)) this.foldEntryUnit(u, st);
   }
 
@@ -2341,7 +2395,7 @@ export class Scanner {
         const types = declared;
         if (types.some((t) => VARIANT_TYPE.test(t)))
           this.traceVariant(p, r.name, why, st, false, path);
-        for (const t of types) if (!VARIANT_TYPE.test(t)) this.holdType(t, r.name, why, st);
+        for (const t of types) if (!VARIANT_TYPE.test(t)) this.holdType(t, r.name, why, st, p.unit);
         return;
       }
       case "call":
@@ -2366,11 +2420,11 @@ export class Scanner {
     }
     for (const t of types)
       if (VARIANT_TYPE.test(t)) fallBack(st, `${why}: assigned from a value of Variant`);
-      else this.holdType(t, "a value", why, st);
+      else this.holdType(t, "a value", why, st, p.unit);
   }
 
   /** R-389: a non-Variant value of type `t` in a handed-out Variant (part 1's classes a to c). */
-  private holdType(t: string, what: string, why: string, st: ReachState): void {
+  private holdType(t: string, what: string, why: string, st: ReachState, from: Unit): void {
     if (ARRAY_OF.test(t) || COLLECTION_OF.test(t)) {
       if (variantShape(t) !== undefined || this.holdsTestApp(t))
         fallBack(st, `${why}: assigned from ${what}, an array or collection (${t.trim()})`);
@@ -2383,7 +2437,7 @@ export class Scanner {
     }
     const iface = INTERFACE_TYPE.exec(t)?.[1];
     if (iface !== undefined) {
-      this.foldInterface(iface, why, st);
+      this.foldInterface(iface, why, st, from);
       return;
     }
     const m = OBJ_TYPE.exec(t);
@@ -2679,12 +2733,26 @@ function scanFile(
 ): void {
   const root = wrapRoot(parsed);
   const errors = errorOffsets(root);
-  const objects = flattenPreproc(root.namedChildren).filter(
+  const top = flattenPreproc(root.namedChildren);
+  const objects = top.filter(
     (c) => c.rawKind.endsWith("_declaration") && c.rawKind !== "namespace_declaration",
   );
+  // R-389: two `namespace` lines (in `#if` arms) leave the file's namespace unknown, which only
+  // `ownsInterface` reads, and an unknown one matches no test-app interface (the safe side).
+  const spaces = new Set(
+    top
+      .filter((c) => c.rawKind === "namespace_declaration")
+      .map((c) => namespaceOf(c.childForFieldName("name")?.text ?? "")),
+  );
+  const ns: FileNamespace = {
+    namespace: spaces.size === 0 ? "" : spaces.size === 1 ? [...spaces][0] ?? "" : "\u0000",
+    usings: top
+      .filter((c) => c.rawKind === "using_statement")
+      .map((c) => namespaceOf(c.childForFieldName("namespace")?.text ?? "")),
+  };
   for (const o of objects) {
     if (o.rawKind === "codeunit_declaration") {
-      units.push(buildUnit(path, o, errors, source, keys));
+      units.push(buildUnit(path, o, errors, source, keys, ns));
       continue;
     }
     // R-371: every other object, for the digest's walk. The TestPage scan never reads these.
@@ -2710,6 +2778,7 @@ function scanFile(
         baseKey,
         extendsText,
         keys,
+        ns,
       ),
     );
   }
