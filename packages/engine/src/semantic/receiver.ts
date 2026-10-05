@@ -39,6 +39,7 @@
  * `declarationMembers`, `SymbolTable`, `ObjectSymbol` and `VarSymbol` are
  * engine surface. Both are declared dependencies of this package.
  */
+import { soleArgument } from "../ast/arguments";
 import { ALNodeKind } from "../ast/node-kinds";
 import type { ALSyntaxNode } from "../ast/syntax-node";
 import {
@@ -221,6 +222,41 @@ export function claimsRecordMethod(
   }
 
   return true;
+}
+
+/** The Record methods whose RunTrigger `lethal.swap-modify-flag` claims. */
+export const RUN_TRIGGER_METHODS = ["Modify", "Insert", "Delete"] as const;
+export type RunTriggerMethod = (typeof RUN_TRIGGER_METHODS)[number];
+
+/**
+ * WHICH of `RUN_TRIGGER_METHODS` does `node` call on a proven record receiver, or `null`? This
+ * file's spelling of the name, matched case-insensitively through `claimsRecordMethod`.
+ */
+export function claimedRunTriggerMethod(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): RunTriggerMethod | null {
+  return RUN_TRIGGER_METHODS.find((m) => claimsRecordMethod(node, ctx, m)) ?? null;
+}
+
+/**
+ * R-459: the SKIP site `lethal.swap-modify-flag` claims, as the method and the literal it flips:
+ * a claimed `RUN_TRIGGER_METHODS` call whose SOLE argument (comment-aware, `soleArgument`) is the
+ * literal `true`. Else `null`: `Insert()` has no literal, `Insert(true, X)` and longer are not
+ * claimed, and an unresolved receiver or a project namesake is refused by `claimsRecordMethod`.
+ *
+ * ONE answer for two operators: Tier 2 claims what this returns, and `flip-boolean-literal` cedes
+ * exactly the literal it returns, so the seam cannot orphan or duplicate a site (R171, R-459).
+ */
+export function claimedRunTriggerSkip(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+): { method: RunTriggerMethod; literal: ALSyntaxNode } | null {
+  const only = soleArgument(node);
+  if (only === null || only.kind !== ALNodeKind.boolean_literal) return null;
+  if (only.text.toLowerCase() !== "true") return null;
+  const method = claimedRunTriggerMethod(node, ctx);
+  return method === null ? null : { method, literal: only };
 }
 
 /**

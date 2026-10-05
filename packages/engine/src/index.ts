@@ -74,7 +74,11 @@ export type { CFG, BasicBlock } from "./semantic/cfg";
 export { buildCFG } from "./semantic/cfg";
 export type { TypeTable } from "./semantic/types";
 export { buildTypeTable } from "./semantic/types";
+export type { RunTriggerMethod } from "./semantic/receiver";
 export {
+  RUN_TRIGGER_METHODS,
+  claimedRunTriggerMethod,
+  claimedRunTriggerSkip,
   claimsRecordMethod,
   claimsSystemCall,
   calleeNameNode,
@@ -95,6 +99,12 @@ export {
   modifySkipCanRaise,
   skipCanRaise,
 } from "./semantic/trigger-skip";
+export {
+  insertSkipCanRaise,
+  onInsertAssignsPrimaryKey,
+  onInsertTrigger,
+  primaryKeyFields,
+} from "./semantic/insert-key-assignment";
 
 // Operator contract
 export type {
