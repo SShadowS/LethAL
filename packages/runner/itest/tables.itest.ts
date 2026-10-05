@@ -545,8 +545,14 @@ const EXPECTED = {
    * second member there would mean the detector had started claiming the STATEMENT form of
    * `Codeunit.Run`, the shape measured to survive and the false prediction R72 spent a probe
    * correcting.
+   *
+   * R281 TOOK THIS FROM 2 TO 3: `swap-modify-flag`'s Delete mutants now declare
+   * `run-trigger-skipped-delete` unless the skipped OnDelete is proven harmless. Arm C
+   * (`DeleteWithTrigger`) gains it because `Data Trigger Probe`'s OnDelete inserts a tombstone row.
+   * That is a named OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
+   * docs/superpowers/specs/2026-10-05-r281-delete-tag-precommitment.md before the run.
    */
-  platformArtifactKills: 2,
+  platformArtifactKills: 3,
   /**
    * R121: this fixture is the measured VACUOUS case for the assertion screen, and pinning it here is
    * the point rather than an incidental extra.
@@ -1033,8 +1039,8 @@ function assertVerdictTable(report: SessionReport): void {
   assert.equal(screen.killedCount, EXPECTED.platformArtifactKills, "screened-kill count mismatch");
   assert.deepEqual(
     screen.byMechanism.map((g) => g.mechanism),
-    ["run-trigger-skipped-insert", "write-txn-codeunit-run"],
-    "both mechanisms must be present and named — R138 added the second, and the report sorts them",
+    ["run-trigger-skipped-delete", "run-trigger-skipped-insert", "write-txn-codeunit-run"],
+    "all three mechanisms must be present and named — R138 added Insert, R281 Delete, and the report sorts them",
   );
   const groupOf = (mechanism: string) => {
     const g = screen.byMechanism.find((x) => x.mechanism === mechanism);
@@ -1068,8 +1074,8 @@ function assertVerdictTable(report: SessionReport): void {
   // Mechanism 2, R138. Pinned BY MUTANT, because a count of two is satisfied by the wrong two: the
   // fixture has three `Insert(true)` sites and the interesting fact is exactly WHICH of them the
   // screen holds — arms A and K (both killed), never arm B (which survives, and a survivor at such
-  // a site is just a survivor), and never the `Delete` or either `Modify` site, which the R138
-  // ruling says get no mechanism at all.
+  // a site is just a survivor), and never the `Delete` site (R281 gives it its own mechanism, below)
+  // or a `Modify` site, which gets no mechanism at all.
   const insertGroup = groupOf("run-trigger-skipped-insert");
   const insertScreened = insertGroup.mutants.map(mutantOf);
   assert.equal(insertScreened.length, 1, "the Insert mechanism screens exactly one kill");
@@ -1102,7 +1108,25 @@ function assertVerdictTable(report: SessionReport): void {
       "refusing a table it can resolve, which is the direction that credits a platform refusal to " +
       "the suite",
   );
-  // The two mechanisms must not share one explanation: the reader would be told a duplicate-key
+  // Mechanism 3, R281. Pinned BY MUTANT: the fixture's only `Delete(true)` site is arm C, killed.
+  const deleteGroup = groupOf("run-trigger-skipped-delete");
+  const deleteScreened = deleteGroup.mutants.map(mutantOf);
+  assert.deepEqual(
+    deleteScreened.map((m) => [m.operatorName, m.procedureName, m.verdict]),
+    [["lethal.swap-modify-flag", "DeleteWithTrigger", "killed"]],
+    "the ONE screened Delete kill is arm C (an over-tag: its OnDelete inserts a tombstone and the " +
+      "kill is assertion-earned). It disappearing means the detector dropped the tag on an OnDelete " +
+      "that writes another row, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
+  );
+  assert.ok(
+    /\.?delete\s*\(\s*true/i.test(deleteScreened[0]?.originalText ?? ""),
+    "the screened Delete mutant must be at a Delete(true) site",
+  );
+  assert.ok(
+    deleteGroup.explanation.includes("Delete(false)"),
+    "the Delete mechanism must explain ITS own mechanism",
+  );
+  // The mechanisms must not share one explanation: the reader would be told a duplicate-key
   // artifact was measured on Cronus281 as a write-transaction abort.
   assert.ok(
     insertGroup.explanation.includes("duplicate primary key"),
